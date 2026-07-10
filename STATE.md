@@ -4,18 +4,25 @@
 
 ## Current phase
 
-**Slice 3 (UBI-7), done — the foundational-slices arc is complete.**
-`ubx scan` closes the loop: reads a resource's live state via `provider`,
-compares it against the ledger (`core.RunScan`), classifies it as new/
-drifted/unchanged, and generates a zero-blast-radius `adoption`/
-`drift_adopt` proposal (`core.GenerateProposal`) that `ubx accept` (now
-with an optional `--reverify-with` staleness guard) and `ubx why` handle
-exactly as they already did. Verified for real: adopted the real
-`ubx-states` S3 bucket, mutated a tag on it directly via the AWS CLI,
-scanned again, and got back a precise `tags.ubx-demo`/`tags_all.ubx-demo`
-diff — a genuine signed record of an out-of-band change. This is
-docs/plan.md's stated exit for the three foundational slices: "point at a
-messy account, resolve a drift with a signed record."
+**Slice 3 (UBI-7), done and its three follow-up flags resolved.**
+`ubx scan` closes the loop: reads a resource's live state, compares it
+against the ledger (`core.RunScan`), classifies it as new/drifted/
+unchanged, and generates a zero-blast-radius `adoption`/`drift_adopt`
+proposal (`core.GenerateProposal`) that `ubx accept` (now with an optional
+`--reverify-with` staleness guard) and `ubx why` handle exactly as they
+already did. Verified for real: adopted the real `ubx-states` S3 bucket,
+mutated a tag on it directly via the AWS CLI, scanned again, and got back a
+precise `tags.ubx-demo`/`tags_all.ubx-demo` diff. This is docs/plan.md's
+stated exit for the three foundational slices: "point at a messy account,
+resolve a drift with a signed record."
+
+UBI-7 follow-up (same day): the three architectural flags from that
+session were each resolved rather than left open — `core` no longer
+imports `provider` (inverted via a `core.StateReader` interface), the
+resource lookup key is now persisted in `resolution.inputs[].lookup`
+(docs/schema.md amended, no schema_version bump needed — see below for
+why), and `Ledger.FoldState`'s O(chain) walk is now a documented, accepted
+tradeoff rather than an unresolved worry. See Open decisions and Done.
 
 ## Current focus
 
@@ -52,28 +59,35 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
       matching `resolution.inputs` entry with a non-empty `observed_hash`,
       enforced at propose time (`core.Validate`, called from `core.Accept`).
       `core.deltaSortKey` no longer guesses — see Done below.
-- [ ] **NEW, not yet ratified — Slice 3 architectural interpretations.**
-      Made pragmatically to ship `ubx scan`, not blessed in a design
-      session. Flagging per session protocol rather than treating as
-      settled:
-      - `core` now imports `provider` (core/scan.go). Reasonable at
-        one-provider scale; worth revisiting if/when a second provider or
-        the real resolver arrives and "core" is expected to be
-        provider-agnostic.
-      - "Current ledger state" for drift comparison is reconstructed by
-        `Ledger.FoldState` — a full linear walk of the chain from genesis,
-        replaying each address's adoption snapshot plus every subsequent
-        drift_adopt's After-diff on top. Correct and tested (incl.
-        multi-drift), but O(chain length) with no index; fine at
-        demo/single-stack scale, not something to carry into M1-2 without
-        reconsidering.
-      - `ubx scan`/`ubx accept --reverify-with` take the resource's provider
-        lookup key (`--lookup`) as a CLI flag, not something persisted in
-        the proposal itself. That means re-verifying freshness at accept
-        time requires the caller to re-supply the exact same lookup JSON
-        used at scan time — workable for this slice's one-resource-at-a-time
-        scope, but won't survive contact with any kind of batch/automated
-        scan workflow without the lookup key living somewhere durable.
+- [x] **RESOLVED 2026-07-10 — the three Slice 3 architectural
+      interpretations (UBI-7 follow-up).** All three closed the same day
+      they were flagged:
+      1. **core→provider dependency inverted.** `core` no longer imports
+         package `provider` at all (verified: `grep -rn
+         ubiquex-cli/provider core/*.go` returns nothing). `core/scan.go`
+         now defines its own minimal `StateReader` interface (`Schema`/
+         `Configure`/`ReadResource`, using `any` for opaque schema handles
+         core never inspects); `cli/stateadapter.go` adapts a
+         `provider.Provider` to it at the one call site that needs both.
+         `core`'s own tests (`fakeProvider` in scan_test.go) implement
+         `StateReader` directly now, with zero dependency on `provider`.
+      2. **`FoldState`'s O(chain) walk: accepted, not deferred.** Documented
+         directly in its doc comment (core/state.go) as a deliberate choice
+         at current scale (one stack, resources addressed individually),
+         with an explicit revisit trigger (an indexed/incremental
+         alternative, once M1-2's auto-discovery makes per-address and
+         per-ledger proposal counts grow enough to matter) — a decision on
+         record, not an open worry.
+      3. **Resource lookup key now persisted.** docs/schema.md §"Amendment:
+         persist resource lookup key" adds `resolution.inputs[].lookup`
+         (the JSON passed to `ReadResource`) — additive/optional, so
+         explicitly does NOT require a schema_version bump (see the
+         amendment's own reasoning for why that's different from the
+         RATIFIED hashing rules or the PINNED delta shapes). `ScanResult`/
+         `GenerateProposal` populate it; `core.VerifyFreshness` reads it
+         back from the proposal instead of taking a `currentState` param —
+         `ubx accept --reverify-with` no longer takes (or needs) `--lookup`
+         at all.
 
 ## Done
 
@@ -267,8 +281,8 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
     (`ErrStaleObservation`) if it no longer matches what the proposal
     recorded, before any hashing/ledger work happens.
   - Tests: `core/scan_test.go` (new/drifted/unchanged classification via an
-    in-memory `provider.Provider` fake — no subprocess needed at this layer
-    — plus all the adversarial paths: unreadable resource, both `nil` and
+    in-memory fake — no subprocess needed at this layer — plus all the
+    adversarial paths: unreadable resource, both `nil` and
     JSON `null` forms, provider errors at each of Schema/Configure/
     ReadResource, unknown resource type), `core/state_test.go` (diff
     correctness incl. nested paths/added/removed keys/atomic arrays,
@@ -288,6 +302,50 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
     the adoption and the drift resolution. Scanning a third time correctly
     reported "no drift." Bucket tags removed afterward to leave the real
     account as found.
+- 2026-07-10: UBI-7 follow-up — resolved all three Slice 3 architectural
+  flags instead of carrying them forward as open worries.
+  - `core/scan.go`: replaced the `provider.Provider` parameter on `RunScan`/
+    `VerifyFreshness` with a new `core.StateReader` interface (`Schema`
+    returns `(providerSchema any, resourceSchemas map[string]any, error)`;
+    `Configure`/`ReadResource` take `any` schema handles) — `core` no
+    longer imports package `provider` anywhere.
+  - `cli/stateadapter.go` (new): `stateReaderAdapter` wraps a
+    `provider.Provider` to satisfy `core.StateReader`, type-asserting the
+    `any` handles back to `*provider.Schema` at the boundary. `cli/scan.go`
+    and `cli/accept.go` both go through `newStateReader(client.Provider)`
+    now instead of passing `client.Provider` straight through.
+  - `core/state.go`: `FoldState`'s doc comment now explicitly calls out the
+    O(chain) linear walk as an accepted tradeoff at current scale, with a
+    stated revisit trigger, rather than leaving it as an unresolved
+    "worth reconsidering."
+  - `core/proposal.go`: `ResolutionInput` gained `Lookup json.RawMessage`
+    (`json:"lookup,omitempty"`). `core/scan.go`: `ScanResult` gained a
+    `Lookup` field (populated from `ScanRequest.CurrentState` in `RunScan`);
+    `GenerateProposal` writes it into the generated proposal's
+    `resolution.inputs` entry; `VerifyFreshness` dropped its `currentState`
+    parameter entirely, reading the lookup back from the proposal's own
+    `resolution.inputs[].Lookup` instead.
+  - `cli/accept.go`: removed the now-redundant `--lookup` flag from
+    `--reverify-with` — it reads the lookup key the proposal already
+    carries.
+  - docs/schema.md: new "Amendment: persist resource lookup key" subsection
+    (with the reasoning for why this doesn't need a schema_version bump,
+    unlike the RATIFIED hashing rules or PINNED delta shapes), plus the
+    `resolution.inputs` example updated to show `lookup`.
+  - `provider/internal/fakeprovider/`: added `FAKEPROVIDER_EXTRA_TAG`
+    ("key=value") — merges an extra tag into ok-v5/ok-v6's ReadResource
+    response regardless of current_state, so a test can simulate a real
+    out-of-band mutation between two separate process launches that pass
+    the *same* lookup both times (varying `--lookup` itself, the previous
+    test trick, no longer models "reality changed" now that lookup is
+    persisted and reused automatically at reverify time).
+  - Tests: `core/scan_test.go`'s `fakeProvider` now implements
+    `core.StateReader` directly (no `provider` import at all — a stronger
+    proof the dependency inversion actually worked, not just compiles);
+    `cli/scan_test.go`'s staleness tests rewritten around
+    `FAKEPROVIDER_EXTRA_TAG` instead of varying `--lookup`, plus a new
+    `TestGenerateProposal_PersistsLookup` confirming the round trip. All
+    green (`go build ./...`, `go vet ./...`, `go test ./...`).
 
 ## Next steps
 
@@ -308,19 +366,17 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
    surface (see docs/architecture.md component map). `ubx scan` now covers
    the "read one resource" use case anyway; revisit only if something else
    still needs raw schema/read access outside of scan/accept.
-4. The three Slice-3 architectural interpretations flagged under Open
-   decisions above (core→provider dependency, FoldState's O(chain) linear
-   walk, lookup-key-not-persisted) are worth a deliberate look before
-   scaling into M1-2's "top ~50 resource types" — each was a reasonable
-   choice at "one resource, foundational slice" scale and may not hold at
-   "auto-discovered fleet" scale.
-5. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
+4. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
    milestone), PlanResourceChange/ApplyResourceChange (write path —
    deferred per docs/architecture.md "wedge reads and records before it
    ever writes"), AutoMTLS in provider/ (still opt-in/unimplemented),
    cryptographic signing tier for acceptance (docs/architecture.md calls
    this out as "optional... later"; `ubx accept` only does the "local"
-   tier — records approver/method/timestamp, no actual signature).
+   tier — records approver/method/timestamp, no actual signature). Note
+   that `FoldState`'s O(chain) walk (see Open decisions) is an *accepted*
+   limit, not deferred work — its own revisit trigger is stated there;
+   don't re-open it as a TODO without something actually hitting that
+   trigger.
 
 ## Surprises / findings
 

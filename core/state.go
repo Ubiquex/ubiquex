@@ -58,6 +58,16 @@ func (l *Ledger) LastObservedHash(addr Address) (hash string, found bool, err er
 // the state from its full snapshot (Delta.Creates); each subsequent
 // drift_adopt (or any Delta.Modifies touching addr) applies its After diff
 // on top, in ledger order. found is false if addr was never adopted.
+//
+// Accepted limit (UBI-7 follow-up, decided rather than left open): this is
+// an O(chain length) linear walk via Chain(), with no index by address.
+// That's a deliberate choice for the current scale — one stack, resources
+// scanned individually by explicit CLI address — not an oversight to
+// silently carry forward. Revisit (e.g. a per-address materialized index,
+// updated incrementally on Append rather than recomputed on every read)
+// once M1-2's auto-discovery makes "how many proposals touch this address"
+// and "how many addresses does this ledger track" both grow past what a
+// full walk on every scan/accept comfortably handles.
 func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err error) {
 	chain, err := l.Chain()
 	if err != nil {

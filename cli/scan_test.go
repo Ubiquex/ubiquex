@@ -145,12 +145,17 @@ func TestScanAcceptWhy(t *testing.T) {
 // TestAccept_ReverifyBlocksStaleAcceptance is the CLI-level version of the
 // "drift-on-drift staleness" adversarial requirement: a proposal generated
 // by scan must be refused at accept time if reality changed again in the
-// meantime.
+// meantime. --reverify-with no longer takes --lookup (UBI-7 follow-up: the
+// lookup key scan used is now persisted in the proposal's
+// resolution.inputs and read back from there), so staleness has to come
+// from the provider actually returning something different on the second
+// call — FAKEPROVIDER_EXTRA_TAG simulates that real out-of-band change
+// (see provider/internal/fakeprovider) rather than the test varying
+// --lookup itself, which wouldn't reflect how a real caller behaves.
 func TestAccept_ReverifyBlocksStaleAcceptance(t *testing.T) {
 	ledgerDir := t.TempDir()
-	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 
-	scanOut, err := runUbx(t, env, "scan",
+	scanOut, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "scan",
 		"--provider", fakeProviderBinary,
 		"--stack", "payments",
 		"--type", "fake_widget",
@@ -163,14 +168,14 @@ func TestAccept_ReverifyBlocksStaleAcceptance(t *testing.T) {
 		t.Fatalf("ubx scan: %v\noutput: %s", err, scanOut)
 	}
 
-	// Reality changes again before accept runs -- simulated, as above, by
-	// re-verifying against a different lookup than the one scan used.
-	_, err = runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"),
+	// Reality changes again before accept runs: someone tags the resource
+	// out-of-band, same lookup key or not.
+	_, err = runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6", "FAKEPROVIDER_EXTRA_TAG=mutated=yes"},
+		"accept", filepath.Join(ledgerDir, "adopt.json"),
 		"--ledger-dir", ledgerDir,
 		"--reverify-with", fakeProviderBinary,
 		"--resource-type", "fake_widget",
 		"--resource-name", "widget2",
-		"--lookup", `{"name":"widget2","tags":{"env":"staging"}}`,
 	)
 	if err == nil {
 		t.Fatal("expected accept to be blocked by staleness, got nil error")
@@ -186,7 +191,8 @@ func TestAccept_ReverifyBlocksStaleAcceptance(t *testing.T) {
 }
 
 // TestAccept_ReverifyPassesWhenFresh confirms --reverify-with doesn't block
-// a legitimate accept when nothing changed since scan.
+// a legitimate accept when nothing changed since scan, using only the
+// lookup key persisted in the proposal (no --lookup flag on accept).
 func TestAccept_ReverifyPassesWhenFresh(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
@@ -209,10 +215,37 @@ func TestAccept_ReverifyPassesWhenFresh(t *testing.T) {
 		"--reverify-with", fakeProviderBinary,
 		"--resource-type", "fake_widget",
 		"--resource-name", "widget3",
-		"--lookup", `{"name":"widget3"}`,
 	)
 	if err != nil {
 		t.Fatalf("ubx accept (fresh, should pass): %v\noutput: %s", err, acceptOut)
+	}
+}
+
+// TestGenerateProposal_PersistsLookup confirms the lookup key scan used to
+// find the resource round-trips into the generated proposal's
+// resolution.inputs (the UBI-7 follow-up amendment to docs/schema.md).
+func TestGenerateProposal_PersistsLookup(t *testing.T) {
+	ledgerDir := t.TempDir()
+
+	_, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "scan",
+		"--provider", fakeProviderBinary,
+		"--stack", "payments",
+		"--type", "fake_widget",
+		"--name", "widget4",
+		"--lookup", `{"name":"widget4"}`,
+		"--ledger-dir", ledgerDir,
+		"--out", filepath.Join(ledgerDir, "adopt.json"),
+	)
+	if err != nil {
+		t.Fatalf("ubx scan: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(ledgerDir, "adopt.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"lookup"`) || !strings.Contains(string(raw), `"widget4"`) {
+		t.Fatalf("generated proposal missing a persisted lookup key: %s", raw)
 	}
 }
 

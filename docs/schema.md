@@ -68,7 +68,12 @@ Value encoding (draft):
   "resolution": {
     "resolved_at": "2026-07-10T...Z",
     "inputs": [
-      { "kind": "live_state", "resource": "payments.aws_db_instance.payments-db", "observed_hash": "sha256:9f2a..." }
+      {
+        "kind": "live_state",
+        "resource": "payments.aws_db_instance.payments-db",
+        "observed_hash": "sha256:9f2a...",
+        "lookup": { "id": "payments-db", "bucket": "payments-db" }
+      }
     ]
   },
   "cost_delta": { "monthly_usd": 59 },
@@ -114,6 +119,32 @@ both are now pinned:
 Since these shapes feed the canonical hash's `(stack, type, name)` sort
 directly, changing them again is a hashed-content shape change — same
 migration bar as §Canonical hashing (schema_version bump required).
+
+### Amendment: persist resource lookup key (2026-07-10, UBI-7 follow-up)
+
+`resolution.inputs[].lookup` is added: the JSON object passed to the
+provider's `ReadResource` to identify the resource (e.g.
+`{"id": "...", "bucket": "..."}`), for `kind: "live_state"` entries.
+Without it, re-verifying a proposal's observation later (`ubx accept
+--reverify-with`) required the caller to already know, and re-supply
+byte-for-byte, exactly what `ubx scan` used the first time — workable but
+brittle, and a dead end for anything beyond one CLI invocation talking to
+itself.
+
+This does **not** require a `schema_version` bump, unlike the delta
+element shapes above: it's a purely additive, optional field. Existing
+ledger entries authored before this amendment simply don't have it and
+remain exactly as valid as they always were (`omitempty`, and no reader
+ever required it) — their hashes are unaffected because their content is
+unaffected; only proposals authored from now on will include it, and their
+hash correctly reflects that they now carry more information than before.
+That's ordinary content hashing working as intended, not a rule change.
+Contrast with §Canonical hashing's RATIFIED rules (domain prefix, exclusion
+list, number encoding, array sort) or the pinned delta shapes above:
+changing any of *those* changes how hashing itself works, or what "the
+address of a modifies entry" even means, which does need a version bump
+and a migration path. Adding an optional field elsewhere in the tree does
+not.
 
 Notes:
 - `id` is a content hash (git's lesson) — no sequential numbering; human-friendly

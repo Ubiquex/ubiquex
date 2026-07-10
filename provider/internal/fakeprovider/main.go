@@ -17,6 +17,10 @@
 //	malformed           an unparseable line
 //	hang                never writes anything to stdout
 //	crash                exits immediately with no output
+//
+// FAKEPROVIDER_EXTRA_TAG ("key=value"), if set, merges an extra tag into
+// ok-v5/ok-v6's ReadResource response regardless of current_state — see
+// echoWidgetState.
 package main
 
 import (
@@ -24,6 +28,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -221,6 +226,14 @@ var fakeWidgetType = cty.Object(map[string]cty.Type{
 // null (as a real provider would compute it), and re-encodes — proving a
 // real cty-msgpack round trip happened rather than trusting a canned
 // response.
+//
+// If FAKEPROVIDER_EXTRA_TAG ("key=value") is set, it's merged into the
+// response's tags regardless of what current_state asked for. This lets a
+// test simulate a real out-of-band mutation (the same thing "aws s3api
+// put-bucket-tagging" did in the real-world verification) between two
+// separate process launches that pass the identical lookup both times —
+// varying the lookup itself doesn't model that scenario, since a real
+// caller keeps asking the same question and gets a different answer.
 func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
 	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
 	if err != nil {
@@ -232,6 +245,16 @@ func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
 	}
 	if vals["tags"].IsNull() {
 		vals["tags"] = cty.MapValEmpty(cty.String)
+	}
+	if extra := os.Getenv("FAKEPROVIDER_EXTRA_TAG"); extra != "" {
+		if k, v, ok := strings.Cut(extra, "="); ok {
+			tags := vals["tags"].AsValueMap()
+			if tags == nil {
+				tags = map[string]cty.Value{}
+			}
+			tags[k] = cty.StringVal(v)
+			vals["tags"] = cty.MapVal(tags)
+		}
 	}
 	return ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
 }

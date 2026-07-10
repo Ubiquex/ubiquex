@@ -19,7 +19,6 @@ func newAcceptCmd() *cobra.Command {
 		reverifyWith   string
 		resourceType   string
 		resourceName   string
-		lookup         string
 		providerConfig string
 		timeout        time.Duration
 	)
@@ -54,8 +53,8 @@ func newAcceptCmd() *cobra.Command {
 				}
 				defer client.Close()
 
-				if err := core.VerifyFreshness(ctx, client.Provider, addr,
-					json.RawMessage(providerConfig), json.RawMessage(lookup), &p); err != nil {
+				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider), addr,
+					json.RawMessage(providerConfig), &p); err != nil {
 					return fmt.Errorf("accept: %w", err)
 				}
 			}
@@ -75,7 +74,6 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&reverifyWith, "reverify-with", "", "path to a provider binary: re-read the resource live and refuse to accept if it no longer matches the proposal's recorded observation (stale)")
 	cmd.Flags().StringVar(&resourceType, "resource-type", "", "resource type to re-read (required with --reverify-with)")
 	cmd.Flags().StringVar(&resourceName, "resource-name", "", "resource name to re-read (required with --reverify-with)")
-	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider (required with --reverify-with)")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (used with --reverify-with)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for the reverify provider round trip")
 	return cmd

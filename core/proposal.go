@@ -123,10 +123,19 @@ type Resolution struct {
 // to be an Address's canonical string form ("<stack>.<type>.<name>") when
 // it corresponds to a Delta.Modifies target — see validate.go, which
 // cross-references the two.
+//
+// Lookup was added 2026-07-10 (docs/schema.md — "Amendment: persist
+// resource lookup key", UBI-7 follow-up): the JSON object passed to the
+// provider's ReadResource to identify this resource (e.g.
+// {"id":"...","bucket":"..."}), for kind "live_state" entries. Persisting
+// it lets a proposal be independently re-verified later (see
+// core.VerifyFreshness) without the caller having to already know, or
+// re-supply, exactly what was used to look the resource up the first time.
 type ResolutionInput struct {
-	Kind         string `json:"kind"`
-	Resource     string `json:"resource"`
-	ObservedHash string `json:"observed_hash"`
+	Kind         string          `json:"kind"`
+	Resource     string          `json:"resource"`
+	ObservedHash string          `json:"observed_hash"`
+	Lookup       json.RawMessage `json:"lookup,omitempty"`
 }
 
 // CostDelta is Proposal.CostDelta. MonthlyUSD is left as raw JSON because

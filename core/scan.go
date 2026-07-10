@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
 var (
@@ -26,6 +24,33 @@ var (
 	// Accepting it would record a "before"/"after" that's no longer true.
 	ErrStaleObservation = errors.New("stale observation: reality changed since this proposal was generated")
 )
+
+// StateReader is core's own, minimal view of "something that can fetch a
+// provider's schema, configure it, and read one resource's live state" —
+// exactly what RunScan/VerifyFreshness need, and nothing about how a
+// provider binary is launched or which wire protocol it speaks.
+//
+// core deliberately does not import package provider (UBI-7 follow-up:
+// this used to be provider.Provider directly, which meant core depended on
+// infrastructure-client internals it never actually needed to know the
+// concrete shape of — it only ever passes provider/resource schema handles
+// straight through to Configure/ReadResource without inspecting them, which
+// is exactly what `any` captures here). provider.Client can satisfy this
+// interface via a small adapter at the call site (see cli's
+// providerStateReader) without provider needing to import core either.
+type StateReader interface {
+	// Schema returns an opaque handle for the provider's own config schema,
+	// and one opaque handle per resource type it supports, keyed by type
+	// name. Callers pass these straight into Configure/ReadResource; core
+	// never looks inside them.
+	Schema(ctx context.Context) (providerSchema any, resourceSchemas map[string]any, err error)
+
+	// Configure performs the provider's one-time initialization.
+	Configure(ctx context.Context, providerSchema any, config json.RawMessage) error
+
+	// ReadResource fetches the live state of one resource instance.
+	ReadResource(ctx context.Context, resourceSchema any, typeName string, currentState json.RawMessage) (json.RawMessage, error)
+}
 
 // ScanOutcome classifies what a scan found for one resource address.
 type ScanOutcome int
@@ -47,7 +72,8 @@ type ScanResult struct {
 	Outcome      ScanOutcome
 	Observed     json.RawMessage
 	ObservedHash string
-	PreviousHash string // "" if Outcome == ScanNew
+	PreviousHash string          // "" if Outcome == ScanNew
+	Lookup       json.RawMessage // the lookup key used to read Address — persisted into the generated proposal, see GenerateProposal
 }
 
 // ScanRequest describes one resource to scan.
@@ -63,7 +89,7 @@ type ScanRequest struct {
 // observed state for that address. Each step is wrapped with which step
 // failed ("provider errors mid-scan" should be diagnosable, not just a bare
 // error).
-func RunScan(ctx context.Context, prov provider.Provider, l *Ledger, req ScanRequest) (*ScanResult, error) {
+func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) (*ScanResult, error) {
 	observed, hash, err := readAndFingerprint(ctx, prov, req.Address, req.ProviderConfig, req.CurrentState)
 	if err != nil {
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
@@ -74,7 +100,7 @@ func RunScan(ctx context.Context, prov provider.Provider, l *Ledger, req ScanReq
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
 	}
 
-	res := &ScanResult{Address: req.Address, Observed: observed, ObservedHash: hash, PreviousHash: prevHash}
+	res := &ScanResult{Address: req.Address, Observed: observed, ObservedHash: hash, PreviousHash: prevHash, Lookup: req.CurrentState}
 	switch {
 	case !found:
 		res.Outcome = ScanNew
@@ -89,16 +115,16 @@ func RunScan(ctx context.Context, prov provider.Provider, l *Ledger, req ScanReq
 // readAndFingerprint fetches the provider's schema, configures it, reads
 // addr's live state, and fingerprints it. Shared by RunScan and
 // VerifyFreshness so both apply the exact same read pipeline.
-func readAndFingerprint(ctx context.Context, prov provider.Provider, addr Address, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
-	schemas, err := prov.Schema(ctx)
+func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
+	providerSchema, resourceSchemas, err := prov.Schema(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch schema: %w", err)
 	}
-	resourceSchema, ok := schemas.Resources[addr.Type]
+	resourceSchema, ok := resourceSchemas[addr.Type]
 	if !ok {
 		return nil, "", fmt.Errorf("%w: %q", ErrUnknownResourceType, addr.Type)
 	}
-	if err := prov.Configure(ctx, schemas.Provider, providerConfig); err != nil {
+	if err := prov.Configure(ctx, providerSchema, providerConfig); err != nil {
 		return nil, "", fmt.Errorf("configure provider: %w", err)
 	}
 	observed, err = prov.ReadResource(ctx, resourceSchema, addr.Type, currentState)
@@ -136,7 +162,7 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 		Resolution: Resolution{
 			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
 			Inputs: []ResolutionInput{
-				{Kind: "live_state", Resource: res.Address.String(), ObservedHash: res.ObservedHash},
+				{Kind: "live_state", Resource: res.Address.String(), ObservedHash: res.ObservedHash, Lookup: res.Lookup},
 			},
 		},
 		CostDelta:   CostDelta{MonthlyUSD: json.RawMessage(`0`)},
@@ -183,17 +209,19 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 // VerifyFreshness re-reads addr's live state and confirms it still matches
 // p's recorded observed_hash for that address, blocking acceptance of a
 // proposal whose claimed observation is now stale (docs/plan.md Slice 3 —
-// "reality changes between propose and accept"). currentState is the same
-// lookup JSON originally used to generate the proposal — Slice 3 doesn't
-// persist it in the proposal itself, so callers (ubx accept
-// --provider/--lookup) must supply it again.
-func VerifyFreshness(ctx context.Context, prov provider.Provider, addr Address, providerConfig, currentState json.RawMessage, p *Proposal) error {
+// "reality changes between propose and accept"). The lookup key is read
+// back from p's own resolution.inputs entry (see ResolutionInput.Lookup) —
+// callers don't need to already know, or re-supply, what was used to
+// generate the proposal in the first place.
+func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, providerConfig json.RawMessage, p *Proposal) error {
 	target := addr.String()
 	var recorded string
+	var lookup json.RawMessage
 	found := false
 	for _, in := range p.Resolution.Inputs {
 		if in.Resource == target {
 			recorded = in.ObservedHash
+			lookup = in.Lookup
 			found = true
 			break
 		}
@@ -201,8 +229,11 @@ func VerifyFreshness(ctx context.Context, prov provider.Provider, addr Address, 
 	if !found {
 		return fmt.Errorf("verify freshness: no resolution.inputs entry for %s", addr)
 	}
+	if len(lookup) == 0 {
+		return fmt.Errorf("verify freshness: resolution.inputs entry for %s has no recorded lookup key", addr)
+	}
 
-	_, fresh, err := readAndFingerprint(ctx, prov, addr, providerConfig, currentState)
+	_, fresh, err := readAndFingerprint(ctx, prov, addr, providerConfig, lookup)
 	if err != nil {
 		return fmt.Errorf("verify freshness: %w", err)
 	}

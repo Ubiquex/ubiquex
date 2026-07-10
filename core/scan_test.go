@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-
-	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
-// fakeProvider is an in-memory test double for provider.Provider — no
-// subprocess, no gRPC, just enough to drive core.RunScan/VerifyFreshness
-// through their adversarial paths deterministically.
+// fakeProvider is an in-memory test double for core.StateReader — no
+// subprocess, no gRPC, no dependency on package provider at all, just
+// enough to drive core.RunScan/VerifyFreshness through their adversarial
+// paths deterministically.
 type fakeProvider struct {
 	schemaErr    error
 	configureErr error
@@ -19,25 +18,18 @@ type fakeProvider struct {
 	state        json.RawMessage // returned by ReadResource; nil/"null" simulates "unreadable"
 }
 
-func (f *fakeProvider) ProtocolVersion() int { return 6 }
-
-func (f *fakeProvider) Schema(context.Context) (*provider.Schemas, error) {
+func (f *fakeProvider) Schema(context.Context) (any, map[string]any, error) {
 	if f.schemaErr != nil {
-		return nil, f.schemaErr
+		return nil, nil, f.schemaErr
 	}
-	return &provider.Schemas{
-		Provider: &provider.Schema{},
-		Resources: map[string]*provider.Schema{
-			"aws_s3_bucket": {},
-		},
-	}, nil
+	return struct{}{}, map[string]any{"aws_s3_bucket": struct{}{}}, nil
 }
 
-func (f *fakeProvider) Configure(context.Context, *provider.Schema, json.RawMessage) error {
+func (f *fakeProvider) Configure(context.Context, any, json.RawMessage) error {
 	return f.configureErr
 }
 
-func (f *fakeProvider) ReadResource(context.Context, *provider.Schema, string, json.RawMessage) (json.RawMessage, error) {
+func (f *fakeProvider) ReadResource(context.Context, any, string, json.RawMessage) (json.RawMessage, error) {
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
@@ -232,7 +224,7 @@ func TestVerifyFreshness_PassesWhenUnchanged(t *testing.T) {
 		t.Fatalf("GenerateProposal: %v", err)
 	}
 
-	if err := VerifyFreshness(context.Background(), fp, addr, nil, json.RawMessage(`{"id":"ubx-states"}`), proposal); err != nil {
+	if err := VerifyFreshness(context.Background(), fp, addr, nil, proposal); err != nil {
 		t.Fatalf("VerifyFreshness: %v", err)
 	}
 }
@@ -258,7 +250,7 @@ func TestVerifyFreshness_BlocksStaleAcceptance(t *testing.T) {
 	// it's accepted.
 	fp.state = json.RawMessage(`{"id":"ubx-states","tags":{"env":"staging"}}`)
 
-	err = VerifyFreshness(context.Background(), fp, addr, nil, json.RawMessage(`{"id":"ubx-states"}`), proposal)
+	err = VerifyFreshness(context.Background(), fp, addr, nil, proposal)
 	if !errors.Is(err, ErrStaleObservation) {
 		t.Fatalf("got %v, want ErrStaleObservation", err)
 	}
