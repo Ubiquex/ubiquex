@@ -102,6 +102,7 @@ func TestScanAcceptWhy(t *testing.T) {
 		"--lookup", `{"name":"widget1","tags":{"env":"staging"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "drift.json"),
+		"--no-attribution", // hermetic: never touch real AWS CloudTrail from this suite (see attribution_test.go for the gated live/fake-lookup coverage)
 	)
 	if err != nil {
 		t.Fatalf("ubx scan (drift): %v\noutput: %s", err, scanOut2)

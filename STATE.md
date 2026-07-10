@@ -4,99 +4,105 @@
 
 ## Current phase
 
-**UBI-9 is done: all 51 AWS resource types resolved — 48 verified (7
-real-safe, 41 fake-only), 3 parked, 0 left pending.** Batches 1-2 (prior
-sessions) established the real-safe half: `aws_s3_bucket`, `aws_iam_role`,
-`aws_vpc` (batch 1, adopting pre-existing real resources), then
-`aws_sqs_queue`, `aws_sns_topic`, `aws_iam_policy`, `aws_iam_user` (batch 2,
-create-and-destroy-per-run) — plus `aws_iam_group` investigated and parked
-(no tagging API at all).
+**UBI-9 is done (prior session): all 51 AWS resource types resolved — 48
+verified (7 real-safe, 41 fake-only), 3 parked, 0 left pending.** Batches
+1-2 established the real-safe types; batch 3 built a generalized
+fakeprovider fixture (`conformance-v5`/`conformance-v6` modes, env-var
+driven) so every remaining fake-only type gets a genuine
+adopt→mutate→scan-diff test, not just a registry entry with no test
+behind it. `conformance/registry.go`'s Registry — every type's verified
+`IdentityFields`/`Notes` or a documented parked reason, enforced by
+`TestRegistry_NoThirdState` — is the milestone's actual deliverable. Full
+writeup preserved in Done below; not repeated here now that UBI-10 has
+built directly on top of it (see immediately below).
 
-Batch 3 (this session) closed the milestone in one pass by solving the
-harder half: fake-only conformance that actually means something, not just
-a registry entry with no test behind it. The methodology, in brief (full
-writeup below under Done):
+**UBI-10 is done (this session): CloudTrail attribution is wired into `ubx scan`'s
+drift-proposal generation, verified against the real account.** Every
+`drift_adopt` proposal now gets a best-effort attribution attempt: two new
+`intent.sources` kinds, `cloudtrail` (a matched management event — actor
+ARN, event id/name/time, source IP, session context) and
+`cloudtrail_unattributed` (attempted, failed, with a `reason` —
+`no_matching_event` | `delivery_window` | `not_logged`). Same
+dependency-inversion discipline as `core.StateReader`: `core/attribution.go`
+owns the deterministic decision logic behind a minimal `EventLookup`
+interface (no AWS SDK, fully unit-tested against a fake), `cloudtrail/` is
+the one package that imports `aws-sdk-go-v2` directly, `cli/attribution.go`
+wires the two into `ubx scan` (`--no-attribution` opts out). Best-effort by
+construction — attribution failure of any kind never blocks generating or
+accepting the underlying drift proposal.
 
-1. **Inspect the real schema for free.** A real AWS provider's
-   `GetProviderSchema` needs no `Configure` call, no credentials, no AWS API
-   round trip — just launching the binary. Wrote a throwaway inspector
-   (`cmd/schemadump`, deleted before committing — same disposable-tool
-   pattern as prior sessions' lookup-checker scripts) and ran it once
-   against all 43 remaining types. This gives real, schema-verified
-   `IdentityFields` and reveals which attribute is genuinely
-   mutable-and-observable (almost always `tags`/`tags_all`; a handful of
-   special cases below).
-2. **Generalize the fakeprovider fixture, not each type's Go code.**
-   `provider/internal/fakeprovider` gained two new modes,
-   `conformance-v5`/`conformance-v6`, driven entirely by env vars
-   (`FAKEPROVIDER_RESOURCE_TYPE`, `FAKEPROVIDER_ATTRS`,
-   `FAKEPROVIDER_MUTATE_ATTR`/`FAKEPROVIDER_MUTATE_VALUE`) — one mechanism
-   serving all 41 types instead of 41 hand-written schemas. This is "the
-   first fixture, built carefully, as the template for all remaining
-   fake-only types" the session was asked to produce.
-3. **Same pipeline, explicitly narrower claim.** Every fake-only case still
-   runs the identical `RunAdoptMutateScanDiff` sequence (`core.RunScan` →
-   `GenerateProposal` → accept → mutate → scan again, expect drifted →
-   accept → scan a third time, expect unchanged) real-safe types run. What
-   it does NOT prove — documented directly in `conformance/registry.go`'s
-   `FakeOnly` doc comment, not left implicit — is the live `ReadResource`
-   *lookup convention* (whether a natural-key duplicate alongside `id` is
-   needed, the aws_iam_role/aws_s3_bucket quirk from batches 1-2). That can
-   only be checked against a real instance, which is exactly the cost/risk
-   fake-only exists to avoid. "Conformance means the same thing across both
-   classes" in the sense that both prove ubx's own scan/diff/fold pipeline
-   correct for that type's real attribute shape — not in the sense that
-   both prove the same thing about live lookup semantics.
-4. **Two more types fought back, found via free schema inspection instead
-   of a live API call.** `aws_iam_role_policy_attachment`
-   (`{id, policy_arn (required), role (required)}` — a pure join, nothing
-   optional besides `id`) and `aws_route_table_association`
-   (`{gateway_id, id, region, route_table_id (required), subnet_id}` — same
-   join shape) have no genuine in-place-mutable field; "changing" what
-   they're attached to is a replace in AWS's own model. Parked alongside
-   `aws_iam_group`, same reasoning, same "document + park, don't hack"
-   discipline.
+Building the first real integration surfaced two empirical corrections
+before they became bugs (see Surprises): CloudTrail's `ResourceName`
+lookup attribute wants the resource's own `id` (bucket name, role name,
+vpc-id), not its ARN — an initial assumption that ARN would be the more
+precise match turned out backwards, caught by testing against the real
+account before writing the matching logic, not after. And real CloudTrail
+delivery latency in this account measured ~2-3 minutes for a live
+`PutBucketTagging` call to become queryable — enough to make the first
+live-test attempt fail on a too-short retry budget, fixed by widening it
+rather than by weakening what the test actually checks.
 
-Special-shaped fake-only types (no `arn`/`tags` in their real schema, so a
-different real attribute stands in for the mutate step — each verified via
-the schema inspector, not assumed from the standard shape): `aws_route`
-(mutates `gateway_id`), `aws_nat_gateway` (no `arn`; mutates `tags`),
-`aws_security_group_rule` (mutates `description`), `aws_s3_bucket_policy`
-(mutates `policy`), `aws_s3_bucket_versioning` (mutates a fixture-flattened
-`status`), `aws_s3_bucket_public_access_block` (mutates
-`block_public_acls`), `aws_route53_record` (mutates `ttl`). Every other
-fake-only type uses the standard `id`/`arn`/`tags`/`tags_all` shape,
-mutating `tags` — the same "someone tagged it in the console" scenario
-real-safe types exercise for real.
+**Verified live, exactly as asked**: tagged the real `ubx-states` bucket
+(a genuine out-of-band mutation, same pattern as every prior real-world
+verification in this codebase), ran `ubx scan` through the actual CLI
+command without `--no-attribution`, and confirmed the generated
+`drift_adopt` proposal's `intent.sources` carried a `cloudtrail` entry
+whose `actor_arn` was Roozbeh's real IAM identity
+(`arn:aws:iam::839333509514:user/roozbeh`) — not a fake/simulated one.
+This is captured as an actual repeatable test
+(`cli/attribution_live_test.go`'s `TestScan_AttributesRealDrift_LiveCloudTrail`,
+gated behind `UBX_CONFORMANCE_LIVE=1`, same convention as every other
+real-account test), not just a one-off manual check. Bucket tag confirmed
+removed afterward.
 
-`conformance/registry.go`'s Registry — the quirks registry accumulated
-across all three batches — is UBI-9's actual deliverable, not the passing
-tests by themselves: every one of the 51 entries now carries either a
-verified `IdentityFields`/`Notes` pair (`Implemented: true`) or a documented
-parked reason, enforced going forward by a new
-`TestRegistry_NoThirdState` (no entry may have neither).
-
-Live (real-AWS) conformance tests remain gated behind
-`UBX_CONFORMANCE_LIVE=1` and skip by default; the 41 new fake-only tests
-need no such gate (nothing they do ever touches real AWS) and run as part
-of plain `go test ./...`. Re-ran the full real-account suite one more time
-this session (all 48 implemented types, `UBX_CONFORMANCE_LIVE=1`) and
-confirmed via `aws` CLI queries afterward that nothing was left behind: no
-bucket/role/VPC tags, no lingering SQS queue/SNS topic/IAM
-policy/user from any batch.
-
-UBI-8 (provider acquisition) and UBI-7 (Slice 3 + follow-ups) remain done
-from prior sessions (see below).
+UBI-9 (51-type conformance), UBI-8 (provider acquisition), and UBI-7
+(Slice 3 + follow-ups) remain done from prior sessions (see below).
 
 ## Current focus
 
-UBI-9 is closed. Next up (see Next steps): the Core IR + resolver work
-that was already queued behind UBI-9, and UBI-10 (CloudTrail correlation),
-which can now lean on every type's `IdentityFields` — populated specifically
-so UBI-10 has ARN-or-equivalent identity data to correlate against.
+UBI-10 is closed. Next up (see Next steps): the Core IR + resolver work
+that's been queued since before UBI-9, and `status --drift` (a read-only
+multi-resource drift report, still M1-2 scope per docs/plan.md).
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-10 — CloudTrail identity matching is derived, not
+      a static per-type table (UBI-10).** The task framing for this
+      session said to match "on per-type identity fields (ARN/name from
+      registry)" — read most literally, that could mean promoting
+      `conformance/registry.go`'s `IdentityFields` into product code so
+      `core/attribution.go` could depend on it. Decided against that:
+      `conformance/` is explicitly documented as project-internal test
+      tooling, not shipped product code (see the UBI-9 harness-shape
+      decision below), and importing it from `core`/`cli` would break
+      that boundary for a table that (a) doesn't need to be static at all
+      — almost every AWS resource type carries `id` and `arn` directly in
+      its own observed state, which is more precise and more current than
+      a lookup table could be — and (b) can't fully capture the thing that
+      actually matters here anyway, which is CloudTrail's own
+      `ResourceName` semantics (empirically NOT the same per type as
+      ubx's own `ReadResource` lookup shape — see Surprises). Instead,
+      `identityCandidates` (core/attribution.go) derives search values
+      directly from the resource's just-observed state (`id`, `arn`,
+      `name`, in that order, deduped) — genuinely "per type" in the sense
+      that the actual value differs per resource instance and type, just
+      not via a maintained table. `conformance/` stays test-only,
+      untouched by this decision.
+- [x] **RESOLVED 2026-07-10 — attribution is a separate step, not built
+      into `GenerateProposal` (UBI-10).** `core.GenerateProposal`'s
+      signature and behavior are completely unchanged by this session —
+      CloudTrail attribution is a new, separate function
+      (`core.AttributeDrift`) that a caller invokes afterward and appends
+      the result into the already-built proposal's `Intent.Sources`.
+      Reasons: (1) `GenerateProposal` is called from ~50 existing
+      conformance tests and `cli/scan.go`; keeping its signature stable
+      avoided a mechanical, no-value edit to all of them. (2) It keeps
+      "detect+diff" and "attribute" as separately testable, separately
+      optional steps — exactly what "best-effort, never blocks proposal
+      generation" means structurally, not just as a runtime guarantee.
+      `cli/scan.go` calls `attributeDrift` (cli/attribution.go) right
+      after `GenerateProposal` returns, only for `ScanDrifted` outcomes,
+      only when `--no-attribution` isn't set.
 - [x] **RESOLVED 2026-07-10 — what "verified" means for a FakeOnly
       conformance type (UBI-9 batch 3).** This came up while designing the
       first fake-only fixture and is worth recording explicitly rather than
@@ -698,27 +704,136 @@ so UBI-10 has ARN-or-equivalent identity data to correlate against.
     passed; confirmed via direct `aws` CLI queries afterward that the
     account was left exactly as found (no bucket/role/VPC tags, no
     lingering SQS queue/SNS topic/IAM policy/user from any batch).
+- 2026-07-10/11: UBI-10 completed — CloudTrail attribution wired into
+  `ubx scan`'s drift-proposal generation.
+  - docs/schema.md: new "Amendment: CloudTrail attribution intent sources"
+    subsection — two new `intent.sources[].kind` values, `cloudtrail`
+    (`event_id`/`event_name`/`event_time`/`actor_arn`/`source_ip`/
+    `session_context`, plus the existing `ref`/`content_hash`) and
+    `cloudtrail_unattributed` (`reason`: `no_matching_event` |
+    `delivery_window` | `not_logged`), both attached to `drift_adopt`
+    proposals only. Additive/optional, no `schema_version` bump — same
+    reasoning as the lookup-key/provider-checksum amendments.
+  - `core/proposal.go`: `IntentSource` gained the new fields above
+    (`omitempty` throughout; existing dialogue/manual_edit/issue sources
+    completely unaffected).
+  - `core/attribution.go` (new): `CloudTrailEvent` (core's own plain-Go
+    view of one event — no AWS SDK), `EventLookup` interface (mirrors
+    `core.StateReader`'s dependency inversion for the tfplugin provider
+    client), `AttributeDrift` (the deterministic decision logic —
+    `identityCandidates` derives search values from the resource's own
+    observed `id`/`arn`/`name`, tried in that order; `filterExactMatch`
+    defends against a lookup returning events for a similarly-named-but-
+    different resource; `cloudTrailSources` sorts matches newest-first),
+    reason constants, `cloudTrailDeliveryLag` (15 min). `core/state.go`
+    gained `Ledger.LastObservationTime(addr)`, mirroring
+    `LastObservedHash` but returning the resolved_at of the proposal that
+    last recorded addr — the correlation window's "since" bound.
+  - `cloudtrail/` (new package): `Client`, the only place in this codebase
+    that imports an AWS SDK (`aws-sdk-go-v2`) directly. `New(ctx, region)`
+    loads AWS config the standard way (no credential-discovery
+    reinvention); `LookupEvents` calls the real `LookupEvents` API with a
+    `ResourceName` lookup attribute, paginates, and parses each event's
+    nested `CloudTrailEvent` JSON record (not just the flat SDK fields,
+    which lack actor ARN/source IP/session context) into
+    `core.CloudTrailEvent`.
+  - `cli/attribution.go` (new): `attributeDrift` — reads the correlation
+    window from the ledger and the just-generated proposal's own
+    `resolved_at`, builds a `cloudtrail.Client` for the provider config's
+    region, calls `core.AttributeDrift`, appends the result to the
+    proposal's `Intent.Sources`. Every failure path (can't build a client,
+    lookup errors) degrades to a `cloudtrail_unattributed`/`not_logged`
+    source rather than propagating an error — best-effort all the way out
+    to the CLI, not just inside `core.AttributeDrift`.
+  - `cli/scan.go`: new `--no-attribution` flag; `attributeDrift` is called
+    right after `GenerateProposal`, only when `res.Outcome ==
+    core.ScanDrifted` (attribution only means something once a drift is
+    already detected) and the flag isn't set.
+  - **Two empirical corrections, both caught before they shipped wrong**
+    (see Surprises for the full detail): CloudTrail's `ResourceName`
+    lookup attribute wants the resource's `id` (bucket name/role name/
+    vpc-id), not its ARN — confirmed by testing both against the real
+    account before writing `identityCandidates`, not assumed; and real
+    CloudTrail delivery latency in this account measured ~2-3 minutes,
+    not the near-instant a first manual probe happened to show, which
+    surfaced when the live test's initial 15-second retry budget wasn't
+    enough and had to be widened to 5 minutes.
+  - Tests: `core/attribution_test.go` — single match, multiple matches
+    (newest-first ordering), no_matching_event, delivery_window (narrow
+    window), not_logged (two distinct failure inputs — API error and a
+    "no visibility" error — both map to the same reason), a
+    similar-name-different-resource case proving `filterExactMatch`
+    rejects it, an id-fails/arn-succeeds fallback case, and a table test
+    for `identityCandidates` itself (dedup, fallback, malformed input).
+    `cli/attribution_test.go`:
+    `TestScan_AttributionDegradesGracefully_NoCredentials` — blanks every
+    AWS credential source (env vars, config/credentials file paths
+    pointed at nonexistent files, IMDS disabled) so credential resolution
+    fails synchronously with no real network call, proving the CLI wiring
+    degrades to `cloudtrail_unattributed`/`not_logged` without blocking
+    `ubx scan`, and stays hermetic (0.36s, confirmed no network I/O).
+    `cli/scan_test.go`'s existing `TestScanAcceptWhy` drift scan updated
+    to pass `--no-attribution` — without it, that test would have made a
+    real, credentialed CloudTrail call on every `go test ./...`, breaking
+    the hermetic-by-default invariant this project has held since Slice 1.
+  - `cli/attribution_live_test.go` (new): `TestScan_AttributesRealDrift_LiveCloudTrail`,
+    gated behind `UBX_CONFORMANCE_LIVE=1` like every other real-account
+    test. Tags the real `ubx-states` bucket, runs `ubx scan` through the
+    actual CLI (no `--no-attribution`), retries (up to 5 minutes, 20s
+    apart — sized from the measured real delivery latency, not guessed)
+    until a `cloudtrail`-kind source appears, and asserts its `actor_arn`
+    matches `aws sts get-caller-identity`'s real ARN. Cleans up the tag
+    via `t.Cleanup`.
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic, ~2s, confirmed no network I/O). Live run:
+    `UBX_CONFORMANCE_LIVE=1 go test ./cli/... -run
+    TestScan_AttributesRealDrift_LiveCloudTrail -v` passed in 137s;
+    confirmed afterward via `aws s3api get-bucket-tagging` that the
+    account was left exactly as found (`NoSuchTagSet`).
+  - go.mod: added `github.com/aws/aws-sdk-go-v2`,
+    `.../config`, `.../service/cloudtrail` (direct deps) plus their
+    transitive requirements — the first AWS SDK dependency in this
+    codebase; every prior AWS interaction went through either the
+    tfplugin provider protocol (`provider/`) or a subprocess `aws` CLI
+    call (test-only). CloudTrail's `LookupEvents` has no tfplugin
+    equivalent — it's a plain AWS management API, not a Terraform
+    provider concern — so a direct SDK client, isolated to the new
+    `cloudtrail/` package, was the right scope for this dependency rather
+    than trying to force it through either existing mechanism.
 
 ## Next steps
 
-1. **UBI-9 is closed** — nothing further queued under it. If a type's
-   fixture-verified shape ever turns out wrong once real usage exercises it
-   (e.g. `ubx scan` against a real instance of a type that's currently
-   fake-only surfaces a lookup quirk the fixture didn't/couldn't predict),
-   fix it as a normal bug against `conformance/registry.go`'s `Notes`, not
-   as a reason to reopen the whole milestone.
-2. Now unblocked: Core IR + resolver (component map #1-2), and CloudTrail
-   correlation (UBI-10, per docs/plan.md's own M1-2 scope) — every type's
-   `IdentityFields` was captured specifically so UBI-10 has ARN/equivalent
-   identity data to correlate against; this is the natural next session.
+1. **UBI-9 and UBI-10 are both closed** — nothing further queued under
+   either. If a type's fixture-verified shape ever turns out wrong once
+   real usage exercises it, or if CloudTrail's `ResourceName` matching
+   behaves differently for a type not yet checked live, fix it as a
+   normal bug (`conformance/registry.go`'s `Notes` / `core/attribution.go`
+   respectively), not a reason to reopen either milestone.
+2. Now unblocked: Core IR + resolver (component map #1-2) — the natural
+   next session; nothing else in M1-2's detection core is blocking it.
    `status --drift` (a read-only report over what `ubx scan` would find
-   across multiple resources) is also still M1-2 scope, not started.
-3. A `ubx provider ...` dev-facing CLI verb was deliberately never added
-   across four sessions — still not part of the eventual product CLI
+   across multiple resources) is also still M1-2 scope, not started —
+   would naturally reuse `core.AttributeDrift` per resource the same way
+   `ubx scan` does now.
+3. UBI-10 gaps, not addressed this session, deliberately deferred: no
+   caching/dedup of `EventLookup` calls across multiple scans in a batch
+   (each `ubx scan` invocation currently builds its own `cloudtrail.Client`
+   and searches independently — fine at "one resource per CLI invocation"
+   scale, worth revisiting once `status --drift` scans many resources per
+   run); `session_context` is passed through opaquely (not parsed into,
+   say, an assumed-role session name) — nothing in `ubx why` surfaces it
+   specially yet, since `ubx why` itself doesn't render `intent.sources`
+   beyond its existing summary/kind display; only tested live against
+   `aws_s3_bucket` (one type) — the `id`-not-`arn` finding is recorded as
+   an empirical fact about that type (and `aws_iam_role`/`aws_vpc`, tested
+   via the manual CloudTrail probe but not through a full live
+   `ubx scan` run), not assumed to hold for every AWS service.
+4. A `ubx provider ...` dev-facing CLI verb was deliberately never added
+   across five sessions — still not part of the eventual product CLI
    surface (see docs/architecture.md component map). `ubx scan` now covers
    the "read one resource" use case anyway; revisit only if something else
    still needs raw schema/read access outside of scan/accept.
-4. Not addressed, deliberately out of scope: PlanResourceChange/
+5. Not addressed, deliberately out of scope: PlanResourceChange/
    ApplyResourceChange (write path — deferred per docs/architecture.md
    "wedge reads and records before it ever writes"), AutoMTLS in provider/
    (still opt-in/unimplemented), cryptographic signing tier for acceptance
@@ -727,7 +842,7 @@ so UBI-10 has ARN-or-equivalent identity data to correlate against.
    walk (see Open decisions) is an *accepted* limit, not deferred work —
    its own revisit trigger is stated there; don't re-open it as a TODO
    without something actually hitting that trigger.
-5. UBI-8 gaps, not addressed this session either: no `UBX_PROVIDER_MIRROR`
+6. UBI-8 gaps, not addressed this session either: no `UBX_PROVIDER_MIRROR`
    signature verification (by design — see docs/architecture.md, a local
    file is trusted differently); no cache invalidation/eviction; `ubx scan
    --source` doesn't route to a non-default registry hostname even though
@@ -735,6 +850,45 @@ so UBI-10 has ARN-or-equivalent identity data to correlate against.
 
 ## Surprises / findings
 
+- 2026-07-10/11: **CloudTrail's `ResourceName` lookup attribute wants the
+  resource's own `id` (bucket name / role name / vpc-id), not its ARN —
+  confirmed directly against the real account, and the opposite of the
+  first assumption.** Reasoning going in: ARNs are globally unique and
+  more "correct" as an identity, so searching by ARN seemed like the
+  obviously right choice. Tested empirically before writing
+  `identityCandidates`: `aws cloudtrail lookup-events
+  --lookup-attributes AttributeKey=ResourceName,AttributeValue=<bucket
+  name>` returned real, correct events (`PutBucketTagging`,
+  `DeleteBucketTagging`); the identical query with
+  `AttributeValue=arn:aws:s3:::<bucket name>` (the full ARN) returned
+  **zero events**, even though the events genuinely existed and were
+  queryable by name. Repeated the same test for `aws_iam_role` (name
+  works, ARN returns nothing) and `aws_vpc` (vpc-id works — it has no
+  separate "name" to compare against). This is why `identityCandidates`
+  tries `id` first, with `arn`/`name` kept only as fallbacks — and why it
+  wasn't promoted into a static table (see Open decisions): a rule that's
+  only been checked against three resource types, all AWS-managed
+  identity conventions that could easily differ for another service, is
+  exactly the kind of thing this project has repeatedly learned not to
+  generalize from a handful of data points.
+- 2026-07-10/11: **CloudTrail's real event-delivery latency in this
+  account measured ~2-3 minutes, not the near-instant response an
+  earlier manual probe happened to show.** Building the identity-matching
+  finding above, a manual `aws s3api put-bucket-tagging` followed
+  immediately by `aws cloudtrail lookup-events` returned the matching
+  event right away — this shaped an initial (wrong) assumption that
+  delivery was effectively instant. The first version of the live
+  verification test used a 5-attempt/3-second retry budget (~15 seconds
+  total) based on that assumption and failed: the real account's
+  `PutBucketTagging` event from that specific test run took roughly two
+  minutes forty seconds to become queryable, confirmed by polling
+  manually and watching it appear. Fixed by widening the live test's
+  retry budget to 5 minutes (15 attempts, 20 seconds apart) rather than
+  weakening the assertion — the test now passes reliably (137s in the
+  run that shipped this). This is also exactly why `delivery_window`
+  exists as a distinct reason from `no_matching_event` in the schema
+  amendment: real accounts can't be assumed to deliver CloudTrail events
+  fast just because a single manual check once looked instant.
 - 2026-07-10: **A provider's `GetProviderSchema` costs nothing and needs no
   credentials — it's a pure local gRPC call against the launched binary,
   no `Configure`, no AWS API round trip.** This is what made UBI-9 batch

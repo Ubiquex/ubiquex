@@ -146,6 +146,72 @@ address of a modifies entry" even means, which does need a version bump
 and a migration path. Adding an optional field elsewhere in the tree does
 not.
 
+### Amendment: CloudTrail attribution intent sources (2026-07-10, UBI-10)
+
+Two new `intent.sources[].kind` values, both attached to `drift_adopt`
+proposals only (attribution answers "who/when did this drift," which only
+means something once a drift has already been detected and recorded):
+
+- **`cloudtrail`** — a matched CloudTrail management event. Carries, in
+  addition to the existing `ref`/`content_hash` fields:
+  `event_id`, `event_name`, `event_time` (RFC3339), `actor_arn`
+  (`userIdentity.arn` from the event record — the IAM principal that made
+  the change), `source_ip`, and `session_context` (the raw
+  `userIdentity.sessionContext` object, opaque — present for assumed-role
+  callers, e.g. SSO, absent for long-lived IAM users). `ref` is the event
+  ID (a human-usable locator, same role `ref` plays for dialogue/PR/issue
+  sources); `content_hash` is `sha256:<hex>` of the raw `CloudTrailEvent`
+  JSON record — tamper-evidence, same reasoning as every other
+  `content_hash` use in this document. **Multiple matching events attach
+  as multiple `cloudtrail` sources, newest `event_time` first** — ubx never
+  guesses which of several candidate events caused the drift; if more than
+  one real management event touched the resource in the correlation
+  window, all of them are recorded and a human decides.
+- **`cloudtrail_unattributed`** — attribution was attempted and failed,
+  recorded as evidence in its own right rather than silently producing a
+  drift_adopt proposal with no intent.sources at all. Carries `reason`,
+  one of:
+  - `no_matching_event` — the correlation window was searched successfully
+    and wide enough to rule out delivery latency (see below), but no
+    event matched this resource's identity.
+  - `delivery_window` — the correlation window is narrower than
+    CloudTrail's known event-delivery latency (~15 minutes for
+    `LookupEvents`), so a real causal event may simply not have
+    propagated yet; distinct from `no_matching_event`, which asserts a
+    search that could actually rule something out.
+  - `not_logged` — the CloudTrail `LookupEvents` call itself could not be
+    made (denied credentials, no CloudTrail visibility in this
+    account/region, or any other API-level failure) — ubx has no
+    visibility into whether an event exists at all, as opposed to having
+    searched and found nothing.
+
+Correlation always runs over `[last ledger observation, scan time]` — the
+resolved_at of whichever proposal most recently recorded this address's
+state, through the current scan's own `resolved_at`. Matching is against
+whichever of the resource's own observed `id`/`arn`/`name` attributes
+CloudTrail's `ResourceName` lookup attribute actually recognizes for that
+service — empirically NOT always the ARN (see Surprises in STATE.md: for
+`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`, `id` is the value CloudTrail
+expects; searching by the full ARN returns nothing even for genuinely
+matching events). ubx tries the resource's own `id` first, falling back to
+`arn` then `name` only if `id` doesn't turn up a match — never assumed
+from one resource type, checked per attempt.
+
+Attribution is **best-effort by construction**: a `cloudtrail_unattributed`
+source is exactly as valid a proposal as one with `cloudtrail` sources —
+attribution failure of any kind (denied credentials, no matching event,
+delivery lag) never blocks or delays generating and accepting the
+underlying drift_adopt proposal. The drift itself is always recorded;
+who/when caused it is best-effort evidence layered on top, not a
+precondition.
+
+Same reasoning as the lookup-key/provider-checksum amendments above:
+purely additive and optional (new `kind` values, new optional fields on
+`IntentSource`), no `schema_version` bump — existing proposals with
+`dialogue`/`manual_edit`/`issue` sources are entirely unaffected, and the
+hash of a proposal that does carry these sources reflects exactly the
+content it actually has, same as any other content hash.
+
 ### Amendment: record verified provider binary checksum (2026-07-10, UBI-8)
 
 `resolution.inputs[].provider_checksum` is added: `"sha256:<hex>"` of the

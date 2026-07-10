@@ -61,10 +61,29 @@ type Intent struct {
 // "sha256:<hex>" content hash of the referenced dialogue/PR/issue at
 // resolution time (docs/schema.md — tamper-evidence for intent evidence
 // that otherwise lives outside the proposal's own hash chain).
+//
+// CloudTrailEvent/Unattributed fields were added 2026-07-10 (docs/schema.md
+// — "Amendment: CloudTrail attribution intent sources", UBI-10) for two new
+// kinds, "cloudtrail" and "cloudtrail_unattributed" — see AttributeDrift
+// (attribution.go). Purely additive/optional, same reasoning as every
+// other schema.md amendment since the hashing ratification: existing
+// proposals with only dialogue/manual_edit/issue sources are unaffected.
 type IntentSource struct {
-	Kind        string `json:"kind"` // dialogue | manual_edit | issue
-	Ref         string `json:"ref"`
+	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed
+	Ref         string `json:"ref,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
+
+	// The following are populated only for Kind == "cloudtrail".
+	EventID        string          `json:"event_id,omitempty"`
+	EventName      string          `json:"event_name,omitempty"`
+	EventTime      string          `json:"event_time,omitempty"` // RFC3339
+	ActorARN       string          `json:"actor_arn,omitempty"`
+	SourceIP       string          `json:"source_ip,omitempty"`
+	SessionContext json.RawMessage `json:"session_context,omitempty"`
+
+	// Reason is populated only for Kind == "cloudtrail_unattributed":
+	// no_matching_event | delivery_window | not_logged.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Address identifies one resource within a stack: (stack, type, name).

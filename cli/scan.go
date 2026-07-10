@@ -26,6 +26,7 @@ func newScanCmd() *cobra.Command {
 		ledgerDir       string
 		out             string
 		timeout         time.Duration
+		noAttribution   bool
 	)
 
 	cmd := &cobra.Command{
@@ -70,6 +71,10 @@ func newScanCmd() *cobra.Command {
 				return fmt.Errorf("scan %s: %w", addr, err)
 			}
 
+			if res.Outcome == core.ScanDrifted && !noAttribution {
+				attributeDrift(ctx, ledger, addr, res, proposal, json.RawMessage(providerConfig))
+			}
+
 			kindLabel := "new"
 			if res.Outcome == core.ScanDrifted {
 				kindLabel = "drifted"
@@ -99,6 +104,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan")
+	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip CloudTrail attribution for drift proposals (UBI-10)")
 
 	for _, f := range []string{"stack", "type", "name"} {
 		_ = cmd.MarkFlagRequired(f)

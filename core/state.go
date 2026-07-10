@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // Chain returns every proposal in l, oldest (genesis) first, by walking
@@ -50,6 +51,32 @@ func (l *Ledger) LastObservedHash(addr Address) (hash string, found bool, err er
 		}
 	}
 	return "", false, nil
+}
+
+// LastObservationTime returns the resolved_at timestamp of the proposal
+// that most recently recorded addr's observed state — the same proposal
+// LastObservedHash reads its hash from. Used by AttributeDrift (UBI-10) to
+// bound the CloudTrail correlation window's start: "since" is when ubx last
+// looked at this resource, not an arbitrary lookback. found is false if the
+// ledger has never recorded addr.
+func (l *Ledger) LastObservationTime(addr Address) (t time.Time, found bool, err error) {
+	chain, err := l.Chain()
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("last observation time: %w", err)
+	}
+	target := addr.String()
+	for i := len(chain) - 1; i >= 0; i-- {
+		for _, in := range chain[i].Resolution.Inputs {
+			if in.Resource == target {
+				parsed, err := time.Parse(time.RFC3339, chain[i].Resolution.ResolvedAt)
+				if err != nil {
+					return time.Time{}, false, fmt.Errorf("last observation time: %s: bad resolved_at %q: %w", addr, chain[i].Resolution.ResolvedAt, err)
+				}
+				return parsed, true, nil
+			}
+		}
+	}
+	return time.Time{}, false, nil
 }
 
 // FoldState reconstructs the ledger's currently-recorded full state for

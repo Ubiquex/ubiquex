@@ -26,6 +26,20 @@
   (no tagging API exists at all; nothing else in its schema is both
   mutable and observable) rather than forced or silently skipped — see
   §M1-2 below. 7 of 51 types implemented.
+- 2026-07-10 — UBI-10: CloudTrail attribution wired into `ubx scan`'s
+  drift-proposal generation. Two new intent.sources kinds (`cloudtrail`,
+  `cloudtrail_unattributed`) per docs/schema.md's amendment; new
+  `core/attribution.go` (EventLookup interface + AttributeDrift decision
+  logic, no AWS SDK dependency) and `cloudtrail/` package (the real
+  aws-sdk-go-v2 client, the only place in the codebase that imports one).
+  Best-effort by construction — attribution never blocks proposal
+  generation. Verified live against the real account: tagged the real
+  `ubx-states` bucket, scanned, confirmed the generated drift_adopt
+  proposal carried the real caller's actor ARN — see §CloudTrail
+  attribution below and STATE.md for the full writeup, including a
+  corrected assumption (CloudTrail's ResourceName lookup wants the
+  resource's `id`, not its ARN, for the three types checked) and measured
+  real delivery latency (~2-3 minutes in this account).
 - 2026-07-10 — UBI-9 batch 3, closing out the milestone: all 51 types now
   resolved (48 verified, 3 parked — see §M1-2, no type left pending).
   Batches 1-2 only covered real-safe types; this batch's real addition is
@@ -84,9 +98,49 @@ Thesis metric: % of surfaced drifts resolved through the signed flow —
 
 ## Wedge buildout (months 1–6)
 
-- **M1–2 (detection core):** top ~50 AWS resource types via ReadResource;
-  CloudTrail correlation (drift → actor, timestamp, session); `scan`,
-  `status --drift`. Milestone: attributed drift on a real messy account in <5 min.
+- **M1–2 (detection core):** top ~50 AWS resource types via ReadResource
+  (done, UBI-9 — see below); CloudTrail correlation (drift → actor,
+  timestamp, session; done, UBI-10 — see §CloudTrail attribution below);
+  `scan` (done since Slice 3), `status --drift`. Milestone: attributed
+  drift on a real messy account in <5 min.
+
+### CloudTrail attribution (UBI-10)
+
+`ubx scan`'s drift-proposal path now attempts CloudTrail attribution for
+every `drift_adopt` proposal it generates: two new `intent.sources` kinds,
+`cloudtrail` (a matched management event — event id/name/time, actor ARN,
+source IP, session context) and `cloudtrail_unattributed` (attribution was
+attempted and failed, with a `reason`: `no_matching_event` |
+`delivery_window` | `not_logged`) — see docs/schema.md's "CloudTrail
+attribution intent sources" amendment for the full field/reason
+definitions.
+
+Architecture: `core/attribution.go` defines `EventLookup` (core's own
+minimal interface, mirroring `StateReader`'s inversion for the tfplugin
+provider client — core still doesn't import an AWS SDK) and
+`AttributeDrift`, the deterministic decision logic (which identity value to
+search by, exact-match filtering, newest-first ordering, reason
+classification) — all unit-tested against a fake `EventLookup`, no network
+involved. The new `cloudtrail/` package is the one place in this codebase
+that imports an AWS SDK directly (`aws-sdk-go-v2`), implementing
+`EventLookup` against the real CloudTrail `LookupEvents` API.
+`cli/attribution.go` wires the two together into `ubx scan`
+(`--no-attribution` opts out); best-effort by construction, so a
+CloudTrail failure of any kind never blocks a scan from producing its
+proposal.
+
+Scope, deliberately narrow per this milestone: management events via
+`LookupEvents` only (CloudTrail's ~90-day default event history) — no
+trail configuration, no CloudTrail Lake, no data events. Correlation
+identity value: empirically, NOT the resource's ARN for the three types
+checked live (`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`) — CloudTrail's
+`ResourceName` lookup attribute wants the resource's own `id` (bucket
+name, role name, VPC id); searching by the full ARN returned nothing even
+for genuinely matching events. `id` is tried first for that reason, with
+`arn`/`name` as fallbacks rather than assumed to generalize to every AWS
+service. See STATE.md's UBI-10 entry for the full empirical writeup,
+including the real, measured CloudTrail delivery latency (~2-3 minutes in
+this account, not the near-instant a first manual probe happened to see).
 
 ### M1-2 resource type list (UBI-9)
 

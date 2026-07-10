@@ -146,6 +146,58 @@ This is a deliberate split between identity and download mechanism:
   "what did we observe" but "which exact build of which provider observed
   it."
 
+### CloudTrail attribution (UBI-10)
+
+Every `drift_adopt` proposal `ubx scan` generates gets a best-effort attempt
+at CloudTrail attribution — the "attribute via CloudTrail" half of the
+wedge pitch (see Business frame below), not deferred behind a later
+milestone. Two new `intent.sources` kinds carry the result: `cloudtrail`
+(a matched management event — actor ARN, event id/name/time, source IP,
+session context) or `cloudtrail_unattributed` (attempted, failed, with a
+`reason` — see docs/schema.md's amendment for the three reasons and what
+distinguishes them). **Best-effort by construction**: attribution failure
+of any kind never blocks generating or accepting the underlying drift
+record — the drift itself is always recorded; who/when caused it is
+evidence layered on top.
+
+Same dependency-inversion discipline as the tfplugin provider client
+(`core.StateReader`, UBI-7 follow-up): `core/attribution.go` defines
+`EventLookup`, a minimal interface core owns, and `AttributeDrift`, which
+holds all of the actual decision logic (which resource identity value to
+search by, exact-match filtering against a possibly-fuzzy lookup, ordering
+multiple matches newest-first, classifying an unmatched search) —
+fully unit-testable against a fake `EventLookup`, no AWS SDK, no network.
+The new `cloudtrail/` package is the only place in this codebase that
+imports an AWS SDK (`aws-sdk-go-v2`) directly, implementing `EventLookup`
+against the real CloudTrail `LookupEvents` API; `cli/attribution.go` wires
+the two together into `ubx scan` (`--no-attribution` opts out per-invocation).
+
+Scope, deliberately narrow: management events via `LookupEvents` only
+(CloudTrail's ~90-day default event history, no trail configuration
+required) — no CloudTrail Lake, no data events, no S3-object-level
+logging. Correlation always runs over `[last ledger observation, scan
+time]`, read back from the ledger itself (`Ledger.LastObservationTime`),
+not an arbitrary lookback.
+
+**Which identity value to search by is not a static per-type table** —
+`core.AttributeDrift` derives it from the resource's own just-observed
+state (`id`, then `arn`, then `name`, whichever are present), because which
+attribute CloudTrail's `ResourceName` lookup attribute actually recognizes
+turns out to vary by AWS service and was confirmed empirically, not
+assumed: for `aws_s3_bucket`/`aws_iam_role`/`aws_vpc`, searching by the
+resource's `id` (bucket name / role name / vpc-id) works, but searching by
+the full ARN returns **nothing at all**, even for genuinely matching
+events (verified live against the real account — see STATE.md). `id` is
+tried first for that reason, with `arn`/`name` kept as fallbacks rather
+than trusted to generalize from three data points. Real-world CloudTrail
+delivery latency was also measured directly against this account while
+building this feature: a live `PutBucketTagging` call took a little over
+two minutes to become queryable via `LookupEvents` — well under the
+documented ~15-minute upper bound, but far from instant — which is why
+`delivery_window` exists as its own distinct, non-`no_matching_event`
+outcome (a narrow correlation window can't rule out "the event just
+hasn't propagated yet" the way a wide one that still finds nothing can).
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
