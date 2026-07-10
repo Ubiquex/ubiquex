@@ -13,6 +13,8 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newAcceptCmd())
+	root.AddCommand(newWhyCmd())
 
 	return root
 }

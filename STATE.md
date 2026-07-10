@@ -4,19 +4,20 @@
 
 ## Current phase
 
-**Slice 1, done.** `provider/` package speaks tfplugin v5 AND v6 (protocol
-negotiated from the handshake), through one protocol-agnostic `Provider`
-interface. GetProviderSchema, Configure, and ReadResource are all verified
-end-to-end against the real `terraform-provider-aws` 6.54.0 binary in
-Roozbeh's own AWS account (bucket `ubx-states`, read-only) — see Surprises
-below for the two empirical findings that shaped this. Fully covered by
-adversarial tests against fake plugin binaries (both protocols).
+**Slice 2, done.** `core/` package: typed `Proposal`, canonical hashing per
+the now-RATIFIED docs/schema.md rules, an append-only per-stack ledger, and
+local acceptance. `ubx accept`/`ubx why` close the loop end-to-end: a
+hand-written proposal JSON file → canonical hash → local signing → ledger
+append → read back. Slice 1 (dual-protocol provider client) remains done
+from last session.
 
 ## Current focus
 
-Slice 1 exit criteria are met (schema dump + real ReadResource). Next up is
-Slice 2 (trust core) per docs/plan.md, unless Roozbeh wants a dev-facing CLI
-verb for provider interaction first (see Next steps).
+Slice 2 exit criteria are met. Next up per docs/plan.md is Slice 3 (close
+the loop — `ubx scan` drift detection, adoption proposals), unless Roozbeh
+wants to build out the Core IR / resolver first (component map #1-2, still
+not started — Slice 2 kept delta payloads as opaque JSON specifically to
+avoid needing them yet, see Next steps).
 
 ## Open decisions
 
@@ -104,27 +105,94 @@ verb for provider interaction first (see Next steps).
     encryption config, grants, etc.) — a real, read-only, attributed-in-spirit
     infrastructure read via ubx's own protocol client, no Terraform/OpenTofu
     involved. This satisfies Slice 1's ReadResource exit bullet.
+- 2026-07-10: docs/schema.md §Canonical hashing RATIFIED v1 (separate commit
+  `schema: ratify canonical hashing v1`), incorporating the design-session
+  amendments: numbers restricted to int64/decimal-strings (floats rejected
+  at propose time); hash-excluded fields exactly `id`/`acceptance`/`status`;
+  domain-separation prefix `ubx:proposal:v1\n`; `intent.sources[].content_hash`
+  for dialogue/PR/issue tamper-evidence; `delta` arrays sorted
+  lexicographically by `(stack, type, name)` instead of dependency order. Any
+  further change now requires a schema_version bump + migration.
+- 2026-07-10: Slice 2 completed — `core/` package (trust core).
+  - `core/proposal.go`: typed `Proposal` per docs/schema.md, including the
+    ratified `IntentSource.ContentHash` field. `Delta.Creates/Modifies/
+    Destroys` are `[]json.RawMessage` (opaque), not typed IR nodes — see
+    Next steps for why.
+  - `core/canonical.go`: canonical-hashing pipeline. Marshals the proposal,
+    re-decodes with `json.Decoder.UseNumber()` (preserves int-vs-float
+    literal shape), deletes the three excluded fields, sorts delta arrays,
+    then walks the tree rejecting any float-shaped number (`.`/`e`/`E` in
+    the literal, or an integer too big for int64) and converting surviving
+    integers to `int64`. The final `map[string]interface{}`/`[]interface{}`
+    tree is marshaled once — Go's `encoding/json` sorts map keys at every
+    nesting level, which is what makes a single `Marshal` call produce
+    JCS-style canonical output with no separate canonicalizer needed.
+  - `core/hash.go`: `Hash(*Proposal) (string, error)` — domain-prefixed
+    SHA-256 of the canonical bytes, full 64-hex-char digest (no truncation;
+    a short display form is a presentation concern, not part of the ID).
+  - `core/doublerun.go`: `DoubleRun(func() ([]byte, error))` — a standalone,
+    reusable component per the session's explicit ask, not just inlined
+    into Hash. Runs a computation twice, hard-fails on any byte mismatch.
+    Meant to be reused later by the resolver, not just proposal hashing.
+  - `core/ledger.go`: `Ledger` over `<dir>/ledger/proposals/<id>.prop.json` +
+    `<dir>/.ubx/ledger.lock`, matching docs/schema.md's layout exactly.
+    `Append` checks duplicate-ID before parent-match (a duplicate is a more
+    specific, more useful error than "parent mismatch" once the head has
+    already moved past it). `Head`/`Read` distinguish "doesn't exist yet"
+    from "exists but corrupt" (`ErrCorruptLedgerEntry`/`ErrCorruptLedgerHead`)
+    — never a panic, never silently wrong data.
+  - `core/accept.go`: `Accept(*Ledger, *Proposal)` — computes the hash, fills
+    in ID/Status/Acceptance (method "local": approver from `os/user`,
+    UTC timestamp — no cryptographic signature; that's explicitly a later
+    tier per docs/architecture.md), appends to the ledger.
+  - `cli/accept.go`, `cli/why.go`: `ubx accept <proposal.json> [--ledger-dir
+    dir]` and `ubx why <id> [--ledger-dir dir]`, wired into the root command.
+  - Tests: `core/canonical_test.go` (hash stability across map/array
+    ordering, float rejection incl. exponent-form and nested-config floats,
+    decimal-string accepted, mutation detection, id/acceptance/status
+    exclusion, domain-prefix sanity), `core/doublerun_test.go`,
+    `core/ledger_test.go` (accept→append→read round trip, genesis/parent-
+    chain/duplicate rejection, missing proposal, truncated proposal file,
+    corrupted (non-JSON) proposal file, corrupted ledger-head file),
+    `cli/proposal_flow_test.go` (full `ubx accept` → `ubx why` CLI round
+    trip). All green (`go build ./...`, `go vet ./...`, `go test ./...`).
+  - Manually verified via the built binary too (see transcript in this
+    session): hand-written proposal → `ubx accept` → real ledger files on
+    disk → `ubx why` printing intent/acceptance/blast-radius back out.
+  - Added `.gitignore` (`.DS_Store`, `/ubx`, `/dist/`) — stray macOS files
+    had started showing up untracked.
 
 ## Next steps
 
 1. A `ubx provider ...` dev-facing CLI verb was again deliberately NOT added
-   — still not part of the eventual product CLI surface (see
-   docs/architecture.md component map), and Slice 1 didn't require it; the
-   real-world ReadResource proof used a throwaway manual Go harness instead
-   (not committed — see Surprises for what it did). Revisit once the CLI
-   verb surface itself is being designed.
-2. Begin Slice 2 (trust core) per docs/plan.md: hand-written proposal JSON →
-   canonical hash → `ubx accept` (local signing) → ledger append → `ubx why`
-   reads it back. This is also where the canonical hashing open decision
-   above must finally get resolved — it's explicitly called out as
-   blocking in docs/schema.md.
-3. Not addressed this session, deliberately out of scope: CloudTrail
-   attribution (M1-2 milestone, not a Slice 1 bullet), PlanResourceChange/
-   ApplyResourceChange (write path — explicitly deferred per
-   docs/architecture.md "wedge reads and records before it ever writes"),
-   AutoMTLS (still opt-in/unimplemented, see provider/client.go — real
-   provider binaries fall back to plaintext over the local unix socket
-   without it, which is what ubx relies on).
+   last session — still not part of the eventual product CLI surface (see
+   docs/architecture.md component map). Revisit once the CLI verb surface
+   itself is being designed.
+2. Begin Slice 3 (close the loop) per docs/plan.md: `ubx scan` (provider
+   reality vs ledger → drift detected), drift → adoption proposal generated
+   → accept → ledger updated → `why` explains. This is the slice's stated
+   demo exit: "point at a messy account, resolve a drift with a signed
+   record."
+3. Still not started: Core IR + resolver (component map #1-2). Slice 2
+   deliberately kept `delta.creates/modifies/destroys` as opaque
+   `json.RawMessage` rather than typed IR nodes, since hand-written JSON was
+   explicitly this slice's input and the IR/resolver don't exist yet. Slice
+   3's adoption-proposal generation will likely be the first real pressure
+   to build at least a minimal typed IR resource-node type.
+4. `delta.modifies`/`delta.destroys` element shape is still schema.md's
+   "..." placeholder (only `delta.creates`, matching the IR resource-node
+   example, has a pinned (stack,type,name) shape). `core.deltaSortKey`
+   (core/canonical.go) has a best-effort fallback for the other two shapes
+   (a `target` field, string or object) — flagged as an interpretation, not
+   a ratified decision. Worth pinning down before real adoption/revert
+   proposals start populating those arrays for real.
+5. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
+   milestone), PlanResourceChange/ApplyResourceChange (write path —
+   deferred per docs/architecture.md "wedge reads and records before it
+   ever writes"), AutoMTLS in provider/ (still opt-in/unimplemented),
+   cryptographic signing tier for acceptance (docs/architecture.md calls
+   this out as "optional... later"; `ubx accept` only does the "local"
+   tier — records approver/method/timestamp, no actual signature).
 
 ## Surprises / findings
 
