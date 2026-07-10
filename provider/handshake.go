@@ -71,7 +71,7 @@ var (
 //
 //	CORE-PROTOCOL-VERSION|APP-PROTOCOL-VERSION|NETWORK-TYPE|NETWORK-ADDR|PROTOCOL|[SERVER-CERT]
 type handshakeInfo struct {
-	appProtocolVersion int // 5 or 6 — which tfplugin wire protocol was negotiated
+	appProtocolVersion int    // 5 or 6 — which tfplugin wire protocol was negotiated
 	network            string // "unix" or "tcp"
 	addr               string
 }

@@ -23,8 +23,8 @@ func sampleProposal() *Proposal {
 				json.RawMessage(`{"stack":"payments","type":"aws_db_instance","name":"payments-db","config":{"engine":"postgres"}}`),
 			},
 		},
-		Resolution: Resolution{ResolvedAt: "2026-07-10T00:00:00Z"},
-		CostDelta:  CostDelta{MonthlyUSD: json.RawMessage(`59`)},
+		Resolution:  Resolution{ResolvedAt: "2026-07-10T00:00:00Z"},
+		CostDelta:   CostDelta{MonthlyUSD: json.RawMessage(`59`)},
 		BlastRadius: BlastRadius{Creates: 1},
 		Status:      StatusDraft,
 	}

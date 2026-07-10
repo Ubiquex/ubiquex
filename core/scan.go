@@ -74,6 +74,14 @@ type ScanResult struct {
 	ObservedHash string
 	PreviousHash string          // "" if Outcome == ScanNew
 	Lookup       json.RawMessage // the lookup key used to read Address — persisted into the generated proposal, see GenerateProposal
+
+	// ProviderChecksum is "sha256:<hex>" of the exact provider binary used
+	// for this scan, if the caller supplied one (see ScanRequest) —
+	// persisted into the generated proposal's resolution.inputs entry as
+	// attribution evidence (docs/architecture.md — provider acquisition,
+	// UBI-8). Empty if the caller didn't supply one (e.g. scanning via a
+	// hand-picked --provider path rather than an acquired/verified one).
+	ProviderChecksum string
 }
 
 // ScanRequest describes one resource to scan.
@@ -81,6 +89,12 @@ type ScanRequest struct {
 	Address        Address
 	ProviderConfig json.RawMessage // passed to Provider.Configure
 	CurrentState   json.RawMessage // passed to Provider.ReadResource — the lookup key(s) (e.g. {"id":"...","bucket":"..."})
+
+	// ProviderChecksum is "sha256:<hex>" of the provider binary being used
+	// to run this scan (see provider.Acquire's AcquireResult.SHA256) —
+	// purely a pass-through value core records, never inspects. Optional;
+	// leave empty if unknown or not applicable.
+	ProviderChecksum string
 }
 
 // RunScan performs the full scan sequence against an already-launched,
@@ -100,7 +114,14 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
 	}
 
-	res := &ScanResult{Address: req.Address, Observed: observed, ObservedHash: hash, PreviousHash: prevHash, Lookup: req.CurrentState}
+	res := &ScanResult{
+		Address:          req.Address,
+		Observed:         observed,
+		ObservedHash:     hash,
+		PreviousHash:     prevHash,
+		Lookup:           req.CurrentState,
+		ProviderChecksum: req.ProviderChecksum,
+	}
 	switch {
 	case !found:
 		res.Outcome = ScanNew
@@ -162,7 +183,13 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 		Resolution: Resolution{
 			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
 			Inputs: []ResolutionInput{
-				{Kind: "live_state", Resource: res.Address.String(), ObservedHash: res.ObservedHash, Lookup: res.Lookup},
+				{
+					Kind:             "live_state",
+					Resource:         res.Address.String(),
+					ObservedHash:     res.ObservedHash,
+					Lookup:           res.Lookup,
+					ProviderChecksum: res.ProviderChecksum,
+				},
 			},
 		},
 		CostDelta:   CostDelta{MonthlyUSD: json.RawMessage(`0`)},

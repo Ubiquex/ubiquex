@@ -4,40 +4,45 @@
 
 ## Current phase
 
-**Slice 3 (UBI-7), done and its three follow-up flags resolved.**
-`ubx scan` closes the loop: reads a resource's live state, compares it
-against the ledger (`core.RunScan`), classifies it as new/drifted/
-unchanged, and generates a zero-blast-radius `adoption`/`drift_adopt`
-proposal (`core.GenerateProposal`) that `ubx accept` (now with an optional
-`--reverify-with` staleness guard) and `ubx why` handle exactly as they
-already did. Verified for real: adopted the real `ubx-states` S3 bucket,
-mutated a tag on it directly via the AWS CLI, scanned again, and got back a
-precise `tags.ubx-demo`/`tags_all.ubx-demo` diff. This is docs/plan.md's
-stated exit for the three foundational slices: "point at a messy account,
-resolve a drift with a signed record."
+**UBI-8 done: provider binary acquisition — download, verify, cache.**
+`provider.Acquire` resolves a provider source+explicit-version into a
+verified local binary: `UBX_PROVIDER_MIRROR` local-dir override first, then
+`~/.ubx/providers/...` cache, then registry.opentofu.org (not
+registry.terraform.io — see docs/architecture.md for why) with SHA256SUMS +
+OpenPGP signature verification against a registry-served key. `ubx scan`/
+`ubx accept --reverify-with` both gained `--source`/`--provider-version`
+(and `--reverify-source`/`--reverify-provider-version`) as an alternative to
+a raw `--provider` path; the verified binary's own checksum is now recorded
+in the generated proposal's `resolution.inputs[].provider_checksum`.
+Verified for real against the actual registry.opentofu.org and the actual
+`ubx-states` bucket — see Done.
 
-UBI-7 follow-up (same day): the three architectural flags from that
-session were each resolved rather than left open — `core` no longer
-imports `provider` (inverted via a `core.StateReader` interface), the
-resource lookup key is now persisted in `resolution.inputs[].lookup`
-(docs/schema.md amended, no schema_version bump needed — see below for
-why), and `Ledger.FoldState`'s O(chain) walk is now a documented, accepted
-tradeoff rather than an unresolved worry. See Open decisions and Done.
+Slice 3 (UBI-7) and its follow-up flags remain done from the prior session
+(see below) — the three-foundational-slices arc was already complete;
+UBI-8 is the wedge-buildout prerequisite that lets a real user run ubx
+without a scratch-dir manual download first.
 
 ## Current focus
 
-All three foundational slices (talk to a provider, trust core, close the
-loop) are done. Next per docs/plan.md is the M1-2 wedge buildout (top ~50
-AWS resource types, CloudTrail correlation, `status --drift`) — a
-meaningfully bigger scope step up from "one resource at a time by explicit
-CLI flags," which has been this arc's deliberate, honest scaling limit so
-far. See Next steps for what M1-2 will actually require that doesn't exist
-yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
+Acquisition is done; next per docs/plan.md is the M1-2 wedge buildout (top
+~50 AWS resource types, CloudTrail correlation, `status --drift`) — still a
+meaningfully bigger scope step than "one resource at a time by explicit CLI
+flags," which remains this arc's deliberate, honest scaling limit. See Next
+steps for what M1-2 will actually require that doesn't exist yet
+(auto-discovery, CloudTrail attribution, a real IR/resolver).
 
 ## Open decisions
 
-- [ ] Provider binary acquisition: download from registry.terraform.io with
-      signature verification vs. vendored for dev
+- [x] **RESOLVED 2026-07-10 — provider binary acquisition (UBI-8).**
+      Decision: download from registry.opentofu.org (not
+      registry.terraform.io — ToS risk for a third-party tool; OpenTofu's
+      registry mirrors the same providers via the same protocol and is
+      built for exactly this) with SHA256SUMS + OpenPGP signature
+      verification, `~/.ubx/providers/<hostname>/<namespace>/<type>/
+      <version>/<os_arch>/` cache, `UBX_PROVIDER_MIRROR` local-directory
+      override checked first, explicit version pins only (no "latest"
+      resolution). docs/architecture.md and docs/schema.md updated. See
+      Done below for what shipped.
 - [ ] Go module path final confirmation (`github.com/ubiquex/ubiquex-cli`)
 - [x] **RESOLVED 2026-07-10 — protocol v6-only premise.** Decision: dual-protocol
       client. `provider/` now has tfplugin5 and tfplugin6 wire implementations
@@ -346,6 +351,79 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
     `FAKEPROVIDER_EXTRA_TAG` instead of varying `--lookup`, plus a new
     `TestGenerateProposal_PersistsLookup` confirming the round trip. All
     green (`go build ./...`, `go vet ./...`, `go test ./...`).
+- 2026-07-10: UBI-8 completed — provider binary acquisition (download,
+  verify, cache).
+  - `provider/source.go`: `Source{Hostname,Namespace,Type}` +
+    `ParseSource` — parses both `"hashicorp/aws"` (hostname defaults to
+    `registry.terraform.io`, Terraform's own default) and the fully
+    qualified form.
+  - `provider/registry.go`: registry protocol client. Verified live against
+    registry.opentofu.org (`GET /.well-known/terraform.json`, then `GET
+    /v1/providers/hashicorp/aws/6.54.0/download/darwin/arm64`) rather than
+    assumed from memory — response shape (`filename`, `download_url`,
+    `shasums_url`, `shasums_signature_url`, `signing_keys.gpg_public_keys[]
+    .ascii_armor`) matches exactly what got implemented.
+  - `provider/verify.go`: signature + checksum verification, using
+    `github.com/ProtonMail/go-crypto/openpgp` (MIT/BSD-3-style — the
+    maintained fork; `golang.org/x/crypto/openpgp` is frozen/deprecated).
+    Confirmed live that `*_SHA256SUMS.sig` is a raw binary detached
+    signature, not ASCII-armored — used `openpgp.CheckDetachedSignature`,
+    not the Armored variant. Verifies signature over the SHA256SUMS file
+    first, then extracts the expected digest for the requested platform's
+    filename from that (signature-covered) content — never trusts the
+    registry response's bare top-level `shasum` field alone, since that
+    field isn't itself signed.
+  - `provider/cache.go`: `~/.ubx/providers/<hostname>/<namespace>/<type>/
+    <version>/<os_arch>/` cache and `UBX_PROVIDER_MIRROR` local-directory
+    override, sharing one "exactly one file in this directory" convention
+    (`findSingleFile`) for both — simpler than agreeing on Terraform's
+    upstream archive filename convention ahead of time, and lets an
+    operator hand-populate a mirror with just the extracted binary.
+  - `provider/acquire.go`: `Acquire(ctx, src, version, opts...)` —
+    mirror → cache → registry (download SHA256SUMS + signature, verify,
+    download archive, verify its checksum, extract) — resolution order,
+    each a documented, deliberate fallthrough not an error. Explicit
+    version only, no "latest" resolution (`WithHTTPClient`/
+    `WithRegistryAPIBase`/`WithCacheRoot`/`WithPlatform` options exist
+    purely for tests).
+  - `core/proposal.go`/`core/scan.go`: `ResolutionInput` gained
+    `ProviderChecksum string` (`"sha256:<hex>"`); `ScanRequest`/`ScanResult`
+    thread it through as a plain opaque string (core still doesn't import
+    `provider` — see the UBI-7 follow-up inversion, unaffected by this).
+  - `cli/providerresolve.go` (new): `resolveProviderBinary` — exactly one
+    of `--provider <path>` (unchanged manual/dev workflow) or `--source`+
+    `--provider-version` (new: calls `provider.Acquire`, returns its
+    checksum) — shared by `cli/scan.go` and `cli/accept.go`
+    (`--reverify-with`/`--reverify-source`+`--reverify-provider-version`).
+  - docs/architecture.md: new "Provider binary acquisition (UBI-8)"
+    subsection — registry choice rationale (ToS risk avoided; OpenTofu
+    mirrors the same protocol), verification model, cache/mirror layout,
+    explicit-version-only rule, attribution via `provider_checksum`.
+    docs/schema.md: matching "Amendment: record verified provider binary
+    checksum" (additive/optional, no schema_version bump, same reasoning
+    as the UBI-7 lookup-key amendment).
+  - Tests (`provider/acquire_test.go`): a throwaway OpenPGP keypair signs
+    fixture `SHA256SUMS` content exactly like a real registry would, served
+    from an `httptest.Server`. Covers the happy path; corrupted download
+    (truncated archive vs. its signed checksum); bad checksum (SHA256SUMS
+    itself wrong, still validly signed — the signature can't save a wrong
+    checksum); bad signature two ways (signed by the wrong key, and
+    corrupted signature bytes); missing platform (404); mirror hit with no
+    network call possible (unreachable API base proves it); mirror miss
+    correctly falling through to network; cache hit on a second call with
+    no second network call (same unreachable-API-base proof). All green.
+  - **Real-world verification, exactly as asked**: cleared `~/.ubx/providers`
+    and ran `ubx scan --source hashicorp/aws --provider-version 6.54.0`
+    against the real `ubx-states` bucket — real network round trip to
+    registry.opentofu.org, real SHA256SUMS + OpenPGP signature
+    verification, real extraction, cached at
+    `~/.ubx/providers/registry.terraform.io/hashicorp/aws/6.54.0/
+    darwin_arm64/terraform-provider-aws`, and the generated proposal's
+    `resolution.inputs[].provider_checksum` correctly populated
+    (`sha256:4b74277739913f...`). A second identical scan completed in
+    ~5s instead of ~35s, confirming the cache hit (no second download).
+    This surfaced a real bug (see Surprises) that got fixed before this
+    counted as verified.
 
 ## Next steps
 
@@ -377,9 +455,34 @@ yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
    limit, not deferred work — its own revisit trigger is stated there;
    don't re-open it as a TODO without something actually hitting that
    trigger.
+5. UBI-8 gaps, not addressed this session: no `UBX_PROVIDER_MIRROR`
+   signature verification (by design — see docs/architecture.md, a local
+   file is trusted differently); no cache invalidation/eviction (a cached
+   binary is trusted forever once verified — fine at current scale, revisit
+   if a provider ever needs to be re-verified e.g. after a key rotation);
+   `ubx scan --source` only supports the registry.opentofu.org mirror path
+   for `registry.terraform.io`-sourced providers specifically — a source
+   naming a different/private registry hostname isn't rejected outright by
+   `ParseSource`, but `Acquire` doesn't route to it either (it always hits
+   `registryAPIBase`, i.e. OpenTofu) — worth an explicit check/error if a
+   non-default hostname ever actually shows up in practice.
 
 ## Surprises / findings
 
+- 2026-07-10: **OpenTofu's mirrored provider release archives aren't always
+  the one-file-only zips HashiCorp's original releases are.** First real
+  (non-test) `Acquire` call against `hashicorp/aws@6.54.0` failed with
+  "expected exactly one file in the provider archive, found 4" — the
+  OpenTofu-mirrored zip also ships `CHANGELOG.md`/`LICENSE`/`README.md`
+  alongside the actual `terraform-provider-aws` binary. Fixed by picking
+  the entry named with Terraform's own `terraform-provider-*` binary
+  convention (which every provider binary is required to follow for
+  Terraform's own provider discovery to work at all) instead of assuming
+  archive-has-exactly-one-file; kept the one-file case as a fallback for
+  any oddly-packaged release. Added a dedicated test
+  (`TestAcquire_ArchiveWithExtraFiles`) reproducing this exact shape so it
+  can't regress silently. Caught before real-world verification counted as
+  done, not after — the "verify against reality" step earns its keep again.
 - 2026-07-10: **docs/architecture.md's "protocol v6 only" premise did not
   hold against real provider binaries.** Downloaded and tested two official
   HashiCorp binaries directly (env vars + raw exec, not through ubx, to rule

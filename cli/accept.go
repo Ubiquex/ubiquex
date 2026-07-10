@@ -15,12 +15,14 @@ import (
 
 func newAcceptCmd() *cobra.Command {
 	var (
-		ledgerDir      string
-		reverifyWith   string
-		resourceType   string
-		resourceName   string
-		providerConfig string
-		timeout        time.Duration
+		ledgerDir               string
+		reverifyWith            string
+		reverifySource          string
+		reverifyProviderVersion string
+		resourceType            string
+		resourceName            string
+		providerConfig          string
+		timeout                 time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -38,16 +40,21 @@ func newAcceptCmd() *cobra.Command {
 				return fmt.Errorf("parse proposal: %w", err)
 			}
 
-			if reverifyWith != "" {
+			if reverifyWith != "" || reverifySource != "" {
 				if resourceType == "" || resourceName == "" {
-					return fmt.Errorf("accept: --reverify-with requires --resource-type and --resource-name")
+					return fmt.Errorf("accept: reverification requires --resource-type and --resource-name")
 				}
 				addr := core.Address{Stack: p.Stack, Type: resourceType, Name: resourceName}
 
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
 
-				client, err := provider.Launch(ctx, reverifyWith)
+				path, _, err := resolveProviderBinary(ctx, reverifyWith, reverifySource, reverifyProviderVersion)
+				if err != nil {
+					return fmt.Errorf("accept: reverify: %w", err)
+				}
+
+				client, err := provider.Launch(ctx, path)
 				if err != nil {
 					return fmt.Errorf("accept: reverify: %w", err)
 				}
@@ -71,10 +78,12 @@ func newAcceptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
-	cmd.Flags().StringVar(&reverifyWith, "reverify-with", "", "path to a provider binary: re-read the resource live and refuse to accept if it no longer matches the proposal's recorded observation (stale)")
-	cmd.Flags().StringVar(&resourceType, "resource-type", "", "resource type to re-read (required with --reverify-with)")
-	cmd.Flags().StringVar(&resourceName, "resource-name", "", "resource name to re-read (required with --reverify-with)")
-	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (used with --reverify-with)")
+	cmd.Flags().StringVar(&reverifyWith, "reverify-with", "", "path to a provider binary: re-read the resource live and refuse to accept if it no longer matches the proposal's recorded observation (stale). Mutually exclusive with --reverify-source")
+	cmd.Flags().StringVar(&reverifySource, "reverify-source", "", "provider source address to acquire for reverification, e.g. hashicorp/aws (mutually exclusive with --reverify-with; requires --reverify-provider-version)")
+	cmd.Flags().StringVar(&reverifyProviderVersion, "reverify-provider-version", "", "explicit provider version to acquire for reverification (required with --reverify-source)")
+	cmd.Flags().StringVar(&resourceType, "resource-type", "", "resource type to re-read (required with --reverify-with/--reverify-source)")
+	cmd.Flags().StringVar(&resourceName, "resource-name", "", "resource name to re-read (required with --reverify-with/--reverify-source)")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (used with --reverify-with/--reverify-source)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for the reverify provider round trip")
 	return cmd
 }

@@ -146,6 +146,22 @@ address of a modifies entry" even means, which does need a version bump
 and a migration path. Adding an optional field elsewhere in the tree does
 not.
 
+### Amendment: record verified provider binary checksum (2026-07-10, UBI-8)
+
+`resolution.inputs[].provider_checksum` is added: `"sha256:<hex>"` of the
+exact provider binary (the extracted executable, not the release archive)
+that produced this observation, once acquired and signature-verified via
+`provider.Acquire` (see docs/architecture.md — Provider binary acquisition).
+Distinct from `observed_hash`, which fingerprints the *resource's* state —
+this fingerprints the *tool* that read it, attribution evidence for `ubx
+why` to eventually surface alongside who/when. Empty when the caller used a
+hand-picked `--provider` path rather than an acquired/verified one — there
+is nothing to attribute in that case beyond what the operator already
+knows.
+
+Same reasoning as the lookup-key amendment above: purely additive and
+optional, no `schema_version` bump.
+
 Notes:
 - `id` is a content hash (git's lesson) — no sequential numbering; human-friendly
   aliases allowed as labels.

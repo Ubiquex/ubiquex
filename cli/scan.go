@@ -15,15 +15,17 @@ import (
 
 func newScanCmd() *cobra.Command {
 	var (
-		providerPath   string
-		stack          string
-		resourceType   string
-		resourceName   string
-		lookup         string
-		providerConfig string
-		ledgerDir      string
-		out            string
-		timeout        time.Duration
+		providerPath    string
+		source          string
+		providerVersion string
+		stack           string
+		resourceType    string
+		resourceName    string
+		lookup          string
+		providerConfig  string
+		ledgerDir       string
+		out             string
+		timeout         time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -35,7 +37,12 @@ func newScanCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
-			client, err := provider.Launch(ctx, providerPath)
+			path, checksum, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+			if err != nil {
+				return fmt.Errorf("scan %s: %w", addr, err)
+			}
+
+			client, err := provider.Launch(ctx, path)
 			if err != nil {
 				return fmt.Errorf("scan %s: %w", addr, err)
 			}
@@ -43,9 +50,10 @@ func newScanCmd() *cobra.Command {
 
 			ledger := core.Open(ledgerDir)
 			res, err := core.RunScan(ctx, newStateReader(client.Provider), ledger, core.ScanRequest{
-				Address:        addr,
-				ProviderConfig: json.RawMessage(providerConfig),
-				CurrentState:   json.RawMessage(lookup),
+				Address:          addr,
+				ProviderConfig:   json.RawMessage(providerConfig),
+				CurrentState:     json.RawMessage(lookup),
+				ProviderChecksum: checksum,
 			})
 			if err != nil {
 				return err
@@ -80,7 +88,9 @@ func newScanCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (required)")
+	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source)")
+	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
+	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
 	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource belongs to (required)")
 	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket (required)")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack (required)")
@@ -90,7 +100,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan")
 
-	for _, f := range []string{"provider", "stack", "type", "name"} {
+	for _, f := range []string{"stack", "type", "name"} {
 		_ = cmd.MarkFlagRequired(f)
 	}
 

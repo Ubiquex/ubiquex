@@ -88,6 +88,64 @@ differentiator; adversarial failure tests are first-class.
 Scope containment: AWS provider first, dual tfplugin v5/v6, conformance suite
 grows per provider.
 
+### Provider binary acquisition (UBI-8)
+
+ubx downloads provider binaries from **registry.opentofu.org**, not
+registry.terraform.io, even though a provider's canonical *source address*
+(what's recorded in the IR, in proposals, in everything a human reads) stays
+the Terraform-standard form — e.g. `registry.terraform.io/hashicorp/aws`.
+This is a deliberate split between identity and download mechanism:
+
+- **Why not registry.terraform.io directly:** HashiCorp's registry ToS and
+  the BSL-era licensing posture around it are not something a third-party,
+  non-Terraform tool should build a load-bearing dependency on — the
+  registry's terms are oriented around Terraform/HCP client use, and
+  building an unrelated product's core acquisition path on it risks the
+  rug being pulled with no warning and no recourse. This isn't a
+  hypothetical: it's exactly the kind of platform-dependency risk a
+  solo-founder wedge (see Business frame) can't absorb.
+- **Why registry.opentofu.org works as the substitute:** OpenTofu is the
+  Linux Foundation-governed, MPL-2.0 fork of Terraform, and its registry
+  mirrors the same provider ecosystem (same namespaces, same versions, same
+  releases — often literally re-publishing the upstream release artifacts)
+  via the **same provider registry protocol** Terraform itself defined
+  (service discovery at `/.well-known/terraform.json`, then
+  `/v1/providers/<namespace>/<type>/<version>/download/<os>/<arch>`).
+  It's explicitly built and governed for third-party tool use, not just
+  OpenTofu-the-CLI. Verified live against the real protocol (not assumed
+  from memory) while implementing this.
+- **Verification, not just trust-the-CDN:** every acquisition downloads the
+  release's `SHA256SUMS` file and its detached OpenPGP signature, verifies
+  the signature against a registry-served signing public key, extracts the
+  expected digest for the requested platform's exact filename from
+  `SHA256SUMS`, and only then checks the downloaded archive's own SHA-256
+  against that (signature-covered) digest — never against the bare
+  `shasum` field alone, which isn't itself signed. A provider binary is
+  cached (`~/.ubx/providers/<hostname>/<namespace>/<type>/<version>/<os_arch>/`)
+  only after this succeeds; once cached, it's trusted again without
+  re-verifying (content-addressed by source/version/platform, which is
+  exactly what was checked).
+- **Explicit version pins only — no "latest" resolution.** A proposal's
+  provider version is part of what was reviewed and hashed into the
+  ledger (see `resolution.inputs`); silently resolving "latest" at
+  acquisition time would make that reviewed version meaningless. Every
+  acquisition names an exact version.
+- **`UBX_PROVIDER_MIRROR`** (a local directory) is checked first, before
+  any network call, preserving the plain "download it yourself, hand ubx
+  the binary" workflow used before this existed — a mirror hit is trusted
+  as-is (a local file an operator placed there is trusted differently than
+  a network download, the same reasoning Terraform's own filesystem-mirror
+  feature uses), with no signature verification performed on it. A mirror
+  miss is not an error — it falls through to the cache, then the network,
+  unchanged.
+- **Attribution:** the verified provider binary's own SHA-256 (of the
+  extracted executable, not the archive — that's literally what gets
+  exec'd and produces a reading) is recorded in the generated proposal's
+  `resolution.inputs[].provider_checksum` — see docs/schema.md's
+  "ProviderChecksum" amendment. `ubx why` can eventually answer not just
+  "what did we observe" but "which exact build of which provider observed
+  it."
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

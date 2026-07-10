@@ -131,11 +131,19 @@ type Resolution struct {
 // it lets a proposal be independently re-verified later (see
 // core.VerifyFreshness) without the caller having to already know, or
 // re-supply, exactly what was used to look the resource up the first time.
+//
+// ProviderChecksum was added 2026-07-10 (docs/architecture.md — provider
+// acquisition, UBI-8): "sha256:<hex>" of the exact provider binary that
+// produced this observation, once acquired/verified via provider.Acquire.
+// Attribution evidence — which build of which provider is responsible for
+// this reading — independent of ObservedHash, which fingerprints the
+// resource's state, not the tool that read it.
 type ResolutionInput struct {
-	Kind         string          `json:"kind"`
-	Resource     string          `json:"resource"`
-	ObservedHash string          `json:"observed_hash"`
-	Lookup       json.RawMessage `json:"lookup,omitempty"`
+	Kind             string          `json:"kind"`
+	Resource         string          `json:"resource"`
+	ObservedHash     string          `json:"observed_hash"`
+	Lookup           json.RawMessage `json:"lookup,omitempty"`
+	ProviderChecksum string          `json:"provider_checksum,omitempty"`
 }
 
 // CostDelta is Proposal.CostDelta. MonthlyUSD is left as raw JSON because
