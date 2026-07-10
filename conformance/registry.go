@@ -130,10 +130,38 @@ var Registry = []TypeSpec{
 			"AWS-created) \"aws-codestar-service-role\".",
 		Implemented: true,
 	},
-	{Type: "aws_iam_policy", Category: "iam", Safety: FakeOnly},
+	{
+		Type: "aws_iam_policy", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id", "arn"},
+		Notes: "id IS the ARN (unlike role/user/group, which use the name) " +
+			"-- lookup only needs {\"id\": \"<policy-arn>\"}. Verified by " +
+			"creating a throwaway managed policy, testing it, and deleting " +
+			"it (create+destroy per run, not an adopted pre-existing " +
+			"resource like aws_iam_role).",
+		Implemented: true,
+	},
 	{Type: "aws_iam_role_policy_attachment", Category: "iam", Safety: FakeOnly},
-	{Type: "aws_iam_user", Category: "iam", Safety: FakeOnly},
-	{Type: "aws_iam_group", Category: "iam", Safety: FakeOnly},
+	{
+		Type: "aws_iam_user", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id", "arn", "name"},
+		Notes: "Same shape as aws_iam_role: id and name are both the user " +
+			"name, and both must be set in the lookup (\"name\" alone reads " +
+			"back null). Verified by creating a throwaway user, testing it, " +
+			"and deleting it.",
+		Implemented: true,
+	},
+	{
+		Type: "aws_iam_group", Category: "iam", Safety: FakeOnly,
+		Notes: "PARKED, not hacked: IAM groups have no tagging API at all " +
+			"(there is no \"aws iam tag-group\" -- confirmed empirically, " +
+			"not assumed) and the aws_iam_group schema itself has nothing " +
+			"else mutable-and-observable (path is immutable after create; " +
+			"no tags field). The adopt half works fine ({\"id\": " +
+			"\"<group-name>\", \"name\": \"<group-name>\"}, same shape as " +
+			"role/user), but there is no real out-of-band mutation to test " +
+			"drift detection against, so this stays fake-only until a " +
+			"fakeprovider fixture stands in for the mutate step instead.",
+	},
 	{Type: "aws_iam_instance_profile", Category: "iam", Safety: FakeOnly},
 	{Type: "aws_iam_openid_connect_provider", Category: "iam", Safety: FakeOnly},
 
@@ -171,8 +199,25 @@ var Registry = []TypeSpec{
 	{Type: "aws_acm_certificate", Category: "dns", Safety: FakeOnly},
 
 	// --- messaging / observability / secrets ---
-	{Type: "aws_sqs_queue", Category: "messaging", Safety: FakeOnly},
-	{Type: "aws_sns_topic", Category: "messaging", Safety: FakeOnly},
+	{
+		Type: "aws_sqs_queue", Category: "messaging", Safety: RealSafe,
+		IdentityFields: []string{"id", "arn", "url"},
+		Notes: "id IS the queue URL (not the ARN, though arn is also " +
+			"surfaced) -- lookup only needs {\"id\": \"<queue-url>\"}. " +
+			"Verified by creating a throwaway queue, testing it, and " +
+			"deleting it. SQS has no per-queue monthly charge (pay per " +
+			"request only), so create+destroy per run costs effectively " +
+			"nothing.",
+		Implemented: true,
+	},
+	{
+		Type: "aws_sns_topic", Category: "messaging", Safety: RealSafe,
+		IdentityFields: []string{"id", "arn"},
+		Notes: "id IS the topic ARN -- lookup only needs {\"id\": " +
+			"\"<topic-arn>\"}, same pattern as aws_iam_policy. Verified by " +
+			"creating a throwaway topic, testing it, and deleting it.",
+		Implemented: true,
+	},
 	{Type: "aws_cloudwatch_log_group", Category: "messaging", Safety: FakeOnly},
 	{Type: "aws_cloudwatch_metric_alarm", Category: "messaging", Safety: FakeOnly},
 	{Type: "aws_secretsmanager_secret", Category: "messaging", Safety: FakeOnly},

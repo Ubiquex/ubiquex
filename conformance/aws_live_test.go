@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -41,6 +42,25 @@ func runAWS(t *testing.T, args ...string) {
 	if err != nil {
 		t.Fatalf("aws %v: %v\n%s", args, err, out)
 	}
+}
+
+// runAWSOutput is runAWS but returns stdout (trimmed) — for commands whose
+// result (a queue URL, an ARN, ...) the test needs to use afterward.
+func runAWSOutput(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("aws", args...).Output()
+	if err != nil {
+		t.Fatalf("aws %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// uniqueName gives each create+destroy-per-run conformance fixture (batch
+// 2 on: types with no existing real resource to adopt, unlike batch 1's
+// aws_s3_bucket/aws_iam_role/aws_vpc) a name that won't collide across
+// repeated or concurrent runs.
+func uniqueName(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
 // requireDefaultVPCID discovers the account's real default VPC. Every AWS
@@ -120,6 +140,102 @@ func TestConformance_AWSVPC(t *testing.T) {
 		Mutate: func(t *testing.T) {
 			runAWS(t, "ec2", "create-tags", "--resources", vpcID, "--tags", "Key=ubx-conformance,Value=vpc")
 			t.Cleanup(func() { runAWS(t, "ec2", "delete-tags", "--resources", vpcID, "--tags", "Key=ubx-conformance") })
+		},
+	})
+}
+
+// TestConformance_AWSSQSQueue creates a throwaway queue (free — SQS has no
+// per-queue monthly charge, only per-request), tests it, and deletes it.
+// Batch 2's first create+destroy-per-run type, unlike batch 1's
+// adopt-something-that-already-exists pattern.
+func TestConformance_AWSSQSQueue(t *testing.T) {
+	RequireLive(t)
+	providerPath := realAWSProviderPath(t)
+	name := uniqueName("ubx-conformance-sqs")
+
+	queueURL := runAWSOutput(t, "sqs", "create-queue", "--queue-name", name, "--query", "QueueUrl", "--output", "text")
+	t.Cleanup(func() { runAWS(t, "sqs", "delete-queue", "--queue-url", queueURL) })
+
+	RunAdoptMutateScanDiff(t, AdoptMutateScanDiffConfig{
+		ProviderPath:   providerPath,
+		Stack:          "conformance",
+		Address:        core.Address{Stack: "conformance", Type: "aws_sqs_queue", Name: name},
+		Lookup:         MustMarshal(map[string]string{"id": queueURL}),
+		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
+		Mutate: func(t *testing.T) {
+			runAWS(t, "sqs", "tag-queue", "--queue-url", queueURL, "--tags", "ubx-conformance=sqs")
+			t.Cleanup(func() { runAWS(t, "sqs", "untag-queue", "--queue-url", queueURL, "--tag-keys", "ubx-conformance") })
+		},
+	})
+}
+
+// TestConformance_AWSSNSTopic creates a throwaway topic (free), tests it,
+// and deletes it.
+func TestConformance_AWSSNSTopic(t *testing.T) {
+	RequireLive(t)
+	providerPath := realAWSProviderPath(t)
+	name := uniqueName("ubx-conformance-sns")
+
+	arn := runAWSOutput(t, "sns", "create-topic", "--name", name, "--query", "TopicArn", "--output", "text")
+	t.Cleanup(func() { runAWS(t, "sns", "delete-topic", "--topic-arn", arn) })
+
+	RunAdoptMutateScanDiff(t, AdoptMutateScanDiffConfig{
+		ProviderPath:   providerPath,
+		Stack:          "conformance",
+		Address:        core.Address{Stack: "conformance", Type: "aws_sns_topic", Name: name},
+		Lookup:         MustMarshal(map[string]string{"id": arn}),
+		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
+		Mutate: func(t *testing.T) {
+			runAWS(t, "sns", "tag-resource", "--resource-arn", arn, "--tags", "Key=ubx-conformance,Value=sns")
+			t.Cleanup(func() { runAWS(t, "sns", "untag-resource", "--resource-arn", arn, "--tag-keys", "ubx-conformance") })
+		},
+	})
+}
+
+// TestConformance_AWSIAMPolicy creates a throwaway managed policy (free),
+// tests it, and deletes it.
+func TestConformance_AWSIAMPolicy(t *testing.T) {
+	RequireLive(t)
+	providerPath := realAWSProviderPath(t)
+	name := uniqueName("ubx-conformance-policy")
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
+
+	arn := runAWSOutput(t, "iam", "create-policy", "--policy-name", name,
+		"--policy-document", doc, "--query", "Policy.Arn", "--output", "text")
+	t.Cleanup(func() { runAWS(t, "iam", "delete-policy", "--policy-arn", arn) })
+
+	RunAdoptMutateScanDiff(t, AdoptMutateScanDiffConfig{
+		ProviderPath:   providerPath,
+		Stack:          "conformance",
+		Address:        core.Address{Stack: "conformance", Type: "aws_iam_policy", Name: name},
+		Lookup:         MustMarshal(map[string]string{"id": arn}),
+		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
+		Mutate: func(t *testing.T) {
+			runAWS(t, "iam", "tag-policy", "--policy-arn", arn, "--tags", "Key=ubx-conformance,Value=policy")
+			t.Cleanup(func() { runAWS(t, "iam", "untag-policy", "--policy-arn", arn, "--tag-keys", "ubx-conformance") })
+		},
+	})
+}
+
+// TestConformance_AWSIAMUser creates a throwaway IAM user (free), tests
+// it, and deletes it.
+func TestConformance_AWSIAMUser(t *testing.T) {
+	RequireLive(t)
+	providerPath := realAWSProviderPath(t)
+	name := uniqueName("ubx-conformance-user")
+
+	runAWS(t, "iam", "create-user", "--user-name", name)
+	t.Cleanup(func() { runAWS(t, "iam", "delete-user", "--user-name", name) })
+
+	RunAdoptMutateScanDiff(t, AdoptMutateScanDiffConfig{
+		ProviderPath:   providerPath,
+		Stack:          "conformance",
+		Address:        core.Address{Stack: "conformance", Type: "aws_iam_user", Name: name},
+		Lookup:         MustMarshal(map[string]string{"id": name, "name": name}),
+		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
+		Mutate: func(t *testing.T) {
+			runAWS(t, "iam", "tag-user", "--user-name", name, "--tags", "Key=ubx-conformance,Value=user")
+			t.Cleanup(func() { runAWS(t, "iam", "untag-user", "--user-name", name, "--tag-keys", "ubx-conformance") })
 		},
 	})
 }

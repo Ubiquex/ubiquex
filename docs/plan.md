@@ -19,6 +19,13 @@
   (aws_s3_bucket, aws_iam_role, aws_vpc — one per required bias category:
   storage, IAM, network); the other ~47 are registered but not yet
   implemented. See STATE.md for per-batch progress as it accumulates.
+- 2026-07-10 — UBI-9 batch 2: four more types verified against the real
+  account (aws_sqs_queue, aws_sns_topic, aws_iam_policy, aws_iam_user —
+  all create-and-destroy-per-test-run, unlike batch 1's adopt-something-
+  pre-existing pattern). aws_iam_group investigated and explicitly parked
+  (no tagging API exists at all; nothing else in its schema is both
+  mutable and observable) rather than forced or silently skipped — see
+  §M1-2 below. 7 of 51 types implemented.
 
 ## Strategy
 
@@ -88,11 +95,13 @@ to stand up disposably just for a conformance test):
 `aws_security_group`, `aws_security_group_rule`, `aws_lb`,
 `aws_lb_target_group`, `aws_lb_listener`, `aws_vpc_endpoint`.
 
-**IAM** (`aws_iam_role` real-safe — the account's real
-`aws-codestar-service-role`; the rest fake-only for now, no principled
-reason they couldn't move to real-safe in a later batch):
-`aws_iam_role`✓, `aws_iam_policy`, `aws_iam_role_policy_attachment`,
-`aws_iam_user`, `aws_iam_group`, `aws_iam_instance_profile`,
+**IAM** (`aws_iam_role`/`aws_iam_policy`/`aws_iam_user` real-safe — the
+first adopts the account's real `aws-codestar-service-role`, the other two
+are created and destroyed per test run, all free; `aws_iam_group` is
+*parked*, not fake-only by default choice — see below; the rest fake-only,
+no principled reason they couldn't move to real-safe in a later batch):
+`aws_iam_role`✓, `aws_iam_policy`✓, `aws_iam_role_policy_attachment`,
+`aws_iam_user`✓, `aws_iam_group`⚠, `aws_iam_instance_profile`,
 `aws_iam_openid_connect_provider`.
 
 **Storage** (`aws_s3_bucket` real-safe — the account's real `ubx-states`
@@ -110,17 +119,22 @@ charge; revisit if a zone exists for another reason):
 `aws_route53_zone`, `aws_route53_record`, `aws_cloudfront_distribution`,
 `aws_acm_certificate`.
 
-**Messaging / observability / secrets** (all fake-only for now — several
-of these, e.g. `aws_sqs_queue`/`aws_sns_topic`, are actually free/cheap
-enough to become real-safe in a later batch; not done opportunistically
-this session):
-`aws_sqs_queue`, `aws_sns_topic`, `aws_cloudwatch_log_group`,
+**Messaging / observability / secrets** (`aws_sqs_queue`/`aws_sns_topic`
+real-safe — created and destroyed per test run, free/negligible-cost; the
+rest fake-only for now, no principled reason they couldn't move to
+real-safe in a later batch):
+`aws_sqs_queue`✓, `aws_sns_topic`✓, `aws_cloudwatch_log_group`,
 `aws_cloudwatch_metric_alarm`, `aws_secretsmanager_secret`, `aws_kms_key`.
 
-50 types total; 3 implemented (✓) as of UBI-9 session 1, proving the
-harness across three different bias categories and two different schema
-conventions (SDKv2's id+name-duplication quirk vs. framework-style's
-plain id) before working through the rest in batches.
+51 types total; 7 implemented (✓) as of UBI-9 batch 2, plus one explicitly
+**parked** (⚠) rather than silently skipped: `aws_iam_group` has no
+tagging API at all (confirmed empirically — there is no `aws iam
+tag-group`) and no other schema field that's both mutable and observable,
+so there's no real out-of-band mutation to test drift detection against.
+Documented in `conformance/registry.go`'s `Notes`, staying `fake-only`
+until a fakeprovider fixture stands in for the mutate step. This is the
+"types that fight back get documented + parked, not hacked" case UBI-9 was
+scoped to expect.
 - **M3–4 (decision loop):** adopt/revert proposals signed via PR-merge or CLI;
   adopt writes corrected attributes back to existing .tf files (narrow-scope
   bidirectionality); revert emits plan — apply via the team's own tooling at this

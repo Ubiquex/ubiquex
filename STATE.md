@@ -4,38 +4,36 @@
 
 ## Current phase
 
-**UBI-9 session 1 done: the per-type conformance harness exists, seeded
-with 3 of ~50 AWS resource types.** New `conformance/` package:
-`conformance.Registry` (51 entries — docs/plan.md §M1-2's "top ~50 AWS
-resource types" pinned to an explicit, categorized, executable list) +
-`conformance.RunAdoptMutateScanDiff` (the reusable adopt→mutate→scan-diff
-test pattern, generalizing the manual sequence UBI-7/8 ran by hand against
-S3). Three types verified end-to-end against the real AWS account this
-session — `aws_s3_bucket`, `aws_iam_role`, `aws_vpc` — one per required
-bias category (storage, IAM, network), surfacing a real per-type quirk
-(`aws_iam_role` needs `id`+`name` both set, like S3's `id`+`bucket` — but
-`aws_vpc`, framework-style, needs only `id`) that's now recorded in the
-registry instead of re-discovered next time. The other 48 types are
-registered (type/category/safety) but not yet implemented — "subsequent
-sessions work through the list in batches" per the session's own framing.
+**UBI-9 batch 2 done: 7 of 51 AWS resource types now conformance-tested
+against the real account, plus one deliberately parked.** Batch 1 (last
+session) proved the harness across storage/IAM/network
+(`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`). Batch 2 added four more, all
+create-and-destroy-per-test-run rather than adopt-something-pre-existing:
+`aws_sqs_queue`, `aws_sns_topic` (messaging), `aws_iam_policy`,
+`aws_iam_user` (IAM) — each verified free/negligible-cost, each cleaned up
+completely afterward (checked, not assumed). `aws_iam_group` was
+investigated and explicitly **parked**, not forced or silently skipped:
+IAM groups have no tagging API at all (confirmed empirically — there is no
+`aws iam tag-group`) and nothing else in the schema is both mutable and
+observable, so there's no real out-of-band mutation to test drift
+detection against. This is exactly the "types that fight back get
+documented + parked" case UBI-9 was scoped to expect.
 
-Live conformance tests are gated behind `UBX_CONFORMANCE_LIVE=1` and
+Live conformance tests remain gated behind `UBX_CONFORMANCE_LIVE=1` and
 skipped by default — `go test ./...` stays hermetic and credential-free
-project-wide, exactly as it's been through every prior session.
+project-wide.
 
 UBI-8 (provider acquisition) and UBI-7 (Slice 3 + follow-ups) remain done
 from prior sessions (see below).
 
 ## Current focus
 
-Batch 1 of the ~50-type conformance list is seeded (3 of 51, one per
-storage/IAM/network). Next is picking up the next batch — see Next steps
-for a suggested order (cheap/free real types first: `aws_sqs_queue`,
-`aws_sns_topic`, `aws_iam_policy`, `aws_iam_user` are all free and don't
-need the account's existing resources, just create/destroy-per-test-run
-fixtures) before the fake-only compute/network/DB types, which need
-fakeprovider schema fixtures built per type rather than just an
-already-real resource to point at.
+7 of 51 types implemented (one per storage/network, three IAM, two
+messaging), one parked. Next is batch 3 — see Next steps for a suggested
+order (the remaining cheap/free real-safe candidates, e.g.
+`aws_cloudwatch_log_group`/`aws_kms_key`/`aws_secretsmanager_secret`,
+before the fake-only compute/network/DB/DNS types, which need per-type
+fakeprovider schema fixtures rather than just a real resource to create).
 
 ## Open decisions
 
@@ -490,26 +488,69 @@ already-real resource to point at.
     tests correctly skip without `UBX_CONFORMANCE_LIVE=1`), plus a real run
     with it set: `UBX_CONFORMANCE_LIVE=1 go test ./conformance/... -run
     TestConformance -v` — all three passed against the real account.
+- 2026-07-10: UBI-9 batch 2 — four more real-safe types implemented, one
+  type investigated and parked.
+  - Verified each type's exact `ReadResource` lookup shape empirically
+    (via the same ad hoc lookup-checker script pattern as batch 1) before
+    writing anything into the registry, same discipline as always:
+    `aws_sqs_queue` needs only `{"id": "<queue-url>"}`; `aws_sns_topic` and
+    `aws_iam_policy` need only `{"id": "<arn>"}`; `aws_iam_user` needs
+    `id`+`name` both (same shape as `aws_iam_role`); `aws_iam_group` also
+    needs `id`+`name` for the adopt half, but see below.
+  - `conformance/registry.go`: `aws_sqs_queue`, `aws_sns_topic`,
+    `aws_iam_policy`, `aws_iam_user` marked `Implemented: true` with
+    verified `IdentityFields`/`Notes`. `aws_iam_group` stays
+    `Implemented: false` but gained a detailed `Notes` entry explaining
+    why it's parked: no `aws iam tag-group` API exists at all (checked by
+    trying it, not assumed), and the schema itself has no other
+    mutable-and-observable field (path is immutable after creation, no
+    tags field) — there's no real out-of-band mutation to test drift
+    detection against, so the mutate half of adopt→mutate→scan-diff has
+    nothing to stand on for this type without a fakeprovider fixture.
+  - `conformance/aws_live_test.go`: `runAWSOutput` (capture stdout, for
+    commands whose result — a queue URL, an ARN — the test needs
+    afterward) and `uniqueName` (timestamp-suffixed names, since these four
+    types create-and-destroy a fresh fixture per run rather than adopting
+    something already there like batch 1). Four new test functions
+    following the same create → `RunAdoptMutateScanDiff` → `t.Cleanup`
+    shape.
+  - docs/plan.md: §M1-2 list updated (7 ✓, one ⚠ parked with a symbol
+    distinguishing it from "not yet attempted"), plus a changelog entry.
+  - All green (`go build ./...`, `go vet ./...`, `go test ./...` — live
+    tests skip by default). Real run:
+    `UBX_CONFORMANCE_LIVE=1 go test ./conformance/... -run TestConformance
+    -v` — all 7 implemented types passed against the real account.
+    Confirmed after the run that every created fixture (SQS queue, SNS
+    topic, IAM policy, IAM user) was actually deleted and every tag
+    (S3/IAM role/VPC from batch 1, plus SQS/SNS/policy/user tags from
+    batch 2) was actually removed — checked via `aws` CLI queries, not
+    assumed from `t.Cleanup` existing.
 
 ## Next steps
 
-1. **UBI-9 batch 2**: pick up the next slice of `conformance/registry.go`'s
-   48 not-yet-`Implemented` types. Suggested order (cheap/free real types
-   first, since they're strictly less work than building a fakeprovider
-   schema fixture): `aws_sqs_queue`/`aws_sns_topic` (free, no dependency on
-   existing account resources — create+destroy per test run, unlike the
-   batch-1 types which all adopted something already there),
-   `aws_iam_policy`/`aws_iam_user`/`aws_iam_group` (free, same
-   create+destroy pattern), `aws_cloudwatch_log_group`/`aws_kms_key`/
-   `aws_secretsmanager_secret` (negligible cost, same pattern). Then the
-   fake-only compute/network/db/dns types, which need per-type
-   fakeprovider schema fixtures rather than just a real resource to point
-   at — expect that to be slower per-type than batch 1. Every new
+1. **UBI-9 batch 3**: pick up the next slice of `conformance/registry.go`'s
+   44 not-yet-`Implemented` types (7 of 51 done; one of the 44,
+   `aws_iam_group`, is parked rather than merely pending — stays
+   fake-only until a fakeprovider fixture covers its mutate step).
+   Suggested order, continuing batch 2's logic (cheap/free real
+   types before fakeprovider-fixture work): `aws_cloudwatch_log_group`,
+   `aws_kms_key`, `aws_secretsmanager_secret` (all negligible-cost,
+   create+destroy per run, same pattern as batch 2's four).
+   `aws_cloudwatch_metric_alarm` too, though it may need an existing metric
+   to attach to — check before assuming. After that, the remaining IAM
+   types (`aws_iam_role_policy_attachment`, `aws_iam_instance_profile`,
+   `aws_iam_openid_connect_provider`) are all still free but likely need
+   a companion resource (a role/policy to attach to) rather than standing
+   alone — probably still real-safe, just slightly more setup per test.
+   Then the fake-only compute/network/db/dns types, which need per-type
+   fakeprovider schema fixtures rather than just a real resource to create
+   — expect that to be slower per-type than batches 1-2. Every new
    `Implemented: true` entry needs `IdentityFields`+`Notes` filled in for
-   real (registry_test.go enforces this), never guessed — batch 1's
-   `aws_iam_role` mistake (guessed "name" alone would work; it doesn't) is
-   exactly the failure mode to avoid by checking empirically every time,
-   even when a similar-looking type "should" work the same way.
+   real (registry_test.go enforces this), verified empirically every time
+   — never assumed from a similar-looking type, even within the same
+   batch (batch 2's four all turned out to follow one of exactly two
+   shapes — id-is-the-arn/url vs id+name-duplication — but that's an
+   observation from four data points, not a rule to stop checking against).
 2. Still not started: Core IR + resolver (component map #1-2), and
    CloudTrail correlation (UBI-10, per docs/plan.md's own M1-2 scope) —
    `IdentityFields` is being captured per type specifically so UBI-10 has
@@ -538,6 +579,34 @@ already-real resource to point at.
 
 ## Surprises / findings
 
+- 2026-07-10: **IAM groups have no tagging API at all — `aws iam
+  tag-group` doesn't exist — and the `aws_iam_group` schema has no other
+  field that's both mutable and observable.** Discovered by trying it
+  (`aws iam tag-group --group-name ... --tags ...` → "Found invalid choice
+  'tag-group'"), not by assuming groups work like roles/users/policies
+  just because they're all IAM. Path is set at creation and immutable
+  after; there's no tags field in the schema either. This means
+  `aws_iam_group`'s *adopt* half works fine (same `id`+`name` lookup shape
+  as role/user), but there's no real out-of-band mutation available to
+  drive the *mutate* half of adopt→mutate→scan-diff — parked as
+  `fake-only` with the reasoning recorded in `conformance/registry.go`,
+  per UBI-9's own "types that fight back get documented + parked, not
+  hacked" framing, rather than inventing a fake mutation or skipping the
+  type silently.
+- 2026-07-10: **Batch 2's four real-safe types split cleanly into two
+  lookup shapes, matching a pattern first hinted at in batch 1 — but still
+  checked individually, not assumed to generalize.** Resources whose `id`
+  attribute already **is** the ARN or a URL (`aws_sqs_queue`'s queue URL,
+  `aws_sns_topic`/`aws_iam_policy`'s ARN) need only `{"id": "..."}`.
+  Resources whose `id` is a **name** rather than an ARN/URL
+  (`aws_iam_user`, matching `aws_iam_role` from batch 1) need `id`+`name`
+  both, `name` alone reading back `null`. Framework-style `aws_vpc` (batch
+  1) needing only `id` fits the first shape too, despite not being
+  ARN/URL-identified — its `id` is just the `vpc-*` identifier directly,
+  with no separate "name" attribute to omit in the first place. Recorded
+  per-type in `conformance/registry.go`, not generalized into a rule the
+  harness relies on — six data points across two protocol generations is
+  still not enough to trust as a blanket assumption for the next 44 types.
 - 2026-07-10: **`aws_iam_role`'s lookup needs `id`+`name` both set, exactly
   like `aws_s3_bucket` needed `id`+`bucket` — but this was checked
   empirically before writing it down, not assumed from the S3 precedent,
