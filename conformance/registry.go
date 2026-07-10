@@ -20,7 +20,28 @@ const (
 	// FakeOnly means this type's conformance test never touches real AWS
 	// — the resource is too expensive (hourly-billed compute/DB/network
 	// appliances) or too slow/risky to spin up and tear down just to
-	// exercise a schema shape. A fakeprovider fixture stands in.
+	// exercise a schema shape. A fakeprovider fixture stands in (see
+	// provider/internal/fakeprovider's "conformance-v5"/"conformance-v6"
+	// modes and conformance/fake_test.go).
+	//
+	// What "verified" means for a FakeOnly entry, precisely (UBI-9 batch
+	// 3): IdentityFields and the attributes named in Notes are real —
+	// checked against the actual AWS provider's GetProviderSchema, which
+	// needs no Configure call, no credentials, and no AWS API round trip
+	// at all, so this is free and safe to do for every type regardless of
+	// cost/risk. What is NOT verified for a FakeOnly type is the live
+	// ReadResource *lookup* convention (e.g. whether a natural-key
+	// duplicate alongside "id" is required, the way aws_iam_role/
+	// aws_s3_bucket empirically turned out to need) — that can only be
+	// checked by actually calling a real provider's ReadResource against
+	// a real instance, which is exactly the cost/risk this type is
+	// fake-only to avoid. The fake fixture instead proves ubx's own
+	// scan/diff/fold pipeline (RunScan, GenerateProposal, FoldState,
+	// diffAttributes) classifies new/drifted/unchanged and generates a
+	// correct before/after diff for that type's real attribute shape —
+	// "conformance means the same thing across both classes" in the
+	// sense that both prove the pipeline correct, not in the sense that
+	// both prove the same thing about live lookup semantics.
 	FakeOnly Safety = iota
 
 	// RealSafe means this type's conformance test may run against the
@@ -77,15 +98,45 @@ type TypeSpec struct {
 // account too.
 var Registry = []TypeSpec{
 	// --- compute ---
-	{Type: "aws_instance", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_launch_template", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_autoscaling_group", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_ecs_cluster", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_ecs_service", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_ecs_task_definition", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_eks_cluster", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_eks_node_group", Category: "compute", Safety: FakeOnly},
-	{Type: "aws_lambda_function", Category: "compute", Safety: FakeOnly},
+	// All nine: real schema (GetProviderSchema) has id/arn/tags/tags_all;
+	// fixture models exactly those four and mutates tags — see
+	// conformance/fake_test.go's stdCase.
+	{Type: "aws_instance", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema also carries ami/instance_type/etc. (not modeled — see FakeOnly's doc comment on scope).",
+		Implemented:    true},
+	{Type: "aws_launch_template", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_autoscaling_group", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_ecs_cluster", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_ecs_service", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_ecs_task_definition", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema's natural key is \"family\" (required), not modeled in the fixture.",
+		Implemented:    true},
+	{Type: "aws_eks_cluster", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_eks_node_group", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_lambda_function", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema's natural key is \"function_name\" (required), not modeled in the fixture.",
+		Implemented:    true},
 
 	// --- network ---
 	{
@@ -97,25 +148,84 @@ var Registry = []TypeSpec{
 			"VPC.",
 		Implemented: true,
 	},
-	{Type: "aws_subnet", Category: "network", Safety: FakeOnly},
-	{Type: "aws_route_table", Category: "network", Safety: FakeOnly},
-	{Type: "aws_route_table_association", Category: "network", Safety: FakeOnly},
-	{Type: "aws_route", Category: "network", Safety: FakeOnly},
-	{Type: "aws_internet_gateway", Category: "network", Safety: FakeOnly},
-	{Type: "aws_nat_gateway", Category: "network", Safety: FakeOnly},
-	{Type: "aws_eip", Category: "network", Safety: FakeOnly},
+	{Type: "aws_subnet", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_route_table", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{
+		Type: "aws_route_table_association", Category: "network", Safety: FakeOnly,
+		Notes: "PARKED, not hacked: real schema (GetProviderSchema) is " +
+			"{gateway_id, id, region, route_table_id (required), " +
+			"subnet_id} -- a pure join between a route table and " +
+			"whichever of gateway_id/subnet_id it associates. Neither " +
+			"optional field is a genuine in-place \"modify\" in AWS's own " +
+			"semantics (changing what an association points to is a " +
+			"replace, like aws_iam_role_policy_attachment below), so " +
+			"there's no honest mutate step to drive adopt-mutate-scan-diff " +
+			"with -- the same \"types that fight back\" shape as " +
+			"aws_iam_group, just discovered via schema inspection instead " +
+			"of a live API call.",
+	},
+	{Type: "aws_route", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "route_table_id"},
+		Notes: "No arn/tags in the real schema. Fixture models " +
+			"id/route_table_id/gateway_id and mutates gateway_id (a real " +
+			"optional attribute -- which gateway a route points to -- " +
+			"though in practice the real AWS provider often replaces " +
+			"rather than in-place-modifies a route when its target " +
+			"changes; noted here so the fixture's mutate step isn't " +
+			"mistaken for a claim about real update-vs-replace behavior).",
+		Implemented: true},
+	{Type: "aws_internet_gateway", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_nat_gateway", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id"},
+		Notes:          "No arn in the real schema (unlike most network types). Fixture models id/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_eip", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 	{Type: "aws_security_group", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
 		Notes: "The account's default security group would be a RealSafe " +
 			"candidate (free, always exists) but its rules are shared, " +
 			"live infrastructure other things may depend on -- tagging it " +
 			"for a mutate-step test is a smaller blast radius than most " +
-			"resources here, but still deferred to a dedicated batch " +
-			"session rather than done opportunistically."},
-	{Type: "aws_security_group_rule", Category: "network", Safety: FakeOnly},
-	{Type: "aws_lb", Category: "network", Safety: FakeOnly},
-	{Type: "aws_lb_target_group", Category: "network", Safety: FakeOnly},
-	{Type: "aws_lb_listener", Category: "network", Safety: FakeOnly},
-	{Type: "aws_vpc_endpoint", Category: "network", Safety: FakeOnly},
+			"resources here, but still deferred rather than done " +
+			"opportunistically. Covered generically here instead: fixture " +
+			"models id/arn/tags/tags_all (real schema-verified), mutates " +
+			"tags.",
+		Implemented: true},
+	{Type: "aws_security_group_rule", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "security_group_id"},
+		Notes: "No arn/tags in the real schema (rules aren't independently " +
+			"taggable, unlike the group they belong to). Fixture models " +
+			"id/security_group_id/description and mutates description -- " +
+			"a real, genuinely in-place-updatable optional attribute.",
+		Implemented: true},
+	{Type: "aws_lb", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_lb_target_group", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_lb_listener", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_vpc_endpoint", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 
 	// --- iam ---
 	{
@@ -140,7 +250,17 @@ var Registry = []TypeSpec{
 			"resource like aws_iam_role).",
 		Implemented: true,
 	},
-	{Type: "aws_iam_role_policy_attachment", Category: "iam", Safety: FakeOnly},
+	{
+		Type: "aws_iam_role_policy_attachment", Category: "iam", Safety: FakeOnly,
+		Notes: "PARKED, not hacked: real schema (GetProviderSchema) is " +
+			"exactly {id, policy_arn (required), role (required)} -- a " +
+			"pure join between a role and a policy, no optional or " +
+			"computed field besides id at all. \"Changing\" which policy " +
+			"is attached is a replace in AWS's own model, not an in-place " +
+			"modify, so there's no honest mutate step -- same shape as " +
+			"aws_route_table_association and aws_iam_group, discovered " +
+			"via schema inspection this time rather than a live API call.",
+	},
 	{
 		Type: "aws_iam_user", Category: "iam", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn", "name"},
@@ -162,8 +282,14 @@ var Registry = []TypeSpec{
 			"drift detection against, so this stays fake-only until a " +
 			"fakeprovider fixture stands in for the mutate step instead.",
 	},
-	{Type: "aws_iam_instance_profile", Category: "iam", Safety: FakeOnly},
-	{Type: "aws_iam_openid_connect_provider", Category: "iam", Safety: FakeOnly},
+	{Type: "aws_iam_instance_profile", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn", "name"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_iam_openid_connect_provider", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn", "url"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 
 	// --- storage ---
 	{
@@ -176,27 +302,88 @@ var Registry = []TypeSpec{
 			"against the real \"ubx-states\" bucket.",
 		Implemented: true,
 	},
-	{Type: "aws_s3_bucket_policy", Category: "storage", Safety: FakeOnly},
-	{Type: "aws_s3_bucket_versioning", Category: "storage", Safety: FakeOnly},
-	{Type: "aws_s3_bucket_public_access_block", Category: "storage", Safety: FakeOnly},
-	{Type: "aws_ebs_volume", Category: "storage", Safety: FakeOnly},
-	{Type: "aws_efs_file_system", Category: "storage", Safety: FakeOnly},
+	{Type: "aws_s3_bucket_policy", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "bucket"},
+		Notes: "No arn/tags (it's a sub-resource of the bucket, not " +
+			"independently taggable). Fixture models id/bucket/policy and " +
+			"mutates policy directly (the JSON policy document) -- the " +
+			"actual real-world drift vector for this type.",
+		Implemented: true},
+	{Type: "aws_s3_bucket_versioning", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "bucket"},
+		Notes: "Real schema nests the mutable field inside a " +
+			"versioning_configuration block (status: Enabled/Suspended); " +
+			"the fixture models it as a flat \"status\" attribute instead " +
+			"(id/bucket/status) since ubx's diff pipeline operates on " +
+			"ReadResource's opaque JSON regardless of nesting -- what's " +
+			"being conformance-tested here is the pipeline, not nested-" +
+			"block wire fidelity (see the real, nested-block-modeling " +
+			"provider/ctyvalue.go for where that already IS proven, " +
+			"against a real provider).",
+		Implemented: true},
+	{Type: "aws_s3_bucket_public_access_block", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "bucket"},
+		Notes: "No arn/tags. Fixture models id/bucket/block_public_acls " +
+			"and mutates block_public_acls -- a real, flat, optional " +
+			"boolean attribute (modeled as a string \"true\"/\"false\", " +
+			"see FakeOnly's doc comment on scalar type-fidelity not " +
+			"mattering here).",
+		Implemented: true},
+	{Type: "aws_ebs_volume", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_efs_file_system", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 
 	// --- database ---
-	{Type: "aws_db_instance", Category: "db", Safety: FakeOnly},
-	{Type: "aws_db_subnet_group", Category: "db", Safety: FakeOnly},
-	{Type: "aws_rds_cluster", Category: "db", Safety: FakeOnly},
-	{Type: "aws_elasticache_cluster", Category: "db", Safety: FakeOnly},
-	{Type: "aws_dynamodb_table", Category: "db", Safety: FakeOnly},
+	{Type: "aws_db_instance", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_db_subnet_group", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_rds_cluster", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_elasticache_cluster", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_dynamodb_table", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 
 	// --- dns / cdn / certs ---
 	{Type: "aws_route53_zone", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
 		Notes: "The account has no existing hosted zone, and creating one " +
 			"solely for this suite would add a real recurring charge -- " +
-			"stays FakeOnly until/unless a zone exists for another reason."},
-	{Type: "aws_route53_record", Category: "dns", Safety: FakeOnly},
-	{Type: "aws_cloudfront_distribution", Category: "dns", Safety: FakeOnly},
-	{Type: "aws_acm_certificate", Category: "dns", Safety: FakeOnly},
+			"stays FakeOnly until/unless a zone exists for another reason. " +
+			"Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented: true},
+	{Type: "aws_route53_record", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "zone_id", "name"},
+		Notes: "No arn/tags in the real schema (DNS records aren't " +
+			"independently taggable). Fixture models id/zone_id/name/ttl " +
+			"and mutates ttl -- a real, genuinely in-place-updatable " +
+			"optional attribute (modeled as a string, see FakeOnly's doc " +
+			"comment on scalar type-fidelity not mattering here).",
+		Implemented: true},
+	{Type: "aws_cloudfront_distribution", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_acm_certificate", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 
 	// --- messaging / observability / secrets ---
 	{
@@ -218,10 +405,22 @@ var Registry = []TypeSpec{
 			"creating a throwaway topic, testing it, and deleting it.",
 		Implemented: true,
 	},
-	{Type: "aws_cloudwatch_log_group", Category: "messaging", Safety: FakeOnly},
-	{Type: "aws_cloudwatch_metric_alarm", Category: "messaging", Safety: FakeOnly},
-	{Type: "aws_secretsmanager_secret", Category: "messaging", Safety: FakeOnly},
-	{Type: "aws_kms_key", Category: "messaging", Safety: FakeOnly},
+	{Type: "aws_cloudwatch_log_group", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_cloudwatch_metric_alarm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_secretsmanager_secret", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
+	{Type: "aws_kms_key", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "arn"},
+		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
+		Implemented:    true},
 }
 
 // ByType returns the registry entry for a type name, or nil if this type

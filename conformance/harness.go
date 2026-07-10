@@ -49,6 +49,18 @@ type AdoptMutateScanDiffConfig struct {
 	ProviderConfig json.RawMessage // passed to Provider.Configure; nil means {}
 	Timeout        time.Duration   // per-provider-launch timeout; zero means 60s
 
+	// ProviderEnv adds extra "KEY=VALUE" entries to every launched provider
+	// process (provider.WithEnv) — unused by RealSafe types, but how
+	// FakeOnly types tell the fakeprovider fixture which resource type/
+	// attributes to serve (FAKEPROVIDER_RESOURCE_TYPE/FAKEPROVIDER_ATTRS).
+	// Static for the whole run; Mutate is responsible for anything that
+	// must differ between the second scan's launch and the first/third
+	// (see FAKEPROVIDER_MUTATE_ATTR/FAKEPROVIDER_MUTATE_VALUE, set via
+	// os.Setenv from within Mutate itself — each scan launches a fresh
+	// subprocess that reads its env at call time, same pattern
+	// FAKEPROVIDER_EXTRA_TAG already established).
+	ProviderEnv []string
+
 	// Mutate performs an out-of-band change to the real (or fake) resource
 	// between the first and second scan — e.g. `aws ec2 create-tags` for a
 	// real type, or setting a fakeprovider env var for a FakeOnly one.
@@ -82,7 +94,7 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		client, err := provider.Launch(ctx, cfg.ProviderPath)
+		client, err := provider.Launch(ctx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
 		if err != nil {
 			t.Fatalf("%s: launch provider: %v", step, err)
 		}

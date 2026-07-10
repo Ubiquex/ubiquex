@@ -4,39 +4,117 @@
 
 ## Current phase
 
-**UBI-9 batch 2 done: 7 of 51 AWS resource types now conformance-tested
-against the real account, plus one deliberately parked.** Batch 1 (last
-session) proved the harness across storage/IAM/network
-(`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`). Batch 2 added four more, all
-create-and-destroy-per-test-run rather than adopt-something-pre-existing:
-`aws_sqs_queue`, `aws_sns_topic` (messaging), `aws_iam_policy`,
-`aws_iam_user` (IAM) — each verified free/negligible-cost, each cleaned up
-completely afterward (checked, not assumed). `aws_iam_group` was
-investigated and explicitly **parked**, not forced or silently skipped:
-IAM groups have no tagging API at all (confirmed empirically — there is no
-`aws iam tag-group`) and nothing else in the schema is both mutable and
-observable, so there's no real out-of-band mutation to test drift
-detection against. This is exactly the "types that fight back get
-documented + parked" case UBI-9 was scoped to expect.
+**UBI-9 is done: all 51 AWS resource types resolved — 48 verified (7
+real-safe, 41 fake-only), 3 parked, 0 left pending.** Batches 1-2 (prior
+sessions) established the real-safe half: `aws_s3_bucket`, `aws_iam_role`,
+`aws_vpc` (batch 1, adopting pre-existing real resources), then
+`aws_sqs_queue`, `aws_sns_topic`, `aws_iam_policy`, `aws_iam_user` (batch 2,
+create-and-destroy-per-run) — plus `aws_iam_group` investigated and parked
+(no tagging API at all).
 
-Live conformance tests remain gated behind `UBX_CONFORMANCE_LIVE=1` and
-skipped by default — `go test ./...` stays hermetic and credential-free
-project-wide.
+Batch 3 (this session) closed the milestone in one pass by solving the
+harder half: fake-only conformance that actually means something, not just
+a registry entry with no test behind it. The methodology, in brief (full
+writeup below under Done):
+
+1. **Inspect the real schema for free.** A real AWS provider's
+   `GetProviderSchema` needs no `Configure` call, no credentials, no AWS API
+   round trip — just launching the binary. Wrote a throwaway inspector
+   (`cmd/schemadump`, deleted before committing — same disposable-tool
+   pattern as prior sessions' lookup-checker scripts) and ran it once
+   against all 43 remaining types. This gives real, schema-verified
+   `IdentityFields` and reveals which attribute is genuinely
+   mutable-and-observable (almost always `tags`/`tags_all`; a handful of
+   special cases below).
+2. **Generalize the fakeprovider fixture, not each type's Go code.**
+   `provider/internal/fakeprovider` gained two new modes,
+   `conformance-v5`/`conformance-v6`, driven entirely by env vars
+   (`FAKEPROVIDER_RESOURCE_TYPE`, `FAKEPROVIDER_ATTRS`,
+   `FAKEPROVIDER_MUTATE_ATTR`/`FAKEPROVIDER_MUTATE_VALUE`) — one mechanism
+   serving all 41 types instead of 41 hand-written schemas. This is "the
+   first fixture, built carefully, as the template for all remaining
+   fake-only types" the session was asked to produce.
+3. **Same pipeline, explicitly narrower claim.** Every fake-only case still
+   runs the identical `RunAdoptMutateScanDiff` sequence (`core.RunScan` →
+   `GenerateProposal` → accept → mutate → scan again, expect drifted →
+   accept → scan a third time, expect unchanged) real-safe types run. What
+   it does NOT prove — documented directly in `conformance/registry.go`'s
+   `FakeOnly` doc comment, not left implicit — is the live `ReadResource`
+   *lookup convention* (whether a natural-key duplicate alongside `id` is
+   needed, the aws_iam_role/aws_s3_bucket quirk from batches 1-2). That can
+   only be checked against a real instance, which is exactly the cost/risk
+   fake-only exists to avoid. "Conformance means the same thing across both
+   classes" in the sense that both prove ubx's own scan/diff/fold pipeline
+   correct for that type's real attribute shape — not in the sense that
+   both prove the same thing about live lookup semantics.
+4. **Two more types fought back, found via free schema inspection instead
+   of a live API call.** `aws_iam_role_policy_attachment`
+   (`{id, policy_arn (required), role (required)}` — a pure join, nothing
+   optional besides `id`) and `aws_route_table_association`
+   (`{gateway_id, id, region, route_table_id (required), subnet_id}` — same
+   join shape) have no genuine in-place-mutable field; "changing" what
+   they're attached to is a replace in AWS's own model. Parked alongside
+   `aws_iam_group`, same reasoning, same "document + park, don't hack"
+   discipline.
+
+Special-shaped fake-only types (no `arn`/`tags` in their real schema, so a
+different real attribute stands in for the mutate step — each verified via
+the schema inspector, not assumed from the standard shape): `aws_route`
+(mutates `gateway_id`), `aws_nat_gateway` (no `arn`; mutates `tags`),
+`aws_security_group_rule` (mutates `description`), `aws_s3_bucket_policy`
+(mutates `policy`), `aws_s3_bucket_versioning` (mutates a fixture-flattened
+`status`), `aws_s3_bucket_public_access_block` (mutates
+`block_public_acls`), `aws_route53_record` (mutates `ttl`). Every other
+fake-only type uses the standard `id`/`arn`/`tags`/`tags_all` shape,
+mutating `tags` — the same "someone tagged it in the console" scenario
+real-safe types exercise for real.
+
+`conformance/registry.go`'s Registry — the quirks registry accumulated
+across all three batches — is UBI-9's actual deliverable, not the passing
+tests by themselves: every one of the 51 entries now carries either a
+verified `IdentityFields`/`Notes` pair (`Implemented: true`) or a documented
+parked reason, enforced going forward by a new
+`TestRegistry_NoThirdState` (no entry may have neither).
+
+Live (real-AWS) conformance tests remain gated behind
+`UBX_CONFORMANCE_LIVE=1` and skip by default; the 41 new fake-only tests
+need no such gate (nothing they do ever touches real AWS) and run as part
+of plain `go test ./...`. Re-ran the full real-account suite one more time
+this session (all 48 implemented types, `UBX_CONFORMANCE_LIVE=1`) and
+confirmed via `aws` CLI queries afterward that nothing was left behind: no
+bucket/role/VPC tags, no lingering SQS queue/SNS topic/IAM
+policy/user from any batch.
 
 UBI-8 (provider acquisition) and UBI-7 (Slice 3 + follow-ups) remain done
 from prior sessions (see below).
 
 ## Current focus
 
-7 of 51 types implemented (one per storage/network, three IAM, two
-messaging), one parked. Next is batch 3 — see Next steps for a suggested
-order (the remaining cheap/free real-safe candidates, e.g.
-`aws_cloudwatch_log_group`/`aws_kms_key`/`aws_secretsmanager_secret`,
-before the fake-only compute/network/DB/DNS types, which need per-type
-fakeprovider schema fixtures rather than just a real resource to create).
+UBI-9 is closed. Next up (see Next steps): the Core IR + resolver work
+that was already queued behind UBI-9, and UBI-10 (CloudTrail correlation),
+which can now lean on every type's `IdentityFields` — populated specifically
+so UBI-10 has ARN-or-equivalent identity data to correlate against.
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-10 — what "verified" means for a FakeOnly
+      conformance type (UBI-9 batch 3).** This came up while designing the
+      first fake-only fixture and is worth recording explicitly rather than
+      leaving as an implicit assumption baked into 41 registry entries:
+      FakeOnly's `IdentityFields`/mutable-attribute claims are verified
+      against the *real* AWS provider's schema (`GetProviderSchema` — free,
+      no Configure/credentials/AWS API call needed), but NOT against a real
+      `ReadResource` call, so the live lookup-convention quirks batches 1-2
+      found empirically (e.g. `aws_iam_role` needing `id`+`name` duplicated,
+      `name` alone reading back `null`) are *not* independently checked for
+      FakeOnly types — checking that would require a real instance, which
+      is exactly the cost/risk FakeOnly exists to avoid. Decision: FakeOnly
+      conformance proves ubx's own `RunScan`/`GenerateProposal`/`FoldState`
+      pipeline is correct for that type's real attribute shape; it does not
+      prove the same thing about live lookup semantics that RealSafe
+      conformance does. Documented directly in `conformance/registry.go`'s
+      `FakeOnly` doc comment, not left implicit. See Done below for what
+      shipped on this basis.
 - [x] **RESOLVED 2026-07-10 — conformance harness shape (UBI-9).**
       Decisions made building it, recorded rather than left implicit:
       `conformance/` is a new top-level package (parallel to core/provider/
@@ -525,36 +603,114 @@ fakeprovider schema fixtures rather than just a real resource to create).
     (S3/IAM role/VPC from batch 1, plus SQS/SNS/policy/user tags from
     batch 2) was actually removed — checked via `aws` CLI queries, not
     assumed from `t.Cleanup` existing.
+- 2026-07-10: UBI-9 batch 3 — closed the milestone: all remaining 43 types
+  resolved (41 fixture-verified, 2 newly parked), completing the 51-type
+  list at 48 verified / 3 parked / 0 pending.
+  - `cmd/schemadump` (throwaway, deleted before this commit): launches the
+    real cached AWS provider and dumps `GetProviderSchema`'s attribute list
+    (name + required/optional/computed flags) for a list of type names — no
+    Configure call, no credentials, no AWS API round trip, so safe/free to
+    run against every remaining type at once. Ran it once against all 43
+    types to get real, schema-verified identity/mutable-field data before
+    writing anything into the registry — same "verify before recording"
+    discipline as batches 1-2's ad hoc lookup-checker script, applied to
+    schema inspection instead of a live `ReadResource` call.
+  - `provider/internal/fakeprovider/main.go`: two new modes,
+    `conformance-v5`/`conformance-v6`. Unlike the existing fixed
+    `fake_widget` schema (ok-v5/ok-v6, unchanged), these serve a schema
+    built entirely from env vars: `FAKEPROVIDER_RESOURCE_TYPE` (the type
+    name to advertise — must match the test's `Address.Type`, since
+    `core.RunScan` looks up `resourceSchemas[addr.Type]`),
+    `FAKEPROVIDER_ATTRS` (comma-separated attribute names — "tags"/
+    "tags_all" become string maps, everything else a plain string;
+    scalar type-fidelity to AWS's real attribute types doesn't matter since
+    ubx's own core layer treats `ReadResource`'s output as opaque JSON, per
+    `core/scan.go`/`core/state.go`, never type-checked against schema),
+    `FAKEPROVIDER_MUTATE_ATTR`/`FAKEPROVIDER_MUTATE_VALUE` (which attribute
+    to change on the next `ReadResource` call — map-typed attributes get
+    `key=value` merged in, same convention `FAKEPROVIDER_EXTRA_TAG` already
+    used; everything else gets replaced directly). One mechanism serves all
+    41 types, driven by data, not 41 separate schemas.
+  - `conformance/harness.go`: `AdoptMutateScanDiffConfig` gained
+    `ProviderEnv []string`, threaded into `provider.Launch` via
+    `provider.WithEnv` — static per-run env (the three above) for FakeOnly
+    cases; `RealSafe` cases leave it empty. `FAKEPROVIDER_MUTATE_ATTR`/
+    `_VALUE` are set dynamically from within each case's `Mutate` callback
+    via `t.Setenv` (auto-restoring, unlike the manual `os.Setenv`+
+    `t.Cleanup` pattern `FAKEPROVIDER_EXTRA_TAG` needed) — each scan launches
+    a fresh subprocess that reads its env at call time, so this changes what
+    only the second/third scan see, exactly like `FAKEPROVIDER_EXTRA_TAG`
+    already proved out in UBI-7's follow-up.
+  - `conformance/fake_test.go` (new): a `fakeConformanceCase` table (41
+    entries: `Type`, `Attrs`, `MutateAttr`, `MutateValue`) instead of 41
+    hand-written Go test functions — the registry's own table-driven ethos
+    applied to the test file, not just the type list. `stdCase(type)` covers
+    the overwhelmingly common shape (`id`/`arn`/`tags`/`tags_all`, mutate
+    `tags`); seven types needed a bespoke entry because their real schema
+    genuinely lacks `arn`/`tags` (see below). `TestConformance_FakeOnly`
+    runs `RunAdoptMutateScanDiff` per case via `t.Run`; a second test,
+    `TestFakeConformanceCases_MatchRegistry`, cross-checks the table against
+    `conformance/registry.go` both directions (every case must be a
+    `FakeOnly`+`Implemented` registry entry; every such entry must have a
+    case) so the fixture and the registry can't silently drift apart. New
+    package-level `TestMain` builds the `fakeprovider` binary once, same
+    pattern `provider/client_test.go` already established.
+  - Special-shaped cases, each individually schema-verified rather than
+    forced into the standard shape: `aws_route` (no arn/tags; mutates
+    `gateway_id`), `aws_nat_gateway` (no arn; mutates `tags`),
+    `aws_security_group_rule` (no arn/tags; mutates `description`),
+    `aws_s3_bucket_policy` (no arn/tags; mutates `policy`, the actual JSON
+    document — the real-world drift vector for this type),
+    `aws_s3_bucket_versioning` (real schema nests the mutable field inside
+    a `versioning_configuration` block; fixture flattens it to a `status`
+    attribute — documented as a deliberate simplification, since what's
+    being tested is ubx's diff pipeline on opaque JSON, not nested-block
+    wire fidelity, which is already proven elsewhere against a real
+    provider via `provider/ctyvalue.go`), `aws_s3_bucket_public_access_block`
+    (mutates `block_public_acls`), `aws_route53_record` (no arn/tags;
+    mutates `ttl`).
+  - Two more types found to have no genuine mutable-and-observable field at
+    all, discovered via the schema dump rather than a live API call:
+    `aws_iam_role_policy_attachment` (`{id, policy_arn (required), role
+    (required)}` — a pure join, nothing optional besides `id`) and
+    `aws_route_table_association` (`{gateway_id, id, region, route_table_id
+    (required), subnet_id}` — same join shape; picking a target is a
+    replace in AWS's own model, not an in-place modify). Parked in
+    `conformance/registry.go` alongside `aws_iam_group`, same reasoning.
+  - `conformance/registry.go`: `FakeOnly`'s doc comment now states
+    explicitly what a FakeOnly entry's `Implemented: true` does and does not
+    prove (see Open decisions above) — not left as something a reader has to
+    infer. All 43 remaining entries updated: 41 with verified
+    `IdentityFields`/`Notes`/`Implemented: true`, 2 newly parked with
+    `Notes` explaining why (`Implemented` stays `false`).
+  - `conformance/registry_test.go`: new `TestRegistry_NoThirdState` — every
+    entry must have either `Implemented: true` or non-empty `Notes`;
+    enforces UBI-9's own completion criterion going forward, not just for
+    this session's count.
+  - docs/plan.md: §M1-2 list rewritten to final reality (every type ✓ or
+    ⚠, none unmarked), plus a changelog entry explaining the methodology,
+    not just the count.
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (all 41 new fake-only tests run un-gated, ~2s total,
+    no `UBX_CONFORMANCE_LIVE` needed). Also re-ran the full real-account
+    suite once more with `UBX_CONFORMANCE_LIVE=1 go test ./conformance/...
+    -run TestConformance -v` — all 48 implemented types (7 real + 41 fake)
+    passed; confirmed via direct `aws` CLI queries afterward that the
+    account was left exactly as found (no bucket/role/VPC tags, no
+    lingering SQS queue/SNS topic/IAM policy/user from any batch).
 
 ## Next steps
 
-1. **UBI-9 batch 3**: pick up the next slice of `conformance/registry.go`'s
-   44 not-yet-`Implemented` types (7 of 51 done; one of the 44,
-   `aws_iam_group`, is parked rather than merely pending — stays
-   fake-only until a fakeprovider fixture covers its mutate step).
-   Suggested order, continuing batch 2's logic (cheap/free real
-   types before fakeprovider-fixture work): `aws_cloudwatch_log_group`,
-   `aws_kms_key`, `aws_secretsmanager_secret` (all negligible-cost,
-   create+destroy per run, same pattern as batch 2's four).
-   `aws_cloudwatch_metric_alarm` too, though it may need an existing metric
-   to attach to — check before assuming. After that, the remaining IAM
-   types (`aws_iam_role_policy_attachment`, `aws_iam_instance_profile`,
-   `aws_iam_openid_connect_provider`) are all still free but likely need
-   a companion resource (a role/policy to attach to) rather than standing
-   alone — probably still real-safe, just slightly more setup per test.
-   Then the fake-only compute/network/db/dns types, which need per-type
-   fakeprovider schema fixtures rather than just a real resource to create
-   — expect that to be slower per-type than batches 1-2. Every new
-   `Implemented: true` entry needs `IdentityFields`+`Notes` filled in for
-   real (registry_test.go enforces this), verified empirically every time
-   — never assumed from a similar-looking type, even within the same
-   batch (batch 2's four all turned out to follow one of exactly two
-   shapes — id-is-the-arn/url vs id+name-duplication — but that's an
-   observation from four data points, not a rule to stop checking against).
-2. Still not started: Core IR + resolver (component map #1-2), and
-   CloudTrail correlation (UBI-10, per docs/plan.md's own M1-2 scope) —
-   `IdentityFields` is being captured per type specifically so UBI-10 has
-   ARN/equivalent identity data to correlate against once it starts.
+1. **UBI-9 is closed** — nothing further queued under it. If a type's
+   fixture-verified shape ever turns out wrong once real usage exercises it
+   (e.g. `ubx scan` against a real instance of a type that's currently
+   fake-only surfaces a lookup quirk the fixture didn't/couldn't predict),
+   fix it as a normal bug against `conformance/registry.go`'s `Notes`, not
+   as a reason to reopen the whole milestone.
+2. Now unblocked: Core IR + resolver (component map #1-2), and CloudTrail
+   correlation (UBI-10, per docs/plan.md's own M1-2 scope) — every type's
+   `IdentityFields` was captured specifically so UBI-10 has ARN/equivalent
+   identity data to correlate against; this is the natural next session.
    `status --drift` (a read-only report over what `ubx scan` would find
    across multiple resources) is also still M1-2 scope, not started.
 3. A `ubx provider ...` dev-facing CLI verb was deliberately never added
@@ -579,6 +735,36 @@ fakeprovider schema fixtures rather than just a real resource to create).
 
 ## Surprises / findings
 
+- 2026-07-10: **A provider's `GetProviderSchema` costs nothing and needs no
+  credentials — it's a pure local gRPC call against the launched binary,
+  no `Configure`, no AWS API round trip.** This is what made UBI-9 batch
+  3's whole approach possible: rather than guessing at FakeOnly types'
+  attribute shapes, the real AWS provider's schema could be inspected for
+  all 43 remaining types in one shot (`cmd/schemadump`, a throwaway tool,
+  deleted before committing) with zero cost/risk — the same "real
+  provider, safe operation" category `ubx scan`'s own reads already occupy
+  (docs/architecture.md's "wedge reads and records before it ever
+  writes"), just one layer up (schema vs. instance state). This produced a
+  finding worth stating plainly: nearly every AWS resource type in this
+  list carries `tags`/`tags_all` in its real schema — confirmed
+  individually per type, not assumed — which is why the fakeprovider
+  fixture's default shape converged on "id + arn + tags/tags_all, mutate
+  tags" almost everywhere; the handful of types that don't (join/
+  attachment resources, and a few sub-resource-of-a-bucket types) needed
+  their own bespoke fixture attribute, or turned out to have no mutable
+  field at all and got parked (see below).
+- 2026-07-10: **Two more types are joins with nothing to mutate, exactly
+  like `aws_iam_group` — but found through free schema inspection instead
+  of a live API call.** `aws_iam_role_policy_attachment`'s real schema is
+  exactly `{id, policy_arn (required), role (required)}`; nothing is
+  optional besides the computed `id`. `aws_route_table_association`'s is
+  `{gateway_id, id, region, route_table_id (required), subnet_id}` — the
+  two optional fields are mutually-exclusive selectors for *what* it's
+  associated with, and changing that is a replace in AWS's own model, not
+  an in-place modify (matching how Terraform providers generally implement
+  these join resources — `ForceNew` on the target field). Parked in
+  `conformance/registry.go` with the schema-derived reasoning, same
+  discipline as `aws_iam_group`.
 - 2026-07-10: **IAM groups have no tagging API at all — `aws iam
   tag-group` doesn't exist — and the `aws_iam_group` schema has no other
   field that's both mutable and observable.** Discovered by trying it

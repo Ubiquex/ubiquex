@@ -11,6 +11,10 @@
 //
 //	ok-v6               valid v6 handshake, serves a real schema + ReadResource over gRPC
 //	ok-v5               valid v5 handshake, serves a real schema + ReadResource over gRPC
+//	conformance-v6      valid v6 handshake, serves a schema/ReadResource shaped by the
+//	                    FAKEPROVIDER_RESOURCE_TYPE/FAKEPROVIDER_ATTRS env vars below —
+//	                    UBI-9's fake-only per-type conformance fixture
+//	conformance-v5      same as conformance-v6, over the v5 wire protocol
 //	bad-core            handshake line with the wrong core (go-plugin) protocol version
 //	unsupported-version handshake line with an app protocol version ubx has no wire impl for
 //	bad-protocol        handshake line with a non-grpc wire protocol
@@ -21,6 +25,24 @@
 // FAKEPROVIDER_EXTRA_TAG ("key=value"), if set, merges an extra tag into
 // ok-v5/ok-v6's ReadResource response regardless of current_state — see
 // echoWidgetState.
+//
+// conformance-v5/conformance-v6 are driven by:
+//
+//	FAKEPROVIDER_RESOURCE_TYPE   the resource type name to advertise (e.g. "aws_instance")
+//	FAKEPROVIDER_ATTRS           comma-separated attribute names to model — a subset of
+//	                             that type's REAL schema (see cmd/schemadump), so the
+//	                             identity/mutable fields a conformance test exercises are
+//	                             schema-verified, not invented. "tags"/"tags_all" are
+//	                             modeled as string maps; everything else as strings.
+//	FAKEPROVIDER_MUTATE_ATTR     which attribute name (from FAKEPROVIDER_ATTRS) to change
+//	                             on the next ReadResource call — the fake stand-in for a
+//	                             real out-of-band mutation.
+//	FAKEPROVIDER_MUTATE_VALUE    the value to set it to. If the target attribute is a map
+//	                             ("tags"/"tags_all"), this is "key=value" merged into the
+//	                             map, same convention as FAKEPROVIDER_EXTRA_TAG; otherwise
+//	                             it replaces the attribute's scalar value directly.
+//
+// See conformance/fake_test.go for how the harness drives this.
 package main
 
 import (
@@ -48,6 +70,10 @@ func main() {
 		serveV6()
 	case "ok-v5":
 		serveV5()
+	case "conformance-v6":
+		serveConformanceV6()
+	case "conformance-v5":
+		serveConformanceV5()
 	case "bad-core":
 		fmt.Println("99|6|unix|/tmp/does-not-matter|grpc")
 		block()
@@ -257,4 +283,221 @@ func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
 		}
 	}
 	return ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
+}
+
+// --- conformance mode: a generic, env-var-shaped resource, one per UBI-9
+// fake-only type. See the package doc comment for the env var contract.
+
+// conformanceAttrs reads FAKEPROVIDER_ATTRS. "id" is always included even if
+// the caller forgot it — every real AWS resource schema has one, and
+// RunAdoptMutateScanDiff's lookup always keys off it.
+func conformanceAttrs() []string {
+	raw := os.Getenv("FAKEPROVIDER_ATTRS")
+	var attrs []string
+	if raw != "" {
+		attrs = strings.Split(raw, ",")
+	}
+	for _, a := range attrs {
+		if a == "id" {
+			return attrs
+		}
+	}
+	return append([]string{"id"}, attrs...)
+}
+
+// conformanceCtyType builds the cty object type for conformanceAttrs():
+// "tags"/"tags_all" as string maps (matching every AWS resource that has
+// them), everything else as plain strings — see the package doc comment for
+// why scalar type-fidelity to AWS's real attribute types doesn't matter here
+// (ubx's own core layer treats Observed state as opaque JSON, never
+// type-checked against the schema).
+func conformanceCtyType() cty.Type {
+	fields := make(map[string]cty.Type, len(conformanceAttrs()))
+	for _, name := range conformanceAttrs() {
+		if name == "tags" || name == "tags_all" {
+			fields[name] = cty.Map(cty.String)
+		} else {
+			fields[name] = cty.String
+		}
+	}
+	return cty.Object(fields)
+}
+
+func conformanceResourceType() string {
+	t := os.Getenv("FAKEPROVIDER_RESOURCE_TYPE")
+	if t == "" {
+		t = "fake_conformance_resource"
+	}
+	return t
+}
+
+// echoConformanceState mirrors echoWidgetState's role (real cty-msgpack
+// round trip, computed "id" fill-in, injected mutation) but against a
+// dynamically shaped object instead of the fixed fake_widget type, so one
+// mechanism serves every FakeOnly conformance type.
+func echoConformanceState(msgpackBytes []byte) ([]byte, error) {
+	ty := conformanceCtyType()
+	val, err := ctymsgpack.Unmarshal(msgpackBytes, ty)
+	if err != nil {
+		return nil, fmt.Errorf("fakeprovider: decode current_state: %w", err)
+	}
+	vals := val.AsValueMap()
+
+	if idVal, ok := vals["id"]; ok && idVal.IsNull() {
+		vals["id"] = cty.StringVal("computed-" + conformanceResourceType() + "-id")
+	}
+	for name, v := range vals {
+		if (name == "tags" || name == "tags_all") && v.IsNull() {
+			vals[name] = cty.MapValEmpty(cty.String)
+		}
+	}
+
+	mutateAttr := os.Getenv("FAKEPROVIDER_MUTATE_ATTR")
+	mutateValue := os.Getenv("FAKEPROVIDER_MUTATE_VALUE")
+	if mutateAttr != "" {
+		if cur, ok := vals[mutateAttr]; ok {
+			if cur.Type().IsMapType() {
+				m := cur.AsValueMap()
+				if m == nil {
+					m = map[string]cty.Value{}
+				}
+				if k, v, ok := strings.Cut(mutateValue, "="); ok {
+					m[k] = cty.StringVal(v)
+					vals[mutateAttr] = cty.MapVal(m)
+				}
+			} else {
+				vals[mutateAttr] = cty.StringVal(mutateValue)
+			}
+		}
+	}
+
+	return ctymsgpack.Marshal(cty.ObjectVal(vals), ty)
+}
+
+func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
+	var attrs []*tfplugin6.Schema_Attribute
+	for _, name := range conformanceAttrs() {
+		a := &tfplugin6.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
+		if name == "tags" || name == "tags_all" {
+			a.Type = []byte(`["map","string"]`)
+		}
+		if name == "id" {
+			a.Computed, a.Optional = true, false
+		}
+		attrs = append(attrs, a)
+	}
+	return attrs
+}
+
+func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
+	var attrs []*tfplugin5.Schema_Attribute
+	for _, name := range conformanceAttrs() {
+		a := &tfplugin5.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
+		if name == "tags" || name == "tags_all" {
+			a.Type = []byte(`["map","string"]`)
+		}
+		if name == "id" {
+			a.Computed, a.Optional = true, false
+		}
+		attrs = append(attrs, a)
+	}
+	return attrs
+}
+
+type fakeConformanceServerV6 struct {
+	tfplugin6.UnimplementedProviderServer
+}
+
+func (s *fakeConformanceServerV6) GetProviderSchema(context.Context, *tfplugin6.GetProviderSchema_Request) (*tfplugin6.GetProviderSchema_Response, error) {
+	return &tfplugin6.GetProviderSchema_Response{
+		Provider: &tfplugin6.Schema{
+			Block: &tfplugin6.Schema_Block{
+				Attributes: []*tfplugin6.Schema_Attribute{
+					{Name: "region", Type: []byte(`"string"`), Optional: true},
+				},
+			},
+		},
+		ResourceSchemas: map[string]*tfplugin6.Schema{
+			conformanceResourceType(): {
+				Version: 1,
+				Block:   &tfplugin6.Schema_Block{Attributes: conformanceSchemaAttributesV6()},
+			},
+		},
+	}, nil
+}
+
+func (s *fakeConformanceServerV6) ConfigureProvider(context.Context, *tfplugin6.ConfigureProvider_Request) (*tfplugin6.ConfigureProvider_Response, error) {
+	return &tfplugin6.ConfigureProvider_Response{}, nil
+}
+
+func (s *fakeConformanceServerV6) ReadResource(_ context.Context, req *tfplugin6.ReadResource_Request) (*tfplugin6.ReadResource_Response, error) {
+	out, err := echoConformanceState(req.CurrentState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin6.ReadResource_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
+}
+
+type fakeConformanceServerV5 struct {
+	tfplugin5.UnimplementedProviderServer
+}
+
+func (s *fakeConformanceServerV5) GetSchema(context.Context, *tfplugin5.GetProviderSchema_Request) (*tfplugin5.GetProviderSchema_Response, error) {
+	return &tfplugin5.GetProviderSchema_Response{
+		Provider: &tfplugin5.Schema{
+			Block: &tfplugin5.Schema_Block{
+				Attributes: []*tfplugin5.Schema_Attribute{
+					{Name: "region", Type: []byte(`"string"`), Optional: true},
+				},
+			},
+		},
+		ResourceSchemas: map[string]*tfplugin5.Schema{
+			conformanceResourceType(): {
+				Version: 1,
+				Block:   &tfplugin5.Schema_Block{Attributes: conformanceSchemaAttributesV5()},
+			},
+		},
+	}, nil
+}
+
+func (s *fakeConformanceServerV5) Configure(context.Context, *tfplugin5.Configure_Request) (*tfplugin5.Configure_Response, error) {
+	return &tfplugin5.Configure_Response{}, nil
+}
+
+func (s *fakeConformanceServerV5) ReadResource(_ context.Context, req *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {
+	out, err := echoConformanceState(req.CurrentState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin5.ReadResource_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
+}
+
+func serveConformanceV6() {
+	lis, err := net.Listen("unix", socketPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fakeprovider: listen: %v\n", err)
+		os.Exit(1)
+	}
+	srv := grpc.NewServer()
+	tfplugin6.RegisterProviderServer(srv, &fakeConformanceServerV6{})
+	fmt.Printf("1|6|unix|%s|grpc\n", lis.Addr().String())
+	if err := srv.Serve(lis); err != nil {
+		fmt.Fprintf(os.Stderr, "fakeprovider: serve: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func serveConformanceV5() {
+	lis, err := net.Listen("unix", socketPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fakeprovider: listen: %v\n", err)
+		os.Exit(1)
+	}
+	srv := grpc.NewServer()
+	tfplugin5.RegisterProviderServer(srv, &fakeConformanceServerV5{})
+	fmt.Printf("1|5|unix|%s|grpc\n", lis.Addr().String())
+	if err := srv.Serve(lis); err != nil {
+		fmt.Fprintf(os.Stderr, "fakeprovider: serve: %v\n", err)
+		os.Exit(1)
+	}
 }

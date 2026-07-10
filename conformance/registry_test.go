@@ -48,6 +48,20 @@ func TestRegistry_ByType(t *testing.T) {
 	}
 }
 
+// TestRegistry_NoThirdState enforces UBI-9's own completion criterion: every
+// type is either Implemented (VERIFIED — real or fake fixture) or PARKED
+// (Implemented: false with a documented Notes reason, the aws_iam_group
+// precedent). An entry with neither — Implemented: false and no Notes at
+// all — means a type nobody has actually gotten to yet, which UBI-9 isn't
+// done until zero of those remain.
+func TestRegistry_NoThirdState(t *testing.T) {
+	for _, s := range Registry {
+		if !s.Implemented && s.Notes == "" {
+			t.Errorf("%s: neither Implemented nor documented as parked — third state not allowed", s.Type)
+		}
+	}
+}
+
 // TestRegistry_ApproximatelyFifty locks in the "~50" scope from
 // docs/plan.md §M1-2 — not an exact count (the list may grow/shrink a
 // little as batches proceed), just a sanity bound against the registry

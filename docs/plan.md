@@ -26,6 +26,30 @@
   (no tagging API exists at all; nothing else in its schema is both
   mutable and observable) rather than forced or silently skipped — see
   §M1-2 below. 7 of 51 types implemented.
+- 2026-07-10 — UBI-9 batch 3, closing out the milestone: all 51 types now
+  resolved (48 verified, 3 parked — see §M1-2, no type left pending).
+  Batches 1-2 only covered real-safe types; this batch's real addition is
+  a FakeOnly conformance methodology, not just more types: every
+  remaining type's real attribute schema was inspected for free (a real
+  AWS provider's `GetProviderSchema`, no Configure/credentials/AWS API
+  call needed) to derive schema-verified `IdentityFields` and a genuine
+  mutable+observable attribute, then a new generic, env-var-driven
+  `fakeprovider` mode ("conformance-v5"/"conformance-v6") serves exactly
+  that attribute shape and simulates the drift with an injected mutation
+  — the same adopt→mutate→scan-diff sequence RealSafe types run for
+  real, driving the identical `core.RunScan`/`GenerateProposal` pipeline.
+  41 types verified this way (`conformance/fake_test.go`, table-driven).
+  Two more types were found to have no genuine mutable+observable field
+  at all — `aws_iam_role_policy_attachment` and
+  `aws_route_table_association` are pure joins whose only "change" is a
+  replace, the same shape `aws_iam_group` already fought back with — so
+  they join it as parked, for the same reason, discovered via free schema
+  inspection rather than a live API call this time. See STATE.md's UBI-9
+  closing entry for the full methodology writeup and its explicitly
+  documented scope limit (FakeOnly types prove ubx's own pipeline is
+  correct for that schema shape; they do NOT prove the live ReadResource
+  lookup convention the way RealSafe types do — that's exactly the
+  cost/risk being avoided).
 
 ## Strategy
 
@@ -82,59 +106,82 @@ not of the type itself; it says nothing about whether `ubx scan` is safe to
 run against one for real (reads are always safe — see docs/architecture.md,
 "wedge reads and records before it ever writes").
 
-**Compute** (fake-only — all hourly/slow-provisioning):
-`aws_instance`, `aws_launch_template`, `aws_autoscaling_group`,
-`aws_ecs_cluster`, `aws_ecs_service`, `aws_ecs_task_definition`,
-`aws_eks_cluster`, `aws_eks_node_group`, `aws_lambda_function`.
+As of UBI-9 batch 3 (closing the milestone), every `fake-only` type below is
+also conformance-tested — against a `fakeprovider` fixture shaped by that
+type's *real* AWS provider schema (inspected for free, no AWS API call
+needed — see STATE.md's closing UBI-9 entry), not an invented one. ✓ marks
+verified (real-safe types against the live account, fake-only types against
+the schema-shaped fixture); ⚠ marks parked. No type is left unmarked.
+
+**Compute** (fake-only — all hourly/slow-provisioning; fixture-verified):
+`aws_instance`✓, `aws_launch_template`✓, `aws_autoscaling_group`✓,
+`aws_ecs_cluster`✓, `aws_ecs_service`✓, `aws_ecs_task_definition`✓,
+`aws_eks_cluster`✓, `aws_eks_node_group`✓, `aws_lambda_function`✓.
 
 **Network** (`aws_vpc` real-safe — the account's default VPC; the rest
-fake-only, mostly because they depend on a VPC/subnet graph that's tedious
-to stand up disposably just for a conformance test):
-`aws_vpc`✓, `aws_subnet`, `aws_route_table`, `aws_route_table_association`,
-`aws_route`, `aws_internet_gateway`, `aws_nat_gateway`, `aws_eip`,
-`aws_security_group`, `aws_security_group_rule`, `aws_lb`,
-`aws_lb_target_group`, `aws_lb_listener`, `aws_vpc_endpoint`.
+fixture-verified fake-only, mostly because they depend on a VPC/subnet
+graph that's tedious to stand up disposably just for a conformance test):
+`aws_vpc`✓, `aws_subnet`✓, `aws_route_table`✓,
+`aws_route_table_association`⚠, `aws_route`✓, `aws_internet_gateway`✓,
+`aws_nat_gateway`✓, `aws_eip`✓, `aws_security_group`✓,
+`aws_security_group_rule`✓, `aws_lb`✓, `aws_lb_target_group`✓,
+`aws_lb_listener`✓, `aws_vpc_endpoint`✓.
 
 **IAM** (`aws_iam_role`/`aws_iam_policy`/`aws_iam_user` real-safe — the
 first adopts the account's real `aws-codestar-service-role`, the other two
-are created and destroyed per test run, all free; `aws_iam_group` is
-*parked*, not fake-only by default choice — see below; the rest fake-only,
-no principled reason they couldn't move to real-safe in a later batch):
-`aws_iam_role`✓, `aws_iam_policy`✓, `aws_iam_role_policy_attachment`,
-`aws_iam_user`✓, `aws_iam_group`⚠, `aws_iam_instance_profile`,
-`aws_iam_openid_connect_provider`.
+are created and destroyed per test run, all free; `aws_iam_group` and
+`aws_iam_role_policy_attachment` are *parked*; the rest fixture-verified
+fake-only):
+`aws_iam_role`✓, `aws_iam_policy`✓, `aws_iam_role_policy_attachment`⚠,
+`aws_iam_user`✓, `aws_iam_group`⚠, `aws_iam_instance_profile`✓,
+`aws_iam_openid_connect_provider`✓.
 
 **Storage** (`aws_s3_bucket` real-safe — the account's real `ubx-states`
-bucket, proven since UBI-7; the rest fake-only for now):
-`aws_s3_bucket`✓, `aws_s3_bucket_policy`, `aws_s3_bucket_versioning`,
-`aws_s3_bucket_public_access_block`, `aws_ebs_volume`, `aws_efs_file_system`.
+bucket, proven since UBI-7; the rest fixture-verified fake-only):
+`aws_s3_bucket`✓, `aws_s3_bucket_policy`✓, `aws_s3_bucket_versioning`✓,
+`aws_s3_bucket_public_access_block`✓, `aws_ebs_volume`✓,
+`aws_efs_file_system`✓.
 
-**Database** (all fake-only — hourly-billed, slow to provision):
-`aws_db_instance`, `aws_db_subnet_group`, `aws_rds_cluster`,
-`aws_elasticache_cluster`, `aws_dynamodb_table`.
+**Database** (all fixture-verified fake-only — hourly-billed, slow to
+provision for real):
+`aws_db_instance`✓, `aws_db_subnet_group`✓, `aws_rds_cluster`✓,
+`aws_elasticache_cluster`✓, `aws_dynamodb_table`✓.
 
-**DNS / CDN / certs** (all fake-only — no hosted zone exists in the test
-account, and creating one solely for this suite would add a real recurring
-charge; revisit if a zone exists for another reason):
-`aws_route53_zone`, `aws_route53_record`, `aws_cloudfront_distribution`,
-`aws_acm_certificate`.
+**DNS / CDN / certs** (all fixture-verified fake-only — no hosted zone
+exists in the test account, and creating one solely for this suite would
+add a real recurring charge; revisit if a zone exists for another reason):
+`aws_route53_zone`✓, `aws_route53_record`✓, `aws_cloudfront_distribution`✓,
+`aws_acm_certificate`✓.
 
 **Messaging / observability / secrets** (`aws_sqs_queue`/`aws_sns_topic`
 real-safe — created and destroyed per test run, free/negligible-cost; the
-rest fake-only for now, no principled reason they couldn't move to
-real-safe in a later batch):
-`aws_sqs_queue`✓, `aws_sns_topic`✓, `aws_cloudwatch_log_group`,
-`aws_cloudwatch_metric_alarm`, `aws_secretsmanager_secret`, `aws_kms_key`.
+rest fixture-verified fake-only):
+`aws_sqs_queue`✓, `aws_sns_topic`✓, `aws_cloudwatch_log_group`✓,
+`aws_cloudwatch_metric_alarm`✓, `aws_secretsmanager_secret`✓,
+`aws_kms_key`✓.
 
-51 types total; 7 implemented (✓) as of UBI-9 batch 2, plus one explicitly
-**parked** (⚠) rather than silently skipped: `aws_iam_group` has no
-tagging API at all (confirmed empirically — there is no `aws iam
-tag-group`) and no other schema field that's both mutable and observable,
-so there's no real out-of-band mutation to test drift detection against.
-Documented in `conformance/registry.go`'s `Notes`, staying `fake-only`
-until a fakeprovider fixture stands in for the mutate step. This is the
+51 types total, all resolved as of UBI-9 batch 3 (no type left pending, per
+UBI-9's own completion criterion — `conformance/registry_test.go`'s
+`TestRegistry_NoThirdState` enforces this going forward): 48 implemented
+(✓ — 7 real-safe against the live account, 41 fake-only against
+schema-shaped `fakeprovider` fixtures) and 3 explicitly **parked** (⚠)
+rather than silently skipped:
+
+- `aws_iam_group`: no tagging API exists at all (confirmed empirically —
+  there is no `aws iam tag-group`) and no other schema field is both
+  mutable and observable.
+- `aws_iam_role_policy_attachment`: its real schema is exactly
+  `{id, policy_arn (required), role (required)}` — a pure join with
+  nothing optional besides `id`; "changing" which policy is attached is a
+  replace in AWS's own model, not an in-place modify.
+- `aws_route_table_association`: its real schema is
+  `{gateway_id, id, region, route_table_id (required), subnet_id}` — same
+  join-resource shape, same replace-not-modify reasoning.
+
+All three are documented in `conformance/registry.go`'s `Notes`. This is the
 "types that fight back get documented + parked, not hacked" case UBI-9 was
-scoped to expect.
+scoped to expect — the last two were found via free schema inspection
+rather than a live API call, but the reasoning is the same.
 - **M3–4 (decision loop):** adopt/revert proposals signed via PR-merge or CLI;
   adopt writes corrected attributes back to existing .tf files (narrow-scope
   bidirectionality); revert emits plan — apply via the team's own tooling at this
