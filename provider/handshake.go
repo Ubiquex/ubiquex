@@ -3,13 +3,15 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // Terraform plugin protocol constants. These values are part of the wire
 // protocol contract between a plugin host (us) and Terraform provider
 // binaries; they are not configurable. Verified against
-// github.com/hashicorp/terraform-plugin-go@v0.31.0 (tfprotov6/tf6server).
+// github.com/hashicorp/terraform-plugin-go@v0.31.0 (tfprotov5/tf5server,
+// tfprotov6/tf6server).
 const (
 	magicCookieKey   = "TF_PLUGIN_MAGIC_COOKIE"
 	magicCookieValue = "d602bf8f470bc67ca7faa0386276bbdd4330efaf76d1a219cb4d6991ca9872b2"
@@ -19,13 +21,32 @@ const (
 	// app protocol version.
 	coreProtocolVersion = "1"
 
-	// appProtocolVersion is the tfplugin protocol major version this client
-	// speaks. ubx targets v6 only (see docs/architecture.md — protocol v6
-	// only, conformance suite grows per provider).
-	appProtocolVersion = "6"
-
 	wireProtocolGRPC = "grpc"
 )
+
+// supportedAppProtocolVersions lists every tfplugin app protocol version
+// ubx has a wire implementation for (see provider.go). Advertised to
+// plugins via PLUGIN_PROTOCOL_VERSIONS so a dual-protocol-capable binary
+// can pick the best mutually supported one; a single-protocol binary just
+// reports whichever it has, and we check it against this set.
+var supportedAppProtocolVersions = []int{5, 6}
+
+func supportedAppProtocolVersionsEnv() string {
+	strs := make([]string, len(supportedAppProtocolVersions))
+	for i, v := range supportedAppProtocolVersions {
+		strs[i] = strconv.Itoa(v)
+	}
+	return strings.Join(strs, ",")
+}
+
+func isSupportedAppProtocolVersion(v int) bool {
+	for _, sv := range supportedAppProtocolVersions {
+		if sv == v {
+			return true
+		}
+	}
+	return false
+}
 
 var (
 	// ErrMalformedHandshake means the plugin's handshake line could not be
@@ -33,8 +54,8 @@ var (
 	ErrMalformedHandshake = errors.New("malformed plugin handshake")
 
 	// ErrProtocolMismatch means the plugin spoke a handshake we understood
-	// structurally, but declared a core/app protocol version or wire
-	// protocol ubx does not support.
+	// structurally, but declared a core protocol version, app protocol
+	// version, or wire protocol ubx does not support.
 	ErrProtocolMismatch = errors.New("plugin protocol mismatch")
 
 	// ErrHandshakeTimeout means the plugin never produced a handshake line
@@ -50,8 +71,9 @@ var (
 //
 //	CORE-PROTOCOL-VERSION|APP-PROTOCOL-VERSION|NETWORK-TYPE|NETWORK-ADDR|PROTOCOL|[SERVER-CERT]
 type handshakeInfo struct {
-	network string // "unix" or "tcp"
-	addr    string
+	appProtocolVersion int // 5 or 6 — which tfplugin wire protocol was negotiated
+	network            string // "unix" or "tcp"
+	addr               string
 }
 
 func parseHandshakeLine(line string) (handshakeInfo, error) {
@@ -66,9 +88,13 @@ func parseHandshakeLine(line string) (handshakeInfo, error) {
 			ErrProtocolMismatch, parts[0], coreProtocolVersion)
 	}
 
-	if parts[1] != appProtocolVersion {
-		return handshakeInfo{}, fmt.Errorf("%w: tfplugin protocol version %q, ubx speaks %q",
-			ErrProtocolMismatch, parts[1], appProtocolVersion)
+	appVersion, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return handshakeInfo{}, fmt.Errorf("%w: unparseable app protocol version %q", ErrMalformedHandshake, parts[1])
+	}
+	if !isSupportedAppProtocolVersion(appVersion) {
+		return handshakeInfo{}, fmt.Errorf("%w: tfplugin protocol version %d, ubx speaks %v",
+			ErrProtocolMismatch, appVersion, supportedAppProtocolVersions)
 	}
 
 	network := parts[2]
@@ -90,5 +116,5 @@ func parseHandshakeLine(line string) (handshakeInfo, error) {
 			ErrProtocolMismatch, wireProtocol, wireProtocolGRPC)
 	}
 
-	return handshakeInfo{network: network, addr: addr}, nil
+	return handshakeInfo{appProtocolVersion: appVersion, network: network, addr: addr}, nil
 }

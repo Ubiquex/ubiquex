@@ -4,6 +4,14 @@
 
 - 2026-07-10 — v1 of plan, from founding design session. Wedge chosen: drift
   attribution. Executor strategy: tfplugin direct, no TF/OpenTofu/Pulumi engines.
+- 2026-07-10 — Slice 1 revised from tfplugin v6-only to dual v5/v6. Real
+  provider binaries (terraform-provider-aws 6.54.0, terraform-provider-time
+  0.9.2) were found to serve v5 on the wire regardless of what protocol
+  version a client requests — v6-only would not have worked against any
+  current real provider. See docs/architecture.md — Execution layer, and
+  STATE.md for the empirical finding. provider/ now exposes one
+  protocol-agnostic interface backed by tfplugin5 and tfplugin6 wire
+  implementations, version selected from the handshake.
 
 ## Strategy
 
@@ -20,7 +28,8 @@ Thesis metric: % of surfaced drifts resolved through the signed flow —
 ## Foundational slices (~2-3 weeks each, end-to-end, ugly, real)
 
 ### Slice 1 — talk to one provider
-- Launch AWS provider binary, tfplugin v6 handshake
+- Launch AWS provider binary, tfplugin handshake (dual v5/v6, version
+  negotiated from the handshake — see changelog)
 - GetProviderSchema; dump one resource type's schema
 - ReadResource against one real AWS resource
 - Exit: attributed real-world read in a single CLI command

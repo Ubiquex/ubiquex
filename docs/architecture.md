@@ -60,17 +60,33 @@ Invariants:
 ## Execution layer
 
 **No Terraform, OpenTofu, or Pulumi engines in the background.** ubx speaks the
-tfplugin gRPC protocol (v6) directly to Terraform *providers* (standalone MPL-2.0
+tfplugin gRPC protocol directly to Terraform *providers* (standalone MPL-2.0
 binaries): GetProviderSchema, ReadResource, PlanResourceChange, ApplyResourceChange,
 ImportResourceState. No .tfstate exists anywhere — the ledger is the only record.
+
+**Dual v5/v6, not v6-only.** Originally scoped as v6-only, but real provider
+binaries as they exist today — including modern terraform-plugin-framework-native
+ones, not just SDKv2 legacy — were empirically found to serve tfplugin **v5** on
+the wire (see STATE.md 2026-07-10 surprise entry for the evidence: both
+terraform-provider-aws 6.54.0 and terraform-provider-time 0.9.2 report v5 even
+when a client explicitly requests v6 via `PLUGIN_PROTOCOL_VERSIONS`). ubx's
+provider layer therefore exposes one protocol-agnostic `Provider` interface
+(schema dump, configure, read) backed by two wire implementations — tfplugin5
+and tfplugin6 — selected from whichever version the plugin actually negotiates
+during the handshake. Callers never branch on protocol version. Both wire
+implementations decode/encode resource and provider config values as
+cty-msgpack (via go-cty), including nested schema blocks as typed object/
+collection attributes — confirmed necessary empirically too: JSON-encoded
+DynamicValue payloads and flattened (attributes-only) object types were both
+rejected by the real AWS provider binary.
 
 The native executor owns failure semantics end-to-end: per-resource state machine
 (pending / in_flight / unknown_post_timeout / failed), reconcile-by-query on
 ambiguous failures, partial-apply as modeled state. This is the reliability
 differentiator; adversarial failure tests are first-class.
 
-Scope containment: AWS provider first, protocol v6 only, conformance suite grows
-per provider.
+Scope containment: AWS provider first, dual tfplugin v5/v6, conformance suite
+grows per provider.
 
 ## Component map (build order)
 

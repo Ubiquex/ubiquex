@@ -1,6 +1,7 @@
 // Package provider launches Terraform provider binaries and speaks the
-// tfplugin v6 gRPC protocol to them directly. No Terraform, OpenTofu, or
-// Pulumi engine is involved (see docs/architecture.md — Execution layer).
+// tfplugin gRPC protocol to them directly — v5 or v6, whichever the binary
+// negotiates during the handshake (see docs/architecture.md — Execution
+// layer: dual v5/v6). No Terraform, OpenTofu, or Pulumi engine is involved.
 package provider
 
 import (
@@ -17,13 +18,16 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin6"
 )
 
 // defaultHandshakeTimeout bounds how long Launch waits for the provider
 // binary to print its handshake line before giving up.
 const defaultHandshakeTimeout = 10 * time.Second
+
+// maxProviderMessageSize matches the message size limit real provider
+// binaries configure on their gRPC servers (see grpcMaxMessageSize in
+// tfprotov5/tf5server and tfprotov6/tf6server).
+const maxProviderMessageSize = 256 << 20
 
 // Option configures Launch.
 type Option func(*config)
@@ -46,9 +50,12 @@ func WithEnv(vars ...string) Option {
 	return func(c *config) { c.extraEnv = append(c.extraEnv, vars...) }
 }
 
-// Client is a launched provider binary, connected over tfplugin v6.
+// Client is a launched provider binary, connected over whichever tfplugin
+// wire protocol (v5 or v6) it negotiated. Provider is protocol-agnostic;
+// use Client.Provider.ProtocolVersion() if the negotiated version itself
+// matters to a caller.
 type Client struct {
-	Provider tfplugin6.ProviderClient
+	Provider Provider
 
 	cmd    *exec.Cmd
 	conn   *grpc.ClientConn
@@ -56,8 +63,9 @@ type Client struct {
 }
 
 // Launch starts the provider binary at path, performs the tfplugin
-// handshake, and dials the gRPC server it reports. The returned Client owns
-// the subprocess and connection; call Close when done with it.
+// handshake — advertising every protocol version ubx has a wire
+// implementation for — and dials the gRPC server it reports. The returned
+// Client owns the subprocess and connection; call Close when done with it.
 func Launch(ctx context.Context, path string, opts ...Option) (*Client, error) {
 	cfg := config{handshakeTimeout: defaultHandshakeTimeout}
 	for _, opt := range opts {
@@ -66,6 +74,7 @@ func Launch(ctx context.Context, path string, opts ...Option) (*Client, error) {
 
 	cmd := exec.Command(path)
 	cmd.Env = append(os.Environ(), magicCookieKey+"="+magicCookieValue)
+	cmd.Env = append(cmd.Env, "PLUGIN_PROTOCOL_VERSIONS="+supportedAppProtocolVersionsEnv())
 	cmd.Env = append(cmd.Env, cfg.extraEnv...)
 
 	stdout, err := cmd.StdoutPipe()
@@ -98,24 +107,33 @@ func Launch(ctx context.Context, path string, opts ...Option) (*Client, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, hs.network, hs.addr)
 		}),
+		// Matches the server-side limit real provider binaries configure
+		// (tfprotov5/tf5server, tfprotov6/tf6server: grpcMaxMessageSize =
+		// 256<<20). A full provider schema dump (e.g. AWS) easily exceeds
+		// gRPC's 4MiB default.
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxProviderMessageSize),
+			grpc.MaxCallSendMsgSize(maxProviderMessageSize),
+		),
 	)
 	if err != nil {
 		_ = killAndWait(cmd)
 		return nil, fmt.Errorf("provider %q: dial %s %s: %w", path, hs.network, hs.addr, err)
 	}
 
+	p, err := newProvider(hs.appProtocolVersion, conn)
+	if err != nil {
+		_ = conn.Close()
+		_ = killAndWait(cmd)
+		return nil, fmt.Errorf("provider %q: %w", path, err)
+	}
+
 	return &Client{
-		Provider: tfplugin6.NewProviderClient(conn),
+		Provider: p,
 		cmd:      cmd,
 		conn:     conn,
 		stderr:   stderr,
 	}, nil
-}
-
-// GetProviderSchema fetches the provider's schema, including every managed
-// resource and data source type it declares.
-func (c *Client) GetProviderSchema(ctx context.Context) (*tfplugin6.GetProviderSchema_Response, error) {
-	return c.Provider.GetProviderSchema(ctx, &tfplugin6.GetProviderSchema_Request{})
 }
 
 // Close tears down the gRPC connection and terminates the provider process.
