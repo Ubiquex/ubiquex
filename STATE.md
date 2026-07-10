@@ -4,22 +4,28 @@
 
 ## Current phase
 
-**Slice 2, done; delta element shapes pinned.** `core/` package: typed
-`Proposal`, canonical hashing per the now-RATIFIED docs/schema.md rules
-(including the now-pinned `delta.modifies`/`delta.destroys` shapes), an
-append-only per-stack ledger, local acceptance, and propose-time validation
-(modifies↔resolution.inputs cross-referencing, adoption record-only rule).
-`ubx accept`/`ubx why` close the loop end-to-end. Slice 1 (dual-protocol
-provider client) remains done from two sessions ago.
+**Slice 3 (UBI-7), done — the foundational-slices arc is complete.**
+`ubx scan` closes the loop: reads a resource's live state via `provider`,
+compares it against the ledger (`core.RunScan`), classifies it as new/
+drifted/unchanged, and generates a zero-blast-radius `adoption`/
+`drift_adopt` proposal (`core.GenerateProposal`) that `ubx accept` (now
+with an optional `--reverify-with` staleness guard) and `ubx why` handle
+exactly as they already did. Verified for real: adopted the real
+`ubx-states` S3 bucket, mutated a tag on it directly via the AWS CLI,
+scanned again, and got back a precise `tags.ubx-demo`/`tags_all.ubx-demo`
+diff — a genuine signed record of an out-of-band change. This is
+docs/plan.md's stated exit for the three foundational slices: "point at a
+messy account, resolve a drift with a signed record."
 
 ## Current focus
 
-Slice 2 exit criteria are met and the delta-shape decision is closed. Next
-up per docs/plan.md is Slice 3 (close the loop — `ubx scan` drift
-detection, adoption proposals), unless Roozbeh wants to build out the Core
-IR / resolver first (component map #1-2, still not started — Slice 2 kept
-`delta.creates` payloads as opaque JSON specifically to avoid needing them
-yet, see Next steps).
+All three foundational slices (talk to a provider, trust core, close the
+loop) are done. Next per docs/plan.md is the M1-2 wedge buildout (top ~50
+AWS resource types, CloudTrail correlation, `status --drift`) — a
+meaningfully bigger scope step up from "one resource at a time by explicit
+CLI flags," which has been this arc's deliberate, honest scaling limit so
+far. See Next steps for what M1-2 will actually require that doesn't exist
+yet (auto-discovery, CloudTrail attribution, a real IR/resolver).
 
 ## Open decisions
 
@@ -46,6 +52,28 @@ yet, see Next steps).
       matching `resolution.inputs` entry with a non-empty `observed_hash`,
       enforced at propose time (`core.Validate`, called from `core.Accept`).
       `core.deltaSortKey` no longer guesses — see Done below.
+- [ ] **NEW, not yet ratified — Slice 3 architectural interpretations.**
+      Made pragmatically to ship `ubx scan`, not blessed in a design
+      session. Flagging per session protocol rather than treating as
+      settled:
+      - `core` now imports `provider` (core/scan.go). Reasonable at
+        one-provider scale; worth revisiting if/when a second provider or
+        the real resolver arrives and "core" is expected to be
+        provider-agnostic.
+      - "Current ledger state" for drift comparison is reconstructed by
+        `Ledger.FoldState` — a full linear walk of the chain from genesis,
+        replaying each address's adoption snapshot plus every subsequent
+        drift_adopt's After-diff on top. Correct and tested (incl.
+        multi-drift), but O(chain length) with no index; fine at
+        demo/single-stack scale, not something to carry into M1-2 without
+        reconsidering.
+      - `ubx scan`/`ubx accept --reverify-with` take the resource's provider
+        lookup key (`--lookup`) as a CLI flag, not something persisted in
+        the proposal itself. That means re-verifying freshness at accept
+        time requires the caller to re-supply the exact same lookup JSON
+        used at scan time — workable for this slice's one-resource-at-a-time
+        scope, but won't survive contact with any kind of batch/automated
+        scan workflow without the lookup key living somewhere durable.
 
 ## Done
 
@@ -196,25 +224,97 @@ yet, see Next steps).
     non-adoption kinds unaffected, Accept rejects before hashing) plus new
     hash-stability cases in `core/canonical_test.go` for destroys/modifies
     array-order independence under the pinned shapes. All green.
+- 2026-07-10: Slice 3 (UBI-7) completed — `ubx scan`, drift detection,
+  adoption/drift_adopt proposal generation.
+  - `core/observed.go`: `ObservedHash` — a permissive (floats allowed)
+    canonical-JSON fingerprint of a provider's ReadResource result.
+    Deliberately a separate pipeline from `Hash` (proposal hashing, which
+    rejects floats) — this fingerprints real API data, not resolver-authored
+    proposal content.
+  - `core/state.go`: `Ledger.Chain()` (oldest-first walk of the whole
+    chain), `Ledger.LastObservedHash(addr)` (most recent recorded
+    observed_hash for one address), `Ledger.FoldState(addr)` (reconstructs
+    an address's full current recorded state: seed from its adoption
+    snapshot, replay every subsequent drift_adopt's after-diff on top —
+    architecture.md's "current infrastructure = fold(applied proposals)",
+    restricted to one resource). `diffAttributes`/`dotSet`: the dot-notation,
+    changed-attributes-only diff the pinned Modification shape requires.
+  - `core/scan.go` (imports `provider` — see Open decisions): `RunScan`
+    (fetch schema → configure → read resource → fingerprint → classify
+    against the ledger as new/drifted/unchanged, each step's failure
+    wrapped so "provider errors mid-scan" is diagnosable), `GenerateProposal`
+    (builds the zero-blast-radius `adoption`/`drift_adopt` proposal —
+    adoption's `delta.creates` carries the full snapshot, drift_adopt's
+    `delta.modifies` carries the real diff against `FoldState`'s
+    reconstruction), `VerifyFreshness` (re-reads live state and compares
+    against a proposal's recorded observed_hash — the staleness guard).
+    `ErrResourceUnreadable`, `ErrUnknownResourceType`, `ErrStaleObservation`
+    sentinels.
+  - `core/validate.go`: extended `validateKind` for `KindDriftAdopt` —
+    all-zero blast_radius and no destroys (record-only against the cloud,
+    like adoption), but modifies IS expected (that's the whole point).
+    docs/schema.md updated with a parallel "Drift-adopt proposals" note.
+  - `provider/internal/fakeprovider/`: added `Configure`/`ConfigureProvider`
+    implementations (previously unimplemented — fine for Slice 1/2's tests,
+    which never called Configure, but `core.RunScan` always does).
+  - `cli/scan.go` (new): `ubx scan --provider --stack --type --name --lookup
+    [--provider-config] [--ledger-dir] [--out]`. Prints "no drift" and exits
+    cleanly when unchanged; otherwise prints the classification and writes
+    the generated proposal (stdout or `--out` file).
+  - `cli/accept.go`: added optional `--reverify-with <provider-binary>`
+    (plus `--resource-type`/`--resource-name`/`--lookup`/`--provider-config`)
+    — when set, re-reads the resource live and refuses to accept
+    (`ErrStaleObservation`) if it no longer matches what the proposal
+    recorded, before any hashing/ledger work happens.
+  - Tests: `core/scan_test.go` (new/drifted/unchanged classification via an
+    in-memory `provider.Provider` fake — no subprocess needed at this layer
+    — plus all the adversarial paths: unreadable resource, both `nil` and
+    JSON `null` forms, provider errors at each of Schema/Configure/
+    ReadResource, unknown resource type), `core/state_test.go` (diff
+    correctness incl. nested paths/added/removed keys/atomic arrays,
+    multi-level fold across two drifts, per-address isolation),
+    `core/validate_test.go` (drift_adopt kind rules), `cli/scan_test.go`
+    (full `ubx scan` → `ubx accept` → `ubx why` CLI round trip against the
+    fakeprovider fixture, including the `--reverify-with` staleness block
+    and its fresh-passes counterpart). All green (`go build ./...`,
+    `go vet ./...`, `go test ./...`).
+  - **Real-world verification, exactly as asked**: adopted the real
+    `ubx-states` S3 bucket (`ubx scan` → "new" → `ubx accept`), tagged it
+    directly via `aws s3api put-bucket-tagging` (a real out-of-band mutation
+    ubx had no part in), scanned again — correctly classified as "drifted"
+    with a generated `drift_adopt` proposal whose diff was exactly
+    `{"tags.ubx-demo": "slice3", "tags_all.ubx-demo": "slice3"}` (both
+    added, nothing else touched) — accepted it, and `ubx why` explained both
+    the adoption and the drift resolution. Scanning a third time correctly
+    reported "no drift." Bucket tags removed afterward to leave the real
+    account as found.
 
 ## Next steps
 
-1. A `ubx provider ...` dev-facing CLI verb was again deliberately NOT added
-   last session — still not part of the eventual product CLI surface (see
-   docs/architecture.md component map). Revisit once the CLI verb surface
-   itself is being designed.
-2. Begin Slice 3 (close the loop) per docs/plan.md: `ubx scan` (provider
-   reality vs ledger → drift detected), drift → adoption proposal generated
-   → accept → ledger updated → `why` explains. This is the slice's stated
-   demo exit: "point at a messy account, resolve a drift with a signed
-   record."
-3. Still not started: Core IR + resolver (component map #1-2). Slice 2
-   deliberately kept `delta.creates/modifies/destroys` as opaque
-   `json.RawMessage` rather than typed IR nodes, since hand-written JSON was
-   explicitly this slice's input and the IR/resolver don't exist yet. Slice
-   3's adoption-proposal generation will likely be the first real pressure
-   to build at least a minimal typed IR resource-node type.
-4. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
+1. Begin M1-2 (wedge buildout) per docs/plan.md: top ~50 AWS resource types
+   via ReadResource, CloudTrail correlation (drift → actor/timestamp/
+   session), `status --drift`. This is a real scope jump from Slice 3's
+   "one resource, named explicitly on the CLI" — it needs auto-discovery
+   (enumerate what exists in an account, not be told), which in turn wants
+   at least a minimal typed IR resource-node (component map #1, still not
+   built — see below) rather than `ubx scan`'s current opaque
+   `--type/--name/--lookup` flags per resource.
+2. Still not started: Core IR + resolver (component map #1-2). Every slice
+   so far has deliberately deferred this (Slice 2: hand-written JSON input;
+   Slice 3: one resource, one CLI invocation) — M1-2's auto-discovery is
+   likely the point where it can't be deferred further.
+3. A `ubx provider ...` dev-facing CLI verb was deliberately never added
+   across three sessions — still not part of the eventual product CLI
+   surface (see docs/architecture.md component map). `ubx scan` now covers
+   the "read one resource" use case anyway; revisit only if something else
+   still needs raw schema/read access outside of scan/accept.
+4. The three Slice-3 architectural interpretations flagged under Open
+   decisions above (core→provider dependency, FoldState's O(chain) linear
+   walk, lookup-key-not-persisted) are worth a deliberate look before
+   scaling into M1-2's "top ~50 resource types" — each was a reasonable
+   choice at "one resource, foundational slice" scale and may not hold at
+   "auto-discovered fleet" scale.
+5. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
    milestone), PlanResourceChange/ApplyResourceChange (write path —
    deferred per docs/architecture.md "wedge reads and records before it
    ever writes"), AutoMTLS in provider/ (still opt-in/unimplemented),

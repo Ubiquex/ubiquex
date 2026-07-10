@@ -15,6 +15,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newAcceptCmd())
 	root.AddCommand(newWhyCmd())
+	root.AddCommand(newScanCmd())
 
 	return root
 }

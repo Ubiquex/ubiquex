@@ -15,9 +15,12 @@ var ErrInvalidProposal = errors.New("invalid proposal")
 //   - every Delta.Modifies entry must have a matching Resolution.Inputs
 //     entry with a non-empty ObservedHash, so a proposal's claimed "before"
 //     is provable against what was actually observed, not just asserted;
-//   - kind-specific rules — currently just KindAdoption, which must be
-//     record-only (docs/schema.md: all-zero blast_radius, no
-//     modifies/destroys).
+//   - kind-specific rules: KindAdoption must be record-only (docs/schema.md:
+//     all-zero blast_radius, no modifies/destroys). KindDriftAdopt is also
+//     record-only against the cloud (all-zero blast_radius, no destroys) but
+//     — unlike adoption — is expected to carry delta.modifies, since its
+//     whole point is recording an already-happened change (see core/scan.go,
+//     GenerateProposal).
 //
 // Accept calls Validate before hashing: a proposal that fails validation
 // must never make it into the ledger, and shouldn't spend a hash on
@@ -56,8 +59,8 @@ func validateModifiesHaveResolutionInputs(p *Proposal) error {
 func validateKind(p *Proposal) error {
 	switch p.Kind {
 	case KindAdoption:
-		if p.BlastRadius != (BlastRadius{}) {
-			return fmt.Errorf("adoption proposals must have all-zero blast_radius, got %+v", p.BlastRadius)
+		if err := requireZeroBlastRadius(p); err != nil {
+			return err
 		}
 		if len(p.Delta.Modifies) != 0 {
 			return errors.New("adoption proposals must not have delta.modifies entries (record-only)")
@@ -65,6 +68,20 @@ func validateKind(p *Proposal) error {
 		if len(p.Delta.Destroys) != 0 {
 			return errors.New("adoption proposals must not have delta.destroys entries (record-only)")
 		}
+	case KindDriftAdopt:
+		if err := requireZeroBlastRadius(p); err != nil {
+			return err
+		}
+		if len(p.Delta.Destroys) != 0 {
+			return errors.New("drift_adopt proposals must not have delta.destroys entries (record-only)")
+		}
+	}
+	return nil
+}
+
+func requireZeroBlastRadius(p *Proposal) error {
+	if p.BlastRadius != (BlastRadius{}) {
+		return fmt.Errorf("%s proposals must have all-zero blast_radius, got %+v", p.Kind, p.BlastRadius)
 	}
 	return nil
 }

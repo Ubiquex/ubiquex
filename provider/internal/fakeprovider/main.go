@@ -154,6 +154,10 @@ func (s *fakeProviderServerV6) GetProviderSchema(context.Context, *tfplugin6.Get
 	}, nil
 }
 
+func (s *fakeProviderServerV6) ConfigureProvider(context.Context, *tfplugin6.ConfigureProvider_Request) (*tfplugin6.ConfigureProvider_Response, error) {
+	return &tfplugin6.ConfigureProvider_Response{}, nil
+}
+
 func (s *fakeProviderServerV6) ReadResource(_ context.Context, req *tfplugin6.ReadResource_Request) (*tfplugin6.ReadResource_Response, error) {
 	out, err := echoWidgetState(req.CurrentState.GetMsgpack())
 	if err != nil {
@@ -188,6 +192,10 @@ func (s *fakeProviderServerV5) GetSchema(context.Context, *tfplugin5.GetProvider
 			},
 		},
 	}, nil
+}
+
+func (s *fakeProviderServerV5) Configure(context.Context, *tfplugin5.Configure_Request) (*tfplugin5.Configure_Response, error) {
+	return &tfplugin5.Configure_Response{}, nil
 }
 
 func (s *fakeProviderServerV5) ReadResource(_ context.Context, req *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {

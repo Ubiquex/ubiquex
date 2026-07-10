@@ -128,6 +128,14 @@ Notes:
   adoption records the resource's IR node into the ledger — but since
   `blast_radius` is all-zero, the executor must never treat it as a real
   create.
+- **Drift-adopt proposals** (kind `drift_adopt`, pinned 2026-07-10 alongside
+  `ubx scan` — see docs/plan.md §Slice 3) MUST also have all-zero
+  `blast_radius` and empty `delta.destroys` (record-only against the cloud,
+  same as adoption). Unlike adoption, `delta.modifies` IS expected — a
+  drift_adopt's whole point is recording a change that already happened in
+  reality, using the same `Modification` shape as any other modifies entry
+  (and therefore the same `resolution.inputs` cross-reference requirement
+  above).
 - `acceptance` binds a signature to the exact hash. Timestamps and acceptance data
   live OUTSIDE the hashed content (see below).
 - `intent.sources[].content_hash` is a SHA-256 content hash (`sha256:<hex>`) of the

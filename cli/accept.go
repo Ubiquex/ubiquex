@@ -1,17 +1,28 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
 func newAcceptCmd() *cobra.Command {
-	var ledgerDir string
+	var (
+		ledgerDir      string
+		reverifyWith   string
+		resourceType   string
+		resourceName   string
+		lookup         string
+		providerConfig string
+		timeout        time.Duration
+	)
 
 	cmd := &cobra.Command{
 		Use:   "accept <proposal.json>",
@@ -28,6 +39,27 @@ func newAcceptCmd() *cobra.Command {
 				return fmt.Errorf("parse proposal: %w", err)
 			}
 
+			if reverifyWith != "" {
+				if resourceType == "" || resourceName == "" {
+					return fmt.Errorf("accept: --reverify-with requires --resource-type and --resource-name")
+				}
+				addr := core.Address{Stack: p.Stack, Type: resourceType, Name: resourceName}
+
+				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+				defer cancel()
+
+				client, err := provider.Launch(ctx, reverifyWith)
+				if err != nil {
+					return fmt.Errorf("accept: reverify: %w", err)
+				}
+				defer client.Close()
+
+				if err := core.VerifyFreshness(ctx, client.Provider, addr,
+					json.RawMessage(providerConfig), json.RawMessage(lookup), &p); err != nil {
+					return fmt.Errorf("accept: %w", err)
+				}
+			}
+
 			ledger := core.Open(ledgerDir)
 			accepted, err := core.Accept(ledger, &p)
 			if err != nil {
@@ -40,5 +72,11 @@ func newAcceptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().StringVar(&reverifyWith, "reverify-with", "", "path to a provider binary: re-read the resource live and refuse to accept if it no longer matches the proposal's recorded observation (stale)")
+	cmd.Flags().StringVar(&resourceType, "resource-type", "", "resource type to re-read (required with --reverify-with)")
+	cmd.Flags().StringVar(&resourceName, "resource-name", "", "resource name to re-read (required with --reverify-with)")
+	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider (required with --reverify-with)")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (used with --reverify-with)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for the reverify provider round trip")
 	return cmd
 }

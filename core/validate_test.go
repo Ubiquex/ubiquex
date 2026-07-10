@@ -136,6 +136,49 @@ func TestValidate_NonAdoptionKindUnaffectedByAdoptionRule(t *testing.T) {
 	}
 }
 
+func TestValidate_DriftAdoptRequiresZeroBlastRadius(t *testing.T) {
+	p := sampleProposal()
+	p.Kind = KindDriftAdopt
+	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "payments-db"}
+	p.Delta.Modifies = []Modification{modificationFor(addr)}
+	p.Resolution.Inputs = []ResolutionInput{
+		{Kind: "live_state", Resource: addr.String(), ObservedHash: "sha256:abc123"},
+	}
+	p.BlastRadius = BlastRadius{Modifies: 1}
+
+	err := Validate(p)
+	if !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("got %v, want ErrInvalidProposal", err)
+	}
+}
+
+func TestValidate_DriftAdoptRejectsDestroys(t *testing.T) {
+	p := sampleProposal()
+	p.Kind = KindDriftAdopt
+	p.BlastRadius = BlastRadius{}
+	p.Delta.Destroys = []Address{{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}
+
+	err := Validate(p)
+	if !errors.Is(err, ErrInvalidProposal) {
+		t.Fatalf("got %v, want ErrInvalidProposal", err)
+	}
+}
+
+func TestValidate_DriftAdoptWithModifiesPasses(t *testing.T) {
+	p := sampleProposal()
+	p.Kind = KindDriftAdopt
+	p.BlastRadius = BlastRadius{}
+	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "payments-db"}
+	p.Delta.Modifies = []Modification{modificationFor(addr)}
+	p.Resolution.Inputs = []ResolutionInput{
+		{Kind: "live_state", Resource: addr.String(), ObservedHash: "sha256:abc123"},
+	}
+
+	if err := Validate(p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestAccept_RejectsInvalidProposalBeforeHashing(t *testing.T) {
 	l := Open(t.TempDir())
 	p := sampleProposal()
