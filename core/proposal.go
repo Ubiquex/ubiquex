@@ -67,22 +67,50 @@ type IntentSource struct {
 	ContentHash string `json:"content_hash,omitempty"`
 }
 
-// Delta is Proposal.Delta. Elements are kept as opaque JSON rather than
-// modeled as typed IR nodes — the IR/resolver components (docs/architecture.md
-// component map #1-2) don't exist yet; Slice 2 only needs to hash and ledger
-// a hand-written proposal, not construct one from a resolver.
-//
-// docs/schema.md's ratified hashing rule sorts these arrays lexicographically
-// by (stack, type, name) rather than preserving authoring/dependency order —
-// see sortDeltaElements. That rule is written against Creates' shape (IR
-// resource nodes: stack/type/name are direct fields). Modifies/Destroys'
-// element shape is still an open "..." placeholder in docs/schema.md, so
-// their sort-key extraction (deltaSortKey) is a best-effort interpretation,
-// not a pinned schema decision — see STATE.md for this flagged as such.
+// Address identifies one resource within a stack: (stack, type, name).
+// This is the pinned shape for Delta.Destroys elements and
+// Modification.Target (docs/schema.md, pinned 2026-07-10).
+type Address struct {
+	Stack string `json:"stack"`
+	Type  string `json:"type"`
+	Name  string `json:"name"`
+}
+
+// String renders an Address in its canonical cross-reference form,
+// "<stack>.<type>.<name>" — how a delta.modifies target is matched against
+// a resolution.inputs entry (see validate.go) and how
+// ResolutionInput.Resource is expected to be written.
+func (a Address) String() string {
+	return a.Stack + "." + a.Type + "." + a.Name
+}
+
+// Modification is one entry of Delta.Modifies (docs/schema.md, pinned
+// 2026-07-10). Before/After hold only the attributes that changed — not
+// full resource state — keyed by dot-notation attribute path for nested
+// values (e.g. "tags.Environment", not a nested "tags": {"Environment": ...}
+// object). Every Modification's Target MUST have a matching
+// Resolution.Inputs entry with a non-empty ObservedHash — see validate.go —
+// so a proposal's claimed "before" is provable against what was actually
+// observed, not just asserted.
+type Modification struct {
+	Target Address                    `json:"target"`
+	Before map[string]json.RawMessage `json:"before,omitempty"`
+	After  map[string]json.RawMessage `json:"after,omitempty"`
+}
+
+// Delta is Proposal.Delta. Creates stays opaque JSON — typed IR resource
+// nodes don't exist yet (docs/architecture.md component map #1-2 hasn't
+// been built; Slice 2/3 only need to hash and ledger hand-written/adoption
+// proposals, not construct one from a resolver) — but its elements are
+// still expected to carry direct stack/type/name fields per the IR
+// resource node shape shown under §IR above, which sortDeltaElements relies
+// on. Modifies and Destroys have a pinned shape (see Address, Modification
+// above); their sort-key extraction (deltaSortKey, canonical.go) reads
+// those fields directly now rather than guessing at an unpinned shape.
 type Delta struct {
 	Creates  []json.RawMessage `json:"creates,omitempty"`
-	Modifies []json.RawMessage `json:"modifies,omitempty"`
-	Destroys []json.RawMessage `json:"destroys,omitempty"`
+	Modifies []Modification    `json:"modifies,omitempty"`
+	Destroys []Address         `json:"destroys,omitempty"`
 }
 
 // Resolution is Proposal.Resolution.
@@ -91,7 +119,10 @@ type Resolution struct {
 	Inputs     []ResolutionInput `json:"inputs,omitempty"`
 }
 
-// ResolutionInput is one entry of Resolution.Inputs.
+// ResolutionInput is one entry of Resolution.Inputs. Resource is expected
+// to be an Address's canonical string form ("<stack>.<type>.<name>") when
+// it corresponds to a Delta.Modifies target — see validate.go, which
+// cross-references the two.
 type ResolutionInput struct {
 	Kind         string `json:"kind"`
 	Resource     string `json:"resource"`

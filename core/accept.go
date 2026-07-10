@@ -28,6 +28,10 @@ func Accept(l *Ledger, p *Proposal) (*Proposal, error) {
 		return nil, fmt.Errorf("accept: %w", ErrAlreadyAccepted)
 	}
 
+	if err := Validate(p); err != nil {
+		return nil, fmt.Errorf("accept: %w", err)
+	}
+
 	hash, err := Hash(p)
 	if err != nil {
 		return nil, fmt.Errorf("accept: %w", err)

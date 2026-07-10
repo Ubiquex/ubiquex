@@ -79,6 +79,73 @@ func TestHash_DeltaOrderNotSignificant(t *testing.T) {
 	}
 }
 
+func TestHash_DestroysOrderNotSignificant(t *testing.T) {
+	x := Address{Stack: "payments", Type: "aws_db_instance", Name: "x"}
+	y := Address{Stack: "payments", Type: "aws_db_instance", Name: "y"}
+
+	a := sampleProposal()
+	a.Delta.Destroys = []Address{x, y}
+
+	b := sampleProposal()
+	b.Delta.Destroys = []Address{y, x}
+
+	ha, err := Hash(a)
+	if err != nil {
+		t.Fatalf("Hash(a): %v", err)
+	}
+	hb, err := Hash(b)
+	if err != nil {
+		t.Fatalf("Hash(b): %v", err)
+	}
+	if ha != hb {
+		t.Fatalf("hashes differ based on destroys authoring order: %s vs %s", ha, hb)
+	}
+}
+
+func TestHash_ModifiesOrderNotSignificant(t *testing.T) {
+	mkMod := func(name string) Modification {
+		return Modification{
+			Target: Address{Stack: "payments", Type: "aws_db_instance", Name: name},
+			Before: map[string]json.RawMessage{"instance_class": json.RawMessage(`"db.t3.medium"`)},
+			After:  map[string]json.RawMessage{"instance_class": json.RawMessage(`"db.t3.large"`)},
+		}
+	}
+	resolutionInputs := func(names ...string) []ResolutionInput {
+		var in []ResolutionInput
+		for _, n := range names {
+			addr := Address{Stack: "payments", Type: "aws_db_instance", Name: n}
+			in = append(in, ResolutionInput{Kind: "live_state", Resource: addr.String(), ObservedHash: "sha256:obs-" + n})
+		}
+		return in
+	}
+
+	// resolution.inputs order is untouched by sortDeltaElements (only the
+	// three delta arrays get the ratified lexicographic sort) — keep it
+	// identical between a and b so this test isolates delta.modifies order
+	// specifically.
+	inputs := resolutionInputs("x", "y")
+
+	a := sampleProposal()
+	a.Delta.Modifies = []Modification{mkMod("x"), mkMod("y")}
+	a.Resolution.Inputs = inputs
+
+	b := sampleProposal()
+	b.Delta.Modifies = []Modification{mkMod("y"), mkMod("x")}
+	b.Resolution.Inputs = inputs
+
+	ha, err := Hash(a)
+	if err != nil {
+		t.Fatalf("Hash(a): %v", err)
+	}
+	hb, err := Hash(b)
+	if err != nil {
+		t.Fatalf("Hash(b): %v", err)
+	}
+	if ha != hb {
+		t.Fatalf("hashes differ based on modifies authoring order: %s vs %s", ha, hb)
+	}
+}
+
 func TestHash_FloatRejected(t *testing.T) {
 	p := sampleProposal()
 	p.Delta.Creates = []json.RawMessage{

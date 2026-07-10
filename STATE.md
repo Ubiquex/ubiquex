@@ -4,20 +4,22 @@
 
 ## Current phase
 
-**Slice 2, done.** `core/` package: typed `Proposal`, canonical hashing per
-the now-RATIFIED docs/schema.md rules, an append-only per-stack ledger, and
-local acceptance. `ubx accept`/`ubx why` close the loop end-to-end: a
-hand-written proposal JSON file → canonical hash → local signing → ledger
-append → read back. Slice 1 (dual-protocol provider client) remains done
-from last session.
+**Slice 2, done; delta element shapes pinned.** `core/` package: typed
+`Proposal`, canonical hashing per the now-RATIFIED docs/schema.md rules
+(including the now-pinned `delta.modifies`/`delta.destroys` shapes), an
+append-only per-stack ledger, local acceptance, and propose-time validation
+(modifies↔resolution.inputs cross-referencing, adoption record-only rule).
+`ubx accept`/`ubx why` close the loop end-to-end. Slice 1 (dual-protocol
+provider client) remains done from two sessions ago.
 
 ## Current focus
 
-Slice 2 exit criteria are met. Next up per docs/plan.md is Slice 3 (close
-the loop — `ubx scan` drift detection, adoption proposals), unless Roozbeh
-wants to build out the Core IR / resolver first (component map #1-2, still
-not started — Slice 2 kept delta payloads as opaque JSON specifically to
-avoid needing them yet, see Next steps).
+Slice 2 exit criteria are met and the delta-shape decision is closed. Next
+up per docs/plan.md is Slice 3 (close the loop — `ubx scan` drift
+detection, adoption proposals), unless Roozbeh wants to build out the Core
+IR / resolver first (component map #1-2, still not started — Slice 2 kept
+`delta.creates` payloads as opaque JSON specifically to avoid needing them
+yet, see Next steps).
 
 ## Open decisions
 
@@ -36,6 +38,14 @@ avoid needing them yet, see Next steps).
       int64/decimal-strings (floats rejected at propose time), delta arrays
       sorted lexicographically by `(stack, type, name)`, intent.sources carry
       content hashes. Any further change requires a schema_version bump.
+- [x] **RESOLVED 2026-07-10 — `delta.modifies`/`delta.destroys` element
+      shape.** docs/schema.md §"Delta element shapes — PINNED": destroys =
+      `Address {stack,type,name}`; modifies = `{target: Address, before,
+      after}` with before/after holding only changed attributes
+      (dot-notation for nested paths). Every modifies entry now requires a
+      matching `resolution.inputs` entry with a non-empty `observed_hash`,
+      enforced at propose time (`core.Validate`, called from `core.Accept`).
+      `core.deltaSortKey` no longer guesses — see Done below.
 
 ## Done
 
@@ -117,7 +127,8 @@ avoid needing them yet, see Next steps).
   - `core/proposal.go`: typed `Proposal` per docs/schema.md, including the
     ratified `IntentSource.ContentHash` field. `Delta.Creates/Modifies/
     Destroys` are `[]json.RawMessage` (opaque), not typed IR nodes — see
-    Next steps for why.
+    Next steps for why. (Modifies/Destroys' opaque shape was superseded the
+    same day the shapes got pinned — see the entry below.)
   - `core/canonical.go`: canonical-hashing pipeline. Marshals the proposal,
     re-decodes with `json.Decoder.UseNumber()` (preserves int-vs-float
     literal shape), deletes the three excluded fields, sorts delta arrays,
@@ -161,6 +172,30 @@ avoid needing them yet, see Next steps).
     disk → `ubx why` printing intent/acceptance/blast-radius back out.
   - Added `.gitignore` (`.DS_Store`, `/ubx`, `/dist/`) — stray macOS files
     had started showing up untracked.
+- 2026-07-10: Pinned `delta.modifies`/`delta.destroys` element shapes
+  (docs/schema.md §"Delta element shapes — PINNED", separate commit
+  `schema: pin delta element shapes`).
+  - `core/proposal.go`: new `Address{Stack,Type,Name}` type (with
+    `.String()` → `<stack>.<type>.<name>`, the canonical cross-reference
+    form). `Delta.Destroys` is now `[]Address`; `Delta.Modifies` is now
+    `[]Modification{Target Address, Before/After map[string]json.RawMessage}`
+    (dot-notation keys, changed attributes only). `Delta.Creates` unchanged
+    (still opaque `[]json.RawMessage` — no typed IR node yet).
+  - `core/canonical.go`: `deltaSortKey` simplified now that all three delta
+    shapes are pinned — no more guessing/fallback logic, just reads
+    `stack`/`type`/`name` directly (from `target` for modifies elements).
+  - `core/validate.go` (new): `Validate(*Proposal) error`. Cross-references
+    every `delta.modifies` entry's target address against
+    `resolution.inputs[].resource`, requiring a match with a non-empty
+    `observed_hash`. Kind-specific rule for `KindAdoption`: all-zero
+    blast_radius, empty modifies/destroys (creates may still be populated).
+    Wired into `core.Accept`, called before `Hash` — an invalid proposal
+    never gets hashed or reaches the ledger.
+  - Tests: `core/validate_test.go` (modifies missing/wrong-address/empty-hash
+    resolution.inputs, adoption blast-radius/modifies/destroys rules,
+    non-adoption kinds unaffected, Accept rejects before hashing) plus new
+    hash-stability cases in `core/canonical_test.go` for destroys/modifies
+    array-order independence under the pinned shapes. All green.
 
 ## Next steps
 
@@ -179,14 +214,7 @@ avoid needing them yet, see Next steps).
    explicitly this slice's input and the IR/resolver don't exist yet. Slice
    3's adoption-proposal generation will likely be the first real pressure
    to build at least a minimal typed IR resource-node type.
-4. `delta.modifies`/`delta.destroys` element shape is still schema.md's
-   "..." placeholder (only `delta.creates`, matching the IR resource-node
-   example, has a pinned (stack,type,name) shape). `core.deltaSortKey`
-   (core/canonical.go) has a best-effort fallback for the other two shapes
-   (a `target` field, string or object) — flagged as an interpretation, not
-   a ratified decision. Worth pinning down before real adoption/revert
-   proposals start populating those arrays for real.
-5. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
+4. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
    milestone), PlanResourceChange/ApplyResourceChange (write path —
    deferred per docs/architecture.md "wedge reads and records before it
    ever writes"), AutoMTLS in provider/ (still opt-in/unimplemented),

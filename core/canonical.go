@@ -157,32 +157,26 @@ func sortDeltaElements(arr []interface{}) {
 }
 
 // deltaSortKey extracts a (stack, type, name) sort key from one delta
-// array element. Creates elements are IR resource nodes (docs/schema.md —
-// IR resource node) with stack/type/name as direct fields, so that case is
-// exact. Modifies ({target, before, after}) and Destroys (bare resource-ref
-// strings in the example) don't have a pinned shape yet — see the Delta
-// doc comment — so this falls back to best-effort extraction: a "target"
-// field (string or object) if present, or the raw element itself.
+// array element, per docs/schema.md's pinned shapes (2026-07-10): Creates
+// elements are IR resource nodes with stack/type/name as direct fields;
+// Destroys elements are Address objects, also stack/type/name direct;
+// Modifies elements are {target: Address, before, after}, so the key comes
+// from the nested target object. All three shapes are now pinned, so this
+// no longer needs to guess — a map lacking these fields, or a non-object
+// element, is a proposal that doesn't conform to the pinned shape and sorts
+// as if empty (a hash produced from an unpinned/malformed shape is
+// something wrong upstream, not something to interpret around here; schema
+// validation is Validate's job, not the canonicalizer's).
 func deltaSortKey(el interface{}) (stack, typ, name string) {
-	switch v := el.(type) {
-	case map[string]interface{}:
-		stack, _ = v["stack"].(string)
-		typ, _ = v["type"].(string)
-		name, _ = v["name"].(string)
-		if typ == "" && name == "" {
-			switch target := v["target"].(type) {
-			case string:
-				name = target
-			case map[string]interface{}:
-				stack, _ = target["stack"].(string)
-				typ, _ = target["type"].(string)
-				name, _ = target["name"].(string)
-			}
-		}
-		return stack, typ, name
-	case string:
-		return "", "", v
-	default:
-		return "", "", fmt.Sprint(v)
+	obj, ok := el.(map[string]interface{})
+	if !ok {
+		return "", "", ""
 	}
+	if target, ok := obj["target"].(map[string]interface{}); ok {
+		obj = target
+	}
+	stack, _ = obj["stack"].(string)
+	typ, _ = obj["type"].(string)
+	name, _ = obj["name"].(string)
+	return stack, typ, name
 }

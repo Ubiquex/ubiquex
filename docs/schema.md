@@ -54,12 +54,22 @@ Value encoding (draft):
   },
   "delta": {
     "creates": [ "<IR nodes>" ],
-    "modifies": [ { "target": "...", "before": {}, "after": {} } ],
-    "destroys": [ "..." ]
+    "modifies": [
+      {
+        "target": { "stack": "payments", "type": "aws_db_instance", "name": "payments-db" },
+        "before": { "instance_class": "db.t3.medium" },
+        "after":  { "instance_class": "db.t3.large" }
+      }
+    ],
+    "destroys": [
+      { "stack": "payments", "type": "aws_db_instance", "name": "old-payments-db" }
+    ]
   },
   "resolution": {
     "resolved_at": "2026-07-10T...Z",
-    "inputs": [ { "kind": "live_state", "resource": "...", "observed_hash": "..." } ]
+    "inputs": [
+      { "kind": "live_state", "resource": "payments.aws_db_instance.payments-db", "observed_hash": "sha256:9f2a..." }
+    ]
   },
   "cost_delta": { "monthly_usd": 59 },
   "blast_radius": { "creates": 0, "modifies": 1, "destroys": 0 },
@@ -74,6 +84,37 @@ Value encoding (draft):
 }
 ```
 
+### Delta element shapes — PINNED (2026-07-10)
+
+`delta.creates` stays an array of IR resource nodes (see §IR above); the IR
+node schema itself isn't fully built out yet, but its `stack`/`type`/`name`
+fields are already load-bearing (canonical hashing sorts by them).
+`delta.modifies` and `delta.destroys` were the draft's "..." placeholders;
+both are now pinned:
+
+- **Address** — `{ "stack": "...", "type": "...", "name": "..." }`. This is
+  `delta.destroys`' element shape directly, and `delta.modifies[].target`'s
+  shape. Its canonical string form is `<stack>.<type>.<name>` (e.g.
+  `payments.aws_db_instance.payments-db`) — this is what
+  `resolution.inputs[].resource` must contain when it backs a modification
+  (see below).
+- **Modification** — `{ "target": Address, "before": {...}, "after": {...} }`.
+  `before`/`after` hold ONLY the attributes that changed, not full resource
+  state, keyed by dot-notation attribute path for nested values (e.g.
+  `"tags.Environment"`, not a nested `"tags": {"Environment": ...}` object).
+- **Every `delta.modifies` entry MUST have a corresponding
+  `resolution.inputs` entry** whose `resource` equals that entry's
+  `target`'s canonical address string, with a non-empty `observed_hash`
+  covering that resource's observed state. This is enforced as **propose-time
+  validation** (a proposal missing this is rejected before it can be
+  hashed/accepted, not just discouraged by convention) — a modification's
+  claimed "before" must be provable against what was actually observed, not
+  merely asserted. `delta.creates` has no equivalent requirement.
+
+Since these shapes feed the canonical hash's `(stack, type, name)` sort
+directly, changing them again is a hashed-content shape change — same
+migration bar as §Canonical hashing (schema_version bump required).
+
 Notes:
 - `id` is a content hash (git's lesson) — no sequential numbering; human-friendly
   aliases allowed as labels.
@@ -81,8 +122,12 @@ Notes:
 - Staleness: any `resolution.inputs` observed_hash mismatch, parent advancement
   conflict, or pinned cross-stack head advancement ⇒ status becomes `stale`;
   re-resolution required before acceptance/ship.
-- Adoption proposals MUST have blast_radius all-zero and `delta.creates/destroys`
-  empty against cloud (record-only).
+- **Adoption proposals** (kind `adoption`) MUST have all-zero `blast_radius`
+  and empty `delta.modifies`/`delta.destroys` (record-only, enforced as
+  propose-time validation, kind-specific). `delta.creates` MAY be populated —
+  adoption records the resource's IR node into the ledger — but since
+  `blast_radius` is all-zero, the executor must never treat it as a real
+  create.
 - `acceptance` binds a signature to the exact hash. Timestamps and acceptance data
   live OUTSIDE the hashed content (see below).
 - `intent.sources[].content_hash` is a SHA-256 content hash (`sha256:<hex>`) of the
@@ -127,9 +172,11 @@ Notes:
   delta lists" — dependency order is a resolver/executor concern for planning
   apply sequence, not a hashing concern; deriving it from a topo sort would
   make the hash sensitive to resolver internals and graph algorithm choice,
-  which is exactly the nondeterminism this section exists to rule out.) Any
-  other array with hash-significant order must have its own explicit,
-  documented sort key — no array may rely on insertion/map-iteration order.
+  which is exactly the nondeterminism this section exists to rule out.) See
+  §Proposal's "Delta element shapes — PINNED" for exactly where `stack`/
+  `type`/`name` come from on each array's element shape. Any other array with
+  hash-significant order must have its own explicit, documented sort key —
+  no array may rely on insertion/map-iteration order.
 - Determinism rules feeding the hash: no map-iteration ordering anywhere
   upstream; no environment or clock leakage except explicit recorded fields.
 - The double-run rule: any evaluator producing hashed content runs twice; byte
