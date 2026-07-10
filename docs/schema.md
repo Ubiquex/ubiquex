@@ -47,9 +47,9 @@ Value encoding (draft):
   "intent": {
     "summary": "postgres for payments, modeled on staging, ~50% capacity",
     "sources": [
-      { "kind": "dialogue", "ref": "d-99f2" },
-      { "kind": "manual_edit", "ref": "PR #315" },
-      { "kind": "issue", "ref": "UBX-241" }
+      { "kind": "dialogue", "ref": "d-99f2", "content_hash": "sha256:9f2a..." },
+      { "kind": "manual_edit", "ref": "PR #315", "content_hash": "sha256:1b7c..." },
+      { "kind": "issue", "ref": "UBX-241", "content_hash": "sha256:4e0d..." }
     ]
   },
   "delta": {
@@ -85,20 +85,75 @@ Notes:
   empty against cloud (record-only).
 - `acceptance` binds a signature to the exact hash. Timestamps and acceptance data
   live OUTSIDE the hashed content (see below).
+- `intent.sources[].content_hash` is a SHA-256 content hash (`sha256:<hex>`) of the
+  referenced dialogue/PR/issue content at resolution time — tamper-evidence for
+  intent evidence, which otherwise lives outside the proposal's own hash chain
+  (dialogues can be edited or deleted upstream; the content_hash catches that).
 
-## Canonical hashing (draft — ratify before Slice 2)
+## Canonical hashing — RATIFIED v1
+
+> See "Ratification — Hashing (2026-07-10)" below. This section is no longer
+> draft; changes require a `schema_version` bump and a migration, not an edit
+> in place.
 
 - Hash function: SHA-256.
-- Hashed content: the proposal object EXCLUDING `acceptance`, `status`, and any
-  field that changes after refinement freezes (`resolved_at` IS included — it is
-  part of what was reviewed).
-- Serialization: canonical JSON — RFC 8785 (JCS) style: UTF-8, sorted object keys,
-  no insignificant whitespace, canonical number formatting.
-- Determinism rules feeding the hash: no map-iteration ordering anywhere upstream;
-  arrays are semantically ordered (dependency order for delta lists, defined sort
-  otherwise); no environment or clock leakage except explicit recorded fields.
+- Domain separation: the literal prefix bytes `ubx:proposal:v1\n` (UTF-8) are
+  prepended to the canonical serialization before hashing. This scopes the hash
+  to "ubx proposal, schema v1" so it can never collide with a hash of the same
+  bytes computed for a different purpose (a different object kind, a future
+  incompatible v2 encoding, another tool's use of the same canonical-JSON bytes,
+  etc.) — the classic cross-protocol hash confusion this guards against.
+- Hashed content: the proposal object EXCLUDING exactly these fields:
+  `id`, `acceptance`, `status`. Nothing else is excluded — in particular
+  `resolved_at` and every other `resolution.*` field ARE included, since they
+  are part of what was reviewed at acceptance time. (`id` is excluded because
+  it IS the hash — a self-reference would be circular. `acceptance` and
+  `status` are excluded because they are recorded after the hash exists, and
+  must not perturb it.)
+- Serialization: canonical JSON — RFC 8785 (JCS) style: UTF-8, sorted object
+  keys, no insignificant whitespace.
+- Number encoding (resolves the prior open question — no generic float
+  canonicalization is needed): every number in hashed content MUST be either
+  a JSON integer representable exactly as a signed 64-bit integer (int64), or
+  a decimal value encoded as a JSON **string** (e.g. `cost_delta.monthly_usd`
+  becomes `"59.00"`, not `59.00`), never a JSON float literal. A resolver that
+  produces a float for a hashed field is a hard failure at propose time
+  (reject before hashing, not a silent coercion) — this sidesteps float
+  serialization ambiguity (trailing zeros, exponent form, -0, NaN/Inf)
+  entirely rather than trying to canonicalize it away.
+- Array ordering: `delta.creates`, `delta.modifies`, `delta.destroys` are
+  sorted **lexicographically by `(stack, type, name)`** of each element, not by
+  dependency/topological order. (Supersedes the draft's "dependency order for
+  delta lists" — dependency order is a resolver/executor concern for planning
+  apply sequence, not a hashing concern; deriving it from a topo sort would
+  make the hash sensitive to resolver internals and graph algorithm choice,
+  which is exactly the nondeterminism this section exists to rule out.) Any
+  other array with hash-significant order must have its own explicit,
+  documented sort key — no array may rely on insertion/map-iteration order.
+- Determinism rules feeding the hash: no map-iteration ordering anywhere
+  upstream; no environment or clock leakage except explicit recorded fields.
 - The double-run rule: any evaluator producing hashed content runs twice; byte
   mismatch = hard failure at propose time.
+
+### Ratification — Hashing (2026-07-10)
+
+`§Canonical hashing` above is **RATIFIED** as of 2026-07-10, incorporating the
+amendments agreed in that day's design session:
+
+1. Numbers restricted to int64 or decimal strings; floats rejected at propose
+   time (no float canonicalization).
+2. Hash-excluded fields are exactly `id`, `acceptance`, `status` — no broader
+   "anything that changes after refinement" carve-out.
+3. Domain-separation prefix `ubx:proposal:v1\n` prepended to canonical bytes
+   before hashing.
+4. `intent.sources[].content_hash` added for dialogue/PR/issue tamper-evidence.
+5. `delta` arrays sorted lexicographically by `(stack, type, name)`, not
+   dependency order.
+
+Any further change to hashed-content shape, exclusion list, domain prefix,
+number encoding, or array ordering after this point requires a
+`schema_version` bump and an explicit migration path for existing ledger
+entries — not an in-place edit of this section.
 
 ## Ledger layout (draft)
 
@@ -116,7 +171,6 @@ Notes:
 
 ## Open questions (tracked, not blocking Slice 1)
 
-- Exact JCS edge cases in Go (number canonicalization) — pick/vendor a library.
 - Dialogue format & privacy tiering.
 - Cross-stack workspace index format.
 - Environment/promotion model (same proposal re-resolved per env) — design before

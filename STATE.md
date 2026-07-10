@@ -20,8 +20,6 @@ verb for provider interaction first (see Next steps).
 
 ## Open decisions
 
-- [ ] Canonical hashing serialization format (see docs/schema.md §Hashing — draft
-      proposes canonical JSON / JCS-style; confirm before first hash is written)
 - [ ] Provider binary acquisition: download from registry.terraform.io with
       signature verification vs. vendored for dev
 - [ ] Go module path final confirmation (`github.com/ubiquex/ubiquex-cli`)
@@ -30,6 +28,13 @@ verb for provider interaction first (see Next steps).
       behind one `Provider` interface, version selected from the handshake.
       docs/architecture.md and docs/plan.md updated accordingly. See Done below
       for what shipped.
+- [x] **RESOLVED 2026-07-10 — canonical hashing serialization format.**
+      docs/schema.md §Canonical hashing is now RATIFIED v1: SHA-256 over
+      canonical JCS-style JSON, domain prefix `ubx:proposal:v1\n`, hash
+      excludes exactly `id`/`acceptance`/`status`, numbers restricted to
+      int64/decimal-strings (floats rejected at propose time), delta arrays
+      sorted lexicographically by `(stack, type, name)`, intent.sources carry
+      content hashes. Any further change requires a schema_version bump.
 
 ## Done
 
