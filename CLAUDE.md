@@ -18,6 +18,12 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 3. Update `STATE.md` as the LAST act of every session (what was done, what's next,
    any surprises).
 4. A plan change is not real until it lands in `docs/plan.md` (with changelog entry).
+5. User-visible changes (new commands, flags, behaviors) create a docs
+   obligation in the ubiquex-docs repo (Mintlify, user-facing). During
+   foundational slices: do NOT write user docs inline — record a "docs debt"
+   entry in STATE.md instead, batched and cleared per slice. Debt must not
+   cross a slice boundary. Internal docs (docs/ in this repo) are updated
+   immediately as before.
 
 ## Git rules (strict)
 
