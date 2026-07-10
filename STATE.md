@@ -4,35 +4,55 @@
 
 ## Current phase
 
-**UBI-8 done: provider binary acquisition — download, verify, cache.**
-`provider.Acquire` resolves a provider source+explicit-version into a
-verified local binary: `UBX_PROVIDER_MIRROR` local-dir override first, then
-`~/.ubx/providers/...` cache, then registry.opentofu.org (not
-registry.terraform.io — see docs/architecture.md for why) with SHA256SUMS +
-OpenPGP signature verification against a registry-served key. `ubx scan`/
-`ubx accept --reverify-with` both gained `--source`/`--provider-version`
-(and `--reverify-source`/`--reverify-provider-version`) as an alternative to
-a raw `--provider` path; the verified binary's own checksum is now recorded
-in the generated proposal's `resolution.inputs[].provider_checksum`.
-Verified for real against the actual registry.opentofu.org and the actual
-`ubx-states` bucket — see Done.
+**UBI-9 session 1 done: the per-type conformance harness exists, seeded
+with 3 of ~50 AWS resource types.** New `conformance/` package:
+`conformance.Registry` (51 entries — docs/plan.md §M1-2's "top ~50 AWS
+resource types" pinned to an explicit, categorized, executable list) +
+`conformance.RunAdoptMutateScanDiff` (the reusable adopt→mutate→scan-diff
+test pattern, generalizing the manual sequence UBI-7/8 ran by hand against
+S3). Three types verified end-to-end against the real AWS account this
+session — `aws_s3_bucket`, `aws_iam_role`, `aws_vpc` — one per required
+bias category (storage, IAM, network), surfacing a real per-type quirk
+(`aws_iam_role` needs `id`+`name` both set, like S3's `id`+`bucket` — but
+`aws_vpc`, framework-style, needs only `id`) that's now recorded in the
+registry instead of re-discovered next time. The other 48 types are
+registered (type/category/safety) but not yet implemented — "subsequent
+sessions work through the list in batches" per the session's own framing.
 
-Slice 3 (UBI-7) and its follow-up flags remain done from the prior session
-(see below) — the three-foundational-slices arc was already complete;
-UBI-8 is the wedge-buildout prerequisite that lets a real user run ubx
-without a scratch-dir manual download first.
+Live conformance tests are gated behind `UBX_CONFORMANCE_LIVE=1` and
+skipped by default — `go test ./...` stays hermetic and credential-free
+project-wide, exactly as it's been through every prior session.
+
+UBI-8 (provider acquisition) and UBI-7 (Slice 3 + follow-ups) remain done
+from prior sessions (see below).
 
 ## Current focus
 
-Acquisition is done; next per docs/plan.md is the M1-2 wedge buildout (top
-~50 AWS resource types, CloudTrail correlation, `status --drift`) — still a
-meaningfully bigger scope step than "one resource at a time by explicit CLI
-flags," which remains this arc's deliberate, honest scaling limit. See Next
-steps for what M1-2 will actually require that doesn't exist yet
-(auto-discovery, CloudTrail attribution, a real IR/resolver).
+Batch 1 of the ~50-type conformance list is seeded (3 of 51, one per
+storage/IAM/network). Next is picking up the next batch — see Next steps
+for a suggested order (cheap/free real types first: `aws_sqs_queue`,
+`aws_sns_topic`, `aws_iam_policy`, `aws_iam_user` are all free and don't
+need the account's existing resources, just create/destroy-per-test-run
+fixtures) before the fake-only compute/network/DB types, which need
+fakeprovider schema fixtures built per type rather than just an
+already-real resource to point at.
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-10 — conformance harness shape (UBI-9).**
+      Decisions made building it, recorded rather than left implicit:
+      `conformance/` is a new top-level package (parallel to core/provider/
+      cli) — project-internal test tooling, not shipped product code, so it
+      doesn't live under core/ or cli/. It imports both `core` and
+      `provider` freely (no architectural conflict — the UBI-7 inversion
+      only requires `core` itself to stay provider-agnostic; nothing stops
+      a test-harness package from depending on both). Live (real-AWS) tests
+      are gated behind `UBX_CONFORMANCE_LIVE=1` and skip by default, so
+      `go test ./...` never needs network/credentials — consistent with
+      every other test in the project so far. "real-safe" vs "fake-only"
+      is a property of *testing* a type (cost/risk of standing up a
+      disposable instance), decided per type, not a blanket rule by
+      category.
 - [x] **RESOLVED 2026-07-10 — provider binary acquisition (UBI-8).**
       Decision: download from registry.opentofu.org (not
       registry.terraform.io — ToS risk for a third-party tool; OpenTofu's
@@ -424,51 +444,113 @@ steps for what M1-2 will actually require that doesn't exist yet
     ~5s instead of ~35s, confirming the cache hit (no second download).
     This surfaced a real bug (see Surprises) that got fixed before this
     counted as verified.
+- 2026-07-10: UBI-9 session 1 — per-type conformance harness + the ~50-type
+  list, batch 1 (3 of 51 types).
+  - `docs/plan.md`: new "M1-2 resource type list (UBI-9)" section under
+    §Wedge buildout — the ~50 types, categorized (compute/network/iam/
+    storage/db/dns/messaging), each marked real-safe or fake-only with
+    rationale. 51 types total (`conformance.Registry`'s exact count) —
+    "~50" was always approximate, not a hard target.
+  - `conformance/registry.go` (new package): `Safety` (`RealSafe`/
+    `FakeOnly`), `TypeSpec{Type, Category, Safety, IdentityFields, Notes,
+    Implemented}`, `Registry` (the 51-entry list, matching docs/plan.md
+    exactly), `ByType`. `IdentityFields`/`Notes` populated only for
+    `Implemented` types — enforced by a registry test (see below), so an
+    entry can't claim a quirk without actually having verified it.
+  - `conformance/harness.go`: `RunAdoptMutateScanDiff` — scan (expect new)
+    → accept the adoption → caller's `Mutate` callback → scan again (expect
+    drifted) → accept the drift_adopt → scan a third time (expect
+    unchanged), against a fresh per-call ledger in `t.TempDir()`. Fully
+    reusable across both real-safe and fake-only types — only the
+    `ProviderPath`/`Mutate` differ. `RequireLive` gates real-AWS tests
+    behind `UBX_CONFORMANCE_LIVE=1`, skipping (not failing) otherwise —
+    `go test ./...` stays hermetic project-wide.
+  - `conformance/aws_live_test.go`: the 3 seeded types.
+    - `aws_s3_bucket` (storage): reuses the real `ubx-states` bucket
+      (proven since UBI-7), now via the harness instead of a manual
+      transcript.
+    - `aws_iam_role` (iam): adopts the account's real, pre-existing
+      `aws-codestar-service-role`. Needs `id`+`name` both set in the
+      lookup — `name` alone reads back null, confirmed empirically (an
+      initial guess that "just name" would work was wrong and caught
+      before it went in the registry — see Surprises).
+    - `aws_vpc` (network): adopts the account's real default VPC
+      (`vpc-b75be9cd`). Needs only `id` — the framework-style/simpler
+      convention, unlike the two SDKv2-style types above.
+    - All three acquire the real AWS provider via `provider.Acquire`
+      (dogfooding UBI-8, not a manual scratch download), mutate via a real
+      `aws` CLI tag call, and clean up via `t.Cleanup` — verified the
+      account was left exactly as found (`aws s3api get-bucket-tagging` /
+      `aws iam list-role-tags` / `aws ec2 describe-tags` all empty again
+      after the run).
+  - `conformance/registry_test.go`: no-duplicate-types, valid-category,
+    every `Implemented` entry has `Notes`+`IdentityFields`, `ByType` hit/
+    miss, and a `40 <= len(Registry) <= 60` sanity bound on the "~50" scope.
+  - All green (`go build ./...`, `go vet ./...`, `go test ./...` — live
+    tests correctly skip without `UBX_CONFORMANCE_LIVE=1`), plus a real run
+    with it set: `UBX_CONFORMANCE_LIVE=1 go test ./conformance/... -run
+    TestConformance -v` — all three passed against the real account.
 
 ## Next steps
 
-1. Begin M1-2 (wedge buildout) per docs/plan.md: top ~50 AWS resource types
-   via ReadResource, CloudTrail correlation (drift → actor/timestamp/
-   session), `status --drift`. This is a real scope jump from Slice 3's
-   "one resource, named explicitly on the CLI" — it needs auto-discovery
-   (enumerate what exists in an account, not be told), which in turn wants
-   at least a minimal typed IR resource-node (component map #1, still not
-   built — see below) rather than `ubx scan`'s current opaque
-   `--type/--name/--lookup` flags per resource.
-2. Still not started: Core IR + resolver (component map #1-2). Every slice
-   so far has deliberately deferred this (Slice 2: hand-written JSON input;
-   Slice 3: one resource, one CLI invocation) — M1-2's auto-discovery is
-   likely the point where it can't be deferred further.
+1. **UBI-9 batch 2**: pick up the next slice of `conformance/registry.go`'s
+   48 not-yet-`Implemented` types. Suggested order (cheap/free real types
+   first, since they're strictly less work than building a fakeprovider
+   schema fixture): `aws_sqs_queue`/`aws_sns_topic` (free, no dependency on
+   existing account resources — create+destroy per test run, unlike the
+   batch-1 types which all adopted something already there),
+   `aws_iam_policy`/`aws_iam_user`/`aws_iam_group` (free, same
+   create+destroy pattern), `aws_cloudwatch_log_group`/`aws_kms_key`/
+   `aws_secretsmanager_secret` (negligible cost, same pattern). Then the
+   fake-only compute/network/db/dns types, which need per-type
+   fakeprovider schema fixtures rather than just a real resource to point
+   at — expect that to be slower per-type than batch 1. Every new
+   `Implemented: true` entry needs `IdentityFields`+`Notes` filled in for
+   real (registry_test.go enforces this), never guessed — batch 1's
+   `aws_iam_role` mistake (guessed "name" alone would work; it doesn't) is
+   exactly the failure mode to avoid by checking empirically every time,
+   even when a similar-looking type "should" work the same way.
+2. Still not started: Core IR + resolver (component map #1-2), and
+   CloudTrail correlation (UBI-10, per docs/plan.md's own M1-2 scope) —
+   `IdentityFields` is being captured per type specifically so UBI-10 has
+   ARN/equivalent identity data to correlate against once it starts.
+   `status --drift` (a read-only report over what `ubx scan` would find
+   across multiple resources) is also still M1-2 scope, not started.
 3. A `ubx provider ...` dev-facing CLI verb was deliberately never added
-   across three sessions — still not part of the eventual product CLI
+   across four sessions — still not part of the eventual product CLI
    surface (see docs/architecture.md component map). `ubx scan` now covers
    the "read one resource" use case anyway; revisit only if something else
    still needs raw schema/read access outside of scan/accept.
-4. Not addressed, deliberately out of scope: CloudTrail attribution (M1-2
-   milestone), PlanResourceChange/ApplyResourceChange (write path —
-   deferred per docs/architecture.md "wedge reads and records before it
-   ever writes"), AutoMTLS in provider/ (still opt-in/unimplemented),
-   cryptographic signing tier for acceptance (docs/architecture.md calls
-   this out as "optional... later"; `ubx accept` only does the "local"
-   tier — records approver/method/timestamp, no actual signature). Note
-   that `FoldState`'s O(chain) walk (see Open decisions) is an *accepted*
-   limit, not deferred work — its own revisit trigger is stated there;
-   don't re-open it as a TODO without something actually hitting that
-   trigger.
-5. UBI-8 gaps, not addressed this session: no `UBX_PROVIDER_MIRROR`
+4. Not addressed, deliberately out of scope: PlanResourceChange/
+   ApplyResourceChange (write path — deferred per docs/architecture.md
+   "wedge reads and records before it ever writes"), AutoMTLS in provider/
+   (still opt-in/unimplemented), cryptographic signing tier for acceptance
+   (docs/architecture.md calls this out as "optional... later"; `ubx
+   accept` only does the "local" tier). Note that `FoldState`'s O(chain)
+   walk (see Open decisions) is an *accepted* limit, not deferred work —
+   its own revisit trigger is stated there; don't re-open it as a TODO
+   without something actually hitting that trigger.
+5. UBI-8 gaps, not addressed this session either: no `UBX_PROVIDER_MIRROR`
    signature verification (by design — see docs/architecture.md, a local
-   file is trusted differently); no cache invalidation/eviction (a cached
-   binary is trusted forever once verified — fine at current scale, revisit
-   if a provider ever needs to be re-verified e.g. after a key rotation);
-   `ubx scan --source` only supports the registry.opentofu.org mirror path
-   for `registry.terraform.io`-sourced providers specifically — a source
-   naming a different/private registry hostname isn't rejected outright by
-   `ParseSource`, but `Acquire` doesn't route to it either (it always hits
-   `registryAPIBase`, i.e. OpenTofu) — worth an explicit check/error if a
-   non-default hostname ever actually shows up in practice.
+   file is trusted differently); no cache invalidation/eviction; `ubx scan
+   --source` doesn't route to a non-default registry hostname even though
+   `ParseSource` would parse one. See prior entries for full detail.
 
 ## Surprises / findings
 
+- 2026-07-10: **`aws_iam_role`'s lookup needs `id`+`name` both set, exactly
+  like `aws_s3_bucket` needed `id`+`bucket` — but this was checked
+  empirically before writing it down, not assumed from the S3 precedent,
+  and a first guess ("just `name`") was wrong.** Sent `{"name":
+  "aws-codestar-service-role"}` alone first (reasoning: SDKv2 resources
+  often use a natural-name field) and got back `null` — same failure shape
+  as S3's original `{"bucket": "..."}`-alone finding from Slice 1. Adding
+  `id` alongside fixed it. `aws_vpc`, tested the same way, needed only
+  `id` — no natural-name duplication at all. Recorded in
+  `conformance/registry.go`'s `Notes` for both types specifically so this
+  doesn't need re-discovering for the next SDKv2-style type in batch 2 (and
+  so nobody assumes "SDKv2 needs id+name" as a blanket rule from a sample
+  of two — it might not hold for every type either).
 - 2026-07-10: **OpenTofu's mirrored provider release archives aren't always
   the one-file-only zips HashiCorp's original releases are.** First real
   (non-test) `Acquire` call against `hashicorp/aws@6.54.0` failed with
