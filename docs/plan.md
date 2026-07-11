@@ -64,14 +64,48 @@
   correct for that schema shape; they do NOT prove the live ReadResource
   lookup convention the way RealSafe types do — that's exactly the
   cost/risk being avoided).
-- 2026-07-11 — UBI-11: `ubx why` polished ahead of demo recording. Now
-  accepts a `<stack>.<type>.<name>` resource address as an alternative to
-  a proposal ID, rendering that resource's full proposal chain (adoption
-  + every subsequent drift, newest first) — proposal-ID lookup unchanged.
-  `cloudtrail`/`cloudtrail_unattributed` intent.sources (UBI-10) now
-  render the human attribution story inline instead of a bare
-  kind/ref/hash line. See STATE.md for the full writeup, including the
-  actual before/after rendering.
+- 2026-07-11 — "UBI-11" (mislabeled — see STATE.md's correction; this
+  ticket ID was never actually verified against Linear): `ubx why`
+  polished ahead of demo recording. Now accepts a `<stack>.<type>.<name>`
+  resource address as an alternative to a proposal ID, rendering that
+  resource's full proposal chain (adoption + every subsequent drift,
+  newest first) — proposal-ID lookup unchanged. `cloudtrail`/
+  `cloudtrail_unattributed` intent.sources (UBI-10) now render the human
+  attribution story inline instead of a bare kind/ref/hash line. See
+  STATE.md for the full writeup, including the actual before/after
+  rendering.
+- 2026-07-11 — UBI-11 (real, Linear-verified — "M3–4 decision loop")
+  Stage 1: PR-merge acceptance binding. `ubx propose`/`ubx accept
+  --from-merge`/`ubx why --verify-acceptance`; acceptance derived from
+  git history + the GitHub API, never asserted. New `github/` package
+  (git history checks + `google/go-github`). Verified live: opened and
+  merged a real PR against `Ubiquex/ubiquex-cli`, ran `ubx accept
+  --from-merge` against the real merge SHA, correctly recorded zero
+  approvers (unreviewed merge), cleaned up after. Backfilled into this
+  changelog now — the session that did this work updated
+  docs/architecture.md and docs/schema.md directly but missed this file;
+  noted here rather than silently left out. See STATE.md for the full
+  writeup.
+- 2026-07-11 — UBI-11 Stage 2: `.tf` write-back. New `tfwrite/` package —
+  `hclsyntax` locates the exact byte range of a literal attribute value
+  (or a specific key within a literal object/list, e.g. `tags.hotfix`)
+  and validates it's actually a literal by attempting `expr.Value(nil)`:
+  an expression referencing a variable, function call, or interpolation
+  fails to evaluate against a nil context, which is exactly "not a
+  literal" — confirmed empirically before building on it. Replacement
+  values are rendered via `hclwrite.TokensForValue` and spliced directly
+  into the original bytes at that exact range — never a whole-attribute
+  regeneration via `hclwrite`'s own `Body.SetAttributeValue`, which would
+  reformat/lose comments on anything with internal structure. New `ubx
+  writeback <proposal-id> --tf-dir <dir> [--write]` triggers only on an
+  accepted `drift_adopt` proposal, prints a diff by default (never writes
+  without `--write`, never commits/pushes). Every named adversarial case
+  covered: attribute-is-expression (declines, reports the offending
+  expression, leaves the file untouched), resource block absent/found in
+  multiple places (hard error, no guessing), nested attribute paths,
+  unusual-but-valid formatting (tabs, no spaces around `=`, compact
+  single-line objects) surviving byte-for-byte. See STATE.md for the full
+  writeup and a real before/after diff.
 
 ## Strategy
 
