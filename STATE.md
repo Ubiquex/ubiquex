@@ -169,16 +169,97 @@ Cleaned up immediately after: reverted the merge commit on `main`
 (`git revert -m 1`), deleted the scratch branch locally and on the
 remote. See Done below for the full transcript.
 
+**UBI-11 Stage 2 is done (this session): `.tf` write-back.** New `tfwrite/`
+package surgically overwrites a literal attribute value — including
+nested paths like `tags.hotfix` — on an existing resource block, driven
+by an already-*accepted* `drift_adopt` proposal's `delta.modifies`. New
+`ubx writeback <proposal-id> --tf-dir <dir> [--write]`.
+
+The surgical mechanism, worked out and verified empirically before
+building on it (see Surprises): `hclsyntax` (not `hclwrite`'s own
+`Body.SetAttributeValue`) locates the exact byte range of the specific
+sub-expression being changed — either a whole top-level attribute's value,
+or one key's value inside an existing literal object/list — and only that
+byte range is ever replaced, using `hclwrite.TokensForValue` purely to
+render the replacement's tokens correctly. `SetAttributeValue` would have
+regenerated the *entire* attribute's tokens, losing comments/formatting on
+anything with internal structure (a map or list) — confirmed this would be
+a real problem, not a theoretical one, by testing it against a real object
+literal with an inline comment before choosing the byte-splice approach
+instead. Literal-vs-expression detection (declining on any variable
+reference, function call, or interpolation) turned out to have an
+elegant, already-built-in mechanism: `hclsyntax.Expression.Value(nil)`
+(evaluate against a nil context) fails with a clear diagnostic
+("Variables not allowed" / "Function calls not allowed") for anything
+that isn't a pure literal, and succeeds — with the actual value — for
+anything that is, including a template string with no interpolation and
+an object/list literal whose members are all themselves literal.
+
+Scope, deliberately narrower than the docs' own wording allows for, noted
+so it isn't mistaken for an oversight: write-back only ever modifies
+attributes/keys that **already exist** in the file — a brand-new tag key
+drift added, or a top-level attribute the `.tf` file never set at all, is
+declined ("write-back never adds new attributes/keys") rather than
+inserted, since inserting new syntax safely (right indentation, right
+position) is a meaningfully bigger problem than surgically replacing an
+existing value's bytes. Output is a diff by default, or an actual file
+write with `--write` — never a git commit; the docs' "(or a commit on a
+branch)" phrasing describes a future option, not something this session
+built.
+
+Verified by hand against the built binary in addition to the test suite
+(see Done for the exact transcript): a two-attribute drift (a top-level
+scalar plus a nested map key) applied to a real-shaped `.tf` file with
+comments on both the changed lines, `--write`d, and confirmed the
+resulting file kept every comment and every untouched attribute exactly
+as it was, with only the two drifted values changed.
+
 ## Current focus
 
-UBI-11 stage 1 is done and verified live. Next up: Stage 2 (`.tf`
-write-back, hclwrite-based surgical edits) — design already landed in
-docs/architecture.md, no code yet. Also still queued from before UBI-9:
-the Core IR + resolver work, and `status --drift` (a read-only
-multi-resource drift report, M1-2 scope per docs/plan.md).
+UBI-11 Stages 1 and 2 are done. Stage 3 (GitHub App skeleton) is next —
+design already landed in docs/architecture.md, no code yet; it reuses
+Stage 1's `AcceptFromMerge` binding directly. Also still queued from
+before UBI-9: the Core IR + resolver work, and `status --drift` (a
+read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-11 — byte-range splice via `hclsyntax`, not
+      `hclwrite`'s `Body.SetAttributeValue` (UBI-11 stage 2).** The
+      obvious-looking approach for ".tf write-back" is `hclwrite`'s own
+      high-level API: parse with `hclwrite`, call
+      `body.SetAttributeValue(name, ctyValue)`. Tested this against a real
+      object-literal attribute with an inline comment on one of its keys
+      before committing to it as the mechanism, per the project's
+      standing "verify before implementing" discipline — and it fails the
+      one thing this feature exists to guarantee: `SetAttributeValue`
+      regenerates the *entire* attribute's token stream from the given
+      `cty.Value`, so replacing one key inside a `tags = { ... }` map
+      loses that key's (or any sibling's) inline comment and reformats
+      the object's layout. Went with exact byte-range replacement instead:
+      `hclsyntax` gives precise byte offsets for any sub-expression,
+      including one specific item inside an object/list constructor;
+      splicing only that range, using `hclwrite.TokensForValue` solely to
+      render the replacement's bytes (never to edit the file's own token
+      stream), preserves everything outside that one range with byte-for-
+      byte fidelity — verified this empirically too (a throwaway repro
+      confirming the round trip re-parses cleanly and the untouched
+      comment survives) before writing `tfwrite`'s real implementation.
+- [x] **RESOLVED 2026-07-11 — write-back never inserts new syntax, only
+      ever replaces existing literal values (UBI-11 stage 2).** The docs
+      landed last session scope write-back to "overwriting a literal
+      attribute value... including nested attribute paths" — read
+      generously, that could include adding a brand-new tag key drift
+      introduced, or a top-level attribute the `.tf` file never set at
+      all. Decided against supporting either in this first cut: inserting
+      new syntax safely (correct indentation, correct position relative
+      to sibling keys, trailing-comma conventions) is a meaningfully
+      different and larger problem than surgical byte-range replacement
+      of something that already has an exact, unambiguous location — and
+      neither case was in the task's own named adversarial list. Declines
+      with a clear "write-back never adds new attributes/keys" reason
+      instead of guessing at placement; left as a named, explicit gap in
+      Next steps, not a silent limitation.
 - [x] **RESOLVED 2026-07-11 — shell out to `git`, don't vendor a git
       library (UBI-11 stage 1).** `github/git.go`'s `CommitExists`/
       `FileAtCommit` run the real `git` binary via `os/exec` rather than a
@@ -1127,27 +1208,141 @@ multi-resource drift report, M1-2 scope per docs/plan.md).
     `go test ./...` (hermetic — confirmed no network calls: `github/`'s
     and `cli/`'s new tests all pass with no `GITHUB_TOKEN`/network
     reachable, using real local git repos and fake HTTP servers only).
+- 2026-07-11: UBI-11 Stage 2 completed — `.tf` write-back.
+  - Verified the core mechanism empirically before writing any real code,
+    per the project's standing discipline (three throwaway experiments,
+    deleted before committing — same disposable-tool pattern used for
+    `cmd/schemadump` in UBI-9): (1) `hclsyntax.Expression.Value(nil)`
+    correctly distinguishes literals from expressions across every shape
+    tried — plain string/number/bool, a plain (non-interpolated) template
+    string, an object/list literal whose members are all literal, a
+    variable reference, a function call, and a template *with*
+    interpolation — the last of these confirming that a quoted string
+    isn't automatically "safe" just because it's a string literal
+    syntactically. (2) exact byte-range splicing (via `hcl.Range.Start/
+    End.Byte`) plus `hclwrite.TokensForValue` for rendering the
+    replacement reproduces a file with only the target range changed,
+    confirmed by re-parsing the result and checking an untouched inline
+    comment survived. (3) `ctyjson.ImpliedType`/`Unmarshal` (already a
+    transitive dependency via `go-cty`, no new import needed) correctly
+    turns a `Modification.After` JSON value — string, number, bool, or
+    array — into a `cty.Value` `TokensForValue` can render.
+  - `tfwrite/tfwrite.go` (new package): `ApplyModification(src []byte,
+    filename string, addr core.Address, mod core.Modification) ([]byte,
+    *Report, error)` — parses once, locates addr's resource block
+    (`ErrResourceBlockNotFound`/`ErrMultipleResourceBlocks` if it doesn't
+    appear exactly once), resolves each `mod.After` dot-path to a byte
+    range (or a decline reason), and applies all edits in one pass —
+    gathered from a single parse, then applied in descending byte-offset
+    order so earlier edits in the file never invalidate the ranges of
+    edits still to come. `FindAndApply(dir, addr, mod)` is the
+    directory-level wrapper: globs `*.tf` in `dir` (non-recursive,
+    matching Terraform's own single-directory-per-module convention), and
+    treats a match count of anything other than exactly 1 across the
+    whole directory — whether 0, 2 in one file, or 1 each in two files —
+    as `ErrResourceBlockNotFound`/`ErrMultipleResourceBlocks` the same way
+    a single file would.
+  - `tfwrite/literal.go`: `resolveTarget` walks a dot-path segment by
+    segment (`strings.Split` on "."), navigating into nested
+    `*hclsyntax.ObjectConsExpr` values for each additional segment
+    (`findObjectItem` matches an object key by evaluating
+    `item.KeyExpr.Value(nil)` — confirmed this correctly treats a bare
+    identifier key like `hotfix` as the literal string `"hotfix"`, not a
+    variable reference, which is exactly HCL's own object-constructor
+    semantics), and validates only the *final* target expression is
+    literal — a sibling key in the same object that isn't literal doesn't
+    block writing back a different, literal sibling.
+  - `cli/writeback.go` (new): `ubx writeback <proposal-id> --tf-dir <dir>
+    [--write] [--ledger-dir dir]`. Refuses anything that isn't an
+    *accepted* `drift_adopt` proposal (write-back records reality, it
+    doesn't apply a still-being-authored change). Iterates every
+    `delta.modifies` entry, calls `tfwrite.FindAndApply`, and reports
+    per-attribute applied/declined outcomes — a declined attribute is
+    reported, never silently dropped, and never fails the command by
+    itself; only a whole modification's resource block being
+    absent/ambiguous does (collected across all modifications, reported
+    per-target, and returned as one error naming every unresolved
+    target). Without `--write`, shells out to the system `diff -u` (same
+    "use the real tool" comfort already established for `git`/`aws`
+    elsewhere in this codebase, rather than vendoring a diff algorithm)
+    to print a unified diff and leaves every file on disk untouched;
+    `--write` actually writes the modified content — never a git
+    commit/push, matching every other "human in the loop" surface in
+    this trust chain.
+  - Tests (`tfwrite/tfwrite_test.go`): every named adversarial case —
+    attribute-is-expression (declines, file byte-identical when it's the
+    only attribute), interpolated string (also correctly non-literal),
+    resource block absent, multiple matching blocks (within one file, and
+    split across two files via `FindAndApply`), nested attribute paths
+    (`tags.hotfix`, including a literal key applied despite a non-literal
+    sibling in the same map), a key not present in an existing object
+    (declined, not inserted), a top-level attribute not present at all
+    (declined, not inserted), an atomic list replacement, a mixed
+    applied+declined modification (partial application), and a
+    weird-but-valid file (tabs, no spaces around `=`, a compact same-line
+    object literal) surviving byte-for-byte outside the changed range.
+    `cli/writeback_test.go`: dry-run leaves the file untouched and prints
+    a real diff, `--write` actually modifies it, a declined attribute is
+    reported without failing the command, a missing resource block does
+    fail it, and both `Kind != drift_adopt` and `Status != accepted` are
+    refused up front.
+  - **Verified by hand against the built binary**, not just the test
+    suite: accepted a hand-written `drift_adopt` proposal recording a
+    top-level scalar change (`instance_type`) and a nested map-key change
+    (`tags.hotfix`) against a `.tf` file with comments on both of those
+    exact lines, then ran `ubx writeback` twice — once without `--write`
+    (confirmed the printed diff was correct and the file on disk was
+    untouched afterward) and once with `--write` (confirmed the file
+    changed to exactly the expected content, both comments intact):
+    ```
+    @@ -1,9 +1,9 @@
+     resource "aws_instance" "web" {
+       # pinned by the platform team, do not change lightly
+    -  instance_type = "t3.medium" # last bumped 2026-06
+    +  instance_type = "t3.large" # last bumped 2026-06
+       ami           = var.ami_id
+       tags = {
+    -    hotfix = "false"
+    +    hotfix = "true"
+         owner  = "team-a"
+       }
+     }
+    ```
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic — no git/GitHub network access needed for
+    this stage at all, everything operates on local files only).
+  - go.mod: added `github.com/hashicorp/hcl/v2` (direct dep, for
+    `hclsyntax`/`hclwrite`) plus its transitive requirements.
+    `go-cty`/`ctyjson` were already present (via `provider/ctyvalue.go`),
+    reused rather than duplicated.
 
 ## Next steps
 
-1. **UBI-11 (real): Stage 1 is done. Stage 2 (`.tf` write-back) is next**,
-   design already landed in docs/architecture.md's "Decision loop"
-   section — no code yet. Rough shape for next session: a new package
-   (parallel to `github/`/`cloudtrail/`, likely `tfwrite/` or similar)
-   using `hclwrite` to locate a resource block by address and overwrite a
-   literal attribute value in place; decline (with a named-attribute
-   report) the moment the current value is anything but a literal.
-   Trigger: an *accepted* `drift_adopt` proposal only. Adversarial list is
-   already written down in this session's own task framing — attribute-
-   is-expression, resource block absent, multiple matching blocks, nested
-   attribute paths (`tags.hotfix`), and a real `.tf` file with unusual
-   but valid formatting that must survive untouched are all still
-   pending, not yet even started. Stage 3 (GitHub App skeleton) comes
-   after — it reuses Stage 1's `AcceptFromMerge` binding directly (a PR
-   the App opens gets accepted exactly the same way a manually-opened one
-   does), so there's no reason to build it before Stage 2, but no reason
-   it strictly depends on Stage 2 either — could be reordered if that
-   turns out more useful.
+1. **UBI-11 (real): Stages 1 and 2 are done. Stage 3 (GitHub App skeleton)
+   is next**, design already landed in docs/architecture.md's "Decision
+   loop" section — no code yet. Rough shape: read-only repo permissions
+   (contents, pull requests, checks) are sufficient precisely because
+   acceptance is derived, not asserted — the App never needs write access
+   to apply anything because it never applies anything (see the design's
+   own security-story framing). Scheduled or manually triggered scan
+   surfaces drift as an issue/PR containing the generated proposal plus a
+   human-readable receipt (diff, attribution if any, blast radius) — the
+   receipt can lean on `tfwrite.ApplyModification`'s dry-run diff output
+   (Stage 2) directly for the ".tf change this would make" part. Reuses
+   Stage 1's `core.AcceptFromMerge`/`github.DeriveAcceptance` directly
+   once a human merges the PR the App opened — no new acceptance
+   mechanism needed, just a new *trigger* for the existing one. Explicitly
+   deferred within this stage too, per the original task framing: webhook
+   -driven (vs. scheduled/manual) triggering, installation-flow
+   hardening, multi-repo fan-out — one repo, end to end, is the bar.
+   Stage 2 gaps not addressed this session, worth remembering before
+   calling Stage 2 "done" in a larger sense: write-back never inserts a
+   new attribute or a new key into an existing map (declines instead —
+   see Open decisions), and there's no `--commit` option to have `ubx
+   writeback` create a git commit directly (only `--write`, a plain file
+   write) — the docs' own "(or a commit on a branch)" phrasing anticipated
+   this as an option, not a requirement, so it's a legitimate future
+   enhancement, not a bug.
 2. UBI-9/UBI-10 are both closed — nothing further queued under either. If
    a type's fixture-verified shape ever turns out wrong once real usage
    exercises it, or if CloudTrail's `ResourceName` matching behaves
@@ -1221,6 +1416,14 @@ in ubiquex-docs, not just flag reference, given how much of "how do I use
 this" is the trailer convention and the PR-based flow rather than any
 single flag.
 
+UBI-11 stage 2's addition: a new `ubx writeback <proposal-id> --tf-dir
+<dir> [--write]` command. User-facing explanation needs to cover the
+scope honestly — what it will and won't touch (literal values only,
+never new attributes/keys, never blocks) — since the value of this
+feature is exactly as much about what it safely declines as what it
+applies; a docs page that only lists the flag without explaining the
+scope boundary would undersell (or oversell) what it actually does.
+
 Not addressed this session (pre-existing, from prior slices, noted here
 since this is the first time this debt has been tracked in STATE.md at
 all — worth clearing alongside the above rather than letting it grow
@@ -1231,6 +1434,36 @@ user-facing documentation yet either.
 
 ## Surprises / findings
 
+- 2026-07-11: **`hclwrite`'s own `Body.SetAttributeValue` is the wrong
+  tool for editing one key inside an existing map/list attribute — it
+  silently reformats the whole thing and can lose comments.** Tested this
+  directly (a throwaway repro, deleted before committing, same pattern as
+  UBI-9's `cmd/schemadump`) against a `tags = { hotfix = "true" # note
+  \n owner = "team-a" }`-shaped attribute: calling
+  `SetAttributeValue("tags", newCtyObjectValue)` to change just `hotfix`
+  regenerates the *entire* attribute's tokens from the `cty.Value`,
+  which has no notion of the original inline comment at all — it's gone
+  in the output. This is exactly the failure mode the "surgical,
+  preserves formatting" promise exists to prevent, and it would have
+  shipped silently wrong if not checked before choosing the mechanism.
+  Fixed by using `hclsyntax` for byte-range discovery and a direct byte
+  splice instead (see Open decisions) — confirmed the fix by re-running
+  the same repro and checking the comment survived.
+- 2026-07-11: **`hclsyntax.Expression.Value(nil)` is a complete,
+  already-built literal-detector — no need to hand-write an expression-
+  type switch.** Evaluating any HCL expression against a `nil`
+  `hcl.EvalContext` (no variables, no functions available) succeeds
+  exactly when the expression is a pure literal — a plain string/number/
+  bool, a template with no interpolation, or an object/list constructor
+  whose members are *all* themselves literal — and fails with a specific,
+  legible diagnostic ("Variables not allowed", "Function calls not
+  allowed") for anything that references a variable, calls a function, or
+  interpolates a variable into a string. Verified this across seven
+  distinct expression shapes in a throwaway repro before relying on it
+  for real, including the trickiest case — a plain-looking quoted string
+  that turns out to contain `${var.x}` interpolation, which correctly
+  fails rather than being mistaken for a safe literal just because it's
+  syntactically inside quotes.
 - 2026-07-11: **A previous session's "UBI-11" label (the `ubx why` polish
   — resource-address support + attribution rendering) was never checked
   against Linear, and turns out to be wrong.** This session's own task
