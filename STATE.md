@@ -1610,41 +1610,61 @@ slice rather than written inline during foundational work.
 `docs.json` navigation, landing page, an honest build-from-source install
 placeholder, five concept pages (proposal/ledger/drift/attribution/why —
 every example a real captured transcript, not fabricated), and skeleton
-`cli/` pages for all six verbs. `mint validate` passes and `mint dev` was
-smoke-tested clean. This clears the *conceptual* half of the two oldest
-debt items below:
+`cli/` pages for all six verbs. This cleared the *conceptual* half of
+`ubx why`'s resource-address lookup and `cloudtrail`/`cloudtrail_unattributed`
+rendering debt (explained in `concepts/why.mdx`/`concepts/attribution.mdx`).
 
-- `ubx why`'s resource-address lookup (`<stack>.<type>.<name>`, newest
-  first) — now explained in `concepts/why.mdx`.
-- `ubx why`'s `cloudtrail`/`cloudtrail_unattributed` rendering — now
-  explained in `concepts/attribution.mdx`.
+**UBI-13 Session 2 (2026-07-11) landed full per-verb reference pages**:
+every flag in every `cli/*.mdx` page now comes straight from the built
+binary's own `--help` output, and every example transcript (proposal JSON,
+command output, GitHub issue/PR body content) was captured from a real
+running `ubx` + fakeprovider + a throwaway fake-GitHub-API HTTP server, not
+hand-typed. This clears essentially everything the debt list below used to
+carry at the flag level:
 
-Still open (flag-level reference, not yet written — tracked in detail in
-ubiquex-docs' own STATE.md, which is now the authoritative tracker for
-this list going forward rather than duplicating it fully here):
+- UBI-11 stage 1 (`ubx propose`, `accept --from-merge`/`--repo-dir`/
+  `--proposal-file`/`--github-repo`, `why --verify-acceptance`/`--repo-dir`/
+  `--github-repo`) — flag tables + worked examples now in `cli/propose.mdx`,
+  `cli/accept.mdx`, `cli/why.mdx`.
+- UBI-11 stage 2 (`writeback --tf-dir`/`--write`, the literal-value-only
+  scope boundary, declined-attribute reporting) — `cli/writeback.mdx`, with
+  a real declined-attribute transcript (an expression-valued `.tf` attribute).
+- UBI-11 stage 3 (`scan --surface-as issue|pr`/`--github-repo`/`--tf-dir`,
+  the issue-write vs. contents/PR-write permission distinction) —
+  `cli/scan.mdx`, with real transcripts for both modes.
+- The conformance-registry per-type lookup-requirement table — now
+  `cli/lookup.mdx`, covering the seven AWS types with a live-verified
+  non-default `--lookup` shape and an honest caveat about the ~40 types
+  whose `{"id": "..."}` default is schema-verified but not live-verified.
 
-- Full flag tables + verified examples for all six verbs, including every
-  flag named below.
-- UBI-11 stage 1: `ubx propose <file>`; `ubx accept`'s `--from-merge`/
-  `--repo-dir`/`--proposal-file`/`--github-repo` and the PR-merge
-  acceptance workflow (trailer convention, zero-approvers-is-normal);
-  `ubx why`'s `--verify-acceptance`/`--repo-dir`/`--github-repo`. Flagged
-  as probably deserving its own `guides/` page, not just flag reference —
-  still true, `guides/` doesn't exist yet in ubiquex-docs.
-- UBI-11 stage 2: `ubx writeback`'s `--tf-dir`/`--write`, including the
-  scope boundary (literal values + new keys in an existing literal map,
-  never new top-level attributes or blocks).
-- UBI-11 stage 3: `ubx scan`'s `--surface-as issue|pr`/`--github-repo`/
-  `--tf-dir`, including the issue-write vs. contents/PR-write permission
-  distinction between the two modes.
-- UBI-8's `--source`/`--provider-version` (on `scan`/`accept`) and
-  UBI-10's `--no-attribution` — pre-existing debt, still undocumented at
-  the flag level.
-- The conformance-registry per-type lookup-requirement table (top
-  anticipated support question) — not yet written anywhere.
+Still open (tracked in detail in ubiquex-docs' own STATE.md):
+
+- `accept`'s `--reverify-with`/`--reverify-source`/`--reverify-provider-version`/
+  `--resource-type`/`--resource-name` flags were discovered this session while
+  verifying against `--help` output — they weren't named in any prior debt
+  entry here (see Surprises below). Now documented in `cli/accept.mdx` with
+  both a pass-when-fresh and a blocked-when-stale transcript, so this isn't
+  open debt anymore, but it's worth flagging that the debt list itself had
+  drifted from the actual shipped flag surface.
+- UBI-8's `--source`/`--provider-version` are named in the flag tables but
+  have no worked example yet — every scan/accept example so far uses
+  `--provider` with a local binary.
+- A `guides/` section for the PR-merge acceptance workflow as its own
+  walkthrough (not just flag reference) — still not started.
 
 ## Surprises / findings
 
+- 2026-07-11 (UBI-13 session 2): **`ubx accept`'s own `--help` output named
+  five flags (`--reverify-with`, `--reverify-source`,
+  `--reverify-provider-version`, `--resource-type`, `--resource-name`) that
+  no prior "docs debt" entry in this file ever mentioned.** Discovered only
+  because ubiquex-docs' session protocol requires verifying every flag
+  against the actual built binary rather than against this file's own
+  running list — the debt list itself isn't a reliable inventory of the
+  shipped flag surface, it's only a log of what was *noticed* as
+  user-visible at the time a slice landed. Worth remembering next time a
+  "what needs documenting" pass starts here: cross-check against
+  `--help`/`cmd.Flags()`, don't just work the debt list.
 - 2026-07-11: **Inserting two new keys into the same map in one call
   produces two identical byte offsets — not a rare edge case, but the
   direct, guaranteed consequence of how insertion is computed (both
