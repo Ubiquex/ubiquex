@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "stack": "payments",
+  "parent": "ab1cce827b5dfb2bbba407339946662f6c5bf7915ec791a05d359d7681374f8f",
+  "kind": "drift_adopt",
+  "intent": {
+    "summary": "record drift on payments.fake_widget.widget-live-stage3 observed outside the ledger"
+  },
+  "delta": {
+    "modifies": [
+      {
+        "target": {
+          "stack": "payments",
+          "type": "fake_widget",
+          "name": "widget-live-stage3"
+        },
+        "before": {
+          "tags.env": "prod"
+        },
+        "after": {
+          "tags.env": "staging"
+        }
+      }
+    ]
+  },
+  "resolution": {
+    "resolved_at": "2026-07-11T12:45:00Z",
+    "inputs": [
+      {
+        "kind": "live_state",
+        "resource": "payments.fake_widget.widget-live-stage3",
+        "observed_hash": "d4679054ba4fe6c689d9244d63155b85a7cd32bd4582b8afe387523a30ea36c5",
+        "lookup": {
+          "name": "widget-live-stage3",
+          "tags": {
+            "env": "staging"
+          }
+        }
+      }
+    ]
+  },
+  "cost_delta": {
+    "monthly_usd": 0
+  },
+  "blast_radius": {
+    "creates": 0,
+    "modifies": 0,
+    "destroys": 0
+  },
+  "status": "draft"
+}
