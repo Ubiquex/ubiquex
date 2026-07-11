@@ -195,17 +195,14 @@ that isn't a pure literal, and succeeds — with the actual value — for
 anything that is, including a template string with no interpolation and
 an object/list literal whose members are all themselves literal.
 
-Scope, deliberately narrower than the docs' own wording allows for, noted
-so it isn't mistaken for an oversight: write-back only ever modifies
-attributes/keys that **already exist** in the file — a brand-new tag key
-drift added, or a top-level attribute the `.tf` file never set at all, is
+Scope, as first shipped (revised in this same session's follow-up — see
+immediately below, kept here rather than deleted since it's what actually
+shipped that day): write-back only ever modified attributes/keys that
+**already existed** in the file — a brand-new tag key drift added was
 declined ("write-back never adds new attributes/keys") rather than
-inserted, since inserting new syntax safely (right indentation, right
-position) is a meaningfully bigger problem than surgically replacing an
-existing value's bytes. Output is a diff by default, or an actual file
-write with `--write` — never a git commit; the docs' "(or a commit on a
-branch)" phrasing describes a future option, not something this session
-built.
+inserted. Output is a diff by default, or an actual file write with
+`--write` — never a git commit; the docs' "(or a commit on a branch)"
+phrasing describes a future option, not something this session built.
 
 Verified by hand against the built binary in addition to the test suite
 (see Done for the exact transcript): a two-attribute drift (a top-level
@@ -214,16 +211,95 @@ comments on both the changed lines, `--write`d, and confirmed the
 resulting file kept every comment and every untouched attribute exactly
 as it was, with only the two drifted values changed.
 
+**UBI-11 Stage 2 follow-up (this session): write-back may now insert a
+brand-new key into an existing literal map attribute** — the single most
+common real drift shape (someone tags a resource in the console with a
+key the `.tf` file never had), and a design-room decision that revised
+the "never adds new attributes/keys" line above. Still declined,
+unchanged: a *top-level* attribute the file never set at all, a new
+nested structure more than one key deep, and anything where the parent
+map is itself an expression rather than a literal. The new key matches
+the existing object's own formatting — indentation, and whether its items
+are comma-terminated — rather than an arbitrary default; an empty `{}`
+gets a sensible first entry. `resolveTarget` now distinguishes a missing
+*final* path segment inside an existing literal object (safe to grow) from
+a missing *intermediate* one (still declined — inserting a whole new
+nested structure is a different, larger problem). Verified empirically
+before implementing (see Surprises) that `hclwrite`'s own
+`Body.SetAttributeValue` is unsuitable here — confirmed separately from
+last session's replace-path finding — and switched `edits`' sort from
+`sort.Slice` to `sort.SliceStable` once it became clear two simultaneous
+insertions into the same map produce identically-valued byte ranges,
+which an unstable sort's tie-breaking doesn't guarantee to order the same
+way twice.
+
+**UBI-11 Stage 3 (this session): GitHub App skeleton.** New `ubx scan
+--surface-as issue|pr --github-repo <owner/name> [--tf-dir <dir>]` —
+firing only on a `ScanDrifted` outcome, never `ScanNew`. Issue mode needs
+only "issues: write" on the target repo, never "contents: write" at
+all — the read-only-on-content security story docs/architecture.md
+describes literally, not just in spirit. PR mode automates stage 1's own
+by-hand flow exactly (commit the draft proposal to a new branch, put the
+`ubx-proposal: <hash>` trailer in the PR body), so once a human merges the
+result, the *existing, unmodified* `ubx accept --from-merge` from stage 1
+derives acceptance from it the same way it would for a manually-opened
+PR — no new acceptance mechanism needed, only a new trigger for the
+existing one. The shared receipt (intent, blast radius, attribution, and
+a best-effort `.tf` write-back preview) reuses `tfwrite.FindAndApply` in
+pure dry-run mode — the same function `ubx writeback` calls, just never
+given `--write` — so the preview and the eventual real write-back can
+never silently diverge into two different code paths.
+
+**Verified live, for real, end to end, closing the loop stages 1 and 3
+share** (asked first, since PR mode creates a real branch/commit, the
+same category of action as stage 1's live PR test): opened a real issue
+on `Ubiquex/ubiquex-cli` (closed immediately after) and a real draft PR
+(`Ubiquex/ubiquex-cli#3`), confirmed both carried exactly the expected
+receipt content, then **merged that PR and ran the existing `ubx accept
+--from-merge` against the real merge SHA** — accepted with 0 approvers,
+the same real "unreviewed merge recorded, not blocked" outcome stage 1's
+own live verification produced, this time triggered by the App skeleton's
+own PR instead of a manually-authored one. Cleaned up immediately after:
+reverted the merge commit on `main`, deleted the scratch branch locally
+and on the remote, closed the scratch issue.
+
 ## Current focus
 
-UBI-11 Stages 1 and 2 are done. Stage 3 (GitHub App skeleton) is next —
-design already landed in docs/architecture.md, no code yet; it reuses
-Stage 1's `AcceptFromMerge` binding directly. Also still queued from
+UBI-11 Stages 1, 2, and 3 are all done — the whole "M3–4 decision loop"
+ticket's scoped work is shipped and verified live. Also still queued from
 before UBI-9: the Core IR + resolver work, and `status --drift` (a
 read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-11 — issue mode is the conservative default,
+      PR mode is opt-in (UBI-11 stage 3).** `ubx scan --surface-as`
+      requires an explicit value (`issue` or `pr`) rather than defaulting
+      to whichever is "more useful" — deliberately, since they need
+      different GitHub App permission scopes (`issues: write` only, vs.
+      `contents: write` + `pull_requests: write`) and docs/architecture.md's
+      own security-story framing ("a GitHub App that only ever reads...")
+      is strongest when the *default* posture genuinely never writes repo
+      content. Making the more-privileged option something an operator
+      opts into by name, rather than something that happens unless
+      disabled, matches the same "never enforced by default, always an
+      explicit choice" posture the whole PR-merge acceptance design
+      already established in stage 1.
+- [x] **RESOLVED 2026-07-11 — `sort.SliceStable`, not `sort.Slice`, for
+      `tfwrite`'s pending edits (UBI-11 stage 2 follow-up).** Two brand-new
+      keys inserted into the *same* existing map in one `Modification`
+      resolve to two zero-width byte ranges at the identical offset (both
+      insert "after the current last item"). `sort.Slice`'s tie-breaking
+      for equal elements isn't guaranteed by the standard library, so two
+      runs over the exact same input could, in principle, order those two
+      insertions differently — output would still be valid HCL either way,
+      but non-deterministic output is exactly the kind of thing this
+      project has refused to accept anywhere else (see docs/schema.md's
+      canonical hashing rules). Switched to `sort.SliceStable`, which,
+      combined with `paths` already being alphabetically sorted before
+      edits are gathered, makes the tie-break outcome fixed and repeatable
+      — confirmed with a dedicated test that runs the same insert twice
+      and requires byte-identical output.
 - [x] **RESOLVED 2026-07-11 — byte-range splice via `hclsyntax`, not
       `hclwrite`'s `Body.SetAttributeValue` (UBI-11 stage 2).** The
       obvious-looking approach for ".tf write-back" is `hclwrite`'s own
@@ -1315,34 +1391,168 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
     `hclsyntax`/`hclwrite`) plus its transitive requirements.
     `go-cty`/`ctyjson` were already present (via `provider/ctyvalue.go`),
     reused rather than duplicated.
+- 2026-07-11: UBI-11 Stage 2 follow-up completed — insert new keys into
+  existing literal maps.
+  - Verified the mechanics with a throwaway repro (deleted before
+    committing) across five formatting shapes before writing the real
+    implementation: multi-line with no trailing comma, multi-line with a
+    trailing comma on every item, a single-line compact object, an empty
+    `{}`, and a comment attached to what was the last item before the
+    insertion. All five re-parsed cleanly and matched the intended output
+    by hand-inspection before being encoded as real tests.
+  - `tfwrite/insert.go` (new): `insertableKey` (an error type wrapping the
+    parent `*hclsyntax.ObjectConsExpr` and the missing key name — the
+    signal `resolveTarget`, literal.go, now returns instead of a generic
+    decline when the path's *final* segment is missing from an otherwise-
+    navigable literal object), `planInsertion` (computes the exact byte
+    position and text to splice in, branching on: object has 0 items →
+    first entry using the attribute's own indentation + 2; object has
+    items and is multi-line → new line matching the last item's
+    indentation, with a trailing comma only if the last item already had
+    one; object has items and is single-line → `, key = value` appended
+    after the last item's value), `lineIndent`/`firstNonSpaceIsComma`
+    (the small byte-scanning helpers both branches share).
+  - `tfwrite/literal.go`: `resolveTarget` now distinguishes a missing
+    *final* path segment (→ `*insertableKey`, insertable) from a missing
+    *intermediate* one (→ still a hard decline — "isn't the final segment
+    of %q (write-back only inserts a single new leaf key, not a new
+    nested structure)").
+  - `tfwrite/tfwrite.go`: `ApplyModification`'s loop now checks
+    `errors.As` for `*insertableKey` and calls `planInsertion` instead of
+    declining; `edits`' sort switched from `sort.Slice` to
+    `sort.SliceStable` (see Open decisions).
+  - Tests (`tfwrite/insert_test.go`, new): every named adversarial case —
+    multi-line no comma, multi-line preserving trailing-comma style,
+    single-line, empty map, a comment on the previously-last item
+    surviving, map-is-a-function-call and map-is-a-variable-reference
+    (both still decline), a missing intermediate segment (still declines),
+    a missing top-level attribute (still declines) — plus two new keys
+    inserted into the same map in one call, confirmed both present and
+    output byte-identical across two runs (the determinism check the
+    `sort.SliceStable` fix exists for). `tfwrite/tfwrite_test.go`'s old
+    `TestApplyModification_DeclinesKeyNotPresent` renamed/rewritten to
+    `TestApplyModification_InsertsNewKeyIntoExistingLiteralMap`, reflecting
+    the behavior actually changing, not just gaining a new case alongside
+    the old one.
+  - docs/architecture.md's Decision loop section updated in place (not a
+    separate docs-first commit — a same-session follow-up to an
+    already-shipped stage, not new stage design) to describe insertion as
+    in-scope, with the same still-declined boundaries restated precisely.
+  - **Verified by hand against the built binary**: a real `.tf` file's
+    `tags` map (with an existing key and an inline comment) gained a
+    brand-new `hotfix` key via `ubx writeback`, with the existing key and
+    its comment surviving untouched:
+    ```
+    @@ -2,5 +2,6 @@
+       instance_type = "t3.medium"
+       tags = {
+         owner = "team-a" # do not remove
+    +    hotfix = "true"
+       }
+     }
+    ```
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic).
+- 2026-07-11: UBI-11 Stage 3 completed — GitHub App skeleton.
+  - `github/issue.go` (new): `CreateIssue` — one `Issues.Create` call,
+    needing only `issues: write`.
+  - `github/pr.go` (new): `OpenDraftPR` — `Repositories.Get` (find the
+    default branch) → `Git.GetRef` (its HEAD SHA) → `Git.CreateRef` (a new
+    branch from that SHA) → `Repositories.CreateFile` (commit the draft
+    proposal JSON to the new branch — the simpler Contents API, not the
+    lower-level Git Data API's blob/tree/commit dance, since committing
+    exactly one new file doesn't need it) → `PullRequests.Create`. Needs
+    `contents: write` + `pull_requests: write`.
+  - `cli/receipt.go` (new): `buildReceipt` — intent summary, blast radius,
+    a condensed per-source attribution line (reusing
+    `unattributedReason` from `cli/why.go` rather than duplicating the
+    reason-to-words mapping), an optional `.tf` write-back preview
+    section, and the full proposal JSON in a collapsible details block.
+    `trailerHash` is empty for issue mode (nothing to derive acceptance
+    from — an issue is never merged) and the real proposal hash for PR
+    mode.
+  - `cli/surface.go` (new): `surfaceDrift` — parses `--github-repo`,
+    computes `driftDiffPreview` (calls `tfwrite.FindAndApply` in pure
+    dry-run mode — the exact same function `ubx writeback` calls, just
+    never given `--write`, so the preview and a later real write-back
+    can't silently diverge into two different code paths), then either
+    `github.CreateIssue` or (computing `core.Hash` first, for the
+    trailer) `github.OpenDraftPR`. Reuses the `UBX_GITHUB_API_BASE_URL`
+    test seam and `GITHUB_TOKEN` convention stage 1 already established.
+  - `cli/scan.go`: new `--surface-as issue|pr --github-repo <owner/name>
+    [--tf-dir <dir>]` flags; `surfaceDrift` is called only when
+    `res.Outcome == core.ScanDrifted`, right alongside (not instead of)
+    the existing CloudTrail attribution step.
+  - Tests: `github/issue_test.go`/`github/pr_test.go` (httptest-served
+    fake API, verifying the exact request bodies — issue title/body, the
+    created ref's name/SHA, the committed file's branch/content, the PR's
+    head/base/body). `cli/surface_test.go` (through the actual `ubx scan`
+    command, fakeprovider fixture on the scan side + the same fake GitHub
+    API pattern): issue-mode receipt content, PR-mode trailer/branch/
+    committed-proposal content, drift-only triggering (a `ScanNew`
+    outcome never calls the GitHub API at all — asserted by a mux handler
+    that would otherwise have fired), an invalid `--surface-as` value, a
+    missing `--github-repo`, and the write-back preview actually
+    appearing (with real diff content) when `--tf-dir` matches.
+  - **Verified live, for real, end to end, on `Ubiquex/ubiquex-cli`**
+    (asked first, since PR mode is the same category of consequential
+    action as stage 1's live PR test — user said to verify both issue and
+    PR): opened a real issue (`#2`) with `--surface-as issue`, confirmed
+    its title/body matched exactly what `buildReceipt` was designed to
+    produce, closed it. Opened a real draft PR (`#3`) with `--surface-as
+    pr`, confirmed its head branch (`ubx-drift/payments-fake_widget-
+    widget-live-stage3`), base (`main`), body (leading `ubx-proposal:`
+    trailer, then the receipt), and committed file
+    (`ubx-drift/payments.fake_widget.widget-live-stage3.json`, valid
+    `drift_adopt` proposal JSON) all matched exactly what was designed —
+    then, to prove stage 3 actually reuses stage 1's binding and not just
+    in theory, **merged PR #3 for real and ran the unmodified `ubx accept
+    --from-merge` from stage 1 against the real merge SHA**:
+    ```
+    accepted a81e554ab255b13c83d67fe01a6eb731a6ac5b5064b72e933bdf718ac385b1ac (stack payments) via PR #3, 0 approver(s)
+    ```
+    0 approvers because nobody reviewed the scratch PR — the same real
+    "unreviewed merge recorded, not blocked" outcome stage 1's own live
+    verification produced, this time from the App skeleton's own PR
+    rather than a manually-authored one; the exact proof point the
+    Decision loop design promised ("reuses stage 1's binding directly").
+    Cleaned up immediately after: reverted the merge commit on `main`
+    (`git revert -m 1`), deleted the scratch branch locally and on the
+    remote, closed the scratch issue. Confirmed afterward (`gh pr list`,
+    `gh issue list`, `gh api .../branches`) that only `main` remained and
+    both scratch artifacts were in their expected final states (merged +
+    reverted; closed).
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic by default — no GitHub API access unless
+    `UBX_GITHUB_API_BASE_URL`/`GITHUB_TOKEN` are explicitly set for a
+    real run).
 
 ## Next steps
 
-1. **UBI-11 (real): Stages 1 and 2 are done. Stage 3 (GitHub App skeleton)
-   is next**, design already landed in docs/architecture.md's "Decision
-   loop" section — no code yet. Rough shape: read-only repo permissions
-   (contents, pull requests, checks) are sufficient precisely because
-   acceptance is derived, not asserted — the App never needs write access
-   to apply anything because it never applies anything (see the design's
-   own security-story framing). Scheduled or manually triggered scan
-   surfaces drift as an issue/PR containing the generated proposal plus a
-   human-readable receipt (diff, attribution if any, blast radius) — the
-   receipt can lean on `tfwrite.ApplyModification`'s dry-run diff output
-   (Stage 2) directly for the ".tf change this would make" part. Reuses
-   Stage 1's `core.AcceptFromMerge`/`github.DeriveAcceptance` directly
-   once a human merges the PR the App opened — no new acceptance
-   mechanism needed, just a new *trigger* for the existing one. Explicitly
-   deferred within this stage too, per the original task framing: webhook
-   -driven (vs. scheduled/manual) triggering, installation-flow
-   hardening, multi-repo fan-out — one repo, end to end, is the bar.
-   Stage 2 gaps not addressed this session, worth remembering before
-   calling Stage 2 "done" in a larger sense: write-back never inserts a
-   new attribute or a new key into an existing map (declines instead —
-   see Open decisions), and there's no `--commit` option to have `ubx
-   writeback` create a git commit directly (only `--write`, a plain file
-   write) — the docs' own "(or a commit on a branch)" phrasing anticipated
-   this as an option, not a requirement, so it's a legitimate future
-   enhancement, not a bug.
+1. **UBI-11 (real) is fully done: all three stages of "M3–4 decision
+   loop" are shipped and verified live.** Nothing further queued under it
+   as a milestone, but real gaps remain, worth remembering rather than
+   quietly forgetting now that the ticket reads "done":
+   - **Stage 2:** write-back still never inserts a *new top-level
+     attribute*, or a nested structure more than one key deep (only a
+     single new leaf key in an *existing* literal object — see Open
+     decisions); no `--commit` option to have `ubx writeback` create a
+     git commit directly (only `--write`, a plain file write) — the
+     docs' own "(or a commit on a branch)" phrasing anticipated this as
+     an option, not a requirement.
+   - **Stage 3:** explicitly out of scope per the original task framing,
+     unchanged: webhook-driven (vs. scheduled/manual) triggering,
+     installation-flow hardening (real GitHub App manifest/OAuth/
+     installation tokens — this session's live verification used a
+     personal access token via `GITHUB_TOKEN`, same convention as stage
+     1), multi-repo fan-out. `ubx scan --surface-as` is a CLI command
+     today, invokable by a scheduled job (e.g. GitHub Actions) or by
+     hand — not a hosted, always-on service; that's Nexus/SaaS territory
+     per docs/architecture.md's component map (#10), deliberately later.
+     Also: `--surface-as` only fires for a single resource per `ubx scan`
+     invocation, same as everything else `ubx scan` does — multi-resource
+     drift surfacing depends on `status --drift` (still not started, see
+     below) existing first.
 2. UBI-9/UBI-10 are both closed — nothing further queued under either. If
    a type's fixture-verified shape ever turns out wrong once real usage
    exercises it, or if CloudTrail's `ResourceName` matching behaves
@@ -1418,11 +1628,25 @@ single flag.
 
 UBI-11 stage 2's addition: a new `ubx writeback <proposal-id> --tf-dir
 <dir> [--write]` command. User-facing explanation needs to cover the
-scope honestly — what it will and won't touch (literal values only,
-never new attributes/keys, never blocks) — since the value of this
+scope honestly — what it will and won't touch (literal values, plus now
+new keys in an *existing* literal map — see the stage 2 follow-up above —
+but never new top-level attributes or blocks) — since the value of this
 feature is exactly as much about what it safely declines as what it
 applies; a docs page that only lists the flag without explaining the
 scope boundary would undersell (or oversell) what it actually does.
+
+This session's stage 2 follow-up additionally revises that same scope
+description — new-key insertion into an existing map is now real
+behavior, not a documented limitation — so whatever draft docs page
+already exists for `ubx writeback` needs updating, not just writing once.
+
+UBI-11 stage 3's addition: `ubx scan`'s new `--surface-as issue|pr
+--github-repo <owner/name> [--tf-dir <dir>]` flags. User-facing docs need
+to explain the permission-scope distinction between the two modes
+(`issue` needs only issue-write; `pr` needs contents/PR write too) since
+that's the actual security-relevant choice an operator is making when
+picking one over the other, not just a stylistic preference between two
+equivalent options.
 
 Not addressed this session (pre-existing, from prior slices, noted here
 since this is the first time this debt has been tracked in STATE.md at
@@ -1434,6 +1658,37 @@ user-facing documentation yet either.
 
 ## Surprises / findings
 
+- 2026-07-11: **Inserting two new keys into the same map in one call
+  produces two identical byte offsets — not a rare edge case, but the
+  direct, guaranteed consequence of how insertion is computed (both
+  "after the current last item," from the same unmodified parse).**
+  Noticed this while writing the determinism test for simultaneous
+  insertions (UBI-11 stage 2 follow-up), not before — the existing
+  descending-byte-order sort (built for the *replace* case, where
+  distinct paths almost always land at distinct offsets) had never needed
+  to think about ties. `sort.Slice`'s docs are explicit that equal
+  elements' relative order is unspecified, which is exactly the kind of
+  guarantee this project doesn't accept implicitly anywhere else. Fixed
+  by switching to `sort.SliceStable`; the actual output order for tied
+  insertions turned out to be the *reverse* of processing order (the
+  first-processed edit's text ends up appended *after* the second's, since
+  each new splice at an already-spliced-into position lands before what's
+  already there) — deterministic and correct, just not the naive
+  "alphabetical" ordering intuition would suggest, so this is recorded
+  rather than left to be independently rediscovered.
+- 2026-07-11: **GitHub's Contents API (`Repositories.CreateFile`) commits
+  one new file in a single call — no need to touch the lower-level Git
+  Data API's blob/tree/commit dance at all for UBI-11 stage 3's PR mode.**
+  Worth naming explicitly since the more "correct-looking" way to commit
+  programmatically (used by most from-scratch git tooling, and the
+  approach a first guess reached for) is the Git Data API: create a blob,
+  create a tree referencing it, create a commit referencing the tree,
+  update a ref to point at the commit. For committing exactly one new
+  file to a fresh branch — everything stage 3 actually needs — the
+  Contents API's `CreateFile` collapses all of that into one request.
+  Confirmed via the real API during live verification (`Ubiquex/ubiquex-cli#3`
+  really did end up with the one intended file, correctly committed),
+  not just the hermetic fake-server tests.
 - 2026-07-11: **`hclwrite`'s own `Body.SetAttributeValue` is the wrong
   tool for editing one key inside an existing map/list attribute — it
   silently reformats the whole thing and can lose comments.** Tested this
