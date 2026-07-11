@@ -1604,57 +1604,44 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 Per CLAUDE.md's session protocol: user-visible CLI changes create a docs
 obligation in the ubiquex-docs (Mintlify) repo, batched and cleared per
-slice rather than written inline during foundational work. This session's
-debt:
+slice rather than written inline during foundational work.
 
-- `ubx why` now accepts a `<stack>.<type>.<name>` resource address as an
-  alternative to a proposal ID, rendering that resource's full proposal
-  chain (newest first) instead of one proposal.
-- `ubx why`'s rendering of `intent.sources` changed for two kinds:
-  `cloudtrail` sources now show the actor/event/time/source-IP story
-  inline; `cloudtrail_unattributed` sources show their reason in words.
-  Existing kinds (`dialogue`/`manual_edit`/`issue`) are visually unchanged.
+**UBI-13 Session 1 (2026-07-11) landed the scaffold + conceptual layer**:
+`docs.json` navigation, landing page, an honest build-from-source install
+placeholder, five concept pages (proposal/ledger/drift/attribution/why —
+every example a real captured transcript, not fabricated), and skeleton
+`cli/` pages for all six verbs. `mint validate` passes and `mint dev` was
+smoke-tested clean. This clears the *conceptual* half of the two oldest
+debt items below:
 
-This session's additional debt (UBI-11 stage 1): a new `ubx propose
-<file>` command; `ubx accept`'s new `--from-merge`/`--repo-dir`/
-`--proposal-file`/`--github-repo` flags and the whole PR-merge acceptance
-workflow they exist for (the trailer convention, what gets recorded, that
-zero approvers is normal); `ubx why`'s new `--verify-acceptance`/
-`--repo-dir`/`--github-repo` flags. This is a real, user-facing workflow
-(not just an internal mechanism) — probably deserves its own guide page
-in ubiquex-docs, not just flag reference, given how much of "how do I use
-this" is the trailer convention and the PR-based flow rather than any
-single flag.
+- `ubx why`'s resource-address lookup (`<stack>.<type>.<name>`, newest
+  first) — now explained in `concepts/why.mdx`.
+- `ubx why`'s `cloudtrail`/`cloudtrail_unattributed` rendering — now
+  explained in `concepts/attribution.mdx`.
 
-UBI-11 stage 2's addition: a new `ubx writeback <proposal-id> --tf-dir
-<dir> [--write]` command. User-facing explanation needs to cover the
-scope honestly — what it will and won't touch (literal values, plus now
-new keys in an *existing* literal map — see the stage 2 follow-up above —
-but never new top-level attributes or blocks) — since the value of this
-feature is exactly as much about what it safely declines as what it
-applies; a docs page that only lists the flag without explaining the
-scope boundary would undersell (or oversell) what it actually does.
+Still open (flag-level reference, not yet written — tracked in detail in
+ubiquex-docs' own STATE.md, which is now the authoritative tracker for
+this list going forward rather than duplicating it fully here):
 
-This session's stage 2 follow-up additionally revises that same scope
-description — new-key insertion into an existing map is now real
-behavior, not a documented limitation — so whatever draft docs page
-already exists for `ubx writeback` needs updating, not just writing once.
-
-UBI-11 stage 3's addition: `ubx scan`'s new `--surface-as issue|pr
---github-repo <owner/name> [--tf-dir <dir>]` flags. User-facing docs need
-to explain the permission-scope distinction between the two modes
-(`issue` needs only issue-write; `pr` needs contents/PR write too) since
-that's the actual security-relevant choice an operator is making when
-picking one over the other, not just a stylistic preference between two
-equivalent options.
-
-Not addressed this session (pre-existing, from prior slices, noted here
-since this is the first time this debt has been tracked in STATE.md at
-all — worth clearing alongside the above rather than letting it grow
-further): UBI-8's `--source`/`--provider-version` acquisition flags on
-`scan`/`accept`, and UBI-10's `--no-attribution` flag and the
-`cloudtrail`/`cloudtrail_unattributed` proposal fields themselves, have no
-user-facing documentation yet either.
+- Full flag tables + verified examples for all six verbs, including every
+  flag named below.
+- UBI-11 stage 1: `ubx propose <file>`; `ubx accept`'s `--from-merge`/
+  `--repo-dir`/`--proposal-file`/`--github-repo` and the PR-merge
+  acceptance workflow (trailer convention, zero-approvers-is-normal);
+  `ubx why`'s `--verify-acceptance`/`--repo-dir`/`--github-repo`. Flagged
+  as probably deserving its own `guides/` page, not just flag reference —
+  still true, `guides/` doesn't exist yet in ubiquex-docs.
+- UBI-11 stage 2: `ubx writeback`'s `--tf-dir`/`--write`, including the
+  scope boundary (literal values + new keys in an existing literal map,
+  never new top-level attributes or blocks).
+- UBI-11 stage 3: `ubx scan`'s `--surface-as issue|pr`/`--github-repo`/
+  `--tf-dir`, including the issue-write vs. contents/PR-write permission
+  distinction between the two modes.
+- UBI-8's `--source`/`--provider-version` (on `scan`/`accept`) and
+  UBI-10's `--no-attribution` — pre-existing debt, still undocumented at
+  the flag level.
+- The conformance-registry per-type lookup-requirement table (top
+  anticipated support question) — not yet written anywhere.
 
 ## Surprises / findings
 
