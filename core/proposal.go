@@ -209,9 +209,23 @@ type InvariantCheck struct {
 
 // Acceptance is Proposal.Acceptance — excluded from the content hash (it is
 // recorded after the hash exists, and must not perturb it).
+//
+// PRNumber and ProposalFile were added 2026-07-11 (docs/schema.md —
+// "Amendment: pr_merge acceptance fields", UBI-11 stage 1), both for
+// method "pr_merge": PRNumber is the GitHub pull request MergeSHA belongs
+// to; ProposalFile is the repo-relative path the proposal file lived at,
+// at that commit. Both are conveniences in the sense that everything
+// needed to re-derive acceptance is already derivable from MergeSHA alone
+// (the GitHub API resolves a commit to its PR; the PR's own history holds
+// the diff) — but recording them directly means re-verification
+// (`ubx why --verify-acceptance`) is self-contained from the ledger entry
+// alone, never needing the operator to remember or re-supply what path a
+// proposal lived at just to re-check it.
 type Acceptance struct {
-	Method     string   `json:"method"` // pr_merge | local | crypto
-	MergeSHA   string   `json:"merge_sha,omitempty"`
-	Approvers  []string `json:"approvers,omitempty"`
-	AcceptedAt string   `json:"accepted_at,omitempty"`
+	Method       string   `json:"method"` // pr_merge | local | crypto
+	MergeSHA     string   `json:"merge_sha,omitempty"`
+	PRNumber     int64    `json:"pr_number,omitempty"`
+	ProposalFile string   `json:"proposal_file,omitempty"`
+	Approvers    []string `json:"approvers,omitempty"`
+	AcceptedAt   string   `json:"accepted_at,omitempty"`
 }

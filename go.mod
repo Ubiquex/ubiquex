@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.29
 	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.57.0
+	github.com/google/go-github/v78 v78.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.18.1
 	google.golang.org/grpc v1.82.0
@@ -28,6 +29,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.0 // indirect
 	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.3.5 // indirect

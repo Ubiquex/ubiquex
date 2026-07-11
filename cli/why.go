@@ -17,7 +17,12 @@ import (
 var proposalIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func newWhyCmd() *cobra.Command {
-	var ledgerDir string
+	var (
+		ledgerDir        string
+		verifyAcceptance bool
+		repoDir          string
+		githubRepo       string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "why <proposal-id> | <stack>.<type>.<name>",
@@ -33,6 +38,9 @@ func newWhyCmd() *cobra.Command {
 					return err
 				}
 				renderProposal(out, p)
+				if verifyAcceptance {
+					return runVerifyAcceptance(cmd, out, p, repoDir, githubRepo)
+				}
 				return nil
 			}
 
@@ -57,6 +65,9 @@ func newWhyCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out (UBI-11)")
+	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
+	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
 	return cmd
 }
 
