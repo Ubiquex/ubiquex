@@ -1602,55 +1602,35 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Docs debt
 
+**UBI-13 closed out 2026-07-11, three sessions, no open debt remaining.**
 Per CLAUDE.md's session protocol: user-visible CLI changes create a docs
 obligation in the ubiquex-docs (Mintlify) repo, batched and cleared per
-slice rather than written inline during foundational work.
+slice rather than written inline during foundational work. UBI-13 was that
+batch, covering everything accumulated from UBI-8/UBI-10/UBI-11.
 
-**UBI-13 Session 1 (2026-07-11) landed the scaffold + conceptual layer**:
-`docs.json` navigation, landing page, an honest build-from-source install
-placeholder, five concept pages (proposal/ledger/drift/attribution/why —
-every example a real captured transcript, not fabricated), and skeleton
-`cli/` pages for all six verbs. This cleared the *conceptual* half of
-`ubx why`'s resource-address lookup and `cloudtrail`/`cloudtrail_unattributed`
-rendering debt (explained in `concepts/why.mdx`/`concepts/attribution.mdx`).
+- **Session 1** — scaffold + conceptual layer: `docs.json` navigation,
+  landing page, install placeholder, five concept pages, skeleton `cli/`
+  pages. Cleared the conceptual half of `ubx why`'s resource-address lookup
+  and `cloudtrail`/`cloudtrail_unattributed` rendering debt.
+- **Session 2** — full per-verb reference: every flag from the built
+  binary's `--help`, every example a real captured transcript. Cleared
+  UBI-11 stages 1–3's flag-level debt (`propose`, `accept --from-merge`,
+  `why --verify-acceptance`, `writeback --tf-dir`/`--write`,
+  `scan --surface-as`) and wrote the conformance-registry lookup table
+  (`cli/lookup.mdx`).
+- **Session 3** — closed the last two items: `guides/pr-merge-acceptance.mdx`
+  (a full draft→PR→merge→accept walkthrough, real transcripts throughout,
+  including a real zero-approvers-accepted case) and a real
+  `--source`/`--provider-version` worked example (via `UBX_PROVIDER_MIRROR`,
+  documented honestly as the mirror-resolution path rather than a live
+  registry round trip) in `cli/scan.mdx`, plus the matching
+  `--reverify-source`/`--reverify-provider-version` example in
+  `cli/accept.mdx`. This example surfaced `resolution.inputs[].provider_checksum`
+  — a real field, present only for source+version-acquired scans, that had
+  no prior debt entry at all (see Surprises below).
 
-**UBI-13 Session 2 (2026-07-11) landed full per-verb reference pages**:
-every flag in every `cli/*.mdx` page now comes straight from the built
-binary's own `--help` output, and every example transcript (proposal JSON,
-command output, GitHub issue/PR body content) was captured from a real
-running `ubx` + fakeprovider + a throwaway fake-GitHub-API HTTP server, not
-hand-typed. This clears essentially everything the debt list below used to
-carry at the flag level:
-
-- UBI-11 stage 1 (`ubx propose`, `accept --from-merge`/`--repo-dir`/
-  `--proposal-file`/`--github-repo`, `why --verify-acceptance`/`--repo-dir`/
-  `--github-repo`) — flag tables + worked examples now in `cli/propose.mdx`,
-  `cli/accept.mdx`, `cli/why.mdx`.
-- UBI-11 stage 2 (`writeback --tf-dir`/`--write`, the literal-value-only
-  scope boundary, declined-attribute reporting) — `cli/writeback.mdx`, with
-  a real declined-attribute transcript (an expression-valued `.tf` attribute).
-- UBI-11 stage 3 (`scan --surface-as issue|pr`/`--github-repo`/`--tf-dir`,
-  the issue-write vs. contents/PR-write permission distinction) —
-  `cli/scan.mdx`, with real transcripts for both modes.
-- The conformance-registry per-type lookup-requirement table — now
-  `cli/lookup.mdx`, covering the seven AWS types with a live-verified
-  non-default `--lookup` shape and an honest caveat about the ~40 types
-  whose `{"id": "..."}` default is schema-verified but not live-verified.
-
-Still open (tracked in detail in ubiquex-docs' own STATE.md):
-
-- `accept`'s `--reverify-with`/`--reverify-source`/`--reverify-provider-version`/
-  `--resource-type`/`--resource-name` flags were discovered this session while
-  verifying against `--help` output — they weren't named in any prior debt
-  entry here (see Surprises below). Now documented in `cli/accept.mdx` with
-  both a pass-when-fresh and a blocked-when-stale transcript, so this isn't
-  open debt anymore, but it's worth flagging that the debt list itself had
-  drifted from the actual shipped flag surface.
-- UBI-8's `--source`/`--provider-version` are named in the flag tables but
-  have no worked example yet — every scan/accept example so far uses
-  `--provider` with a local binary.
-- A `guides/` section for the PR-merge acceptance workflow as its own
-  walkthrough (not just flag reference) — still not started.
+Nothing from UBI-8/UBI-10/UBI-11 remains undocumented. The next docs
+obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
@@ -1665,6 +1645,18 @@ Still open (tracked in detail in ubiquex-docs' own STATE.md):
   user-visible at the time a slice landed. Worth remembering next time a
   "what needs documenting" pass starts here: cross-check against
   `--help`/`cmd.Flags()`, don't just work the debt list.
+- 2026-07-11 (UBI-13 session 3): **`ScanRequest.ProviderChecksum` round-trips
+  into the generated proposal as `resolution.inputs[].provider_checksum`
+  (`core/proposal.go`), but only when the provider was acquired via
+  `--source`/`--provider-version` — a `--provider`-direct scan has no
+  checksum to attribute, so the field is simply absent (`omitempty`).**
+  Found only by actually running `--source`/`--provider-version` end to end
+  for the docs' worked example — every prior scan/accept example (including
+  all of UBI-13 sessions 1–2) used `--provider` with a local binary, so this
+  field never showed up in any transcript captured before now. Same lesson
+  as the reverify-flags finding above: exercising a flag combination for
+  real surfaces things a code-reading pass over the CLI flag list alone
+  would miss.
 - 2026-07-11: **Inserting two new keys into the same map in one call
   produces two identical byte offsets — not a rare edge case, but the
   direct, guaranteed consequence of how insertion is computed (both
