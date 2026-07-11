@@ -166,15 +166,29 @@ func TestApplyModification_DeclinesNonLiteralSibling(t *testing.T) {
 	}
 }
 
-func TestApplyModification_DeclinesKeyNotPresent(t *testing.T) {
+// TestApplyModification_InsertsNewKeyIntoExistingLiteralMap is UBI-11
+// stage 2's follow-up: a key not present in an existing literal map is now
+// inserted (the most common real drift shape — someone tags something in
+// the console with a key the .tf file never had), not declined.
+func TestApplyModification_InsertsNewKeyIntoExistingLiteralMap(t *testing.T) {
 	addr := core.Address{Stack: "s", Type: "aws_instance", Name: "web"}
-	_, report, err := ApplyModification([]byte(sampleTF), "test.tf", addr,
+	out, report, err := ApplyModification([]byte(sampleTF), "test.tf", addr,
 		mod(addr, map[string]json.RawMessage{"tags.newkey": raw(`"x"`)}))
 	if err != nil {
 		t.Fatalf("ApplyModification: %v", err)
 	}
-	if len(report.Declined) != 1 || report.Declined[0].Path != "tags.newkey" {
-		t.Fatalf("Declined = %+v, want exactly one entry (write-back never adds new keys)", report.Declined)
+	if len(report.Declined) != 0 {
+		t.Fatalf("Declined = %+v, want none", report.Declined)
+	}
+	if len(report.Applied) != 1 || report.Applied[0] != "tags.newkey" {
+		t.Fatalf("Applied = %v, want [tags.newkey]", report.Applied)
+	}
+	got := string(out)
+	if !strings.Contains(got, `newkey = "x"`) {
+		t.Fatalf("expected the new key inserted, got:\n%s", got)
+	}
+	if !strings.Contains(got, `hotfix = "true" # a comment on hotfix`) || !strings.Contains(got, `owner  = "team-a"`) {
+		t.Fatalf("expected existing keys/comments to survive untouched, got:\n%s", got)
 	}
 }
 

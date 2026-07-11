@@ -5,21 +5,30 @@
 //
 //   - In scope: overwriting a literal attribute value (string, number,
 //     bool, or a literal map/list of those), including nested paths like
-//     "tags.hotfix", on a resource block that already exists.
-//   - Never: creating, deleting, or reordering blocks; reformatting a
-//     file; touching anything besides the specific drifted attribute.
-//   - Declines (never guesses) when the current value is itself an
-//     expression — a variable reference, function call, or interpolation
-//     — rather than silently severing it from whatever it referred to.
+//     "tags.hotfix", on a resource block that already exists. Also in
+//     scope, since it's the single most common real drift shape (UBI-11
+//     stage 2 follow-up): inserting a brand-new key into an existing
+//     literal map/object attribute — someone tagging a resource in the
+//     console with a key the .tf file never had — matching that object's
+//     own indentation and trailing-comma style (see insert.go).
+//   - Never: creating a new top-level attribute that doesn't exist at
+//     all, creating/deleting/reordering blocks, reformatting a file, or
+//     touching anything besides the specific drifted attribute/key.
+//   - Declines (never guesses) when the current value — or, for an
+//     insertion, the *parent* object being inserted into — is itself an
+//     expression (a variable reference, function call, or interpolation)
+//     rather than a literal, rather than silently severing it from
+//     whatever it referred to.
 //
 // The surgical part is done with exact byte-range replacement: hclsyntax
 // parses the file to find the precise byte range of the one sub-expression
-// being changed, and only that range is ever touched — not hclwrite's
-// higher-level Body.SetAttributeValue, which regenerates an entire
-// attribute's tokens and would reformat/lose comments on anything with
-// internal structure (an object or list literal). hclwrite is still used,
-// for exactly one thing: rendering the replacement value's tokens
-// (TokensForValue), so quoting/formatting for the new literal matches HCL
+// being changed (or, for an insertion, the exact byte position to splice
+// new bytes into), and only that range/position is ever touched — not
+// hclwrite's higher-level Body.SetAttributeValue, which regenerates an
+// entire attribute's tokens and would reformat/lose comments on anything
+// with internal structure (an object or list literal). hclwrite is still
+// used, for exactly one thing: rendering a literal value's tokens
+// (TokensForValue), so quoting/formatting for new content matches HCL
 // conventions.
 package tfwrite
 
@@ -103,6 +112,21 @@ func ApplyModification(src []byte, filename string, addr core.Address, mod core.
 	for _, path := range paths {
 		rng, currentExpr, err := resolveTarget(block, path)
 		if err != nil {
+			var ik *insertableKey
+			if errors.As(err, &ik) {
+				insertRng, insertBytes, ierr := planInsertion(src, ik.obj, ik.key, mod.After[path])
+				if ierr != nil {
+					report.Declined = append(report.Declined, DeclinedAttribute{
+						Path:       path,
+						Reason:     ierr.Error(),
+						Expression: exprText(src, currentExpr),
+					})
+					continue
+				}
+				edits = append(edits, pendingEdit{path: path, rng: insertRng, replacement: insertBytes})
+				report.Applied = append(report.Applied, path)
+				continue
+			}
 			report.Declined = append(report.Declined, DeclinedAttribute{
 				Path:       path,
 				Reason:     err.Error(),
@@ -124,7 +148,15 @@ func ApplyModification(src []byte, filename string, addr core.Address, mod core.
 	}
 	sort.Strings(report.Applied)
 
-	sort.Slice(edits, func(i, j int) bool { return edits[i].rng.Start.Byte > edits[j].rng.Start.Byte })
+	// Stable, not just sorted: two insertions into the same object (e.g.
+	// two brand-new tag keys added in one drift) resolve to the identical
+	// byte offset, and a plain sort.Slice's tie-breaking isn't guaranteed
+	// -- determinism matters here the same way it does everywhere else in
+	// this project (see docs/schema.md's canonical hashing rules for the
+	// standing precedent), so ties keep the paths' own alphabetical order
+	// (the order they were appended in, from the already-sorted paths
+	// slice above).
+	sort.SliceStable(edits, func(i, j int) bool { return edits[i].rng.Start.Byte > edits[j].rng.Start.Byte })
 	out := append([]byte(nil), src...)
 	for _, e := range edits {
 		out = spliceBytes(out, e.rng, e.replacement)

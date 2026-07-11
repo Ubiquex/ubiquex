@@ -305,20 +305,40 @@ bidirectionality," not a general HCL code generator):
   bool, or a literal map/list of those) on an existing resource block,
   located by address (`type "name" { ... }` matching the drifted
   resource), including nested attribute paths (e.g. `tags.hotfix`, the
-  same dot-notation `delta.modifies` already uses).
-- **Never:** creating, deleting, or reordering blocks; reformatting a
-  file; touching anything that isn't the specific drifted attribute.
-  Edits go through `hclwrite` specifically because it edits the existing
-  token stream in place — comments, formatting, blank lines, whatever
-  idiosyncrasies a real `.tf` file has survive untouched by construction,
-  not by best-effort diffing.
+  same dot-notation `delta.modifies` already uses). Also in scope
+  (UBI-11 stage 2 follow-up, once real usage made clear it's the single
+  most common drift shape): **inserting a brand-new key into an existing
+  literal map attribute** — someone tags a resource in the console with a
+  key the `.tf` file's `tags = { ... }` never had. The new key matches the
+  existing object's own formatting — its indentation, and whether its
+  items are comma-terminated — rather than an arbitrary default; an empty
+  `{}` gets a sensible first entry.
+- **Still never:** creating a *new* top-level attribute that isn't in the
+  file at all, or creating/deleting/reordering blocks, or reformatting a
+  file, or touching anything that isn't the specific drifted attribute/
+  key. Only ever growing an *existing* literal object's key set is in
+  scope — inserting a wholly new attribute, or a new nested structure more
+  than one level deep, means picking a position/indentation with no
+  existing anchor to match, which is a meaningfully different (and
+  currently out-of-scope) problem from surgically editing something that
+  already has an exact, unambiguous location. Edits go through `hclsyntax`
+  for exact byte-range discovery, not `hclwrite`'s higher-level
+  `Body.SetAttributeValue` — that regenerates an entire attribute's
+  tokens and would reformat/lose comments on anything with internal
+  structure (an object or list literal) — so comments, formatting, blank
+  lines, whatever idiosyncrasies a real `.tf` file has survive untouched
+  by construction, not by best-effort diffing.
 - **If the drifted attribute's current value in the `.tf` file is itself
   an expression** — a variable reference, a function call, an
   interpolation, anything that isn't a literal — write-back **declines**,
   producing a manual-reconciliation report naming the attribute and the
-  expression it can't safely overwrite. Overwriting `var.instance_type`
-  with a literal string would silently sever that attribute from whatever
-  the variable was for; that's a decision for a human, not something a
+  expression it can't safely overwrite. The same rule governs a new-key
+  insertion: if the *parent* map itself is an expression (`tags =
+  merge(...)`, `tags = var.common_tags`) rather than a literal `{ ... }`,
+  insertion declines too — there's no literal object to safely grow.
+  Overwriting `var.instance_type` with a literal string would silently
+  sever that attribute from whatever the variable was for; that's a
+  decision for a human, not something a
   drift-recorder does on their behalf.
 - **Output is a diff (or a commit on a branch), never a silent push** —
   the same "human in the loop" posture as everything else in the trust

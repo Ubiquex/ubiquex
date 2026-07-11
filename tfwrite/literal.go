@@ -18,6 +18,14 @@ import (
 // core/state.go's dotSet/diffAttributes) already use, so a path here is
 // exactly what a drift_adopt proposal's delta.modifies already carries.
 //
+// If the path's *final* segment names a key that doesn't exist yet, but
+// everything before it resolved to an existing literal object, resolveTarget
+// returns an *insertableKey error instead of a generic decline — the
+// common "someone added a whole new tag in the console" shape (UBI-11
+// stage 2 follow-up). A missing *intermediate* segment (there's more path
+// left after it) is still a hard decline: inserting a new nested
+// structure, not just one scalar key, stays out of scope.
+//
 // The returned expression is whichever one resolveTarget got furthest
 // with before failing (nil if not even the top-level attribute exists) —
 // exprText uses it to render the "expression it can't safely overwrite"
@@ -31,7 +39,8 @@ func resolveTarget(block *hclsyntax.Block, path string) (hcl.Range, hclsyntax.Ex
 	}
 
 	expr := attr.Expr
-	for i, seg := range segments[1:] {
+	rest := segments[1:]
+	for i, seg := range rest {
 		obj, ok := expr.(*hclsyntax.ObjectConsExpr)
 		if !ok {
 			return hcl.Range{}, expr, fmt.Errorf("%q is not a literal object, can't navigate into %q",
@@ -39,8 +48,12 @@ func resolveTarget(block *hclsyntax.Block, path string) (hcl.Range, hclsyntax.Ex
 		}
 		item, ok := findObjectItem(obj, seg)
 		if !ok {
-			return hcl.Range{}, expr, fmt.Errorf("key %q not present in the existing %q object (write-back never adds new keys)",
-				seg, strings.Join(segments[:i+1], "."))
+			isFinalSegment := i == len(rest)-1
+			if isFinalSegment {
+				return hcl.Range{}, expr, &insertableKey{obj: obj, key: seg}
+			}
+			return hcl.Range{}, expr, fmt.Errorf("key %q not present in the existing %q object, and it isn't the final segment of %q (write-back only inserts a single new leaf key, not a new nested structure)",
+				seg, strings.Join(segments[:i+1], "."), path)
 		}
 		expr = item.ValueExpr
 	}
