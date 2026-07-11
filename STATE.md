@@ -58,9 +58,41 @@ removed afterward.
 UBI-9 (51-type conformance), UBI-8 (provider acquisition), and UBI-7
 (Slice 3 + follow-ups) remain done from prior sessions (see below).
 
+**UBI-11 is done (this session): `ubx why` polished ahead of demo
+recording, closing two gaps a dry run surfaced.**
+
+1. **Resource-address support.** `ubx why <stack>.<type>.<name>` now
+   resolves and renders the resource's *entire* recorded history —
+   adoption plus every subsequent drift_adopt — newest first, instead of
+   requiring the operator to already have a specific proposal ID in hand.
+   `ubx why <proposal-id>` (the 64-hex-char form) is completely
+   unchanged: same output, byte-for-byte, for every existing intent
+   source kind. New `core.ParseAddress` (the inverse of `Address.String`)
+   and `Ledger.ProposalsForAddress` do the actual work; `cli/why.go`
+   decides which path to take by regex-matching the argument against the
+   64-hex-char shape first, falling back to address parsing.
+2. **Attribution rendering.** `intent.sources` entries used to print as a
+   bare `kind ref (content_hash=...)` line regardless of kind — fine for
+   dialogue/PR/issue sources, useless for the whole point of UBI-10's
+   `cloudtrail` sources, which carry an actor ARN, event name/time, and
+   source IP that were previously invisible unless you opened the raw
+   JSON. `cloudtrail` sources now render the human story inline (who, did
+   what, when, from where), with the event id/content_hash demoted to an
+   indented detail line rather than dropped; `cloudtrail_unattributed`
+   sources render their `reason` in words (e.g. "too recent for
+   CloudTrail to have delivered a matching event yet") instead of the
+   bare enum value. Every other kind renders exactly as before.
+
+Verified by hand against the actual built binary, not just the test
+suite, specifically because this was a "will it read well on camera"
+polish pass: built a real chain (adopt → drift, via fakeprovider) and
+confirmed the newest-first, two-entry rendering; hand-accepted a proposal
+carrying one `cloudtrail` and one `cloudtrail_unattributed` source and
+confirmed both render as intended (see Done for the exact output).
+
 ## Current focus
 
-UBI-10 is closed. Next up (see Next steps): the Core IR + resolver work
+UBI-11 is closed. Next up (see Next steps): the Core IR + resolver work
 that's been queued since before UBI-9, and `status --drift` (a read-only
 multi-resource drift report, still M1-2 scope per docs/plan.md).
 
@@ -800,36 +832,109 @@ multi-resource drift report, still M1-2 scope per docs/plan.md).
     provider concern — so a direct SDK client, isolated to the new
     `cloudtrail/` package, was the right scope for this dependency rather
     than trying to force it through either existing mechanism.
+- 2026-07-11: UBI-11 completed — `ubx why` polish (resource-address
+  support, attribution rendering) ahead of demo recording.
+  - `core/proposal.go`: new `ParseAddress(s string) (Address, bool)` — the
+    inverse of `Address.String()`. Splits on the first two dots only
+    (`strings.SplitN(s, ".", 3)`, not `strings.Split`), so a resource name
+    that itself contains a dot round-trips correctly; `ok` is false unless
+    all three components are non-empty.
+  - `core/state.go`: new `Ledger.ProposalsForAddress(addr Address)
+    ([]*Proposal, error)` — walks `Chain()` (same pattern as
+    `LastObservedHash`/`LastObservationTime`) collecting every proposal
+    with a `resolution.inputs` entry whose `resource` matches `addr`'s
+    canonical string form. Returns proposals in chain (oldest-first)
+    order; an address the ledger has never recorded returns an empty
+    slice with no error — "not found" is a decision left to the caller's
+    layer (`ubx why` treats it as an error; a future caller might not).
+  - `cli/why.go`: argument dispatch now checks a 64-hex-char regex first
+    (unchanged proposal-ID path, `renderProposal` — verified
+    byte-identical output for every pre-existing intent-source kind) and
+    falls back to `core.ParseAddress`; a string that's neither reports
+    `"%q is not a valid proposal ID (64-char hex) or resource address
+    (<stack>.<type>.<name>)"`. A resolved address prints a one-line
+    summary (`<addr>: N proposal(s), newest first`) then one compact
+    block per proposal (`renderProposalCompact`: kind, a presentation-only
+    truncated id via new `shortID` — never used to look anything back up
+    — `resolved_at`, intent summary, then the same attribution rendering
+    as the full view).
+  - `cli/why.go`: `renderIntentSource` replaces the old bare
+    `kind ref (content_hash=...)` line for two kinds specifically:
+    `cloudtrail` now prints `source: cloudtrail -- <actor_arn>
+    <event_name> at <event_time> from <source_ip>` followed by an
+    indented `event <id> (content_hash=...)` detail line;
+    `cloudtrail_unattributed` prints `source: cloudtrail_unattributed --
+    <reason in words>` via new `unattributedReason`, which maps each of
+    the three schema reasons to a sentence (falling back to the raw
+    string for anything unrecognized, so a future reason never renders as
+    nothing). `dialogue`/`manual_edit`/`issue` (and any other kind) render
+    exactly as before — same format string, same indent.
+  - Tests: `core/proposal_test.go` (new) — `ParseAddress` table test
+    (simple, name-containing-dots, missing/empty components, a bare
+    64-hex string with no dots correctly failing to parse as an address)
+    plus a round-trip-through-`String()` case. `core/state_test.go` — 
+    `TestLedger_ProposalsForAddress_ChainOrder` (adopt then drift via
+    `fakeProvider`, confirms both proposals returned in chain order) and
+    `TestLedger_ProposalsForAddress_UnknownAddressIsEmptyNotError`.
+    `cli/why_test.go` (new) — `TestWhy_ResourceAddress_ChainOrdering`
+    (real scan→accept→scan→accept sequence through the CLI, confirms the
+    drift proposal's short id renders before the adoption's),
+    `TestWhy_ResourceAddress_Unknown`, `TestWhy_InvalidArgument` (neither
+    id nor address), and `TestWhy_RendersAttributedCloudTrailSource`/
+    `TestWhy_RendersUnattributedReasonInWords` against a hand-written
+    drift_adopt proposal carrying one of each new source kind (same
+    hand-written-JSON pattern `TestAcceptThenWhy` already established).
+  - **Verified by hand against the built binary**, not just the test
+    suite (this was explicitly a "how does it look on camera" pass):
+    built a real two-entry chain via `ubx scan`/`ubx accept` against the
+    fakeprovider fixture and confirmed
+    `ubx why payments.fake_widget.demo-widget` renders
+    ```
+    payments.fake_widget.demo-widget: 2 proposal(s), newest first
+    - drift_adopt 4e7c88296758… (2026-07-11T10:53:37Z): record drift on payments.fake_widget.demo-widget observed outside the ledger
+    - adoption b25c8affa2ca… (2026-07-11T10:53:37Z): adopt existing payments.fake_widget.demo-widget into the ledger (discovered by scan)
+    ```
+    and hand-accepted a proposal carrying one `cloudtrail` and one
+    `cloudtrail_unattributed` source, confirming:
+    ```
+      source: cloudtrail -- arn:aws:iam::839333509514:user/roozbeh PutBucketTagging at 2026-07-10T21:42:30Z from 93.228.76.41
+        event 9910b32a-2f22-44b9-8d18-88cd3b95841a (content_hash=sha256:deadbeef)
+      source: cloudtrail_unattributed -- too recent for CloudTrail to have delivered a matching event yet
+    ```
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic, all packages pass).
 
 ## Next steps
 
-1. **UBI-9 and UBI-10 are both closed** — nothing further queued under
-   either. If a type's fixture-verified shape ever turns out wrong once
-   real usage exercises it, or if CloudTrail's `ResourceName` matching
-   behaves differently for a type not yet checked live, fix it as a
-   normal bug (`conformance/registry.go`'s `Notes` / `core/attribution.go`
-   respectively), not a reason to reopen either milestone.
+1. **UBI-9, UBI-10, and UBI-11 are all closed** — nothing further queued
+   under any of them. If a type's fixture-verified shape ever turns out
+   wrong once real usage exercises it, or if CloudTrail's `ResourceName`
+   matching behaves differently for a type not yet checked live, fix it
+   as a normal bug (`conformance/registry.go`'s `Notes` /
+   `core/attribution.go` respectively), not a reason to reopen a
+   milestone.
 2. Now unblocked: Core IR + resolver (component map #1-2) — the natural
    next session; nothing else in M1-2's detection core is blocking it.
    `status --drift` (a read-only report over what `ubx scan` would find
    across multiple resources) is also still M1-2 scope, not started —
    would naturally reuse `core.AttributeDrift` per resource the same way
-   `ubx scan` does now.
+   `ubx scan` does now, and `ubx why <address>`'s new chain view (UBI-11)
+   for showing that report's history per resource.
 3. UBI-10 gaps, not addressed this session, deliberately deferred: no
    caching/dedup of `EventLookup` calls across multiple scans in a batch
    (each `ubx scan` invocation currently builds its own `cloudtrail.Client`
    and searches independently — fine at "one resource per CLI invocation"
    scale, worth revisiting once `status --drift` scans many resources per
-   run); `session_context` is passed through opaquely (not parsed into,
-   say, an assumed-role session name) — nothing in `ubx why` surfaces it
-   specially yet, since `ubx why` itself doesn't render `intent.sources`
-   beyond its existing summary/kind display; only tested live against
-   `aws_s3_bucket` (one type) — the `id`-not-`arn` finding is recorded as
-   an empirical fact about that type (and `aws_iam_role`/`aws_vpc`, tested
-   via the manual CloudTrail probe but not through a full live
-   `ubx scan` run), not assumed to hold for every AWS service.
+   run); `session_context` is still passed through opaquely (UBI-11 didn't
+   change this — `ubx why` prints the actor ARN/event name/time/source IP
+   now, but not session_context specifically, which stays available in
+   the raw ledger JSON only); only tested live against `aws_s3_bucket`
+   (one type) — the `id`-not-`arn` finding is recorded as an empirical
+   fact about that type (and `aws_iam_role`/`aws_vpc`, tested via the
+   manual CloudTrail probe but not through a full live `ubx scan` run),
+   not assumed to hold for every AWS service.
 4. A `ubx provider ...` dev-facing CLI verb was deliberately never added
-   across five sessions — still not part of the eventual product CLI
+   across six sessions — still not part of the eventual product CLI
    surface (see docs/architecture.md component map). `ubx scan` now covers
    the "read one resource" use case anyway; revisit only if something else
    still needs raw schema/read access outside of scan/accept.
@@ -847,6 +952,29 @@ multi-resource drift report, still M1-2 scope per docs/plan.md).
    file is trusted differently); no cache invalidation/eviction; `ubx scan
    --source` doesn't route to a non-default registry hostname even though
    `ParseSource` would parse one. See prior entries for full detail.
+
+## Docs debt
+
+Per CLAUDE.md's session protocol: user-visible CLI changes create a docs
+obligation in the ubiquex-docs (Mintlify) repo, batched and cleared per
+slice rather than written inline during foundational work. This session's
+debt:
+
+- `ubx why` now accepts a `<stack>.<type>.<name>` resource address as an
+  alternative to a proposal ID, rendering that resource's full proposal
+  chain (newest first) instead of one proposal.
+- `ubx why`'s rendering of `intent.sources` changed for two kinds:
+  `cloudtrail` sources now show the actor/event/time/source-IP story
+  inline; `cloudtrail_unattributed` sources show their reason in words.
+  Existing kinds (`dialogue`/`manual_edit`/`issue`) are visually unchanged.
+
+Not addressed this session (pre-existing, from prior slices, noted here
+since this is the first time this debt has been tracked in STATE.md at
+all — worth clearing alongside the above rather than letting it grow
+further): UBI-8's `--source`/`--provider-version` acquisition flags on
+`scan`/`accept`, and UBI-10's `--no-attribution` flag and the
+`cloudtrail`/`cloudtrail_unattributed` proposal fields themselves, have no
+user-facing documentation yet either.
 
 ## Surprises / findings
 

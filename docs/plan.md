@@ -64,6 +64,14 @@
   correct for that schema shape; they do NOT prove the live ReadResource
   lookup convention the way RealSafe types do — that's exactly the
   cost/risk being avoided).
+- 2026-07-11 — UBI-11: `ubx why` polished ahead of demo recording. Now
+  accepts a `<stack>.<type>.<name>` resource address as an alternative to
+  a proposal ID, rendering that resource's full proposal chain (adoption
+  + every subsequent drift, newest first) — proposal-ID lookup unchanged.
+  `cloudtrail`/`cloudtrail_unattributed` intent.sources (UBI-10) now
+  render the human attribution story inline instead of a bare
+  kind/ref/hash line. See STATE.md for the full writeup, including the
+  actual before/after rendering.
 
 ## Strategy
 

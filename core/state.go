@@ -79,6 +79,34 @@ func (l *Ledger) LastObservationTime(addr Address) (t time.Time, found bool, err
 	return time.Time{}, false, nil
 }
 
+// ProposalsForAddress returns every proposal in the ledger that recorded an
+// observation of addr — any proposal with a resolution.inputs entry whose
+// Resource matches addr's canonical string form, the same field
+// LastObservedHash/LastObservationTime already key off. In practice this is
+// addr's adoption proposal plus every subsequent drift_adopt, in ledger
+// (oldest-first) order — addr's full recorded history. Used by `ubx why`
+// (UBI-11) to resolve a resource address into its proposal chain, not just
+// a single proposal ID. An empty (nil) result means addr was never
+// recorded; that's not an error, callers decide what "unknown address"
+// should mean at their layer.
+func (l *Ledger) ProposalsForAddress(addr Address) ([]*Proposal, error) {
+	chain, err := l.Chain()
+	if err != nil {
+		return nil, fmt.Errorf("proposals for address: %w", err)
+	}
+	target := addr.String()
+	var matched []*Proposal
+	for _, p := range chain {
+		for _, in := range p.Resolution.Inputs {
+			if in.Resource == target {
+				matched = append(matched, p)
+				break
+			}
+		}
+	}
+	return matched, nil
+}
+
 // FoldState reconstructs the ledger's currently-recorded full state for
 // addr — architecture.md's "current infrastructure = fold(applied
 // proposals)", restricted to one resource. addr's adoption proposal seeds

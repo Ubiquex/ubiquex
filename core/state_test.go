@@ -147,6 +147,66 @@ func TestFoldState_MultiLevelDrift(t *testing.T) {
 	}
 }
 
+func TestLedger_ProposalsForAddress_ChainOrder(t *testing.T) {
+	l := Open(t.TempDir())
+	ctx := context.Background()
+	addr := testAddr()
+
+	// Adopt.
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"ubx-states","tags":{"env":"prod"}}`)}
+	res1, err := RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: json.RawMessage(`{"id":"ubx-states"}`)})
+	if err != nil {
+		t.Fatalf("RunScan (adopt): %v", err)
+	}
+	p1, err := GenerateProposal(l, "payments", res1)
+	if err != nil {
+		t.Fatalf("GenerateProposal (adopt): %v", err)
+	}
+	if _, err := Accept(l, p1); err != nil {
+		t.Fatalf("Accept (adopt): %v", err)
+	}
+
+	// Drift.
+	fp.state = json.RawMessage(`{"id":"ubx-states","tags":{"env":"staging"}}`)
+	res2, err := RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: json.RawMessage(`{"id":"ubx-states"}`)})
+	if err != nil {
+		t.Fatalf("RunScan (drift): %v", err)
+	}
+	p2, err := GenerateProposal(l, "payments", res2)
+	if err != nil {
+		t.Fatalf("GenerateProposal (drift): %v", err)
+	}
+	accepted2, err := Accept(l, p2)
+	if err != nil {
+		t.Fatalf("Accept (drift): %v", err)
+	}
+
+	proposals, err := l.ProposalsForAddress(addr)
+	if err != nil {
+		t.Fatalf("ProposalsForAddress: %v", err)
+	}
+	if len(proposals) != 2 {
+		t.Fatalf("len(proposals) = %d, want 2", len(proposals))
+	}
+	if proposals[0].Kind != KindAdoption {
+		t.Errorf("proposals[0].Kind = %q, want %q (oldest first)", proposals[0].Kind, KindAdoption)
+	}
+	if proposals[1].Kind != KindDriftAdopt || proposals[1].ID != accepted2.ID {
+		t.Errorf("proposals[1] = %+v, want the drift_adopt proposal (newest last, chain order)", proposals[1])
+	}
+}
+
+func TestLedger_ProposalsForAddress_UnknownAddressIsEmptyNotError(t *testing.T) {
+	l := Open(t.TempDir())
+	proposals, err := l.ProposalsForAddress(Address{Stack: "payments", Type: "aws_s3_bucket", Name: "never-scanned"})
+	if err != nil {
+		t.Fatalf("ProposalsForAddress: %v", err)
+	}
+	if len(proposals) != 0 {
+		t.Fatalf("len(proposals) = %d, want 0", len(proposals))
+	}
+}
+
 func TestLedger_LastObservedHash_IsolatedPerAddress(t *testing.T) {
 	l := Open(t.TempDir())
 	ctx := context.Background()

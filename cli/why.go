@@ -2,42 +2,141 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"regexp"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
 )
 
+// proposalIDPattern matches a full 64-hex-char content hash — the only
+// legal shape for a proposal ID (docs/schema.md: "id is a content hash...
+// no sequential numbering"). Anything else passed to `ubx why` is tried as
+// a resource address instead.
+var proposalIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 func newWhyCmd() *cobra.Command {
 	var ledgerDir string
 
 	cmd := &cobra.Command{
-		Use:   "why <proposal-id>",
-		Short: "Explain an accepted proposal: intent, delta, acceptance",
+		Use:   "why <proposal-id> | <stack>.<type>.<name>",
+		Short: "Explain an accepted proposal, or a resource's full proposal history",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ledger := core.Open(ledgerDir)
-			p, err := ledger.Read(args[0])
+			out := cmd.OutOrStdout()
+
+			if proposalIDPattern.MatchString(args[0]) {
+				p, err := ledger.Read(args[0])
+				if err != nil {
+					return err
+				}
+				renderProposal(out, p)
+				return nil
+			}
+
+			addr, ok := core.ParseAddress(args[0])
+			if !ok {
+				return fmt.Errorf("%q is not a valid proposal ID (64-char hex) or resource address (<stack>.<type>.<name>)", args[0])
+			}
+			proposals, err := ledger.ProposalsForAddress(addr)
 			if err != nil {
 				return err
 			}
+			if len(proposals) == 0 {
+				return fmt.Errorf("no proposals found for %s", addr)
+			}
 
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "proposal %s (%s)\n", p.ID, p.Kind)
-			fmt.Fprintf(out, "stack:  %s\n", p.Stack)
-			fmt.Fprintf(out, "status: %s\n", p.Status)
-			fmt.Fprintf(out, "intent: %s\n", p.Intent.Summary)
-			for _, s := range p.Intent.Sources {
-				fmt.Fprintf(out, "  source: %s %s (content_hash=%s)\n", s.Kind, s.Ref, s.ContentHash)
+			fmt.Fprintf(out, "%s: %d proposal(s), newest first\n", addr, len(proposals))
+			for i := len(proposals) - 1; i >= 0; i-- {
+				renderProposalCompact(out, proposals[i])
 			}
-			if p.Acceptance != nil {
-				fmt.Fprintf(out, "accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
-			}
-			fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	return cmd
+}
+
+// renderProposal is the full single-proposal view, unchanged from before
+// this session except that intent.sources now goes through
+// renderIntentSource (see its doc comment) instead of a bare kind/ref/hash
+// line — dialogue/manual_edit/issue sources render byte-identically to
+// before; only cloudtrail/cloudtrail_unattributed sources look different.
+func renderProposal(out io.Writer, p *core.Proposal) {
+	fmt.Fprintf(out, "proposal %s (%s)\n", p.ID, p.Kind)
+	fmt.Fprintf(out, "stack:  %s\n", p.Stack)
+	fmt.Fprintf(out, "status: %s\n", p.Status)
+	fmt.Fprintf(out, "intent: %s\n", p.Intent.Summary)
+	for _, s := range p.Intent.Sources {
+		renderIntentSource(out, s, "  ")
+	}
+	if p.Acceptance != nil {
+		fmt.Fprintf(out, "accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
+	}
+	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+}
+
+// renderProposalCompact is why's per-entry rendering for a resource
+// address's full proposal chain — terser than renderProposal (a short id,
+// one summary line) since a chain view shows several entries at once, but
+// still renders attribution in full (see renderIntentSource): "who/when
+// changed this" is exactly what a chain view over a resource is for.
+func renderProposalCompact(out io.Writer, p *core.Proposal) {
+	fmt.Fprintf(out, "- %s %s (%s): %s\n", p.Kind, shortID(p.ID), p.Resolution.ResolvedAt, p.Intent.Summary)
+	for _, s := range p.Intent.Sources {
+		renderIntentSource(out, s, "    ")
+	}
+}
+
+// shortID is a presentation-layer truncation only (docs/schema.md's hash.go
+// comment: "a short display form is a presentation concern, not part of
+// the canonical identity itself") — never used to look anything back up.
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12] + "…"
+}
+
+// renderIntentSource prints one intent.sources entry. cloudtrail sources
+// render the human story inline — actor, what they did, when, from where —
+// with the event id/content_hash demoted to an indented detail line; that
+// story, not the event id, is what "who changed this" is actually asking
+// for. cloudtrail_unattributed sources render their reason in words rather
+// than a bare enum value. Every other kind (dialogue/manual_edit/issue) is
+// unchanged from before this session.
+func renderIntentSource(out io.Writer, s core.IntentSource, indent string) {
+	switch s.Kind {
+	case "cloudtrail":
+		fmt.Fprintf(out, "%ssource: cloudtrail -- %s %s at %s", indent, s.ActorARN, s.EventName, s.EventTime)
+		if s.SourceIP != "" {
+			fmt.Fprintf(out, " from %s", s.SourceIP)
+		}
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "%s  event %s (content_hash=%s)\n", indent, s.EventID, s.ContentHash)
+	case "cloudtrail_unattributed":
+		fmt.Fprintf(out, "%ssource: cloudtrail_unattributed -- %s\n", indent, unattributedReason(s.Reason))
+	default:
+		fmt.Fprintf(out, "%ssource: %s %s (content_hash=%s)\n", indent, s.Kind, s.Ref, s.ContentHash)
+	}
+}
+
+// unattributedReason renders IntentSource.Reason (docs/schema.md's
+// CloudTrail attribution amendment) in words rather than a bare enum value.
+// Falls back to the raw reason string for anything unrecognized (a future
+// reason added to the schema shouldn't render as nothing).
+func unattributedReason(reason string) string {
+	switch reason {
+	case core.ReasonNoMatchingEvent:
+		return "no matching CloudTrail event found in the correlation window"
+	case core.ReasonDeliveryWindow:
+		return "too recent for CloudTrail to have delivered a matching event yet"
+	case core.ReasonNotLogged:
+		return "CloudTrail visibility unavailable (denied access or not logged)"
+	default:
+		return reason
+	}
 }

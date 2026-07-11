@@ -3,7 +3,10 @@
 // the append-only per-stack ledger it's recorded in.
 package core
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // SchemaVersion is the current schema_version for Proposal objects. The
 // ledger is forever; any change to hashed-content shape requires bumping
@@ -101,6 +104,20 @@ type Address struct {
 // ResolutionInput.Resource is expected to be written.
 func (a Address) String() string {
 	return a.Stack + "." + a.Type + "." + a.Name
+}
+
+// ParseAddress parses s in the canonical "<stack>.<type>.<name>" form
+// (Address.String()'s own output) back into an Address — used by `ubx why`
+// (UBI-11: polish before demo recording) to accept a resource address as an
+// alternative to a proposal ID. Splits on the first two dots only (not
+// strings.Split), so a resource name that itself contains a dot round-trips
+// correctly. ok is false if s doesn't have all three non-empty components.
+func ParseAddress(s string) (addr Address, ok bool) {
+	parts := strings.SplitN(s, ".", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return Address{}, false
+	}
+	return Address{Stack: parts[0], Type: parts[1], Name: parts[2]}, true
 }
 
 // Modification is one entry of Delta.Modifies (docs/schema.md, pinned
