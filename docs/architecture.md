@@ -198,6 +198,154 @@ documented ~15-minute upper bound, but far from instant — which is why
 outcome (a narrow correlation window can't rule out "the event just
 hasn't propagated yet" the way a wide one that still finds nothing can).
 
+## Decision loop (UBI-11)
+
+M3-4's "decision loop" (docs/plan.md) turns a detected drift (UBI-7/UBI-10)
+into a resolved, recorded decision without ubx itself becoming the thing
+that enforces process. Three stages, each independently shippable:
+
+1. **PR-merge acceptance binding** — a second acceptance tier alongside
+   `local` (docs/schema.md's `acceptance.method`), for teams whose real
+   review process already happens in a pull request.
+2. **`.tf` write-back** — once a drift is accepted, correct the team's own
+   Terraform source to match reality, narrowly.
+3. **GitHub App skeleton** — surfaces drift as an issue/PR automatically,
+   reusing stage 1's binding for a receipt on the resulting PR.
+
+### PR-merge acceptance: derived, never asserted
+
+The organizing principle, stated once so every design choice below can be
+checked against it: **ubx never trusts a claim of acceptance — it verifies
+one.** `local` acceptance (existing) trusts the operator running `ubx
+accept` on their own machine, which is honest about what it is: a
+convenience tier with no external witness. `pr_merge` acceptance instead
+*re-derives* the whole `Acceptance` record from artifacts ubx doesn't
+control (git history, the GitHub API) every time it's written, and can
+re-derive it again anytime after — a `pr_merge` proposal's acceptance is
+a claim that's supposed to be independently checkable for as long as the
+ledger exists, not a one-time assertion trusted at write time and never
+looked at again.
+
+**The flow:**
+
+1. An author resolves a proposal (any tool: `ubx propose` computes the
+   canonical hash without touching the ledger) and commits the draft
+   proposal JSON as an ordinary file on a branch — anywhere in the repo
+   the team likes; it isn't part of `ledger/proposals/` yet, since that
+   directory holds *accepted* entries keyed by their hash, and this one
+   isn't accepted yet.
+2. The PR body carries a trailer line: `ubx-proposal: <hash>` — the exact
+   value `ubx propose` printed. This is the claim; nothing here is
+   trusted yet.
+3. Ordinary GitHub review happens. Branch protection, required reviewers,
+   CODEOWNERS — all of that is **GitHub's job**, completely outside ubx.
+   ubx has no opinion on whether a merge was "properly" reviewed by
+   whatever the team's policy is; it only records what actually happened.
+4. Once merged, `ubx accept --from-merge <sha> --proposal-file <path>
+   --github-repo <owner/name>` derives acceptance:
+   - Verifies `<sha>` exists in the local git history (`--repo-dir`, a
+     clone/working tree ubx can query — no GitHub API call needed for
+     this check).
+   - Reads the proposal file's content *at that commit* (`git show
+     <sha>:<path>`) — not whatever's on disk right now, which could have
+     moved on.
+   - Recomputes the proposal's canonical hash from that exact content and
+     requires it to equal the trailer's claimed hash. A mismatch is a
+     hard failure — the trailer is what a human reviewed; if the file
+     hashes to something else, review happened over different content
+     than what's being accepted, and this is fabricated evidence,
+     handled the same way (rejected) whether it's an authoring bug or an
+     attempt to substitute content after review.
+   - Finds the merged pull request associated with `<sha>` via the
+     GitHub API and reads its **current** review state: every reviewer
+     whose most recent review is `APPROVED` (a later `CHANGES_REQUESTED`
+     supersedes an earlier `APPROVED` from the same person — ubx doesn't
+     count a withdrawn approval).
+   - Writes `acceptance = {method: "pr_merge", merge_sha, approvers,
+     accepted_at}` and appends to the ledger, exactly like `local`
+     acceptance's final step.
+5. **Zero approvers is a valid, recorded outcome, not a rejection.** If
+   the PR merged with no approving reviews at all (branch protection
+   disabled, an admin override, a solo-maintainer repo), ubx records
+   `approvers: []` and proceeds. Whether that *should* have been
+   possible is a policy question for GitHub's branch protection to
+   answer, not something ubx enforces after the fact — enforcing it here
+   would be ubx quietly assuming an authority (blocking a decision
+   someone already made) it explicitly does not have (see Business
+   frame: "wedge reads and records before it ever writes" — acceptance
+   binding records a decision, it does not gate one).
+6. **Re-verification, anytime.** `ubx why <id> --verify-acceptance
+   --repo-dir <path>` re-runs the git-history and hash checks against a
+   `pr_merge` proposal's current state, and — network/token permitting —
+   re-fetches the PR's current reviews and reports whether the recorded
+   approver set still matches (a review dismissed after the fact is
+   exactly the kind of thing "derived, not asserted" exists to catch).
+   If the GitHub API leg can't run (no token, offline), that's reported
+   as *inconclusive*, not silently treated as a pass — an acceptance
+   claim that can only be partially re-checked right now is weaker than
+   one that was fully re-checked, and `ubx why` says so rather than
+   rounding up.
+
+**What ubx explicitly does not do here:** enforce required reviewers,
+enforce branch protection, block a merge, or have any opinion on GitHub's
+process before the merge happens. All of that remains entirely GitHub's
+job. ubx's contribution is exactly the sentence in the wedge pitch: "a
+signed record of what you decided" — decided by the team, through
+whatever process they already run, recorded faithfully by ubx afterward.
+
+### `.tf` write-back: narrow-scope, surgical
+
+Triggered only by an *accepted* `drift_adopt` proposal — never a `change`
+or any proposal a human is still authoring; write-back records reality
+into existing source, it doesn't propose new infrastructure. Scope is
+deliberately narrow, matching M3-4's own framing ("narrow-scope
+bidirectionality," not a general HCL code generator):
+
+- **In scope:** overwriting a literal attribute value (string, number,
+  bool, or a literal map/list of those) on an existing resource block,
+  located by address (`type "name" { ... }` matching the drifted
+  resource), including nested attribute paths (e.g. `tags.hotfix`, the
+  same dot-notation `delta.modifies` already uses).
+- **Never:** creating, deleting, or reordering blocks; reformatting a
+  file; touching anything that isn't the specific drifted attribute.
+  Edits go through `hclwrite` specifically because it edits the existing
+  token stream in place — comments, formatting, blank lines, whatever
+  idiosyncrasies a real `.tf` file has survive untouched by construction,
+  not by best-effort diffing.
+- **If the drifted attribute's current value in the `.tf` file is itself
+  an expression** — a variable reference, a function call, an
+  interpolation, anything that isn't a literal — write-back **declines**,
+  producing a manual-reconciliation report naming the attribute and the
+  expression it can't safely overwrite. Overwriting `var.instance_type`
+  with a literal string would silently sever that attribute from whatever
+  the variable was for; that's a decision for a human, not something a
+  drift-recorder does on their behalf.
+- **Output is a diff (or a commit on a branch), never a silent push** —
+  the same "human in the loop" posture as everything else in the trust
+  chain. A team applies it exactly like any other change: review, then
+  merge.
+
+### GitHub App skeleton
+
+Read-only repository permissions are the security story, not an
+afterthought bolted on: because acceptance is *derived* (see above), a
+GitHub App that only ever reads (contents, pull requests, checks) can
+still do everything stage 3 needs — detect drift, open an issue/PR with
+the proposal and a human-readable receipt, and — once a human merges that
+PR — derive acceptance the exact same way `ubx accept --from-merge`
+already does for a manually-opened PR. The App never needs write access
+to *apply* anything, because it never applies anything; it records. This
+is the same containment "wedge reads and records before it ever writes"
+already establishes for the executor, extended to the App's own
+permission scope.
+
+Skeleton scope for this milestone: one repo, a scan triggered on a
+schedule or manually, drift surfaced as an issue or PR containing the
+generated proposal plus a receipt (diff, attribution if any, blast
+radius). Explicitly deferred: webhook-driven (vs. scheduled/manual)
+triggering, installation-flow hardening, multi-repo fan-out — enough to
+prove the loop end-to-end on one repo, not a general-purpose App yet.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

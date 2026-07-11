@@ -82,6 +82,7 @@ Value encoding (draft):
   "acceptance": {
     "method": "pr_merge | local | crypto",
     "merge_sha": "8c1d2e...",
+    "pr_number": 42,
     "approvers": [ "roozbeh" ],
     "accepted_at": "..."
   },
@@ -227,6 +228,55 @@ knows.
 
 Same reasoning as the lookup-key amendment above: purely additive and
 optional, no `schema_version` bump.
+
+### Amendment: `pr_merge` acceptance fields (2026-07-11, UBI-11 stage 1)
+
+`acceptance.pr_number` is added: the GitHub pull request number the
+`merge_sha` belongs to, for `method: "pr_merge"` acceptances. Purely a
+convenience — everything needed to re-derive acceptance is already
+derivable from `merge_sha` alone (the GitHub API resolves a commit to its
+merged PR), but recording the PR number directly means `ubx why` and any
+future re-verification don't need that extra lookup just to print a link
+or re-fetch reviews. Additive/optional, no `schema_version` bump — same
+reasoning as every amendment above: `acceptance` is entirely excluded
+from the content hash (see §Canonical hashing), so nothing about its
+shape is load-bearing for the hash chain in the first place.
+
+The full `pr_merge` acceptance shape, all fields already present in the
+Proposal draft's own example at the top of this document:
+
+```json
+"acceptance": {
+  "method": "pr_merge",
+  "merge_sha": "8c1d2e...",
+  "pr_number": 42,
+  "approvers": ["roozbeh"],
+  "accepted_at": "2026-07-11T00:00:00Z"
+}
+```
+
+**Derived, never asserted** (docs/architecture.md — Decision loop, PR-merge
+acceptance): every field above except `accepted_at` is independently
+re-checkable for the life of the ledger, against git history (`merge_sha`
+must exist, and the proposal file's content at that commit must hash to
+exactly this proposal's `id`) and the GitHub API (`approvers` is every
+reviewer whose *most recent* review on `pr_number` is `APPROVED` — a
+later `CHANGES_REQUESTED` from the same person supersedes an earlier
+approval; nothing here is asserted by whoever ran `ubx accept
+--from-merge` and trusted at face value the way `method: "local"`
+trusts `os/user`). `approvers` MAY be an empty array — a merge with zero
+approving reviews is recorded exactly as it happened, not rejected;
+enforcing "this needed N approvals" is entirely GitHub's job (branch
+protection), never ubx's. See docs/architecture.md for the full flow and
+the `--verify-acceptance` re-check `ubx why` gains alongside this.
+
+The convention this acceptance tier depends on, also pinned here since
+it's part of what "derived" means in practice: the PR body that gets
+merged MUST carry a line matching `^ubx-proposal: [0-9a-f]{64}$` (the
+exact hash `ubx propose` printed when the proposal was first resolved,
+before review). `ubx accept --from-merge` treats a missing trailer, or one
+whose hash doesn't match the proposal file's own recomputed hash, as a
+hard failure — see docs/architecture.md's "hash mismatch" case.
 
 Notes:
 - `id` is a content hash (git's lesson) — no sequential numbering; human-friendly
