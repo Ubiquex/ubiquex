@@ -58,8 +58,20 @@ removed afterward.
 UBI-9 (51-type conformance), UBI-8 (provider acquisition), and UBI-7
 (Slice 3 + follow-ups) remain done from prior sessions (see below).
 
-**UBI-11 is done (this session): `ubx why` polished ahead of demo
-recording, closing two gaps a dry run surfaced.**
+**Correction (2026-07-11): the `ubx why` polish below was mislabeled
+"UBI-11" — that was never verified against Linear, and turns out to be
+wrong.** The real UBI-11 (confirmed via Linear this session, per an
+explicit "verify, don't infer" instruction) is "M3–4 decision loop:
+adopt/revert proposals, PR-merge signing, .tf write-back" — see this
+session's own entry further down. The `ubx why` work below has no
+confirmed Linear ID; it's left labeled as originally written (wrongly)
+rather than renumbered, since rewriting an already-pushed commit's
+reference would be its own kind of historical inaccuracy. Lesson applied
+going forward: verify a ticket ID against Linear before using it, don't
+infer the next number in sequence.
+
+**"UBI-11" (mislabeled, see correction above) — `ubx why` polished ahead
+of demo recording, closing two gaps a dry run surfaced:**
 
 1. **Resource-address support.** `ubx why <stack>.<type>.<name>` now
    resolves and renders the resource's *entire* recorded history —
@@ -90,14 +102,125 @@ confirmed the newest-first, two-entry rendering; hand-accepted a proposal
 carrying one `cloudtrail` and one `cloudtrail_unattributed` source and
 confirmed both render as intended (see Done for the exact output).
 
+**UBI-11 (real, Linear-confirmed this session): "M3–4 decision loop" —
+docs landed, Stage 1 (PR-merge acceptance binding) done and verified live
+against the real repo; Stages 2 (.tf write-back) and 3 (GitHub App
+skeleton) queued for future sessions.**
+
+Design for all three stages landed first, as its own commit, before any
+implementation (`docs/architecture.md`'s new "Decision loop (UBI-11)"
+section, `docs/schema.md`'s "pr_merge acceptance fields" amendment) — per
+the session's own explicit sequencing.
+
+Stage 1 implements the `pr_merge` acceptance tier: **derived, never
+asserted.** An author resolves a proposal (`ubx propose <file>`, prints
+the canonical hash without touching the ledger), commits the draft as an
+ordinary file on a branch, and puts `ubx-proposal: <hash>` in the PR
+body. Ordinary GitHub review happens — branch protection, required
+reviewers, all of that is entirely GitHub's job, ubx has no opinion on it
+before the merge. Once merged, `ubx accept --from-merge <sha>
+--repo-dir <path> --proposal-file <path-in-repo> --github-repo
+<owner/name>`:
+
+- Verifies `<sha>` exists in local git history (`github.CommitExists`,
+  shells out to the real `git` binary — no pure-Go git reimplementation
+  needed for read-only plumbing this simple).
+- Reads the proposal file's content *at that commit*
+  (`github.FileAtCommit`, `git show <sha>:<path>`) — not whatever's on
+  disk now.
+- Recomputes the proposal's canonical hash from that exact content and
+  requires it to equal the trailer's claimed hash
+  (`core.ErrTrailerHashMismatch` on any mismatch — the actual enforcement
+  of "derived, never asserted," not just a description of intent).
+- Finds the merged PR via the GitHub API (`google/go-github`, the new
+  `github/` package's only external dependency besides `git` itself) and
+  computes approvers as every reviewer whose *most recent* review is
+  `APPROVED` — a later `CHANGES_REQUESTED` from the same person
+  supersedes an earlier approval, so a withdrawn approval never counts.
+- Writes `acceptance = {method: "pr_merge", merge_sha, pr_number,
+  proposal_file, approvers, accepted_at}` and appends to the ledger.
+
+**Zero approvers is a valid, recorded outcome, not a rejection** — a
+merge with no approving reviews at all is recorded exactly as it
+happened; ubx never enforces review requirements after the fact, that's
+GitHub's job entirely. `ubx why <id> --verify-acceptance --repo-dir
+<path> [--github-repo <owner/name>]` re-runs the git-history and hash
+checks anytime after acceptance (hard failure if the commit or its hash
+no longer checks out — the acceptance record can no longer be verified
+against the history it claims, a serious finding) and, given
+`--github-repo`, re-fetches current approvers and reports a mismatch
+without failing the command (the ledger correctly recorded what was true
+then; reality having moved on since is exactly what this check exists to
+surface).
+
+**Verified live, for real, on the actual repo** (the task didn't
+explicitly ask for this the way UBI-10's did — stopped and asked before
+doing it, given opening/merging a real PR is more consequential and
+harder to fully undo than tagging a scratch AWS resource; user said to go
+ahead): opened `Ubiquex/ubiquex-cli#1` from a scratch branch with a real
+`ubx-proposal: <hash>` trailer (the hash `ubx propose` actually printed),
+merged it via `gh pr merge --merge`, then ran `ubx accept --from-merge`
+against the real merge SHA with a real `GITHUB_TOKEN` (`gh auth token`).
+It worked end to end — `accepted 2d9ad652... (stack verify) via PR #1, 0
+approver(s)`, a genuine live instance of "unreviewed merge recorded, not
+blocked" (nobody reviewed my own scratch PR). `ubx why --verify-acceptance`
+against the same real commit/PR confirmed both the git and API legs pass.
+Cleaned up immediately after: reverted the merge commit on `main`
+(`git revert -m 1`), deleted the scratch branch locally and on the
+remote. See Done below for the full transcript.
+
 ## Current focus
 
-UBI-11 is closed. Next up (see Next steps): the Core IR + resolver work
-that's been queued since before UBI-9, and `status --drift` (a read-only
-multi-resource drift report, still M1-2 scope per docs/plan.md).
+UBI-11 stage 1 is done and verified live. Next up: Stage 2 (`.tf`
+write-back, hclwrite-based surgical edits) — design already landed in
+docs/architecture.md, no code yet. Also still queued from before UBI-9:
+the Core IR + resolver work, and `status --drift` (a read-only
+multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Open decisions
 
+- [x] **RESOLVED 2026-07-11 — shell out to `git`, don't vendor a git
+      library (UBI-11 stage 1).** `github/git.go`'s `CommitExists`/
+      `FileAtCommit` run the real `git` binary via `os/exec` rather than a
+      pure-Go implementation (e.g. `go-git`). Reasoning: the only
+      operations needed are read-only plumbing (`cat-file -e`, `show
+      <sha>:<path>`) that every git installation already implements
+      correctly and stably; a repo ubx is deriving acceptance for is
+      necessarily already a real git checkout with a working `git` binary
+      available (unlike CloudTrail, where no local-binary equivalent
+      exists at all, which is why that integration went through a real
+      SDK instead — see UBI-10's precedent for the opposite call, made for
+      the opposite reason). Verified the exact error-message text `git
+      show` uses for "commit exists, path doesn't" empirically
+      (`does not exist in`) before writing `looksLikeMissingPath`, not
+      assumed from memory.
+- [x] **RESOLVED 2026-07-11 — no core-level interface for PR-merge
+      derivation, unlike StateReader/EventLookup (UBI-11 stage 1).**
+      `core.AcceptFromMerge` takes plain, already-verified data
+      (`MergeAcceptance` + a claimed hash) rather than an interface core
+      calls out through. Unlike CloudTrail attribution (a single swappable
+      operation — "look up events" — that benefits from a fake in
+      `core`'s own tests), PR-merge derivation is an inherently
+      CLI-orchestrated multi-step process (git check, then API call, then
+      trailer parse, then another API call) that doesn't reduce to one
+      interface method without either a leaky abstraction or an interface
+      nobody but this one call site would implement. `core` stays
+      dependency-free either way; the difference is where the
+      orchestration lives (`github.DeriveAcceptance`, not inside `core`).
+- [x] **RESOLVED 2026-07-11 — `ubx why --verify-acceptance`'s git check is
+      a hard failure, its GitHub API check is not (UBI-11 stage 1).** A
+      merge commit that no longer exists, or a proposal file that no
+      longer hashes correctly, means the acceptance record can no longer
+      be verified against the history it claims — treated as a command
+      failure (non-zero exit). A reviewer's approval having been
+      withdrawn *after* acceptance is a different kind of finding: the
+      ledger entry correctly recorded what was true when `ubx accept
+      --from-merge` ran; reality moving on since doesn't retroactively
+      make that entry wrong. Reported clearly (a `MISMATCH` line) but
+      exit 0 — the same reasoning that makes CloudTrail's
+      `cloudtrail_unattributed` a valid outcome rather than a failure:
+      recording reality honestly, including its own inconclusiveness, is
+      the point, not forcing every check into pass/fail.
 - [x] **RESOLVED 2026-07-10 — CloudTrail identity matching is derived, not
       a static per-type table (UBI-10).** The task framing for this
       session said to match "on per-type identity fields (ARN/name from
@@ -903,24 +1026,142 @@ multi-resource drift report, still M1-2 scope per docs/plan.md).
     ```
   - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
     `go test ./...` (hermetic, all packages pass).
+- 2026-07-11: UBI-11 (real, Linear-verified) — docs landed, Stage 1
+  (PR-merge acceptance binding) implemented and verified live.
+  - Verified the ticket against Linear before starting, per the session's
+    own explicit instruction ("verify against Linear title... do not
+    infer other IDs"): `UBI-11` = "M3–4 decision loop: adopt/revert
+    proposals, PR-merge signing, .tf write-back," status Backlog before
+    this session. This caught that the *previous* session's use of
+    "UBI-11" for the `ubx why` polish was an unverified guess — see the
+    correction note under Current phase and the Surprises entry below.
+  - **Docs landed first, as its own commit** (`docs: UBI-11 -- land the
+    decision-loop design before implementation`), before any code:
+    `docs/architecture.md`'s new "Decision loop (UBI-11)" section covers
+    all three stages — PR-merge acceptance's derived-never-asserted
+    principle and full flow, `.tf` write-back's narrow scope (literal
+    attributes only, decline on any expression, hclwrite for surgical
+    edits), and the GitHub App skeleton's security story (read-only
+    permissions suffice because acceptance is derived, not asserted — the
+    App never needs write access to apply anything because it never
+    applies anything). `docs/schema.md`'s new "pr_merge acceptance
+    fields" amendment: `acceptance.pr_number`/`acceptance.proposal_file`
+    (additive, no `schema_version` bump — `acceptance` is entirely
+    excluded from the content hash already), plus the `ubx-proposal:
+    <hash>` PR-body trailer convention pinned as part of what "derived"
+    means in practice.
+  - **Stage 1 implementation** (`core,cli,github: UBI-11 stage 1 --
+    PR-merge acceptance binding`):
+    - `core/proposal.go`: `Acceptance` gains `PRNumber`/`ProposalFile`.
+    - `core/accept.go`: `Accept` (local tier) refactored to share a
+      `validateAndHash`/`finalizeAndAppend` preflight/finalize pair with
+      new `AcceptFromMerge` (pr_merge tier). `AcceptFromMerge` takes a new
+      `MergeAcceptance{MergeSHA, PRNumber, ProposalFile, Approvers}`
+      struct plus the trailer's claimed hash, recomputes `Hash(p)`, and
+      returns `ErrTrailerHashMismatch` on any disagreement — the actual
+      enforcement of "derived, never asserted," not just a design
+      statement. `Approvers` may be empty; that's accepted, not rejected.
+    - `github/` (new package, alongside `cloudtrail/` the only two places
+      in this codebase that talk to an external system directly):
+      `git.go` (`CommitExists`/`FileAtCommit`, shelling out to the real
+      `git` binary — see Open decisions for why not a git library),
+      `client.go` (wraps `google/go-github/v78`: `pullRequestForCommit`,
+      exported `ApprovingReviewers` computing latest-review-per-user so a
+      withdrawn approval never counts), `trailer.go`
+      (`ParseProposalTrailer`, the `ubx-proposal: <hash>` regex),
+      `derive.go` (`DeriveAcceptance` ties git+API together into the one
+      call `cli/accept.go` makes).
+    - `cli/propose.go` (new): `ubx propose <file>` prints the trailer
+      line for a draft proposal — no ledger interaction at all, since
+      this runs before any PR exists to embed the hash into.
+    - `cli/accept.go`: `--from-merge <sha> --repo-dir --proposal-file
+      --github-repo` derives and records `pr_merge` acceptance end to
+      end; the existing local-file path is completely unchanged (same
+      `core.Accept` call as before).
+    - `cli/why.go`/`cli/verify.go` (new): `--verify-acceptance
+      [--repo-dir] [--github-repo]` re-runs the git-history+hash check
+      (hard failure) and, given `--github-repo`, the reviewer re-check
+      (reported, not fatal, on mismatch) — see Open decisions for why
+      those two checks fail differently.
+    - `UBX_GITHUB_API_BASE_URL` (test-only env seam, same convention as
+      `UBX_PROVIDER_MIRROR`): points the GitHub client at an
+      `httptest.Server` instead of the real API, so nothing in this
+      codebase's test suite ever makes a real GitHub API call by default.
+    - Tests, matching every adversarial case the task named: merge SHA
+      not in history, proposal file absent from the merge, hash mismatch
+      between trailer and file, unreviewed merge (recorded with empty
+      approvers), a withdrawn approval no longer counting, and
+      re-verification catching a commit rewritten out of history — all
+      hermetic (`github/`'s own tests use real throwaway local git repos,
+      since read-only git plumbing needs no mocking, plus an
+      `httptest`-served fake GitHub API for the reviews/PR-lookup legs;
+      `cli/`'s tests wire the same fakes through the actual command
+      layer).
+  - **Verified live, for real, on `Ubiquex/ubiquex-cli`** (stopped and
+    asked first — see Open decisions/the correction note above for why
+    this one got a check-in when UBI-10's live verification didn't):
+    opened PR #1 from a scratch branch (`verify/ubi-11-stage1-live`)
+    carrying a real `ubx propose`-computed trailer, merged it for real
+    (`gh pr merge --merge`, merge SHA `ef89992dafad05c811f5766b091db6742432e417`),
+    then ran the real `ubx accept --from-merge` against it with a real
+    `GITHUB_TOKEN` (`gh auth token`). Output:
+    ```
+    accepted 2d9ad652b14614b8c265633f8afe6c011d49d413ec85264d988dbc57fd475704 (stack verify) via PR #1, 0 approver(s)
+    ```
+    0 approvers because nobody reviewed the scratch PR — a genuine live
+    instance of "unreviewed merge recorded, not blocked," not a
+    fabricated test case. `ubx why <id> --verify-acceptance --repo-dir .
+    --github-repo Ubiquex/ubiquex-cli` against the same real commit/PR
+    confirmed both legs:
+    ```
+    git: merge commit ef89992dafad05c811f5766b091db6742432e417 exists in .
+    git: scratch/ubi11-verify-proposal.json at that commit still hashes to 2d9ad652b14614b8c265633f8afe6c011d49d413ec85264d988dbc57fd475704
+    github API: PR #1's approvers are unchanged ([])
+    ```
+    Cleaned up immediately after: `git revert -m 1` the merge commit on
+    `main` (removing the scratch fixture file), pushed; deleted
+    `verify/ubi-11-stage1-live` locally and on the remote. Confirmed
+    afterward (`git status`, `ls scratch/`) that nothing scratch-related
+    remained.
+  - All green: `go build ./...`, `go vet ./...`, `gofmt -l .` (empty),
+    `go test ./...` (hermetic — confirmed no network calls: `github/`'s
+    and `cli/`'s new tests all pass with no `GITHUB_TOKEN`/network
+    reachable, using real local git repos and fake HTTP servers only).
 
 ## Next steps
 
-1. **UBI-9, UBI-10, and UBI-11 are all closed** — nothing further queued
-   under any of them. If a type's fixture-verified shape ever turns out
-   wrong once real usage exercises it, or if CloudTrail's `ResourceName`
-   matching behaves differently for a type not yet checked live, fix it
-   as a normal bug (`conformance/registry.go`'s `Notes` /
-   `core/attribution.go` respectively), not a reason to reopen a
-   milestone.
-2. Now unblocked: Core IR + resolver (component map #1-2) — the natural
-   next session; nothing else in M1-2's detection core is blocking it.
-   `status --drift` (a read-only report over what `ubx scan` would find
-   across multiple resources) is also still M1-2 scope, not started —
-   would naturally reuse `core.AttributeDrift` per resource the same way
-   `ubx scan` does now, and `ubx why <address>`'s new chain view (UBI-11)
-   for showing that report's history per resource.
-3. UBI-10 gaps, not addressed this session, deliberately deferred: no
+1. **UBI-11 (real): Stage 1 is done. Stage 2 (`.tf` write-back) is next**,
+   design already landed in docs/architecture.md's "Decision loop"
+   section — no code yet. Rough shape for next session: a new package
+   (parallel to `github/`/`cloudtrail/`, likely `tfwrite/` or similar)
+   using `hclwrite` to locate a resource block by address and overwrite a
+   literal attribute value in place; decline (with a named-attribute
+   report) the moment the current value is anything but a literal.
+   Trigger: an *accepted* `drift_adopt` proposal only. Adversarial list is
+   already written down in this session's own task framing — attribute-
+   is-expression, resource block absent, multiple matching blocks, nested
+   attribute paths (`tags.hotfix`), and a real `.tf` file with unusual
+   but valid formatting that must survive untouched are all still
+   pending, not yet even started. Stage 3 (GitHub App skeleton) comes
+   after — it reuses Stage 1's `AcceptFromMerge` binding directly (a PR
+   the App opens gets accepted exactly the same way a manually-opened one
+   does), so there's no reason to build it before Stage 2, but no reason
+   it strictly depends on Stage 2 either — could be reordered if that
+   turns out more useful.
+2. UBI-9/UBI-10 are both closed — nothing further queued under either. If
+   a type's fixture-verified shape ever turns out wrong once real usage
+   exercises it, or if CloudTrail's `ResourceName` matching behaves
+   differently for a type not yet checked live, fix it as a normal bug
+   (`conformance/registry.go`'s `Notes` / `core/attribution.go`
+   respectively), not a reason to reopen a milestone.
+3. Still queued from before UBI-9, now further behind: Core IR + resolver
+   (component map #1-2). `status --drift` (a read-only report over what
+   `ubx scan` would find across multiple resources) is also still M1-2
+   scope, not started — would naturally reuse `core.AttributeDrift` per
+   resource the same way `ubx scan` does now, and the (mislabeled-"UBI-11")
+   `ubx why <address>` chain view for showing that report's history per
+   resource.
+4. UBI-10 gaps, not addressed this session, deliberately deferred: no
    caching/dedup of `EventLookup` calls across multiple scans in a batch
    (each `ubx scan` invocation currently builds its own `cloudtrail.Client`
    and searches independently — fine at "one resource per CLI invocation"
@@ -933,21 +1174,22 @@ multi-resource drift report, still M1-2 scope per docs/plan.md).
    fact about that type (and `aws_iam_role`/`aws_vpc`, tested via the
    manual CloudTrail probe but not through a full live `ubx scan` run),
    not assumed to hold for every AWS service.
-4. A `ubx provider ...` dev-facing CLI verb was deliberately never added
-   across six sessions — still not part of the eventual product CLI
+5. A `ubx provider ...` dev-facing CLI verb was deliberately never added
+   across seven sessions — still not part of the eventual product CLI
    surface (see docs/architecture.md component map). `ubx scan` now covers
    the "read one resource" use case anyway; revisit only if something else
    still needs raw schema/read access outside of scan/accept.
-5. Not addressed, deliberately out of scope: PlanResourceChange/
+6. Not addressed, deliberately out of scope: PlanResourceChange/
    ApplyResourceChange (write path — deferred per docs/architecture.md
    "wedge reads and records before it ever writes"), AutoMTLS in provider/
    (still opt-in/unimplemented), cryptographic signing tier for acceptance
    (docs/architecture.md calls this out as "optional... later"; `ubx
-   accept` only does the "local" tier). Note that `FoldState`'s O(chain)
+   accept` now has two tiers, `local` and `pr_merge` (UBI-11 stage 1) —
+   `crypto` is still unimplemented). Note that `FoldState`'s O(chain)
    walk (see Open decisions) is an *accepted* limit, not deferred work —
    its own revisit trigger is stated there; don't re-open it as a TODO
    without something actually hitting that trigger.
-6. UBI-8 gaps, not addressed this session either: no `UBX_PROVIDER_MIRROR`
+7. UBI-8 gaps, not addressed this session either: no `UBX_PROVIDER_MIRROR`
    signature verification (by design — see docs/architecture.md, a local
    file is trusted differently); no cache invalidation/eviction; `ubx scan
    --source` doesn't route to a non-default registry hostname even though
@@ -968,6 +1210,17 @@ debt:
   inline; `cloudtrail_unattributed` sources show their reason in words.
   Existing kinds (`dialogue`/`manual_edit`/`issue`) are visually unchanged.
 
+This session's additional debt (UBI-11 stage 1): a new `ubx propose
+<file>` command; `ubx accept`'s new `--from-merge`/`--repo-dir`/
+`--proposal-file`/`--github-repo` flags and the whole PR-merge acceptance
+workflow they exist for (the trailer convention, what gets recorded, that
+zero approvers is normal); `ubx why`'s new `--verify-acceptance`/
+`--repo-dir`/`--github-repo` flags. This is a real, user-facing workflow
+(not just an internal mechanism) — probably deserves its own guide page
+in ubiquex-docs, not just flag reference, given how much of "how do I use
+this" is the trailer convention and the PR-based flow rather than any
+single flag.
+
 Not addressed this session (pre-existing, from prior slices, noted here
 since this is the first time this debt has been tracked in STATE.md at
 all — worth clearing alongside the above rather than letting it grow
@@ -978,6 +1231,32 @@ user-facing documentation yet either.
 
 ## Surprises / findings
 
+- 2026-07-11: **A previous session's "UBI-11" label (the `ubx why` polish
+  — resource-address support + attribution rendering) was never checked
+  against Linear, and turns out to be wrong.** This session's own task
+  came with an explicit instruction to verify the ticket ID against
+  Linear's title rather than infer the next number in sequence — doing
+  that surfaced that the real `UBI-11` is "M3–4 decision loop," a
+  different, larger piece of work, still in Backlog status when this
+  session started. The earlier session had inferred "UBI-11" purely from
+  it being the next unused number after UBI-10, which was never actually
+  true. Nothing was rewritten (the earlier commit already references the
+  wrong number, and rewriting pushed history to fix a label would be its
+  own kind of inaccuracy) — just corrected going forward, with a note left
+  at the point in STATE.md where the confusion would otherwise resurface.
+  Lesson banked: check Linear before writing a ticket ID into a commit
+  message or STATE.md, every time, not just when explicitly told to.
+- 2026-07-11: **`git show <sha>:<path>` reports a missing path with the
+  literal text `fatal: path '<path>' does not exist in '<sha>'`, exit code
+  128 — indistinguishable, by exit code alone, from `<sha>` itself being
+  an invalid revision.** Confirmed by actually running it against a
+  throwaway repo before writing `github.looksLikeMissingPath`'s string
+  match, not assumed from git documentation or memory — the same
+  "verify before implementing" discipline this project has followed since
+  Slice 1's protocol-version surprises. This is why `FileAtCommit` and
+  `CommitExists` are two separate checks in `DeriveAcceptance`'s flow
+  (commit existence checked first, independently) rather than trying to
+  infer both facts from one `git show` call's exit code.
 - 2026-07-10/11: **CloudTrail's `ResourceName` lookup attribute wants the
   resource's own `id` (bucket name / role name / vpc-id), not its ARN —
   confirmed directly against the real account, and the opposite of the
