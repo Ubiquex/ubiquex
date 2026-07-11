@@ -27,6 +27,9 @@ func newScanCmd() *cobra.Command {
 		out             string
 		timeout         time.Duration
 		noAttribution   bool
+		surfaceAs       string
+		githubRepo      string
+		tfDir           string
 	)
 
 	cmd := &cobra.Command{
@@ -75,6 +78,12 @@ func newScanCmd() *cobra.Command {
 				attributeDrift(ctx, ledger, addr, res, proposal, json.RawMessage(providerConfig))
 			}
 
+			if res.Outcome == core.ScanDrifted && surfaceAs != "" {
+				if err := surfaceDrift(ctx, out2, proposal, addr, surfaceAs, githubRepo, tfDir); err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+			}
+
 			kindLabel := "new"
 			if res.Outcome == core.ScanDrifted {
 				kindLabel = "drifted"
@@ -105,6 +114,9 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan")
 	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip CloudTrail attribution for drift proposals (UBI-10)")
+	cmd.Flags().StringVar(&surfaceAs, "surface-as", "", "on drift, open a GitHub \"issue\" or \"pr\" with a receipt instead of just printing the proposal (UBI-11 stage 3; requires --github-repo)")
+	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository to surface drift in (required with --surface-as)")
+	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory of .tf files to compute a best-effort write-back preview diff from, for the receipt (optional)")
 
 	for _, f := range []string{"stack", "type", "name"} {
 		_ = cmd.MarkFlagRequired(f)
