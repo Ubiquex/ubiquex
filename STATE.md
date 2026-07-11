@@ -4,6 +4,69 @@
 
 ## Current phase
 
+**UBI-12 is done (this session): release cut v0.1.0 — goreleaser +
+tag-triggered CI wired up, the tag itself not yet pushed.** Four pieces:
+
+1. `cli/version.go`: `Version`/`Commit` package vars, both overridable via
+   `-ldflags -X`. `versionString()` prints `<Version>` alone, or
+   `<Version>+<commit>` once a commit is known — from `Commit` if ldflags
+   set it (every goreleaser build does), otherwise from
+   `buildInfoRevision()`, which reads Go's own automatic VCS build-info
+   stamping (`debug.ReadBuildInfo()`'s `vcs.revision`, present for any
+   `go build` run inside a git checkout with no ldflags at all). Verified
+   both paths for real: a plain `go build -o ubx ./cmd/ubx` prints
+   `dev+99236a7`; a build with `-ldflags "-X ...Version=0.1.0 -X
+   ...Commit=abc1234"` prints `0.1.0+abc1234`. `buildInfoRevision` is a
+   package var (not a bare call) specifically so tests can stub it instead
+   of depending on the real running-under-`go test` VCS stamp —
+   `cli/version_test.go` covers all four combinations (bare `dev`,
+   overridden `Version` alone, `Version`+`Commit` both set, `Commit` unset
+   falling back to a stubbed `buildInfoRevision`).
+2. `.goreleaser.yaml`: darwin/linux × amd64/arm64 archives (`tar.gz`),
+   `checksums.txt`, GitHub Releases only — deliberately no `brews:`/
+   `dockers:` sections at all, not disabled-but-present ones. `release.github`
+   pins `owner: Ubiquex` explicitly (the org's actual case) rather than
+   trusting auto-detection from the git remote's literal casing. Verified
+   with `goreleaser check` (config validates) and two dry runs, neither
+   published: `goreleaser release --snapshot --clean` (no tag needed,
+   confirms the build/archive/checksum pipeline works at all) and a
+   real-tag dry run (`git tag v0.1.0` locally, `goreleaser release --clean
+   --skip=publish,announce,validate`, then `git tag -d v0.1.0` — never
+   pushed) — the second one is what actually confirmed the ldflags produce
+   `0.1.0+99236a7` end to end, checksums verify (`shasum -a 256 -c`), and
+   archive/checksum filenames are exactly what the install docs reference.
+   One bug caught and fixed during this: an initial `snapshot.version_template`
+   of `"{{ .Tag }}-dev+{{ .ShortCommit }}"` double-appended the commit
+   (once from the template, once from `versionString()` itself) — only
+   visible in snapshot mode, since a real tag's `{{.Version}}` never
+   contains a commit suffix on its own; fixed by dropping the commit
+   from the template and letting ldflags own it exclusively.
+3. `.github/workflows/release.yml`: triggers on `v*` tag pushes only, runs
+   `goreleaser-action` with `fetch-depth: 0` (needed for changelog
+   generation) and `go-version-file: go.mod`. Not run this session — CI
+   workflow files execute on GitHub's runners, not locally; correctness
+   here rests on the goreleaser config being independently dry-run
+   verified per #2, plus the workflow's own shape matching goreleaser's
+   documented GitHub Actions convention.
+4. `README.md`: status line now says releases publish via GitHub Releases
+   starting at `v0.1.0` (previously "foundational slices in progress" with
+   no release story at all), a docs link to ubiquex-docs (not yet publicly
+   hosted, said so honestly), and a small accuracy fix carried along
+   (`tfplugin v6` → `tfplugin v5/v6`, matching the dual-protocol client
+   this project has actually shipped since UBI-7's real-provider work).
+   ubiquex-docs' `getting-started/installation.mdx` and `cli/version.mdx`
+   updated to match — real `gh release download`/checksum/PATH
+   instructions replacing the source-only placeholder, labeled honestly as
+   pre-alpha; see that repo's own STATE.md for detail.
+
+**The `v0.1.0` tag itself has not been pushed.** Everything above is
+release *infrastructure* — the tag push (`git tag v0.1.0 && git push
+origin v0.1.0`), which is what actually triggers the GitHub Actions
+workflow and publishes anything, is Roozbeh's manual act, done after
+reviewing this session's dry-run output. Until that happens, there is no
+real `v0.1.0` release on GitHub — the install docs describe the release
+process that will exist once he does, not a claim that it exists already.
+
 **UBI-9 is done (prior session): all 51 AWS resource types resolved — 48
 verified (7 real-safe, 41 fake-only), 3 parked, 0 left pending.** Batches
 1-2 established the real-safe types; batch 3 built a generalized
@@ -1528,6 +1591,13 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
     real run).
 
 ## Next steps
+
+**Immediate, manual, not a coding session:** push the `v0.1.0` tag (`git tag
+v0.1.0 && git push origin v0.1.0`) once the UBI-12 goreleaser dry-run output
+above has been reviewed — that's what actually triggers
+`.github/workflows/release.yml` and publishes the release. Nothing in this
+repo is waiting on that happening first; it's recorded here so it isn't
+forgotten, not because anything is blocked on it.
 
 1. **UBI-11 (real) is fully done: all three stages of "M3–4 decision
    loop" are shipped and verified live.** Nothing further queued under it

@@ -1,0 +1,57 @@
+version: 2
+
+project_name: ubx
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ubx
+    main: ./cmd/ubx
+    binary: ubx
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/ubiquex/ubiquex-cli/cli.Version={{ .Version }}
+      - -X github.com/ubiquex/ubiquex-cli/cli.Commit={{ .ShortCommit }}
+
+archives:
+  - id: ubx
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+# GitHub Releases only -- no Homebrew tap, no Docker images. Deliberately
+# no brews:/dockers:/etc. sections; adding a distribution channel is a
+# decision to make later, not a default to fall into.
+
+release:
+  github:
+    owner: Ubiquex
+    name: ubiquex-cli
+  name_template: "v{{ .Version }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^state:"
+      - "^test:"
+
+snapshot:
+  # No commit suffix here -- ldflags already inject Commit separately (see
+  # builds.ldflags above), and versionString() appends it once at runtime.
+  # Embedding {{.ShortCommit}} in both places would double it up.
+  version_template: "{{ .Tag }}-dev"
