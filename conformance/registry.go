@@ -456,7 +456,119 @@ var Registry = []TypeSpec{
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
+
+	// --- hashicorp/google (UBI-21 Stage 1) ---
+	//
+	// Session bootstrapping, same posture as UBI-9 session 1's own AWS
+	// seeding (see docs/plan.md §M1-2 GCP resource type list): every entry
+	// below is Safety: FakeOnly, Implemented: false. IdentityFields come
+	// from a real GetProviderSchema call against the acquired
+	// hashicorp/google 7.40.0 binary (free, no credentials, no live GCP
+	// API round trip -- see conformance/gcp_provider_test.go), not
+	// guessed. Classifying which of these are cheap enough to be
+	// RealSafe, writing fakeprovider fixtures, and finding any that "fight
+	// back" the way aws_iam_group/aws_route_table_association did is
+	// Stage 2 work, done against a real account rather than guessed here.
+	{Type: "google_compute_instance", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_instance_template", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_container_cluster", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_cloudfunctions2_function", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_cloud_run_v2_service", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name", "uid"}, Notes: gcpSeedNote},
+	{Type: "google_cloud_run_v2_job", Source: "hashicorp/google", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name", "uid"}, Notes: gcpSeedNote},
+
+	{Type: "google_compute_network", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_subnetwork", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_route", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_router", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_router_nat", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_firewall", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_address", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_global_address", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_forwarding_rule", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_backend_service", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+
+	{Type: "google_service_account", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "email", "name"}, Notes: gcpSeedNote},
+	{Type: "google_service_account_key", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_project_iam_member", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
+	{Type: "google_project_iam_binding", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
+	{Type: "google_project_iam_custom_role", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+
+	{Type: "google_storage_bucket", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_storage_bucket_iam_member", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
+	{Type: "google_storage_bucket_object", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_disk", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_filestore_instance", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+
+	{Type: "google_sql_database_instance", Source: "hashicorp/google", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_sql_database", Source: "hashicorp/google", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{Type: "google_sql_user", Source: "hashicorp/google", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_spanner_instance", Source: "hashicorp/google", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_firestore_database", Source: "hashicorp/google", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name", "uid"}, Notes: gcpSeedNote},
+
+	{Type: "google_dns_managed_zone", Source: "hashicorp/google", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_dns_record_set", Source: "hashicorp/google", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_compute_ssl_certificate", Source: "hashicorp/google", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+
+	{Type: "google_pubsub_topic", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_pubsub_subscription", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_logging_metric", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_monitoring_alert_policy", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_secret_manager_secret", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{Type: "google_kms_crypto_key", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 }
+
+// gcpSeedNote is the shared "not yet worked through" note for UBI-21
+// Stage 1's GCP entries -- honest about what's actually been verified
+// (IdentityFields, against the real schema) versus what hasn't
+// (everything else), the same "documented as parked, not silently
+// skipped" discipline UBI-9's own PARKED entries follow, just for "not
+// started yet" rather than "can't be conformance-tested at all."
+const gcpSeedNote = "Seeded for UBI-21 Stage 1 (docs/plan.md §M1-2 GCP resource type list): " +
+	"IdentityFields verified against the real hashicorp/google 7.40.0 schema " +
+	"(GetProviderSchema, free, no credentials, no live GCP API call). Not yet " +
+	"implemented -- no fakeprovider fixture, no live-account verification, " +
+	"Safety/LookupHint not yet classified. Stage 2 (a real GCP account) works " +
+	"through this list in batches, the same way UBI-9 worked through AWS's."
 
 // ByType returns the registry entry for a (source, type) pair, or nil if
 // that combination isn't tracked at all (UBI-21: keyed by source+type,
