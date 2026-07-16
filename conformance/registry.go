@@ -503,19 +503,56 @@ var Registry = []TypeSpec{
 	{Type: "google_compute_backend_service", Source: "hashicorp/google", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
 
-	{Type: "google_service_account", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
-		IdentityFields: []string{"id", "email", "name"}, Notes: gcpSeedNote},
+	{
+		Type: "google_service_account", Source: "hashicorp/google", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id", "email", "name"},
+		Notes: "id (the full \"projects/<project>/serviceAccounts/<email>\" path) alone " +
+			"is sufficient -- no companion field needed, unlike google_storage_bucket/" +
+			"google_pubsub_topic/google_secret_manager_secret below. Verified by creating " +
+			"a throwaway service account, testing it, and deleting it. GCP IAM's own " +
+			"read-after-write consistency lags the write itself -- a live displayName " +
+			"update took up to several minutes to become visible to the provider's own " +
+			"ReadResource call, well past what gcloud's own describe reported as already " +
+			"consistent (see conformance/gcp_live_test.go's own polling wait). Not the " +
+			"same shape of surprise CloudTrail's delivery lag was (a logging/audit system), " +
+			"but the same genre: a real API's real consistency window, discovered by " +
+			"actually hitting it, not assumed.",
+		Implemented: true,
+	},
 	{Type: "google_service_account_key", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 	{Type: "google_project_iam_member", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
 	{Type: "google_project_iam_binding", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
-	{Type: "google_project_iam_custom_role", Source: "hashicorp/google", Category: "iam", Safety: FakeOnly,
-		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{
+		Type: "google_project_iam_custom_role", Source: "hashicorp/google", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id (the full \"projects/<project>/roles/<role_id>\" path) alone is " +
+			"sufficient, same as google_service_account -- no companion field needed. " +
+			"Verified by creating a throwaway custom role, testing it, and deleting it.",
+		Implemented: true,
+	},
 
-	{Type: "google_storage_bucket", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
-		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
+	{
+		Type: "google_storage_bucket", Source: "hashicorp/google", Category: "storage", Safety: RealSafe,
+		IdentityFields: []string{"id", "self_link", "name"},
+		Notes: "id and name are both the bucket name, and BOTH must be set together -- " +
+			"unlike every AWS LookupHint entry, NEITHER alone is sufficient here. " +
+			"\"id\" alone errors outright (\"Storage Bucket \\\"\\\": googleapi: Error " +
+			"400\"); \"name\" alone reads back null (ErrResourceUnreadable) instead of " +
+			"erroring -- two different failure shapes for the two different single-" +
+			"field mistakes. Deliberately NOT given a LookupHint / promoted to " +
+			"core/lookuphints: that mechanism's shipped message hardcodes 'make sure " +
+			"\"id\" is included' (correct for every AWS entry, where id alone always " +
+			"works and the OTHER field is the trap) -- applying it here would tell a " +
+			"user whose lookup already has \"id\" (and is missing \"name\") to add the " +
+			"one field they already have. Generalizing the hint mechanism to express " +
+			"\"both required together\" distinctly from \"id always works alone\" is " +
+			"follow-up work, not done under time pressure here (see STATE.md). " +
+			"Verified by creating a throwaway bucket, testing it, and deleting it.",
+		Implemented: true,
+	},
 	{Type: "google_storage_bucket_iam_member", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: gcpSeedNote},
 	{Type: "google_storage_bucket_object", Source: "hashicorp/google", Category: "storage", Safety: FakeOnly,
@@ -543,16 +580,43 @@ var Registry = []TypeSpec{
 	{Type: "google_compute_ssl_certificate", Source: "hashicorp/google", Category: "dns", Safety: FakeOnly,
 		IdentityFields: []string{"id", "self_link", "name"}, Notes: gcpSeedNote},
 
-	{Type: "google_pubsub_topic", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
-		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{
+		Type: "google_pubsub_topic", Source: "hashicorp/google", Category: "messaging", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "A materially more dangerous shape of lookup mistake than any AWS entry: " +
+			"\"id\" alone (the full \"projects/<project>/topics/<name>\" path) does NOT " +
+			"error and does NOT read back null -- ReadResource succeeds, but the " +
+			"resource's own \"name\" attribute comes back as an empty string even " +
+			"though the topic genuinely has one. core.ErrResourceUnreadable never " +
+			"fires (nothing is nil/null), so this ledgers a real, silently-incomplete " +
+			"proposal rather than erroring -- the teaching-error mechanism (UBI-20) " +
+			"can't help here at all, since it only ever engages on an actual read " +
+			"failure. \"id\" AND \"name\" together read back correctly. Deliberately " +
+			"NOT given a LookupHint for the same reason as google_storage_bucket " +
+			"above, plus this one: there is no error to attach a hint's message to in " +
+			"the first place. See STATE.md for the fuller writeup of this gap. " +
+			"Verified by creating a throwaway topic, testing it, and deleting it.",
+		Implemented: true,
+	},
 	{Type: "google_pubsub_subscription", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 	{Type: "google_logging_metric", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 	{Type: "google_monitoring_alert_policy", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
-	{Type: "google_secret_manager_secret", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
-		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+	{
+		Type: "google_secret_manager_secret", Source: "hashicorp/google", Category: "messaging", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "Same silently-incomplete-read shape as google_pubsub_topic above: " +
+			"\"id\" alone (the full \"projects/<project>/secrets/<name>\" path) reads " +
+			"back successfully but with \"name\": \"\" and \"secret_id\": null -- no " +
+			"error, ErrResourceUnreadable never fires. \"id\" and \"secret_id\" (this " +
+			"type's own natural-key attribute, not \"name\") together read back " +
+			"correctly. Deliberately not given a LookupHint, same reasoning as " +
+			"google_pubsub_topic. Verified by creating a throwaway secret, testing " +
+			"it, and deleting it.",
+		Implemented: true,
+	},
 	{Type: "google_kms_crypto_key", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 }
