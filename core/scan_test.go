@@ -167,7 +167,7 @@ func TestRunScan_ResourceUnreadable_TeachesKnownType(t *testing.T) {
 	l := Open(t.TempDir())
 	fp := &fakeProvider{state: nil}
 
-	_, err := RunScan(context.Background(), fp, l, ScanRequest{Address: testAddr(), CurrentState: json.RawMessage(`{}`)})
+	_, err := RunScan(context.Background(), fp, l, ScanRequest{Address: testAddr(), CurrentState: json.RawMessage(`{}`), ProviderSource: "hashicorp/aws"})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -188,12 +188,34 @@ func TestRunScan_ResourceUnreadable_TeachesKnownType(t *testing.T) {
 // schema doesn't recognize -- that's ErrUnknownResourceType instead,
 // tested elsewhere).
 func TestLookupHintText_HonestFallbackForUnknownType(t *testing.T) {
-	got := lookupHintText("aws_totally_unknown_type")
+	got := lookupHintText("hashicorp/aws", "aws_totally_unknown_type")
 	if !strings.Contains(got, "check aws_totally_unknown_type's provider schema") {
 		t.Errorf("expected the honest fallback wording, got: %v", got)
 	}
 	if strings.Contains(got, `"id"`) {
 		t.Errorf("must not fabricate a specific field guess for an unknown type, got: %v", got)
+	}
+}
+
+// TestRunScan_ResourceUnreadable_EmptyProviderSourceFallsBack is UBI-21's
+// own adversarial case for the (source, type) keying refactor: a scan
+// launched via a raw --provider path (no known registry source, so
+// ScanRequest.ProviderSource is "") for a type core/lookuphints DOES know
+// about under "hashicorp/aws" must still fall back to the honest generic
+// message, never guess the source.
+func TestRunScan_ResourceUnreadable_EmptyProviderSourceFallsBack(t *testing.T) {
+	l := Open(t.TempDir())
+	fp := &fakeProvider{state: nil}
+
+	_, err := RunScan(context.Background(), fp, l, ScanRequest{Address: testAddr(), CurrentState: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), `must include "id"`) {
+		t.Errorf("expected the honest fallback (no known ProviderSource), got a specific hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "check aws_s3_bucket's provider schema") {
+		t.Errorf("expected the honest fallback wording, got: %v", err)
 	}
 }
 
@@ -263,7 +285,7 @@ func TestVerifyFreshness_PassesWhenUnchanged(t *testing.T) {
 		t.Fatalf("GenerateProposal: %v", err)
 	}
 
-	if err := VerifyFreshness(context.Background(), fp, addr, nil, proposal); err != nil {
+	if err := VerifyFreshness(context.Background(), fp, addr, "", nil, proposal); err != nil {
 		t.Fatalf("VerifyFreshness: %v", err)
 	}
 }
@@ -289,7 +311,7 @@ func TestVerifyFreshness_BlocksStaleAcceptance(t *testing.T) {
 	// it's accepted.
 	fp.state = json.RawMessage(`{"id":"ubx-states","tags":{"env":"staging"}}`)
 
-	err = VerifyFreshness(context.Background(), fp, addr, nil, proposal)
+	err = VerifyFreshness(context.Background(), fp, addr, "", nil, proposal)
 	if !errors.Is(err, ErrStaleObservation) {
 		t.Fatalf("got %v, want ErrStaleObservation", err)
 	}

@@ -98,6 +98,19 @@ type ScanRequest struct {
 	// purely a pass-through value core records, never inspects. Optional;
 	// leave empty if unknown or not applicable.
 	ProviderChecksum string
+
+	// ProviderSource is the provider's Terraform-source identity (e.g.
+	// "hashicorp/google"), used only to look up a teaching-error hint for
+	// ErrResourceUnreadable (UBI-21, docs/architecture.md — GCP support:
+	// core/lookuphints is keyed by (source, type), not type alone).
+	// Populated by the CLI from --source when that's how the provider was
+	// resolved; left empty for a raw --provider path, since ubx has no
+	// way to know a hand-picked binary's registry identity without
+	// guessing. An empty ProviderSource never fails a scan -- it just
+	// means ErrResourceUnreadable falls back to its honest generic
+	// message instead of a type-specific hint, the same graceful
+	// degradation an unrecognized type already gets.
+	ProviderSource string
 }
 
 // RunScan performs the full scan sequence against an already-launched,
@@ -107,7 +120,7 @@ type ScanRequest struct {
 // failed ("provider errors mid-scan" should be diagnosable, not just a bare
 // error).
 func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) (*ScanResult, error) {
-	observed, hash, err := readAndFingerprint(ctx, prov, req.Address, req.ProviderConfig, req.CurrentState)
+	observed, hash, err := readAndFingerprint(ctx, prov, req.Address, req.ProviderSource, req.ProviderConfig, req.CurrentState)
 	if err != nil {
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
 	}
@@ -152,7 +165,10 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 // readAndFingerprint fetches the provider's schema, configures it, reads
 // addr's live state, and fingerprints it. Shared by RunScan and
 // VerifyFreshness so both apply the exact same read pipeline.
-func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
+// providerSource is used only for ErrResourceUnreadable's teaching-error
+// hint (see lookupHintText); it never affects the read itself and may be
+// empty.
+func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
 	providerSchema, resourceSchemas, err := prov.Schema(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch schema: %w", err)
@@ -169,7 +185,7 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 		return nil, "", fmt.Errorf("read resource: %w", err)
 	}
 	if len(observed) == 0 || string(observed) == "null" {
-		return nil, "", fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(addr.Type))
+		return nil, "", fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(providerSource, addr.Type))
 	}
 	hash, err = ObservedHash(observed)
 	if err != nil {
@@ -180,14 +196,18 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 
 // lookupHintText builds ErrResourceUnreadable's teaching-error suffix
 // (UBI-20 workstream 3, docs/architecture.md — Teaching errors): a
-// resourceType-specific hint for the handful of types core/lookuphints
-// (generated from conformance.Registry's empirically-verified LookupHint
-// field) actually knows about, or an honest fallback for every other type
-// -- never a fabricated guess dressed up as a known fact.
+// (providerSource, resourceType)-specific hint for the handful of types
+// core/lookuphints (generated from conformance.Registry's
+// empirically-verified LookupHint field, keyed by provider source since
+// UBI-21) actually knows about, or an honest fallback otherwise -- never
+// a fabricated guess dressed up as a known fact. providerSource is empty
+// when the scan used a raw --provider path (no known registry source);
+// lookuphints.For already handles that by simply not matching, so it
+// falls through to the same honest fallback an unrecognized type gets.
 //
 // The hint's direction was itself verified live against real AWS during
-// this session (conformance/lookuphints_live_test.go), not assumed from
-// the Notes prose alone: for aws_s3_bucket/aws_iam_role/aws_iam_user,
+// UBI-20 (conformance/lookuphints_live_test.go), not assumed from the
+// Notes prose alone: for aws_s3_bucket/aws_iam_role/aws_iam_user,
 // {"id": "<name>"} alone successfully reads the resource, but
 // {"bucket": "<name>"}/{"name": "<name>"} alone (the type's own natural,
 // Terraform-attribute-shaped key -- an easy thing to reach for instead of
@@ -195,9 +215,9 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 // included," not "you're missing bucket/name" -- lookuphints.For's stored
 // value is the misleading natural-key attribute a user might have reached
 // for alone, not the field that's actually missing.
-func lookupHintText(resourceType string) string {
+func lookupHintText(providerSource, resourceType string) string {
 	docsLink := "see https://github.com/Ubiquex/ubiquex-docs, cli/lookup"
-	if naturalKey, ok := lookuphints.For(resourceType); ok {
+	if naturalKey, ok := lookuphints.For(providerSource, resourceType); ok {
 		return fmt.Sprintf("%s's lookup must include \"id\" -- %s alone is not enough (%s)",
 			resourceType, strings.Join(naturalKey, "/"), docsLink)
 	}
@@ -344,8 +364,10 @@ func GenerateRevertProposal(l *Ledger, stack string, res *ScanResult) (*Proposal
 // "reality changes between propose and accept"). The lookup key is read
 // back from p's own resolution.inputs entry (see ResolutionInput.Lookup) —
 // callers don't need to already know, or re-supply, what was used to
-// generate the proposal in the first place.
-func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, providerConfig json.RawMessage, p *Proposal) error {
+// generate the proposal in the first place. providerSource is passed
+// straight through to the teaching-error hint path (see
+// ScanRequest.ProviderSource); may be empty.
+func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig json.RawMessage, p *Proposal) error {
 	target := addr.String()
 	var recorded string
 	var lookup json.RawMessage
@@ -365,7 +387,7 @@ func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, provid
 		return fmt.Errorf("verify freshness: resolution.inputs entry for %s has no recorded lookup key", addr)
 	}
 
-	_, fresh, err := readAndFingerprint(ctx, prov, addr, providerConfig, lookup)
+	_, fresh, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, lookup)
 	if err != nil {
 		return fmt.Errorf("verify freshness: %w", err)
 	}

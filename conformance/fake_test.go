@@ -160,7 +160,7 @@ func TestFakeConformanceCases_MatchRegistry(t *testing.T) {
 	cased := make(map[string]bool, len(fakeConformanceCases))
 	for _, tc := range fakeConformanceCases {
 		cased[tc.Type] = true
-		spec := ByType(tc.Type)
+		spec := ByType("hashicorp/aws", tc.Type)
 		if spec == nil {
 			t.Errorf("fakeConformanceCases has %q, not in Registry at all", tc.Type)
 			continue

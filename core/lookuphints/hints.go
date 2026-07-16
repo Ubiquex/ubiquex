@@ -3,33 +3,43 @@
 // LookupHint instead and re-run `go generate ./conformance/...`.
 
 // Package lookuphints is UBI-20 workstream 3's shipped teaching-error
-// data: for a handful of AWS resource types, the natural-key attribute
+// data: for a handful of resource types, the natural-key attribute
 // name(s) (Terraform's own attribute, e.g. "bucket"/"name") that read
 // back null when supplied alone, without "id" -- see cli/lookup.mdx in
 // ubiquex-docs for the full human-readable table this is generated
-// alongside. This package has zero runtime dependency on
-// conformance -- that package is explicitly test-only tooling (see its
-// own doc comment), never imported by shipped product code. Promoting
-// the DATA into a small generated table here, rather than importing the
-// package directly, keeps that boundary intact while still avoiding a
-// hand-duplicated copy that could drift from what conformance actually
-// verified.
+// alongside. Keyed by (provider source, type), not type alone (UBI-21,
+// docs/architecture.md -- GCP support), the same reasoning
+// conformance.Registry's own keying follows. This package has zero
+// runtime dependency on conformance -- that package is explicitly
+// test-only tooling (see its own doc comment), never imported by shipped
+// product code. Promoting the DATA into a small generated table here,
+// rather than importing the package directly, keeps that boundary intact
+// while still avoiding a hand-duplicated copy that could drift from what
+// conformance actually verified.
 package lookuphints
 
-// hints maps a resource type to its natural-key attribute(s) that read
-// back null when supplied alone in --lookup, without "id".
-var hints = map[string][]string{
-	"aws_iam_role":  {"name"},
-	"aws_iam_user":  {"name"},
-	"aws_s3_bucket": {"bucket"},
+// hints maps a provider source to its resource types' natural-key
+// attribute(s) that read back null when supplied alone in --lookup,
+// without "id".
+var hints = map[string]map[string][]string{}
+
+func init() {
+	hints["hashicorp/aws"] = map[string][]string{}
+	hints["hashicorp/aws"]["aws_iam_role"] = []string{"name"}
+	hints["hashicorp/aws"]["aws_iam_user"] = []string{"name"}
+	hints["hashicorp/aws"]["aws_s3_bucket"] = []string{"bucket"}
 }
 
-// For returns resourceType's natural-key attribute(s) known to read back
-// null when supplied alone in --lookup (without "id"), and whether any
-// are known at all. A false ok means "id" alone is the verified shape,
-// not that this type was never checked -- see cli/lookup.mdx for what
-// "verified" means here.
-func For(resourceType string) ([]string, bool) {
-	h, ok := hints[resourceType]
+// For returns resourceType's natural-key attribute(s), under the given
+// provider source, known to read back null when supplied alone in
+// --lookup (without "id"), and whether any are known at all. A false ok
+// means "id" alone is the verified shape, or that source is unrecognized
+// -- not that this type was never checked -- see cli/lookup.mdx for what
+// "verified" means here. An empty source (e.g. a scan via a raw
+// --provider path, with no known registry source) always returns false --
+// see core.ScanRequest.ProviderSource's own doc comment for why that's an
+// accepted narrowing, not a bug.
+func For(source, resourceType string) ([]string, bool) {
+	h, ok := hints[source][resourceType]
 	return h, ok
 }

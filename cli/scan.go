@@ -127,6 +127,7 @@ func newScanCmd() *cobra.Command {
 				ProviderConfig:   json.RawMessage(providerConfig),
 				CurrentState:     json.RawMessage(lookup),
 				ProviderChecksum: checksum,
+				ProviderSource:   source,
 			})
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}

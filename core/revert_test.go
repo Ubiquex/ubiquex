@@ -239,7 +239,7 @@ func TestVerifyFreshness_BlocksStaleAcceptance_ForDriftRevert(t *testing.T) {
 	// Reality moves again, a second time, before the revert is accepted.
 	fp.state = json.RawMessage(`{"id":"ubx-states","tags":{"env":"canary"}}`)
 
-	err = VerifyFreshness(context.Background(), fp, addr, json.RawMessage(`{}`), revert)
+	err = VerifyFreshness(context.Background(), fp, addr, "", json.RawMessage(`{}`), revert)
 	if err == nil {
 		t.Fatal("expected VerifyFreshness to block acceptance -- reality moved again since the revert was drafted")
 	}

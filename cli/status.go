@@ -145,6 +145,7 @@ always wins if more than one applies.`,
 					Address:        e.Address,
 					ProviderConfig: json.RawMessage(providerConfig),
 					CurrentState:   e.Lookup,
+					ProviderSource: source,
 				})
 				if err != nil {
 					unreadableCount++

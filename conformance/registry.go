@@ -1,11 +1,18 @@
 // Package conformance is UBI-9's per-resource-type conformance harness: a
-// table-driven registry of AWS resource types (docs/plan.md §M1-2, "top
-// ~50 AWS resource types") plus a reusable adopt→mutate→scan-diff test
-// pattern that exercises core.RunScan/GenerateProposal against each type —
-// the real provider where cheap/safe, fakeprovider fixtures otherwise.
+// table-driven registry of provider resource types (docs/plan.md §M1-2,
+// "top ~50 AWS resource types"; §M1-2 GCP resource type list, UBI-21) plus
+// a reusable adopt→mutate→scan-diff test pattern that exercises
+// core.RunScan/GenerateProposal against each type — the real provider
+// where cheap/safe, fakeprovider fixtures otherwise.
+//
+// Registry entries are keyed by (provider source, type), not bare type
+// name (UBI-21, docs/architecture.md — GCP support): a second provider
+// makes "there's only one provider" an assumption worth naming rather
+// than leaving implicit, even though today's aws_*/google_* type-name
+// prefixes don't actually collide in practice.
 //
 // This is project-internal tooling, not shipped product code — it lives
-// outside core/ and cli/ deliberately, since "does ubx handle this AWS
+// outside core/ and cli/ deliberately, since "does ubx handle this
 // resource type correctly" is a test/coverage concern, not part of the
 // trust core or CLI surface.
 //
@@ -15,21 +22,22 @@ package conformance
 import "encoding/json"
 
 // Safety classifies whether a type's conformance test may run against the
-// real AWS account, or must stay on fakeprovider fixtures.
+// real account (AWS or GCP, whichever this entry's Source is), or must
+// stay on fakeprovider fixtures.
 type Safety int
 
 const (
-	// FakeOnly means this type's conformance test never touches real AWS
-	// — the resource is too expensive (hourly-billed compute/DB/network
-	// appliances) or too slow/risky to spin up and tear down just to
-	// exercise a schema shape. A fakeprovider fixture stands in (see
+	// FakeOnly means this type's conformance test never touches a real
+	// account — the resource is too expensive (hourly-billed compute/DB/
+	// network appliances) or too slow/risky to spin up and tear down just
+	// to exercise a schema shape. A fakeprovider fixture stands in (see
 	// provider/internal/fakeprovider's "conformance-v5"/"conformance-v6"
 	// modes and conformance/fake_test.go).
 	//
 	// What "verified" means for a FakeOnly entry, precisely (UBI-9 batch
 	// 3): IdentityFields and the attributes named in Notes are real —
-	// checked against the actual AWS provider's GetProviderSchema, which
-	// needs no Configure call, no credentials, and no AWS API round trip
+	// checked against the actual provider's GetProviderSchema, which
+	// needs no Configure call, no credentials, and no live API round trip
 	// at all, so this is free and safe to do for every type regardless of
 	// cost/risk. What is NOT verified for a FakeOnly type is the live
 	// ReadResource *lookup* convention (e.g. whether a natural-key
@@ -47,7 +55,7 @@ const (
 	FakeOnly Safety = iota
 
 	// RealSafe means this type's conformance test may run against the
-	// real AWS account: the resource is free or negligible-cost, safe to
+	// real account: the resource is free or negligible-cost, safe to
 	// read (and, for the mutate step, safe to tag), and either already
 	// exists in the account or is cheap enough to create/destroy per test
 	// run.
@@ -61,11 +69,17 @@ func (s Safety) String() string {
 	return "fake-only"
 }
 
-// TypeSpec describes one AWS resource type's place in the conformance
-// suite.
+// TypeSpec describes one provider resource type's place in the
+// conformance suite.
 type TypeSpec struct {
-	Type     string // e.g. "aws_s3_bucket"
-	Category string // "compute" | "network" | "iam" | "storage" | "db" | "dns"
+	// Source is the type's provider, in Terraform-source form (e.g.
+	// "hashicorp/aws", "hashicorp/google") — part of this entry's
+	// identity, not metadata about it (UBI-21, docs/architecture.md — GCP
+	// support): Registry entries and core/lookuphints are both keyed by
+	// (Source, Type), never bare Type alone.
+	Source   string
+	Type     string // e.g. "aws_s3_bucket", "google_storage_bucket"
+	Category string // "compute" | "network" | "iam" | "storage" | "db" | "dns" | "messaging"
 	Safety   Safety
 
 	// IdentityFields lists which observed-state attribute(s) carry this
@@ -119,46 +133,46 @@ var Registry = []TypeSpec{
 	// All nine: real schema (GetProviderSchema) has id/arn/tags/tags_all;
 	// fixture models exactly those four and mutates tags — see
 	// conformance/fake_test.go's stdCase.
-	{Type: "aws_instance", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_instance", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema also carries ami/instance_type/etc. (not modeled — see FakeOnly's doc comment on scope).",
 		Implemented:    true},
-	{Type: "aws_launch_template", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_launch_template", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_autoscaling_group", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_autoscaling_group", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_ecs_cluster", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_ecs_cluster", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_ecs_service", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_ecs_service", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_ecs_task_definition", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_ecs_task_definition", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema's natural key is \"family\" (required), not modeled in the fixture.",
 		Implemented:    true},
-	{Type: "aws_eks_cluster", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_eks_cluster", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_eks_node_group", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_eks_node_group", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_lambda_function", Category: "compute", Safety: FakeOnly,
+	{Type: "aws_lambda_function", Source: "hashicorp/aws", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags. Real schema's natural key is \"function_name\" (required), not modeled in the fixture.",
 		Implemented:    true},
 
 	// --- network ---
 	{
-		Type: "aws_vpc", Category: "network", Safety: RealSafe,
+		Type: "aws_vpc", Source: "hashicorp/aws", Category: "network", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn"},
 		Notes: "id is the vpc-* id (e.g. \"vpc-b75be9cd\"); that's also " +
 			"what the lookup needs (\"id\"). arn is surfaced directly by " +
@@ -166,16 +180,16 @@ var Registry = []TypeSpec{
 			"VPC.",
 		Implemented: true,
 	},
-	{Type: "aws_subnet", Category: "network", Safety: FakeOnly,
+	{Type: "aws_subnet", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_route_table", Category: "network", Safety: FakeOnly,
+	{Type: "aws_route_table", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 	{
-		Type: "aws_route_table_association", Category: "network", Safety: FakeOnly,
+		Type: "aws_route_table_association", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		Notes: "PARKED, not hacked: real schema (GetProviderSchema) is " +
 			"{gateway_id, id, region, route_table_id (required), " +
 			"subnet_id} -- a pure join between a route table and " +
@@ -188,7 +202,7 @@ var Registry = []TypeSpec{
 			"aws_iam_group, just discovered via schema inspection instead " +
 			"of a live API call.",
 	},
-	{Type: "aws_route", Category: "network", Safety: FakeOnly,
+	{Type: "aws_route", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "route_table_id"},
 		Notes: "No arn/tags in the real schema. Fixture models " +
 			"id/route_table_id/gateway_id and mutates gateway_id (a real " +
@@ -198,19 +212,19 @@ var Registry = []TypeSpec{
 			"changes; noted here so the fixture's mutate step isn't " +
 			"mistaken for a claim about real update-vs-replace behavior).",
 		Implemented: true},
-	{Type: "aws_internet_gateway", Category: "network", Safety: FakeOnly,
+	{Type: "aws_internet_gateway", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_nat_gateway", Category: "network", Safety: FakeOnly,
+	{Type: "aws_nat_gateway", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id"},
 		Notes:          "No arn in the real schema (unlike most network types). Fixture models id/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_eip", Category: "network", Safety: FakeOnly,
+	{Type: "aws_eip", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_security_group", Category: "network", Safety: FakeOnly,
+	{Type: "aws_security_group", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes: "The account's default security group would be a RealSafe " +
 			"candidate (free, always exists) but its rules are shared, " +
@@ -221,33 +235,33 @@ var Registry = []TypeSpec{
 			"models id/arn/tags/tags_all (real schema-verified), mutates " +
 			"tags.",
 		Implemented: true},
-	{Type: "aws_security_group_rule", Category: "network", Safety: FakeOnly,
+	{Type: "aws_security_group_rule", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "security_group_id"},
 		Notes: "No arn/tags in the real schema (rules aren't independently " +
 			"taggable, unlike the group they belong to). Fixture models " +
 			"id/security_group_id/description and mutates description -- " +
 			"a real, genuinely in-place-updatable optional attribute.",
 		Implemented: true},
-	{Type: "aws_lb", Category: "network", Safety: FakeOnly,
+	{Type: "aws_lb", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_lb_target_group", Category: "network", Safety: FakeOnly,
+	{Type: "aws_lb_target_group", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_lb_listener", Category: "network", Safety: FakeOnly,
+	{Type: "aws_lb_listener", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_vpc_endpoint", Category: "network", Safety: FakeOnly,
+	{Type: "aws_vpc_endpoint", Source: "hashicorp/aws", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 
 	// --- iam ---
 	{
-		Type: "aws_iam_role", Category: "iam", Safety: RealSafe,
+		Type: "aws_iam_role", Source: "hashicorp/aws", Category: "iam", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn", "name"},
 		Notes: "id and name are both the role name (not the ARN). Like " +
 			"aws_s3_bucket, the lookup needs BOTH \"id\" and \"name\" set " +
@@ -260,7 +274,7 @@ var Registry = []TypeSpec{
 		Implemented: true,
 	},
 	{
-		Type: "aws_iam_policy", Category: "iam", Safety: RealSafe,
+		Type: "aws_iam_policy", Source: "hashicorp/aws", Category: "iam", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn"},
 		Notes: "id IS the ARN (unlike role/user/group, which use the name) " +
 			"-- lookup only needs {\"id\": \"<policy-arn>\"}. Verified by " +
@@ -270,7 +284,7 @@ var Registry = []TypeSpec{
 		Implemented: true,
 	},
 	{
-		Type: "aws_iam_role_policy_attachment", Category: "iam", Safety: FakeOnly,
+		Type: "aws_iam_role_policy_attachment", Source: "hashicorp/aws", Category: "iam", Safety: FakeOnly,
 		Notes: "PARKED, not hacked: real schema (GetProviderSchema) is " +
 			"exactly {id, policy_arn (required), role (required)} -- a " +
 			"pure join between a role and a policy, no optional or " +
@@ -281,7 +295,7 @@ var Registry = []TypeSpec{
 			"via schema inspection this time rather than a live API call.",
 	},
 	{
-		Type: "aws_iam_user", Category: "iam", Safety: RealSafe,
+		Type: "aws_iam_user", Source: "hashicorp/aws", Category: "iam", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn", "name"},
 		Notes: "Same shape as aws_iam_role: id and name are both the user " +
 			"name, and both must be set in the lookup (\"name\" alone reads " +
@@ -291,7 +305,7 @@ var Registry = []TypeSpec{
 		Implemented: true,
 	},
 	{
-		Type: "aws_iam_group", Category: "iam", Safety: FakeOnly,
+		Type: "aws_iam_group", Source: "hashicorp/aws", Category: "iam", Safety: FakeOnly,
 		Notes: "PARKED, not hacked: IAM groups have no tagging API at all " +
 			"(there is no \"aws iam tag-group\" -- confirmed empirically, " +
 			"not assumed) and the aws_iam_group schema itself has nothing " +
@@ -302,18 +316,18 @@ var Registry = []TypeSpec{
 			"drift detection against, so this stays fake-only until a " +
 			"fakeprovider fixture stands in for the mutate step instead.",
 	},
-	{Type: "aws_iam_instance_profile", Category: "iam", Safety: FakeOnly,
+	{Type: "aws_iam_instance_profile", Source: "hashicorp/aws", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn", "name"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_iam_openid_connect_provider", Category: "iam", Safety: FakeOnly,
+	{Type: "aws_iam_openid_connect_provider", Source: "hashicorp/aws", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn", "url"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 
 	// --- storage ---
 	{
-		Type: "aws_s3_bucket", Category: "storage", Safety: RealSafe,
+		Type: "aws_s3_bucket", Source: "hashicorp/aws", Category: "storage", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn", "bucket"},
 		Notes: "id and bucket are both the bucket name; lookup needs BOTH " +
 			"set ({\"id\": \"<name>\", \"bucket\": \"<name>\"}) -- sending " +
@@ -323,14 +337,14 @@ var Registry = []TypeSpec{
 		LookupHint:  []string{"bucket"},
 		Implemented: true,
 	},
-	{Type: "aws_s3_bucket_policy", Category: "storage", Safety: FakeOnly,
+	{Type: "aws_s3_bucket_policy", Source: "hashicorp/aws", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id", "bucket"},
 		Notes: "No arn/tags (it's a sub-resource of the bucket, not " +
 			"independently taggable). Fixture models id/bucket/policy and " +
 			"mutates policy directly (the JSON policy document) -- the " +
 			"actual real-world drift vector for this type.",
 		Implemented: true},
-	{Type: "aws_s3_bucket_versioning", Category: "storage", Safety: FakeOnly,
+	{Type: "aws_s3_bucket_versioning", Source: "hashicorp/aws", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id", "bucket"},
 		Notes: "Real schema nests the mutable field inside a " +
 			"versioning_configuration block (status: Enabled/Suspended); " +
@@ -342,7 +356,7 @@ var Registry = []TypeSpec{
 			"provider/ctyvalue.go for where that already IS proven, " +
 			"against a real provider).",
 		Implemented: true},
-	{Type: "aws_s3_bucket_public_access_block", Category: "storage", Safety: FakeOnly,
+	{Type: "aws_s3_bucket_public_access_block", Source: "hashicorp/aws", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id", "bucket"},
 		Notes: "No arn/tags. Fixture models id/bucket/block_public_acls " +
 			"and mutates block_public_acls -- a real, flat, optional " +
@@ -350,46 +364,46 @@ var Registry = []TypeSpec{
 			"see FakeOnly's doc comment on scalar type-fidelity not " +
 			"mattering here).",
 		Implemented: true},
-	{Type: "aws_ebs_volume", Category: "storage", Safety: FakeOnly,
+	{Type: "aws_ebs_volume", Source: "hashicorp/aws", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_efs_file_system", Category: "storage", Safety: FakeOnly,
+	{Type: "aws_efs_file_system", Source: "hashicorp/aws", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 
 	// --- database ---
-	{Type: "aws_db_instance", Category: "db", Safety: FakeOnly,
+	{Type: "aws_db_instance", Source: "hashicorp/aws", Category: "db", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_db_subnet_group", Category: "db", Safety: FakeOnly,
+	{Type: "aws_db_subnet_group", Source: "hashicorp/aws", Category: "db", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_rds_cluster", Category: "db", Safety: FakeOnly,
+	{Type: "aws_rds_cluster", Source: "hashicorp/aws", Category: "db", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_elasticache_cluster", Category: "db", Safety: FakeOnly,
+	{Type: "aws_elasticache_cluster", Source: "hashicorp/aws", Category: "db", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_dynamodb_table", Category: "db", Safety: FakeOnly,
+	{Type: "aws_dynamodb_table", Source: "hashicorp/aws", Category: "db", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 
 	// --- dns / cdn / certs ---
-	{Type: "aws_route53_zone", Category: "dns", Safety: FakeOnly,
+	{Type: "aws_route53_zone", Source: "hashicorp/aws", Category: "dns", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes: "The account has no existing hosted zone, and creating one " +
 			"solely for this suite would add a real recurring charge -- " +
 			"stays FakeOnly until/unless a zone exists for another reason. " +
 			"Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented: true},
-	{Type: "aws_route53_record", Category: "dns", Safety: FakeOnly,
+	{Type: "aws_route53_record", Source: "hashicorp/aws", Category: "dns", Safety: FakeOnly,
 		IdentityFields: []string{"id", "zone_id", "name"},
 		Notes: "No arn/tags in the real schema (DNS records aren't " +
 			"independently taggable). Fixture models id/zone_id/name/ttl " +
@@ -397,18 +411,18 @@ var Registry = []TypeSpec{
 			"optional attribute (modeled as a string, see FakeOnly's doc " +
 			"comment on scalar type-fidelity not mattering here).",
 		Implemented: true},
-	{Type: "aws_cloudfront_distribution", Category: "dns", Safety: FakeOnly,
+	{Type: "aws_cloudfront_distribution", Source: "hashicorp/aws", Category: "dns", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_acm_certificate", Category: "dns", Safety: FakeOnly,
+	{Type: "aws_acm_certificate", Source: "hashicorp/aws", Category: "dns", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 
 	// --- messaging / observability / secrets ---
 	{
-		Type: "aws_sqs_queue", Category: "messaging", Safety: RealSafe,
+		Type: "aws_sqs_queue", Source: "hashicorp/aws", Category: "messaging", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn", "url"},
 		Notes: "id IS the queue URL (not the ARN, though arn is also " +
 			"surfaced) -- lookup only needs {\"id\": \"<queue-url>\"}. " +
@@ -419,36 +433,37 @@ var Registry = []TypeSpec{
 		Implemented: true,
 	},
 	{
-		Type: "aws_sns_topic", Category: "messaging", Safety: RealSafe,
+		Type: "aws_sns_topic", Source: "hashicorp/aws", Category: "messaging", Safety: RealSafe,
 		IdentityFields: []string{"id", "arn"},
 		Notes: "id IS the topic ARN -- lookup only needs {\"id\": " +
 			"\"<topic-arn>\"}, same pattern as aws_iam_policy. Verified by " +
 			"creating a throwaway topic, testing it, and deleting it.",
 		Implemented: true,
 	},
-	{Type: "aws_cloudwatch_log_group", Category: "messaging", Safety: FakeOnly,
+	{Type: "aws_cloudwatch_log_group", Source: "hashicorp/aws", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_cloudwatch_metric_alarm", Category: "messaging", Safety: FakeOnly,
+	{Type: "aws_cloudwatch_metric_alarm", Source: "hashicorp/aws", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_secretsmanager_secret", Category: "messaging", Safety: FakeOnly,
+	{Type: "aws_secretsmanager_secret", Source: "hashicorp/aws", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
-	{Type: "aws_kms_key", Category: "messaging", Safety: FakeOnly,
+	{Type: "aws_kms_key", Source: "hashicorp/aws", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "arn"},
 		Notes:          "Fixture models id/arn/tags/tags_all, mutates tags.",
 		Implemented:    true},
 }
 
-// ByType returns the registry entry for a type name, or nil if this type
-// isn't tracked in the ~50-type list at all.
-func ByType(t string) *TypeSpec {
+// ByType returns the registry entry for a (source, type) pair, or nil if
+// that combination isn't tracked at all (UBI-21: keyed by source+type,
+// not type alone — see TypeSpec.Source).
+func ByType(source, t string) *TypeSpec {
 	for i := range Registry {
-		if Registry[i].Type == t {
+		if Registry[i].Source == source && Registry[i].Type == t {
 			return &Registry[i]
 		}
 	}

@@ -102,7 +102,7 @@ func newAcceptCmd() *cobra.Command {
 				}
 				defer client.Close()
 
-				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider), addr,
+				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider), addr, reverifySource,
 					json.RawMessage(providerConfig), &p); err != nil {
 					return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 				}

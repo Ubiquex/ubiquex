@@ -45,6 +45,7 @@ func TestLookupHints_LiveWrongLookup_TeachesTheMissingField(t *testing.T) {
 		Address:        core.Address{Stack: "conformance", Type: "aws_s3_bucket", Name: bucket},
 		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
 		CurrentState:   MustMarshal(map[string]string{"bucket": bucket}),
+		ProviderSource: "hashicorp/aws",
 	})
 	if err == nil {
 		t.Fatal("expected RunScan to fail against a lookup missing \"id\", got nil error")

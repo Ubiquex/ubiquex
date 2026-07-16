@@ -125,6 +125,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 			ProviderConfig:   json.RawMessage(opts.ProviderConfig),
 			CurrentState:     lookup,
 			ProviderChecksum: checksum,
+			ProviderSource:   opts.Source,
 		})
 		if err != nil {
 			skipped["provider read failed"]++
