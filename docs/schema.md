@@ -278,6 +278,53 @@ before review). `ubx accept --from-merge` treats a missing trailer, or one
 whose hash doesn't match the proposal file's own recomputed hash, as a
 hard failure — see docs/architecture.md's "hash mismatch" case.
 
+### Amendment: `drift_revert` proposals (2026-07-16, UBI-16)
+
+`kind: "drift_revert"` was already an enumerated value in this document's
+own Proposal example (`"kind": "change | adoption | drift_adopt |
+drift_revert | revert"`) with no rules behind it. This amendment pins those
+rules — see docs/architecture.md's "Revert path" section for the full
+design and rationale; this is the schema-constitution half.
+
+A `drift_revert` proposal is the *corrective* counterpart to a
+`drift_adopt` generated from the same drift observation (`ubx scan
+--propose revert|both`):
+
+- **`delta.modifies`** uses the same `Modification` shape as every other
+  modifies entry (§Delta element shapes), but with `before`/`after`
+  reversed relative to `drift_adopt`'s convention: `before` is the
+  *observed* (drifted) value, `after` is the *ledger-recorded* value being
+  restored to. At least one `delta.modifies` entry is required — a revert
+  with nothing to revert is invalid. `delta.creates` and `delta.destroys`
+  MUST both be empty — revert only ever corrects existing attributes.
+- **`blast_radius` is real, not all-zero** — the one place `drift_revert`
+  differs from every other drift/adoption kind. `blast_radius.modifies`
+  MUST equal the number of `delta.modifies` entries exactly;
+  `blast_radius.creates`/`.destroys` MUST both be zero (still no
+  creates/destroys). This is enforced as propose-time validation, same as
+  every other kind-specific rule in this document. The reason: accepting a
+  `drift_adopt`/`adoption` records something that already happened (hence
+  zero blast radius — nothing is *about* to change); accepting a
+  `drift_revert` is a decision that something is *about to* change in
+  cloud (via `ubx revert-plan`'s emitted plan, applied by the operator's
+  own tooling) — that's a real blast radius by the same definition every
+  other non-zero blast radius in this document already uses.
+- **`resolution.inputs`** follows the existing cross-reference rule
+  unchanged (§Delta element shapes: every `delta.modifies` target needs a
+  matching `resolution.inputs` entry with a non-empty `observed_hash`) —
+  and that `observed_hash` is the *observed/drifted* state's hash, the same
+  value a `drift_adopt` generated from the same scan would carry, **not**
+  the restore-target's hash. This is what lets `accept --reverify-with`/
+  `--reverify-source` keep meaning "has reality moved again since this was
+  drafted?" — comparing against the restore target instead would make that
+  check meaningless (it would never match anything currently live, since
+  the whole point of the drift is that live state doesn't match the
+  restore target yet).
+- **No `schema_version` bump** — `drift_revert` was already a legal enum
+  value in the schema's own Proposal example; this amendment only pins
+  behavior for a value that already existed, the same posture as every
+  other post-ratification amendment in this document.
+
 Notes:
 - `id` is a content hash (git's lesson) — no sequential numbering; human-friendly
   aliases allowed as labels.
@@ -299,6 +346,11 @@ Notes:
   reality, using the same `Modification` shape as any other modifies entry
   (and therefore the same `resolution.inputs` cross-reference requirement
   above).
+- **Drift-revert proposals** (kind `drift_revert`, pinned 2026-07-16,
+  UBI-16 — see "Amendment: drift_revert proposals" below) are the opposite
+  of drift-adopt in exactly one respect: `blast_radius` is real, not
+  all-zero. Everything else about the record-only/cross-reference
+  discipline above still applies.
 - `acceptance` binds a signature to the exact hash. Timestamps and acceptance data
   live OUTSIDE the hashed content (see below).
 - `intent.sources[].content_hash` is a SHA-256 content hash (`sha256:<hex>`) of the

@@ -75,6 +75,36 @@ func validateKind(p *Proposal) error {
 		if len(p.Delta.Destroys) != 0 {
 			return errors.New("drift_adopt proposals must not have delta.destroys entries (record-only)")
 		}
+	case KindDriftRevert:
+		if err := validateDriftRevert(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateDriftRevert enforces docs/schema.md's "Amendment: drift_revert
+// proposals": drift_revert is the one kind whose blast_radius is real, not
+// all-zero -- accepting it is a decision to actually change cloud (see
+// docs/architecture.md's Revert path), not a record of something that
+// already happened.
+func validateDriftRevert(p *Proposal) error {
+	if len(p.Delta.Creates) != 0 {
+		return errors.New("drift_revert proposals must not have delta.creates entries")
+	}
+	if len(p.Delta.Destroys) != 0 {
+		return errors.New("drift_revert proposals must not have delta.destroys entries")
+	}
+	if len(p.Delta.Modifies) == 0 {
+		return errors.New("drift_revert proposals must have at least one delta.modifies entry")
+	}
+	if p.BlastRadius.Creates != 0 || p.BlastRadius.Destroys != 0 {
+		return fmt.Errorf("drift_revert proposals must have zero blast_radius.creates/destroys, got %+v", p.BlastRadius)
+	}
+	if want := int64(len(p.Delta.Modifies)); p.BlastRadius.Modifies != want {
+		return fmt.Errorf("drift_revert proposals must have blast_radius.modifies == len(delta.modifies) (%d), got %d "+
+			"-- accepting a revert is a decision to change cloud, unlike adopt/drift_adopt's record-only zero blast radius",
+			want, p.BlastRadius.Modifies)
 	}
 	return nil
 }

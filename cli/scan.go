@@ -30,12 +30,23 @@ func newScanCmd() *cobra.Command {
 		surfaceAs       string
 		githubRepo      string
 		tfDir           string
+		propose         string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "scan",
-		Short: "Compare one resource's live state against the ledger and generate an adoption/drift_adopt proposal if it differs",
+		Short: "Compare one resource's live state against the ledger and generate an adoption/drift_adopt/drift_revert proposal if it differs",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch propose {
+			case "adopt", "revert", "both":
+			default:
+				return fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)
+			}
+			if surfaceAs != "" && propose == "revert" {
+				return fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
+					"its issue/PR receipt is built around a drift_adopt proposal, which --propose revert doesn't generate")
+			}
+
 			addr := core.Address{Stack: stack, Type: resourceType, Name: resourceName}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -69,17 +80,65 @@ func newScanCmd() *cobra.Command {
 				return nil
 			}
 
-			proposal, err := core.GenerateProposal(ledger, stack, res)
-			if err != nil {
-				return fmt.Errorf("scan %s: %w", addr, err)
+			var proposals []*core.Proposal
+			switch {
+			case res.Outcome == core.ScanNew:
+				// --propose has no effect on a never-seen-before resource --
+				// there's nothing recorded yet to revert to, so adoption is
+				// the only valid resolution regardless of the flag's value.
+				p, err := core.GenerateProposal(ledger, stack, res)
+				if err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+				proposals = []*core.Proposal{p}
+
+			case propose == "adopt":
+				p, err := core.GenerateProposal(ledger, stack, res)
+				if err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+				proposals = []*core.Proposal{p}
+
+			case propose == "revert":
+				p, err := core.GenerateRevertProposal(ledger, stack, res)
+				if err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+				proposals = []*core.Proposal{p}
+
+			default: // both
+				adopt, err := core.GenerateProposal(ledger, stack, res)
+				if err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+				revert, err := core.GenerateRevertProposal(ledger, stack, res)
+				if err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
+				proposals = []*core.Proposal{adopt, revert}
 			}
 
-			if res.Outcome == core.ScanDrifted && !noAttribution {
-				attributeDrift(ctx, ledger, addr, res, proposal, json.RawMessage(providerConfig))
+			if out != "" && len(proposals) > 1 {
+				return fmt.Errorf("scan %s: --out only supports a single generated proposal -- "+
+					"--propose both on a drifted resource generates two; omit --out to print both to stdout", addr)
 			}
 
-			if res.Outcome == core.ScanDrifted && surfaceAs != "" {
-				if err := surfaceDrift(ctx, out2, proposal, addr, surfaceAs, githubRepo, tfDir); err != nil {
+			// CloudTrail attribution and --surface-as are both drift_adopt-
+			// specific (docs/schema.md: attribution sources attach to
+			// drift_adopt proposals only; --surface-as's receipt is built
+			// around one too, guarded above) -- apply them to whichever
+			// generated proposal is the drift_adopt, if any.
+			var adoptProposal *core.Proposal
+			for _, p := range proposals {
+				if p.Kind == core.KindDriftAdopt {
+					adoptProposal = p
+				}
+			}
+			if adoptProposal != nil && !noAttribution {
+				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig))
+			}
+			if adoptProposal != nil && surfaceAs != "" {
+				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, githubRepo, tfDir); err != nil {
 					return fmt.Errorf("scan %s: %w", addr, err)
 				}
 			}
@@ -88,17 +147,22 @@ func newScanCmd() *cobra.Command {
 			if res.Outcome == core.ScanDrifted {
 				kindLabel = "drifted"
 			}
-			fmt.Fprintf(out2, "%s: %s (%s) -- generated a %q proposal\n", kindLabel, addr, res.ObservedHash, proposal.Kind)
+			for _, p := range proposals {
+				fmt.Fprintf(out2, "%s: %s (%s) -- generated a %q proposal\n", kindLabel, addr, res.ObservedHash, p.Kind)
 
-			b, err := json.MarshalIndent(proposal, "", "  ")
-			if err != nil {
-				return fmt.Errorf("scan %s: marshal proposal: %w", addr, err)
+				b, err := json.MarshalIndent(p, "", "  ")
+				if err != nil {
+					return fmt.Errorf("scan %s: marshal proposal: %w", addr, err)
+				}
+				if out == "" {
+					fmt.Fprintln(out2, string(b))
+					continue
+				}
+				if err := os.WriteFile(out, b, 0o644); err != nil {
+					return fmt.Errorf("scan %s: %w", addr, err)
+				}
 			}
-			if out == "" {
-				fmt.Fprintln(out2, string(b))
-				return nil
-			}
-			return os.WriteFile(out, b, 0o644)
+			return nil
 		},
 	}
 
@@ -117,6 +181,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&surfaceAs, "surface-as", "", "on drift, open a GitHub \"issue\" or \"pr\" with a receipt instead of just printing the proposal (UBI-11 stage 3; requires --github-repo)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository to surface drift in (required with --surface-as)")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory of .tf files to compute a best-effort write-back preview diff from, for the receipt (optional)")
+	cmd.Flags().StringVar(&propose, "propose", "adopt", "on drift, which resolution(s) to generate: \"adopt\" (drift_adopt), \"revert\" (drift_revert), or \"both\" (UBI-16; no effect on a new/never-seen resource, which always generates adoption)")
 
 	for _, f := range []string{"stack", "type", "name"} {
 		_ = cmd.MarkFlagRequired(f)

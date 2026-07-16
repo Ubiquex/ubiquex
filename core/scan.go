@@ -109,9 +109,22 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
 	}
 
-	prevHash, found, err := l.LastObservedHash(req.Address)
+	// Drift is classified against the ledger's own reconstructed truth
+	// (FoldState), not merely the last thing a scan happened to observe
+	// (Ledger.LastObservedHash) -- see docs/architecture.md's "Revert path"
+	// section ("A necessary correction") for why these two, which coincide
+	// for every proposal kind that predates drift_revert, can genuinely
+	// diverge once an accepted-but-not-yet-applied drift_revert exists.
+	foldedState, found, err := l.FoldState(req.Address)
 	if err != nil {
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
+	}
+	var prevHash string
+	if found {
+		prevHash, err = ObservedHash(foldedState)
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", req.Address, err)
+		}
 	}
 
 	res := &ScanResult{
@@ -231,6 +244,69 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 	}
 
 	return p, nil
+}
+
+// GenerateRevertProposal builds the drift_revert proposal for a scan result
+// that found drift -- the corrective counterpart to GenerateProposal's
+// drift_adopt from the same observation (docs/architecture.md's "Revert
+// path"). Only meaningful for ScanDrifted (a never-seen-before resource has
+// nothing to revert to); callers must check res.Outcome first, same
+// discipline as GenerateProposal.
+//
+// Unlike drift_adopt's before=ledger/after=observed, a drift_revert's delta
+// is before=observed(drifted)/after=ledger(restored-to) -- the same
+// diffAttributes function GenerateProposal uses, arguments swapped. Its
+// blast_radius is real (docs/schema.md's drift_revert amendment): accepting
+// it is a decision to actually change cloud, not a record of something that
+// already happened.
+func GenerateRevertProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, error) {
+	if res.Outcome != ScanDrifted {
+		return nil, errors.New("generate revert proposal: scan result is not drifted, nothing to revert")
+	}
+
+	head, err := l.Head()
+	if err != nil {
+		return nil, fmt.Errorf("generate revert proposal: %w", err)
+	}
+
+	prevState, found, err := l.FoldState(res.Address)
+	if err != nil {
+		return nil, fmt.Errorf("generate revert proposal: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("generate revert proposal: %w: %s has a prior observed_hash but no reconstructable state",
+			ErrCorruptLedgerEntry, res.Address)
+	}
+
+	before, after, err := diffAttributes(res.Observed, prevState)
+	if err != nil {
+		return nil, fmt.Errorf("generate revert proposal: %w", err)
+	}
+	modifies := []Modification{{Target: res.Address, Before: before, After: after}}
+
+	return &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         stack,
+		Parent:        head,
+		Kind:          KindDriftRevert,
+		Intent:        Intent{Summary: fmt.Sprintf("revert %s back to the ledger's recorded state", res.Address)},
+		Delta:         Delta{Modifies: modifies},
+		Resolution: Resolution{
+			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
+			Inputs: []ResolutionInput{
+				{
+					Kind:             "live_state",
+					Resource:         res.Address.String(),
+					ObservedHash:     res.ObservedHash,
+					Lookup:           res.Lookup,
+					ProviderChecksum: res.ProviderChecksum,
+				},
+			},
+		},
+		CostDelta:   CostDelta{MonthlyUSD: json.RawMessage(`0`)},
+		BlastRadius: BlastRadius{Modifies: int64(len(modifies))},
+		Status:      StatusDraft,
+	}, nil
 }
 
 // VerifyFreshness re-reads addr's live state and confirms it still matches

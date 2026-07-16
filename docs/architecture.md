@@ -366,6 +366,149 @@ radius). Explicitly deferred: webhook-driven (vs. scheduled/manual)
 triggering, installation-flow hardening, multi-repo fan-out — enough to
 prove the loop end-to-end on one repo, not a general-purpose App yet.
 
+## Revert path (UBI-16)
+
+M3-4's other resolution to a detected drift (§Core concepts — Drift: "two
+resolutions: adopt ... or revert (signed restore)"). Where `drift_adopt`
+records that reality's new state (Y) is now the ledger's truth, `drift_revert`
+records the opposite decision: the ledger's existing truth (X) is correct,
+and reality needs to be corrected back to it. Same detection (`ubx scan`),
+same staleness discipline, opposite direction.
+
+### `ubx scan --propose revert|adopt|both`
+
+New flag, default `adopt` (current behavior, byte-for-byte unchanged). Only
+meaningful on a `drifted` outcome — a `new` (never-seen-before) resource has
+nothing to revert to, so `--propose` has no effect there; `ubx scan` always
+generates an `adoption` proposal for a new resource regardless of the flag's
+value.
+
+On drift:
+- `adopt` (default) — generates `drift_adopt` only, exactly as before.
+- `revert` — generates `drift_revert` only: a proposal whose
+  `delta.modifies` describes the *corrective* change, `before` = the
+  observed (drifted) value, `after` = the ledger's already-recorded value
+  — the reverse of `drift_adopt`'s own before/after (mechanically:
+  `diffAttributes(observed, ledgerState)` instead of
+  `diffAttributes(ledgerState, observed)` — same function, arguments
+  swapped).
+- `both` — generates both, from the same scan/observation, as two
+  independent draft proposals sharing the same `parent` (the current
+  ledger head). They are alternative resolutions to *one* detected drift,
+  not two changes to append separately: whichever gets accepted first
+  advances the stack's ledger chain; the other becomes stale the moment
+  that happens (ordinary parent-mismatch staleness, no new mechanism
+  needed) and would need re-resolving (a fresh `ubx scan`) before it could
+  still be accepted.
+
+### `drift_revert`'s blast radius is real
+
+Unlike `adoption`/`drift_adopt` (all-zero blast_radius, record-only against
+the cloud by construction), a `drift_revert`'s `blast_radius.modifies` equals
+its `delta.modifies` count exactly, and its `creates`/`destroys` stay zero
+(revert only ever corrects existing attributes, never creates or destroys a
+resource). This isn't a record of something that already happened — it's a
+real, live, prospective change: **accepting a `drift_revert` is a decision to
+change cloud**, which is exactly the M3-4 framing ("revert emits plan —
+apply via the team's own tooling at this stage; executor trust comes
+later"). ubx itself never applies it; see `ubx revert-plan` below.
+
+### Staleness applies doubly
+
+A `drift_revert`'s `resolution.inputs` entry carries the same shape and the
+same value as its `drift_adopt` sibling would from the same scan: the
+*observed* (drifted) state's hash, not the restore target. This is
+deliberate, not an oversight — it's what `accept --reverify-with`/
+`--reverify-source` need to keep meaning what they already mean elsewhere in
+this codebase: "has reality moved again since this proposal was drafted?"
+Recording the restore-to hash instead would make that check compare against
+something that was never live, defeating its purpose. Reverifying a
+`drift_revert` before accepting it therefore blocks exactly when reality
+drifted a *second* time between `ubx scan --propose revert` and `ubx accept`
+— the same mechanism, unmodified, that already protects every other
+acceptance path.
+
+### A necessary correction: drift detection compares against ledger truth, not last observation
+
+Building this surfaced a real divergence that didn't exist before
+`drift_revert` did: `RunScan` used to classify drift by comparing a fresh
+read against `Ledger.LastObservedHash` — the most recently *recorded*
+`resolution.inputs[].observed_hash`, walked directly, independent of
+`FoldState`. For every kind that existed before this session
+(`adoption`/`drift_adopt`), "the last thing we recorded observing" and "what
+the ledger's fold reconstructs as current truth" were always the same
+value, because accepting either one *is* the decision that the observed
+value becomes the ledger's truth — the two mechanisms coincided by
+construction, not by any explicit design choice tying them together.
+
+`drift_revert` breaks that coincidence on purpose: its `resolution.inputs`
+entry (by the rule just above) records the *observed/drifted* hash, while
+its `delta.modifies[].after` — what `FoldState` folds forward — is the
+*restored* (ledger-truth) value. Accepting a `drift_revert` is a decision
+that hasn't been applied to cloud yet, so immediately afterward reality is
+still drifted; `FoldState` and `LastObservedHash` now correctly disagree
+about "what's true" versus "what we last saw."
+
+The fix: `RunScan` now classifies drift by comparing the fresh read's hash
+against `ObservedHash(FoldState(addr))` — the ledger's actual reconstructed
+truth — rather than `LastObservedHash(addr)`. This is provably a no-op for
+every proposal shape that predates `drift_revert` (both mechanisms compute
+the same canonical hash for `adoption`/`drift_adopt` chains, verified by the
+full existing test suite passing unchanged), and it's also the semantically
+correct baseline regardless — "drift" is defined here (§Core concepts) as
+*reality diverging from the ledger*, which is exactly what `FoldState`
+answers and `LastObservedHash` only ever approximated. It's what makes the
+revert path's whole point work end to end: after a `drift_revert` is
+accepted and a human (or their own tooling) actually applies the correction
+outside of ubx, the next `ubx scan` reads reality matching `FoldState`'s
+already-restored truth and correctly reports no drift — not a phantom
+"drifted away from the last thing we happened to see."
+
+### `ubx revert-plan`: emits, never applies
+
+Takes an *accepted* `drift_revert` proposal and produces the reconciliation
+artifact a human (or their own tooling) needs to actually fix cloud — and
+nothing more:
+
+1. **Human-readable plan** — always produced: resource address, attribute,
+   current (drifted) value → restore-to (ledger-truth) value, one line per
+   changed attribute across every `delta.modifies` entry.
+2. **Corrective `.tf` diff**, only if `--tf-dir` is given — reuses the exact
+   same `tfwrite` machinery `ubx writeback` already uses
+   (`tfwrite.FindAndApply`), just fed a `Modification` whose `after` is
+   already the restore target rather than the newly-observed value; the
+   function itself needs no changes; "reverse direction" describes the
+   semantic meaning (moving `.tf` back toward original truth), not a
+   different code path.
+3. **Manual-steps section** for anything the diff machinery can't safely
+   resolve on its own: an attribute whose current `.tf` expression isn't a
+   literal (declined, same rule as write-back), or a resource block
+   `--tf-dir` doesn't contain at all (revert can target a resource that was
+   only ever adopted via `ubx scan`, never written to `.tf`). A revert with
+   some literal and some non-literal attributes produces both a partial
+   diff and a manual-steps entry for the rest — never one at the expense
+   of the other.
+
+**`ubx revert-plan` never writes a file, never touches cloud, and has no
+`--write` flag at all** — unlike `ubx writeback`, which does apply to `.tf`
+given `--write`. This isn't an oversight; it's the whole point of "revert
+emits plan" (docs/plan.md M3-4): the corrective action targets *cloud*, and
+applying changes to cloud is explicitly out of scope until the native
+executor (§Component map) earns that trust. The command's own `--help` text
+says so plainly.
+
+### `ubx why` and revert chains
+
+No rendering code changes were needed: `Proposal.Kind` already prints
+verbatim in both the single-proposal and resource-chain views (`(drift_adopt)`
+vs `(drift_revert)`), and a `drift_revert`'s non-zero blast radius
+(`+0 ~1 -0`, say) already reads differently from a `drift_adopt`'s
+always-zero one — the two were distinguishable at a glance the moment
+`drift_revert` started carrying real data, without touching `cli/why.go`.
+Covered by a new test asserting exactly that (a chain mixing `adoption`,
+`drift_adopt`, and `drift_revert` entries renders each recognizably), rather
+than left as an unverified assumption.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

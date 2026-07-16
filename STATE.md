@@ -4,6 +4,88 @@
 
 ## Current phase
 
+**UBI-16 is done (this session, Linear-verified): the revert path — M3-4's
+other resolution to a detected drift.** Design landed first in
+docs/architecture.md ("Revert path") and docs/schema.md ("Amendment:
+drift_revert proposals") before any code, per session protocol. Four
+pieces:
+
+1. **`core.GenerateRevertProposal`** (`core/scan.go`): the corrective
+   counterpart to `GenerateProposal`'s `drift_adopt` from the same
+   observation — `before`=observed(drifted), `after`=ledger-recorded
+   (restore-to), the exact reverse of `drift_adopt`'s own convention
+   (mechanically: `diffAttributes(observed, ledgerState)` instead of
+   `diffAttributes(ledgerState, observed)`, arguments swapped, same
+   function). Only valid on `ScanDrifted` — a never-seen resource has
+   nothing to revert to. `core/validate.go` gained `validateDriftRevert`:
+   unlike every other drift/adoption kind, `blast_radius` must be REAL
+   (`modifies` == `len(delta.modifies)` exactly, `creates`/`destroys`
+   zero, at least one modifies entry required) — accepting a revert is a
+   decision to actually change cloud, not a record of something that
+   already happened.
+2. **`ubx scan --propose revert|adopt|both`** (default `adopt`, byte-for-
+   byte unchanged): on drift, generates `drift_adopt`, `drift_revert`, or
+   both (two draft proposals sharing one `parent` — alternative
+   resolutions to the same detected drift; accepting one stales the
+   other via ordinary parent-mismatch, no new mechanism). No effect on a
+   `new` outcome (always adoption). CloudTrail attribution and
+   `--surface-as` both stay drift_adopt-specific (per docs/schema.md's
+   existing pinned scope) — `--surface-as revert` is a hard error with a
+   clear message, since its receipt is built entirely around a
+   drift_adopt proposal that mode doesn't generate. `--out` with
+   `--propose both`'s two proposals is also a hard error (print to stdout
+   instead).
+3. **A real, necessary correction to `RunScan` itself**: drift
+   classification now compares a fresh read against
+   `ObservedHash(FoldState(addr))` — the ledger's actual reconstructed
+   truth — instead of `Ledger.LastObservedHash` (the last thing a scan
+   happened to literally observe). These two coincided for every kind
+   that predates `drift_revert` (verified: the full pre-existing test
+   suite passes byte-for-byte unchanged), but a `drift_revert` can make
+   them diverge on purpose — accepting one is a decision that hasn't
+   been applied to cloud yet, so `FoldState` (ledger says "restored")
+   and `LastObservedHash` (last literal read, still drifted) genuinely
+   disagree immediately afterward. Caught this by writing the exact
+   live-verify sequence as a test first (`TestRunScan_
+   AfterRevertAccepted_ManualCorrection_ScanClean`) and watching it fail
+   with the wrong outcome at the wrong step — not by reasoning it through
+   in the abstract and assuming it'd work.
+4. **New `ubx revert-plan <accepted-drift_revert-id> [--tf-dir]`**
+   (`cli/revertplan.go`): emits, never applies — no `--write` flag exists
+   at all, unlike `ubx writeback`. Always prints a human-readable plan
+   (resource, attribute, current → restore-to). With `--tf-dir`, reuses
+   `tfwrite.FindAndApply` unmodified (fed a `Modification` whose `After`
+   is already the restore target — "reverse direction" is semantic, not a
+   different code path) for a corrective diff on literal attributes, and
+   collects both declined (non-literal) attributes and "resource block
+   not found in `--tf-dir`" cases into one manual-steps section — neither
+   is a command failure, since a revert can target a resource that was
+   only ever adopted via `ubx scan`, never written to `.tf`.
+   `cli/why.go` needed **no rendering changes**: `Kind` already prints
+   verbatim (`drift_adopt` vs `drift_revert`), and a revert's real blast
+   radius already reads differently from adopt's always-zero one —
+   confirmed by a new test with a 3-entry mixed-kind chain, not assumed.
+
+**Live-verified end to end against the real `ubx-states` account**
+(`TestRevertPath_LiveEndToEnd`, gated behind `UBX_CONFORMANCE_LIVE=1`, same
+convention as every other real-account test): tagged the bucket
+`Environment=prod`, adopted it, mutated the tag to `staging` out of band,
+ran `ubx scan --propose both`, accepted the `drift_revert`, confirmed
+`ubx revert-plan`'s output named the right resource/attribute/values,
+applied the correction manually via the `aws` CLI (standing in for "the
+team's own tooling"), and confirmed a final `ubx scan` reported clean.
+Bucket confirmed back to its original untagged state
+(`GetBucketTagging` → `NoSuchTagSet`, both before and after) via
+`t.Cleanup`.
+
+Filed and tracked in Linear from the start (`UBI-16`, team `ubiquex`) —
+verified via the Linear MCP tool itself, not assumed/typed from memory
+(see the 2026-07-11 Surprises entry below about a prior session's
+"UBI-11" mislabeling — this time the ticket existed before any commit
+referenced it).
+
+## Current phase (previous)
+
 **UBI-12 is done (this session): release cut v0.1.0 — goreleaser +
 tag-triggered CI wired up, the tag itself not yet pushed.** Four pieces:
 
@@ -1592,6 +1674,12 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
+**M3-4 ("decision loop") is now fully done, all three UBI-11 stages plus
+UBI-16's revert path.** Nothing further queued under it as a milestone —
+docs/plan.md's M3-4 bullet is annotated "Milestone complete." Next
+wedge-buildout milestone per docs/plan.md is M5-6 (retention layer: `why`
+over drift history, Slack notifications, policy stubs), not started.
+
 **Immediate, manual, not a coding session:** push the `v0.1.0` tag (`git tag
 v0.1.0 && git push origin v0.1.0`) once the UBI-12 goreleaser dry-run output
 above has been reviewed — that's what actually triggers
@@ -1672,6 +1760,29 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
+**UBI-16 (this session) opens new debt in ubiquex-docs, deliberately not
+written inline** — the revert path is foundational-slice work (a whole new
+wedge verb, docs/plan.md M3-4), not a docs session, per CLAUDE.md's session
+protocol. Batch for the next ubiquex-docs session:
+
+- `ubx scan`'s new `--propose revert|adopt|both` flag: needs both flag
+  reference and a concepts-level explanation of what a `drift_revert`
+  proposal actually means (the corrective direction, real blast radius —
+  this is a bigger conceptual shift than a typical new flag, arguably
+  deserves its own `concepts/revert.mdx` alongside the existing
+  `concepts/drift.mdx`, not just a flag-table entry).
+- New `ubx revert-plan` command: full CLI reference page needed
+  (`cli/revert-plan.mdx`, following the same skeleton-then-full-reference
+  pattern UBI-13 established for every other verb). The "emits, never
+  applies" distinction from `ubx writeback` is exactly the kind of thing
+  worth a real worked example, not just a one-line flag description —
+  probably also worth a forward link from `cli/writeback.mdx` and
+  `concepts/drift.mdx`.
+- `ubx why`'s chain rendering now shows three kinds instead of two
+  (adoption/drift_adopt/drift_revert) — no rendering code changed, but the
+  existing why-focused docs pages should probably show a mixed-kind chain
+  example now that one is possible, not just adoption+drift_adopt.
+
 **UBI-13 closed out 2026-07-11, three sessions, no open debt remaining.**
 Per CLAUDE.md's session protocol: user-visible CLI changes create a docs
 obligation in the ubiquex-docs (Mintlify) repo, batched and cleared per
@@ -1704,6 +1815,31 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-16): **`RunScan`'s drift baseline (`Ledger.LastObservedHash`)
+  and the ledger's actual reconstructed truth (`FoldState`) had always
+  computed the same hash for every proposal kind that existed before
+  `drift_revert` — not because anything tied them together on purpose, but
+  because accepting `adoption`/`drift_adopt` IS the decision that the
+  observed value becomes the ledger's truth, so "last thing we recorded
+  observing" and "what the ledger's fold reconstructs" were the same value
+  by construction.** `drift_revert` breaks that coincidence on purpose: its
+  `resolution.inputs` entry (correctly, per the schema amendment) records
+  the *observed/drifted* hash for staleness-checking purposes, while its
+  `delta.modifies[].after` — what `FoldState` folds forward — is the
+  *restored* value. Accepting a `drift_revert` doesn't itself touch cloud,
+  so immediately afterward the two genuinely disagree about "what's true"
+  (FoldState: restored) versus "what we last saw" (LastObservedHash: still
+  drifted). Found this by writing the live-verify sequence as a test
+  first — `TestRunScan_AfterRevertAccepted_ManualCorrection_ScanClean` —
+  and watching the *second* assertion (scan after manual correction should
+  show clean) fail with `ScanDrifted` instead, not by reasoning it through
+  in the abstract and trusting the reasoning. Fixed by switching `RunScan`
+  to compare against `ObservedHash(FoldState(addr))` instead of
+  `LastObservedHash(addr)` directly — verified as a true no-op for every
+  pre-existing case by running the full test suite unchanged (it passed),
+  and it's the semantically correct baseline regardless: docs/architecture.md
+  already defines drift as "reality diverging from the ledger," which is
+  exactly what `FoldState` answers.
 - 2026-07-11 (UBI-13 session 2): **`ubx accept`'s own `--help` output named
   five flags (`--reverify-with`, `--reverify-source`,
   `--reverify-provider-version`, `--resource-type`, `--resource-name`) that

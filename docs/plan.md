@@ -106,6 +106,27 @@
   unusual-but-valid formatting (tabs, no spaces around `=`, compact
   single-line objects) surviving byte-for-byte. See STATE.md for the full
   writeup and a real before/after diff.
+- 2026-07-16 — UBI-16 (Linear-verified): the revert path, M3-4's other
+  resolution to a detected drift. `ubx scan --propose revert|adopt|both`
+  (default `adopt`, unchanged) can generate a `drift_revert` proposal — the
+  corrective direction (before=observed/drifted, after=ledger-recorded),
+  real (non-zero) blast_radius, since accepting one is a decision to
+  actually change cloud. New `ubx revert-plan <accepted-drift_revert-id>
+  [--tf-dir]` emits (never applies) the reconciliation artifact: a
+  human-readable plan always, a corrective `.tf` diff via the existing
+  `tfwrite` machinery where `--tf-dir` is given and the attribute is a
+  literal, and an honest manual-steps section otherwise. A real correction
+  fell out of this work: `RunScan`'s drift baseline moved from
+  `Ledger.LastObservedHash` to `ObservedHash(FoldState(addr))` — the two
+  coincided for every proposal kind that existed before `drift_revert`
+  (verified: the full pre-existing test suite passes unchanged), but a
+  `drift_revert` can make them diverge on purpose (accepted-but-not-yet-
+  applied), and the ledger's actual reconstructed truth is the
+  semantically correct baseline for "did reality drift from the ledger"
+  regardless. See docs/architecture.md's "Revert path" section and
+  docs/schema.md's "Amendment: drift_revert proposals" for full design;
+  STATE.md for the adversarial tests and the live end-to-end verification
+  against the real `ubx-states` account.
 
 ## Strategy
 
@@ -278,13 +299,39 @@ All three are documented in `conformance/registry.go`'s `Notes`. This is the
 "types that fight back get documented + parked, not hacked" case UBI-9 was
 scoped to expect — the last two were found via free schema inspection
 rather than a live API call, but the reasoning is the same.
-- **M3–4 (decision loop):** adopt/revert proposals signed via PR-merge or CLI;
-  adopt writes corrected attributes back to existing .tf files (narrow-scope
-  bidirectionality); revert emits plan — apply via the team's own tooling at this
-  stage (executor trust comes later). GitHub App surfaces drift as issue/PR with
-  receipt.
+- **M3–4 (decision loop):** adopt/revert proposals signed via PR-merge or CLI
+  (done, UBI-11 — see §Decision loop above); adopt writes corrected
+  attributes back to existing .tf files (narrow-scope bidirectionality;
+  done, UBI-11 stage 2); revert emits plan — apply via the team's own
+  tooling at this stage, executor trust comes later (done, UBI-16 — see
+  §Revert path below). GitHub App surfaces drift as issue/PR with receipt
+  (done, UBI-11 stage 3). Milestone complete.
 - **M5–6 (retention layer):** `why` over drift history, Slack notifications,
   policy stubs (auto-adopt sandbox / require-approval prod).
+
+### Revert path (UBI-16)
+
+`ubx scan --propose revert|adopt|both` (default `adopt`, unchanged) can now
+generate a `drift_revert` proposal alongside or instead of `drift_adopt` —
+the corrective direction: `before` = observed/drifted, `after` = the
+ledger's existing truth being restored to. Unlike every other
+drift/adoption kind, its `blast_radius` is real (accepting it is a decision
+to actually change cloud, not a record of something that already
+happened). New `ubx revert-plan <accepted-drift_revert-id> [--tf-dir]`
+emits — never applies — the reconciliation artifact: a human-readable
+plan, a corrective `.tf` diff via the same `tfwrite` machinery `ubx
+writeback` uses (reversed direction — the file gets ledger truth, not the
+drifted value) where attributes are literal, and an explicit manual-steps
+section for anything that isn't. See docs/architecture.md's "Revert path"
+section for the full design, including a real correction this session made
+to `RunScan`'s own drift-detection baseline (compares against
+`ObservedHash(FoldState(addr))` now, not `LastObservedHash` — provably a
+no-op for every pre-existing proposal kind, necessary once `drift_revert`
+can make the two diverge) and docs/schema.md's "Amendment: drift_revert
+proposals" for the pinned validation rules. Verified live end to end on
+the real `ubx-states` account: adopt → mutate → `scan --propose both` →
+accept the revert → `revert-plan` output correct → manual `aws` CLI
+correction → `scan` reports clean. See STATE.md for the full writeup.
 
 ## Deferred (explicitly not now)
 
