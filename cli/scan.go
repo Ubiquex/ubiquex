@@ -210,7 +210,7 @@ func newScanCmd() *cobra.Command {
 				}
 			}
 			if adoptProposal != nil && !noAttribution {
-				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig), source)
+				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig), source, cfg.K8sAudit)
 			}
 			if adoptProposal != nil && surfaceAs != "" {
 				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, githubRepo, tfDir); err != nil {
