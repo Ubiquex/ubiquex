@@ -4,7 +4,184 @@
 
 ## Current phase
 
-**UBI-23 is done (this session, Linear-verified): redact provider-`Sensitive`
+**UBI-22 is done (this session, Linear-verified): Kubernetes support —
+the first non-cloud-provider provider, both stages completed.** Design
+landed first in docs/architecture.md ("Kubernetes support") and
+docs/schema.md (new `k8s_audit`/`not_configured` amendment), per session
+protocol.
+
+**Stage 1 (hermetic — schema-only verification, no cluster needed):**
+
+1. **`hashicorp/kubernetes` (2.35.1, 82 resource types) and
+   `hashicorp/helm` (2.17.0, 1 resource type) both verified via
+   `provider.Acquire`: both negotiate tfplugin **v5** — dual v5/v6
+   support earning its keep a third time, matching AWS/GCP.
+2. **A real, empirically-confirmed schema-shape finding**: every
+   `kubernetes_*` type checked models `metadata` (and, for workload
+   types, `spec`) as `NestingList`, not `NestingSingle` — a real
+   SDKv2-era "one-item list simulates an optional single block"
+   convention, confirmed by checking that `timeouts` (present on several
+   of the same types) IS `NestingSingle`. `helm_release`, by contrast,
+   has NO such nesting — flat `id`/`name`/`namespace`, a genuinely
+   simpler AWS/GCP-shaped identity. Also found: several `kubernetes_*`
+   types exist in both a bare (`kubernetes_secret`) and `_v1`-suffixed
+   (`kubernetes_secret_v1`) form with byte-for-byte identical schemas;
+   only the `_v1` forms (the provider's own recommended naming) were
+   seeded, to avoid duplicate registry entries.
+3. **The explicit UBI-23 cross-check, verified not assumed**:
+   `kubernetes_secret_v1.data`/`binary_data` are both confirmed
+   `Sensitive: true` in the real schema — had they not been, UBI-22
+   would have needed its own type-level redaction override (a stop-and-flag
+   design decision). No upstream gap, no override needed.
+   `kubernetes_config_map_v1`'s `data`/`binary_data` are correctly NOT
+   `Sensitive` (ConfigMaps are Kubernetes' own non-secret counterpart to
+   Secrets). `helm_release.set_sensitive` (a `NestingSet` block) is the
+   first real *Set*-nested sensitive value found in any
+   currently-integrated provider's schema — `provider.Redact`'s
+   Set-handling branch existed already (UBI-23) but had no real-schema
+   exercise until now.
+4. **A disclosed limitation, found reading `helm_release`'s schema**:
+   `manifest` (rendered chart YAML) and `metadata[0].notes`/
+   `metadata[0].values` are NOT `Sensitive`-flagged, even though a chart
+   template can render a `set_sensitive` value directly into them.
+   Schema-level `Sensitive` flags mark the input attribute only, not
+   everywhere it might get echoed into a derived, computed text blob — a
+   real, meaningful boundary of schema-driven redaction as a strategy,
+   confirmed concretely (not just predicted) once Stage 2 showed
+   `metadata[0].values` is, in fact, the field a real Helm values-drift
+   actually surfaces through (see Stage 2, below).
+5. **~20 `kubernetes_*`/`helm_release` types seeded into
+   `conformance.Registry`** (`Source: hashicorp/kubernetes`/
+   `hashicorp/helm`), `IdentityFields: ["id"]`, `Safety: FakeOnly`,
+   `Implemented: false` — mirroring UBI-9/UBI-21's own bootstrapping.
+6. **`k8saudit/` package**: a third `core.EventLookup` backend (EKS
+   control-plane audit logs — Kubernetes' own `audit.k8s.io/v1` event
+   schema — delivered to CloudWatch Logs, queried via `FilterLogEvents`).
+   Dispatched in `cli/attribution.go`'s `newAttributionBackend` by
+   `ProviderSource == "hashicorp/kubernetes"/"hashicorp/helm"` — **not**
+   by resource type, since an EKS cluster's own drift (`aws_eks_cluster`,
+   scanned via `hashicorp/aws`) must stay exactly as
+   CloudTrail-attributable as before. New, entirely optional
+   `.ubx/config` `[k8s_audit]` table (`cluster`/`region`/`log_group`) —
+   the one config table with no CLI flag equivalent, since (unlike AWS's
+   region or GCP's project) there's nothing to derive "which cluster"
+   from. Unconfigured (`cluster == ""`) degrades to
+   `audit_unattributed`/`not_configured` (new `core.ReasonNotConfigured`,
+   additive), via a sentinel error (`errK8sAuditNotConfigured`) —
+   `attributeDrift`/`newAttributionBackend` never block, matching the
+   best-effort-attribution posture every other backend already has.
+7. **Hermetic tests**: `k8saudit/client_test.go` (real K8s audit-event
+   JSON → `core.CloudTrailEvent` parsing, including the defensive
+   multi-candidate `Resources` building), `cli/k8sattribution_test.go`
+   (dispatch: not-configured for both providers, configured dispatches
+   correctly, AWS regression guard), `cli/config_test.go` additions
+   (`[k8s_audit]` parsing, absence → zero value).
+
+**Stage 2 (needed a real cluster — a local `kind` cluster, free/instant,
+was used for conformance; a real EKS cluster was judged out of scope for
+the audit-log leg, see below):**
+
+1. **A real correction to the Stage-1 hermetic guess, not just a
+   confirmation** — worth stating exactly like that, not softened:
+   Stage 1 reasoned that `metadata` being `NestingList` would require
+   `--lookup` shaped `{"metadata": [{"name": ..., "namespace": ...}]}`.
+   **Live against a real (`kind`) cluster, this turned out unnecessary**:
+   `{"id": "<namespace>/<name>"}` alone is sufficient for every
+   `kubernetes_*` type tested — the provider's own `ReadResource` parses
+   `id` internally. Cluster-scoped types (`kubernetes_namespace_v1`) use
+   the bare name, no prefix. `helm_release` is the reverse case: `id`
+   alone is NOT sufficient — the confirmed shape needs `id`+`name`+
+   `namespace` together.
+2. **Five `kubernetes_*` kinds + `helm_release` live-verified end to
+   end** (adopt→mutate→scan-diff, via the same `RunAdoptMutateScanDiff`
+   harness UBI-9/UBI-21 used), against a real, local `kind` cluster
+   (created via `kind create cluster`, Docker Desktop already
+   installed/running; `kind`/`helm` CLIs installed via `brew`):
+   `kubernetes_config_map_v1`, `kubernetes_secret_v1`,
+   `kubernetes_deployment_v1`, `kubernetes_service_v1`,
+   `kubernetes_namespace_v1`, `helm_release` — all promoted to
+   `RealSafe` in `conformance/registry.go`, plus a new, permanent
+   `conformance/k8s_live_test.go` (gated `UBX_CONFORMANCE_LIVE=1` +
+   `requireKubeContext`, which skips rather than fails if no
+   `kubectl` context is configured — `ubx` itself never creates/destroys
+   clusters).
+3. **`kubernetes_secret_v1` end to end, the critical redaction
+   cross-check**: adopted a real Secret (`data` correctly redacted to a
+   `$redacted` marker); re-scanning against the unrotated secret reported
+   no drift (same salt, same value, same hash); rotating the real secret
+   (`kubectl patch ... stringData`) correctly fired drift, `before`/`after`
+   both `$redacted` at different hashes; the generated proposal file was
+   grepped by hand for the real secret string AND its base64 encoding,
+   both before and after rotation — zero matches, every time. `ubx why`
+   rendered `(redacted)` correctly on both sides; `--json` carried the
+   same marker, no material.
+4. **`helm_release` adopt + a real values-drift**: adopted a real
+   release (a throwaway `helm create`-generated chart); a real
+   `helm upgrade --set replicaCount=3` correctly showed up as
+   `metadata[0].values` changing from `{"replicaCount":1}` to
+   `{"replicaCount":3}` in the generated `drift_adopt` proposal — **the
+   top-level `values`/`chart` attributes stayed `null` throughout**, since
+   the provider never backfills them from a live read; `metadata[0].values`
+   is the field that actually carries a values-drift signal. This
+   directly confirms the disclosed redaction limitation above is
+   concrete, not hypothetical: neither `metadata[0].values` nor
+   `manifest` is `Sensitive`-flagged, so this exact mechanism would
+   surface a `set_sensitive` value in plaintext if a chart rendered it
+   into output.
+5. **A real, if minor, finding worth naming**: any `kubernetes_*`
+   mutation always shows a `metadata` change alongside the semantic one,
+   since every real mutation bumps `resourceVersion` and `metadata`
+   (a whole `NestingList` value) is compared atomically — not a bug, but
+   worth knowing before it reads as unrelated noise in a diff.
+6. **The EKS audit-log leg was deliberately not attempted, recorded
+   honestly rather than silently skipped**: `aws eks list-clusters`
+   confirmed no EKS cluster already exists in the account (both regions
+   checked); provisioning one — a real, hourly-billed, ~15-20-minute
+   piece of cloud infrastructure, categorically more consequential than
+   the free/instant local `kind` cluster used above, or the
+   Secrets-Manager-secret/IAM-access-key created and destroyed in
+   seconds during UBI-23's own live verification — was judged out of
+   proportion to attempt autonomously. `k8saudit.Client.LookupEvents`'s
+   defensive `Resources`-candidate-building (offering `objectRef.name`,
+   `objectRef.namespace + "/" + objectRef.name`, `objectRef.uid` all at
+   once) was validated as far as a local cluster allows: `id`'s
+   confirmed `<namespace>/<name>` shape (finding #1 above) IS one of the
+   candidates this backend already builds — so the mechanism is believed
+   sound, but a real EKS audit event was never actually correlated
+   against it. `k8saudit.Backend.DeliveryLag` ships as a documented,
+   conservative placeholder (5 minutes) pending that measurement, stated
+   plainly as unmeasured.
+7. **A live-side finding along the way**: `hashicorp/helm`'s own
+   provider-level config nests its Kubernetes connection inside a
+   `NestingList` block too (`kubernetes = [{config_path=..., ...}]`) —
+   confirmed directly against the real schema, the same list-wrapping
+   convention `kubernetes_*`'s own `metadata` uses, this time at the
+   provider-config layer rather than a resource schema.
+
+Every hermetic test (`go test ./...`) and all six live conformance tests
+(`UBX_CONFORMANCE_LIVE=1 go test ./conformance/...`, against a real `kind`
+cluster created and destroyed for the run) pass. `gofmt -l .`/`go vet
+./...` clean. ubiquex-docs updated same session: Kubernetes/Helm sections
+on `cli/lookup.mdx`/`cli/scan.mdx`, a new `[k8s_audit]` subsection on
+`cli/config.mdx`, the `not_configured` reason and a new "Kubernetes and
+Helm: EKS audit logs" section on `concepts/attribution.mdx`, a
+cross-reference on `concepts/secrets.mdx`, and provider/credential
+mentions on `getting-started/installation.mdx` — every transcript real
+(captured from the actual built binary against the real `kind` cluster
+during Stage 2, not hand-written). `mint validate`/`mint broken-links`
+both pass clean.
+
+**A pre-existing bug caught and fixed while working in this area, unrelated
+to UBI-22's own scope**: an earlier UBI-23 session edit to docs/schema.md
+had accidentally deleted the `## Canonical hashing — RATIFIED v1` heading
+line itself (an old_string/new_string replacement that consumed the
+heading without restoring it). Found by `grep`ping for the heading while
+inserting this session's own new amendment nearby, and fixed as part of
+this session's first docs commit.
+
+## Current phase (previous)
+
+**UBI-23 is done (2026-07-17): redact provider-`Sensitive`
 attributes in observed state — secrets must never enter the ledger.**
 Design landed first in docs/schema.md (new "`$redacted` value encoding"
 amendment) and docs/architecture.md (new "Secrets" section), per session
