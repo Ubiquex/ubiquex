@@ -4,6 +4,142 @@
 
 ## Current phase
 
+**UBI-23 is done (this session, Linear-verified): redact provider-`Sensitive`
+attributes in observed state — secrets must never enter the ledger.**
+Design landed first in docs/schema.md (new "`$redacted` value encoding"
+amendment) and docs/architecture.md (new "Secrets" section), per session
+protocol.
+
+**Mechanism**: redaction happens at the `core.StateReader` adapter
+boundary (`cli/stateadapter.go`'s `stateReaderAdapter`,
+`conformance/harness.go`'s own copy) — the one place that still holds the
+concrete `*provider.Schema` (hence its `Sensitive` flags) before it's
+type-erased to `core.StateReader`'s opaque `any`. New `provider.Redact(block,
+salt, observed)` walks `Block.Attributes`/`Block.NestedBlocks` (dispatched
+on `NestingMode`, mirroring `ctyvalue.go`'s own encode-side shapes) and
+replaces every `Sensitive`-flagged value wholesale with `{"$redacted":
+{"sha256": "<salted hash>"}}`. `core` itself gains only two things: a
+small `$redacted`-shape recognition helper (`core/redacted.go`:
+`IsRedactedValue`/`CountRedacted`, plus an internal `isRedactedMarker`) and
+a fix to `core/state.go`'s `diffObjects` so it treats a `$redacted` object
+as atomic rather than recursing into it — `core` never learns what
+"sensitive" means, only the resulting JSON shape, preserving the
+core/provider zero-import boundary (the same wire-convention pattern
+`IntentSource.Kind` string literals already establish). `FoldState` needed
+no changes at all.
+
+**Salt**: new `core/salt.go`'s `Ledger.Salt()` — per-ledger-directory,
+`.ubx/salt`, generated via `crypto/rand` on first use, `0600`, and ensures
+a `.gitignore` entry for it exists (creating a minimal `.gitignore` if
+none exists, appending the line otherwise). All four `newStateReader`
+call sites (`cli/scan.go`, `cli/scanall.go`, `cli/status.go`,
+`cli/accept.go`) now fetch the ledger's salt and pass it through;
+`conformance/harness.go`'s `RunAdoptMutateScanDiff` does the same.
+
+**Verified against real provider schemas, not assumed** (the task's own
+instruction): a throwaway introspection tool against real `hashicorp/aws`
+6.54.0 and `hashicorp/google` 7.40.0 found nested sensitivity is common,
+not hypothetical — 115 nested (of 131 top-level) for AWS, 207 nested (of
+46 top-level) for GCP, up to depth 4/3, including a whole `List`-typed
+attribute marked sensitive as one unit
+(`aws_elasticache_user.authentication_mode.passwords`) and
+non-obviously-secret field names also flagged sensitive
+(`aws_quicksight_data_source`'s `credential_pair.username` alongside
+`password`). The existing `Block`/`NestedBlock` model (built for
+cty-msgpack encode/decode, UBI-7) already correctly surfaces all of this
+via `BlockTypes`-based nesting — no schema-translation change needed. A
+real gap was checked directly rather than assumed away: `tfplugin6.Schema_Attribute`
+has an unread `NestedType` field (the modern terraform-plugin-framework
+nested-attribute mechanism); confirmed both integrated providers negotiate
+wire protocol **v5** (matching this project's own standing "dual v5/v6"
+finding), and `tfplugin5.Schema_Attribute` has no `NestedType` field at
+all — it's architecturally impossible to encounter with either provider
+`ubx` supports today. Flagged, not silently dropped: a future v6-negotiating
+provider would need `blockFromV6` extended to also read `NestedType` first.
+
+**Per-command behavior**: `writeback`/`revert-plan` (via
+`tfwrite.ApplyModification`) decline any redacted `Modification.After`
+value unconditionally, before ever attempting to resolve/render it —
+never handing a `$redacted` marker to `hclwrite.TokensForValue`. `why`
+gained a new `renderModifies` (both the single-proposal and
+resource-address chain views) rendering `change: <addr>: <path>: <before>
+-> <after>` for every kind carrying a real delta — not previously
+rendered at all — with `(redacted)` substituted for a `$redacted` value,
+reusing `revert-plan`'s own `rawOrAbsent` helper (now redaction-aware).
+`scan --all`'s batch summary gained a third count,
+`N attribute(s) redacted`. `--json` needed zero code changes anywhere:
+every payload already marshals the real, already-redacted `*core.Proposal`.
+
+**A real, checked scope boundary found while writing the adversarial
+test, not silently swept under**: `resolution.inputs[].lookup` (the UBI-7
+follow-up field) is populated straight from `ScanRequest.CurrentState` in
+`core.RunScan`, independent of the adapter-layer redaction path — it is
+never redacted. An early version of the adversarial test put the fake
+sensitive value directly into `--lookup` and caught the raw value showing
+up unredacted in the generated proposal file. Checked against real schemas
+before "fixing" anything: across every type in `conformance/registry.go`
+(AWS and GCP), no identity/lookup attribute is ever `Sensitive`-flagged —
+real lookup keys are `id`/`name`/`arn`/`bucket`, never a credential.
+Redacting `lookup` unconditionally would break `VerifyFreshness`'s
+re-read (a redacted marker can't be re-supplied as a working identifier)
+to guard against a scenario no real schema produces. Scope boundary
+recorded in docs/architecture.md's own subsection; the test itself was
+corrected to the realistic shape (`--lookup` carrying only `id`
+throughout) and now asserts the persisted lookup is exactly
+`{"id": "..."}`, permanently guarding this boundary.
+
+**Adversarial tests, all hermetic except the one explicit live check**:
+`provider/redact_test.go` (top-level/nested block/list/set/map,
+whole-value-regardless-of-type, missing-attribute-skipped,
+same-salt-same-value determinism, different-salt-different-hash),
+`core/redacted_test.go` + `core/salt_test.go` (marker recognition, count,
+generate/persist/reread, `.gitignore` creation/append/no-duplicate,
+salt-loss-regenerates-different), `core/state_test.go` additions
+(`diffObjects` atomic-not-recursive both directions, a full
+adopt→drift→fold chain over redacted values with drift firing only on a
+real hash change), `tfwrite/tfwrite_test.go` (decline path, byte-identical
+file, no hash/marker written), `cli/redact_test.go` (full CLI adoption +
+drift-both-directions + `why`/`--json` rendering + writeback decline +
+`scan --all` redaction-count summary, all via a new `provider/internal/fakeprovider`
+knob, `FAKEPROVIDER_SENSITIVE_ATTRS`).
+
+**Live-verified against the real AWS account** (`839333509514`,
+`arn:aws:iam::...:user/roozbeh` — same account every prior live session
+used), by hand via the actual built binary, not a permanent gated test
+(judged out of proportion to this ticket's scope — `aws_secretsmanager_secret_version`
+isn't in `conformance/registry.go`, and adding/promoting a new type there
+is UBI-9/UBI-18-shaped work, not this one's mandate): first tried
+`aws_iam_access_key` (the task's own suggested example) and found a
+genuinely interesting negative result — AWS never returns an IAM access
+key's `secret` on an ordinary read after creation (only at
+`CreateAccessKey` time), so `ubx scan` structurally can never observe it
+at all; nothing to redact because there's nothing to see. Switched to a
+real `aws_secretsmanager_secret_version` (created, rotated via
+`put-secret-value`, destroyed after): adoption's `delta.creates.state.secret_string`
+came back a real `$redacted` marker; `grep`ping the generated proposal
+file for the real secret string, both before and after rotation, found
+zero matches both times; re-scanning against the unrotated secret
+reported no drift; after rotation, drift fired with `before`/`after` both
+`$redacted` at genuinely different hashes; `ubx why` rendered
+`(redacted)` on both sides, and `--json` carried the same marker with,
+again, zero matches for either real secret value. Account confirmed left
+exactly as found (secret deleted without recovery, IAM access keys back
+to only the pre-existing one).
+
+ubiquex-docs updated same session: new `concepts/secrets.mdx` (added to
+nav), `cli/scan.mdx`/`cli/writeback.mdx`/`cli/revert-plan.mdx`/`cli/why.mdx`
+gained redaction examples and cross-links (all transcripts regenerated
+against the actual built binary, not hand-written), `cli/lookup.mdx`
+gained the lookup-never-redacted note. Two pre-existing `cli/why.mdx`
+examples and two pre-existing `cli/scan.mdx --all` summary-line examples
+were also regenerated/corrected, since `why`'s new `renderModifies` and
+`scan --all`'s new summary count are both real, unconditional output
+changes (not redaction-specific) that made the old committed transcripts
+stale the moment this session's code shipped. `mint validate`/`mint
+broken-links` both pass clean.
+
+## Current phase (previous)
+
 **UBI-21 is done, both stages, this session (Linear-verified): GCP
 support, the first cross-provider generalization.** Design landed in
 docs/architecture.md ("GCP support (UBI-21)") and docs/plan.md before
