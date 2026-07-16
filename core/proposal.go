@@ -71,12 +71,29 @@ type Intent struct {
 // (attribution.go). Purely additive/optional, same reasoning as every
 // other schema.md amendment since the hashing ratification: existing
 // proposals with only dialogue/manual_edit/issue sources are unaffected.
+//
+// UBI-21 (docs/architecture.md — GCP support) adds two more kinds for the
+// GCP Cloud Audit Logs backend: "gcp_audit" (a matched event, GCP's
+// counterpart to "cloudtrail") and "audit_unattributed" (a generalized,
+// backend-tagged counterpart to "cloudtrail_unattributed" -- see Backend
+// below). "cloudtrail_unattributed" is not deprecated or migrated; it
+// remains permanently valid, and cloudtrail/'s own AWS backend keeps
+// emitting it unchanged, not "audit_unattributed" -- only the newer GCP
+// backend uses the generalized kind, since there's no existing AWS output
+// to preserve compatibility with there.
 type IntentSource struct {
-	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed
+	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed
 	Ref         string `json:"ref,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
 
-	// The following are populated only for Kind == "cloudtrail".
+	// The following are populated only for Kind == "cloudtrail" or
+	// "gcp_audit". ActorARN carries the GCP caller's principal email for
+	// "gcp_audit" sources, not literally an ARN -- reusing the same field
+	// (not introducing a GCP-specific one) is a deliberate choice: both
+	// backends implement the same core.EventLookup interface and produce
+	// the same core.CloudTrailEvent shape (see gcpaudit/client.go's own
+	// doc comment for the full reasoning); SessionContext is AWS-specific
+	// and always empty for "gcp_audit" sources.
 	EventID        string          `json:"event_id,omitempty"`
 	EventName      string          `json:"event_name,omitempty"`
 	EventTime      string          `json:"event_time,omitempty"` // RFC3339
@@ -84,9 +101,17 @@ type IntentSource struct {
 	SourceIP       string          `json:"source_ip,omitempty"`
 	SessionContext json.RawMessage `json:"session_context,omitempty"`
 
-	// Reason is populated only for Kind == "cloudtrail_unattributed":
-	// no_matching_event | delivery_window | not_logged.
+	// Reason is populated for Kind == "cloudtrail_unattributed" or
+	// "audit_unattributed": no_matching_event | delivery_window |
+	// not_logged.
 	Reason string `json:"reason,omitempty"`
+
+	// Backend is populated only for Kind == "audit_unattributed": which
+	// platform's attribution backend came up empty -- "gcp_audit_logs"
+	// today, more values as more backends are added. Never populated for
+	// "cloudtrail_unattributed", which predates this field and needs no
+	// disambiguation (it only ever meant CloudTrail).
+	Backend string `json:"backend,omitempty"`
 }
 
 // Address identifies one resource within a stack: (stack, type, name).

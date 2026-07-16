@@ -206,7 +206,7 @@ func newScanCmd() *cobra.Command {
 				}
 			}
 			if adoptProposal != nil && !noAttribution {
-				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig))
+				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig), source)
 			}
 			if adoptProposal != nil && surfaceAs != "" {
 				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, githubRepo, tfDir); err != nil {

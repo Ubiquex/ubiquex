@@ -29,6 +29,17 @@ import (
 	"github.com/ubiquex/ubiquex-cli/core"
 )
 
+// Backend is cloudtrail's own core.AttributionBackend value, unchanged
+// from before UBI-21 generalized core.AttributeDrift: "cloudtrail"/
+// "cloudtrail_unattributed" kinds, no Backend field ever set on the
+// unattributed case (Name is deliberately empty), and CloudTrail's own
+// ~15-minute documented (and, in UBI-10, directly measured) delivery lag.
+var Backend = core.AttributionBackend{
+	SuccessKind:      "cloudtrail",
+	UnattributedKind: "cloudtrail_unattributed",
+	DeliveryLag:      15 * time.Minute,
+}
+
 // Client implements core.EventLookup against the real AWS CloudTrail API.
 type Client struct {
 	api *sdkcloudtrail.Client
