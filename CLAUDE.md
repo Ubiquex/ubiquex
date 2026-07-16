@@ -18,12 +18,14 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 3. Update `STATE.md` as the LAST act of every session (what was done, what's next,
    any surprises).
 4. A plan change is not real until it lands in `docs/plan.md` (with changelog entry).
-5. User-visible changes (new commands, flags, behaviors) create a docs
-   obligation in the ubiquex-docs repo (Mintlify, user-facing). During
-   foundational slices: do NOT write user docs inline — record a "docs debt"
-   entry in STATE.md instead, batched and cleared per slice. Debt must not
-   cross a slice boundary. Internal docs (docs/ in this repo) are updated
-   immediately as before.
+5. User-visible changes (new commands, flags, behaviors) update ubiquex-docs
+   in the SAME session: pages verified against the actual built binary
+   (transcripts real, flags from --help), mint validate clean, committed and
+   pushed. If genuinely infeasible in-session, record a docs-debt entry in
+   STATE.md as the exception — never skip silently. Internal docs (docs/ in
+   this repo) are updated immediately as before.
+6. Only reference Linear issue IDs given in the handoff prompt; never infer one.
+   When filing new issues, verify the title against the Linear board.
 
 ## Git rules (strict)
 
@@ -39,12 +41,15 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 
 - Language: Go (module: `github.com/ubiquex/ubiquex-cli`).
 - Layout: `core/` (IR, ledger, hashing), `provider/` (tfplugin client),
-  `cli/` (cobra commands), `docs/`.
+  `cli/` (cobra commands), `tfwrite/` (surgical .tf edits), `github/`
+  (acceptance derivation), `cloudtrail/` (attribution), `conformance/`
+  (per-type registry + harness, test-only), `docs/`.
 - Determinism is a feature: anything feeding a hash must have canonical,
   reproducible serialization. No map-iteration ordering, no timestamps in
   hashed content, no environment leakage.
 - Tests accompany every slice; adversarial/failure-path tests are first-class
-  (provider timeout, partial state, interrupted operations).
+  (provider timeout, partial state, interrupted operations). Live tests are
+  gated behind env vars; `go test ./...` stays hermetic.
 
 ## Key docs
 
