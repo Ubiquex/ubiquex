@@ -267,6 +267,35 @@
   `NestedType` is v6-only — scoped out honestly, not assumed away. See
   docs/architecture.md's "Secrets" section and STATE.md for the full
   writeup.
+- 2026-07-17 — UBI-22 (Linear-verified): Kubernetes support, the first
+  non-cloud-provider provider (`hashicorp/kubernetes`, `hashicorp/helm`),
+  both stages completed this session. Identity generalized with zero new
+  mechanism; the real finding is `kubernetes_*`'s `metadata`/`spec`
+  modeled as `NestingList`, yet `--lookup` needs only `{"id":
+  "<namespace>/<name>"}` (confirmed live against a local `kind` cluster,
+  correcting an initial Stage-1 guess that `metadata` itself would need
+  pre-populating). `provider.Redact` (UBI-23) needed no Kubernetes-specific
+  code: `kubernetes_secret_v1.data`/`binary_data` confirmed real
+  `Sensitive` attributes, verified end to end (adopt, rotate, drift,
+  grep-for-zero-material) against a real cluster; `helm_release.set_sensitive`
+  contributed the first real Set-nested sensitive value in any
+  currently-integrated provider, alongside a disclosed limitation
+  (`manifest`/`metadata[0].values` aren't `Sensitive`-flagged, so a
+  sensitive value can still surface there in plaintext if a chart
+  template renders it). New `k8saudit/` package, a third `core.EventLookup`
+  backend (EKS control-plane audit logs via CloudWatch Logs), dispatched
+  by `ProviderSource` exactly like AWS-vs-GCP; a new, entirely optional
+  `.ubx/config` `[k8s_audit]` table, unconfigured degrading to
+  `audit_unattributed`/`not_configured` (docs/schema.md's new amendment),
+  never blocking detection. Six real conformance tests (five
+  `kubernetes_*` kinds + `helm_release`) live-verified against a real,
+  local `kind` cluster and promoted to `RealSafe`. The EKS audit-log leg
+  itself was deliberately not attempted — no EKS cluster existed already,
+  and provisioning one is real, hourly-billed infrastructure judged out
+  of proportion to create autonomously; `k8saudit.Backend.DeliveryLag`
+  ships as a documented, unmeasured placeholder pending that. See
+  docs/architecture.md's "Kubernetes support" section and STATE.md for
+  the full writeup, including every empirical finding.
 
 ## Strategy
 
