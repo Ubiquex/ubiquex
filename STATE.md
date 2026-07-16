@@ -4,6 +4,69 @@
 
 ## Current phase
 
+**UBI-19 is done (this session, Linear-verified): `.ubx/config` defaults
+and `ubx init` — production ladder step 4.** Design landed first in
+docs/architecture.md ("Config defaults") and docs/plan.md before code,
+per session protocol. Four pieces:
+
+1. **TOML, not YAML** (`github.com/BurntSushi/toml`, the first dependency
+   added purely for config parsing): no implicit type coercion, matching
+   this project's own determinism posture — justified in full in
+   docs/architecture.md, not just asserted.
+2. **`cli/config.go`**: discovery walks from the current working
+   directory upward, nearest `.ubx/config` wins (same convention `.git`
+   itself uses), independent of `--ledger-dir` on purpose. Covers exactly
+   five keys the issue named: `[provider]` (`path`, or `source`+`version`),
+   `[provider_config]` (freeform, marshaled to the same JSON string
+   `--provider-config` already accepts), `stack`, `github_repo`, `tf_dir`
+   — deliberately not `--ledger-dir`. Precedence fixed everywhere it
+   applies: CLI flag (via `cmd.Flags().Changed`, never a zero-value
+   guess), then config, then whatever "required and absent" already
+   meant for that flag. Unknown keys warn (`toml.MetaData.Undecoded()`)
+   and are ignored; malformed TOML is a hard error.
+3. **Wired into every verb that takes these flags**: `scan` (stack,
+   provider, provider-config, github-repo, tf-dir — config's stack sits
+   *before* `--all`'s own filename-derived fallback in the precedence
+   chain), `accept` (provider-config and github-repo; config's provider
+   only fills a gap in an *already-opted-into* `--reverify-source`, never
+   turns reverification on by itself — accept's reverify stays
+   per-invocation opt-in regardless of what config holds), `why`
+   (github-repo), `writeback`/`revert-plan` (tf-dir), `status` (provider
+   and provider-config only — **deliberately not stack**: its absence
+   there means "every stack," not "required and missing," and applying a
+   configured default would silently turn status's whole selling point
+   inside out).
+4. **New `ubx init [--dir] [--force] [--stack] [--source] [--provider-version]
+   [--provider] [--provider-config] [--github-repo] [--tf-dir]`**: a real
+   value for every key a flag was given, a commented example for
+   everything else, refusing to overwrite an existing config without
+   `--force`.
+
+**A real bug caught by writing a test that actually decodes the generated
+file back, not by eyeballing the template**: `renderConfigTemplate`
+originally emitted `stack`/`github_repo`/`tf_dir` *after* the
+`[provider]`/`[provider_config]` table headers — valid TOML, but TOML
+itself assigns a bare key written after a `[table]` header to that table,
+not the document root, no matter how many blank lines separate them. Every
+one of those three values read back empty. Fixed by emitting all
+root-level keys before any table header; `TestLoadConfig_RootKeysAfterTableGetSwallowed`
+locks in the underlying TOML behavior itself as a permanent regression
+test, not just the fix.
+
+**A hermeticity fix applied proactively, not reactively**: `configSearchStartDir`
+is a package var (not a bare `os.Getwd()` call) specifically so
+`cli/scan_test.go`'s `TestMain` can pin the whole test suite to an empty
+scratch directory. Without this seam, every test in the package would
+silently depend on whether some ambient `.ubx/config` happens to exist
+anywhere from the real test-runner cwd up to the filesystem root (a
+developer's home directory, say) — exactly the kind of host-machine-state
+leak `go test ./...` staying hermetic is supposed to rule out. Caught by
+thinking through the discovery mechanism's implications before writing
+any tests against it, not after one failed mysteriously on someone else's
+machine.
+
+## Current phase (previous)
+
 **UBI-18 is done (this session, Linear-verified): `ubx scan --all`, bulk
 onboarding from Terraform state — production ladder step 3.** Design
 landed first in docs/architecture.md ("Bulk onboarding") and docs/plan.md
@@ -1826,6 +1889,16 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
+**Production ladder step 4 (UBI-19, `.ubx/config`) is done.** Real gaps
+worth remembering: `--ledger-dir` is deliberately not a config key (the
+issue never named it, and it's more consequential to get silently wrong
+than the other five); `accept`'s reverify flow only reads config when
+already opted into via `--reverify-source` on the CLI, never turned on by
+config alone; `status` deliberately never reads config's `stack` default.
+None of these are gaps to close later — they're the actual scope
+boundary, documented as such. Production ladder step 5, if there is one,
+isn't scoped yet.
+
 **Production ladder step 3 (UBI-18, bulk onboarding) is done.** Real gaps
 worth remembering, not quietly forgetting: bulk *acceptance* is
 deliberately out of scope (see docs/architecture.md's Business-frame
@@ -1837,7 +1910,7 @@ bounded-memory (one `json.Unmarshal` of the whole state file), same
 accepted scale posture as `FoldState`'s own linear ledger walk and `ubx
 status`'s own fleet walk — revisit together if a real state file or
 ledger ever approaches a size where that stops being reasonable, not
-separately. Production ladder step 4, if there is one, isn't scoped yet.
+separately.
 
 **M1-2 ("detection core") is fully done too, `ubx status` (UBI-17) having
 landed its last unstarted piece.** docs/plan.md's M1-2 bullet is annotated
@@ -1939,6 +2012,17 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
+**UBI-19's ubiquex-docs work was done in this same session, per
+protocol**: new `cli/config.mdx` and `cli/init.mdx`, short daily-command-
+form examples added to `cli/scan.mdx` and `cli/status.mdx` (the latter
+also documenting the deliberate stack-default exception), and a brief
+config-fallback note + cross-link added to `cli/writeback.mdx`,
+`cli/revert-plan.mdx`, `cli/accept.mdx`, and `cli/why.mdx` each for their
+own relevant key. `getting-started/installation.mdx` now points to `ubx
+init` as the natural first step post-install. `mint validate`/`mint dev`/
+`mint broken-links` all pass clean. See ubiquex-docs' own STATE.md for
+the full writeup.
+
 **UBI-18's ubiquex-docs work was done in this same session, per protocol,
 and it also cleared UBI-16's carried debt (below) while in the docs
 repo**: new `cli/revert-plan.mdx` and a `concepts/drift.mdx` "Two
@@ -2034,6 +2118,24 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-19): **`ubx init`'s own generated `.ubx/config` silently
+  discarded `stack`/`github_repo`/`tf_dir` — every one of them read back
+  empty — because `renderConfigTemplate` wrote them *after* the
+  `[provider]`/`[provider_config]` table headers.** This is completely
+  valid TOML syntax; it's just not what it looks like to a human reading
+  the template string. TOML assigns a bare key to whichever table was
+  most recently opened, and blank lines between sections don't close a
+  table the way they might in, say, an INI-adjacent mental model — only
+  the next `[table]` header or end-of-file does. Found only by writing a
+  test that actually round-trips `ubx init`'s output back through
+  `toml.DecodeFile` and checking the parsed struct's fields, not by
+  reading the generated string and confirming it "looked right" (which it
+  did, by eye). Fixed by moving every root-level key before any table
+  header; kept as a permanent regression test
+  (`TestLoadConfig_RootKeysAfterTableGetSwallowed`) that documents the
+  underlying TOML behavior itself, not just this one template's fix — the
+  same mistake is trivially easy to reintroduce by hand-editing a real
+  config, not just by generating one.
 - 2026-07-16 (UBI-18): **Every proposal generated in one `ubx scan --all`
   batch shared the exact same `parent` — the ledger's real, on-disk head,
   which never moves mid-walk since nothing gets accepted until later —
