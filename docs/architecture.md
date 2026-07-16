@@ -799,6 +799,104 @@ proposal files that accept cleanly, one after another, in the order
 `--all` printed them — not something the operator has to reorder or
 patch by hand first.
 
+## Config defaults (UBI-19)
+
+Production ladder step 4: daily commands were carrying five flags
+(`--stack`, `--source`/`--provider-version` or `--provider`,
+`--provider-config`, `--github-repo`, `--tf-dir`) that are almost always
+the same value, invocation after invocation, for one project. `.ubx/config`
+lets a team set them once.
+
+### Format: TOML, not YAML
+
+Both were on the table; TOML won for reasons that matter specifically
+here, not as a general preference: its grammar has no significant
+whitespace and no implicit type coercion (YAML's well-known `no`/`yes`,
+`on`/`off`, and bare-Norway-problem string-vs-boolean ambiguities have no
+TOML equivalent — every value's type is unambiguous from its own
+syntax). That's a direct match for "determinism is a feature"
+(docs/schema.md, CLAUDE.md) applied to a new surface: a config file whose
+meaning could shift depending on quoting style is exactly the kind of
+ambiguity this project has refused to accept anywhere else. TOML is also
+comment-native (so is YAML) and precedented for exactly this role in
+other developer tooling (`Cargo.toml`, `pyproject.toml`) — a config file a
+human is expected to hand-edit, not a data interchange format. Parsed with
+`github.com/BurntSushi/toml`, the first non-Go-standard-library dependency
+this project has added purely for config parsing.
+
+### Discovery: nearest `.ubx/config` wins
+
+Resolution starts at the current working directory and walks upward
+through parent directories, stopping at the first `.ubx/config` found —
+the same convention `.git` itself uses to find a repository root.
+Deliberately *not* tied to `--ledger-dir`: a project's defaults (which
+provider, which region, which stack) are a property of *where the
+operator is standing* when they run `ubx`, not of wherever `--ledger-dir`
+happens to point (which can legitimately be a completely different path,
+e.g. shared ledger storage outside the project checkout). No config
+file anywhere up to the filesystem root is not an error — every value
+config could have supplied simply falls through to its own flag's
+ordinary default, or to "required and absent," per command.
+
+### Precedence: CLI flag, then config, then required-and-absent is an error
+
+For every flag config can supply, the rule is fixed and applies
+uniformly: an explicitly-passed CLI flag always wins (checked via cobra's
+own `cmd.Flags().Changed(...)`, not by comparing against a zero value —
+a flag explicitly set *to* its zero value must still count as "explicitly
+given," the same discipline `ubx scan`'s existing `--stack`/`--type`/
+`--name` validation already uses); otherwise config fills the gap if it
+has a value; otherwise, whatever the flag's own existing "is this
+required" rule already says applies unchanged — config is a second place
+to find a value, never a new rule about which values are required. `ubx
+scan --all`'s own filename-derived stack default (UBI-18) sits *after*
+config in this chain: CLI flag, then config, then the state file's own
+basename, matching how each layer only ever fills a gap the one before it
+left open.
+
+### What it covers, and what it deliberately doesn't
+
+Five keys, matching the five flags this session set out to stop
+repeating: a `[provider]` table (`path`, or `source`+`version` — the same
+mutual exclusivity `ubx scan`'s own flags already enforce), a
+`[provider_config]` table (freeform, marshaled straight to JSON and handed
+to the exact same `--provider-config` string every provider-touching
+command already accepts), `stack`, `github_repo`, and `tf_dir`.
+**`--ledger-dir` is deliberately not one of them** — not an oversight,
+the issue's own scope named exactly these five, and a ledger's location
+is arguably a more consequential default to get silently wrong than the
+others (a wrong provider region fails loudly on the first read; a wrong
+ledger directory could make a command silently look at the wrong ledger
+entirely). If that ever needs to change, it's a separate, deliberate
+decision, not a quiet scope-creep of this one.
+
+### Unknown keys warn, they don't fail
+
+A config file's own forward/backward compatibility matters more than
+strict schema enforcement here: an unrecognized key (a typo, a field from
+a future `ubx` version, a field a downgraded `ubx` no longer knows about)
+is reported as a warning naming the exact key, and otherwise ignored —
+never a hard failure that would block every command in a project until
+someone fixes a typo. `github.com/BurntSushi/toml`'s own `MetaData.Undecoded()`
+makes this a direct, no-guesswork check: every key the decoder didn't
+assign to a known struct field, named exactly. A config file that isn't
+valid TOML *syntax* at all is a different matter — that's reported as a
+hard error, since there's no partial, best-effort way to read a file that
+doesn't parse.
+
+### `ubx init`: a new verb, not an extension of an existing one
+
+No `init`-shaped command existed before this session. `ubx init [--dir]
+[--force] [--stack] [--source] [--provider-version] [--provider]
+[--provider-config] [--github-repo] [--tf-dir]` writes `.ubx/config`
+(refusing to overwrite an existing one without `--force`, the same
+"never silently destroy what's already there" posture as everywhere else
+in this trust chain) — every key the operator supplies a flag for is
+written as a real, active value; every key they don't is written as a
+commented-out example showing the correct syntax, so the file is
+immediately useful as its own documentation of what's possible, not just
+a blank template.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

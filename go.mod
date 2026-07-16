@@ -3,6 +3,7 @@ module github.com/ubiquex/ubiquex-cli
 go 1.26.3
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/ProtonMail/go-crypto v1.3.0
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.29

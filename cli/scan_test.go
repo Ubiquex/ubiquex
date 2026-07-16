@@ -31,6 +31,21 @@ func TestMain(m *testing.M) {
 		panic("building fakeprovider fixture: " + err.Error())
 	}
 
+	// Every test in this package that runs a command indirectly calls
+	// LoadConfig, which walks upward from configSearchStartDir() looking
+	// for .ubx/config. Left at its real os.Getwd default, that walk would
+	// depend on whatever happens to exist above wherever `go test` is
+	// invoked from (a developer's home directory, say) -- exactly the kind
+	// of ambient host-machine state `go test ./...` staying hermetic is
+	// supposed to rule out. Pin it to this run's own empty scratch
+	// directory by default; config_test.go's own tests override this
+	// per-test to check real discovery behavior.
+	emptyConfigDir := filepath.Join(dir, "no-config-here")
+	if err := os.MkdirAll(emptyConfigDir, 0o755); err != nil {
+		panic(err)
+	}
+	configSearchStartDir = func() (string, error) { return emptyConfigDir, nil }
+
 	os.Exit(m.Run())
 }
 

@@ -36,6 +36,24 @@ func newAcceptCmd() *cobra.Command {
 		Short: "Accept a proposal -- local signing from a file, or PR-merge derivation with --from-merge -- and append it to the ledger",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("accept: %w", err)
+			}
+			applyGithubRepoDefault(cmd, &githubRepo, cfg)
+			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
+				return fmt.Errorf("accept: %w", err)
+			}
+			// Config's [provider] only fills a gap in an ALREADY-opted-into
+			// reverify (--reverify-source given without --reverify-provider-version)
+			// -- it never turns reverification on by itself. accept's reverify
+			// is opt-in per invocation, unlike scan/status where a provider is
+			// always needed; config supplying [provider] shouldn't silently
+			// make every `ubx accept` start reverifying.
+			if reverifySource != "" && !cmd.Flags().Changed("reverify-provider-version") && cfg.Provider.Version != "" {
+				reverifyProviderVersion = cfg.Provider.Version
+			}
+
 			if fromMerge != "" {
 				if len(args) != 0 {
 					return fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")

@@ -29,6 +29,12 @@ func newWhyCmd() *cobra.Command {
 		Short: "Explain an accepted proposal, or a resource's full proposal history",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("why: %w", err)
+			}
+			applyGithubRepoDefault(cmd, &githubRepo, cfg)
+
 			ledger := core.Open(ledgerDir)
 			out := cmd.OutOrStdout()
 

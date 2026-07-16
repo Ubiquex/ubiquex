@@ -34,6 +34,12 @@ func newWritebackCmd() *cobra.Command {
 		Short: "Write an accepted drift_adopt proposal's recorded reality back into existing .tf source",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("writeback: %w", err)
+			}
+			applyTFDirDefault(cmd, &tfDir, cfg)
+
 			ledger := core.Open(ledgerDir)
 			p, err := ledger.Read(args[0])
 			if err != nil {

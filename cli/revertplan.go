@@ -38,6 +38,12 @@ or to the live resource -- is the operator's own tooling to run (docs/plan.md's 
 plan"; executor trust comes later).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("revert-plan: %w", err)
+			}
+			applyTFDirDefault(cmd, &tfDir, cfg)
+
 			ledger := core.Open(ledgerDir)
 			p, err := ledger.Read(args[0])
 			if err != nil {

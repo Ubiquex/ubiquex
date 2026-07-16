@@ -46,6 +46,18 @@ func newScanCmd() *cobra.Command {
 				return fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)
 			}
 
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return fmt.Errorf("scan: %w", err)
+			}
+			applyStackDefault(cmd, &stack, cfg)
+			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
+			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
+				return fmt.Errorf("scan: %w", err)
+			}
+			applyGithubRepoDefault(cmd, &githubRepo, cfg)
+			applyTFDirDefault(cmd, &tfDir, cfg)
+
 			if all {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
 					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") {

@@ -20,6 +20,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWritebackCmd())
 	root.AddCommand(newRevertPlanCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newInitCmd())
 
 	return root
 }

@@ -178,6 +178,24 @@
   duplicate addresses, nested modules) and the live verification against
   a real, disposable Terraform config (fixture generator only, never a
   runtime dependency).
+- 2026-07-16 — UBI-19 (Linear-verified): `.ubx/config` — production ladder
+  step 4. TOML (not YAML — no implicit type coercion, matching this
+  project's own determinism posture; see docs/architecture.md's "Config
+  defaults" section for the full justification), parsed with
+  `github.com/BurntSushi/toml`, the first dependency added purely for
+  config parsing. Discovery walks from the current working directory
+  upward, nearest `.ubx/config` wins, independent of `--ledger-dir`.
+  Covers exactly five keys: provider (`path`, or `source`+`version`),
+  `provider_config`, `stack`, `github_repo`, `tf_dir` — deliberately not
+  `--ledger-dir`, which the issue never named and which is more
+  consequential to get silently wrong than the others. Precedence is
+  fixed everywhere it applies: CLI flag (checked via `cmd.Flags().Changed`,
+  not a zero-value guess), then config, then whatever "required and
+  absent" already meant for that flag. Unknown keys warn and are ignored;
+  malformed TOML is a hard error. New `ubx init` writes a starter file,
+  real values for whatever flags were supplied, commented examples for
+  everything else. See docs/architecture.md for full design; STATE.md for
+  the adversarial tests and per-verb integration.
 
 ## Strategy
 
@@ -438,6 +456,24 @@ until later), so only the first one anyone accepted would ever succeed —
 fixed by chaining each generated proposal's `parent` to the precomputed
 hash of the one before it in the same batch, entirely within the `--all`
 orchestration itself. See STATE.md for the full writeup.
+
+### Config defaults (UBI-19)
+
+`.ubx/config` (TOML — determinism-motivated, see docs/architecture.md's
+"Config defaults" section for the full justification against YAML) lets a
+team stop repeating `--stack`, `--source`/`--provider-version` (or
+`--provider`), `--provider-config`, `--github-repo`, and `--tf-dir` on
+every daily command. Discovery walks from the current working directory
+upward, nearest `.ubx/config` wins — independent of `--ledger-dir`, since
+a project's defaults are a property of where the operator is standing,
+not of wherever the ledger happens to live. Precedence is fixed: CLI flag,
+then config, then whatever "required and absent" already meant for that
+flag (unchanged). Unknown keys warn and are ignored, never a hard
+failure; a config file that isn't valid TOML at all is. New `ubx init`
+writes a starter file — every key the caller supplies a flag for is
+written as a real value, everything else as a commented example. See
+docs/architecture.md for the full design; STATE.md for the adversarial
+tests and per-verb integration.
 
 ## Deferred (explicitly not now)
 

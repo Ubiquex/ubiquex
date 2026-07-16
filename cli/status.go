@@ -51,6 +51,22 @@ always wins if more than one applies.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+			}
+			// Deliberately NOT applying a config default for --stack here:
+			// its absence means "every stack" (docs/architecture.md — Fleet
+			// status), a meaningfully different thing from scan's "required
+			// and missing." A configured default stack would silently turn
+			// bare `ubx status` from "show everything" into "show just my
+			// one stack," which is exactly the opposite of what makes it
+			// useful as a fleet-wide report.
+			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
+			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+			}
+
 			ledger := core.Open(ledgerDir)
 			fleet, err := ledger.Fleet(stack)
 			if err != nil {
