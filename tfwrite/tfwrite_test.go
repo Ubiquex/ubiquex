@@ -104,6 +104,37 @@ func TestApplyModification_ListAttribute_AtomicReplace(t *testing.T) {
 	}
 }
 
+// TestApplyModification_DeclinesRedactedValue is UBI-23's core adversarial
+// case for write-back (docs/architecture.md -- Secrets): a $redacted
+// value must NEVER be rendered as an HCL literal into .tf source -- it's
+// a salted fingerprint, not real material, but it has no business being
+// written into source control as if it were the literal attribute value.
+// Declined unconditionally, before ever attempting to resolve/render it,
+// and the file must come back byte-identical to the input.
+func TestApplyModification_DeclinesRedactedValue(t *testing.T) {
+	addr := core.Address{Stack: "s", Type: "aws_instance", Name: "web"}
+	out, report, err := ApplyModification([]byte(sampleTF), "test.tf", addr,
+		mod(addr, map[string]json.RawMessage{"instance_type": raw(`{"$redacted":{"sha256":"deadbeef"}}`)}))
+	if err != nil {
+		t.Fatalf("ApplyModification: %v", err)
+	}
+	if len(report.Applied) != 0 {
+		t.Fatalf("Applied = %v, want none -- a redacted value must never be applied", report.Applied)
+	}
+	if len(report.Declined) != 1 || report.Declined[0].Path != "instance_type" {
+		t.Fatalf("Declined = %+v, want exactly one entry for instance_type", report.Declined)
+	}
+	if !strings.Contains(report.Declined[0].Reason, "redacted") {
+		t.Fatalf("expected the decline reason to name redaction, got: %q", report.Declined[0].Reason)
+	}
+	if string(out) != sampleTF {
+		t.Fatal("expected the file to come back byte-identical -- a redacted value must never be written")
+	}
+	if strings.Contains(string(out), "deadbeef") || strings.Contains(string(out), "$redacted") {
+		t.Fatal("the redacted marker's hash must never appear in the written .tf content")
+	}
+}
+
 func TestApplyModification_DeclinesExpression_LeavesFileUntouched(t *testing.T) {
 	addr := core.Address{Stack: "s", Type: "aws_instance", Name: "web"}
 	out, report, err := ApplyModification([]byte(sampleTF), "test.tf", addr,

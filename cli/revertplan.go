@@ -181,10 +181,16 @@ func sortedAttributePaths(before, after map[string]json.RawMessage) []string {
 
 // rawOrAbsent renders a Modification.Before/After entry for display,
 // distinguishing "absent" (attribute didn't exist on this side) from an
-// actual JSON value.
+// actual JSON value. A $redacted value (UBI-23, docs/architecture.md --
+// Secrets) renders as "(redacted)" rather than its raw JSON -- the salted
+// hash isn't secret material itself, but it has no business appearing
+// inline next to a human-readable attribute name either.
 func rawOrAbsent(raw json.RawMessage) string {
 	if raw == nil {
 		return "(absent)"
+	}
+	if core.IsRedactedValue(raw) {
+		return "(redacted)"
 	}
 	return string(raw)
 }

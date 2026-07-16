@@ -143,6 +143,23 @@ func renderProposal(out io.Writer, p *core.Proposal) {
 		fmt.Fprintf(out, "accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
 	}
 	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+	renderModifies(out, p.Delta.Modifies, "")
+}
+
+// renderModifies prints each Delta.Modifies entry's changed attributes,
+// current -> new (drift_adopt's before/after convention, or
+// drift_revert's own reversed one -- Kind already prints verbatim above,
+// so this needs no kind-specific branching). A $redacted value (UBI-23)
+// renders "(redacted)" via rawOrAbsent, the same rule revert-plan's own
+// printPlan uses -- so a proposal involving a sensitive attribute change
+// is visibly a change without ever surfacing the salted hash next to a
+// human-readable attribute name.
+func renderModifies(out io.Writer, modifies []core.Modification, indent string) {
+	for _, m := range modifies {
+		for _, path := range sortedAttributePaths(m.Before, m.After) {
+			fmt.Fprintf(out, "%schange: %s: %s: %s -> %s\n", indent, m.Target, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+		}
+	}
 }
 
 // renderProposalCompact is why's per-entry rendering for a resource
@@ -155,6 +172,7 @@ func renderProposalCompact(out io.Writer, p *core.Proposal) {
 	for _, s := range p.Intent.Sources {
 		renderIntentSource(out, s, "    ")
 	}
+	renderModifies(out, p.Delta.Modifies, "    ")
 }
 
 // shortID is a presentation-layer truncation only (docs/schema.md's hash.go

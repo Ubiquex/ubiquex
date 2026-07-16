@@ -110,6 +110,19 @@ func ApplyModification(src []byte, filename string, addr core.Address, mod core.
 	report := &Report{}
 	var edits []pendingEdit
 	for _, path := range paths {
+		if core.IsRedactedValue(mod.After[path]) {
+			// UBI-23, docs/architecture.md -- Secrets: a redacted value
+			// must never be written into .tf source -- it's a salted
+			// fingerprint, not the real material, and rendering it as an
+			// HCL literal would put that fingerprint where a human might
+			// mistake it for the actual secret. Declined unconditionally,
+			// before ever resolving/rendering it.
+			report.Declined = append(report.Declined, DeclinedAttribute{
+				Path:   path,
+				Reason: "value is redacted -- ubx cannot write secret material to .tf; restore this attribute from your secret store manually",
+			})
+			continue
+		}
 		rng, currentExpr, err := resolveTarget(block, path)
 		if err != nil {
 			var ik *insertableKey
