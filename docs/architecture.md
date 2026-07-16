@@ -1049,6 +1049,154 @@ signal) when contended, keeps "confirmed dead, here's how to recover"
 observable as its own outcome rather than folding it into ordinary
 contention.
 
+## GCP support (UBI-21)
+
+The wedge has been AWS-only through every prior session (UBI-7 through
+UBI-20). UBI-21 is the first cross-provider generalization — not a new
+capability so much as a check that the trust chain's own abstractions
+(`core.StateReader`, `core.EventLookup`, the conformance registry) were
+actually provider-agnostic, not AWS-shaped and merely undocumented as
+such. Two design decisions, made before any code:
+
+### 1. Identity stays opaque; the KNOWLEDGE layer generalizes
+
+`core.Address`/`--lookup` do not gain a "provider" field. A resource's
+identity to `ubx` is still exactly what it always was: a stack, a type
+name (e.g. `aws_s3_bucket` or `google_storage_bucket`), a name, and an
+opaque provider-agnostic lookup JSON `core.RunScan` hands straight to
+`ReadResource` without interpreting. Nothing about `core.ScanResult`,
+`Proposal`, or the ledger format changes for this reason — a second
+provider is exactly the kind of thing this boundary was supposed to
+absorb without a schema change, and it does.
+
+What DOES change is the KNOWLEDGE this project keeps about specific
+types — `conformance.Registry` (per-type identity fields, quirks,
+lookup hints) and its generated shipped table, `core/lookuphints`
+(UBI-20 workstream 3). Both were keyed by bare type name alone, an
+implicit "there's only one provider" assumption that a second provider
+would make load-bearing rather than academic: nothing today actually
+requires `aws_*`/`google_*` prefixes to stay collision-free forever, and
+even where names don't collide, a single flat table conflates two
+providers' identity knowledge as if it were one namespace. Both are now
+keyed by **(provider source, type)** — `"hashicorp/aws"`/`"aws_s3_bucket"`
+as one entry, `"hashicorp/google"`/`"google_storage_bucket"` as a
+distinct one — see `conformance.TypeSpec.Source` and
+`core/lookuphints.For(source, resourceType string)`.
+
+This does mean `core` needs to know a scan's provider source to look up
+a teaching-error hint for it — previously nothing in `core` needed to
+know anything about provider identity at all. `ScanRequest` gains an
+optional `ProviderSource` field (e.g. `"hashicorp/google"`), populated by
+the CLI from whichever of `--source`/`--provider` was used. When
+`--provider <path>` (a raw binary, no registry source known) is used
+instead, `ProviderSource` is simply empty and the teaching-error path
+falls through to its existing honest "check the provider's schema"
+fallback — exactly the same fallback an unrecognized *type* already gets,
+now also covering an unrecognized *source*. This is a real, accepted
+narrowing (a raw `--provider` invocation gets a slightly less specific
+error than a `--source` one), not an oversight: inferring provider
+identity from the schema itself (e.g. guessing from type-name prefixes)
+would be exactly the kind of "fabricated guess dressed up as a known
+fact" the teaching-error feature was built to avoid in the first place.
+
+### 2. Attribution backends are per-platform packages behind `EventLookup`
+
+`core.EventLookup` (UBI-10) was already provider-agnostic in shape — one
+method, `LookupEvents(ctx, resourceID string, since, until time.Time)
+([]CloudTrailEvent, error)` — and CloudTrail-specific only in naming
+(`CloudTrailEvent`, `cloudtrail`/`cloudtrail_unattributed` kind
+literals, `ActorARN`). The decision: keep the interface, add a second,
+independent implementation — a new `gcpaudit/` package implementing
+`EventLookup` against GCP's Cloud Audit Logs (via Cloud Logging's
+`entries.list`, correlating by resource name the same way `cloudtrail/`
+correlates by ARN/id) — plus a small registry mapping provider source
+(`"hashicorp/aws"` → `cloudtrail/`, `"hashicorp/google"` → `gcpaudit/`)
+so `ubx scan` picks the right backend for whatever it's scanning,
+exactly the same shape as `conformance.Registry`'s own (source, type)
+generalization above.
+
+**`docs/schema.md` gains a purely additive amendment**: a new
+`intent.sources[].kind`, `audit_unattributed`, generalizing
+`cloudtrail_unattributed` with a new `backend` field
+(`"cloudtrail"`/`"gcp_audit_logs"`) — the *unattributed* case has no
+backend-specific fields at all (just a `reason`), so one shared shape
+plus a `backend` tag covers every platform cleanly. The *successful*
+match case is NOT generalized the same way: `cloudtrail`'s fields
+(`actor_arn` in particular) are AWS-shaped in a way a GCP principal
+(an email, not an ARN) doesn't fit, so GCP's own successful-match kind
+will be introduced separately when `gcpaudit/` actually lands, not
+forced into `cloudtrail`'s existing shape. `cloudtrail_unattributed`
+remains a permanently valid kind for every existing ledger entry that
+already has one — no migration, no `schema_version` bump, same
+purely-additive discipline every prior schema.md amendment has followed.
+
+**This session (UBI-21 Stage 1) does not implement `gcpaudit/` or wire
+the backend registry** — `core/attribution.go`'s `AttributeDrift` still
+only ever emits `cloudtrail`/`cloudtrail_unattributed`, unchanged. That
+work is Stage 2's, gated on having a real GCP project with Cloud Audit
+Logs to verify against (see below) — this section documents the decided
+shape so Stage 2 has a design to implement against, not a design to
+invent under time pressure. If actually implementing `gcpaudit/` reveals
+`EventLookup`'s single-method shape doesn't hold for Cloud Audit Log
+semantics, that's a stop-and-flag moment, not a silent reshape — recorded
+here as the explicit instruction it was given under.
+
+### Stage 1 (this session, hermetic — no GCP account needed)
+
+- The (provider, type) keying refactor above, across
+  `conformance/registry.go`, `core/lookuphints`, and
+  `core/scan.go`'s teaching-error path. Every existing AWS-only test
+  stays green — this is a refactor of the KEY, not the DATA; no AWS
+  entry's `IdentityFields`/`Notes`/`LookupHint` content changed.
+- The provider layer verified empirically against `hashicorp/google`
+  via `provider.Acquire` (same acquisition path `hashicorp/aws` already
+  uses, registry.opentofu.org, checksum-verified) — schema pull,
+  protocol handshake. **Empirical finding**: `hashicorp/google` 7.40.0
+  negotiates tfplugin **v5**, the same version `hashicorp/aws` was found
+  to speak in Slice 1 — dual v5/v6 support earns its keep a second time,
+  not just accepted on faith that "some future provider might need v6."
+- `conformance.Registry` gains ~40 `hashicorp/google` `TypeSpec` entries
+  (`Safety: FakeOnly`, `Implemented: false` — mirroring UBI-9 session 1's
+  own bootstrapping precedent for AWS exactly: seed the list first, work
+  through it in later batches), spanning six categories with the same
+  "real GCP shop" bias the AWS list used: compute (`google_compute_instance`
+  and friends, plus Cloud Run/GKE/Cloud Functions as GCP's own
+  compute-adjacent surface), network (VPC/subnet/route/router/NAT/
+  firewall/addresses/forwarding rules/backend services), IAM (service
+  accounts and keys, project IAM bindings/members, custom roles),
+  storage (bucket and its IAM/object sub-resources, persistent disks,
+  Filestore), SQL/database (Cloud SQL instance/database/user, Spanner,
+  Firestore), and DNS (managed zone, record set, SSL certificate), plus
+  messaging/observability/secrets (Pub/Sub topic/subscription, log-based
+  metrics, alerting policies, Secret Manager, KMS). `IdentityFields` for
+  every entry come from a real `GetProviderSchema` call against the
+  acquired `hashicorp/google` binary — free, no credentials, no live GCP
+  API round trip, the same "verified against the real schema, not
+  assumed" standard `conformance.Registry`'s AWS entries already hold to.
+
+### Stage 2 (needs a real GCP project, credentials, and Cloud Audit Logs
+enabled — explicitly gated, not assumed available)
+
+- ~5 cheap, safe GCP types promoted to `RealSafe` and live-verified via
+  the same adopt→mutate→scan-diff harness (`conformance.RunAdoptMutateScanDiff`)
+  UBI-9's AWS batches used — candidates: `google_storage_bucket`,
+  `google_pubsub_topic`, `google_service_account`, and two more chosen
+  once real account testing starts (mirroring AWS's own "start with
+  cheap, already-exists-or-free resources" bias).
+- `gcpaudit/` implemented and live-verified: a real drift, correlated
+  against Cloud Audit Logs with the actual actor identity recorded, not
+  a synthetic fixture — the same "prove it against a real account, not
+  just a fake" bar `cloudtrail/` was held to in UBI-10. Cloud Audit Logs'
+  own delivery latency gets measured directly against this account,
+  exactly like CloudTrail's ~2-minute-observed/15-minute-documented
+  latency was measured in UBI-10 — informing whatever `delivery_window`
+  threshold `audit_unattributed` uses for the GCP backend (not assumed to
+  be CloudTrail's own 15 minutes just because the shape of the amendment
+  is shared).
+- Every fixture created for live verification is destroyed afterward,
+  the GCP project left exactly as found — same discipline every AWS
+  `RealSafe` conformance test already follows.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

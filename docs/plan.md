@@ -524,6 +524,76 @@ hanging forever or silently breaking a live lock. See docs/architecture.md's
 "Hardening pass" section for the full design of all four; STATE.md for
 the adversarial tests and live verification.
 
+### GCP support (UBI-21)
+
+The first cross-provider generalization: `conformance.Registry`/
+`core/lookuphints` re-keyed from bare type name to (provider source,
+type), `core.ScanRequest` gains an optional `ProviderSource`, and a
+second attribution backend (`gcpaudit/`, against GCP Cloud Audit Logs)
+is designed — see docs/architecture.md's "GCP support" section for the
+full design, including the `audit_unattributed` schema.md amendment.
+Two stages, gated on GCP account availability:
+
+- **Stage 1 (hermetic)**: the keying refactor (AWS regression green);
+  `hashicorp/google` verified via `provider.Acquire` — empirically
+  negotiates tfplugin **v5**, same as `hashicorp/aws`; ~40 GCP
+  `conformance.Registry` entries seeded (see the type list below),
+  `IdentityFields` from real schema inspection, `Safety: FakeOnly`,
+  `Implemented: false` — mirroring UBI-9 session 1's own AWS
+  bootstrapping exactly.
+- **Stage 2 (needs a real GCP project + credentials + Cloud Audit Logs
+  enabled)**: ~5 cheap types live-verified (adopt→mutate→scan-diff);
+  `gcpaudit/` implemented and live-verified against a real drift with
+  real actor identity; Cloud Audit Logs' own delivery latency measured
+  directly (the CloudTrail lesson, UBI-10, applied to a second
+  platform rather than assumed to transfer).
+
+#### M1-2 GCP resource type list (UBI-21 Stage 1)
+
+The ~40 types below mirror `docs/plan.md`'s own AWS list's category
+spread and "real GCP shop" bias — `conformance/registry.go`'s
+`hashicorp/google`-sourced entries are the executable counterpart, this
+list is the rationale. All seeded `Safety: FakeOnly`, `Implemented:
+false` this session (Stage 1 is hermetic — no live GCP account touched);
+`IdentityFields` verified against the real `hashicorp/google` 7.40.0
+schema (free, no credentials, same standard the AWS list holds to).
+
+**Compute**: `google_compute_instance`, `google_compute_instance_template`,
+`google_container_cluster` (GKE), `google_cloudfunctions2_function`,
+`google_cloud_run_v2_service`, `google_cloud_run_v2_job`.
+
+**Network**: `google_compute_network` (VPC), `google_compute_subnetwork`,
+`google_compute_route`, `google_compute_router`,
+`google_compute_router_nat`, `google_compute_firewall`,
+`google_compute_address`, `google_compute_global_address`,
+`google_compute_forwarding_rule`, `google_compute_backend_service`.
+
+**IAM**: `google_service_account`, `google_service_account_key`,
+`google_project_iam_member`, `google_project_iam_binding`,
+`google_project_iam_custom_role`.
+
+**Storage**: `google_storage_bucket`, `google_storage_bucket_iam_member`,
+`google_storage_bucket_object`, `google_compute_disk`,
+`google_filestore_instance`.
+
+**SQL / database**: `google_sql_database_instance`, `google_sql_database`,
+`google_sql_user`, `google_spanner_instance`, `google_firestore_database`.
+
+**DNS / certs**: `google_dns_managed_zone`, `google_dns_record_set`,
+`google_compute_ssl_certificate`.
+
+**Messaging / observability / secrets**: `google_pubsub_topic`,
+`google_pubsub_subscription`, `google_logging_metric`,
+`google_monitoring_alert_policy`, `google_secret_manager_secret`,
+`google_kms_crypto_key`.
+
+40 types total. Unlike the AWS list at this same bootstrapping stage,
+none are marked real-safe or parked yet — that classification (which
+ones are cheap enough to live-verify, which ones "fight back" the way
+`aws_iam_group`/`aws_route_table_association` did) is Stage 2 work,
+done against a real account rather than guessed from schema inspection
+alone, the same discipline UBI-9 followed.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, full executor

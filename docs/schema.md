@@ -213,6 +213,44 @@ purely additive and optional (new `kind` values, new optional fields on
 hash of a proposal that does carry these sources reflects exactly the
 content it actually has, same as any other content hash.
 
+### Amendment: `audit_unattributed`, a provider-agnostic unattributed kind (2026-07-16, UBI-21)
+
+`ubx` gaining a second platform (GCP, docs/architecture.md — GCP support)
+means attribution failure can no longer be assumed to mean "CloudTrail
+had nothing" — it might mean GCP's Cloud Audit Logs backend (`gcpaudit/`,
+still unimplemented as of this amendment; see below) had nothing instead.
+One new `intent.sources[].kind`, **`audit_unattributed`**, generalizes
+`cloudtrail_unattributed`:
+
+- Same `reason` enum as `cloudtrail_unattributed` (`no_matching_event`,
+  `delivery_window`, `not_logged`) — an audit-log backend's own delivery
+  latency and correlation semantics are the same *shape* of problem
+  regardless of platform, even though the actual latency numbers differ
+  (CloudTrail's is documented and measured in UBI-10; GCP Cloud Audit
+  Logs' own latency is Stage 2 work, not assumed to match CloudTrail's).
+- One new field, **`backend`**: `"cloudtrail"` or `"gcp_audit_logs"` —
+  which platform's attribution attempt this records the failure of.
+  `cloudtrail_unattributed` (the pre-existing kind) carries no `backend`
+  field at all, since it was never ambiguous which backend it meant.
+
+**`cloudtrail_unattributed` is not deprecated or migrated** — it remains
+a permanently valid kind. Every ledger entry generated before this
+amendment (and, per docs/architecture.md, every AWS-generated entry
+until the backend-registry code actually lands) keeps using it
+unchanged. `audit_unattributed` is additive, not a replacement:
+`schema_version` does not bump, existing tooling reading
+`cloudtrail_unattributed` needs no update, and a reader that doesn't yet
+know about `audit_unattributed` simply doesn't recognize a kind it
+hasn't been taught yet — the same purely-additive posture as every prior
+amendment in this document.
+
+The successful-match case (`cloudtrail`'s own kind, carrying `actor_arn`
+and friends) is deliberately **not** generalized alongside this — see
+docs/architecture.md's GCP support section for why: its fields are
+AWS-shaped in a way a GCP principal identity doesn't fit, and a new,
+GCP-specific successful-match kind is the honest way to extend it, not
+forcing a mismatched shape into `cloudtrail`'s existing fields.
+
 ### Amendment: record verified provider binary checksum (2026-07-10, UBI-8)
 
 `resolution.inputs[].provider_checksum` is added: `"sha256:<hex>"` of the
