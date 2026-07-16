@@ -41,53 +41,73 @@ import (
 // actionable finding, exit 1. A genuine tool/network failure (can't run
 // git, can't reach the GitHub API, a malformed --github-repo) is exit 2.
 // Nothing to check, or everything checks out, is exit 0.
-func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, repoDir, githubRepo string) error {
-	fmt.Fprintln(out, "--- verify-acceptance ---")
+//
+// jsonMode suppresses every human-text print to out (UBI-20 workstream 2:
+// `ubx why --json` emits exactly one JSON document, never mixed with the
+// human-format progress lines) -- the checks and their exit-code
+// classification are identical either way, only the reporting differs.
+// The returned *verifyAcceptanceJSON is always non-nil and is `why --json`'s
+// "verify_acceptance" field, whether or not jsonMode is set (a caller not
+// in JSON mode can simply ignore it).
+func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, repoDir, githubRepo string, jsonMode bool) (*verifyAcceptanceJSON, error) {
+	if !jsonMode {
+		fmt.Fprintln(out, "--- verify-acceptance ---")
+	}
 
 	if p.Acceptance == nil || p.Acceptance.Method != "pr_merge" {
-		fmt.Fprintf(out, "acceptance method is %q -- nothing to re-verify (only pr_merge is derived from git/GitHub)\n", acceptanceMethod(p))
-		return nil
+		if !jsonMode {
+			fmt.Fprintf(out, "acceptance method is %q -- nothing to re-verify (only pr_merge is derived from git/GitHub)\n", acceptanceMethod(p))
+		}
+		return &verifyAcceptanceJSON{Applicable: false}, nil
 	}
 	a := p.Acceptance
+	result := &verifyAcceptanceJSON{Applicable: true, Method: a.Method}
 
 	ctx := cmd.Context()
 
 	exists, err := ghub.CommitExists(ctx, repoDir, a.MergeSHA)
 	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
+		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 	}
 	if !exists {
-		return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s no longer exists in %s's history", ghub.ErrCommitNotFound, a.MergeSHA, repoDir)}
+		return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s no longer exists in %s's history", ghub.ErrCommitNotFound, a.MergeSHA, repoDir)}
 	}
-	fmt.Fprintf(out, "git: merge commit %s exists in %s\n", a.MergeSHA, repoDir)
+	if !jsonMode {
+		fmt.Fprintf(out, "git: merge commit %s exists in %s\n", a.MergeSHA, repoDir)
+	}
 
 	if a.ProposalFile != "" {
 		content, err := ghub.FileAtCommit(ctx, repoDir, a.MergeSHA, a.ProposalFile)
 		if err != nil {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
+			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 		}
 		var atCommit core.Proposal
 		if err := json.Unmarshal(content, &atCommit); err != nil {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: parse %s at %s: %w", a.ProposalFile, a.MergeSHA, err)}
+			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: parse %s at %s: %w", a.ProposalFile, a.MergeSHA, err)}
 		}
 		hash, err := core.Hash(&atCommit)
 		if err != nil {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
+			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 		}
 		if hash != p.ID {
-			return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s at %s now hashes to %s, not %s",
+			return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s at %s now hashes to %s, not %s",
 				core.ErrTrailerHashMismatch, a.ProposalFile, a.MergeSHA, hash, p.ID)}
 		}
-		fmt.Fprintf(out, "git: %s at that commit still hashes to %s\n", a.ProposalFile, p.ID)
+		if !jsonMode {
+			fmt.Fprintf(out, "git: %s at that commit still hashes to %s\n", a.ProposalFile, p.ID)
+		}
 	}
+	result.GitOK = true
 
 	if githubRepo == "" {
-		fmt.Fprintln(out, "github API: skipped (no --github-repo given) -- reviewer re-check is inconclusive, not a pass")
-		return nil
+		if !jsonMode {
+			fmt.Fprintln(out, "github API: skipped (no --github-repo given) -- reviewer re-check is inconclusive, not a pass")
+		}
+		return result, nil
 	}
 	owner, repo, ok := strings.Cut(githubRepo, "/")
 	if !ok || owner == "" || repo == "" {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: --github-repo must be \"owner/name\", got %q", githubRepo)}
+		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: --github-repo must be \"owner/name\", got %q", githubRepo)}
 	}
 
 	var apiOpts []ghub.Option
@@ -98,17 +118,41 @@ func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, re
 
 	current, err := api.ApprovingReviewers(ctx, owner, repo, a.PRNumber)
 	if err != nil {
-		fmt.Fprintf(out, "github API: could not re-fetch reviews for PR #%d: %v\n", a.PRNumber, err)
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: could not re-fetch reviews for PR #%d: %w", a.PRNumber, err)}
+		if !jsonMode {
+			fmt.Fprintf(out, "github API: could not re-fetch reviews for PR #%d: %v\n", a.PRNumber, err)
+		}
+		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: could not re-fetch reviews for PR #%d: %w", a.PRNumber, err)}
 	}
+	result.ReviewersChecked = true
+	result.CurrentApprovers = current
+	result.RecordedApprovers = a.Approvers
+	result.ReviewersMatch = sameSet(current, a.Approvers)
 
-	if sameSet(current, a.Approvers) {
-		fmt.Fprintf(out, "github API: PR #%d's approvers are unchanged (%v)\n", a.PRNumber, current)
-		return nil
+	if result.ReviewersMatch {
+		if !jsonMode {
+			fmt.Fprintf(out, "github API: PR #%d's approvers are unchanged (%v)\n", a.PRNumber, current)
+		}
+		return result, nil
 	}
-	fmt.Fprintf(out, "github API: MISMATCH -- PR #%d's approvers are now %v, recorded acceptance has %v\n",
-		a.PRNumber, current, a.Approvers)
-	return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: PR #%d's approving reviewers changed since acceptance (see above)", a.PRNumber)}
+	if !jsonMode {
+		fmt.Fprintf(out, "github API: MISMATCH -- PR #%d's approvers are now %v, recorded acceptance has %v\n",
+			a.PRNumber, current, a.Approvers)
+	}
+	return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: PR #%d's approving reviewers changed since acceptance (see above)", a.PRNumber)}
+}
+
+// verifyAcceptanceJSON is `ubx why --json --verify-acceptance`'s
+// "verify_acceptance" field (UBI-20 workstream 2). Applicable is false for
+// a non-pr_merge (or unaccepted) proposal, in which case every other field
+// is zero-valued -- not a claim that they were checked and found empty.
+type verifyAcceptanceJSON struct {
+	Applicable        bool     `json:"applicable"`
+	Method            string   `json:"method,omitempty"`
+	GitOK             bool     `json:"git_ok,omitempty"`
+	ReviewersChecked  bool     `json:"reviewers_checked"`
+	ReviewersMatch    bool     `json:"reviewers_match,omitempty"`
+	CurrentApprovers  []string `json:"current_approvers,omitempty"`
+	RecordedApprovers []string `json:"recorded_approvers,omitempty"`
 }
 
 func acceptanceMethod(p *core.Proposal) string {

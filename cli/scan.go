@@ -34,6 +34,7 @@ func newScanCmd() *cobra.Command {
 		all             bool
 		tfstatePath     string
 		outDir          string
+		jsonOut         bool
 	)
 
 	cmd := &cobra.Command{
@@ -51,6 +52,13 @@ func newScanCmd() *cobra.Command {
 			case "adopt", "revert", "both":
 			default:
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)}
+			}
+
+			if jsonOut && all {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --json is only supported for a single-resource scan, not --all")}
+			}
+			if jsonOut && surfaceAs != "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --json is not supported with --surface-as -- surfacing already reports its own separate result")}
 			}
 
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
@@ -126,6 +134,18 @@ func newScanCmd() *cobra.Command {
 
 			out2 := cmd.OutOrStdout()
 			if res.Outcome == core.ScanUnchanged {
+				if jsonOut {
+					payload := scanJSON{
+						Format:       jsonFormatVersion,
+						Address:      addressToJSON(addr),
+						Outcome:      "unchanged",
+						ObservedHash: res.ObservedHash,
+					}
+					if err := writeJSON(out2, payload); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+					}
+					return nil
+				}
 				fmt.Fprintf(out2, "no drift: %s matches the ledger (observed_hash %s)\n", addr, res.ObservedHash)
 				return nil
 			}
@@ -197,6 +217,32 @@ func newScanCmd() *cobra.Command {
 			if res.Outcome == core.ScanDrifted {
 				kindLabel = "drifted"
 			}
+
+			if jsonOut {
+				if out != "" {
+					// The --out+len(proposals)>1 guard above already
+					// guarantees exactly one proposal here.
+					b, err := json.MarshalIndent(proposals[0], "", "  ")
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: marshal proposal: %w", addr, err)}
+					}
+					if err := os.WriteFile(out, b, 0o644); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+					}
+				}
+				payload := scanJSON{
+					Format:       jsonFormatVersion,
+					Address:      addressToJSON(addr),
+					Outcome:      kindLabel,
+					ObservedHash: res.ObservedHash,
+					Proposals:    proposals,
+				}
+				if err := writeJSON(out2, payload); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+				}
+				return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan %s: %s, %q proposal(s) generated (see above)", addr, kindLabel, propose)}
+			}
+
 			for _, p := range proposals {
 				fmt.Fprintf(out2, "%s: %s (%s) -- generated a %q proposal\n", kindLabel, addr, res.ObservedHash, p.Kind)
 
@@ -237,6 +283,21 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "bulk onboarding (UBI-18): enumerate every resource in --tfstate and generate an adoption proposal for each, instead of scanning a single --type/--name resource")
 	cmd.Flags().StringVar(&tfstatePath, "tfstate", "", "path to a Terraform state v4 JSON file, read once as a bulk-onboarding enumeration source (required with --all)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write each --all-generated proposal to its own file in this directory, instead of printing all of them to stdout")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20; single-resource scan only, not --all or --surface-as)")
 
 	return cmd
+}
+
+// scanJSON is `ubx scan --json`'s single-resource payload (UBI-20
+// workstream 2, docs/exit-codes.mdx / docs/architecture.md's --json
+// section). Format is a schema version (see jsonFormatVersion), not the
+// product version -- bumped only on an incompatible shape change.
+// Proposals is empty for "unchanged"; one entry for "new" or a single
+// --propose; two for --propose both.
+type scanJSON struct {
+	Format       int              `json:"format"`
+	Address      addressJSON      `json:"address"`
+	Outcome      string           `json:"outcome"` // "new" | "drifted" | "unchanged"
+	ObservedHash string           `json:"observed_hash"`
+	Proposals    []*core.Proposal `json:"proposals,omitempty"`
 }

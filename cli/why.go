@@ -22,6 +22,7 @@ func newWhyCmd() *cobra.Command {
 		verifyAcceptance bool
 		repoDir          string
 		githubRepo       string
+		jsonOut          bool
 	)
 
 	cmd := &cobra.Command{
@@ -50,11 +51,25 @@ func newWhyCmd() *cobra.Command {
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
-				renderProposal(out, p)
-				if verifyAcceptance {
-					return runVerifyAcceptance(cmd, out, p, repoDir, githubRepo)
+				if !jsonOut {
+					renderProposal(out, p)
 				}
-				return nil
+				if !verifyAcceptance {
+					if jsonOut {
+						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p}); err != nil {
+							return &ExitCodeError{Code: 2, Err: err}
+						}
+					}
+					return nil
+				}
+				verifyResult, verifyErr := runVerifyAcceptance(cmd, out, p, repoDir, githubRepo, jsonOut)
+				if jsonOut {
+					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, VerifyAcceptance: verifyResult}
+					if err := writeJSON(out, payload); err != nil {
+						return &ExitCodeError{Code: 2, Err: err}
+					}
+				}
+				return verifyErr
 			}
 
 			addr, ok := core.ParseAddress(args[0])
@@ -69,9 +84,23 @@ func newWhyCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("no proposals found for %s", addr)}
 			}
 
+			// Newest first, matching the human view's own order.
+			chain := make([]*core.Proposal, len(proposals))
+			for i, p := range proposals {
+				chain[len(proposals)-1-i] = p
+			}
+
+			if jsonOut {
+				payload := whyJSON{Format: jsonFormatVersion, Chain: chain}
+				if err := writeJSON(out, payload); err != nil {
+					return &ExitCodeError{Code: 2, Err: err}
+				}
+				return nil
+			}
+
 			fmt.Fprintf(out, "%s: %d proposal(s), newest first\n", addr, len(proposals))
-			for i := len(proposals) - 1; i >= 0; i-- {
-				renderProposalCompact(out, proposals[i])
+			for _, p := range chain {
+				renderProposalCompact(out, p)
 			}
 			return nil
 		},
@@ -81,7 +110,20 @@ func newWhyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out (UBI-11)")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20); the chain view emits a JSON array under \"chain\"")
 	return cmd
+}
+
+// whyJSON is `ubx why --json`'s payload (UBI-20 workstream 2,
+// docs/exit-codes.mdx). Exactly one of Proposal (single-id form) or Chain
+// (resource-address form) is set, never both -- the two `ubx why` input
+// forms are genuinely different views, not one view with an optional
+// extra field.
+type whyJSON struct {
+	Format           int                   `json:"format"`
+	Proposal         *core.Proposal        `json:"proposal,omitempty"`
+	Chain            []*core.Proposal      `json:"chain,omitempty"`
+	VerifyAcceptance *verifyAcceptanceJSON `json:"verify_acceptance,omitempty"`
 }
 
 // renderProposal is the full single-proposal view, unchanged from before

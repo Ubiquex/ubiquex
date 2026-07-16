@@ -27,6 +27,7 @@ func newStatusCmd() *cobra.Command {
 		providerVersion string
 		providerConfig  string
 		timeout         time.Duration
+		jsonOut         bool
 	)
 
 	cmd := &cobra.Command{
@@ -76,8 +77,29 @@ always wins if more than one applies.`,
 			out := cmd.OutOrStdout()
 
 			if !drift {
+				resources := make([]statusResourceJSON, 0, len(fleet))
 				for _, e := range fleet {
-					fmt.Fprintf(out, "%s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					if !jsonOut {
+						fmt.Fprintf(out, "%s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					}
+					resources = append(resources, statusResourceJSON{
+						Address:    addressToJSON(e.Address),
+						Kind:       string(e.Kind),
+						ProposalID: e.ProposalID,
+						AcceptedAt: e.AcceptedAt,
+					})
+				}
+				if jsonOut {
+					payload := statusJSON{
+						Format:       jsonFormatVersion,
+						DriftChecked: false,
+						Resources:    resources,
+						Summary:      statusSummaryJSON{Total: len(fleet)},
+					}
+					if err := writeJSON(out, payload); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+					}
+					return nil
 				}
 				fmt.Fprintf(out, "%d resource(s) (ledger-only, no live comparison)\n", len(fleet))
 				return nil
@@ -98,12 +120,24 @@ always wins if more than one applies.`,
 			stateReader := newStateReader(client.Provider)
 
 			var driftedCount, unreadableCount int
+			resources := make([]statusResourceJSON, 0, len(fleet))
 			for _, e := range fleet {
+				entry := statusResourceJSON{
+					Address:    addressToJSON(e.Address),
+					Kind:       string(e.Kind),
+					ProposalID: e.ProposalID,
+					AcceptedAt: e.AcceptedAt,
+				}
+
 				if len(e.Lookup) == 0 {
 					unreadableCount++
-					fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- no lookup key recorded for this resource "+
-						"(authored before the resolution.inputs lookup amendment, or never had one)\n",
-						e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					entry.Status = "unreadable"
+					entry.Reason = "no lookup key recorded for this resource (authored before the resolution.inputs lookup amendment, or never had one)"
+					if !jsonOut {
+						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
+							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+					}
+					resources = append(resources, entry)
 					continue
 				}
 
@@ -114,17 +148,28 @@ always wins if more than one applies.`,
 				})
 				if err != nil {
 					unreadableCount++
-					fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %v\n",
-						e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, err)
+					entry.Status = "unreadable"
+					entry.Reason = err.Error()
+					if !jsonOut {
+						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %v\n",
+							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, err)
+					}
+					resources = append(resources, entry)
 					continue
 				}
 
 				switch res.Outcome {
 				case core.ScanUnchanged:
-					fmt.Fprintf(out, "clean: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					entry.Status = "clean"
+					if !jsonOut {
+						fmt.Fprintf(out, "clean: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					}
 				case core.ScanDrifted:
 					driftedCount++
-					fmt.Fprintf(out, "drifted: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					entry.Status = "drifted"
+					if !jsonOut {
+						fmt.Fprintf(out, "drifted: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					}
 				default:
 					// ScanNew: the ledger has a resolution.inputs entry for
 					// this address (that's how Fleet found it) but FoldState
@@ -133,12 +178,33 @@ always wins if more than one applies.`,
 					// well-formed scan-generated ledger ever produces (see
 					// docs/architecture.md).
 					unreadableCount++
-					fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- ledger has no reconstructable prior state for this address\n",
-						e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					entry.Status = "unreadable"
+					entry.Reason = "ledger has no reconstructable prior state for this address"
+					if !jsonOut {
+						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
+							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+					}
 				}
+				resources = append(resources, entry)
 			}
 
-			fmt.Fprintf(out, "%d resource(s), %d drifted, %d unreadable\n", len(fleet), driftedCount, unreadableCount)
+			if jsonOut {
+				payload := statusJSON{
+					Format:       jsonFormatVersion,
+					DriftChecked: true,
+					Resources:    resources,
+					Summary: statusSummaryJSON{
+						Total:      len(fleet),
+						Drifted:    driftedCount,
+						Unreadable: unreadableCount,
+					},
+				}
+				if err := writeJSON(out, payload); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+				}
+			} else {
+				fmt.Fprintf(out, "%d resource(s), %d drifted, %d unreadable\n", len(fleet), driftedCount, unreadableCount)
+			}
 
 			switch {
 			case unreadableCount > 0:
@@ -159,6 +225,33 @@ always wins if more than one applies.`,
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire, e.g. 6.54.0 (required with --source; only used with --drift)")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"} (only used with --drift)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the fleet walk (only used with --drift)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
 
 	return cmd
+}
+
+// statusJSON is `ubx status --json`'s payload (UBI-20 workstream 2,
+// docs/exit-codes.mdx). DriftChecked distinguishes "0 drifted because
+// --drift wasn't given" from "0 drifted because --drift found nothing" --
+// Resources' Status field is empty in the former case, never a guess.
+type statusJSON struct {
+	Format       int                  `json:"format"`
+	DriftChecked bool                 `json:"drift_checked"`
+	Resources    []statusResourceJSON `json:"resources"`
+	Summary      statusSummaryJSON    `json:"summary"`
+}
+
+type statusResourceJSON struct {
+	Address    addressJSON `json:"address"`
+	Kind       string      `json:"kind"`
+	ProposalID string      `json:"proposal_id"`
+	AcceptedAt string      `json:"accepted_at"`
+	Status     string      `json:"status,omitempty"` // "clean" | "drifted" | "unreadable"; omitted if !DriftChecked
+	Reason     string      `json:"reason,omitempty"` // set when Status == "unreadable"
+}
+
+type statusSummaryJSON struct {
+	Total      int `json:"total"`
+	Drifted    int `json:"drifted"`
+	Unreadable int `json:"unreadable"`
 }
