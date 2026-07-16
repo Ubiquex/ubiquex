@@ -509,6 +509,120 @@ Covered by a new test asserting exactly that (a chain mixing `adoption`,
 `drift_adopt`, and `drift_revert` entries renders each recognizably), rather
 than left as an unverified assumption.
 
+## Fleet status (UBI-17)
+
+M1-2's other unstarted piece (docs/plan.md: "`status --drift`"): a
+read-only report over every resource the ledger already knows about, not
+one address per `ubx scan` invocation. `ubx status [--drift] [--stack
+<name>]` is deliberately the simplest possible thing that's actually
+useful across a whole fleet, reusing every mechanism this codebase already
+built rather than inventing new ones.
+
+### Discovering "every resource the ledger knows about"
+
+Every scan-generated proposal (`adoption`, `drift_adopt`, `drift_revert`)
+carries exactly one `resolution.inputs` entry naming the address it
+observed (docs/schema.md's pinned cross-reference rule) — the same field
+`Ledger.LastObservedHash`/`LastObservationTime`/`ProposalsForAddress`
+already key off. `ubx status` walks the whole chain once
+(`Ledger.Chain()`) and keeps, per distinct address seen in any
+`resolution.inputs[].resource`, the *latest* proposal that touched it —
+one pass, not one `Chain()` walk per address. A hand-authored proposal
+with a malformed or missing address string is skipped rather than
+guessed at (`core.ParseAddress`'s existing `ok` return already makes this
+a non-panic, non-fatal check).
+
+**A confirmed (not assumed) finding this surfaced**: `core.Ledger`'s own
+doc comment describes it as "a per-stack append-only proposal chain," and
+docs/schema.md's Ledger layout diagram roots each stack at its own
+directory — but nothing in `Ledger.Head()`/`Append()` actually partitions
+by `Proposal.Stack` at the storage layer. One ledger directory holds one
+flat hash chain; `Stack` is just a field recorded on each proposal.
+Because `GenerateProposal`/`GenerateRevertProposal` always read the
+*current* head fresh via `Ledger.Head()` before building a proposal
+(regardless of which stack it's for), proposals for different stacks
+chain together correctly in temporal order within a single directory —
+this was previously untested (every prior test and live verification used
+exactly one `--stack` value per ledger directory) and is now covered by a
+real multi-stack test. `--stack <name>` on `ubx status` filters the
+*discovered addresses* by `Address.Stack` after the walk; it does not
+change how or where the ledger itself is read. Whether one ledger
+directory per stack (matching the schema.md diagram) or one shared
+directory holding several interleaved stacks is the better real-world
+deployment shape is a separate, later decision — both work correctly
+today, and `ubx status`'s "all stacks by default" framing depends on the
+shared-directory shape actually being sound, which this session is the
+first to verify rather than assume.
+
+### Ledger-only vs. `--drift`
+
+Without `--drift`: purely a read of the ledger's own accepted history —
+for each discovered address, its latest recorded kind, short proposal ID,
+and acceptance time. No provider is launched, no credentials are needed,
+nothing touches the network. Fast by construction, and a genuinely
+different capability from `--drift`, not just a default value for it.
+
+With `--drift`: one provider is launched (resolved exactly like `ubx
+scan`'s own `--provider`/`--source`+`--provider-version`), and for every
+discovered address, `core.RunScan` runs against it using the address's
+own **persisted `resolution.inputs[].lookup`** — the exact reason that
+field was added in the first place (docs/schema.md's UBI-7 follow-up
+amendment): so a caller other than the original `ubx scan` invocation
+never has to already know, or re-derive, what identifies a resource to
+its provider. `RunScan`'s own comparison baseline is
+`ObservedHash(FoldState(addr))` (UBI-16's correction) — the same "does
+reality diverge from the ledger's own reconstructed truth" question `ubx
+scan` answers, just asked for every known resource in one pass instead of
+one CLI invocation per address. One provider launch/handshake serves the
+whole fleet (`Configure` is still called once per resource inside
+`RunScan`, same as every existing call site — accepted as a known,
+bounded inefficiency at foundational-slice scale, the same posture
+`FoldState`'s own doc comment already takes about its linear ledger walk,
+not a design gap left to discover later).
+
+Each resource classifies as:
+- **clean** — `RunScan` reports `ScanUnchanged`.
+- **drifted** — `RunScan` reports `ScanDrifted`.
+- **unreadable** — anything that stops a real comparison from happening
+  at all: no lookup was ever recorded for this address (a proposal
+  authored before the lookup amendment existed), the provider fails to
+  read it (credentials, unknown resource type, a transient failure), or
+  — genuinely malformed ledger content — `resolution.inputs` names an
+  address whose state `FoldState` can never reconstruct (no adoption ever
+  seeded it, so `RunScan` would otherwise report the surprising `ScanNew`
+  for a resource `ubx status` already knows about). **A failure on any one
+  resource is recorded and the walk continues** — one unreadable or
+  unknown-type resource in a large fleet must never hide the rest of the
+  report.
+
+### Exit code: the CI contract
+
+`ubx status` is meant to gate a pipeline step, not just print a report a
+human reads — so its exit code carries meaning beyond "the command ran
+without crashing," the convention every other `ubx` command uses today:
+
+- **0** — clean (or ledger-only mode, which has nothing to report drift on).
+- **1** — at least one resource drifted, nothing unreadable.
+- **2** — at least one resource was unreadable, or the command failed
+  outright (e.g. the provider itself couldn't be resolved/launched) —
+  whichever is worse always wins if both apply.
+
+This required a small, deliberately narrow addition to how `ubx` itself
+maps errors to process exit codes: `cli.ExitCodeError{Code, Err}` — a
+sentinel a command's `RunE` can return to request a *specific* exit code
+(with or without a message) instead of the blanket "any error means exit
+1" every other command relies on via `cmd/ubx/main.go`. Every existing
+command is completely unaffected: `errors.As` only matches this new type,
+so a plain error from any other command still falls through to exactly
+the same `os.Exit(1)` path it always has. This couldn't be `os.Exit`
+called directly inside `ubx status`'s own `RunE` — this codebase's CLI
+tests run every command in-process (`cli.NewRootCmd().Execute()`, see
+`cli/scan_test.go`'s `runUbx`), and an in-process `os.Exit` would kill the
+test binary itself, not just "the command" — so the exit-code contract
+had to be a value `RunE` returns and `main.go` interprets, not a side
+effect `RunE` performs, for the adversarial exit-code tests to be
+possible at all as ordinary Go tests.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

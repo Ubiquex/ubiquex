@@ -127,6 +127,27 @@
   docs/schema.md's "Amendment: drift_revert proposals" for full design;
   STATE.md for the adversarial tests and the live end-to-end verification
   against the real `ubx-states` account.
+- 2026-07-16 — UBI-17 (Linear-verified): `ubx status`, the fleet drift
+  view — M1-2's last unstarted piece. Walks every resource the ledger
+  knows about (discovered via `resolution.inputs[].resource`, one ledger
+  walk); ledger-only by default, `--drift` adds a live comparison per
+  resource using the exact same `ObservedHash(FoldState)` baseline `ubx
+  scan` uses and each resource's own persisted `resolution.inputs[].lookup`.
+  A per-resource failure is recorded as `unreadable`, never aborts the
+  walk. New CI-facing exit-code contract (0 clean / 1 drift / 2
+  unreadable-or-error), which needed a small, narrowly-scoped
+  `cli.ExitCodeError` addition to how `cmd/ubx/main.go` maps errors to
+  process exit codes — every other command's plain-error-means-exit-1
+  behavior is unaffected. Surfaced a confirmed (not assumed) finding:
+  `core.Ledger` is documented as "per-stack" but doesn't actually
+  partition storage by stack at all — multiple stacks chain correctly
+  within one shared ledger directory because proposal generation always
+  reads the live current head, previously untested since every prior
+  session used one stack per ledger directory. See
+  docs/architecture.md's "Fleet status" section for full design; STATE.md
+  for the adversarial tests and the live multi-resource verification
+  (real `ubx-states` bucket plus a throwaway SQS queue) against the real
+  account.
 
 ## Strategy
 
@@ -164,8 +185,9 @@ Thesis metric: % of surfaced drifts resolved through the signed flow —
 - **M1–2 (detection core):** top ~50 AWS resource types via ReadResource
   (done, UBI-9 — see below); CloudTrail correlation (drift → actor,
   timestamp, session; done, UBI-10 — see §CloudTrail attribution below);
-  `scan` (done since Slice 3), `status --drift`. Milestone: attributed
-  drift on a real messy account in <5 min.
+  `scan` (done since Slice 3), `status --drift` (done, UBI-17 — see §Fleet
+  status below). Milestone complete: attributed drift on a real messy
+  account in <5 min.
 
 ### CloudTrail attribution (UBI-10)
 
@@ -332,6 +354,29 @@ proposals" for the pinned validation rules. Verified live end to end on
 the real `ubx-states` account: adopt → mutate → `scan --propose both` →
 accept the revert → `revert-plan` output correct → manual `aws` CLI
 correction → `scan` reports clean. See STATE.md for the full writeup.
+
+### Fleet status (UBI-17)
+
+`ubx status [--drift] [--stack <name>]` is M1-2's last unstarted piece: a
+read-only report over every resource the ledger already knows about
+(discovered via `resolution.inputs[].resource`, one ledger walk, latest
+proposal per address wins), not one address per `ubx scan` invocation.
+Ledger-only by default (kind/short-hash/accepted-at per resource, no
+provider, no credentials); `--drift` adds a live comparison per resource
+via the exact same `ObservedHash(FoldState)` baseline `ubx scan` uses,
+reusing each resource's own persisted `resolution.inputs[].lookup` — the
+entire reason that field exists. A per-resource failure (missing lookup,
+unreadable provider, unknown type) is recorded as `unreadable` and the
+walk continues; it never aborts the report. See docs/architecture.md's
+"Fleet status" section for the full design, including a confirmed (not
+assumed) finding about how multiple stacks actually chain together
+correctly within one shared ledger directory, and the new
+`cli.ExitCodeError` mechanism `ubx status`'s CI exit-code contract (0
+clean / 1 drift / 2 unreadable-or-error) needed. Verified live against the
+real `ubx-states` account plus a throwaway SQS queue (created and deleted
+for this test, same pattern `conformance/aws_live_test.go` already uses),
+so the fleet walk is genuinely multi-resource, not a single address
+dressed up as a fleet. See STATE.md for the full writeup.
 
 ## Deferred (explicitly not now)
 

@@ -4,6 +4,91 @@
 
 ## Current phase
 
+**UBI-17 is done (this session, Linear-verified): `ubx status`, the fleet
+drift view — M1-2's last unstarted piece (production-readiness step 2).**
+Design landed first in docs/architecture.md ("Fleet status") before code,
+per session protocol. Four pieces:
+
+1. **`core.Ledger.Fleet(stack string) ([]FleetEntry, error)`**
+   (`core/fleet.go`): one pass over `Chain()`, keeping the *latest*
+   proposal per distinct address (discovered via
+   `resolution.inputs[].resource` — the same field
+   `LastObservedHash`/`LastObservationTime`/`ProposalsForAddress` already
+   key off, so `ubx status` reports exactly the same "known resources"
+   set `ubx why <address>` can already look up). Sorted by canonical
+   address string. A malformed/unparseable address string is skipped, not
+   guessed at. `stack` filters after discovery, not during — it doesn't
+   change how or where the ledger is read.
+2. **A confirmed (not assumed) finding**: `core.Ledger`'s own doc comment
+   calls it "a per-stack append-only proposal chain," and
+   docs/schema.md's layout diagram roots each stack at its own directory
+   — but `Head()`/`Append()` don't actually partition storage by
+   `Proposal.Stack` at all; one ledger directory is one flat chain, and
+   `Stack` is just a recorded field. Because `GenerateProposal`/
+   `GenerateRevertProposal` always read the *live* current head before
+   building a proposal, multiple stacks chain together correctly within
+   one shared directory — previously untested (every prior session used
+   exactly one `--stack` per ledger directory), now covered by a real
+   multi-stack test (`TestFleet_MultiStack`, `TestStatus_MultiStack_
+   FilterByStack`). `ubx status`'s "all stacks by default" framing
+   depended on this actually being true, not just plausible.
+3. **`ubx status [--drift] [--stack <name>]`** (`cli/status.go`):
+   ledger-only by default (no provider, no credentials); `--drift` runs
+   `core.RunScan` per resource using each resource's own persisted
+   `resolution.inputs[].lookup` (the entire reason that field was added,
+   UBI-7 follow-up) against one provider launched once for the whole
+   walk. Classifies clean / drifted / unreadable; a missing lookup skips
+   the provider call entirely (an immediate, specific "unreadable" rather
+   than an unpredictable provider call with nothing to look up), any
+   other per-resource failure (unknown type, transient provider error, a
+   malformed proposal `FoldState` can't reconstruct) is caught and
+   recorded the same way — **the walk always continues**, verified by a
+   real unknown-resource-type failure mid-fleet, not just a
+   hand-constructed error.
+4. **A new, narrowly-scoped exit-code mechanism**: `cli.ExitCodeError{Code,
+   Err}`, which `cmd/ubx/main.go` now checks for via `errors.As` before
+   falling through to the existing blanket "any error means exit 1" —
+   every other command is completely unaffected (a plain error still
+   takes the same path it always did). This is what makes `ubx status`'s
+   CI exit-code contract (0 clean, 1 drift, 2 unreadable-or-error,
+   whichever's worse always winning) possible without an in-process
+   `os.Exit` call, which would have killed this codebase's own CLI test
+   harness (`runUbx` executes commands via cobra's `Execute()` in the same
+   process). **A real UX bug caught and fixed along the way**: an
+   `ExitCodeError{Code: 1, Err: nil}` for a "drift found, nothing else
+   wrong" result still triggered cobra's default error handling — a blank
+   `Error: ` line followed by the entire flag-usage block, for a
+   perfectly normal report outcome, not a misuse of the command. Fixed by
+   (a) always giving `ExitCodeError` a real one-line message
+   (`"status: N resource(s) drifted (see above)"` etc.) instead of nil,
+   and (b) setting `SilenceUsage`/`SilenceErrors` on the `status` command
+   specifically (not project-wide) — without the latter, the message
+   printed twice (once from cobra's own default handling, once from
+   `main.go`'s `ExitCodeError`-aware print). Caught by actually running
+   the built binary end-to-end and reading its output, not just checking
+   `err != nil` in a test.
+
+**Live-verified end to end against the real account**
+(`TestStatus_LiveEndToEnd`, gated behind `UBX_CONFORMANCE_LIVE=1`): adopted
+the real `ubx-states` bucket *and* a throwaway SQS queue (created and
+deleted for this test, reusing `conformance/aws_live_test.go`'s own
+create-tag-destroy pattern) into one ledger — a genuinely multi-resource,
+multi-type fleet, not a single address dressed up as one. Confirmed
+ledger-only mode lists both with no provider launched; confirmed `--drift`
+reports both clean; mutated only the bucket's tag out of band and
+confirmed the fleet report correctly distinguished it (drifted) from the
+untouched queue (still clean), with the right summary counts and exit code
+1. Bucket confirmed back to its original untagged state
+(`GetBucketTagging` → `NoSuchTagSet`, before and after); queue confirmed
+deleted (`list-queues` with its name prefix returns nothing) — via
+`t.Cleanup`.
+
+Filed and tracked in Linear from the start (`UBI-17`, team `ubiquex`),
+verified via the Linear MCP tool itself before any commit referenced it —
+same discipline as UBI-16.
+
+## Current phase (previous)
+
 **UBI-16 is done (this session, Linear-verified): the revert path — M3-4's
 other resolution to a detected drift.** Design landed first in
 docs/architecture.md ("Revert path") and docs/schema.md ("Amendment:
@@ -1674,11 +1759,25 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
-**M3-4 ("decision loop") is now fully done, all three UBI-11 stages plus
+**M1-2 ("detection core") is now fully done too, with `ubx status` (UBI-17)
+landing its last unstarted piece.** docs/plan.md's M1-2 bullet is annotated
+"Milestone complete" alongside M3-4's. Both of the wedge's first two
+milestones are done. Next wedge-buildout milestone per docs/plan.md is M5-6
+(retention layer: `why` over drift history, Slack notifications, policy
+stubs), not started. `status --drift`'s own real gaps worth remembering
+rather than quietly forgetting: no CloudTrail attribution wired in (UBI-10's
+`core.AttributeDrift` is drift_adopt-generation-specific today; `ubx status`
+is a pure read-only report and was scoped that way deliberately this
+session, not by oversight — see docs/architecture.md); `Configure` is still
+called once per resource inside each `RunScan` call even though one
+provider process serves the whole fleet (accepted, bounded inefficiency at
+foundational-slice scale, same posture as `FoldState`'s own linear-walk
+note); no pagination/streaming for a very large ledger (one `Chain()` walk
+holds the whole chain in memory, same accepted scale posture).
+
+**M3-4 ("decision loop") is fully done, all three UBI-11 stages plus
 UBI-16's revert path.** Nothing further queued under it as a milestone —
-docs/plan.md's M3-4 bullet is annotated "Milestone complete." Next
-wedge-buildout milestone per docs/plan.md is M5-6 (retention layer: `why`
-over drift history, Slack notifications, policy stubs), not started.
+docs/plan.md's M3-4 bullet is annotated "Milestone complete."
 
 **Immediate, manual, not a coding session:** push the `v0.1.0` tag (`git tag
 v0.1.0 && git push origin v0.1.0`) once the UBI-12 goreleaser dry-run output
@@ -1760,7 +1859,30 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
-**UBI-16 (this session) opens new debt in ubiquex-docs, deliberately not
+**UBI-17 (this session) opens new debt in ubiquex-docs, deliberately not
+written inline** — same reasoning as UBI-16 below, and every foundational
+slice before it: this is a whole new CLI verb (docs/plan.md M1-2's last
+piece), not a docs session, per CLAUDE.md's session protocol. Batch for
+the next ubiquex-docs session:
+
+- New `ubx status` command: full CLI reference page needed
+  (`cli/status.mdx`), covering both modes distinctly (ledger-only vs.
+  `--drift`) since they're genuinely different capabilities, not one
+  capability with a default. The exit-code contract (0/1/2) is the single
+  most CI-relevant fact about this command and deserves prominent,
+  worked-example treatment — this is exactly the kind of "how do I use
+  this" that's a trailer/workflow concern more than a flag description,
+  possibly warranting a short `guides/` page on wiring `ubx status --drift`
+  into a CI pipeline (checking `$?`), alongside the existing
+  `guides/pr-merge-acceptance.mdx`.
+- The "one ledger directory can hold multiple stacks" finding (see Current
+  phase above) is genuinely useful operator-facing information —
+  `concepts/ledger.mdx` currently doesn't say anything about whether one
+  ledger directory is meant to hold one stack or several; worth a
+  paragraph now that `ubx status --stack` depends on readers understanding
+  this isn't automatic partitioning, just a report-time filter.
+
+**UBI-16 (prior session) opened new debt in ubiquex-docs, deliberately not
 written inline** — the revert path is foundational-slice work (a whole new
 wedge verb, docs/plan.md M3-4), not a docs session, per CLAUDE.md's session
 protocol. Batch for the next ubiquex-docs session:
@@ -1815,6 +1937,44 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-17): **`core.Ledger`'s own doc comment ("a per-stack
+  append-only proposal chain") and docs/schema.md's layout diagram both
+  describe one directory per stack, but `Head()`/`Append()` never actually
+  partition storage by `Proposal.Stack` — one directory is one flat hash
+  chain regardless of how many different stacks' proposals live in it.**
+  Every prior session (UBI-7 through UBI-16) happened to use exactly one
+  `--stack` value per ledger directory in every test and every live
+  verification, so this was simply never exercised, not verified safe.
+  `ubx status`'s "all stacks by default" framing needed it to actually
+  work, so this session tested it directly rather than assuming the doc
+  comment was either accurate or load-bearing: it works, because
+  `GenerateProposal`/`GenerateRevertProposal` always read the *current*
+  head fresh via `Head()` before building a proposal, regardless of which
+  stack it's for, so proposals for different stacks correctly chain in
+  temporal order within one shared directory. Whether that's actually the
+  *intended* real-world deployment shape (vs. one directory per stack,
+  matching the schema.md diagram) is still an open question — this
+  session only confirmed both shapes work, not which one teams should
+  use.
+- 2026-07-16 (UBI-17): **Returning `&ExitCodeError{Code: 1, Err: nil}` from
+  a command's `RunE` still triggered cobra's default error-handling path
+  — a blank `Error: ` line followed by the entire flag-usage block —
+  because cobra only checks whether the returned error is `nil`, not
+  whether it carries a message.** For `ubx status`, "drift found" is a
+  normal, working-as-designed report outcome, not a command misuse the
+  usage block would help with; a blank error line made it look like
+  something had actually gone wrong. Caught only by running the real
+  built binary end-to-end and reading its actual stderr output, not by
+  checking `err != nil` in a Go test (which is exactly why this went
+  unnoticed through several rounds of unit/CLI tests first — they all
+  correctly asserted the exit code, none of them looked at what a human
+  running this at a terminal would actually see). Fixed two ways
+  together: `ExitCodeError` always carries a real one-line message now
+  (never nil for a reportable outcome), and `status`'s own
+  `SilenceUsage`/`SilenceErrors` are set (not project-wide) — without
+  `SilenceErrors` specifically, the message printed twice, once from
+  cobra's own default handling and again from `cmd/ubx/main.go`'s
+  `ExitCodeError`-aware print, since both paths run unless silenced.
 - 2026-07-16 (UBI-16): **`RunScan`'s drift baseline (`Ledger.LastObservedHash`)
   and the ledger's actual reconstructed truth (`FoldState`) had always
   computed the same hash for every proposal kind that existed before
