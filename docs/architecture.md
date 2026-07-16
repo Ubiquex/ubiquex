@@ -1241,6 +1241,228 @@ Credentials against his own `personal-273114` project)
   the GCP project left exactly as found — same discipline every AWS
   `RealSafe` conformance test already follows.
 
+## Secrets (UBI-23)
+
+"Every infra change is a typed, hashed, signed proposal recorded in an
+append-only per-stack ledger" (this document's own thesis) is in tension
+with a provider schema's own `Sensitive` flag the moment a resource with
+real secret material — a DB password, an API key, a TLS private key — gets
+adopted or drift-recorded: the ledger is forever, git history is forever,
+and a secret that enters either is compromised the moment anyone else ever
+clones the repo. UBI-23's whole job is closing that gap without weakening
+what the ledger is for: still able to *detect* that a sensitive value
+changed, never able to *reveal* what it changed to or from.
+
+### The mechanism: redact at the read boundary, before core ever sees it
+
+`core` (this project's proposal/ledger/hashing layer) deliberately has no
+dependency on `provider` and no schema knowledge at all — `StateReader`'s
+`resourceSchema any` is intentionally opaque to it (see `core/scan.go`'s
+own doc comment). That boundary is preserved, not bent, for UBI-23:
+redaction happens in the one layer that already sits between the two and
+already holds the concrete provider schema type before it gets
+type-erased to `any` — the `core.StateReader` adapters
+(`cli/stateadapter.go`'s `stateReaderAdapter`, `conformance/harness.go`'s
+own copy). Each adapter's `ReadResource` calls the real
+`provider.Client.ReadResource` exactly as before, then passes the result
+through a new pure function, `provider.Redact(block provider.Block, salt
+[]byte, observed json.RawMessage) (json.RawMessage, error)`, before
+returning it to `core`. By the time `RunScan`/`VerifyFreshness`/
+`GenerateProposal` ever touch observed state, every `Sensitive`-flagged
+attribute is already in `$redacted` form (docs/schema.md's amendment) —
+`core` never learns what "sensitive" means, it only recognizes a JSON
+shape convention that's already there, the same posture `IntentSource.Kind`
+string literals already establish across `cloudtrail`/`gcpaudit`/`core`
+without a shared Go symbol.
+
+`provider.Redact` walks `Block.Attributes` (any attribute with
+`Sensitive: true` gets its whole value replaced, regardless of that
+attribute's own type — a scalar, a list, a map, or an object-typed
+attribute expressed via the schema's own `Type` field all redact the same
+way, wholesale, since a cty attribute type carries no per-sub-field
+sensitivity of its own) and recurses into `Block.NestedBlocks`, dispatched
+on `NestingMode` exactly as `ctyvalue.go`'s `blockObjectType` already does
+for encoding: `Single`/`Group` → the nested value is a bare JSON object;
+`List`/`Set` → an array of objects, walked per element; `Map` → an object
+keyed by string, walked per value.
+
+### Verified against real provider schemas, not assumed
+
+The design's own instruction was to verify nesting shapes against real
+providers rather than assume from the schema alone. A throwaway
+introspection tool (acquire the real binary via `provider.Acquire`, launch
+it, call `Schema(ctx)`, walk `Block.Attributes`/`Block.NestedBlocks`
+counting `Sensitive` flags by depth) against both integrated providers
+found nested sensitivity is common, not a hypothetical edge case:
+
+- `hashicorp/aws` 6.54.0: 131 top-level, 115 nested `Sensitive` attributes,
+  nesting as deep as 4 levels (e.g.
+  `aws_appflow_connector_profile.connector_profile_config.connector_profile_credentials.slack.access_token`).
+  A whole `List`-typed attribute marked sensitive as one unit also occurs
+  in practice (`aws_elasticache_user.authentication_mode.passwords`),
+  confirming "redact the whole attribute value regardless of its own
+  type" is a real requirement, not over-engineering. Non-obviously-secret
+  field names get flagged too (`aws_quicksight_data_source`'s
+  `credentials.credential_pair.username`, alongside its sibling
+  `password`) — redaction must never assume "sensitive" means only the
+  classically-named secret fields.
+- `hashicorp/google` 7.40.0: 46 top-level, 207 nested — proportionally
+  even more nested than AWS, up to 3 levels
+  (`google_datastream_connection_profile.postgresql_profile.ssl_config.server_and_client_verification.client_key`).
+
+Both confirm the existing `Block`/`Attribute`/`NestedBlock` model (built
+for cty-msgpack encode/decode, UBI-7) already correctly surfaces every one
+of these, via `BlockTypes`-based nesting — no schema-translation change
+was needed to make them reachable, only the new `Redact` walk that mirrors
+the same recursion.
+
+**A real gap was investigated and found not to apply, rather than assumed
+away**: `tfplugin6.Schema_Attribute` has a `NestedType *Schema_Object`
+field (the modern terraform-plugin-framework nested-attribute mechanism)
+that `blockFromV6`'s translation has never read — a `Sensitive` flag
+living only inside a `NestedType` structure would be invisible to any
+redaction built on top of `Block`/`Attribute` as they stand today. This
+was checked directly (a throwaway probe reading the raw
+`tfplugin6.GetProviderSchema` response, bypassing the lossy translation
+entirely) rather than left as a caveat: **both `hashicorp/aws` and
+`hashicorp/google` negotiate wire protocol v5** (confirmed live, matching
+this project's own standing "Dual v5/v6, not v6-only" finding under
+Execution layer above — real provider binaries, including modern
+framework-native ones, serve v5 on the wire even when v6 is available),
+and `tfplugin5.Schema_Attribute` has no `NestedType` field at all — it's
+strictly a v6 wire concept. `NestedType` is therefore architecturally
+impossible to encounter with either provider `ubx` integrates with today.
+This is scoped out honestly, not silently: if `ubx` ever integrates a
+provider that negotiates v6, `blockFromV6`'s translation would need
+extending to also read `NestedType` before redaction could claim the same
+completeness it has today. Not needed now; flagged for whoever adds the
+first v6-negotiating provider.
+
+### The salt: per-ledger, generated on first use, never committed
+
+A redacted value's whole point is still detecting change without
+revealing material — `sha256(salt || canonical-value-bytes)` (docs/schema.md's
+`$redacted` amendment) needs a salt so a redacted hash isn't just an
+unsalted fingerprint an attacker could dictionary-attack against likely
+secret values. The salt is ledger-directory-scoped (`.ubx/salt`, alongside
+the existing `.ubx/config`/`.ubx/ledger.lock`/`.ubx/lock` — a fourth,
+distinct file), generated via `crypto/rand` on first call to
+`Ledger.Salt()` and persisted at `0600`. `Ledger.Salt()` also ensures a
+`.gitignore` entry for `.ubx/salt` exists in the ledger directory
+(creating a minimal one if none exists, appending the line if one exists
+and lacks it) — a safety net against an operator's own `git add -A` habit,
+not the only line of defense (the file is `0600` and never itself becomes
+part of any hashed/ledgered content regardless).
+
+**Why the salt itself lives outside `core`'s dependency-inversion
+boundary concerns**: `Ledger.Salt()` is a `core.Ledger` method (core
+already owns `.ubx/`-relative file management — see `core/lock.go`'s
+identical `.ubx/lock` pattern) — but core never calls it itself. The
+salt is threaded through by the CLI/conformance adapter layer (the same
+layer that owns calling `provider.Redact`), read once per command
+invocation and passed to the adapter's constructor, alongside the
+already-established `newStateReader(p provider.Provider, salt []byte)`
+signature.
+
+**Recovery implication, stated honestly rather than glossed over**: losing
+or regenerating the salt makes every subsequently-computed `$redacted`
+hash for an unchanged real secret differ from what's already in ledger
+history — the next scan reports it as drifted. This is a false positive,
+not a missed detection: it degrades equality comparison across history,
+it never causes real material to leak (nothing about the salt's loss
+touches what gets written anywhere), and it never makes a genuine change
+go undetected (a scan always re-reads live state fresh). See
+docs/schema.md's amendment for the full statement.
+
+### What every affected command does differently
+
+- **`scan`/`scan --all`/drift/revert (proposal generation)**: nothing
+  explicit changes in `core/scan.go` itself — `RunScan`'s `ScanResult.Observed`
+  is already redacted by the time core sees it (the adapter boundary
+  above), so `GenerateProposal`/`GenerateRevertProposal` construct
+  `delta.creates`/`delta.modifies` from already-safe data without knowing
+  it. The one real `core` change: `core/state.go`'s `diffObjects` (the
+  recursive engine behind `diffAttributes`, hence every drift/revert
+  delta) now recognizes a `$redacted`-shaped object and treats it as
+  atomic rather than recursing into it — otherwise a changed secret would
+  diff as `attr.$redacted.sha256: <hash1> -> <hash2>`, technically
+  accurate but the wrong granularity (docs/schema.md's amendment has the
+  full reasoning). `FoldState` needed no changes at all: it's pure
+  dot-path JSON manipulation, and a `$redacted` object is just a value
+  like any other from its perspective.
+- **`writeback`**: `tfwrite.ApplyModification` declines any
+  `Modification.After` dot-path whose value is `$redacted`-shaped,
+  *before* attempting to resolve or render it — never handing a redacted
+  marker to `hclwrite.TokensForValue`, which would otherwise happily
+  render `{ "$redacted" = { "sha256" = "..." } }` as a literal into a real
+  `.tf` file. This is the one guarantee that must hold absolutely: a
+  redacted attribute is reported in the same `Declined` mechanism an
+  expression-valued attribute already uses, with a reason naming it as
+  redacted and pointing at manual restoration, never a rendering attempt.
+- **`revert-plan`**: reuses the same `tfwrite.ApplyModification` decline
+  path for its `--tf-dir` diff (so a redacted attribute lands in its
+  existing "manual steps" section automatically), and its plain-text plan
+  (`printPlan`, always printed regardless of `--tf-dir`) renders
+  `(redacted)` in place of the raw `$redacted` JSON for both the current
+  and restore-to value — visible as "this changed" without ever printing
+  the hash inline next to a human-readable attribute name.
+- **`why`**: renders `(redacted)` for any modified attribute whose
+  before/after value is `$redacted`-shaped, reusing the same rendering
+  rule `revert-plan` uses.
+- **`scan --all` (bulk onboarding)**: the batch summary now reports how
+  many attributes were redacted across the whole walk, alongside the
+  existing adopted/skipped counts — visibility that adoption is quietly
+  doing the right thing with sensitive fields, not a silent side effect.
+- **`--json` (`scan`/`why`/`status`)**: no code changes needed. Every
+  `--json` payload already marshals the real `*core.Proposal` structure
+  directly; since redaction already happened upstream of everything that
+  builds a `Proposal`, the JSON a script consumes contains the same
+  `$redacted` markers the human view describes in words — never raw
+  material, and never a separate code path that could diverge from the
+  human view's own safety guarantee.
+
+### A deliberate, checked scope boundary: `resolution.inputs[].lookup` is never redacted
+
+Writing the adversarial test for this exact area surfaced a real question,
+not a hypothetical one: `resolution.inputs[].lookup` (the UBI-7 follow-up
+amendment — the JSON object passed to `ReadResource` to identify a
+resource, persisted so a later `ubx accept --reverify-with`/
+`--reverify-source` can re-read the same resource without the caller
+re-supplying it) is populated directly from `ScanRequest.CurrentState` in
+`core.RunScan`, completely independent of the adapter-layer redaction path
+above — it is never passed through `provider.Redact`, deliberately.
+
+An initial version of the adversarial test put the fake sensitive
+attribute's value directly into `--lookup` (to double-check redaction
+covered "every place a value could end up," per the task's own framing)
+and caught it immediately: the raw value showed up in
+`resolution.inputs[].lookup`, unredacted, in the generated proposal file.
+Rather than silently loosening the test or reflexively redacting the
+lookup field too, this was checked against real schemas first: **across
+every type in `conformance/registry.go` — both AWS and GCP, everything
+this project has empirically verified `LookupHint`/`IdentityFields`
+for — no identity/lookup-worthy attribute is ever `Sensitive`-flagged.**
+Real lookup keys are `id`, `name`, `arn`, `bucket` — never a password, key,
+or credential. This matches the same lesson the live schema introspection
+above already established: `Sensitive` marks credential-shaped material,
+which no real provider ever also needs to *locate* a resource by.
+
+Given that, redacting `lookup` unconditionally would cost real capability
+(a redacted marker can't be re-supplied to a live `ReadResource` call as a
+working identifier — `VerifyFreshness` would break) to guard against a
+scenario no real provider schema actually produces. The scope boundary is
+therefore: **`ubx` never redacts `resolution.inputs[].lookup`; a caller
+who deliberately supplies real secret material via `--lookup` anyway (not
+something any real schema requires) is persisting a value they already
+typed into the command themselves — categorically different from `ubx`
+observing and recording something from the live resource without the
+caller's own action already putting that material in their hands.** The
+adversarial test that caught this (`cli/redact_test.go`) was corrected to
+reflect the realistic case — `--lookup` carrying only `id` throughout,
+the sensitive value originating from the (simulated) live read instead —
+and now asserts the persisted lookup is exactly `{"id": "..."}`, with no
+trace of the secret, as a permanent regression check on this boundary.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

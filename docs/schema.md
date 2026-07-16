@@ -425,7 +425,79 @@ Notes:
   intent evidence, which otherwise lives outside the proposal's own hash chain
   (dialogues can be edited or deleted upstream; the content_hash catches that).
 
-## Canonical hashing — RATIFIED v1
+### Amendment: `$redacted` value encoding (2026-07-17, UBI-23)
+
+Secrets must never enter the ledger — not even as an accidental byproduct
+of adopting or drift-recording a resource that happens to have one. This
+amendment pins the JSON *value* shape any provider-`Sensitive`-flagged
+attribute takes, wherever it would otherwise appear in hashed content:
+`resolution.inputs[].observed_hash`'s source data, `delta.creates`' state
+snapshots, and `delta.modifies[].before`/`after`.
+
+A redacted value is:
+
+```json
+{ "$redacted": { "sha256": "<hex>" } }
+```
+
+replacing the ENTIRE attribute value — whatever its own type (scalar,
+list, set, map, nested object) — never a partial/field-level redaction
+within it. `sha256` is `sha256(salt || canonical-json-bytes-of-the-real-value)`,
+where `salt` is a 32-byte value generated once per ledger directory on
+first use and persisted at `.ubx/salt` (never itself part of any hashed
+content, never committed — see docs/architecture.md's "Secrets" section
+for the salt's own lifecycle and the honest recovery-implication tradeoff
+of losing it). "Canonical" here means the same decode-then-remarshal
+convention `ObservedHash` already uses (sorted object keys, no
+insignificant whitespace) — consistent with every other canonicalization
+rule in this document, not a new one.
+
+**This is a value-shape convention, not a new field** — `$redacted` can
+appear anywhere an attribute value already could, so no `schema_version`
+bump is needed, the same reasoning as every additive amendment above. A
+reader that has never heard of `$redacted` still sees perfectly valid
+JSON at that position; it just won't know to render it specially. What a
+reader/writer of this document's canonical hashing rules DOES need to
+know: a `$redacted` object is **atomic** for diff purposes — comparing two
+resource states never recurses into one (see below); it is compared and
+hashed exactly like any scalar value would be.
+
+**Where this applies**: `provider.Redact` (see docs/architecture.md)
+walks a resource's schema `Sensitive` flags over its observed state
+immediately after every live `ReadResource` call, before that state is
+handed back to `core` for fingerprinting/hashing/diffing. By the time
+`core` ever sees observed state, any sensitive attribute is already in
+`$redacted` form — `core` has no schema knowledge and never decides what's
+sensitive; it only recognizes the `$redacted` shape once it's already
+there.
+
+**Diff behavior**: `core`'s attribute-diff (`diffAttributes`/`diffObjects`)
+treats a `$redacted`-shaped value as atomic, not as a nested object to
+recurse into. Two equal `$redacted` values (same salt, same underlying
+secret — same `sha256`) diff as unchanged, exactly like two equal scalars
+would; two different `$redacted` values (the underlying secret actually
+changed) diff as a whole-attribute change, `before`/`after` both holding
+the complete `$redacted` object at that dot-path — never a spurious
+`attr.$redacted.sha256: <hash1> -> <hash2>` sub-path, which would be
+technically accurate but violate "before/after hold only the attributes
+that changed" at the wrong granularity for what's actually a single
+attribute's value changing.
+
+**Recovery implication of losing the salt, stated honestly**: regenerating
+`.ubx/salt` (lost, deleted, or a fresh checkout of a ledger directory
+whose salt was never itself committed — correctly so) means every
+subsequently-computed `$redacted` hash for a given real secret value no
+longer matches what's already recorded in ledger history, even though the
+real value hasn't changed. The next scan reports every sensitive attribute
+as drifted — a false positive, not a missed detection. This is the
+deliberate, disclosed tradeoff: losing the salt degrades *equality
+comparison across history*, it does not ever cause a real secret to leak,
+and it does not cause a real change to go undetected (a scan always
+re-reads live state fresh; nothing about salt loss makes drift detection
+blind, only noisier for sensitive attributes specifically, exactly once,
+until the next observation re-settles against the new salt).
+
+
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
 > draft; changes require a `schema_version` bump and a migration, not an edit

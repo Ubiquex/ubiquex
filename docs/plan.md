@@ -248,6 +248,25 @@
   breaking correlation for the latter until a per-service fix lands. See
   docs/architecture.md's "GCP support" section and STATE.md for the full
   writeup, including every empirical finding.
+- 2026-07-17 — UBI-23 (Linear-verified): redact provider-`Sensitive`
+  attributes in observed state — secrets must never enter the ledger.
+  `provider.Redact` walks a resource schema's `Sensitive` flags over
+  observed state at the `core.StateReader` adapter boundary
+  (`cli/stateadapter.go`, `conformance/harness.go`), replacing each
+  flagged value wholesale with `{"$redacted": {"sha256": "<salted
+  hash>"}}` before `core` ever sees it — `core` stays schema-ignorant,
+  recognizing only the resulting JSON shape (docs/schema.md's new
+  amendment). Salt is per-ledger-directory (`.ubx/salt`, `Ledger.Salt()`),
+  generated on first use, gitignored, never committed. Verified against
+  real `hashicorp/aws`/`hashicorp/google` schemas that nested sensitivity
+  is common (115/207 nested `Sensitive` attributes respectively, up to
+  depth 4/3) — the existing `Block`/`NestedBlock` model already surfaces
+  all of it. A real gap (the modern `NestedType` nested-attribute
+  mechanism, unread by `blockFromV6`) was checked directly and found not
+  to apply: both integrated providers negotiate wire protocol v5, and
+  `NestedType` is v6-only — scoped out honestly, not assumed away. See
+  docs/architecture.md's "Secrets" section and STATE.md for the full
+  writeup.
 
 ## Strategy
 
@@ -628,6 +647,20 @@ ones are cheap enough to live-verify, which ones "fight back" the way
 `aws_iam_group`/`aws_route_table_association` did) is Stage 2 work,
 done against a real account rather than guessed from schema inspection
 alone, the same discipline UBI-9 followed.
+
+### Secrets (UBI-23)
+
+Every `Sensitive`-flagged attribute in a resource's observed state is
+replaced with a salted fingerprint (`{"$redacted": {"sha256": "..."}}`)
+before it ever reaches `core` — see docs/architecture.md's "Secrets"
+section for the full mechanism (redaction at the `core.StateReader`
+adapter boundary, `provider.Redact`, the per-ledger `.ubx/salt`) and
+docs/schema.md's `$redacted` value-encoding amendment for the wire shape
+and hashing rule. Drift detection is preserved end to end: an unchanged
+secret's redacted hash matches across scans (same salt, same real value),
+a genuinely changed one doesn't. `writeback`/`revert-plan` both decline
+ever writing a redacted marker into `.tf` source, surfacing it as a
+manual-restoration step instead.
 
 ## Deferred (explicitly not now)
 
