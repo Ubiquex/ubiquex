@@ -979,18 +979,39 @@ The knowledge already exists — `conformance/registry.go`'s per-type
 `Notes` — but that package is explicitly test-only tooling ("this is
 project-internal tooling, not shipped product code — it lives outside
 core/ and cli/ deliberately," its own doc comment). Importing it into
-`cli/` (shipped product code) would make a test harness a runtime
+`cli/`/`core/` (shipped product code) would make a test harness a runtime
 dependency of the binary, exactly the boundary that comment exists to
-hold. **The data is promoted, not the package**: a small, generated,
-shipped table (`core/lookuphints/`, generated from `conformance/registry.go`'s
-`Notes` field by a small `go generate` step, committed as ordinary Go
-source — no runtime dependency on `conformance/` at all, and no drift
-between "what the docs say" and "what the error teaches," since both
-trace to the same source data). `ErrResourceUnreadable`'s error message
-gains the hint (attribute names, not the full prose Notes text) and a
-link to `cli/lookup`'s docs page, for the seven types this is actually
-known for; every other type gets an honest "check the provider's schema"
+hold. **The data is promoted, not the package**: `Notes` is free prose,
+not mechanically generatable from, so `TypeSpec` gained a new structured
+field, `LookupHint`, populated only where a live `ReadResource` round
+trip actually confirmed the failure mode (not assumed from Notes' text) —
+`conformance/gentool` (a `go generate`-invoked generator, never imported
+by anything else) reads `LookupHint` and writes a small, shipped table,
+`core/lookuphints/hints.go`, committed as ordinary Go source with no
+runtime dependency on `conformance/` at all.
+
+Only three types get this: `aws_s3_bucket`, `aws_iam_role`, `aws_iam_user`
+— the ones where the mistake is a genuinely missing field, not just a
+surprising id value. (`cli/lookup.mdx`'s other four "confirmed
+non-default lookup shape" types — `aws_iam_policy`, `aws_sqs_queue`,
+`aws_sns_topic`, `aws_vpc` — use an ARN/URL/vpc-id as `id` and need
+nothing else; that's a "use the right value" surprise, not a "you're
+missing a field" one, and isn't safe to promote as a shipped hint without
+a plausible specific fix to name.) `ErrResourceUnreadable`'s error
+message gains the hint and a link to `cli/lookup`'s docs page for these
+three; every other type gets an honest "check the provider's schema"
 fallback rather than a fabricated guess.
+
+**Live verification caught the hint direction backwards before it
+shipped.** The Notes prose for these three types reads "id and bucket/
+name are both the natural key; lookup needs BOTH set" — which, read
+without actually calling `ReadResource`, could suggest either half is the
+"missing" one. A real scan against the "ubx-states" bucket
+(`conformance/lookuphints_live_test.go`) proved `{"id": "..."}` alone
+succeeds, and `{"bucket": "..."}` alone (the type's own natural,
+Terraform-attribute-shaped key — an easy thing to reach for instead of
+`id`) reads back null. So the hint teaches "make sure `id` is included,"
+never "you're missing bucket/name" — the opposite of the first draft.
 
 ### 4. Ledger lock
 
@@ -1015,6 +1036,18 @@ recovery guidance (remove the file) rather than either blocking forever
 or silently breaking the lock — a silently-broken lock would defeat the
 entire point for the one case (a genuinely still-running process) it
 exists to protect against.
+
+**Mechanism: a PID file, not a bare OS-level `flock(2)`.** A real
+`flock()` is automatically released by the kernel the instant a holding
+process dies, for any reason including a hard kill — which would make
+"stale lock from a killed process" invisible rather than a real, testable
+scenario: the very next contender's retry would just succeed silently,
+with nothing left to detect. Writing the holder's own PID into the lock
+file, and checking that PID's liveness (`os.FindProcess` +
+`Signal(syscall.Signal(0))`, a pure existence probe, not an actual
+signal) when contended, keeps "confirmed dead, here's how to recover"
+observable as its own outcome rather than folding it into ordinary
+contention.
 
 ## Component map (build order)
 

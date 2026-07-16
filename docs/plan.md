@@ -196,6 +196,32 @@
   real values for whatever flags were supplied, commented examples for
   everything else. See docs/architecture.md for full design; STATE.md for
   the adversarial tests and per-verb integration.
+- 2026-07-16 — UBI-20 (Linear-verified): the hardening pass, production
+  ladder step 5 — "the credibility layer." Four independently-committed
+  workstreams. (1) Exit-code contract extended from `status` alone to
+  every verb (0 success, 1 an actionable finding, 2 error) — a deliberate
+  breaking change to what "exit 1" meant for every other command
+  (`cmd/ubx/main.go`'s fallback moves from `os.Exit(1)` to `os.Exit(2)`).
+  (2) `--json` on `scan`/`status`/`why`: one versioned (`"format": 1`)
+  JSON document on stdout, never mixed with human text; `why --json`'s
+  resource-address form emits a `"chain"` array, newest first.
+  (3) Teaching errors: `core.ErrResourceUnreadable` now names the likely
+  fix for `aws_s3_bucket`/`aws_iam_role`/`aws_iam_user` plus a docs link,
+  sourced from a new generated (`go:generate`), shipped `core/lookuphints`
+  table — promoting the DATA out of `conformance/registry.go` (still
+  test-only), not the package itself. Live verification against the real
+  "ubx-states" bucket caught the hint direction backwards before it
+  shipped: `{"id": ...}` alone succeeds, `{"bucket": ...}` alone (the
+  natural-but-wrong key) reads back null — the opposite of what the
+  Notes prose alone would have suggested. (4) Ledger lock: a PID-file
+  lock at `.ubx/lock` (a third, distinct file alongside `.ubx/config` and
+  `.ubx/ledger.lock`) wraps `Ledger.Append`'s whole check-then-write
+  sequence, so two concurrent `Accept`/`AcceptFromMerge` calls serialize
+  instead of racing; a live-held lock is waited out then reported with
+  the holder's PID, a lock naming a dead PID is detected immediately and
+  reported with recovery guidance, never auto-removed. `scan`/`why`/
+  `status` never acquire it. See STATE.md for the full writeup, including
+  the live-verification finding above.
 
 ## Strategy
 
@@ -484,8 +510,12 @@ to what a plain error's exit code meant everywhere else (1 → 2; 1 is now
 reserved for actionable findings specifically); (2) `--json` on
 `scan`/`status`/`why`, every payload versioned with `"format": 1`, human
 output unchanged and still the default; (3) teaching errors — `scan`'s
-"provider returned no state" now names the likely missing lookup field
-for the seven empirically-known types, sourced from a small generated,
+"provider returned no state" now names the likely fix for the three
+empirically-known types whose mistake is a missing field, not just a
+surprising id value (`aws_s3_bucket`, `aws_iam_role`, `aws_iam_user`;
+`cli/lookup.mdx`'s other four "confirmed non-default" types use a
+surprising but sufficient id value and aren't a missing-field mistake, so
+they're deliberately not in this table), sourced from a small generated,
 shipped table (`core/lookuphints/`) rather than importing the test-only
 `conformance/` package into product code; (4) a per-ledger-directory
 lockfile (`.ubx/lock`) making concurrent `ubx` processes safe, with
