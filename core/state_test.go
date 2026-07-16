@@ -68,6 +68,141 @@ func TestDiffAttributes_NoChangesProducesEmptyDiff(t *testing.T) {
 	}
 }
 
+// TestDiffAttributes_RedactedValueUnchangedProducesNoDiff and
+// TestDiffAttributes_RedactedValueChangedIsAtomic are UBI-23's core
+// adversarial cases: a $redacted marker (docs/schema.md's value-encoding
+// amendment) must never be recursed into by diffObjects -- an unchanged
+// redacted value (same hash) must diff as nothing, and a changed one
+// (different hash -- the real underlying secret changed) must diff as one
+// whole-attribute change, never a spurious "attr.$redacted.sha256: ..."
+// sub-path.
+func TestDiffAttributes_RedactedValueUnchangedProducesNoDiff(t *testing.T) {
+	same := json.RawMessage(`{"password":{"$redacted":{"sha256":"abc123"}}}`)
+	b, a, err := diffAttributes(same, same)
+	if err != nil {
+		t.Fatalf("diffAttributes: %v", err)
+	}
+	if len(b) != 0 || len(a) != 0 {
+		t.Fatalf("expected an unchanged redacted value to produce no diff, got before=%v after=%v", b, a)
+	}
+}
+
+func TestDiffAttributes_RedactedValueChangedIsAtomic(t *testing.T) {
+	before := json.RawMessage(`{"password":{"$redacted":{"sha256":"hash-of-old-value"}}}`)
+	after := json.RawMessage(`{"password":{"$redacted":{"sha256":"hash-of-new-value"}}}`)
+
+	b, a, err := diffAttributes(before, after)
+	if err != nil {
+		t.Fatalf("diffAttributes: %v", err)
+	}
+	if len(b) != 1 || len(a) != 1 {
+		t.Fatalf("expected exactly one changed path each, got before=%v after=%v", b, a)
+	}
+	// The changed path must be "password" itself -- never a sub-path like
+	// "password.$redacted.sha256" -- and its value must be the whole
+	// $redacted object.
+	if !IsRedactedValue(b["password"]) {
+		t.Fatalf("expected before[\"password\"] to still be a $redacted marker, got %s", b["password"])
+	}
+	if !IsRedactedValue(a["password"]) {
+		t.Fatalf("expected after[\"password\"] to still be a $redacted marker, got %s", a["password"])
+	}
+	if _, ok := b["password.$redacted.sha256"]; ok {
+		t.Fatal("diff must not recurse into a $redacted marker's own fields")
+	}
+}
+
+// TestFoldState_OverRedactedValues confirms the full adoption -> drift ->
+// fold chain works correctly when the changing attribute is a redacted
+// one (UBI-23): FoldState is pure dot-path JSON manipulation and needs no
+// awareness of $redacted at all, but this proves that empirically rather
+// than assuming it from FoldState's own code shape.
+func TestFoldState_OverRedactedValues(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := testAddr()
+	ctx := context.Background()
+	lookup := json.RawMessage(`{"id":"ubx-states"}`)
+
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"ubx-states","password":{"$redacted":{"sha256":"hash-v1"}}}`)}
+
+	res, err := RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: lookup})
+	if err != nil {
+		t.Fatalf("RunScan (adopt): %v", err)
+	}
+	if res.Outcome != ScanNew {
+		t.Fatalf("expected ScanNew, got %v", res.Outcome)
+	}
+	p, err := GenerateProposal(l, "payments", res)
+	if err != nil {
+		t.Fatalf("GenerateProposal (adopt): %v", err)
+	}
+	if _, err := Accept(l, p); err != nil {
+		t.Fatalf("Accept (adopt): %v", err)
+	}
+
+	// Re-scanning against the exact same redacted value must report no
+	// drift -- proves redaction doesn't spuriously fire drift on every
+	// scan just because the attribute is sensitive.
+	res, err = RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: lookup})
+	if err != nil {
+		t.Fatalf("RunScan (unchanged): %v", err)
+	}
+	if res.Outcome != ScanUnchanged {
+		t.Fatalf("expected ScanUnchanged for an unchanged redacted value, got %v", res.Outcome)
+	}
+
+	// The real secret changes (a different redacted hash) -- drift must
+	// fire.
+	fp.state = json.RawMessage(`{"id":"ubx-states","password":{"$redacted":{"sha256":"hash-v2"}}}`)
+	res, err = RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: lookup})
+	if err != nil {
+		t.Fatalf("RunScan (drift): %v", err)
+	}
+	if res.Outcome != ScanDrifted {
+		t.Fatalf("expected ScanDrifted when the redacted hash changes, got %v", res.Outcome)
+	}
+	p, err = GenerateProposal(l, "payments", res)
+	if err != nil {
+		t.Fatalf("GenerateProposal (drift): %v", err)
+	}
+	mod := p.Delta.Modifies[0]
+	if !IsRedactedValue(mod.Before["password"]) || !IsRedactedValue(mod.After["password"]) {
+		t.Fatalf("expected both before/after to be $redacted markers, got before=%s after=%s", mod.Before["password"], mod.After["password"])
+	}
+	if _, err := Accept(l, p); err != nil {
+		t.Fatalf("Accept (drift): %v", err)
+	}
+
+	folded, found, err := l.FoldState(addr)
+	if err != nil {
+		t.Fatalf("FoldState: %v", err)
+	}
+	if !found {
+		t.Fatal("FoldState: not found")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(folded, &decoded); err != nil {
+		t.Fatalf("decode folded state: %v", err)
+	}
+	pw, err := json.Marshal(decoded["password"])
+	if err != nil {
+		t.Fatalf("marshal folded password: %v", err)
+	}
+	if !IsRedactedValue(pw) {
+		t.Fatalf("expected FoldState to carry forward a $redacted marker, got %s", pw)
+	}
+
+	// Re-scanning against the folded (latest) redacted value should now
+	// report clean again.
+	res, err = RunScan(ctx, fp, l, ScanRequest{Address: addr, CurrentState: lookup})
+	if err != nil {
+		t.Fatalf("RunScan (settled): %v", err)
+	}
+	if res.Outcome != ScanUnchanged {
+		t.Fatalf("expected ScanUnchanged after the drift settles, got %v", res.Outcome)
+	}
+}
+
 func TestFoldState_MultiLevelDrift(t *testing.T) {
 	l := Open(t.TempDir())
 	addr := testAddr()

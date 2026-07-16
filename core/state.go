@@ -229,7 +229,14 @@ func diffObjects(prefix string, b, a map[string]interface{}, beforeOut, afterOut
 		av, aok := a[k]
 		bObj, bIsObj := bv.(map[string]interface{})
 		aObj, aIsObj := av.(map[string]interface{})
-		if bok && aok && bIsObj && aIsObj {
+		// A $redacted marker (UBI-23, docs/schema.md's value-encoding
+		// amendment) is atomic -- never recursed into, even though it
+		// decodes to a map[string]interface{} like any other nested
+		// object. Recursing would produce a spurious sub-path diff
+		// (attr.$redacted.sha256: <hash1> -> <hash2>) instead of the
+		// whole-attribute-level change a redacted value changing
+		// actually is.
+		if bok && aok && bIsObj && aIsObj && !isRedactedMarker(bObj) && !isRedactedMarker(aObj) {
 			if err := diffObjects(path, bObj, aObj, beforeOut, afterOut); err != nil {
 				return err
 			}

@@ -41,6 +41,10 @@
 //	                             ("tags"/"tags_all"), this is "key=value" merged into the
 //	                             map, same convention as FAKEPROVIDER_EXTRA_TAG; otherwise
 //	                             it replaces the attribute's scalar value directly.
+//	FAKEPROVIDER_SENSITIVE_ATTRS comma-separated subset of FAKEPROVIDER_ATTRS to advertise
+//	                             with Sensitive: true (UBI-23) — lets a test exercise
+//	                             provider.Redact/core's $redacted handling end to end
+//	                             without a real Sensitive-bearing provider schema.
 //
 // See conformance/fake_test.go for how the harness drives this.
 package main
@@ -323,6 +327,20 @@ func conformanceCtyType() cty.Type {
 	return cty.Object(fields)
 }
 
+// conformanceSensitiveAttrs reads FAKEPROVIDER_SENSITIVE_ATTRS (UBI-23):
+// which of conformanceAttrs() to advertise as Sensitive.
+func conformanceSensitiveAttrs() map[string]bool {
+	raw := os.Getenv("FAKEPROVIDER_SENSITIVE_ATTRS")
+	if raw == "" {
+		return nil
+	}
+	m := make(map[string]bool)
+	for _, name := range strings.Split(raw, ",") {
+		m[name] = true
+	}
+	return m
+}
+
 func conformanceResourceType() string {
 	t := os.Getenv("FAKEPROVIDER_RESOURCE_TYPE")
 	if t == "" {
@@ -375,6 +393,7 @@ func echoConformanceState(msgpackBytes []byte) ([]byte, error) {
 }
 
 func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
+	sensitive := conformanceSensitiveAttrs()
 	var attrs []*tfplugin6.Schema_Attribute
 	for _, name := range conformanceAttrs() {
 		a := &tfplugin6.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
@@ -384,12 +403,16 @@ func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
 		if name == "id" {
 			a.Computed, a.Optional = true, false
 		}
+		if sensitive[name] {
+			a.Sensitive = true
+		}
 		attrs = append(attrs, a)
 	}
 	return attrs
 }
 
 func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
+	sensitive := conformanceSensitiveAttrs()
 	var attrs []*tfplugin5.Schema_Attribute
 	for _, name := range conformanceAttrs() {
 		a := &tfplugin5.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
@@ -398,6 +421,9 @@ func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
 		}
 		if name == "id" {
 			a.Computed, a.Optional = true, false
+		}
+		if sensitive[name] {
+			a.Sensitive = true
 		}
 		attrs = append(attrs, a)
 	}
