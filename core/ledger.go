@@ -87,6 +87,18 @@ func (l *Ledger) Append(p *Proposal) error {
 		return errors.New("append: proposal has no ID (compute and set it first, e.g. via Accept)")
 	}
 
+	// Locked for the whole check-then-write sequence below, not just the
+	// final write -- two concurrent Accept calls that both read the same
+	// head before either writes would otherwise both think they're
+	// building on the current head and race to append (UBI-20 workstream
+	// 4, docs/architecture.md — Ledger lock). scan/why/status never call
+	// Append, so they never contend for this.
+	release, err := l.acquireLedgerLock()
+	if err != nil {
+		return fmt.Errorf("append: %w", err)
+	}
+	defer release()
+
 	// Checked before the parent match: if this exact ID is already in the
 	// ledger, that's the more specific and useful signal to the caller —
 	// the head has necessarily moved past a proposal's own parent by the
