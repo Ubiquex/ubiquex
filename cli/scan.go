@@ -122,7 +122,11 @@ func newScanCmd() *cobra.Command {
 			defer client.Close()
 
 			ledger := core.Open(ledgerDir)
-			res, err := core.RunScan(ctx, newStateReader(client.Provider), ledger, core.ScanRequest{
+			salt, err := ledger.Salt()
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+			}
+			res, err := core.RunScan(ctx, newStateReader(client.Provider, salt), ledger, core.ScanRequest{
 				Address:          addr,
 				ProviderConfig:   json.RawMessage(providerConfig),
 				CurrentState:     json.RawMessage(lookup),

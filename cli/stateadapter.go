@@ -12,8 +12,16 @@ import (
 // stateReaderAdapter adapts a provider.Provider to core.StateReader. core
 // deliberately doesn't import package provider (see core/scan.go); this is
 // the small translation layer that lives at the one place that needs both.
+//
+// salt (UBI-23, docs/architecture.md -- Secrets) is this ledger
+// directory's redaction salt (core.Ledger.Salt) -- ReadResource redacts
+// every Sensitive-flagged attribute before core ever sees the observed
+// state, since this adapter is the one place that still holds the
+// concrete *provider.Schema (hence its Sensitive flags) before it's
+// type-erased to core.StateReader's opaque `any`.
 type stateReaderAdapter struct {
-	p provider.Provider
+	p    provider.Provider
+	salt []byte
 }
 
 func (a stateReaderAdapter) Schema(ctx context.Context) (any, map[string]any, error) {
@@ -41,10 +49,19 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 	if !ok {
 		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
 	}
-	return a.p.ReadResource(ctx, rs, typeName, currentState)
+	observed, err := a.p.ReadResource(ctx, rs, typeName, currentState)
+	if err != nil {
+		return nil, err
+	}
+	if len(observed) == 0 {
+		return observed, nil
+	}
+	return provider.Redact(rs.Block, a.salt, observed)
 }
 
-// newStateReader wraps a provider.Provider as a core.StateReader.
-func newStateReader(p provider.Provider) core.StateReader {
-	return stateReaderAdapter{p: p}
+// newStateReader wraps a provider.Provider as a core.StateReader. salt is
+// the ledger directory's redaction salt (core.Ledger.Salt) -- see
+// stateReaderAdapter's own doc comment.
+func newStateReader(p provider.Provider, salt []byte) core.StateReader {
+	return stateReaderAdapter{p: p, salt: salt}
 }

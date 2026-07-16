@@ -82,6 +82,8 @@ func newAcceptCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("parse proposal: %w", err)}
 			}
 
+			ledger := core.Open(ledgerDir)
+
 			if reverifyWith != "" || reverifySource != "" {
 				if resourceType == "" || resourceName == "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: reverification requires --resource-type and --resource-name")}
@@ -102,13 +104,16 @@ func newAcceptCmd() *cobra.Command {
 				}
 				defer client.Close()
 
-				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider), addr, reverifySource,
+				salt, err := ledger.Salt()
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
+				}
+				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider, salt), addr, reverifySource,
 					json.RawMessage(providerConfig), &p); err != nil {
 					return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 				}
 			}
 
-			ledger := core.Open(ledgerDir)
 			accepted, err := core.Accept(ledger, &p)
 			if err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: err}

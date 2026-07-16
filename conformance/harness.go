@@ -16,7 +16,14 @@ import (
 // so every consumer that needs both gets its own small copy of this; cli
 // has an equivalent (cli/stateadapter.go). Not worth a shared package for
 // ~20 lines.
-type stateReaderAdapter struct{ p provider.Provider }
+//
+// salt (UBI-23, docs/architecture.md -- Secrets) redacts Sensitive
+// attributes before core ever sees observed state -- see
+// cli/stateadapter.go's equivalent field for the full reasoning.
+type stateReaderAdapter struct {
+	p    provider.Provider
+	salt []byte
+}
 
 func (a stateReaderAdapter) Schema(ctx context.Context) (any, map[string]any, error) {
 	schemas, err := a.p.Schema(ctx)
@@ -37,7 +44,14 @@ func (a stateReaderAdapter) Configure(ctx context.Context, providerSchema any, c
 
 func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any, typeName string, currentState json.RawMessage) (json.RawMessage, error) {
 	rs, _ := resourceSchema.(*provider.Schema)
-	return a.p.ReadResource(ctx, rs, typeName, currentState)
+	observed, err := a.p.ReadResource(ctx, rs, typeName, currentState)
+	if err != nil {
+		return nil, err
+	}
+	if len(observed) == 0 {
+		return observed, nil
+	}
+	return provider.Redact(rs.Block, a.salt, observed)
 }
 
 // AdoptMutateScanDiffConfig describes one conformance run.
@@ -88,6 +102,10 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 	}
 
 	ledger := core.Open(t.TempDir())
+	salt, err := ledger.Salt()
+	if err != nil {
+		t.Fatalf("ledger salt: %v", err)
+	}
 
 	scan := func(step string) *core.ScanResult {
 		t.Helper()
@@ -100,7 +118,7 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 		}
 		defer client.Close()
 
-		res, err := core.RunScan(ctx, stateReaderAdapter{client.Provider}, ledger, core.ScanRequest{
+		res, err := core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt}, ledger, core.ScanRequest{
 			Address:        cfg.Address,
 			ProviderConfig: providerConfig,
 			CurrentState:   cfg.Lookup,

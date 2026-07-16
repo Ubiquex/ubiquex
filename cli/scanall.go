@@ -69,7 +69,6 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
 	defer client.Close()
-	stateReader := newStateReader(client.Provider)
 
 	if opts.OutDir != "" {
 		if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
@@ -78,6 +77,11 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	}
 
 	ledger := core.Open(opts.LedgerDir)
+	salt, err := ledger.Salt()
+	if err != nil {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+	}
+	stateReader := newStateReader(client.Provider, salt)
 
 	// core.GenerateProposal sets each proposal's Parent from the ledger's
 	// real on-disk head, which never moves during this walk -- nothing
@@ -98,6 +102,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	skipped := map[string]int{}
 	seen := map[core.Address]bool{}
 	adopted := 0
+	redactedAttrs := 0
 
 	for _, r := range resources {
 		name := r.Name
@@ -163,6 +168,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		}
 
 		adopted++
+		redactedAttrs += core.CountRedacted(res.Observed)
 		if opts.OutDir == "" {
 			fmt.Fprintf(out, "adopted: %s\n%s\n", addr, string(b))
 			continue
@@ -178,7 +184,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	for _, n := range skipped {
 		totalSkipped += n
 	}
-	fmt.Fprintf(out, "%d adopted, %d skipped\n", adopted, totalSkipped)
+	fmt.Fprintf(out, "%d adopted, %d skipped, %d attribute(s) redacted\n", adopted, totalSkipped, redactedAttrs)
 	printSkipSummary(out, skipped)
 	if totalSkipped > 0 {
 		// Skips are a normal, working-as-designed outcome of a bulk walk (a

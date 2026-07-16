@@ -41,7 +41,11 @@ func TestLookupHints_LiveWrongLookup_TeachesTheMissingField(t *testing.T) {
 	defer client.Close()
 
 	ledger := core.Open(t.TempDir())
-	_, err = core.RunScan(ctx, stateReaderAdapter{client.Provider}, ledger, core.ScanRequest{
+	salt, err := ledger.Salt()
+	if err != nil {
+		t.Fatalf("ledger salt: %v", err)
+	}
+	_, err = core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt}, ledger, core.ScanRequest{
 		Address:        core.Address{Stack: "conformance", Type: "aws_s3_bucket", Name: bucket},
 		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
 		CurrentState:   MustMarshal(map[string]string{"bucket": bucket}),
@@ -81,7 +85,11 @@ func TestLookupHints_LiveIDAlone_Succeeds(t *testing.T) {
 	defer client.Close()
 
 	ledger := core.Open(t.TempDir())
-	res, err := core.RunScan(ctx, stateReaderAdapter{client.Provider}, ledger, core.ScanRequest{
+	salt, err := ledger.Salt()
+	if err != nil {
+		t.Fatalf("ledger salt: %v", err)
+	}
+	res, err := core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt}, ledger, core.ScanRequest{
 		Address:        core.Address{Stack: "conformance", Type: "aws_s3_bucket", Name: bucket},
 		ProviderConfig: MustMarshal(map[string]string{"region": "us-east-1"}),
 		CurrentState:   MustMarshal(map[string]string{"id": bucket}),

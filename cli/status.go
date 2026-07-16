@@ -117,7 +117,11 @@ always wins if more than one applies.`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 			}
 			defer client.Close()
-			stateReader := newStateReader(client.Provider)
+			salt, err := ledger.Salt()
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+			}
+			stateReader := newStateReader(client.Provider, salt)
 
 			var driftedCount, unreadableCount int
 			resources := make([]statusResourceJSON, 0, len(fleet))
