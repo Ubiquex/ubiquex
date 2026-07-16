@@ -4,6 +4,86 @@
 
 ## Current phase
 
+**UBI-21 Stage 1 is done (this session, Linear-verified): GCP support,
+the first cross-provider generalization.** Design landed in
+docs/architecture.md ("GCP support (UBI-21)") and docs/plan.md before
+code. Two stages, gated on GCP account availability — Stage 1 is
+hermetic (no GCP account touched, only real network access to acquire a
+provider binary); Stage 2 needs a real GCP project + credentials +
+Cloud Audit Logs, and did not run this session (see "Next steps" below
+for why, and what's needed to unblock it).
+
+**Design decisions (both made before any code, see docs/architecture.md
+for the full reasoning):**
+
+1. `core.Address`/`--lookup` stay exactly as they were — a resource's
+   identity is still an opaque, provider-agnostic lookup JSON, no new
+   "provider" field. What generalizes is the KNOWLEDGE `ubx` keeps about
+   specific types (`conformance.Registry`, `core/lookuphints`) — both
+   re-keyed from bare type name to **(provider source, type)**, since a
+   second provider makes "there's only one provider" an assumption worth
+   naming rather than leaving implicit.
+2. Attribution backends become per-platform packages behind the existing
+   `core.EventLookup` interface (already shape-agnostic: one method,
+   `LookupEvents(resourceID, since, until)`). A new `gcpaudit/` package
+   (against GCP Cloud Audit Logs) plus a small provider-source→backend
+   registry is the plan; `docs/schema.md` gained a purely-additive
+   `audit_unattributed` kind (a `backend` field, generalizing
+   `cloudtrail_unattributed`, which remains valid forever, unmigrated) so
+   Stage 2 has schema to implement against. **Not implemented this
+   session** — `core/attribution.go` is untouched; `AttributeDrift` still
+   only ever emits `cloudtrail`/`cloudtrail_unattributed`.
+
+**Stage 1 work, four commits:**
+
+1. **(Provider source, type) keying refactor.** `conformance.TypeSpec`
+   gains `Source string`; all 51 existing AWS entries migrated to
+   `Source: "hashicorp/aws"` (a pure key change — no AWS entry's
+   `IdentityFields`/`Notes`/`LookupHint` content touched). `ByType` and
+   `core/lookuphints.For` both now take `(source, type)`.
+   `core.ScanRequest` gains an optional `ProviderSource`, threaded
+   through `RunScan`/`VerifyFreshness` into the teaching-error hint path
+   (UBI-20 workstream 3) — populated by the CLI from `--source`; empty
+   (honest generic fallback, never a guess) for a raw `--provider` path,
+   since `ubx` has no way to know a hand-picked binary's registry
+   identity. Full AWS regression (including `UBX_CONFORMANCE_LIVE=1`
+   against the real account) re-run clean — confirms the refactor
+   changed no AWS-observable behavior, only the internal key shape.
+2. **`hashicorp/google` verified empirically.** New
+   `conformance/gcp_provider_test.go` (`UBX_CONFORMANCE_LIVE=1`-gated,
+   like every other network-touching conformance test, even though this
+   one needs no GCP account/credentials at all — see the test's own doc
+   comment for that categorization call): acquires the real
+   `hashicorp/google` 7.40.0 binary via `provider.Acquire`
+   (registry.opentofu.org, checksum-verified, same path `hashicorp/aws`
+   already uses), launches it, and asserts the negotiated protocol.
+   **Empirical finding: `hashicorp/google` speaks tfplugin v5** — same
+   as `hashicorp/aws` (Slice 1's own finding) — dual v5/v6 support earns
+   its keep a second time.
+3. **~40 GCP `conformance.Registry` entries seeded** (docs/plan.md's own
+   §M1-2 GCP resource type list: compute, network, IAM, storage, SQL,
+   DNS, messaging — mirroring the AWS list's category spread and "real
+   GCP shop" bias). `Safety: FakeOnly`, `Implemented: false` for every
+   one — deliberately mirroring UBI-9 session 1's own AWS bootstrapping:
+   seed the list first, work through it in batches later (Stage 2).
+   `IdentityFields` come from a real `GetProviderSchema` call against the
+   acquired binary (free, no credentials), not guessed.
+4. **ubiquex-docs updated same-session**: `getting-started/installation.mdx`
+   now mentions `--source hashicorp/google` alongside AWS (verified
+   end-to-end against the real registry — acquisition, launch, and
+   protocol negotiation all confirmed working; a live scan attempt against
+   a real GCP project got exactly as far as expected, failing only on
+   missing GCP credentials, which is outside Stage 1's scope). `cli/lookup.mdx`
+   gains a GCP section, honestly scoped: ~40 types tracked, schema-verified
+   identity fields, but explicitly **not** claiming any confirmed
+   non-default lookup shape yet (that's Stage 2, the same way AWS's own
+   seven-type table only exists because of live `ReadResource` calls).
+   `concepts/attribution.mdx` gains a "Beyond AWS" section describing the
+   per-platform backend design without claiming `gcpaudit/` is live.
+   `mint validate`/`mint broken-links` both pass clean.
+
+## Current phase (previous)
+
 **UBI-20 is done (this session, Linear-verified): the hardening pass —
 "the credibility layer" — production ladder step 5.** Four independently
 committed workstreams, design landed in docs/architecture.md ("Hardening
@@ -2009,6 +2089,34 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
+**UBI-21 Stage 1 (GCP support, hermetic half) is done.** Stage 2 (needs a
+real GCP project + credentials + Cloud Audit Logs enabled) did NOT run
+this session — a GCP project (`personal-273114`) exists with billing
+enabled and enough APIs on, but Application Default Credentials were
+never configured (no `gcloud auth application-default login`, no
+`GOOGLE_APPLICATION_CREDENTIALS` service account key). Setting either up
+touches Roozbeh's real, billed GCP project and mints new credentials —
+deliberately not done unilaterally; flagged to him directly rather than
+assumed. Once auth is sorted, Stage 2 is: pick ~5 cheap GCP types and
+promote them to `RealSafe` (candidates already named in
+docs/architecture.md: `google_storage_bucket`, `google_pubsub_topic`,
+`google_service_account`, two more once real testing starts), run them
+through `conformance.RunAdoptMutateScanDiff` live, implement `gcpaudit/`
+against Cloud Audit Logs and live-verify it against a real drift with
+real actor identity, and measure Cloud Audit Logs' own delivery latency
+directly (never assumed to match CloudTrail's measured ~2 minutes/
+documented ~15 minutes just because the amendment's shape is shared).
+
+Real gaps in what Stage 1 itself covers, worth remembering: none of the
+40 seeded GCP types have `LookupHint`/teaching-error data yet (that's
+Stage 2, the same live-`ReadResource`-call requirement that produced
+AWS's own three-type table); `cli/lookup.mdx`'s GCP section is
+deliberately silent on non-default lookup shapes for exactly this
+reason; the `gcpaudit/` package doesn't exist as code yet, only as a
+documented design (docs/architecture.md, docs/schema.md's
+`audit_unattributed` amendment) — `core/attribution.go` is completely
+unchanged.
+
 **Production ladder step 5 (UBI-20, hardening pass) is done.** Real gaps
 worth remembering, not quietly forgetting: `--json` covers `scan`
 (single-resource only, not `--all`), `status`, and `why` — not
@@ -2146,6 +2254,17 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
+**UBI-21 Stage 1's ubiquex-docs work was done in this same session, per
+protocol**: `getting-started/installation.mdx` now mentions
+`--source hashicorp/google` alongside AWS; `cli/lookup.mdx` gained an
+honestly-scoped GCP section (schema-verified identity fields, no
+confirmed non-default lookup shapes yet); `concepts/attribution.mdx`
+gained a "Beyond AWS" section on the per-platform backend design.
+`mint validate`/`mint broken-links` both pass clean. See ubiquex-docs'
+own STATE.md for the full writeup. No debt carried — Stage 2's own docs
+(a GCP attribution walkthrough, live-verified lookup shapes) will land
+same-session whenever Stage 2 itself runs, not batched now.
+
 **UBI-20's ubiquex-docs work was done in this same session, per
 protocol, across all four workstreams**: new `cli/exit-codes.mdx` (the
 full per-verb 0/1/2 table, cross-linked from every affected page,
@@ -2264,6 +2383,26 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-21): **`hashicorp/google` speaks tfplugin v5, same as
+  `hashicorp/aws`.** Not a surprise exactly (dual v5/v6 support exists
+  precisely because this kind of thing was already found once, in Slice
+  1), but worth recording as confirmation rather than assumption: a
+  second real provider, from a different vendor's SDK generation and
+  release cadence than AWS's, still negotiates the same wire version.
+  `conformance/gcp_provider_test.go` asserts this directly (fails loudly
+  if a future `hashicorp/google` release ever changes it) rather than
+  just noting it in prose.
+- 2026-07-16 (UBI-21): **The GCP project available for Stage 2
+  (`personal-273114`) has billing enabled and most needed APIs on, but
+  no Application Default Credentials configured at all** — a real live
+  scan attempt (`ubx scan --source hashicorp/google ...`) got exactly as
+  far as `Configure`, then failed on `google: could not find default
+  credentials`. This is exactly the boundary Stage 1 vs. Stage 2 was
+  designed around: everything up to and including a live provider
+  handshake needs no GCP account at all; anything that actually reads a
+  GCP resource does. Setting up ADC (either `gcloud auth
+  application-default login` or minting a service account key) wasn't
+  done unilaterally this session — see "Next steps."
 - 2026-07-16 (UBI-20): **The teaching-error hint (workstream 3) was
   backwards in its first draft, caught only by an actual live scan
   against the real "ubx-states" S3 bucket, not by reading
