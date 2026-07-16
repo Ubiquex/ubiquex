@@ -34,6 +34,13 @@ import (
 //
 // Non-pr_merge acceptances (or proposals with no acceptance at all) are
 // reported as not applicable, not an error.
+//
+// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): a git-history
+// failure (commit gone, file gone/rehashed at that commit) or a reviewer
+// mismatch means the claimed acceptance doesn't check out -- an
+// actionable finding, exit 1. A genuine tool/network failure (can't run
+// git, can't reach the GitHub API, a malformed --github-repo) is exit 2.
+// Nothing to check, or everything checks out, is exit 0.
 func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, repoDir, githubRepo string) error {
 	fmt.Fprintln(out, "--- verify-acceptance ---")
 
@@ -47,29 +54,29 @@ func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, re
 
 	exists, err := ghub.CommitExists(ctx, repoDir, a.MergeSHA)
 	if err != nil {
-		return fmt.Errorf("verify-acceptance: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 	}
 	if !exists {
-		return fmt.Errorf("verify-acceptance: %w: %s no longer exists in %s's history", ghub.ErrCommitNotFound, a.MergeSHA, repoDir)
+		return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s no longer exists in %s's history", ghub.ErrCommitNotFound, a.MergeSHA, repoDir)}
 	}
 	fmt.Fprintf(out, "git: merge commit %s exists in %s\n", a.MergeSHA, repoDir)
 
 	if a.ProposalFile != "" {
 		content, err := ghub.FileAtCommit(ctx, repoDir, a.MergeSHA, a.ProposalFile)
 		if err != nil {
-			return fmt.Errorf("verify-acceptance: %w", err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 		}
 		var atCommit core.Proposal
 		if err := json.Unmarshal(content, &atCommit); err != nil {
-			return fmt.Errorf("verify-acceptance: parse %s at %s: %w", a.ProposalFile, a.MergeSHA, err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: parse %s at %s: %w", a.ProposalFile, a.MergeSHA, err)}
 		}
 		hash, err := core.Hash(&atCommit)
 		if err != nil {
-			return fmt.Errorf("verify-acceptance: %w", err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
 		}
 		if hash != p.ID {
-			return fmt.Errorf("verify-acceptance: %w: %s at %s now hashes to %s, not %s",
-				core.ErrTrailerHashMismatch, a.ProposalFile, a.MergeSHA, hash, p.ID)
+			return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s at %s now hashes to %s, not %s",
+				core.ErrTrailerHashMismatch, a.ProposalFile, a.MergeSHA, hash, p.ID)}
 		}
 		fmt.Fprintf(out, "git: %s at that commit still hashes to %s\n", a.ProposalFile, p.ID)
 	}
@@ -80,7 +87,7 @@ func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, re
 	}
 	owner, repo, ok := strings.Cut(githubRepo, "/")
 	if !ok || owner == "" || repo == "" {
-		return fmt.Errorf("verify-acceptance: --github-repo must be \"owner/name\", got %q", githubRepo)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: --github-repo must be \"owner/name\", got %q", githubRepo)}
 	}
 
 	var apiOpts []ghub.Option
@@ -91,17 +98,17 @@ func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, re
 
 	current, err := api.ApprovingReviewers(ctx, owner, repo, a.PRNumber)
 	if err != nil {
-		fmt.Fprintf(out, "github API: could not re-fetch reviews for PR #%d: %v -- inconclusive, not a pass\n", a.PRNumber, err)
-		return nil
+		fmt.Fprintf(out, "github API: could not re-fetch reviews for PR #%d: %v\n", a.PRNumber, err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: could not re-fetch reviews for PR #%d: %w", a.PRNumber, err)}
 	}
 
 	if sameSet(current, a.Approvers) {
 		fmt.Fprintf(out, "github API: PR #%d's approvers are unchanged (%v)\n", a.PRNumber, current)
-	} else {
-		fmt.Fprintf(out, "github API: MISMATCH -- PR #%d's approvers are now %v, recorded acceptance has %v\n",
-			a.PRNumber, current, a.Approvers)
+		return nil
 	}
-	return nil
+	fmt.Fprintf(out, "github API: MISMATCH -- PR #%d's approvers are now %v, recorded acceptance has %v\n",
+		a.PRNumber, current, a.Approvers)
+	return &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: PR #%d's approving reviewers changed since acceptance (see above)", a.PRNumber)}
 }
 
 func acceptanceMethod(p *core.Proposal) string {

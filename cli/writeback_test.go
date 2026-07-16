@@ -108,7 +108,11 @@ func TestWriteback_Write_ActuallyModifiesFile(t *testing.T) {
 	}
 }
 
-func TestWriteback_DeclinedAttributeReportedNotFatal(t *testing.T) {
+// TestWriteback_DeclinedAttributeExitsOne: a declined attribute is still
+// reported, never silently dropped, but now also exits 1 (an actionable
+// finding needing a human's attention, not exit 0) under the UBI-20
+// exit-code contract.
+func TestWriteback_DeclinedAttributeExitsOne(t *testing.T) {
 	ledgerDir := t.TempDir()
 	proposalPath := filepath.Join(t.TempDir(), "drift.json")
 	writeFile(t, proposalPath, `{
@@ -135,9 +139,7 @@ func TestWriteback_DeclinedAttributeReportedNotFatal(t *testing.T) {
 	writeFile(t, filepath.Join(tfDir, "compute.tf"), writebackTF) // ami = var.ami_id, an expression
 
 	out, err := runUbx(t, nil, "writeback", id, "--ledger-dir", ledgerDir, "--tf-dir", tfDir)
-	if err != nil {
-		t.Fatalf("a declined attribute must not fail the command: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "declined: ami") {
 		t.Fatalf("expected ami reported declined, got: %s", out)
 	}
@@ -154,9 +156,9 @@ func TestWriteback_ResourceBlockAbsent(t *testing.T) {
 	writeFile(t, filepath.Join(tfDir, "network.tf"), "resource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}\n")
 
 	out, err := runUbx(t, nil, "writeback", id, "--ledger-dir", ledgerDir, "--tf-dir", tfDir)
-	if err == nil {
-		t.Fatal("expected an error when no matching resource block exists")
-	}
+	// A resource block that can't be located means manual steps are
+	// needed -- an actionable finding, exit 1 (UBI-20 exit-code contract).
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(err.Error(), "could not locate a resource block") {
 		t.Fatalf("expected a resource-block-not-found error, got: %v", err)
 	}

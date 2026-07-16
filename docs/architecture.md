@@ -897,6 +897,125 @@ commented-out example showing the correct syntax, so the file is
 immediately useful as its own documentation of what's possible, not just
 a blank template.
 
+## Hardening pass (UBI-20)
+
+Production ladder step 5, "the credibility layer": four workstreams that
+don't add a new capability so much as make the existing ones trustworthy
+to script against, debug, and run concurrently. Each is independently
+shippable; each gets its own commit.
+
+### 1. Exit-code contract, everywhere
+
+`ubx status` (UBI-17) established 0/1/2 for one command. This workstream
+extends the same three-way split to every verb, as a single documented
+contract:
+
+- **0 — success, nothing to flag.** The operation completed and found
+  nothing that needs a human's attention beyond its own normal output.
+- **1 — an actionable finding.** The operation completed *correctly*, but
+  surfaced something a human should look at: drift found (`scan`), a
+  stale reverify block (`accept --reverify-*`), a rejected PR-merge
+  acceptance (`accept --from-merge`'s hash mismatch or a merge commit no
+  longer in history), a `--verify-acceptance` check that no longer holds,
+  a `writeback`/`revert-plan` that had to decline an attribute. None of
+  these are the tool malfunctioning — they're the tool doing its job and
+  reporting something real.
+- **2 — an error.** Bad input, a missing/malformed file, a provider that
+  couldn't be launched or resolve a resource, a ledger it couldn't append
+  to, malformed config. The operation could not be completed as asked.
+
+**This changes what a plain (unclassified) error means.** Before this
+session, every command funneled any returned error through
+`cmd/ubx/main.go`'s single fallback, `os.Exit(1)` — so "exit 1" meant
+nothing more specific than "something went wrong." Under the new
+contract that's `cli.ExitCodeError`'s job everywhere: commands return an
+explicit `ExitCodeError{Code: 1, ...}` at the specific points listed
+above, and the fallback itself moves to `os.Exit(2)` — a plain, unclassified
+error is now unambiguously "an error," never confusable with "a finding."
+This is a deliberate breaking change to what "exit 1" has meant for every
+command except `status` since this project began, made explicitly rather
+than silently, and documented as the CI contract (`docs/plan.md` and
+ubiquex-docs' own exit-codes reference) — anyone scripting against the
+old "any error is exit 1" convention needs `exit 2`, not `exit 1`, for
+that check going forward.
+
+Every verb was audited against this, not just the ones that needed new
+`ExitCodeError` call sites: `version`, `init`, and `propose` have no
+"finding" concept at all and stay 0/2-only, which is a complete audit
+outcome, not an oversight.
+
+### 2. `--json` on `scan`, `status`, `why`
+
+Stable, machine-readable output for the three verbs a CI pipeline is most
+likely to parse. Human output stays the default and is unchanged;
+`--json` switches the *entire* stdout stream to one JSON document (or, for
+`why`'s chain view, one JSON array) instead of the existing text format —
+never a mix of the two on one invocation.
+
+Every JSON payload carries a top-level `"format": 1` field — a schema
+version, not a product version, bumped only if the shape of that verb's
+JSON output changes incompatibly. A consumer checks `format` once and
+knows exactly what shape to expect for the rest of the fields; a future
+incompatible change bumps it rather than silently changing meaning under
+an unversioned consumer's feet.
+
+`why --json` emits a resource's full proposal chain as structured data —
+an array of proposal objects (newest first, matching the human view's own
+order) — not a bare re-serialization of one proposal's own JSON with no
+wrapping (which would give a consumer no reliable way to distinguish "one
+proposal" from "a chain," or to find the format version at all).
+
+### 3. Teaching errors: promote the lookup data, not the package
+
+`ubx scan`'s "provider returned no state" (`core.ErrResourceUnreadable`)
+is the single most likely first real error a new user hits — sent a
+lookup missing the field a type actually needs (docs/architecture.md's
+own Bulk onboarding section, and `cli/lookup.mdx`, already document this
+per-type shape). The fix flagged during demo dry-run: name the likely
+missing field *in the error itself*, not just in a docs page the user has
+to already know exists.
+
+The knowledge already exists — `conformance/registry.go`'s per-type
+`Notes` — but that package is explicitly test-only tooling ("this is
+project-internal tooling, not shipped product code — it lives outside
+core/ and cli/ deliberately," its own doc comment). Importing it into
+`cli/` (shipped product code) would make a test harness a runtime
+dependency of the binary, exactly the boundary that comment exists to
+hold. **The data is promoted, not the package**: a small, generated,
+shipped table (`core/lookuphints/`, generated from `conformance/registry.go`'s
+`Notes` field by a small `go generate` step, committed as ordinary Go
+source — no runtime dependency on `conformance/` at all, and no drift
+between "what the docs say" and "what the error teaches," since both
+trace to the same source data). `ErrResourceUnreadable`'s error message
+gains the hint (attribute names, not the full prose Notes text) and a
+link to `cli/lookup`'s docs page, for the seven types this is actually
+known for; every other type gets an honest "check the provider's schema"
+fallback rather than a fabricated guess.
+
+### 4. Ledger lock
+
+A per-ledger-directory lockfile (`.ubx/lock`, alongside the existing
+`.ubx/config` and `.ubx/ledger.lock` — three different files, three
+different purposes, deliberately not conflated) makes concurrent `ubx`
+processes against the same ledger directory safe — a person running
+`ubx accept` locally while CI runs `ubx scan --all` against the same
+ledger is exactly the scenario this exists for. Acquired around every
+ledger-mutating operation (`Accept`/`AcceptFromMerge`'s append,
+specifically — read-only operations like `scan`'s comparison, `why`, and
+`status` don't need it, since they never write). A blocked process waits
+briefly (a short, bounded retry window — this is lock *contention*
+between two legitimate, cooperating processes, not a hang to paper over)
+and then fails clearly with `ExitCodeError{Code: 2}` naming the lock file
+and, where determinable, the PID holding it.
+
+**Stale-lock detection, not just stale-lock avoidance**: a lock file
+whose recorded PID no longer corresponds to a running process (the holder
+was killed, not released cleanly) is detected and reported with explicit
+recovery guidance (remove the file) rather than either blocking forever
+or silently breaking the lock — a silently-broken lock would defeat the
+entire point for the one case (a genuinely still-running process) it
+exists to protect against.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

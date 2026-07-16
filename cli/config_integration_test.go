@@ -27,9 +27,7 @@ func TestScan_HonorsConfigStack(t *testing.T) {
 		"--ledger-dir", t.TempDir(),
 		"--no-attribution",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (no --stack, config has one): %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "payments.fake_widget.config-stack-widget") {
 		t.Fatalf("expected the config-supplied stack applied, got: %s", out)
 	}
@@ -48,9 +46,7 @@ func TestScan_CLIStackOverridesConfig(t *testing.T) {
 		"--ledger-dir", t.TempDir(),
 		"--no-attribution",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "cli-stack.fake_widget.override-widget") {
 		t.Fatalf("expected the explicit --stack to win over config, got: %s", out)
 	}
@@ -90,9 +86,7 @@ path = "`+fakeProviderBinary+`"
 		"--ledger-dir", t.TempDir(),
 		"--no-attribution",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (no --provider, config supplies path): %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "payments.fake_widget.config-provider-widget") {
 		t.Fatalf("expected the scan to succeed using config's provider path, got: %s", out)
 	}
@@ -113,7 +107,7 @@ func TestStatus_DoesNotApplyConfigStackDefault(t *testing.T) {
 		"--lookup", `{"name":"vpc"}`,
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -156,9 +150,7 @@ func TestRevertPlan_HonorsConfigTFDir(t *testing.T) {
 	id := acceptRevertPlanProposal(t, ledgerDir)
 
 	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx revert-plan (no --tf-dir, config supplies one): %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "--- .tf diff ---") {
 		t.Fatalf("expected revert-plan to have found and used config's tf_dir, got: %s", out)
 	}
@@ -175,9 +167,7 @@ func TestRevertPlan_CLITFDirOverridesConfig(t *testing.T) {
 	id := acceptRevertPlanProposal(t, ledgerDir)
 
 	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir, "--tf-dir", cliTFDir)
-	if err != nil {
-		t.Fatalf("ubx revert-plan: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "--- .tf diff ---") {
 		t.Fatalf("expected the explicit --tf-dir to be used over config's, got: %s", out)
 	}
@@ -197,9 +187,7 @@ oops_a_typo = true
 		"--ledger-dir", t.TempDir(),
 		"--no-attribution",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "oops_a_typo") {
 		t.Fatalf("expected the unknown-key warning surfaced (runUbx merges stderr into the same buffer), got: %s", out)
 	}

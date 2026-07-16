@@ -29,7 +29,7 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 		"--lookup", `{"name":"widget-why-mixed","tags":{"env":"prod"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	acceptOut, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir)
@@ -48,7 +48,7 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (drift): %v", err)
 	}
 	acceptOut2, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "drift.json"), "--ledger-dir", ledgerDir)
@@ -68,7 +68,7 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 		"--out", filepath.Join(ledgerDir, "revert.json"),
 		"--no-attribution",
 		"--propose", "revert",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (revert): %v", err)
 	}
 	acceptOut3, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "revert.json"), "--ledger-dir", ledgerDir)

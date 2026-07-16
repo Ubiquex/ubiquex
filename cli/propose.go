@@ -21,26 +21,30 @@ func newProposeCmd() *cobra.Command {
 		Use:   "propose <proposal.json>",
 		Short: "Compute a draft proposal's canonical hash for a PR body's ubx-proposal trailer",
 		Args:  cobra.ExactArgs(1),
+		// propose has no "finding" concept -- it either computes a hash or
+		// it doesn't (UBI-20 exit-code contract): 0 or 2 only.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := os.ReadFile(args[0])
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 
 			var p core.Proposal
 			if err := json.Unmarshal(data, &p); err != nil {
-				return fmt.Errorf("parse proposal: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("parse proposal: %w", err)}
 			}
 			if p.ID != "" || p.Acceptance != nil {
-				return fmt.Errorf("propose: this proposal already has an id/acceptance -- propose is for drafts only")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose: this proposal already has an id/acceptance -- propose is for drafts only")}
 			}
 			if err := core.Validate(&p); err != nil {
-				return fmt.Errorf("propose: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose: %w", err)}
 			}
 
 			hash, err := core.Hash(&p)
 			if err != nil {
-				return fmt.Errorf("propose: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose: %w", err)}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "ubx-proposal: %s\n", hash)

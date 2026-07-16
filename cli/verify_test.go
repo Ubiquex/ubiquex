@@ -73,7 +73,13 @@ func TestWhy_VerifyAcceptance_StillValid(t *testing.T) {
 	}
 }
 
-func TestWhy_VerifyAcceptance_ReviewerMismatchReportedNotFatal(t *testing.T) {
+// TestWhy_VerifyAcceptance_ReviewerMismatchExitsOne: a reviewer withdrawing
+// approval after acceptance doesn't mean the ledger entry was ever wrong --
+// it was a correct record of what was true at acceptance time -- but it IS
+// an actionable finding worth a human's attention (UBI-20 exit-code
+// contract), so --verify-acceptance still reports it (never silently
+// drops it) and now also exits 1 rather than 0.
+func TestWhy_VerifyAcceptance_ReviewerMismatchExitsOne(t *testing.T) {
 	ledgerDir, id, repoDir := acceptFromMergeForVerifyTest(t, []map[string]any{
 		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
 	})
@@ -91,9 +97,7 @@ func TestWhy_VerifyAcceptance_ReviewerMismatchReportedNotFatal(t *testing.T) {
 		"--repo-dir", repoDir,
 		"--github-repo", "acme/infra",
 	)
-	if err != nil {
-		t.Fatalf("a reviewer mismatch must be reported, not fail the command: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "MISMATCH") {
 		t.Fatalf("expected a MISMATCH line, got: %s", out)
 	}
@@ -115,9 +119,7 @@ func TestWhy_VerifyAcceptance_CommitRewrittenAway(t *testing.T) {
 		"--repo-dir", freshRepoDir,
 		"--github-repo", "acme/infra",
 	)
-	if err == nil {
-		t.Fatal("expected a hard failure when the merge commit no longer exists in history")
-	}
+	requireExitCode(t, err, 1, "")
 	if !strings.Contains(err.Error(), "no longer exists in") {
 		t.Fatalf("expected a commit-not-found error, got: %v", err)
 	}

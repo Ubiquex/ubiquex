@@ -42,17 +42,17 @@ type scanAllOptions struct {
 // live ReadResource call.
 func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	if opts.Propose != "adopt" {
-		return fmt.Errorf("scan --all: --propose must be \"adopt\" -- bulk onboarding only ever generates " +
-			"adoption proposals (a resource being onboarded for the first time has nothing to revert to)")
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --propose must be \"adopt\" -- bulk onboarding only ever generates " +
+			"adoption proposals (a resource being onboarded for the first time has nothing to revert to)")}
 	}
 
 	data, err := os.ReadFile(opts.TFStatePath)
 	if err != nil {
-		return fmt.Errorf("scan --all: read state file: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: read state file: %w", err)}
 	}
 	resources, err := tfstate.Parse(data)
 	if err != nil {
-		return fmt.Errorf("scan --all: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
 
 	stack := opts.Stack
@@ -62,18 +62,18 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 
 	path, checksum, err := resolveProviderBinary(ctx, opts.ProviderPath, opts.Source, opts.ProviderVersion)
 	if err != nil {
-		return fmt.Errorf("scan --all: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
 	client, err := provider.Launch(ctx, path)
 	if err != nil {
-		return fmt.Errorf("scan --all: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
 	defer client.Close()
 	stateReader := newStateReader(client.Provider)
 
 	if opts.OutDir != "" {
 		if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
-			return fmt.Errorf("scan --all: %w", err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 		}
 	}
 
@@ -92,7 +92,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	// not something the operator has to reorder or fix up by hand.
 	nextParent, err := ledger.Head()
 	if err != nil {
-		return fmt.Errorf("scan --all: %w", err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
 
 	skipped := map[string]int{}
@@ -158,7 +158,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 
 		b, err := json.MarshalIndent(proposal, "", "  ")
 		if err != nil {
-			return fmt.Errorf("scan --all: marshal proposal for %s: %w", addr, err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: marshal proposal for %s: %w", addr, err)}
 		}
 
 		adopted++
@@ -168,7 +168,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		}
 		outPath := filepath.Join(opts.OutDir, addressFilename(addr)+".json")
 		if err := os.WriteFile(outPath, b, 0o644); err != nil {
-			return fmt.Errorf("scan --all: write %s: %w", outPath, err)
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: write %s: %w", outPath, err)}
 		}
 		fmt.Fprintf(out, "adopted: %s -> %s\n", addr, outPath)
 	}
@@ -179,6 +179,13 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	}
 	fmt.Fprintf(out, "%d adopted, %d skipped\n", adopted, totalSkipped)
 	printSkipSummary(out, skipped)
+	if totalSkipped > 0 {
+		// Skips are a normal, working-as-designed outcome of a bulk walk (a
+		// resource with no identity in state, a duplicate address, ...) --
+		// an actionable finding for the operator to look at, not a failed
+		// walk (UBI-20 exit-code contract).
+		return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan --all: %d resource(s) skipped (see above)", totalSkipped)}
+	}
 	return nil
 }
 

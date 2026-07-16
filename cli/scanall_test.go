@@ -153,9 +153,7 @@ func TestScanAll_AlreadyKnownToLedgerSkipped(t *testing.T) {
 
 	out2, err := runUbx(t, env, "scan", "--all", "--tfstate", statePath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx scan --all (2nd): %v\noutput: %s", err, out2)
-	}
+	requireExitCode(t, err, 1, out2)
 	if !strings.Contains(out2, "already known to the ledger") {
 		t.Fatalf("expected the already-accepted resource skipped, got: %s", out2)
 	}
@@ -174,9 +172,7 @@ func TestScanAll_UnknownTypeSkipped_WalkContinues(t *testing.T) {
 
 	out, err := runUbx(t, env, "scan", "--all", "--tfstate", statePath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx scan --all: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "unknown resource type") {
 		t.Fatalf("expected the bad-type resource skipped with a reason, got: %s", out)
 	}
@@ -197,9 +193,7 @@ func TestScanAll_MissingIdentitySkipped(t *testing.T) {
 
 	out, err := runUbx(t, env, "scan", "--all", "--tfstate", statePath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx scan --all: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "no id attribute") {
 		t.Fatalf("expected a missing-identity skip reason, got: %s", out)
 	}
@@ -249,9 +243,7 @@ func TestScanAll_DuplicateAddressSkipped(t *testing.T) {
 
 	out, err := runUbx(t, env, "scan", "--all", "--tfstate", statePath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx scan --all: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "duplicate address") {
 		t.Fatalf("expected the second entry skipped as a duplicate address, got: %s", out)
 	}

@@ -88,9 +88,9 @@ func TestRevertPlan_TFDir_MixedLiteralAndNonLiteral(t *testing.T) {
 	writeFile(t, filepath.Join(tfDir, "compute.tf"), revertPlanTF)
 
 	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir, "--tf-dir", tfDir)
-	if err != nil {
-		t.Fatalf("ubx revert-plan: %v\noutput: %s", err, out)
-	}
+	// A declined attribute means manual steps are needed -- an actionable
+	// finding, not a failure (UBI-20 exit-code contract): exit 1.
+	requireExitCode(t, err, 1, out)
 
 	// instance_type is literal -- applied, shown as a real diff, restoring
 	// the ledger's recorded value.
@@ -128,9 +128,9 @@ func TestRevertPlan_ResourceNotFoundInTFDir_ManualStep(t *testing.T) {
 	writeFile(t, filepath.Join(tfDir, "network.tf"), "resource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}\n")
 
 	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir, "--tf-dir", tfDir)
-	if err != nil {
-		t.Fatalf("a resource absent from --tf-dir must not fail the command: %v\noutput: %s", err, out)
-	}
+	// A resource absent from --tf-dir means a manual step is needed -- an
+	// actionable finding, not a failure (UBI-20 exit-code contract): exit 1.
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "--- manual steps ---") {
 		t.Fatalf("expected a manual-steps section, got: %s", out)
 	}

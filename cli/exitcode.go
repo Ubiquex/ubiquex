@@ -1,11 +1,18 @@
 package cli
 
 // ExitCodeError lets a command's RunE request a specific process exit code
-// -- for `ubx status`'s CI contract (docs/architecture.md — Fleet status:
-// 0 clean, 1 drift, 2 unreadable/error), the blanket "any error means exit
-// 1" every other command relies on (cmd/ubx/main.go) isn't expressive
-// enough. Err may be nil: "drift found" isn't itself a Go error, just a
-// reason to exit non-zero after already printing a normal report.
+// -- the CI contract (UBI-20, docs/architecture.md — Hardening pass: exit
+// codes, docs/exit-codes.mdx) applies to every verb, not just `ubx status`
+// where it started (UBI-17): 0 success/clean (nothing to flag), 1 an
+// actionable finding (drift found, a stale/parent-mismatched proposal, a
+// rejected pr_merge acceptance claim, declined write-back/revert-plan
+// attributes), 2 an error (bad input, I/O, provider failure, ledger
+// failure). Any plain (non-ExitCodeError) error returned from a command's
+// RunE falls through to exit 2 in cmd/ubx/main.go -- a command that hasn't
+// been audited into this contract yet still exits non-zero, just at the
+// "something went wrong" code, never the misleading-if-unaudited 1. Err
+// may be nil: "drift found" isn't itself a Go error, just a reason to exit
+// non-zero after already printing a normal report.
 //
 // This can't be `os.Exit` called directly inside a command's RunE --
 // cli/scan_test.go's runUbx (and every other CLI test in this codebase)

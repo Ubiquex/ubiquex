@@ -39,21 +39,28 @@ func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Compare one resource's live state against the ledger and generate an adoption/drift_adopt/drift_revert proposal if it differs",
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0 no
+		// drift, 1 a proposal was generated (new resource or drift found --
+		// an actionable finding, not a failure), 2 error. SilenceUsage/Errors
+		// avoid cobra's own usage dump and "Error: ..." doubling ExitCodeError's
+		// own message, same reasoning as status.go.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch propose {
 			case "adopt", "revert", "both":
 			default:
-				return fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)}
 			}
 
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("scan: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: %w", err)}
 			}
 			applyStackDefault(cmd, &stack, cfg)
 			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
-				return fmt.Errorf("scan: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 			applyTFDirDefault(cmd, &tfDir, cfg)
@@ -61,11 +68,11 @@ func newScanCmd() *cobra.Command {
 			if all {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
 					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") {
-					return fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as/--tf-dir describe a single resource " +
-						"and don't apply to bulk onboarding")
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as/--tf-dir describe a single resource " +
+						"and don't apply to bulk onboarding")}
 				}
 				if tfstatePath == "" {
-					return fmt.Errorf("scan --all requires --tfstate")
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all requires --tfstate")}
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
@@ -83,11 +90,11 @@ func newScanCmd() *cobra.Command {
 				})
 			}
 			if stack == "" || resourceType == "" || resourceName == "" {
-				return fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding)")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding)")}
 			}
 			if surfaceAs != "" && propose == "revert" {
-				return fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
-					"its issue/PR receipt is built around a drift_adopt proposal, which --propose revert doesn't generate")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
+					"its issue/PR receipt is built around a drift_adopt proposal, which --propose revert doesn't generate")}
 			}
 
 			addr := core.Address{Stack: stack, Type: resourceType, Name: resourceName}
@@ -97,12 +104,12 @@ func newScanCmd() *cobra.Command {
 
 			path, checksum, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
 			if err != nil {
-				return fmt.Errorf("scan %s: %w", addr, err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 			}
 
 			client, err := provider.Launch(ctx, path)
 			if err != nil {
-				return fmt.Errorf("scan %s: %w", addr, err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 			}
 			defer client.Close()
 
@@ -114,7 +121,7 @@ func newScanCmd() *cobra.Command {
 				ProviderChecksum: checksum,
 			})
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 
 			out2 := cmd.OutOrStdout()
@@ -131,39 +138,39 @@ func newScanCmd() *cobra.Command {
 				// the only valid resolution regardless of the flag's value.
 				p, err := core.GenerateProposal(ledger, stack, res)
 				if err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 				proposals = []*core.Proposal{p}
 
 			case propose == "adopt":
 				p, err := core.GenerateProposal(ledger, stack, res)
 				if err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 				proposals = []*core.Proposal{p}
 
 			case propose == "revert":
 				p, err := core.GenerateRevertProposal(ledger, stack, res)
 				if err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 				proposals = []*core.Proposal{p}
 
 			default: // both
 				adopt, err := core.GenerateProposal(ledger, stack, res)
 				if err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 				revert, err := core.GenerateRevertProposal(ledger, stack, res)
 				if err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 				proposals = []*core.Proposal{adopt, revert}
 			}
 
 			if out != "" && len(proposals) > 1 {
-				return fmt.Errorf("scan %s: --out only supports a single generated proposal -- "+
-					"--propose both on a drifted resource generates two; omit --out to print both to stdout", addr)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: --out only supports a single generated proposal -- "+
+					"--propose both on a drifted resource generates two; omit --out to print both to stdout", addr)}
 			}
 
 			// CloudTrail attribution and --surface-as are both drift_adopt-
@@ -182,7 +189,7 @@ func newScanCmd() *cobra.Command {
 			}
 			if adoptProposal != nil && surfaceAs != "" {
 				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, githubRepo, tfDir); err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 			}
 
@@ -195,17 +202,19 @@ func newScanCmd() *cobra.Command {
 
 				b, err := json.MarshalIndent(p, "", "  ")
 				if err != nil {
-					return fmt.Errorf("scan %s: marshal proposal: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: marshal proposal: %w", addr, err)}
 				}
 				if out == "" {
 					fmt.Fprintln(out2, string(b))
 					continue
 				}
 				if err := os.WriteFile(out, b, 0o644); err != nil {
-					return fmt.Errorf("scan %s: %w", addr, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 			}
-			return nil
+			// A proposal was generated -- new resource or drift -- an
+			// actionable finding, not a failure (UBI-20 exit-code contract).
+			return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan %s: %s, %q proposal(s) generated (see above)", addr, kindLabel, propose)}
 		},
 	}
 

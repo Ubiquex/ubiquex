@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,34 @@ func runUbx(t *testing.T, env []string, args ...string) (stdout string, err erro
 	return out.String(), err
 }
 
+// exitCode extracts the process exit code err represents under the UBI-20
+// contract: 0 for a nil error, an ExitCodeError's own Code, or -1 for a
+// plain (non-ExitCodeError) error -- which never happens for an audited
+// verb, so callers can tell "an actionable finding" (1) apart from "an
+// unaudited plain error" (-1) instead of conflating both with "any error."
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *ExitCodeError
+	if errors.As(err, &exitErr) {
+		return exitErr.Code
+	}
+	return -1
+}
+
+// requireExitCode fails the test unless err's exit code is want (UBI-20's
+// CI contract, docs/exit-codes.mdx) -- e.g. a scan that generates a
+// proposal now returns ExitCodeError{Code: 1}, not nil, so test helpers
+// that treat "a proposal was generated" as the expected outcome must
+// assert exit code 1 explicitly rather than "err == nil".
+func requireExitCode(t *testing.T, err error, want int, out string) {
+	t.Helper()
+	if got := exitCode(err); got != want {
+		t.Fatalf("expected exit code %d, got %d (err: %v)\noutput: %s", want, got, err, out)
+	}
+}
+
 // TestScanAcceptWhy exercises Slice 3's whole loop through the CLI: scan
 // (new resource -> adoption proposal) -> accept -> why, then scan again
 // with a different observed lookup (standing in for "reality changed") ->
@@ -84,9 +113,7 @@ func TestScanAcceptWhy(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (adopt): %v\noutput: %s", err, scanOut)
-	}
+	requireExitCode(t, err, 1, scanOut)
 	if !strings.Contains(scanOut, "new:") {
 		t.Fatalf("expected a 'new' classification, got: %s", scanOut)
 	}
@@ -119,9 +146,7 @@ func TestScanAcceptWhy(t *testing.T) {
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 		"--no-attribution", // hermetic: never touch real AWS CloudTrail from this suite (see attribution_test.go for the gated live/fake-lookup coverage)
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (drift): %v\noutput: %s", err, scanOut2)
-	}
+	requireExitCode(t, err, 1, scanOut2)
 	if !strings.Contains(scanOut2, "drifted:") {
 		t.Fatalf("expected a 'drifted' classification, got: %s", scanOut2)
 	}
@@ -180,9 +205,7 @@ func TestAccept_ReverifyBlocksStaleAcceptance(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v\noutput: %s", err, scanOut)
-	}
+	requireExitCode(t, err, 1, scanOut)
 
 	// Reality changes again before accept runs: someone tags the resource
 	// out-of-band, same lookup key or not.
@@ -193,9 +216,7 @@ func TestAccept_ReverifyBlocksStaleAcceptance(t *testing.T) {
 		"--resource-type", "fake_widget",
 		"--resource-name", "widget2",
 	)
-	if err == nil {
-		t.Fatal("expected accept to be blocked by staleness, got nil error")
-	}
+	requireExitCode(t, err, 1, "")
 	if !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("expected a staleness error, got: %v", err)
 	}
@@ -222,9 +243,7 @@ func TestAccept_ReverifyPassesWhenFresh(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v", err)
-	}
+	requireExitCode(t, err, 1, "")
 
 	acceptOut, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"),
 		"--ledger-dir", ledgerDir,
@@ -252,9 +271,7 @@ func TestGenerateProposal_PersistsLookup(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v", err)
-	}
+	requireExitCode(t, err, 1, "")
 
 	raw, err := os.ReadFile(filepath.Join(ledgerDir, "adopt.json"))
 	if err != nil {

@@ -37,23 +37,30 @@ ubx revert-plan NEVER writes a file and NEVER touches cloud. Applying the correc
 or to the live resource -- is the operator's own tooling to run (docs/plan.md's M3-4: "revert emits
 plan"; executor trust comes later).`,
 		Args: cobra.ExactArgs(1),
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
+		// (nothing to plan, or every changed attribute got a .tf diff), 1
+		// (manual steps are needed -- a declined attribute or a resource
+		// block that couldn't be located -- an actionable finding), 2
+		// (error). SilenceUsage/Errors: same reasoning as status.go.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("revert-plan: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: %w", err)}
 			}
 			applyTFDirDefault(cmd, &tfDir, cfg)
 
 			ledger := core.Open(ledgerDir)
 			p, err := ledger.Read(args[0])
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 			if p.Kind != core.KindDriftRevert {
-				return fmt.Errorf("revert-plan: proposal %s is kind %q, not drift_revert -- revert-plan only applies to a proposed revert", p.ID, p.Kind)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: proposal %s is kind %q, not drift_revert -- revert-plan only applies to a proposed revert", p.ID, p.Kind)}
 			}
 			if p.Status != core.StatusAccepted {
-				return fmt.Errorf("revert-plan: proposal %s is not accepted (status %q)", p.ID, p.Status)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: proposal %s is not accepted (status %q)", p.ID, p.Status)}
 			}
 			if len(p.Delta.Modifies) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "revert-plan: proposal has no delta.modifies entries -- nothing to plan")
@@ -67,7 +74,14 @@ plan"; executor trust comes later).`,
 				fmt.Fprintln(out, "\nno --tf-dir given -- apply the correction above to cloud via your own tooling; ubx never applies it")
 				return nil
 			}
-			return printTFDiffAndManualSteps(out, tfDir, p.Delta.Modifies)
+			manualSteps, err := printTFDiffAndManualSteps(out, tfDir, p.Delta.Modifies)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: err}
+			}
+			if manualSteps > 0 {
+				return &ExitCodeError{Code: 1, Err: fmt.Errorf("revert-plan: %d attribute(s) need manual steps (see above)", manualSteps)}
+			}
+			return nil
 		},
 	}
 
@@ -97,8 +111,11 @@ func printPlan(out io.Writer, modifies []core.Modification) {
 // modifies entry whose resource block isn't found in tfDir at all, is
 // collected into a manual-steps section instead of failing the command --
 // a revert can legitimately target a resource that was only ever adopted
-// via `ubx scan`, never written to .tf.
-func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modification) error {
+// via `ubx scan`, never written to .tf. Returns the number of manual-steps
+// entries (declined + not-found), so the caller can classify the UBI-20
+// exit code -- any manual step needed is an actionable finding, not a
+// clean pass.
+func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modification) (int, error) {
 	var declined []tfwrite.DeclinedAttribute
 	var notFound []string
 	anyDiff := false
@@ -119,7 +136,7 @@ func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modi
 		}
 		diff, err := unifiedDiff(path, newContent)
 		if err != nil {
-			return fmt.Errorf("revert-plan: diff %s: %w", path, err)
+			return 0, fmt.Errorf("revert-plan: diff %s: %w", path, err)
 		}
 		fmt.Fprintln(out, diff)
 	}
@@ -137,7 +154,7 @@ func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modi
 			fmt.Fprintln(out, " -- apply this correction manually")
 		}
 	}
-	return nil
+	return len(declined) + len(notFound), nil
 }
 
 // sortedAttributePaths returns the union of before/after's dot-paths,

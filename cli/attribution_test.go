@@ -40,7 +40,7 @@ func TestScan_AttributionDegradesGracefully_NoCredentials(t *testing.T) {
 		"--lookup", `{"name":"widget-attribution","tags":{"env":"prod"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir); err != nil {
@@ -60,9 +60,7 @@ func TestScan_AttributionDegradesGracefully_NoCredentials(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (drift) should succeed even with no CloudTrail access, got: %v\noutput: %s", err, driftOut)
-	}
+	requireExitCode(t, err, 1, driftOut)
 	if !strings.Contains(driftOut, "drifted:") {
 		t.Fatalf("expected a 'drifted' classification, got: %s", driftOut)
 	}

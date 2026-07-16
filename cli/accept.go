@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,14 +36,21 @@ func newAcceptCmd() *cobra.Command {
 		Use:   "accept [proposal.json]",
 		Short: "Accept a proposal -- local signing from a file, or PR-merge derivation with --from-merge -- and append it to the ledger",
 		Args:  cobra.MaximumNArgs(1),
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
+		// accepted, 1 an actionable finding (stale reverify, a
+		// parent-mismatched or trailer-hash-mismatched proposal -- the
+		// world moved, or the claimed acceptance doesn't check out), 2
+		// error. SilenceUsage/Errors: same reasoning as status.go.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("accept: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
-				return fmt.Errorf("accept: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
 			// Config's [provider] only fills a gap in an ALREADY-opted-into
 			// reverify (--reverify-source given without --reverify-provider-version)
@@ -56,27 +64,27 @@ func newAcceptCmd() *cobra.Command {
 
 			if fromMerge != "" {
 				if len(args) != 0 {
-					return fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
 				return acceptFromMerge(cmd, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo)
 			}
 			if len(args) != 1 {
-				return fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
 			}
 
 			data, err := os.ReadFile(args[0])
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 
 			var p core.Proposal
 			if err := json.Unmarshal(data, &p); err != nil {
-				return fmt.Errorf("parse proposal: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("parse proposal: %w", err)}
 			}
 
 			if reverifyWith != "" || reverifySource != "" {
 				if resourceType == "" || resourceName == "" {
-					return fmt.Errorf("accept: reverification requires --resource-type and --resource-name")
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: reverification requires --resource-type and --resource-name")}
 				}
 				addr := core.Address{Stack: p.Stack, Type: resourceType, Name: resourceName}
 
@@ -85,25 +93,25 @@ func newAcceptCmd() *cobra.Command {
 
 				path, _, err := resolveProviderBinary(ctx, reverifyWith, reverifySource, reverifyProviderVersion)
 				if err != nil {
-					return fmt.Errorf("accept: reverify: %w", err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: reverify: %w", err)}
 				}
 
 				client, err := provider.Launch(ctx, path)
 				if err != nil {
-					return fmt.Errorf("accept: reverify: %w", err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: reverify: %w", err)}
 				}
 				defer client.Close()
 
 				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider), addr,
 					json.RawMessage(providerConfig), &p); err != nil {
-					return fmt.Errorf("accept: %w", err)
+					return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 				}
 			}
 
 			ledger := core.Open(ledgerDir)
 			accepted, err := core.Accept(ledger, &p)
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: acceptErrorCode(err), Err: err}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s)\n", accepted.ID, accepted.Stack)
@@ -133,11 +141,11 @@ func newAcceptCmd() *cobra.Command {
 // actually enforced).
 func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string) error {
 	if proposalFile == "" || githubRepo == "" {
-		return fmt.Errorf("accept --from-merge requires --proposal-file and --github-repo")
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file and --github-repo")}
 	}
 	owner, repo, ok := strings.Cut(githubRepo, "/")
 	if !ok || owner == "" || repo == "" {
-		return fmt.Errorf("accept: --github-repo must be \"owner/name\", got %q", githubRepo)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: --github-repo must be \"owner/name\", got %q", githubRepo)}
 	}
 
 	ctx := cmd.Context()
@@ -152,12 +160,12 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 
 	derived, err := ghub.DeriveAcceptance(ctx, api, repoDir, owner, repo, mergeSHA, proposalFile)
 	if err != nil {
-		return fmt.Errorf("accept: %w", err)
+		return &ExitCodeError{Code: deriveAcceptanceErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
 	var p core.Proposal
 	if err := json.Unmarshal(derived.ProposalFileContent, &p); err != nil {
-		return fmt.Errorf("accept: parse proposal at %s:%s: %w", mergeSHA, proposalFile, err)
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: parse proposal at %s:%s: %w", mergeSHA, proposalFile, err)}
 	}
 
 	ledger := core.Open(ledgerDir)
@@ -168,10 +176,45 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 		Approvers:    derived.Approvers,
 	})
 	if err != nil {
-		return fmt.Errorf("accept: %w", err)
+		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s) via PR #%d, %d approver(s)\n",
 		accepted.ID, accepted.Stack, accepted.Acceptance.PRNumber, len(accepted.Acceptance.Approvers))
 	return nil
+}
+
+// acceptErrorCode classifies core.Accept/core.AcceptFromMerge's failures
+// for the UBI-20 exit-code contract: ErrStaleObservation (VerifyFreshness)
+// and ErrParentMismatch/ErrTrailerHashMismatch (Accept/AcceptFromMerge/
+// Append) all mean "the world moved, or the claimed acceptance doesn't
+// check out since this proposal was resolved" -- an actionable finding
+// (exit 1), matching the "stale block"/"proposal rejected" examples in
+// docs/architecture.md's Hardening pass section. Anything else (a
+// malformed proposal, a double-accept attempt, ledger I/O) is a genuine
+// error (exit 2).
+func acceptErrorCode(err error) int {
+	if errors.Is(err, core.ErrStaleObservation) || errors.Is(err, core.ErrParentMismatch) || errors.Is(err, core.ErrTrailerHashMismatch) {
+		return 1
+	}
+	return 2
+}
+
+// deriveAcceptanceErrorCode classifies ghub.DeriveAcceptance's failures:
+// every named sentinel it can return means the merge commit's claimed
+// acceptance doesn't check out against git/GitHub history as it stands
+// today (commit gone, file gone at that commit, no PR for it, no
+// ubx-proposal trailer in the PR body) -- an actionable finding (exit 1),
+// the same family as acceptErrorCode's ErrTrailerHashMismatch. A genuine
+// network/API/git-tooling failure is exit 2.
+func deriveAcceptanceErrorCode(err error) int {
+	switch {
+	case errors.Is(err, ghub.ErrCommitNotFound),
+		errors.Is(err, ghub.ErrFileNotFoundAtCommit),
+		errors.Is(err, ghub.ErrNoPullRequestForCommit),
+		errors.Is(err, ghub.ErrNoProposalTrailer):
+		return 1
+	default:
+		return 2
+	}
 }

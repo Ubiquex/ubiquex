@@ -37,31 +37,35 @@ func newInitCmd() *cobra.Command {
 provider identity, provider configuration, default stack, GitHub repository, and .tf directory. Any flag you give
 here is written as a real, active value; anything you don't is written as a commented-out example showing the
 correct syntax. Refuses to overwrite an existing config unless --force is given.`,
+		// init has no "finding" concept -- it either writes the file or it
+		// doesn't (UBI-20 exit-code contract): 0 or 2 only.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if providerPath != "" && source != "" {
-				return fmt.Errorf("init: --provider and --source are mutually exclusive")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --provider and --source are mutually exclusive")}
 			}
 			if source != "" && providerVersion == "" {
-				return fmt.Errorf("init: --source requires --provider-version (explicit version pins only)")
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --source requires --provider-version (explicit version pins only)")}
 			}
 
 			var providerConfigMap map[string]any
 			if providerConfig != "" {
 				if err := json.Unmarshal([]byte(providerConfig), &providerConfigMap); err != nil {
-					return fmt.Errorf("init: --provider-config: %w", err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --provider-config: %w", err)}
 				}
 			}
 
 			path := filepath.Join(dir, ".ubx", "config")
 			if info, err := os.Stat(path); err == nil {
 				if info.IsDir() {
-					return fmt.Errorf("init: %s is a directory", path)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %s is a directory", path)}
 				}
 				if !force {
-					return fmt.Errorf("init: %s already exists (use --force to overwrite)", path)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %s already exists (use --force to overwrite)", path)}
 				}
 			} else if !os.IsNotExist(err) {
-				return fmt.Errorf("init: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
 			}
 
 			content := renderConfigTemplate(configTemplateValues{
@@ -75,10 +79,10 @@ correct syntax. Refuses to overwrite an existing config unless --force is given.
 			})
 
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return fmt.Errorf("init: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
 			}
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-				return fmt.Errorf("init: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)

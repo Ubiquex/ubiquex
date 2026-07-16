@@ -475,6 +475,25 @@ written as a real value, everything else as a commented example. See
 docs/architecture.md for the full design; STATE.md for the adversarial
 tests and per-verb integration.
 
+### Hardening pass (UBI-20)
+
+Production ladder step 5, "the credibility layer," four independently
+shippable workstreams: (1) a documented 0/1/2 exit-code contract across
+every verb, not just `status` — a deliberate, documented breaking change
+to what a plain error's exit code meant everywhere else (1 → 2; 1 is now
+reserved for actionable findings specifically); (2) `--json` on
+`scan`/`status`/`why`, every payload versioned with `"format": 1`, human
+output unchanged and still the default; (3) teaching errors — `scan`'s
+"provider returned no state" now names the likely missing lookup field
+for the seven empirically-known types, sourced from a small generated,
+shipped table (`core/lookuphints/`) rather than importing the test-only
+`conformance/` package into product code; (4) a per-ledger-directory
+lockfile (`.ubx/lock`) making concurrent `ubx` processes safe, with
+explicit stale-lock detection (a dead holder's PID) rather than either
+hanging forever or silently breaking a live lock. See docs/architecture.md's
+"Hardening pass" section for the full design of all four; STATE.md for
+the adversarial tests and live verification.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, full executor

@@ -25,9 +25,7 @@ func adoptThenDrift(t *testing.T, extraArgs ...string) (ledgerDir, scanOut strin
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (adopt): %v", err)
-	}
+	requireExitCode(t, err, 1, "")
 	if _, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir); err != nil {
 		t.Fatalf("ubx accept (adopt): %v", err)
 	}
@@ -43,9 +41,7 @@ func adoptThenDrift(t *testing.T, extraArgs ...string) (ledgerDir, scanOut strin
 		"--no-attribution",
 	}, extraArgs...)
 	scanOut, err = runUbx(t, env, args...)
-	if err != nil {
-		t.Fatalf("ubx scan (drift): %v\noutput: %s", err, scanOut)
-	}
+	requireExitCode(t, err, 1, scanOut)
 	return ledgerDir, scanOut
 }
 
@@ -102,9 +98,7 @@ func TestScan_ProposeBoth_GeneratesBothProposals(t *testing.T) {
 
 func TestScan_ProposeInvalidValue_Errors(t *testing.T) {
 	_, err := adoptThenDriftExpectErr(t, "--propose", "carrier-pigeon")
-	if err == nil {
-		t.Fatal("expected an error for an invalid --propose value")
-	}
+	requireExitCode(t, err, 2, "")
 	if !strings.Contains(err.Error(), `must be "adopt", "revert", or "both"`) {
 		t.Fatalf("expected a clear invalid-value error, got: %v", err)
 	}
@@ -121,7 +115,7 @@ func TestScan_ProposeBoth_WithOutFlag_Errors(t *testing.T) {
 		"--lookup", `{"name":"widget-both-out","tags":{"env":"prod"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir); err != nil {
@@ -139,9 +133,7 @@ func TestScan_ProposeBoth_WithOutFlag_Errors(t *testing.T) {
 		"--propose", "both",
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 	)
-	if err == nil {
-		t.Fatal("expected an error: --out doesn't support --propose both's two generated proposals")
-	}
+	requireExitCode(t, err, 2, "")
 	if !strings.Contains(err.Error(), "--out only supports a single generated proposal") {
 		t.Fatalf("expected a clear --out+both error, got: %v", err)
 	}
@@ -149,9 +141,7 @@ func TestScan_ProposeBoth_WithOutFlag_Errors(t *testing.T) {
 
 func TestScan_ProposeRevert_WithSurfaceAs_Errors(t *testing.T) {
 	_, err := adoptThenDriftExpectErr(t, "--propose", "revert", "--surface-as", "issue", "--github-repo", "acme/infra")
-	if err == nil {
-		t.Fatal("expected an error: --surface-as requires a drift_adopt proposal, which --propose revert doesn't generate")
-	}
+	requireExitCode(t, err, 2, "")
 	if !strings.Contains(err.Error(), "--surface-as requires --propose adopt") {
 		t.Fatalf("expected a clear --surface-as+revert error, got: %v", err)
 	}
@@ -170,9 +160,7 @@ func TestScan_ProposeHasNoEffectOnNewResource(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--propose", "revert",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan (new, --propose revert): %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, `"adoption"`) {
 		t.Fatalf("a never-seen resource must still generate an adoption proposal regardless of --propose, got: %s", out)
 	}
@@ -197,7 +185,7 @@ func adoptThenDriftExpectErr(t *testing.T, extraArgs ...string) (scanOut string,
 		"--lookup", `{"name":"widget-propose-err","tags":{"env":"prod"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir); err != nil {

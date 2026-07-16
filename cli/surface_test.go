@@ -24,7 +24,7 @@ func TestScan_SurfaceAsIssue(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -58,9 +58,7 @@ func TestScan_SurfaceAsIssue(t *testing.T) {
 		"--surface-as", "issue",
 		"--github-repo", "acme/infra",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan --surface-as issue: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "opened issue https://github.com/acme/infra/issues/5") {
 		t.Fatalf("expected the issue URL reported, got: %s", out)
 	}
@@ -92,7 +90,7 @@ func TestScan_SurfaceAsPR(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -147,9 +145,7 @@ func TestScan_SurfaceAsPR(t *testing.T) {
 		"--surface-as", "pr",
 		"--github-repo", "acme/infra",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan --surface-as pr: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "opened pull request https://github.com/acme/infra/pull/11") {
 		t.Fatalf("expected the PR URL reported, got: %s", out)
 	}
@@ -192,9 +188,7 @@ func TestScan_SurfaceAsOnlyTriggersOnDrift(t *testing.T) {
 		"--surface-as", "issue",
 		"--github-repo", "acme/infra",
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if called {
 		t.Fatal("expected --surface-as to be skipped for a ScanNew outcome, but the GitHub API was called")
 	}
@@ -214,7 +208,7 @@ func TestScan_SurfaceAsInvalidValue(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -232,9 +226,7 @@ func TestScan_SurfaceAsInvalidValue(t *testing.T) {
 		"--surface-as", "carrier-pigeon",
 		"--github-repo", "acme/infra",
 	)
-	if err == nil {
-		t.Fatal("expected an error for an invalid --surface-as value")
-	}
+	requireExitCode(t, err, 2, "")
 	if !strings.Contains(err.Error(), `must be "issue" or "pr"`) {
 		t.Fatalf("expected a clear invalid-value error, got: %v", err)
 	}
@@ -254,7 +246,7 @@ func TestScan_SurfaceAsIssue_MissingGithubRepo(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -271,9 +263,7 @@ func TestScan_SurfaceAsIssue_MissingGithubRepo(t *testing.T) {
 		"--no-attribution",
 		"--surface-as", "issue",
 	)
-	if err == nil {
-		t.Fatal("expected an error when --surface-as is set without --github-repo")
-	}
+	requireExitCode(t, err, 2, "")
 	if !strings.Contains(err.Error(), "--github-repo") {
 		t.Fatalf("expected a clear missing-github-repo error, got: %v", err)
 	}
@@ -293,7 +283,7 @@ func TestScan_SurfaceAsIssue_IncludesWritebackPreview(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
@@ -328,9 +318,7 @@ func TestScan_SurfaceAsIssue_IncludesWritebackPreview(t *testing.T) {
 		"--github-repo", "acme/infra",
 		"--tf-dir", tfDir,
 	)
-	if err != nil {
-		t.Fatalf("ubx scan: %v\noutput: %s", err, out)
-	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(gotBody, ".tf write-back preview") {
 		t.Fatalf("expected a write-back preview section, got: %s", gotBody)
 	}

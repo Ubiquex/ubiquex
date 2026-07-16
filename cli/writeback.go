@@ -33,23 +33,31 @@ func newWritebackCmd() *cobra.Command {
 		Use:   "writeback <proposal-id>",
 		Short: "Write an accepted drift_adopt proposal's recorded reality back into existing .tf source",
 		Args:  cobra.ExactArgs(1),
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
+		// (everything applied cleanly, or nothing to write back), 1 (an
+		// attribute was declined, or a resource block couldn't be located --
+		// the write-back is incomplete and needs a human, an actionable
+		// finding), 2 (error). SilenceUsage/Errors: same reasoning as
+		// status.go.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("writeback: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: %w", err)}
 			}
 			applyTFDirDefault(cmd, &tfDir, cfg)
 
 			ledger := core.Open(ledgerDir)
 			p, err := ledger.Read(args[0])
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 			if p.Kind != core.KindDriftAdopt {
-				return fmt.Errorf("writeback: proposal %s is kind %q, not drift_adopt -- write-back only applies to recorded drift", p.ID, p.Kind)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: proposal %s is kind %q, not drift_adopt -- write-back only applies to recorded drift", p.ID, p.Kind)}
 			}
 			if p.Status != core.StatusAccepted {
-				return fmt.Errorf("writeback: proposal %s is not accepted (status %q)", p.ID, p.Status)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: proposal %s is not accepted (status %q)", p.ID, p.Status)}
 			}
 			if len(p.Delta.Modifies) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "writeback: proposal has no delta.modifies entries -- nothing to write back")
@@ -58,6 +66,7 @@ func newWritebackCmd() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			var unresolved []string
+			var declinedCount int
 			for _, m := range p.Delta.Modifies {
 				path, newContent, report, err := tfwrite.FindAndApply(tfDir, m.Target, m)
 				if err != nil {
@@ -70,6 +79,7 @@ func newWritebackCmd() *cobra.Command {
 				for _, a := range report.Applied {
 					fmt.Fprintf(out, "  applied: %s\n", a)
 				}
+				declinedCount += len(report.Declined)
 				for _, d := range report.Declined {
 					fmt.Fprintf(out, "  declined: %s -- %s", d.Path, d.Reason)
 					if d.Expression != "" {
@@ -83,20 +93,23 @@ func newWritebackCmd() *cobra.Command {
 
 				if write {
 					if err := os.WriteFile(path, newContent, 0o644); err != nil {
-						return fmt.Errorf("writeback: write %s: %w", path, err)
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: write %s: %w", path, err)}
 					}
 					fmt.Fprintf(out, "  wrote %s\n", path)
 				} else {
 					diff, err := unifiedDiff(path, newContent)
 					if err != nil {
-						return fmt.Errorf("writeback: diff %s: %w", path, err)
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: diff %s: %w", path, err)}
 					}
 					fmt.Fprintln(out, diff)
 				}
 			}
 
 			if len(unresolved) > 0 {
-				return fmt.Errorf("writeback: could not locate a resource block to write back into for: %s", strings.Join(unresolved, ", "))
+				return &ExitCodeError{Code: 1, Err: fmt.Errorf("writeback: could not locate a resource block to write back into for: %s", strings.Join(unresolved, ", "))}
+			}
+			if declinedCount > 0 {
+				return &ExitCodeError{Code: 1, Err: fmt.Errorf("writeback: %d attribute(s) declined, needs manual attention (see above)", declinedCount)}
 			}
 			return nil
 		},

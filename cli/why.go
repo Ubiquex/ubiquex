@@ -28,10 +28,17 @@ func newWhyCmd() *cobra.Command {
 		Use:   "why <proposal-id> | <stack>.<type>.<name>",
 		Short: "Explain an accepted proposal, or a resource's full proposal history",
 		Args:  cobra.ExactArgs(1),
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
+		// (nothing to re-verify, or it checks out), 1 (--verify-acceptance
+		// found the claimed acceptance doesn't check out -- an actionable
+		// finding), 2 (error). SilenceUsage/Errors: same reasoning as
+		// status.go.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("why: %w", err)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 
@@ -41,7 +48,7 @@ func newWhyCmd() *cobra.Command {
 			if proposalIDPattern.MatchString(args[0]) {
 				p, err := ledger.Read(args[0])
 				if err != nil {
-					return err
+					return &ExitCodeError{Code: 2, Err: err}
 				}
 				renderProposal(out, p)
 				if verifyAcceptance {
@@ -52,14 +59,14 @@ func newWhyCmd() *cobra.Command {
 
 			addr, ok := core.ParseAddress(args[0])
 			if !ok {
-				return fmt.Errorf("%q is not a valid proposal ID (64-char hex) or resource address (<stack>.<type>.<name>)", args[0])
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a valid proposal ID (64-char hex) or resource address (<stack>.<type>.<name>)", args[0])}
 			}
 			proposals, err := ledger.ProposalsForAddress(addr)
 			if err != nil {
-				return err
+				return &ExitCodeError{Code: 2, Err: err}
 			}
 			if len(proposals) == 0 {
-				return fmt.Errorf("no proposals found for %s", addr)
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("no proposals found for %s", addr)}
 			}
 
 			fmt.Fprintf(out, "%s: %d proposal(s), newest first\n", addr, len(proposals))

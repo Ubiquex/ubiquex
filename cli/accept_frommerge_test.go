@@ -167,9 +167,9 @@ func TestAcceptFromMerge_HashMismatchRejected(t *testing.T) {
 		"--github-repo", "acme/infra",
 		"--ledger-dir", ledgerDir,
 	)
-	if err == nil {
-		t.Fatal("expected a hash-mismatch rejection")
-	}
+	// A hash mismatch means the claimed acceptance doesn't check out --
+	// an actionable finding, exit 1 (UBI-20 exit-code contract).
+	requireExitCode(t, err, 1, "")
 	if !strings.Contains(err.Error(), "does not hash to the trailer") {
 		t.Fatalf("expected a trailer-hash-mismatch error, got: %v", err)
 	}
@@ -186,11 +186,66 @@ func TestAcceptFromMerge_CommitNotInHistory(t *testing.T) {
 		"--github-repo", "acme/infra",
 		"--ledger-dir", ledgerDir,
 	)
-	if err == nil {
-		t.Fatal("expected an error for a merge SHA not in history")
-	}
+	// A merge commit no longer in history means the claimed acceptance
+	// doesn't check out -- an actionable finding, exit 1.
+	requireExitCode(t, err, 1, "")
 	if !strings.Contains(err.Error(), "not found in git history") {
 		t.Fatalf("expected a not-in-history error, got: %v", err)
+	}
+}
+
+// TestAcceptFromMerge_NoProposalTrailer is UBI-20's exit-code audit filling
+// a gap the original UBI-11 adversarial coverage above didn't have: a PR
+// body with no "ubx-proposal:" trailer at all means there's nothing to
+// derive acceptance from -- the claimed acceptance doesn't check out,
+// exit 1, same family as a hash mismatch or a commit gone from history.
+func TestAcceptFromMerge_NoProposalTrailer(t *testing.T) {
+	repoDir, sha := gitRepoWithProposal(t, "proposal.json", draftProposalJSON)
+
+	apiBase := fakeGitHubServer(t, "just a regular PR description, no trailer here", []map[string]any{})
+	t.Setenv("UBX_GITHUB_API_BASE_URL", apiBase)
+
+	ledgerDir := t.TempDir()
+	_, err := runUbx(t, nil, "accept",
+		"--from-merge", sha,
+		"--repo-dir", repoDir,
+		"--proposal-file", "proposal.json",
+		"--github-repo", "acme/infra",
+		"--ledger-dir", ledgerDir,
+	)
+	requireExitCode(t, err, 1, "")
+	if !strings.Contains(err.Error(), "no ubx-proposal trailer") {
+		t.Fatalf("expected a no-trailer error, got: %v", err)
+	}
+}
+
+// TestAcceptFromMerge_NoPullRequestForCommit: the GitHub API knows the
+// commit but associates no pull request with it at all (e.g. a direct
+// push, or an SHA typo pointing at a real-but-wrong commit) -- same
+// "claimed acceptance doesn't check out" family, exit 1.
+func TestAcceptFromMerge_NoPullRequestForCommit(t *testing.T) {
+	repoDir, sha := gitRepoWithProposal(t, "proposal.json", draftProposalJSON)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/infra/commits/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{}) // no PR associated with this commit
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("UBX_GITHUB_API_BASE_URL", srv.URL+"/")
+
+	ledgerDir := t.TempDir()
+	_, err := runUbx(t, nil, "accept",
+		"--from-merge", sha,
+		"--repo-dir", repoDir,
+		"--proposal-file", "proposal.json",
+		"--github-repo", "acme/infra",
+		"--ledger-dir", ledgerDir,
+	)
+	requireExitCode(t, err, 1, "")
+	if !strings.Contains(err.Error(), "no pull request found for commit") {
+		t.Fatalf("expected a no-pull-request error, got: %v", err)
 	}
 }
 
@@ -205,9 +260,9 @@ func TestAcceptFromMerge_ProposalFileAbsentFromMerge(t *testing.T) {
 		"--github-repo", "acme/infra",
 		"--ledger-dir", ledgerDir,
 	)
-	if err == nil {
-		t.Fatal("expected an error for a proposal file absent from the merge")
-	}
+	// A proposal file absent from the merge means the claimed acceptance
+	// doesn't check out -- an actionable finding, exit 1.
+	requireExitCode(t, err, 1, "")
 	if !strings.Contains(err.Error(), "not found at commit") {
 		t.Fatalf("expected a file-not-found error, got: %v", err)
 	}

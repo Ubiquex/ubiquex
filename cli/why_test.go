@@ -24,7 +24,7 @@ func TestWhy_ResourceAddress_ChainOrdering(t *testing.T) {
 		"--lookup", `{"name":"widget-why","tags":{"env":"prod"}}`,
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (adopt): %v", err)
 	}
 	acceptOut, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir)
@@ -42,7 +42,7 @@ func TestWhy_ResourceAddress_ChainOrdering(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 		"--no-attribution", // hermetic -- see cli/scan_test.go's TestScanAcceptWhy for why
-	); err != nil {
+	); exitCode(err) != 1 {
 		t.Fatalf("ubx scan (drift): %v", err)
 	}
 	acceptOut2, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "drift.json"), "--ledger-dir", ledgerDir)

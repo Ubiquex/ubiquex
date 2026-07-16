@@ -12,7 +12,7 @@ import (
 func adoptViaCLI(t *testing.T, ledgerDir, stack, resourceType, name, lookup string, env []string) {
 	t.Helper()
 	adoptPath := filepath.Join(t.TempDir(), name+".json")
-	if _, err := runUbx(t, env, "scan",
+	scanOut, err := runUbx(t, env, "scan",
 		"--provider", fakeProviderBinary,
 		"--stack", stack,
 		"--type", resourceType,
@@ -21,9 +21,8 @@ func adoptViaCLI(t *testing.T, ledgerDir, stack, resourceType, name, lookup stri
 		"--ledger-dir", ledgerDir,
 		"--out", adoptPath,
 		"--no-attribution",
-	); err != nil {
-		t.Fatalf("ubx scan (adopt %s): %v", name, err)
-	}
+	)
+	requireExitCode(t, err, 1, scanOut)
 	if _, err := runUbx(t, env, "accept", adoptPath, "--ledger-dir", ledgerDir); err != nil {
 		t.Fatalf("ubx accept (adopt %s): %v", name, err)
 	}
