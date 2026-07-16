@@ -79,7 +79,7 @@ type TypeSpec struct {
 	// (Source, Type), never bare Type alone.
 	Source   string
 	Type     string // e.g. "aws_s3_bucket", "google_storage_bucket"
-	Category string // "compute" | "network" | "iam" | "storage" | "db" | "dns" | "messaging"
+	Category string // "compute" | "network" | "iam" | "storage" | "db" | "dns" | "messaging" | "helm"
 	Safety   Safety
 
 	// IdentityFields lists which observed-state attribute(s) carry this
@@ -619,6 +619,109 @@ var Registry = []TypeSpec{
 	},
 	{Type: "google_kms_crypto_key", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
+
+	// --- kubernetes (UBI-22 Stage 1) ---
+	// All fourteen: real schema (hashicorp/kubernetes 2.35.1
+	// GetProviderSchema) models "metadata" (and, for workload types,
+	// "spec") as NestingList -- a real SDKv2 "one-item list simulates an
+	// optional single block" convention, confirmed directly (not
+	// assumed) by checking that "timeouts", present on several of these
+	// same types, IS NestingSingle. name/namespace/uid live nested inside
+	// metadata[0], not as flat top-level attributes the way every AWS/GCP
+	// type in this registry has -- see docs/architecture.md's
+	// "Kubernetes support" §1 for the full finding and its consequence
+	// for --lookup's shape. IdentityFields is conservatively "id" alone
+	// here (the one confirmed-flat, confirmed-present attribute); what
+	// "id" actually contains for a live object, and whether metadata's
+	// nested name/namespace are also required for a real ReadResource
+	// call the way aws_s3_bucket/google_storage_bucket need more than
+	// "id" alone, is Stage 2 work, not assumed here. Both a bare
+	// ("kubernetes_secret") and a "_v1"-suffixed ("kubernetes_secret_v1")
+	// form of most of these types exist with byte-for-byte identical
+	// schemas (confirmed for kubernetes_secret specifically); only the
+	// "_v1" forms -- the provider's own actively recommended naming --
+	// are seeded, to avoid two registry entries that would always report
+	// identical conformance results.
+	{Type: "kubernetes_deployment_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_stateful_set_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_daemon_set_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_cron_job_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_job_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_pod_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_service_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_ingress_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_network_policy_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{
+		Type: "kubernetes_config_map_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"},
+		Notes: k8sSeedNote + " data/binary_data are NOT Sensitive here -- " +
+			"ConfigMaps are explicitly the non-secret counterpart to Secrets by " +
+			"Kubernetes' own design, and the schema agrees.",
+	},
+	{
+		Type: "kubernetes_secret_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"},
+		Notes: k8sSeedNote + " MUST exercise the UBI-23 redaction path: data " +
+			"and binary_data are both confirmed Sensitive: true in the real " +
+			"schema (verified directly -- this was the explicit thing to check, " +
+			"not assume; had the provider not flagged these, UBI-22 would have " +
+			"needed its own type-level redaction override). No upstream gap, no " +
+			"override needed.",
+	},
+	{Type: "kubernetes_persistent_volume_claim_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_persistent_volume_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_storage_class_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_namespace_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote + " Cluster-scoped -- metadata has no namespace field at all."},
+	{Type: "kubernetes_service_account_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_cluster_role_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote + " Cluster-scoped -- metadata has no namespace field at all."},
+	{Type: "kubernetes_cluster_role_binding_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote + " Cluster-scoped -- metadata has no namespace field at all."},
+	{Type: "kubernetes_role_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{Type: "kubernetes_role_binding_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+
+	// --- helm (UBI-22 Stage 1) ---
+	{
+		Type: "helm_release", Source: "hashicorp/helm", Category: "helm", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"},
+		Notes: "Seeded for UBI-22 Stage 1: hashicorp/helm 2.17.0 empirically " +
+			"confirmed to negotiate tfplugin v5 (dual v5/v6 support earning its " +
+			"keep a third time). Unlike every kubernetes_* type above, id/name/" +
+			"namespace are all flat top-level attributes -- no NestingList " +
+			"wrapping at all, a genuinely simpler identity shape. " +
+			"repository_password (flat) and a NestingSet block, set_sensitive " +
+			"(.value), are both confirmed Sensitive -- set_sensitive is the " +
+			"first real Set-nested sensitive value found in any " +
+			"currently-integrated provider's schema. Disclosed limitation, not " +
+			"a gap in this session's own redaction work: manifest (the chart's " +
+			"full rendered YAML, computed) and metadata[0].notes are NOT " +
+			"Sensitive-flagged, so a value that started sensitive (a " +
+			"set_sensitive password, say) can still appear in plaintext there " +
+			"if a chart template renders it into output -- schema-level " +
+			"Sensitive flags mark the input attribute only, not everywhere it " +
+			"might get echoed into a derived, computed text blob. Chart-aware " +
+			"diffing (tracking the individual Kubernetes objects a release " +
+			"manages, or diffing inside rendered manifests) is explicitly out " +
+			"of scope -- see docs/architecture.md's \"Kubernetes support\" §4. " +
+			"Not yet implemented -- no fakeprovider fixture, no live-account " +
+			"verification, Safety/LookupHint not yet classified.",
+	},
 }
 
 // gcpSeedNote is the shared "not yet worked through" note for UBI-21
@@ -633,6 +736,17 @@ const gcpSeedNote = "Seeded for UBI-21 Stage 1 (docs/plan.md §M1-2 GCP resource
 	"implemented -- no fakeprovider fixture, no live-account verification, " +
 	"Safety/LookupHint not yet classified. Stage 2 (a real GCP account) works " +
 	"through this list in batches, the same way UBI-9 worked through AWS's."
+
+// k8sSeedNote is the shared "not yet worked through" note for UBI-22 Stage
+// 1's kubernetes_* entries -- same honest "verified schema shape, nothing
+// live yet" posture as gcpSeedNote.
+const k8sSeedNote = "Seeded for UBI-22 Stage 1 (docs/architecture.md -- Kubernetes support): " +
+	"IdentityFields verified against the real hashicorp/kubernetes 2.35.1 " +
+	"schema (GetProviderSchema, free, no credentials, no live cluster call). " +
+	"Not yet implemented -- no fakeprovider fixture, no live-cluster " +
+	"verification, Safety/LookupHint not yet classified. Stage 2 (a real " +
+	"cluster) works through this list in batches, the same way UBI-9/UBI-21 " +
+	"worked through AWS/GCP."
 
 // ByType returns the registry entry for a (source, type) pair, or nil if
 // that combination isn't tracked at all (UBI-21: keyed by source+type,

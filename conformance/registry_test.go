@@ -4,7 +4,12 @@ import "testing"
 
 var validCategories = map[string]bool{
 	"compute": true, "network": true, "iam": true,
-	"storage": true, "db": true, "dns": true, "messaging": true,
+	"storage": true, "db": true, "dns": true, "messaging": true, "helm": true,
+}
+
+var validSources = map[string]bool{
+	"hashicorp/aws": true, "hashicorp/google": true,
+	"hashicorp/kubernetes": true, "hashicorp/helm": true,
 }
 
 // TestRegistry_NoDuplicateTypes checks (Source, Type) uniqueness, not bare
@@ -23,11 +28,12 @@ func TestRegistry_NoDuplicateTypes(t *testing.T) {
 	}
 }
 
-// TestRegistry_EverySourceIsAWSOrGCP guards against a typo'd Source
-// silently creating a third, untracked provider bucket.
-func TestRegistry_EverySourceIsAWSOrGCP(t *testing.T) {
+// TestRegistry_EverySourceIsKnown guards against a typo'd Source silently
+// creating a new, untracked provider bucket (UBI-22 added
+// hashicorp/kubernetes and hashicorp/helm to the original AWS/GCP pair).
+func TestRegistry_EverySourceIsKnown(t *testing.T) {
 	for _, s := range Registry {
-		if s.Source != "hashicorp/aws" && s.Source != "hashicorp/google" {
+		if !validSources[s.Source] {
 			t.Errorf("%s: unrecognized Source %q", s.Type, s.Source)
 		}
 	}
