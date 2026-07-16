@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -155,6 +156,44 @@ func TestRunScan_ResourceUnreadable_JSONNull(t *testing.T) {
 	_, err := RunScan(context.Background(), fp, l, ScanRequest{Address: testAddr(), CurrentState: json.RawMessage(`{}`)})
 	if !errors.Is(err, ErrResourceUnreadable) {
 		t.Fatalf("got %v, want ErrResourceUnreadable", err)
+	}
+}
+
+// TestRunScan_ResourceUnreadable_TeachesKnownType is UBI-20 workstream 3:
+// aws_s3_bucket (testAddr's own type) is one of core/lookuphints' known
+// types -- the error should name "id" as the fix and link to the docs,
+// not just report the bare sentinel.
+func TestRunScan_ResourceUnreadable_TeachesKnownType(t *testing.T) {
+	l := Open(t.TempDir())
+	fp := &fakeProvider{state: nil}
+
+	_, err := RunScan(context.Background(), fp, l, ScanRequest{Address: testAddr(), CurrentState: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), `"id"`) {
+		t.Errorf("expected the error to teach \"id\" as the fix for aws_s3_bucket, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cli/lookup") {
+		t.Errorf("expected a link to the lookup docs page, got: %v", err)
+	}
+}
+
+// TestLookupHintText_HonestFallbackForUnknownType confirms a type
+// core/lookuphints has no entry for gets an honest "check the schema"
+// fallback, never a fabricated guess dressed up as a known fact.
+// lookupHintText, not the full RunScan pipeline, since fakeProvider's
+// Schema only ever knows about "aws_s3_bucket" (there is no way to reach
+// ErrResourceUnreadable through RunScan for a type the provider's own
+// schema doesn't recognize -- that's ErrUnknownResourceType instead,
+// tested elsewhere).
+func TestLookupHintText_HonestFallbackForUnknownType(t *testing.T) {
+	got := lookupHintText("aws_totally_unknown_type")
+	if !strings.Contains(got, "check aws_totally_unknown_type's provider schema") {
+		t.Errorf("expected the honest fallback wording, got: %v", got)
+	}
+	if strings.Contains(got, `"id"`) {
+		t.Errorf("must not fabricate a specific field guess for an unknown type, got: %v", got)
 	}
 }
 

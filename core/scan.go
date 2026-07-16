@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/ubiquex/ubiquex-cli/core/lookuphints"
 )
 
 var (
@@ -166,13 +169,39 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 		return nil, "", fmt.Errorf("read resource: %w", err)
 	}
 	if len(observed) == 0 || string(observed) == "null" {
-		return nil, "", ErrResourceUnreadable
+		return nil, "", fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(addr.Type))
 	}
 	hash, err = ObservedHash(observed)
 	if err != nil {
 		return nil, "", err
 	}
 	return observed, hash, nil
+}
+
+// lookupHintText builds ErrResourceUnreadable's teaching-error suffix
+// (UBI-20 workstream 3, docs/architecture.md — Teaching errors): a
+// resourceType-specific hint for the handful of types core/lookuphints
+// (generated from conformance.Registry's empirically-verified LookupHint
+// field) actually knows about, or an honest fallback for every other type
+// -- never a fabricated guess dressed up as a known fact.
+//
+// The hint's direction was itself verified live against real AWS during
+// this session (conformance/lookuphints_live_test.go), not assumed from
+// the Notes prose alone: for aws_s3_bucket/aws_iam_role/aws_iam_user,
+// {"id": "<name>"} alone successfully reads the resource, but
+// {"bucket": "<name>"}/{"name": "<name>"} alone (the type's own natural,
+// Terraform-attribute-shaped key -- an easy thing to reach for instead of
+// "id") reads back null. So the actionable hint is "make sure id is
+// included," not "you're missing bucket/name" -- lookuphints.For's stored
+// value is the misleading natural-key attribute a user might have reached
+// for alone, not the field that's actually missing.
+func lookupHintText(resourceType string) string {
+	docsLink := "see https://github.com/Ubiquex/ubiquex-docs, cli/lookup"
+	if naturalKey, ok := lookuphints.For(resourceType); ok {
+		return fmt.Sprintf("%s's lookup must include \"id\" -- %s alone is not enough (%s)",
+			resourceType, strings.Join(naturalKey, "/"), docsLink)
+	}
+	return fmt.Sprintf("check %s's provider schema for its required lookup fields (%s)", resourceType, docsLink)
 }
 
 // GenerateProposal builds the adoption/drift_adopt proposal for a scan

@@ -8,6 +8,8 @@
 // outside core/ and cli/ deliberately, since "does ubx handle this AWS
 // resource type correctly" is a test/coverage concern, not part of the
 // trust core or CLI surface.
+//
+//go:generate go run ./gentool -out ../core/lookuphints/hints.go
 package conformance
 
 import "encoding/json"
@@ -81,6 +83,22 @@ type TypeSpec struct {
 	// once Implemented; a type that isn't implemented yet has no verified
 	// notes to record.
 	Notes string
+
+	// LookupHint names this type's own natural-key attribute(s) -- the
+	// ones a user coming from Terraform's own attribute names might
+	// reach for alone instead of "id" (e.g. aws_s3_bucket's "bucket",
+	// aws_iam_role/aws_iam_user's "name") -- empirically confirmed to
+	// read back null on their own; "id" alone, by contrast, IS
+	// sufficient for every one of these types (verified live,
+	// conformance/lookuphints_live_test.go, not assumed from the Notes
+	// prose). Left nil for every type where this confusion doesn't
+	// apply, including types whose id happens to BE something
+	// surprising like an ARN or URL (that's a "use the right value"
+	// surprise, not a "you reached for the wrong key" one, and isn't
+	// safe to promote as a shipped teaching-error hint -- see
+	// core/lookuphints, UBI-20 workstream 3, which generates a shipped
+	// table from exactly this field via go:generate).
+	LookupHint []string
 
 	// Implemented is true once this type has a real conformance test
 	// (see aws_test.go and friends) backing up IdentityFields/Notes.
@@ -238,6 +256,7 @@ var Registry = []TypeSpec{
 			"writing this note (not assumed from the S3 precedent). " +
 			"Verified by adopting the account's real (pre-existing, " +
 			"AWS-created) \"aws-codestar-service-role\".",
+		LookupHint:  []string{"name"},
 		Implemented: true,
 	},
 	{
@@ -268,6 +287,7 @@ var Registry = []TypeSpec{
 			"name, and both must be set in the lookup (\"name\" alone reads " +
 			"back null). Verified by creating a throwaway user, testing it, " +
 			"and deleting it.",
+		LookupHint:  []string{"name"},
 		Implemented: true,
 	},
 	{
@@ -300,6 +320,7 @@ var Registry = []TypeSpec{
 			"only \"bucket\" reads back null (see STATE.md's 2026-07-10 " +
 			"finding from Slice 1). Verified repeatedly across UBI-7/8/9 " +
 			"against the real \"ubx-states\" bucket.",
+		LookupHint:  []string{"bucket"},
 		Implemented: true,
 	},
 	{Type: "aws_s3_bucket_policy", Category: "storage", Safety: FakeOnly,
