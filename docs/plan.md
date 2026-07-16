@@ -148,6 +148,36 @@
   for the adversarial tests and the live multi-resource verification
   (real `ubx-states` bucket plus a throwaway SQS queue) against the real
   account.
+- 2026-07-16 — UBI-18 (Linear-verified): `ubx scan --all --tfstate <path>`,
+  bulk onboarding — production ladder step 3. Enumeration source decided
+  in the design room: the team's existing `.tfstate`, read once at
+  onboarding as a border-crossing artifact, never depended on again;
+  cloud-side discovery is explicitly a different epic. State provides
+  identity only — every proposal's observed state still comes from a
+  live `ReadResource` call, reusing `core.RunScan`/`core.GenerateProposal`
+  unchanged. New `tfstate/` package parses Terraform state v4 JSON
+  (modules, `count`/`for_each` instances addressed `name[index]`,
+  `data`/output entries ignored outright). A small, explicit per-type
+  lookup-augmentation table (not derived from `conformance/registry.go`'s
+  `IdentityFields`, which answers a related but distinct question) covers
+  the same empirically-known cases `cli/lookup.mdx` already documents.
+  Stack defaults to the state file's own basename (`--stack` overrides);
+  module paths become an `intent.summary` hint AND get folded into the
+  resource's own address (for uniqueness — two different modules can
+  declare a same-type same-name resource, a real "duplicate addresses"
+  case the adversarial tests caught) — never an automatic stack split, a
+  documented v1 decision. Unknown type / deleted-since-state / unbuildable
+  lookup are recorded in a skipped-summary and never abort the walk.
+  `--out-dir` batches one proposal file per resource, each one's `parent`
+  chained to the precomputed hash of the one before it in the same batch
+  (a real bug the live-verification test caught: left at the ledger's
+  real, unmoving head, only the first of N proposals would ever accept).
+  Bulk *acceptance* is explicitly out of scope. See docs/architecture.md's
+  "Bulk onboarding" section for full design; STATE.md for the adversarial
+  tests (synthetic 1000-resource state, malformed/truncated state,
+  duplicate addresses, nested modules) and the live verification against
+  a real, disposable Terraform config (fixture generator only, never a
+  runtime dependency).
 
 ## Strategy
 
@@ -377,6 +407,37 @@ real `ubx-states` account plus a throwaway SQS queue (created and deleted
 for this test, same pattern `conformance/aws_live_test.go` already uses),
 so the fleet walk is genuinely multi-resource, not a single address
 dressed up as a fleet. See STATE.md for the full writeup.
+
+### Bulk onboarding (UBI-18)
+
+`ubx scan --all --tfstate <path> [--stack <name>] [--propose adopt]
+[--out-dir <dir>]` is production ladder step 3: a team with 300 resources
+can't adopt them one `--lookup` at a time. Enumeration source, decided in
+the design room before any code: the team's existing `.tfstate`, read
+*once* at onboarding as a border-crossing artifact — the ledger owns
+everything after, `ubx` never opens or depends on the file again.
+Cloud-side discovery (tag-based enumeration, per-type list APIs) is a
+different feature, a different epic, explicitly out of scope here. State
+provides identity (how to look a resource up), never truth — every
+resource's recorded observed state still comes from a live `ReadResource`
+call, reusing the *exact same* `core.RunScan`/`core.GenerateProposal`
+pipeline a single `ubx scan` already runs; bulk onboarding is an
+orchestration layer, not a new proposal pipeline. See
+docs/architecture.md's "Bulk onboarding" section for the full design,
+including the small explicit per-type lookup-augmentation table (distinct
+from, and not mechanically derived from, `conformance/registry.go`'s
+`IdentityFields`), the module-paths-are-a-summary-hint-not-a-stack-split
+decision, and exactly what gets skipped (unknown type, deleted-since-state,
+unbuildable lookup) versus ignored outright (data sources, outputs).
+Bulk *acceptance* is deliberately not part of this issue. A real bug
+surfaced only by live-verifying against a real, disposable Terraform
+config (Terraform used only as a test-fixture generator, never a runtime
+dependency): every proposal in one batch shared the same stale `parent`
+(the ledger's real head never moves mid-walk, since nothing gets accepted
+until later), so only the first one anyone accepted would ever succeed —
+fixed by chaining each generated proposal's `parent` to the precomputed
+hash of the one before it in the same batch, entirely within the `--all`
+orchestration itself. See STATE.md for the full writeup.
 
 ## Deferred (explicitly not now)
 

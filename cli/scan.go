@@ -31,6 +31,9 @@ func newScanCmd() *cobra.Command {
 		githubRepo      string
 		tfDir           string
 		propose         string
+		all             bool
+		tfstatePath     string
+		outDir          string
 	)
 
 	cmd := &cobra.Command{
@@ -41,6 +44,34 @@ func newScanCmd() *cobra.Command {
 			case "adopt", "revert", "both":
 			default:
 				return fmt.Errorf("scan: --propose must be \"adopt\", \"revert\", or \"both\", got %q", propose)
+			}
+
+			if all {
+				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
+					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") {
+					return fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as/--tf-dir describe a single resource " +
+						"and don't apply to bulk onboarding")
+				}
+				if tfstatePath == "" {
+					return fmt.Errorf("scan --all requires --tfstate")
+				}
+				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+				defer cancel()
+				return runScanAll(ctx, cmd.OutOrStdout(), scanAllOptions{
+					TFStatePath:     tfstatePath,
+					Stack:           stack,
+					Propose:         propose,
+					OutDir:          outDir,
+					LedgerDir:       ledgerDir,
+					ProviderPath:    providerPath,
+					Source:          source,
+					ProviderVersion: providerVersion,
+					ProviderConfig:  providerConfig,
+					Timeout:         timeout,
+				})
+			}
+			if stack == "" || resourceType == "" || resourceName == "" {
+				return fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding)")
 			}
 			if surfaceAs != "" && propose == "revert" {
 				return fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
@@ -169,23 +200,22 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source)")
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
-	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource belongs to (required)")
-	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket (required)")
-	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack (required)")
+	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource belongs to (required unless --all, where it defaults to the state file's own basename)")
+	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket (required unless --all)")
+	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack (required unless --all)")
 	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider (e.g. {\"id\":\"...\"})")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (e.g. {\"region\":\"us-east-1\"})")
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
-	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan")
+	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout (single-resource mode only; use --out-dir with --all)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan (or the whole --all walk)")
 	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip CloudTrail attribution for drift proposals (UBI-10)")
 	cmd.Flags().StringVar(&surfaceAs, "surface-as", "", "on drift, open a GitHub \"issue\" or \"pr\" with a receipt instead of just printing the proposal (UBI-11 stage 3; requires --github-repo)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository to surface drift in (required with --surface-as)")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory of .tf files to compute a best-effort write-back preview diff from, for the receipt (optional)")
 	cmd.Flags().StringVar(&propose, "propose", "adopt", "on drift, which resolution(s) to generate: \"adopt\" (drift_adopt), \"revert\" (drift_revert), or \"both\" (UBI-16; no effect on a new/never-seen resource, which always generates adoption)")
-
-	for _, f := range []string{"stack", "type", "name"} {
-		_ = cmd.MarkFlagRequired(f)
-	}
+	cmd.Flags().BoolVar(&all, "all", false, "bulk onboarding (UBI-18): enumerate every resource in --tfstate and generate an adoption proposal for each, instead of scanning a single --type/--name resource")
+	cmd.Flags().StringVar(&tfstatePath, "tfstate", "", "path to a Terraform state v4 JSON file, read once as a bulk-onboarding enumeration source (required with --all)")
+	cmd.Flags().StringVar(&outDir, "out-dir", "", "write each --all-generated proposal to its own file in this directory, instead of printing all of them to stdout")
 
 	return cmd
 }

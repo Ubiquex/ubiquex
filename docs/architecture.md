@@ -623,6 +623,182 @@ had to be a value `RunE` returns and `main.go` interprets, not a side
 effect `RunE` performs, for the adversarial exit-code tests to be
 possible at all as ordinary Go tests.
 
+## Bulk onboarding (UBI-18)
+
+Production ladder step 3: a team with 300 resources cannot adopt them one
+`--lookup` at a time. `ubx scan --all --tfstate <path>` walks every managed
+resource in a Terraform state file and generates one `adoption` proposal
+per resource, reusing the *entire* existing single-resource pipeline
+(`core.RunScan` + `core.GenerateProposal`) unchanged — bulk onboarding is
+an orchestration layer over what already exists, not a new proposal
+pipeline.
+
+### Enumeration source: `.tfstate`, read once, never depended on again
+
+Decided in the design room (Linear UBI-18) before any code: **the state
+file is a border-crossing artifact, read exactly once, at onboarding.**
+After that read, the ledger owns everything — `ubx` never opens the state
+file again, never watches it, never reconciles against it. This is a
+deliberate, narrow scope, not a first step toward `.tfstate` as an ongoing
+source of truth (that would contradict the thesis's own "no `.tfstate`
+exists anywhere" invariant — see Execution layer above): the state file's
+only job here is telling `ubx` *which resources exist and how to look them
+up*, once, for a team that already has a pile of resources under
+Terraform management and needs a fast on-ramp into the ledger.
+
+**Cloud-side discovery (tag-based enumeration, per-type list APIs) is
+explicitly out of scope for this issue** — a different feature, a
+different epic, for teams whose resources were never under Terraform
+management at all. Conflating the two would have doubled this design
+session's surface area for no benefit to either.
+
+**State provides identity, never truth.** For every resource the state
+file names, `ubx` builds a lookup key from state attributes and then reads
+that resource live from the actual provider — the proposal's recorded
+observed state comes from that live `ReadResource` call, exactly like
+every other `ubx scan` invocation, never from the state file's own
+recorded attribute values. A resource whose state entry is stale (edited
+outside Terraform since the last `terraform apply`) still gets adopted
+with its *current* reality, not last-known Terraform state — the same
+"reads and records before it ever writes" posture as everywhere else in
+this trust chain.
+
+### Building a lookup from state, per type
+
+State's own `attributes` map always includes `id`; that alone is the
+correct `ReadResource` lookup for most types (the default). A handful of
+types need more, per the same empirical findings already recorded in
+`conformance/registry.go`'s `Notes` and pinned in ubiquex-docs'
+`cli/lookup.mdx`: `aws_s3_bucket` also needs `bucket`, `aws_iam_role`/
+`aws_iam_user` also need `name` — both cases where state already carries
+that second attribute under its own name, so it's a matter of also
+including it, not deriving it. The other `RealSafe` types with additional
+`IdentityFields` (`aws_iam_policy`, `aws_sqs_queue`, `aws_sns_topic`,
+`aws_vpc`) need no augmentation at all: their `id` attribute in state
+already *is* the value those extra fields would have contributed (the ARN,
+the queue URL), confirmed against the same empirical findings, not
+re-derived from `IdentityFields` mechanically — `IdentityFields` records
+which attributes carry stable identity for CloudTrail attribution
+purposes (UBI-8/UBI-10), a related but distinct question from "what does
+`ReadResource` need," and the two don't always coincide (`aws_sqs_queue`'s
+`IdentityFields` includes `url` as a distinct field, but the lookup needs
+no separate `url` key at all since `id` already equals it) — conflating
+them would have silently produced a wrong lookup for exactly that type.
+This is a small, explicit, separately-maintained table for that reason,
+not a mechanical reading of the conformance registry's existing field.
+
+A resource whose type the live provider's schema doesn't recognize at all
+is caught by the exact same `ErrUnknownResourceType` path `ubx scan`
+already has (`core.RunScan` calls the provider's own `GetProviderSchema`)
+— no separate type allowlist is needed to reject it up front.
+
+### Stack inference and module paths
+
+`--stack` wins if given. Otherwise, every resource in the state file is
+assigned to one stack, named after the state file's own basename with its
+extension stripped (`prod.tfstate` → stack `prod`), falling back to the
+literal `default` if that's empty or unusable. **This is a v1 decision,
+made and documented rather than left implicit**: Terraform module paths
+(`module.network`, `module.network.module.subnet`, ...) never become an
+automatic per-module *stack* split. Modules are an authoring-time
+organization concept in Terraform; conflating them with `ubx`'s own stack
+concept would be a second opinion `ubx` doesn't need to have yet, and —
+since `--stack` already exists as an escape hatch — not one this session
+had to resolve to ship something useful. A module path shows up two other
+ways instead: as a plain-text hint appended to the generated proposal's
+`intent.summary` ("... (from module network)"), and folded into the
+resource's own `Address.Name` (`network.web`, `network.subnet.web`) —
+the latter isn't optional the way the summary hint is. Two different
+modules can each declare a resource named `web` of the same type; without
+folding the module path into the name, both would collide into the exact
+same `ubx` address the moment they share a stack (a real "duplicate
+addresses" case caught by writing the adversarial test for it, not
+foreseen from the design session's own framing alone) — silently
+overwriting one's proposal file with the other's, or making the second
+look like it was "already known to the ledger" once the first is
+accepted. Folding the module path into the name is a disambiguation `ubx`
+has to perform to keep every address genuinely unique, distinct from
+(and not a contradiction of) the decision not to let modules drive stack
+assignment.
+
+`count`/`for_each` instances address the same way Terraform itself does:
+`<name>[<index>]` (`aws_instance.web[0]`, `aws_instance.web["us-east-1"]`)
+— folded into `ubx`'s own `Address.Name` the same way module paths are,
+since `Address` has no separate index concept and every instance needs
+its own distinct, stable address to be adopted as its own resource.
+Any address that still collides after both foldings (a genuinely
+malformed or hand-edited state file, since Terraform itself never
+produces two resources with the same full address) is caught explicitly
+and skipped rather than silently overwriting an already-processed
+resource's proposal.
+
+### Scale: bounded memory, not streaming
+
+`tfstate.Parse` decodes the entire state file with one `json.Unmarshal`
+call — the whole file in memory at once, not a streaming/incremental
+parse. Accepted deliberately at foundational-slice scale (verified against
+a synthetic 1000-resource state; real teams onboarding "300 resources" per
+the issue's own framing are well inside that), the same posture
+`FoldState`'s own doc comment already takes about its linear, unindexed
+ledger walk — a real scale problem to revisit if a state file ever
+approaches sizes where whole-file-in-memory genuinely stops being
+reasonable, not a design gap being silently carried forward unnoticed.
+
+### What gets skipped, and why — the walk never aborts
+
+Three things stop a state resource from producing a proposal, none of
+them fatal to the rest of the batch:
+
+- Its type isn't in the live provider's schema at all.
+- `ReadResource` returns no state — the resource was deleted from real
+  cloud since the state file was last written, an ordinary and expected
+  thing to find while onboarding a team's actual, messy history.
+- A lookup can't be built for it at all (state entry missing its own `id`
+  attribute — genuinely malformed, not just an edge case of the
+  augmentation table above).
+
+Every skip is recorded with its address and reason in a skipped-summary,
+alongside the count of proposals actually generated — the same "a failure
+on one resource never hides the rest of the report" posture `ubx status`
+(UBI-17) already established for its own fleet walk.
+
+**`data` sources, `outputs`, and any non-`"mode": "managed"` entry in the
+state file are ignored outright** — they aren't resources `ubx` could
+adopt into a ledger (a data source is a read, not a piece of infrastructure
+under management; an output is a computed value, not a resource at all).
+
+### Batch output, and why acceptance stays out of scope
+
+`--out-dir <dir>` writes one proposal JSON file per adopted resource, plus
+a summary (counts, not full proposal bodies) to stdout. **`ubx accept`
+remains per-proposal and deliberate — bulk *acceptance* is explicitly not
+part of this issue.** Generating 300 proposals in one pass is a genuine
+time-saver; auto-accepting 300 proposals would be exactly the kind of
+authority-assumption this trust chain has refused to grant itself anywhere
+else (see Business frame: "wedge reads and records before it ever
+writes") — bulk-accept, if it ever exists, is a separate, later design
+decision, not a default this issue backs into by omission.
+
+**A real bug the live-verification test caught, not a hand-traced
+one**: `core.GenerateProposal` sets a proposal's `parent` from
+`Ledger.Head()`, read fresh — but nothing gets accepted *during* an
+`--all` walk, only proposal files get written, so the ledger's real
+on-disk head never moves across the whole batch. Left uncorrected, every
+one of N generated proposals shared the exact same (real) parent, and
+only the first one anyone tried to `ubx accept` would ever succeed — the
+rest failed as parent-mismatched, discovered only once the live
+end-to-end test tried to accept a second real, onboarded resource, not by
+reasoning about the flow in the abstract beforehand. Fixed by tracking,
+purely within the `--all` orchestration itself, what the head *will be*
+after accepting every proposal generated so far in this same batch, in
+order — a proposal's hash is a pure function of its content (`parent`
+included, `id`/`acceptance`/`status` excluded, docs/schema.md), so this
+hash is computable the moment a proposal is generated, before it's ever
+written to a file or accepted by anyone. The result: a batch of N
+proposal files that accept cleanly, one after another, in the order
+`--all` printed them — not something the operator has to reorder or
+patch by hand first.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
