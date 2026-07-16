@@ -4,14 +4,14 @@
 
 ## Current phase
 
-**UBI-21 Stage 1 is done (this session, Linear-verified): GCP support,
-the first cross-provider generalization.** Design landed in
+**UBI-21 is done, both stages, this session (Linear-verified): GCP
+support, the first cross-provider generalization.** Design landed in
 docs/architecture.md ("GCP support (UBI-21)") and docs/plan.md before
-code. Two stages, gated on GCP account availability — Stage 1 is
-hermetic (no GCP account touched, only real network access to acquire a
-provider binary); Stage 2 needs a real GCP project + credentials +
-Cloud Audit Logs, and did not run this session (see "Next steps" below
-for why, and what's needed to unblock it).
+code. Stage 1 (hermetic) and Stage 2 (needs a real GCP account) were
+both originally scoped to possibly span sessions — Stage 2 ran this same
+session once Roozbeh set up Application Default Credentials against his
+own `personal-273114` GCP project (billing already enabled) partway
+through, at the "Decide Stage 2 feasibility with user" checkpoint.
 
 **Design decisions (both made before any code, see docs/architecture.md
 for the full reasoning):**
@@ -25,16 +25,17 @@ for the full reasoning):**
    naming rather than leaving implicit.
 2. Attribution backends become per-platform packages behind the existing
    `core.EventLookup` interface (already shape-agnostic: one method,
-   `LookupEvents(resourceID, since, until)`). A new `gcpaudit/` package
-   (against GCP Cloud Audit Logs) plus a small provider-source→backend
-   registry is the plan; `docs/schema.md` gained a purely-additive
-   `audit_unattributed` kind (a `backend` field, generalizing
-   `cloudtrail_unattributed`, which remains valid forever, unmigrated) so
-   Stage 2 has schema to implement against. **Not implemented this
-   session** — `core/attribution.go` is untouched; `AttributeDrift` still
-   only ever emits `cloudtrail`/`cloudtrail_unattributed`.
+   `LookupEvents(resourceID, since, until)` — **held up with zero
+   interface changes**, confirmed once `gcpaudit/` was actually built,
+   not just assumed). A new `gcpaudit/` package (against GCP Cloud Audit
+   Logs) plus a small provider-source→backend registry
+   (`cli/attribution.go`'s `newAttributionBackend`); `docs/schema.md`
+   gained a purely-additive `gcp_audit`/`audit_unattributed` pair
+   (`cloudtrail`/`cloudtrail_unattributed` unchanged, still what
+   `cloudtrail.Backend` emits — no back-compat risk to AWS's existing
+   output at all).
 
-**Stage 1 work, four commits:**
+**Stage 1 work (hermetic — no GCP account touched), four commits:**
 
 1. **(Provider source, type) keying refactor.** `conformance.TypeSpec`
    gains `Source string`; all 51 existing AWS entries migrated to
@@ -65,22 +66,50 @@ for the full reasoning):**
    DNS, messaging — mirroring the AWS list's category spread and "real
    GCP shop" bias). `Safety: FakeOnly`, `Implemented: false` for every
    one — deliberately mirroring UBI-9 session 1's own AWS bootstrapping:
-   seed the list first, work through it in batches later (Stage 2).
-   `IdentityFields` come from a real `GetProviderSchema` call against the
-   acquired binary (free, no credentials), not guessed.
-4. **ubiquex-docs updated same-session**: `getting-started/installation.mdx`
-   now mentions `--source hashicorp/google` alongside AWS (verified
-   end-to-end against the real registry — acquisition, launch, and
-   protocol negotiation all confirmed working; a live scan attempt against
-   a real GCP project got exactly as far as expected, failing only on
-   missing GCP credentials, which is outside Stage 1's scope). `cli/lookup.mdx`
-   gains a GCP section, honestly scoped: ~40 types tracked, schema-verified
-   identity fields, but explicitly **not** claiming any confirmed
-   non-default lookup shape yet (that's Stage 2, the same way AWS's own
-   seven-type table only exists because of live `ReadResource` calls).
-   `concepts/attribution.mdx` gains a "Beyond AWS" section describing the
-   per-platform backend design without claiming `gcpaudit/` is live.
-   `mint validate`/`mint broken-links` both pass clean.
+   seed the list first, work through it in batches later. `IdentityFields`
+   come from a real `GetProviderSchema` call against the acquired binary
+   (free, no credentials), not guessed.
+4. **ubiquex-docs updated same-session** (later superseded by Stage 2's
+   own docs commit, below).
+
+**Stage 2 work (needed a real GCP project + credentials), two commits:**
+
+1. **Five GCP types live-verified and promoted to `RealSafe`**:
+   `google_storage_bucket`, `google_pubsub_topic`, `google_service_account`,
+   `google_secret_manager_secret`, `google_project_iam_custom_role` — via
+   the same `conformance.RunAdoptMutateScanDiff` harness UBI-9's AWS
+   batches used, against a real, throwaway resource per type
+   (`conformance/gcp_live_test.go`), destroyed after each run. Real,
+   type-specific lookup-shape findings — see Surprises below for the
+   full writeup, since two of these turned out materially more dangerous
+   than anything AWS showed.
+2. **`gcpaudit/` implemented and live-verified.** New package, `core.EventLookup`
+   against real Cloud Logging `ListLogEntries` (Admin Activity audit logs
+   only, mirroring `cloudtrail/`'s own management-events-only scoping).
+   `core.AttributeDrift` gained an `AttributionBackend` parameter
+   (`SuccessKind`/`UnattributedKind`/`DeliveryLag`/`Name`) so `cloudtrail/`
+   and `gcpaudit/` each own their platform's specifics; `cloudtrail.Backend`'s
+   own output is byte-identical to before this change. Live-verified end
+   to end via the actual `ubx scan` command against a real Pub/Sub topic:
+   the generated `drift_adopt` proposal correctly carried a `gcp_audit`
+   source with the real GCP account email that made the change. Cloud
+   Audit Logs' delivery latency measured directly (~18s for one mutation).
+   A real, confirmed correlation gap was found and documented, not
+   silently resolved — see Surprises below.
+3. **A real UBI-20 regression, caught by this session's own live runs and
+   fixed**: `cli/attribution_live_test.go`'s AWS test still checked
+   `err != nil` after a successful adopt/drift scan, unaware that UBI-20
+   made those return `ExitCodeError{Code: 1}` now. Nobody had actually run
+   this specific live test with `UBX_CONFORMANCE_LIVE=1` since UBI-20
+   shipped — exactly the kind of gap "audit every verb" exists to catch,
+   caught here by actually running it rather than assuming the earlier
+   audit was complete.
+4. **ubiquex-docs updated same-session**: `cli/lookup.mdx`'s GCP section
+   now has a real five-type table (with a `Warning` for the two
+   silently-incomplete-read types); `concepts/attribution.mdx`'s "Beyond
+   AWS" section is no longer a future plan — a real transcript, real
+   caller email, real event. `mint validate`/`mint broken-links` both
+   pass clean.
 
 ## Current phase (previous)
 
@@ -2089,33 +2118,40 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
-**UBI-21 Stage 1 (GCP support, hermetic half) is done.** Stage 2 (needs a
-real GCP project + credentials + Cloud Audit Logs enabled) did NOT run
-this session — a GCP project (`personal-273114`) exists with billing
-enabled and enough APIs on, but Application Default Credentials were
-never configured (no `gcloud auth application-default login`, no
-`GOOGLE_APPLICATION_CREDENTIALS` service account key). Setting either up
-touches Roozbeh's real, billed GCP project and mints new credentials —
-deliberately not done unilaterally; flagged to him directly rather than
-assumed. Once auth is sorted, Stage 2 is: pick ~5 cheap GCP types and
-promote them to `RealSafe` (candidates already named in
-docs/architecture.md: `google_storage_bucket`, `google_pubsub_topic`,
-`google_service_account`, two more once real testing starts), run them
-through `conformance.RunAdoptMutateScanDiff` live, implement `gcpaudit/`
-against Cloud Audit Logs and live-verify it against a real drift with
-real actor identity, and measure Cloud Audit Logs' own delivery latency
-directly (never assumed to match CloudTrail's measured ~2 minutes/
-documented ~15 minutes just because the amendment's shape is shared).
+**UBI-21 is done, both stages.** Stage 2 ran this session after Roozbeh
+set up Application Default Credentials against his own `personal-273114`
+GCP project mid-session (his own call, at the checkpoint this session
+raised rather than proceeding unilaterally with new credentials in a
+real billed project).
 
-Real gaps in what Stage 1 itself covers, worth remembering: none of the
-40 seeded GCP types have `LookupHint`/teaching-error data yet (that's
-Stage 2, the same live-`ReadResource`-call requirement that produced
-AWS's own three-type table); `cli/lookup.mdx`'s GCP section is
-deliberately silent on non-default lookup shapes for exactly this
-reason; the `gcpaudit/` package doesn't exist as code yet, only as a
-documented design (docs/architecture.md, docs/schema.md's
-`audit_unattributed` amendment) — `core/attribution.go` is completely
-unchanged.
+Real gaps worth remembering, not quietly forgetting:
+
+- Only 5 of the ~40 seeded GCP types are `RealSafe`/live-verified; the
+  other ~35 are still `FakeOnly`/`Implemented: false`, exactly where
+  UBI-9's own AWS batches started before working through the list over
+  several sessions — expect the same here, not a one-session sweep.
+- None of the 5 live-verified GCP types were given a `LookupHint` /
+  promoted into `core/lookuphints` — that mechanism's shipped message
+  hardcodes "make sure `id` is included," which is wrong for
+  `google_storage_bucket` (needs `name` too, not instead) and can't fire
+  at all for `google_pubsub_topic`/`google_secret_manager_secret` (their
+  mistake produces no error to attach a hint to). Generalizing
+  `core/lookuphints`/`lookupHintText` to express "both required
+  together" and "silently incomplete, not just unreadable" is real,
+  unstarted follow-up work.
+- `gcpaudit/`'s correlation only actually works today for GCP services
+  whose audit log entries name the resource using the project ID
+  (confirmed for Pub/Sub) — Secret Manager's entries use the numeric
+  project number instead, which never appears in the resource's own
+  observed state, so `google_secret_manager_secret` drift is silently
+  unattributable via this backend (always `audit_unattributed`/
+  `no_matching_event`, indistinguishable from a genuine no-event case).
+  Needs a per-service resourceName-shape table or a project-number
+  lookup added as a correlation candidate — not built here.
+- `gcpaudit.Backend.DeliveryLag` (3 minutes) is a safety margin above a
+  single ~18-second measurement, not a documented GCP ceiling the way
+  CloudTrail's ~15 minutes is (GCP publishes no equivalent number) —
+  worth widening the sample size if this ever proves too tight.
 
 **Production ladder step 5 (UBI-20, hardening pass) is done.** Real gaps
 worth remembering, not quietly forgetting: `--json` covers `scan`
@@ -2254,16 +2290,16 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
-**UBI-21 Stage 1's ubiquex-docs work was done in this same session, per
-protocol**: `getting-started/installation.mdx` now mentions
-`--source hashicorp/google` alongside AWS; `cli/lookup.mdx` gained an
-honestly-scoped GCP section (schema-verified identity fields, no
-confirmed non-default lookup shapes yet); `concepts/attribution.mdx`
-gained a "Beyond AWS" section on the per-platform backend design.
-`mint validate`/`mint broken-links` both pass clean. See ubiquex-docs'
-own STATE.md for the full writeup. No debt carried — Stage 2's own docs
-(a GCP attribution walkthrough, live-verified lookup shapes) will land
-same-session whenever Stage 2 itself runs, not batched now.
+**UBI-21's ubiquex-docs work was done in this same session, per protocol,
+both stages**: `getting-started/installation.mdx` mentions `--source
+hashicorp/google` alongside AWS; `cli/lookup.mdx` gained a real GCP
+table (five live-verified types, their actual confirmed `--lookup`
+shapes, a `Warning` for the two silently-incomplete-read types);
+`concepts/attribution.mdx`'s "Beyond AWS" section carries a real
+transcript (real caller email, real event) rather than a future plan,
+plus a `Warning` about the Secret Manager correlation gap. `mint
+validate`/`mint broken-links` both pass clean. See ubiquex-docs' own
+STATE.md for the full writeup. No debt carried.
 
 **UBI-20's ubiquex-docs work was done in this same session, per
 protocol, across all four workstreams**: new `cli/exit-codes.mdx` (the
@@ -2403,6 +2439,83 @@ obligation starts fresh from whatever slice lands next.
   GCP resource does. Setting up ADC (either `gcloud auth
   application-default login` or minting a service account key) wasn't
   done unilaterally this session — see "Next steps."
+- 2026-07-16 (UBI-21 Stage 2): **`google_storage_bucket`'s lookup
+  requirement is the opposite shape from `aws_s3_bucket`'s, discovered
+  only by testing both directions live.** `{"id": "<name>"}` alone
+  errors outright (`Storage Bucket "": googleapi: Error 400: Required
+  parameter: project`, even with `project` supplied in provider config);
+  `{"name": "<name>"}` alone reads back `null`. Only `{"id": ...,
+  "name": ...}` together works — genuinely both-required, unlike
+  `aws_s3_bucket` where `id` alone already succeeds. This directly
+  broke an assumption baked into UBI-20's own teaching-error mechanism
+  (`core/lookuphints`'s shipped hint text hardcodes "make sure `id` is
+  included"), which would have been actively wrong advice here — the
+  type was deliberately left out of `core/lookuphints` rather than
+  forcing it in. Lesson: "the same amendment's shape applies to a new
+  platform" is worth checking in both directions, not just porting the
+  AWS finding's polarity.
+- 2026-07-16 (UBI-21 Stage 2): **Two GCP types (`google_pubsub_topic`,
+  `google_secret_manager_secret`) have a lookup-mistake failure mode
+  AWS never showed at all: `ReadResource` succeeds with `id` alone, but
+  silently returns incomplete data** (`name: ""` for the topic,
+  `name: "", secret_id: null` for the secret) rather than erroring or
+  returning null. `core.ErrResourceUnreadable` never fires — there is
+  no error for the UBI-20 teaching-error mechanism to attach a hint to,
+  and no signal at all that anything went wrong short of noticing the
+  proposal's own recorded state looks wrong. This is a structurally
+  different, more dangerous class of mistake than anything the existing
+  teaching-error design was built to catch (which only ever engages on
+  an actual read failure) — flagged as real follow-up work, not
+  patched under time pressure here.
+- 2026-07-16 (UBI-21 Stage 2): **GCP IAM's own read-after-write
+  consistency lags the write itself, confirmed live while writing
+  `conformance/gcp_live_test.go`'s `google_service_account` case.**
+  `gcloud iam service-accounts update ... --display-name=X` followed
+  immediately by `gcloud ... describe` returned the OLD display name —
+  `update`'s own response already echoed the new value, but a
+  subsequent read (even via the same `gcloud` CLI) hadn't caught up
+  yet. The Terraform provider's own `ReadResource` call lagged further
+  still, on a different occasion, than `gcloud describe` did — two
+  different read paths becoming consistent at different times, not one
+  global moment. Fixed with an explicit poll-until-consistent wait (up
+  to 90s) rather than a fixed sleep, since a fixed guess would only ever
+  be "usually enough."
+- 2026-07-16 (UBI-21 Stage 2): **`gcpaudit/`'s correlation logic
+  (unchanged `core.AttributeDrift`/`identityCandidates`, carried over
+  from UBI-10's AWS-only design) doesn't work for every GCP service,
+  discovered only by actually trying to attribute a Secret Manager
+  drift and getting `audit_unattributed`/`no_matching_event` for an
+  event that demonstrably existed.** `gcloud logging read` showed why:
+  Pub/Sub's Admin Activity entries name the resource as
+  `projects/<PROJECT_ID>/topics/<name>` (matching the resource's own
+  observed `id` exactly), but Secret Manager's entries name it as
+  `projects/<PROJECT_NUMBER>/secrets/<name>` — the *numeric* project
+  number, which appears nowhere in `google_secret_manager_secret`'s own
+  observed state. `identityCandidates`'s id/arn/name derivation can
+  never produce a matching candidate for this service. This is close to
+  (but distinct from) the "stop and flag if `EventLookup` doesn't hold"
+  instruction this session was given: the *interface* held up
+  perfectly; what broke is the *caller-side candidate derivation*,
+  which quietly assumed every service's own resourceName is reachable
+  from the resource's own observed attributes. Documented in
+  `gcpaudit/client.go`, docs/schema.md, and here rather than silently
+  declaring GCP attribution "done" — real follow-up work (a per-service
+  resourceName-shape table, or fetching the project number as an extra
+  candidate) is needed before Secret Manager drift can be attributed.
+- 2026-07-16 (UBI-21 Stage 2): **A real UBI-20 regression, sitting
+  undetected since that session shipped, caught by this session's own
+  live test runs**: `cli/attribution_live_test.go`'s
+  `TestScan_AttributesRealDrift_LiveCloudTrail` still asserted
+  `err != nil` as a failure after a successful adopt/drift scan — but
+  UBI-20 changed exactly that outcome to return
+  `ExitCodeError{Code: 1}` (an actionable finding, not an error). Nobody
+  had run this specific test with `UBX_CONFORMANCE_LIVE=1` since UBI-20
+  landed (it's not part of the default `go test ./...` run, by design).
+  Fixed here, alongside the `gcpaudit/` work that happened to touch the
+  same file. Lesson: a hermetic regression suite passing clean doesn't
+  mean every gated live test was actually re-run after a
+  behavior-changing session — worth a periodic full live sweep across
+  every package, not just the ones a given session's own diff touches.
 - 2026-07-16 (UBI-20): **The teaching-error hint (workstream 3) was
   backwards in its first draft, caught only by an actual live scan
   against the real "ubx-states" S3 bucket, not by reading
