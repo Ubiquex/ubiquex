@@ -1115,31 +1115,42 @@ so `ubx scan` picks the right backend for whatever it's scanning,
 exactly the same shape as `conformance.Registry`'s own (source, type)
 generalization above.
 
-**`docs/schema.md` gains a purely additive amendment**: a new
-`intent.sources[].kind`, `audit_unattributed`, generalizing
-`cloudtrail_unattributed` with a new `backend` field
-(`"cloudtrail"`/`"gcp_audit_logs"`) — the *unattributed* case has no
-backend-specific fields at all (just a `reason`), so one shared shape
-plus a `backend` tag covers every platform cleanly. The *successful*
-match case is NOT generalized the same way: `cloudtrail`'s fields
-(`actor_arn` in particular) are AWS-shaped in a way a GCP principal
-(an email, not an ARN) doesn't fit, so GCP's own successful-match kind
-will be introduced separately when `gcpaudit/` actually lands, not
-forced into `cloudtrail`'s existing shape. `cloudtrail_unattributed`
-remains a permanently valid kind for every existing ledger entry that
-already has one — no migration, no `schema_version` bump, same
-purely-additive discipline every prior schema.md amendment has followed.
+**`docs/schema.md` gains a purely additive amendment**: two new
+`intent.sources[].kind` values, `gcp_audit` (a matched event, GCP's
+counterpart to `cloudtrail`) and `audit_unattributed` (generalizing
+`cloudtrail_unattributed` with a new `backend` field,
+`"gcp_audit_logs"` today). `cloudtrail_unattributed` remains a
+permanently valid kind, and `cloudtrail.Backend` keeps emitting it
+unchanged — no migration, no `schema_version` bump, same purely-additive
+discipline every prior schema.md amendment has followed. See
+docs/schema.md's own amendment for the full writeup, including a real
+implementation decision this document originally left open: whether
+`gcp_audit` would need GCP-specific fields, or could reuse `cloudtrail`'s
+existing ones. It reuses them (`actor_arn` carries the GCP principal's
+email, not an ARN) — decided once `gcpaudit/` was actually built and
+both backends turned out to produce the exact same `core.CloudTrailEvent`
+shape, not assumed in advance.
 
-**This session (UBI-21 Stage 1) does not implement `gcpaudit/` or wire
-the backend registry** — `core/attribution.go`'s `AttributeDrift` still
-only ever emits `cloudtrail`/`cloudtrail_unattributed`, unchanged. That
-work is Stage 2's, gated on having a real GCP project with Cloud Audit
-Logs to verify against (see below) — this section documents the decided
-shape so Stage 2 has a design to implement against, not a design to
-invent under time pressure. If actually implementing `gcpaudit/` reveals
-`EventLookup`'s single-method shape doesn't hold for Cloud Audit Log
-semantics, that's a stop-and-flag moment, not a silent reshape — recorded
-here as the explicit instruction it was given under.
+**`EventLookup`'s single-method interface held up completely** —
+`gcpaudit/` implements it against Cloud Logging's `ListLogEntries` with
+no interface changes at all, confirming the "already provider-agnostic"
+read above rather than requiring a stop-and-flag reshape. What did
+surface a real, unanticipated gap: **which value a GCP service's own
+audit log entry uses to name the affected resource is not consistent
+across services**, in a way `core.AttributeDrift`'s existing
+`identityCandidates` (id/arn/name from the resource's own observed
+state) can't always bridge. Confirmed live: Pub/Sub's audit entries name
+a topic using the project *ID* (`projects/<PROJECT_ID>/topics/<name>`,
+matching `google_pubsub_topic`'s own observed `id` exactly — correlation
+works), but Secret Manager's entries instead use the numeric project
+*number* (`projects/<PROJECT_NUMBER>/secrets/<name>`) — a value that
+never appears anywhere in `google_secret_manager_secret`'s own observed
+state, so every secret's drift is silently unattributable via this
+backend today (indistinguishable from a genuine no-event case). This is
+flagged, not silently resolved — see `gcpaudit/client.go`'s own doc
+comment and STATE.md. It needs either a per-service resourceName-shape
+table or a project-number lookup added as a correlation candidate;
+neither was built under time pressure here.
 
 ### Stage 1 (this session, hermetic — no GCP account needed)
 
@@ -1174,26 +1185,59 @@ here as the explicit instruction it was given under.
   API round trip, the same "verified against the real schema, not
   assumed" standard `conformance.Registry`'s AWS entries already hold to.
 
-### Stage 2 (needs a real GCP project, credentials, and Cloud Audit Logs
-enabled — explicitly gated, not assumed available)
+### Stage 2 (needed a real GCP project, credentials, and Cloud Audit Logs
+enabled — done this same session, once Roozbeh set up Application Default
+Credentials against his own `personal-273114` project)
 
-- ~5 cheap, safe GCP types promoted to `RealSafe` and live-verified via
-  the same adopt→mutate→scan-diff harness (`conformance.RunAdoptMutateScanDiff`)
-  UBI-9's AWS batches used — candidates: `google_storage_bucket`,
-  `google_pubsub_topic`, `google_service_account`, and two more chosen
-  once real account testing starts (mirroring AWS's own "start with
-  cheap, already-exists-or-free resources" bias).
-- `gcpaudit/` implemented and live-verified: a real drift, correlated
-  against Cloud Audit Logs with the actual actor identity recorded, not
-  a synthetic fixture — the same "prove it against a real account, not
-  just a fake" bar `cloudtrail/` was held to in UBI-10. Cloud Audit Logs'
-  own delivery latency gets measured directly against this account,
-  exactly like CloudTrail's ~2-minute-observed/15-minute-documented
-  latency was measured in UBI-10 — informing whatever `delivery_window`
-  threshold `audit_unattributed` uses for the GCP backend (not assumed to
-  be CloudTrail's own 15 minutes just because the shape of the amendment
-  is shared).
-- Every fixture created for live verification is destroyed afterward,
+- Five types promoted to `RealSafe` and live-verified via the same
+  adopt→mutate→scan-diff harness (`conformance.RunAdoptMutateScanDiff`)
+  UBI-9's AWS batches used: `google_storage_bucket`, `google_pubsub_topic`,
+  `google_service_account`, `google_secret_manager_secret`,
+  `google_project_iam_custom_role`. Real per-type lookup-shape findings,
+  each the kind of thing only a live `ReadResource` call surfaces:
+  - `google_service_account`/`google_project_iam_custom_role`: `id` alone
+    (the full resource path) is sufficient, matching `aws_iam_policy`'s
+    own shape.
+  - `google_storage_bucket`: `id` and `name` are BOTH required together —
+    neither alone works (`id` alone errors outright; `name` alone reads
+    back null). The opposite direction from `aws_s3_bucket`, where `id`
+    alone already works — confirming this genuinely needed a live check
+    per cloud, not an assumption ported from AWS.
+  - `google_pubsub_topic`/`google_secret_manager_secret`: a materially
+    more dangerous shape than anything AWS showed. `id` alone doesn't
+    error and doesn't read back null — `ReadResource` succeeds, but the
+    resource's own natural-key attribute (`name`/`secret_id`) comes back
+    empty/null anyway. `core.ErrResourceUnreadable` never fires, so this
+    silently ledgers an incomplete proposal rather than erroring — the
+    UBI-20 teaching-error mechanism can't help here at all, since it only
+    engages on an actual read failure. None of these three types were
+    given a `LookupHint` / promoted into `core/lookuphints` for exactly
+    this reason: that mechanism's message hardcodes "make sure `id` is
+    included," which would be actively wrong advice for
+    `google_storage_bucket` (where `id` alone is often what the user
+    already has) and can't fire at all for the silent-incomplete-read
+    cases. Generalizing the teaching-error mechanism to express "both
+    required together" and "silently incomplete, not just unreadable" is
+    real follow-up work, not attempted under time pressure here.
+  - GCP IAM's own read-after-write consistency lags the write itself,
+    confirmed live: a `google_service_account` display-name update was
+    visible via `gcloud describe` before it was visible to the
+    Terraform provider's own `ReadResource` call — two different read
+    paths becoming consistent at different times, not one moment.
+- `gcpaudit/` implemented and live-verified: a real drift on a real
+  Pub/Sub topic, correlated against Cloud Audit Logs with the actual
+  caller's real GCP account email recorded, via the actual `ubx scan`
+  command end to end — not a synthetic fixture, the same "prove it
+  against a real account, not just a fake" bar `cloudtrail/` was held to
+  in UBI-10. Cloud Audit Logs' own delivery latency was measured
+  directly: a Pub/Sub `CreateTopic` admin-activity entry became queryable
+  roughly 18 seconds after the API call returned — far faster than
+  CloudTrail's measured ~2 minutes, and with no GCP-published ceiling
+  the way CloudTrail has a documented ~15-minute one.
+  `gcpaudit.Backend.DeliveryLag` is set to 3 minutes, a safety margin
+  above that one measurement, not tuned tightly to it.
+- Every fixture created for live verification was destroyed afterward
+  (confirmed via a post-session sweep of every resource type touched),
   the GCP project left exactly as found — same discipline every AWS
   `RealSafe` conformance test already follows.
 

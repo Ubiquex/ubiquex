@@ -222,6 +222,32 @@
   reported with recovery guidance, never auto-removed. `scan`/`why`/
   `status` never acquire it. See STATE.md for the full writeup, including
   the live-verification finding above.
+- 2026-07-16 — UBI-21 (Linear-verified): GCP support, the first
+  cross-provider generalization, both stages completed this session.
+  `conformance.Registry`/`core/lookuphints` re-keyed from bare type name
+  to (provider source, type) — AWS regression green throughout, including
+  against the real account; `core.ScanRequest` gained an optional
+  `ProviderSource`. `hashicorp/google` verified via `provider.Acquire`:
+  negotiates tfplugin v5, same as `hashicorp/aws`. ~40 GCP resource types
+  seeded into `conformance.Registry` (Stage 1); five of them
+  (`google_storage_bucket`, `google_pubsub_topic`, `google_service_account`,
+  `google_secret_manager_secret`, `google_project_iam_custom_role`)
+  live-verified end to end and promoted to `RealSafe` (Stage 2), surfacing
+  real per-type lookup-shape quirks distinct from anything AWS showed —
+  including a "reads back successfully but with incomplete data, no error
+  at all" failure mode for two types that the existing UBI-20
+  teaching-error mechanism structurally can't address. New `gcpaudit/`
+  package implements `core.EventLookup` against GCP Cloud Audit Logs,
+  live-verified against a real Pub/Sub drift with the real caller's GCP
+  account email recorded; `docs/schema.md` gained the purely-additive
+  `gcp_audit`/`audit_unattributed` kinds (`cloudtrail`/`cloudtrail_unattributed`
+  unchanged, still what `cloudtrail.Backend` emits). A real, confirmed gap
+  was found and flagged rather than silently resolved: GCP audit log
+  entries don't consistently use the same resource-identifier shape across
+  services (project ID for Pub/Sub, project number for Secret Manager),
+  breaking correlation for the latter until a per-service fix lands. See
+  docs/architecture.md's "GCP support" section and STATE.md for the full
+  writeup, including every empirical finding.
 
 ## Strategy
 
@@ -541,12 +567,21 @@ Two stages, gated on GCP account availability:
   `IdentityFields` from real schema inspection, `Safety: FakeOnly`,
   `Implemented: false` — mirroring UBI-9 session 1's own AWS
   bootstrapping exactly.
-- **Stage 2 (needs a real GCP project + credentials + Cloud Audit Logs
-  enabled)**: ~5 cheap types live-verified (adopt→mutate→scan-diff);
-  `gcpaudit/` implemented and live-verified against a real drift with
-  real actor identity; Cloud Audit Logs' own delivery latency measured
-  directly (the CloudTrail lesson, UBI-10, applied to a second
-  platform rather than assumed to transfer).
+- **Stage 2 (needed a real GCP project + credentials + Cloud Audit Logs
+  enabled — done this same session)**: five types live-verified
+  (adopt→mutate→scan-diff): `google_storage_bucket`, `google_pubsub_topic`,
+  `google_service_account`, `google_secret_manager_secret`,
+  `google_project_iam_custom_role` — each promoted to `RealSafe`, real
+  per-type lookup-shape findings recorded in `conformance/registry.go`'s
+  own `Notes` (see docs/architecture.md for the full per-type writeup,
+  including a materially more dangerous "silently reads back incomplete
+  data, no error at all" shape two of the five types have that no AWS
+  type ever showed). `gcpaudit/` implemented and live-verified against a
+  real Pub/Sub drift with the real caller's actual GCP account email
+  recorded, via the actual `ubx scan` command; Cloud Audit Logs' own
+  delivery latency measured directly (~18s for one Pub/Sub mutation —
+  the CloudTrail lesson, UBI-10, applied to a second platform rather
+  than assumed to transfer, and confirmed much faster this time).
 
 #### M1-2 GCP resource type list (UBI-21 Stage 1)
 

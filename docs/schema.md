@@ -213,43 +213,72 @@ purely additive and optional (new `kind` values, new optional fields on
 hash of a proposal that does carry these sources reflects exactly the
 content it actually has, same as any other content hash.
 
-### Amendment: `audit_unattributed`, a provider-agnostic unattributed kind (2026-07-16, UBI-21)
+### Amendment: `audit_unattributed` and `gcp_audit` (2026-07-16, UBI-21)
 
 `ubx` gaining a second platform (GCP, docs/architecture.md — GCP support)
 means attribution failure can no longer be assumed to mean "CloudTrail
 had nothing" — it might mean GCP's Cloud Audit Logs backend (`gcpaudit/`,
-still unimplemented as of this amendment; see below) had nothing instead.
-One new `intent.sources[].kind`, **`audit_unattributed`**, generalizes
-`cloudtrail_unattributed`:
+implemented and live-verified in Stage 2 of this same session) had
+nothing instead. Two new `intent.sources[].kind` values:
 
-- Same `reason` enum as `cloudtrail_unattributed` (`no_matching_event`,
-  `delivery_window`, `not_logged`) — an audit-log backend's own delivery
-  latency and correlation semantics are the same *shape* of problem
-  regardless of platform, even though the actual latency numbers differ
-  (CloudTrail's is documented and measured in UBI-10; GCP Cloud Audit
-  Logs' own latency is Stage 2 work, not assumed to match CloudTrail's).
-- One new field, **`backend`**: `"cloudtrail"` or `"gcp_audit_logs"` —
-  which platform's attribution attempt this records the failure of.
-  `cloudtrail_unattributed` (the pre-existing kind) carries no `backend`
-  field at all, since it was never ambiguous which backend it meant.
+- **`gcp_audit`** — a matched Cloud Audit Log entry, GCP's counterpart to
+  `cloudtrail`. Reuses `cloudtrail`'s own fields rather than introducing
+  GCP-specific ones: `actor_arn` carries the GCP principal's email
+  address (not literally an ARN), `event_id`/`event_name`/`event_time`/
+  `source_ip` map onto Cloud Logging's insert ID/method name/timestamp/
+  caller IP directly, and `session_context` is always absent (an
+  AWS-assumed-role-specific concept with no GCP equivalent). This was a
+  live implementation decision, not assumed in advance: both backends
+  implement the same `core.EventLookup` interface and produce the same
+  `core.CloudTrailEvent` shape (see `gcpaudit/client.go`'s own doc
+  comment), so reusing the existing fields was the honest, non-forcing
+  choice once it was actually built, rather than the GCP-specific-fields
+  possibility this document originally left open.
+- **`audit_unattributed`** — generalizes `cloudtrail_unattributed`:
+  - Same `reason` enum (`no_matching_event`, `delivery_window`,
+    `not_logged`) — an audit-log backend's own delivery latency and
+    correlation semantics are the same *shape* of problem regardless of
+    platform, even though the actual latency numbers differ (CloudTrail's
+    ~15-minute documented ceiling, ~2 minutes measured in UBI-10; GCP
+    Cloud Audit Logs has no equivalent published ceiling — measured
+    directly in Stage 2 at roughly 18 seconds for one Pub/Sub mutation,
+    `gcpaudit.Backend`'s own `DeliveryLag` set well above that single
+    measurement as a safety margin, not tuned tightly to it).
+  - One new field, **`backend`**: `"gcp_audit_logs"` today, more values
+    as more backends are added — which platform's attribution attempt
+    this records the failure of. `cloudtrail_unattributed` (the
+    pre-existing kind) carries no `backend` field at all, since it was
+    never ambiguous which backend it meant.
 
 **`cloudtrail_unattributed` is not deprecated or migrated** — it remains
-a permanently valid kind. Every ledger entry generated before this
-amendment (and, per docs/architecture.md, every AWS-generated entry
-until the backend-registry code actually lands) keeps using it
-unchanged. `audit_unattributed` is additive, not a replacement:
-`schema_version` does not bump, existing tooling reading
-`cloudtrail_unattributed` needs no update, and a reader that doesn't yet
-know about `audit_unattributed` simply doesn't recognize a kind it
-hasn't been taught yet — the same purely-additive posture as every prior
-amendment in this document.
+a permanently valid kind, and `cloudtrail/`'s own backend (`cloudtrail.Backend`)
+keeps emitting it unchanged, not `audit_unattributed` — a deliberate,
+conservative choice made during Stage 2 implementation: every existing
+and newly-generated AWS proposal's attribution shape stays byte-identical
+to before UBI-21, and only the newer GCP backend uses the generalized
+kind, since there's no existing AWS output to preserve compatibility with
+there. `audit_unattributed`/`gcp_audit` are additive: `schema_version`
+does not bump, existing tooling reading `cloudtrail`/`cloudtrail_unattributed`
+needs no update, and a reader that doesn't yet know about the two new
+kinds simply doesn't recognize kinds it hasn't been taught yet — the same
+purely-additive posture as every prior amendment in this document.
 
-The successful-match case (`cloudtrail`'s own kind, carrying `actor_arn`
-and friends) is deliberately **not** generalized alongside this — see
-docs/architecture.md's GCP support section for why: its fields are
-AWS-shaped in a way a GCP principal identity doesn't fit, and a new,
-GCP-specific successful-match kind is the honest way to extend it, not
-forcing a mismatched shape into `cloudtrail`'s existing fields.
+**Known gap, found during Stage 2 live verification, not silently
+resolved**: which value a GCP service's own audit log entry uses for its
+resource identifier is not consistent across services. Pub/Sub's audit
+entries name a topic as `"projects/<PROJECT_ID>/topics/<name>"` —
+matching `google_pubsub_topic`'s own observed `id` attribute exactly, so
+correlation (`core.AttributeDrift`'s `identityCandidates`, unchanged
+since UBI-10) works. Secret Manager's entries instead name a secret as
+`"projects/<PROJECT_NUMBER>/secrets/<name>"` — the numeric project
+number, which never appears in `google_secret_manager_secret`'s own
+observed state at all, so `identityCandidates` can never produce a
+matching candidate; every secret's drift is unattributable via
+`gcpaudit/` today, indistinguishable from a genuine no-event case (always
+`audit_unattributed`/`no_matching_event`). See `gcpaudit/client.go`'s own
+doc comment and STATE.md for the full writeup — this needs either a
+per-service resourceName-shape table or a project-number lookup added as
+a candidate, follow-up work, not done under time pressure here.
 
 ### Amendment: record verified provider binary checksum (2026-07-10, UBI-8)
 
