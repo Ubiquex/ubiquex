@@ -662,6 +662,37 @@ a genuinely changed one doesn't. `writeback`/`revert-plan` both decline
 ever writing a redacted marker into `.tf` source, surfacing it as a
 manual-restoration step instead.
 
+### Kubernetes support (UBI-22)
+
+The first non-cloud-provider provider: `hashicorp/kubernetes` and
+`hashicorp/helm`, both empirically confirmed to negotiate tfplugin wire
+protocol v5 (dual v5/v6 support earning its keep a third time). Identity
+generalizes with zero new mechanism (UBI-21's (provider source, type)
+keying already covers it) — the real finding is that `kubernetes_*`
+types model `metadata`/`spec` as `NestingList`, not `NestingSingle`,
+unlike every AWS/GCP type checked so far, while `helm_release` has a
+flat, AWS/GCP-shaped identity with no such nesting at all. `provider.Redact`
+(UBI-23) needed no Kubernetes-specific code — confirmed live that
+`kubernetes_secret_v1.data`/`binary_data` are both real `Sensitive`
+attributes (no upstream gap, no per-type override needed), and
+`helm_release`'s `set_sensitive` block contributed the first real
+Set-nested sensitive value seen in any currently-integrated provider —
+alongside a disclosed limitation: `helm_release.manifest`'s rendered
+output isn't itself `Sensitive`-flagged, so a value that started sensitive
+can still appear in plaintext there if a chart template renders it.
+`k8saudit/` is a third `core.EventLookup` backend (against EKS
+control-plane audit logs in CloudWatch), dispatched by `ProviderSource`
+exactly like AWS-vs-GCP, requiring one new, explicitly optional `.ubx/config`
+table (`[k8s_audit]`) since — unlike AWS/GCP — there's no way to derive
+"which cluster" from anything `ubx` already has; unconfigured degrades to
+`audit_unattributed`/`not_configured` (docs/schema.md's new amendment),
+never blocking detection. `helm_release` is a resource like any other;
+chart-aware diffing (tracking the individual Kubernetes objects a release
+manages, or diffing inside rendered manifests) is explicitly out of
+scope. See docs/architecture.md's "Kubernetes support" section for the
+full design and every empirical finding, and STATE.md for the live
+Stage 2 conformance/attribution results.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, full executor

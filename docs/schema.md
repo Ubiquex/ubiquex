@@ -497,7 +497,60 @@ re-reads live state fresh; nothing about salt loss makes drift detection
 blind, only noisier for sensitive attributes specifically, exactly once,
 until the next observation re-settles against the new salt).
 
+### Amendment: `k8s_audit` and `not_configured` (2026-07-17, UBI-22)
 
+`ubx` gaining Kubernetes/Helm support (docs/architecture.md — Kubernetes
+support) means a third attribution backend, alongside `cloudtrail`
+(UBI-10) and `gcp_audit` (UBI-21): `k8saudit/`, against EKS control-plane
+audit logs delivered to CloudWatch Logs. One new `intent.sources[].kind`
+value, plus one new `reason`:
+
+- **`k8s_audit`** — a matched Kubernetes audit event
+  (`audit.k8s.io/v1`'s own `Event` schema). Reuses `cloudtrail`/`gcp_audit`'s
+  own fields rather than inventing Kubernetes-specific ones, the same
+  choice UBI-21 made for GCP: `actor_arn` carries the acting user's
+  `user.username` (not an ARN or email — whatever identity string the
+  cluster's authentication layer reports), `event_name` carries the
+  audit event's `verb` (`create`/`update`/`patch`/`delete`, Kubernetes'
+  own vocabulary, not an AWS/GCP-style `PutBucketTagging`-shaped name),
+  `event_time` from `requestReceivedTimestamp`, `event_id` from
+  `auditID`, `source_ip` from `sourceIPs[0]` when present.
+  `session_context` is always absent (an AWS-assumed-role-specific
+  concept with no Kubernetes equivalent, same as GCP's own sources).
+- **`not_configured`** — a fourth value for the existing `reason` enum
+  (`no_matching_event`, `delivery_window`, `not_logged`, now
+  **`not_configured`**), used only by `audit_unattributed` sources whose
+  `backend` names a backend that requires operator configuration `ubx`
+  has no way to derive on its own (`k8s_audit_logs` in v1 — unlike AWS's
+  region or GCP's project, there is nothing in `provider_config` that
+  implies "which EKS cluster, which CloudWatch log group"). Recorded
+  exactly like every other unattributed reason — evidence in its own
+  right, never silently omitted — and, per this project's own
+  best-effort-attribution posture (UBI-10), never blocks generating or
+  accepting the drift proposal it's attached to. Distinguishing
+  `not_configured` from `not_logged` matters for the same reason the
+  other three reasons stay distinct from each other: an operator reading
+  `ubx why` should be able to tell "I haven't set this up" apart from "I
+  set it up and it's failing," without having to guess from context.
+
+Both are purely additive: `schema_version` does not bump, an existing
+reader that doesn't recognize `k8s_audit`/`not_configured` simply doesn't
+render them specially, the same posture as `gcp_audit`/`audit_unattributed`
+before it. `cloudtrail`/`cloudtrail_unattributed` and `gcp_audit`/
+`audit_unattributed`'s existing three reasons are entirely unchanged.
+
+**A correlation gap, checked and flagged, not assumed clean (mirroring
+UBI-21's own GCP precedent)**: which identity value a Kubernetes audit
+event's `objectRef` can be matched against — a `kubernetes_*` resource's
+own observed `id` attribute, since `name`/`namespace`/`uid` live nested
+inside `metadata[0]` rather than at the top level `identityCandidates`
+(`core/attribution.go`) reads from — is unverified until this project's
+own Stage 2 live-cluster work. See docs/architecture.md's "Kubernetes
+support" section for the full reasoning and `k8saudit.Client`'s own
+defensive mitigation (offering every plausible `Resources` shape rather
+than picking one), and STATE.md for whatever Stage 2 actually found.
+
+## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
 > draft; changes require a `schema_version` bump and a migration, not an edit

@@ -1463,6 +1463,220 @@ the sensitive value originating from the (simulated) live read instead —
 and now asserts the persisted lookup is exactly `{"id": "..."}`, with no
 trace of the secret, as a permanent regression check on this boundary.
 
+## Kubernetes support (UBI-22)
+
+The wedge has been cloud-provider-shaped (AWS, GCP) through every prior
+session. UBI-22 is the first genuinely different KIND of provider:
+`hashicorp/kubernetes` and `hashicorp/helm` don't manage cloud
+infrastructure at all — they manage objects inside an already-running
+cluster (Deployments, Services, Secrets) and chart releases on top of it.
+The question this section answers is how much of that difference is real
+(needs new mechanism) versus apparent (the existing (provider, type)-keyed
+machinery already generalizes).
+
+### 1. Identity stays exactly as generalized in UBI-21 — no new mechanism
+
+`conformance.Registry`/`core/lookuphints` are already keyed by (provider
+source, type), not bare type name (UBI-21) — `hashicorp/kubernetes` and
+`hashicorp/helm` are simply two more values that key can take. No change
+to `core.Address`, `core.ScanRequest`, or the lookup-hint machinery itself
+was needed or made.
+
+**A real, empirically-confirmed nesting shape worth naming explicitly**:
+every `kubernetes_*` resource type checked (`hashicorp/kubernetes` 2.35.1 —
+`kubernetes_secret_v1`, `kubernetes_deployment_v1`, `kubernetes_service_v1`,
+`kubernetes_namespace_v1`, `kubernetes_stateful_set_v1`,
+`kubernetes_daemon_set_v1`, `kubernetes_cluster_role_v1`,
+`kubernetes_cluster_role_binding_v1`, `kubernetes_role_v1`,
+`kubernetes_role_binding_v1`, `kubernetes_service_account_v1`,
+`kubernetes_persistent_volume_claim_v1`, `kubernetes_config_map_v1`,
+`kubernetes_ingress_v1`) models its `metadata` block (and, for workload
+types, `spec`) as `NestingList` — a real SDKv2-era "one-item list simulates
+an optional single block" convention — not `NestingSingle`, which every
+AWS/GCP `NestedBlock` checked in this project so far uses for an
+analogous "exactly one of these" relationship. This was checked directly,
+not assumed: `timeouts` (also present on several of these types) IS
+`NestingSingle`, confirming the List-shape on `metadata`/`spec` is a real,
+type-specific schema choice, not a blanket difference between providers.
+
+Practical consequence: `name`/`namespace`/`uid` — the values `ubx` would
+otherwise expect as flat top-level attributes (matching every AWS/GCP
+type documented in `cli/lookup.mdx` so far) — live inside
+`metadata[0].name` etc., and `--lookup` for a namespaced Kubernetes
+resource must be shaped `{"metadata": [{"name": "...", "namespace":
+"..."}]}` (a one-item array), never a flat object. This is confirmed by
+the schema alone (Stage 1, hermetic — the same `Block`/`NestedBlock`
+encode/decode path `provider/ctyvalue.go` already generalizes correctly
+handles it), independent of whether `id` alone happens to also be
+sufficient for a real read — that operational question (does `id` alone
+suffice, the way it does for `aws_s3_bucket`/`aws_iam_role`, or is
+`metadata` required too, the way `google_storage_bucket` needs both `id`
+and `name`) is exactly the kind of thing this project's own convention
+insists on checking live rather than assuming, and is Stage 2 work.
+
+`helm_release`, by contrast, has NO such nesting: `id`, `name`, `namespace`
+are all flat top-level attributes (`name` required, `namespace` optional)
+— a genuinely simpler, AWS/GCP-shaped identity, the opposite of every
+`kubernetes_*` type. Worth stating plainly since it would be easy to
+assume "Kubernetes-flavored" resources share one lookup convention; they
+don't, even within this one session's own two new providers.
+
+**A second real finding, resolved rather than left ambiguous**: several
+`kubernetes_*` types exist in both a bare form (`kubernetes_secret`) and a
+`_v1`-suffixed form (`kubernetes_secret_v1`) with byte-for-byte identical
+schemas (confirmed directly, not assumed, for `kubernetes_secret`). The
+registry seeds only the `_v1` forms — the provider's own actively
+recommended naming going forward — rather than both, to avoid a
+registry with two entries per resource that would always report
+identical conformance results.
+
+### 2. Sensitive attributes: verified, not assumed (the UBI-23 cross-check)
+
+UBI-23's redaction mechanism (`provider.Redact`, walking a schema's
+`Sensitive` flags) requires no Kubernetes-specific code at all — it's
+generic over any `Block`/`NestedBlock` shape, confirmed by this session's
+own live schema check: `kubernetes_secret_v1.data` and
+`kubernetes_secret_v1.binary_data` are both `Sensitive: true` in the real
+provider schema. This was the explicit thing to verify, not assume — had
+the provider NOT flagged these, UBI-22 would have needed its own
+type-level redaction override (a design decision requiring its own stop-
+and-flag session, per this project's own standing discipline), since
+`kubernetes_secret` is exactly the resource `ubx` most needs to redact
+correctly. It does; no override needed. `kubernetes_config_map_v1.data`/
+`binary_data`, by contrast, are correctly NOT `Sensitive` — ConfigMaps are
+explicitly the non-secret counterpart to Secrets by Kubernetes' own
+design, and the schema agrees.
+
+`helm_release` contributes its own confirmation, and its own new gap: a
+`NestingSet` block (`set_sensitive`) whose `value` attribute is
+`Sensitive: true` — the first *Set*-nested sensitive value found in a
+currently-integrated provider's real schema (AWS/GCP's own nested
+sensitivity, UBI-23, was all List/Map/Single; `provider.Redact`'s
+Set-handling branch existed already but had no real-schema exercise until
+now). `repository_password` (a flat top-level attribute) is also
+correctly `Sensitive`.
+
+**A real, disclosed limitation, found while reading `helm_release`'s
+schema, not glossed over**: `manifest` (the chart's full rendered
+Kubernetes YAML, computed) and `metadata[0].notes` are plain strings, NOT
+`Sensitive` — even though a chart's templates commonly interpolate a
+`set_sensitive` value (or a plain, non-sensitive `values`/`set` string
+that happens to contain a password) directly into rendered manifest
+output. Schema-level `Sensitive` flags mark the *input* attribute only;
+they don't propagate to everywhere that value might get echoed into a
+derived, computed text blob. `provider.Redact`'s walk correctly redacts
+`set_sensitive.value` itself — it has no way to know, and does not
+attempt to guess, whether that same material reappears inside `manifest`.
+This is a real, meaningful boundary of schema-driven redaction as a
+general strategy, not specific to Kubernetes, but Helm is where this
+session's own schema reading surfaced it concretely enough to state
+plainly rather than leave implicit.
+
+### 3. Attribution: k8saudit/, one configured backend, dispatched by provider source
+
+A `kubernetes_*`/`helm_release` drift's "who/when" story lives in the EKS
+control plane's own **audit** log stream (Kubernetes' own `audit.k8s.io`
+event schema — `objectRef`, `user`, `sourceIPs`, `verb`, timestamps),
+delivered to CloudWatch Logs when EKS control-plane logging is enabled —
+not CloudTrail (which sees AWS API calls like `CreateCluster`, not
+`kubectl apply`) and not GCP Cloud Audit Logs. A third backend,
+`k8saudit/`, implements the same `core.EventLookup` interface
+`cloudtrail/`/`gcpaudit/` already do — **held up unchanged again**, the
+third time this exact interface has generalized to a new platform without
+modification.
+
+**Dispatch is by `ScanRequest.ProviderSource`, exactly like AWS-vs-GCP —
+not by resource type prefix.** This resolves what would otherwise be a
+real ambiguity: EKS itself is an AWS resource (`aws_eks_cluster`, scanned
+via `--source hashicorp/aws`), so `providerSource == "hashicorp/aws"`
+can't be the signal to pick `k8saudit` over `cloudtrail` — an EKS
+*cluster's own* drift (say, its control-plane logging config) is exactly
+as CloudTrail-attributable as any other AWS resource, and should stay
+that way. The actual signal is which provider *scanned* the drifted
+resource: a `kubernetes_*`/`helm_release` resource is necessarily scanned
+via `--source hashicorp/kubernetes`/`hashicorp/helm`, since that's the
+only way `ubx` can read one at all — so `newAttributionBackend`'s
+existing switch on `providerSource` (UBI-21's own registry/dispatch
+mechanism) gains two more cases, `"hashicorp/kubernetes"` and
+`"hashicorp/helm"`, alongside the existing `"hashicorp/google"` special
+case and the AWS/everything-else default.
+
+**"ONE configured backend in v1," stated as a real constraint, not a
+placeholder for "figure it out"**: unlike AWS (a region is always
+knowable) or GCP (a project is always in `provider_config`), there is no
+way to derive "which EKS cluster, which CloudWatch log group" from
+anything `ubx` already has on hand — this has to be operator-configured,
+and configuring it is optional. A new `.ubx/config` table, `[k8s_audit]`
+(`cluster`, `region`, `log_group` — `log_group` optional, defaulting to
+EKS's own `/aws/eks/<cluster>/cluster` convention when the cluster's
+logging setup hasn't been customized), is threaded from `cli/scan.go`'s
+already-loaded `*Config` through `attributeDrift`/`newAttributionBackend`
+(a new parameter on each — the one real plumbing change this stage
+requires, named explicitly rather than left implicit, mirroring UBI-21's
+own "`ScanRequest` gains `ProviderSource`" call-out). **When `[k8s_audit]`
+is absent or `cluster` is empty, `newAttributionBackend` returns a
+sentinel "not configured" condition** — `attributeDrift` recognizes it
+(`errors.Is`) and records `audit_unattributed`/`not_configured`
+(`core.ReasonNotConfigured`, a new, additive fourth reason value —
+`docs/schema.md`'s own amendment covers the wire shape) instead of
+`not_logged`, the same non-blocking, always-recorded-as-evidence posture
+every other attribution failure mode already has. **Drift detection
+itself is never affected either way** — attribution is best-effort by
+construction (UBI-10), and an unconfigured backend is exactly as
+non-blocking as a denied-credentials or no-matching-event outcome.
+
+**A genuine correlation gap, checked and flagged rather than assumed away
+(mirroring GCP's own Pub/Sub-vs-Secret-Manager precedent, UBI-21)**:
+`core.AttributeDrift`'s `identityCandidates` tries a resource's top-level
+`id`/`arn`/`name` observed attributes. For `kubernetes_*` types, per §1
+above, `name`/`namespace`/`uid` live nested inside `metadata[0]`, not at
+the top level — so `identityCandidates` only ever has `id` (a top-level,
+provider-computed attribute) to offer as a search term for these types,
+and what `id` actually contains for a live Kubernetes object (a bare
+name? `namespace/name`? something else?) is unverified until Stage 2.
+`k8saudit.Client.LookupEvents` compensates defensively on its own side —
+building each Kubernetes audit event's `Resources` field with every
+plausible candidate shape (`objectRef.name`,
+`objectRef.namespace + "/" + objectRef.name`, `objectRef.uid`) rather than
+picking one — so that whichever shape `id` actually turns out to be, a
+real match has a chance of landing. This is a mitigation, not a
+confirmed fix: which shape `id` actually is, and whether this mitigation
+is sufficient, is Stage 2's own live-verification job, and the outcome
+(matched cleanly, or a real remaining gap like GCP's) will be recorded
+honestly either way, not assumed clean because the mitigation exists.
+`helm_release`'s own `id`/`name` are flat and unambiguous (§1), so this
+gap is specific to `kubernetes_*` types, not Helm.
+
+CloudWatch Logs' own event delivery latency (the CloudTrail/GCP lesson,
+applied a third time rather than assumed to transfer) is measured
+directly against a real EKS cluster in Stage 2, if one is available; if
+not, `k8saudit.Backend.DeliveryLag` ships with a documented, conservative
+placeholder pending that measurement, stated as unmeasured rather than
+presented as if it were.
+
+### 4. `helm_release` as a resource, and chart-aware diffing's explicit non-scope
+
+`helm_release` is a resource type like any other in this trust chain —
+adopted, drift-detected, and diffed purely on its own Terraform-observed
+attributes (`values`, `version`, `manifest`, `status`, `metadata`, ...),
+the same `core.RunScan`/`GenerateProposal` pipeline every other type
+already uses, no special-casing. **What this deliberately does NOT do**:
+parse the chart's rendered Kubernetes manifests to discover or track the
+individual objects (Deployments, Services, ...) a release actually
+creates as their own `ubx` resources, or diff *inside* `values`/`manifest`
+at anything finer than "the whole string changed." A change to what's
+running in the cluster because a chart's own template logic shifted
+(a new default image tag in a chart version bump, say, with `values`
+itself unchanged) is invisible to `ubx` unless it happens to also show up
+in one of `helm_release`'s own observed top-level attributes. Adopting
+the individual Kubernetes objects a Helm release manages — as their own
+`kubernetes_*` resources, alongside the `helm_release` itself — is
+possible today via the exact same `kubernetes_*` conformance types this
+session seeds, just not automatic or chart-aware; `ubx` treats a
+`helm_release` and any `kubernetes_*` objects it happens to manage as
+entirely separate, uncorrelated resources, exactly as it would for any
+two independently-scanned resources.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
