@@ -4,6 +4,126 @@
 
 ## Current phase
 
+**UBI-20 is done (this session, Linear-verified): the hardening pass —
+"the credibility layer" — production ladder step 5.** Four independently
+committed workstreams, design landed in docs/architecture.md ("Hardening
+pass (UBI-20)") and docs/plan.md before code, per session protocol.
+
+1. **Exit-code contract, everywhere.** `ubx status` (UBI-17) already had
+   0 (clean)/1 (drift)/2 (unreadable-or-error); every other verb now
+   follows the same contract explicitly via `cli.ExitCodeError`: 0
+   success, 1 an actionable finding, 2 error.
+   `cmd/ubx/main.go`'s fallback for a plain (non-`ExitCodeError`) error
+   moves from `os.Exit(1)` to `os.Exit(2)` — **a deliberate breaking
+   change**: every command except `status` used to exit 1 for *any*
+   error; a script gating on "exit 1 means something went wrong" needs to
+   gate on exit 2 instead, going forward. Per-verb classification (see
+   `docs/exit-codes.mdx` in ubiquex-docs for the full table):
+   - `scan`: 1 for `new`/`drifted` (a proposal was generated), 0 for
+     `unchanged`. `--all`: 1 if anything was skipped, 0 if the whole walk
+     adopted cleanly.
+   - `accept`: 1 for a stale reverify block, a `parent`-mismatched
+     proposal (the ledger moved since it was resolved), or a
+     `--from-merge` claim that doesn't check out (trailer hash mismatch,
+     commit/file/PR/trailer gone — every `github.Err*` sentinel
+     `ghub.DeriveAcceptance` can return classified into this same
+     family). 2 for a malformed/already-accepted/duplicate proposal, or a
+     genuine tool/network failure.
+   - `why --verify-acceptance`: 1 if the claimed acceptance doesn't check
+     out (git-history failure, or a reviewer-approval `MISMATCH` — this
+     used to be reported but never affect the exit code; it does now).
+   - `writeback`/`revert-plan`: 1 if any attribute was declined or a
+     resource block couldn't be located (manual steps needed) — same
+     "used to be silently exit 0" fix as `why`'s reviewer mismatch.
+   - `version`/`init`/`propose`: audited and left 0/2-only, deliberately
+     — they have no "finding" concept, and that's a complete audit
+     outcome, not an oversight.
+   - Every command that returns `ExitCodeError` also sets
+     `SilenceUsage`/`SilenceErrors` (the pattern `status` established),
+     so a finding doesn't dump a flag-usage block or double-print
+     "Error: ...".
+2. **`--json` on `scan`/`status`/`why`.** New `cli/jsonformat.go`:
+   `jsonFormatVersion = 1` (a schema version, not the product version —
+   bumped only on an incompatible shape change) and `addressJSON`/
+   `writeJSON` shared across all three. Human output is unchanged and
+   still the default; `--json` replaces it entirely — never a mix of the
+   two on one invocation, verified by unmarshaling the *whole, untrimmed*
+   stdout in every `--json` test. `scan --json` (single-resource only —
+   rejected in combination with `--all` or `--surface-as`, a deliberate
+   scope limit, documented, not silently ignored) emits `{format,
+   address, outcome, observed_hash, proposals}`. `status --json` emits
+   `{format, drift_checked, resources[], summary}` —
+   `resources[].status` is *omitted entirely* in ledger-only mode, not
+   set to an empty string, so a consumer can't mistake "didn't check" for
+   "0 drifted." `why --json` emits `{format, proposal}` for the single-id
+   form or `{format, chain[]}` (newest first) for the resource-address
+   form, never both; `--verify-acceptance --json` required restructuring
+   `runVerifyAcceptance` (`cli/verify.go`) to take a `jsonMode bool` and
+   return a `*verifyAcceptanceJSON` result alongside the same
+   `ExitCodeError` classification either way, so the checks and their
+   exit-code logic live in exactly one place regardless of output mode.
+3. **Teaching errors.** `core.ErrResourceUnreadable` ("provider returned
+   no state") now names the likely fix for three types with a confirmed
+   missing-field mistake (`aws_s3_bucket`, `aws_iam_role`,
+   `aws_iam_user`) plus a link to `cli/lookup`'s docs page, instead of a
+   bare sentinel. Mechanism, decided and documented in
+   docs/architecture.md: `conformance.TypeSpec` gained a new structured
+   `LookupHint []string` field (Notes is free prose, not mechanically
+   generatable from); a new `conformance/gentool` (a `go generate`-invoked
+   generator, never imported by anything else) reads it and writes
+   `core/lookuphints/hints.go` — a small, committed, generated table with
+   *zero* runtime dependency on `conformance/`, which stays test-only.
+   `conformance/gentool_test.go` guards against the committed file
+   drifting from a hand-edited `Registry` without re-running `go
+   generate`. See Surprises below for a real bug live verification caught
+   in this workstream before it shipped.
+4. **Ledger lock.** New `core/lock.go`: a PID-file lock at `.ubx/lock` (a
+   *third*, distinct file — `.ubx/config` and `.ubx/ledger.lock` already
+   exist for unrelated reasons, none of the three conflated) wraps
+   `Ledger.Append`'s whole check-then-write sequence (not just the final
+   write — two concurrent callers that both read the same head before
+   either writes would otherwise both think they're building on the
+   current head). A blocked caller waits up to `lockWaitTimeout` (3s,
+   package var, shrunk in tests) for a genuinely live holder, then fails
+   with the file path and holder PID; a lock naming a PID that's no
+   longer running is detected *immediately* (no need to wait out
+   contention for a holder that isn't there) and reported with explicit
+   recovery guidance (`remove <path> to recover`) — **never auto-removed
+   by the failed acquirer**, since deleting a lock file is a deliberate
+   operator action. Deliberately a PID file, not a bare OS `flock(2)`: a
+   real `flock` is released by the kernel the instant a holding process
+   dies for any reason, which would make "stale lock from a killed
+   process" invisible rather than a real, testable scenario — see
+   docs/architecture.md for the full reasoning. `scan`/`why`/`status`
+   never call `Append`, so they never acquire this lock and are never
+   blocked by an in-progress `accept` — proven directly in
+   `TestRunScan_NotBlockedByHeldLedgerLock` (release held for the
+   duration, `RunScan` still completes promptly).
+
+Every workstream committed separately, adversarial tests throughout
+(including two-concurrent-accepts and accept-during-scan for the lock,
+and a genuine `errors.Is`/exit-code audit across every affected file), and
+verified against the real, built binary as well as `go test`. Live
+verification: `conformance/lookuphints_live_test.go` (Teaching errors,
+against the real `ubx-states` S3 bucket) and manual real-binary exit-code/
+lock smoke tests (recorded below in Surprises, since one of them changed
+the actual implementation). ubiquex-docs updated same-session, per
+protocol: new `cli/exit-codes.mdx` (the full per-verb table), `--json`
+schema sections on `cli/scan.mdx`/`cli/status.mdx`/`cli/why.mdx`, a new
+"Concurrent access" section on `concepts/ledger.mdx`, and a cross-link
+from `cli/lookup.mdx` to the new teaching-error text. `mint validate`/
+`mint broken-links` both pass clean.
+
+**Consciously out of scope, not silently dropped**: the Linear issue's
+fuller description also mentions "timeout/retry behavior reviewed under
+real network conditions" — the user's own 4-workstream breakdown for this
+session didn't include it, and it was treated as the authoritative scope.
+Worth picking up as its own pass if it becomes a real question (nothing
+shipped this session makes existing timeout/retry behavior more or less
+correct than before).
+
+## Current phase (previous)
+
 **UBI-19 is done (this session, Linear-verified): `.ubx/config` defaults
 and `ubx init` — production ladder step 4.** Design landed first in
 docs/architecture.md ("Config defaults") and docs/plan.md before code,
@@ -1889,6 +2009,20 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
+**Production ladder step 5 (UBI-20, hardening pass) is done.** Real gaps
+worth remembering, not quietly forgetting: `--json` covers `scan`
+(single-resource only, not `--all`), `status`, and `why` — not
+`writeback`/`revert-plan`, which the user's own workstream 2 scope never
+named; `scan --all --json` was deliberately rejected rather than
+implemented this session (documented scope limit, revisit if a real CI
+pipeline needs it); the lock only guards `Accept`/`AcceptFromMerge` —
+nothing else writes to a ledger directory today, but if that ever
+changes, the new writer needs to acquire it too, not assumed automatic;
+"timeout/retry behavior under real network conditions" (named in Linear's
+fuller UBI-20 description, not in the user's own 4-workstream scope for
+this session) is still unreviewed. Production ladder step 6, if there is
+one, isn't scoped yet.
+
 **Production ladder step 4 (UBI-19, `.ubx/config`) is done.** Real gaps
 worth remembering: `--ledger-dir` is deliberately not a config key (the
 issue never named it, and it's more consequential to get silently wrong
@@ -2012,6 +2146,18 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
+**UBI-20's ubiquex-docs work was done in this same session, per
+protocol, across all four workstreams**: new `cli/exit-codes.mdx` (the
+full per-verb 0/1/2 table, cross-linked from every affected page,
+including a fix to `cli/writeback.mdx`/`cli/revert-plan.mdx` wording that
+had assumed a declined attribute never affects the exit code — it does
+now); `--json` schema sections with real transcripts on `cli/scan.mdx`,
+`cli/status.mdx`, `cli/why.mdx`; a new "Concurrent access" section on
+`concepts/ledger.mdx` for the ledger lock, cross-linked from
+`cli/accept.mdx`; and a cross-link from `cli/lookup.mdx` to the new
+teaching-error runtime text. `mint validate`/`mint broken-links` both
+pass clean. See ubiquex-docs' own STATE.md for the full writeup.
+
 **UBI-19's ubiquex-docs work was done in this same session, per
 protocol**: new `cli/config.mdx` and `cli/init.mdx`, short daily-command-
 form examples added to `cli/scan.mdx` and `cli/status.mdx` (the latter
@@ -2118,6 +2264,42 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-20): **The teaching-error hint (workstream 3) was
+  backwards in its first draft, caught only by an actual live scan
+  against the real "ubx-states" S3 bucket, not by reading
+  `conformance/registry.go`'s existing Notes prose.** The Notes text for
+  `aws_s3_bucket`/`aws_iam_role`/`aws_iam_user` reads "id and
+  bucket/name are both the natural key; lookup needs BOTH set" — true,
+  but read without actually calling `ReadResource`, it doesn't say *which
+  one* is safe to treat as "the missing field" when only one is given. A
+  live `core.RunScan` against the real bucket with `{"bucket": "..."}`
+  alone read back `null`; the exact same call with `{"id": "..."}` alone
+  succeeded. The first version of `core/lookuphints` had this backwards
+  — it told a user hitting the error to add `"bucket"`/`"name"`, when the
+  real fix is `"id"` (which they may not have included at all if they
+  reached for the type's own Terraform attribute name instead, exactly
+  the mistake this teaching error exists to catch). Fixed before
+  committing, with `conformance/lookuphints_live_test.go` pinning both
+  directions (the failing case, and — new — a passing `{"id": ...}`-alone
+  case, so this can't silently flip back). Lesson for next time: a Notes
+  field written as prose can be *correct* and still not answer the
+  specific structured question a generator needs — verify the generated
+  data's direction against a real call, don't just trust the prose it was
+  paraphrased from.
+- 2026-07-16 (UBI-20): **A real `flock(2)` would have made "stale lock
+  from a killed process" — one of the user's own named adversarial cases
+  — impossible to observe.** The kernel releases a process's `flock`s the
+  instant it exits for any reason, including `SIGKILL`; a contender's very
+  next retry would just silently succeed, with nothing left to detect or
+  report. Realized during design, before writing any lock code, from
+  first principles about how `flock` actually behaves — worth recording
+  since "flock-style lockfile" (the user's own phrasing) could easily have
+  been implemented as a literal `flock(2)` call and only failed to satisfy
+  the stated adversarial requirement once someone tried to write the test
+  for it. Built as a PID file instead: write the holder's PID into the
+  lock file, check that PID's liveness (`Signal(syscall.Signal(0))`) on
+  contention, so "confirmed dead, here's how to recover" stays a real,
+  distinct, testable outcome.
 - 2026-07-16 (UBI-19): **`ubx init`'s own generated `.ubx/config` silently
   discarded `stack`/`github_repo`/`tf_dir` — every one of them read back
   empty — because `renderConfigTemplate` wrote them *after* the
