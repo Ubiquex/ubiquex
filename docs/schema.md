@@ -539,16 +539,20 @@ render them specially, the same posture as `gcp_audit`/`audit_unattributed`
 before it. `cloudtrail`/`cloudtrail_unattributed` and `gcp_audit`/
 `audit_unattributed`'s existing three reasons are entirely unchanged.
 
-**A correlation gap, checked and flagged, not assumed clean (mirroring
-UBI-21's own GCP precedent)**: which identity value a Kubernetes audit
-event's `objectRef` can be matched against — a `kubernetes_*` resource's
-own observed `id` attribute, since `name`/`namespace`/`uid` live nested
-inside `metadata[0]` rather than at the top level `identityCandidates`
-(`core/attribution.go`) reads from — is unverified until this project's
-own Stage 2 live-cluster work. See docs/architecture.md's "Kubernetes
-support" section for the full reasoning and `k8saudit.Client`'s own
-defensive mitigation (offering every plausible `Resources` shape rather
-than picking one), and STATE.md for whatever Stage 2 actually found.
+**A correlation gap, checked and partially closed, not assumed clean
+(mirroring UBI-21's own GCP precedent)**: which identity value a
+Kubernetes audit event's `objectRef` can be matched against — a
+`kubernetes_*` resource's own observed `id` attribute, since
+`name`/`namespace`/`uid` live nested inside `metadata[0]` rather than at
+the top level `identityCandidates` (`core/attribution.go`) reads from —
+was checked against a real (local `kind`) cluster in Stage 2: `id`'s real
+shape is `<namespace>/<name>`, exactly one of the candidate forms
+`k8saudit.Client`'s own defensive `Resources`-building already offers.
+What remains unverified is the EKS-audit-log leg itself (no real EKS
+cluster with control-plane audit logging was available/provisioned this
+session — a deliberate, recorded decision, not a silent gap). See
+docs/architecture.md's "Kubernetes support" section for the full
+reasoning, and STATE.md for the complete Stage 2 writeup.
 
 ## Canonical hashing — RATIFIED v1
 

@@ -1499,27 +1499,61 @@ not assumed: `timeouts` (also present on several of these types) IS
 `NestingSingle`, confirming the List-shape on `metadata`/`spec` is a real,
 type-specific schema choice, not a blanket difference between providers.
 
-Practical consequence: `name`/`namespace`/`uid` — the values `ubx` would
-otherwise expect as flat top-level attributes (matching every AWS/GCP
-type documented in `cli/lookup.mdx` so far) — live inside
-`metadata[0].name` etc., and `--lookup` for a namespaced Kubernetes
-resource must be shaped `{"metadata": [{"name": "...", "namespace":
-"..."}]}` (a one-item array), never a flat object. This is confirmed by
-the schema alone (Stage 1, hermetic — the same `Block`/`NestedBlock`
-encode/decode path `provider/ctyvalue.go` already generalizes correctly
-handles it), independent of whether `id` alone happens to also be
-sufficient for a real read — that operational question (does `id` alone
-suffice, the way it does for `aws_s3_bucket`/`aws_iam_role`, or is
-`metadata` required too, the way `google_storage_bucket` needs both `id`
-and `name`) is exactly the kind of thing this project's own convention
-insists on checking live rather than assuming, and is Stage 2 work.
+Practical consequence for OBSERVED STATE: `name`/`namespace`/`uid` — the
+values `ubx` would otherwise expect as flat top-level attributes
+(matching every AWS/GCP type documented in `cli/lookup.mdx` so far) —
+live inside `metadata[0].name` etc. in whatever a `kubernetes_*`
+`ReadResource` call returns.
 
-`helm_release`, by contrast, has NO such nesting: `id`, `name`, `namespace`
-are all flat top-level attributes (`name` required, `namespace` optional)
-— a genuinely simpler, AWS/GCP-shaped identity, the opposite of every
-`kubernetes_*` type. Worth stating plainly since it would be easy to
-assume "Kubernetes-flavored" resources share one lookup convention; they
-don't, even within this one session's own two new providers.
+**`--lookup` itself, however, turned out simpler than the schema shape
+alone predicted — a real correction, not a confirmation, made in Stage 2
+against a real cluster (`kind`), stated honestly rather than left as the
+Stage-1 guess**: every `kubernetes_*` type tested (`kubernetes_config_map_v1`,
+`kubernetes_secret_v1`, `kubernetes_deployment_v1`, `kubernetes_service_v1`,
+`kubernetes_namespace_v1`) reads back correctly from `{"id": "<value>"}`
+ALONE — a flat, single-key lookup, exactly like `aws_s3_bucket`/
+`aws_iam_role`'s own shape, never the `{"metadata": [{"name": ...,
+"namespace": ...}]}` list-wrapped form Stage 1's schema-only reasoning
+assumed would be required. `id`'s own value for a namespaced resource is
+`<namespace>/<name>` (e.g. `"ubx-test/app-config"`); for a cluster-scoped
+one (`kubernetes_namespace_v1`, `kubernetes_cluster_role_v1`,
+`kubernetes_cluster_role_binding_v1`) it's the bare name alone (no
+namespace prefix, no separator). The provider's own `ReadResource`
+implementation parses `id` into namespace+name internally — a caller
+never needs to pre-populate `metadata` at all, even though `metadata` is
+exactly where namespace/name live once the resource comes back. This
+`<namespace>/<name>` composite is also, conveniently, the exact string
+`k8saudit.parseEvent`'s own defensive `Resources` candidate-building
+(`objectRef.namespace + "/" + objectRef.name`) already produces —
+confirmed by this same Stage 2 work, not assumed, closing (for
+`kubernetes_*` types specifically) the correlation gap §3 below flags for
+the general case.
+
+`helm_release`, by contrast, has NO `metadata`-list nesting at all — `id`,
+`name`, `namespace` are all flat top-level attributes (`name` required,
+`namespace` optional). Its real lookup requirement, confirmed live, is
+the opposite of the `kubernetes_*` finding above: `id` alone is NOT
+sufficient — the confirmed-working shape is all three together,
+`{"id": "<release-name>", "name": "<release-name>", "namespace":
+"<namespace>"}`. Worth stating plainly since it would be easy to assume
+either that "Kubernetes-flavored" resources share one lookup convention
+(they don't, even within this session's own two new providers), or that
+whichever one needs less turns out to need less everywhere (here it's
+the reverse of `kubernetes_*`'s own simplification).
+
+**A minor but real finding worth naming, confirmed live**: because
+`metadata` is a whole `NestingList` value (§1) and every real Kubernetes
+mutation bumps the object's own `resourceVersion`, ANY drift on a
+`kubernetes_*` resource's own semantic attributes (a ConfigMap's `data`,
+a Deployment's `replicas`, ...) always shows a `metadata` change
+alongside it too — `diffAttributes`' atomic array comparison (arrays are
+compared as a whole, not recursed into further) means the whole
+`metadata` array shows up as changed the moment `resource_version`
+differs, confirmed directly by scanning a real ConfigMap before/after a
+`kubectl patch`. This isn't a bug — every real mutation genuinely does
+bump `resourceVersion` — but it means a `kubernetes_*` drift's rendered
+diff always includes what looks like a second, unrelated "metadata
+changed" entry, worth knowing before it looks like noise.
 
 **A second real finding, resolved rather than left ambiguous**: several
 `kubernetes_*` types exist in both a bare form (`kubernetes_secret`) and a
@@ -1557,8 +1591,9 @@ now). `repository_password` (a flat top-level attribute) is also
 correctly `Sensitive`.
 
 **A real, disclosed limitation, found while reading `helm_release`'s
-schema, not glossed over**: `manifest` (the chart's full rendered
-Kubernetes YAML, computed) and `metadata[0].notes` are plain strings, NOT
+schema and then confirmed live in Stage 2, not glossed over**: `manifest`
+(the chart's full rendered Kubernetes YAML, computed) and
+`metadata[0].notes`/`metadata[0].values` are plain strings, NOT
 `Sensitive` — even though a chart's templates commonly interpolate a
 `set_sensitive` value (or a plain, non-sensitive `values`/`set` string
 that happens to contain a password) directly into rendered manifest
@@ -1571,6 +1606,22 @@ This is a real, meaningful boundary of schema-driven redaction as a
 general strategy, not specific to Kubernetes, but Helm is where this
 session's own schema reading surfaced it concretely enough to state
 plainly rather than leave implicit.
+
+**Confirmed live in Stage 2, not just predicted from the schema**: the
+top-level `values`/`chart` attributes stay `null` on an ordinary adopt
+scan (they're write-only config the provider never backfills from a live
+read) — the field that actually carries a values change, and the one
+`ubx`'s own drift detection genuinely keys off, is
+`metadata[0].values` — a computed JSON string of the release's fully
+resolved values, confirmed by a real `helm upgrade --set replicaCount=3`
+showing up as `metadata[0].values` changing from `{"replicaCount":1}` to
+`{"replicaCount":3}` in the generated `drift_adopt` proposal. Since none
+of `metadata`'s sub-attributes are `Sensitive`-flagged (§1's list is
+exhaustive), this is exactly the field the limitation above describes in
+the concrete: a `set_sensitive` value baked into a release at apply time
+would appear here, in the resolved values a normal drift scan reads back,
+unredacted — not a hypothetical, the actual mechanism by which Helm
+values-drift is detected today.
 
 ### 3. Attribution: k8saudit/, one configured backend, dispatched by provider source
 
@@ -1625,34 +1676,48 @@ itself is never affected either way** — attribution is best-effort by
 construction (UBI-10), and an unconfigured backend is exactly as
 non-blocking as a denied-credentials or no-matching-event outcome.
 
-**A genuine correlation gap, checked and flagged rather than assumed away
-(mirroring GCP's own Pub/Sub-vs-Secret-Manager precedent, UBI-21)**:
-`core.AttributeDrift`'s `identityCandidates` tries a resource's top-level
-`id`/`arn`/`name` observed attributes. For `kubernetes_*` types, per §1
-above, `name`/`namespace`/`uid` live nested inside `metadata[0]`, not at
-the top level — so `identityCandidates` only ever has `id` (a top-level,
-provider-computed attribute) to offer as a search term for these types,
-and what `id` actually contains for a live Kubernetes object (a bare
-name? `namespace/name`? something else?) is unverified until Stage 2.
-`k8saudit.Client.LookupEvents` compensates defensively on its own side —
-building each Kubernetes audit event's `Resources` field with every
-plausible candidate shape (`objectRef.name`,
-`objectRef.namespace + "/" + objectRef.name`, `objectRef.uid`) rather than
-picking one — so that whichever shape `id` actually turns out to be, a
-real match has a chance of landing. This is a mitigation, not a
-confirmed fix: which shape `id` actually is, and whether this mitigation
-is sufficient, is Stage 2's own live-verification job, and the outcome
-(matched cleanly, or a real remaining gap like GCP's) will be recorded
-honestly either way, not assumed clean because the mitigation exists.
+**A correlation gap that Stage 2 partially closed, stated honestly rather
+than declared fully resolved (mirroring GCP's own Pub/Sub-vs-Secret-Manager
+precedent, UBI-21)**: `core.AttributeDrift`'s `identityCandidates` tries a
+resource's top-level `id`/`arn`/`name` observed attributes. For
+`kubernetes_*` types, per §1 above, `name`/`namespace`/`uid` live nested
+inside `metadata[0]`, not at the top level — so `identityCandidates` only
+ever has `id` to offer as a search term for these types. **Stage 2
+confirmed `id`'s real shape is `<namespace>/<name>`** (§1) — exactly one
+of the candidate forms `k8saudit.Client.LookupEvents` already builds
+defensively (`objectRef.namespace + "/" + objectRef.name`), so the
+mitigation this package shipped in Stage 1 (offering every plausible
+`Resources` shape rather than picking one) turned out to cover the real
+case, for the one signal `identityCandidates` actually has access to.
+**What remains genuinely unverified**: this confirms the *shape* of `id`
+matches one candidate `k8saudit` offers — it does not confirm an actual
+Kubernetes audit event's `objectRef.name`/`objectRef.namespace` come back
+in exactly the casing/form a real EKS control plane emits them in, since
+this session's Stage 2 used a local `kind` cluster for conformance
+(free, fast, sufficient for the identity-shape question above) and had no
+real EKS cluster with control-plane audit logging available to correlate
+an actual audit event against — see below. The correlation mechanism is
+therefore believed sound, not confirmed end-to-end the way CloudTrail's
+and GCP's own attribution were each confirmed against a real match.
 `helm_release`'s own `id`/`name` are flat and unambiguous (§1), so this
 gap is specific to `kubernetes_*` types, not Helm.
 
-CloudWatch Logs' own event delivery latency (the CloudTrail/GCP lesson,
-applied a third time rather than assumed to transfer) is measured
-directly against a real EKS cluster in Stage 2, if one is available; if
-not, `k8saudit.Backend.DeliveryLag` ships with a documented, conservative
-placeholder pending that measurement, stated as unmeasured rather than
-presented as if it were.
+**The EKS audit-log leg itself was not attempted this session, and that
+decision is recorded here rather than silently skipped**: no EKS cluster
+existed in the AWS account already (`aws eks list-clusters` returned
+empty in both regions checked), and provisioning one — a real, hourly-
+billed, ~15-20-minute-to-create piece of cloud infrastructure, categorically
+more consequential than the free/instant local `kind` cluster this
+session's other Stage 2 work used, or the Secrets Manager
+secret/IAM access key created and destroyed in seconds during UBI-23's
+own live verification — was judged out of proportion to attempt
+autonomously without checking with the operator first, matching this
+project's own "measure twice" posture on hard-to-reverse, billed actions.
+`k8saudit.Backend.DeliveryLag` therefore ships as a documented,
+conservative **placeholder** (5 minutes), stated plainly as unmeasured
+rather than presented as if it were — the same honest-placeholder
+posture CloudTrail's and GCP's own delivery-lag figures earned only after
+a real measurement, not before.
 
 ### 4. `helm_release` as a resource, and chart-aware diffing's explicit non-scope
 
