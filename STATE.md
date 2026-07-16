@@ -1859,28 +1859,30 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
-**UBI-17 (this session) opens new debt in ubiquex-docs, deliberately not
-written inline** — same reasoning as UBI-16 below, and every foundational
-slice before it: this is a whole new CLI verb (docs/plan.md M1-2's last
-piece), not a docs session, per CLAUDE.md's session protocol. Batch for
-the next ubiquex-docs session:
+**Mid-session protocol change (2026-07-16): CLAUDE.md's session protocol
+now requires ubiquex-docs updates in the SAME session, not batched as
+debt** — discovered as an uncommitted working-tree edit partway through
+this session (not made by this session's work), confirmed with Roozbeh
+before acting on it, then committed. This reverses the "During
+foundational slices: do NOT write user docs inline" rule that governed
+every prior session referenced below (UBI-13's whole existence was to pay
+down exactly that kind of backlog) — a docs-debt entry is now the
+documented exception, not the default.
 
-- New `ubx status` command: full CLI reference page needed
-  (`cli/status.mdx`), covering both modes distinctly (ledger-only vs.
-  `--drift`) since they're genuinely different capabilities, not one
-  capability with a default. The exit-code contract (0/1/2) is the single
-  most CI-relevant fact about this command and deserves prominent,
-  worked-example treatment — this is exactly the kind of "how do I use
-  this" that's a trailer/workflow concern more than a flag description,
-  possibly warranting a short `guides/` page on wiring `ubx status --drift`
-  into a CI pipeline (checking `$?`), alongside the existing
-  `guides/pr-merge-acceptance.mdx`.
-- The "one ledger directory can hold multiple stacks" finding (see Current
-  phase above) is genuinely useful operator-facing information —
-  `concepts/ledger.mdx` currently doesn't say anything about whether one
-  ledger directory is meant to hold one stack or several; worth a
-  paragraph now that `ubx status --stack` depends on readers understanding
-  this isn't automatic partitioning, just a report-time filter.
+**UBI-17's ubiquex-docs work was done in this same session, under the new
+rule**: `cli/status.mdx` (both modes documented distinctly, every example
+a real transcript, the exit-code CI contract as its own table with a
+worked `bash`/`case` example), plus the "one ledger directory can hold
+multiple stacks" clarification added to `concepts/ledger.mdx`'s "Stacks
+are independent" section. `mint validate`/`mint dev`/`mint broken-links`
+all pass clean. See ubiquex-docs' own STATE.md for the full writeup.
+
+**UBI-16's docs debt (previous session, predates the protocol change)
+remains genuinely open** — not touched this session, since it wasn't this
+session's scope: `ubx revert-plan` still has no CLI reference page, and no
+concepts-level page explains `drift_revert`'s corrective-direction
+semantics. Tracked in ubiquex-docs' own STATE.md now too, carried forward
+until picked up.
 
 **UBI-16 (prior session) opened new debt in ubiquex-docs, deliberately not
 written inline** — the revert path is foundational-slice work (a whole new
@@ -1937,6 +1939,22 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (mid-session, not tied to any single ticket): **CLAUDE.md had
+  an uncommitted working-tree edit that neither this session's work nor
+  any prior commit made** — the session protocol's rule 5 (docs debt is
+  batched, not written inline) had been rewritten to require same-session
+  ubiquex-docs updates instead, plus a new rule 6 about Linear issue
+  discipline. `git log -1 -- CLAUDE.md` showed the last real commit
+  touching it was 2026-07-10; the file's mtime was from earlier today.
+  Almost certainly Roozbeh editing it directly while this session was
+  already in progress. Stopped and asked before acting on it rather than
+  either silently following the new rule or silently ignoring an edit
+  sitting in the working tree — confirmed intentional, then committed it
+  and applied it to the rest of this session (UBI-17's ubiquex-docs work
+  landed same-session as a direct result; see Docs debt below for what
+  that changed). Worth remembering generally: a project's own governing
+  file can change mid-session, and the working tree is the place that
+  would show it before any commit does.
 - 2026-07-16 (UBI-17): **`core.Ledger`'s own doc comment ("a per-stack
   append-only proposal chain") and docs/schema.md's layout diagram both
   describe one directory per stack, but `Head()`/`Append()` never actually
