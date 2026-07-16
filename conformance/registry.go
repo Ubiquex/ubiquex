@@ -620,7 +620,7 @@ var Registry = []TypeSpec{
 	{Type: "google_kms_crypto_key", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: gcpSeedNote},
 
-	// --- kubernetes (UBI-22 Stage 1) ---
+	// --- kubernetes (UBI-22) ---
 	// All fourteen: real schema (hashicorp/kubernetes 2.35.1
 	// GetProviderSchema) models "metadata" (and, for workload types,
 	// "spec") as NestingList -- a real SDKv2 "one-item list simulates an
@@ -629,21 +629,31 @@ var Registry = []TypeSpec{
 	// same types, IS NestingSingle. name/namespace/uid live nested inside
 	// metadata[0], not as flat top-level attributes the way every AWS/GCP
 	// type in this registry has -- see docs/architecture.md's
-	// "Kubernetes support" §1 for the full finding and its consequence
-	// for --lookup's shape. IdentityFields is conservatively "id" alone
-	// here (the one confirmed-flat, confirmed-present attribute); what
-	// "id" actually contains for a live object, and whether metadata's
-	// nested name/namespace are also required for a real ReadResource
-	// call the way aws_s3_bucket/google_storage_bucket need more than
-	// "id" alone, is Stage 2 work, not assumed here. Both a bare
+	// "Kubernetes support" §1 for the full finding. IdentityFields is
+	// "id" alone -- confirmed by Stage 2 (a real, if local, `kind`
+	// cluster) to be genuinely sufficient on its own for every live-verified
+	// type below, a real correction to the Stage-1 guess that metadata's
+	// own nesting might require more (see the five RealSafe entries'
+	// own Notes, and docs/architecture.md). Both a bare
 	// ("kubernetes_secret") and a "_v1"-suffixed ("kubernetes_secret_v1")
 	// form of most of these types exist with byte-for-byte identical
 	// schemas (confirmed for kubernetes_secret specifically); only the
 	// "_v1" forms -- the provider's own actively recommended naming --
 	// are seeded, to avoid two registry entries that would always report
 	// identical conformance results.
-	{Type: "kubernetes_deployment_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
-		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{
+		Type: "kubernetes_deployment_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: RealSafe,
+		IdentityFields: []string{"id"},
+		Notes: "Live-verified (UBI-22 Stage 2, a local `kind` cluster): " +
+			"{\"id\": \"<namespace>/<name>\"} alone is sufficient -- metadata's " +
+			"own NestingList shape does NOT need to be pre-populated in " +
+			"--lookup. A `kubectl scale --replicas` mutation correctly shows " +
+			"up as a spec.replicas change. Every kubernetes_* mutation also " +
+			"always shows a metadata change alongside the semantic one, since " +
+			"any real mutation bumps resourceVersion and metadata is compared " +
+			"atomically as a whole NestingList value -- expected, not a bug.",
+		Implemented: true,
+	},
 	{Type: "kubernetes_stateful_set_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{Type: "kubernetes_daemon_set_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
@@ -654,28 +664,45 @@ var Registry = []TypeSpec{
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{Type: "kubernetes_pod_v1", Source: "hashicorp/kubernetes", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
-	{Type: "kubernetes_service_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
-		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
+	{
+		Type: "kubernetes_service_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: RealSafe,
+		IdentityFields: []string{"id"},
+		Notes: "Live-verified (UBI-22 Stage 2, a local `kind` cluster): " +
+			"{\"id\": \"<namespace>/<name>\"} alone is sufficient. A label " +
+			"mutation correctly detected as drift.",
+		Implemented: true,
+	},
 	{Type: "kubernetes_ingress_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{Type: "kubernetes_network_policy_v1", Source: "hashicorp/kubernetes", Category: "network", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{
-		Type: "kubernetes_config_map_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		Type: "kubernetes_config_map_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: RealSafe,
 		IdentityFields: []string{"id"},
-		Notes: k8sSeedNote + " data/binary_data are NOT Sensitive here -- " +
-			"ConfigMaps are explicitly the non-secret counterpart to Secrets by " +
-			"Kubernetes' own design, and the schema agrees.",
+		Notes: "Live-verified (UBI-22 Stage 2, a local `kind` cluster): " +
+			"{\"id\": \"<namespace>/<name>\"} alone is sufficient. data/binary_data " +
+			"are NOT Sensitive here -- ConfigMaps are explicitly the non-secret " +
+			"counterpart to Secrets by Kubernetes' own design, and the schema " +
+			"agrees. A kubectl patch to data correctly detected as drift.",
+		Implemented: true,
 	},
 	{
-		Type: "kubernetes_secret_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
+		Type: "kubernetes_secret_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: RealSafe,
 		IdentityFields: []string{"id"},
-		Notes: k8sSeedNote + " MUST exercise the UBI-23 redaction path: data " +
-			"and binary_data are both confirmed Sensitive: true in the real " +
-			"schema (verified directly -- this was the explicit thing to check, " +
-			"not assume; had the provider not flagged these, UBI-22 would have " +
-			"needed its own type-level redaction override). No upstream gap, no " +
-			"override needed.",
+		Notes: "MUST exercise the UBI-23 redaction path: data and binary_data " +
+			"are both confirmed Sensitive: true in the real schema (verified " +
+			"directly -- this was the explicit thing to check, not assume; had " +
+			"the provider not flagged these, UBI-22 would have needed its own " +
+			"type-level redaction override). No upstream gap, no override " +
+			"needed. Live-verified end to end (UBI-22 Stage 2, a local `kind` " +
+			"cluster): {\"id\": \"<namespace>/<name>\"} alone is sufficient; " +
+			"adopted cleanly with data redacted to a $redacted marker; a real " +
+			"secret rotation (kubectl patch) correctly detected as drift, " +
+			"before/after both $redacted at different hashes; the generated " +
+			"proposal file was grepped by hand for the real (and base64-encoded) " +
+			"secret material both before and after rotation -- zero matches " +
+			"either time.",
+		Implemented: true,
 	},
 	{Type: "kubernetes_persistent_volume_claim_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
@@ -683,8 +710,16 @@ var Registry = []TypeSpec{
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{Type: "kubernetes_storage_class_v1", Source: "hashicorp/kubernetes", Category: "storage", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
-	{Type: "kubernetes_namespace_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
-		IdentityFields: []string{"id"}, Notes: k8sSeedNote + " Cluster-scoped -- metadata has no namespace field at all."},
+	{
+		Type: "kubernetes_namespace_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id"},
+		Notes: "Cluster-scoped -- metadata has no namespace field at all, and " +
+			"id is the bare name with no prefix (confirmed live, UBI-22 Stage " +
+			"2, a local `kind` cluster) -- unlike every namespaced type above, " +
+			"whose id is \"<namespace>/<name>\". A label mutation correctly " +
+			"detected as drift.",
+		Implemented: true,
+	},
 	{Type: "kubernetes_service_account_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 	{Type: "kubernetes_cluster_role_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
@@ -696,31 +731,39 @@ var Registry = []TypeSpec{
 	{Type: "kubernetes_role_binding_v1", Source: "hashicorp/kubernetes", Category: "iam", Safety: FakeOnly,
 		IdentityFields: []string{"id"}, Notes: k8sSeedNote},
 
-	// --- helm (UBI-22 Stage 1) ---
+	// --- helm (UBI-22) ---
 	{
-		Type: "helm_release", Source: "hashicorp/helm", Category: "helm", Safety: FakeOnly,
-		IdentityFields: []string{"id", "name"},
-		Notes: "Seeded for UBI-22 Stage 1: hashicorp/helm 2.17.0 empirically " +
-			"confirmed to negotiate tfplugin v5 (dual v5/v6 support earning its " +
-			"keep a third time). Unlike every kubernetes_* type above, id/name/" +
-			"namespace are all flat top-level attributes -- no NestingList " +
-			"wrapping at all, a genuinely simpler identity shape. " +
-			"repository_password (flat) and a NestingSet block, set_sensitive " +
-			"(.value), are both confirmed Sensitive -- set_sensitive is the " +
-			"first real Set-nested sensitive value found in any " +
-			"currently-integrated provider's schema. Disclosed limitation, not " +
-			"a gap in this session's own redaction work: manifest (the chart's " +
-			"full rendered YAML, computed) and metadata[0].notes are NOT " +
-			"Sensitive-flagged, so a value that started sensitive (a " +
-			"set_sensitive password, say) can still appear in plaintext there " +
-			"if a chart template renders it into output -- schema-level " +
-			"Sensitive flags mark the input attribute only, not everywhere it " +
-			"might get echoed into a derived, computed text blob. Chart-aware " +
-			"diffing (tracking the individual Kubernetes objects a release " +
-			"manages, or diffing inside rendered manifests) is explicitly out " +
-			"of scope -- see docs/architecture.md's \"Kubernetes support\" §4. " +
-			"Not yet implemented -- no fakeprovider fixture, no live-account " +
-			"verification, Safety/LookupHint not yet classified.",
+		Type: "helm_release", Source: "hashicorp/helm", Category: "helm", Safety: RealSafe,
+		IdentityFields: []string{"id", "name", "namespace"},
+		Notes: "hashicorp/helm 2.17.0 empirically confirmed to negotiate " +
+			"tfplugin v5 (dual v5/v6 support earning its keep a third time). " +
+			"Unlike every kubernetes_* type above, id/name/namespace are all " +
+			"flat top-level attributes -- no NestingList wrapping at all, a " +
+			"genuinely simpler schema shape -- but the real --lookup " +
+			"requirement, confirmed live (UBI-22 Stage 2, a local `kind` " +
+			"cluster), is the OPPOSITE of kubernetes_*'s own simplification: " +
+			"id alone is NOT sufficient; all three of id, name, and namespace " +
+			"together are required. repository_password (flat) and a " +
+			"NestingSet block, set_sensitive (.value), are both confirmed " +
+			"Sensitive -- set_sensitive is the first real Set-nested sensitive " +
+			"value found in any currently-integrated provider's schema. " +
+			"Disclosed limitation, confirmed live not just predicted from the " +
+			"schema: manifest (the chart's full rendered YAML, computed) and " +
+			"metadata[0].notes/metadata[0].values are NOT Sensitive-flagged, " +
+			"so a value that started sensitive (a set_sensitive password, say) " +
+			"can still appear in plaintext there if a chart template renders " +
+			"it into output. metadata[0].values is, in fact, the field that " +
+			"actually carries a values-drift signal at all -- the top-level " +
+			"values/chart attributes stay null on an ordinary adopt scan (the " +
+			"provider never backfills them from a live read), confirmed by a " +
+			"real `helm upgrade --set replicaCount=3` showing up as " +
+			"metadata[0].values changing from {\"replicaCount\":1} to " +
+			"{\"replicaCount\":3} in the generated drift_adopt proposal. " +
+			"Chart-aware diffing (tracking the individual Kubernetes objects a " +
+			"release manages, or diffing inside rendered manifests) is " +
+			"explicitly out of scope -- see docs/architecture.md's " +
+			"\"Kubernetes support\" §4.",
+		Implemented: true,
 	},
 }
 

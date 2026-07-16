@@ -168,13 +168,14 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 }
 
 // RequireLive skips t unless UBX_CONFORMANCE_LIVE=1 is set — RealSafe
-// conformance tests touch the real AWS account (a real, if cheap/safe,
-// network round trip and/or a real tag mutation) and must never run as
-// part of a default `go test ./...`, which stays hermetic and
-// credential-free everywhere else in this project. Explicit opt-in only.
+// conformance tests touch a real backend (an AWS or GCP account, or a
+// real/local Kubernetes cluster, UBI-22 — a real, if cheap/safe, network
+// round trip and/or a real mutation) and must never run as part of a
+// default `go test ./...`, which stays hermetic and credential-free
+// everywhere else in this project. Explicit opt-in only.
 func RequireLive(t *testing.T) {
 	t.Helper()
 	if os.Getenv("UBX_CONFORMANCE_LIVE") != "1" {
-		t.Skip("skipping: set UBX_CONFORMANCE_LIVE=1 to run conformance tests against the real AWS account")
+		t.Skip("skipping: set UBX_CONFORMANCE_LIVE=1 to run conformance tests against a real backend (AWS/GCP account or Kubernetes cluster)")
 	}
 }
