@@ -89,6 +89,11 @@ version = "6.54.0"
 
 [provider_config]
 region = "us-east-1"
+
+[k8s_audit]
+cluster = "my-eks-cluster"
+region = "us-west-2"
+log_group = "/aws/eks/my-eks-cluster/cluster"
 `)
 	withConfigSearchDir(t, dir)
 
@@ -104,6 +109,29 @@ region = "us-east-1"
 	}
 	if cfg.Stack != "payments" || cfg.GithubRepo != "acme/infra" || cfg.TFDir != "./terraform" {
 		t.Errorf("got Stack=%q GithubRepo=%q TFDir=%q, want payments/acme/infra/./terraform", cfg.Stack, cfg.GithubRepo, cfg.TFDir)
+	}
+	wantK8sAudit := K8sAuditConfig{Cluster: "my-eks-cluster", Region: "us-west-2", LogGroup: "/aws/eks/my-eks-cluster/cluster"}
+	if cfg.K8sAudit != wantK8sAudit {
+		t.Errorf("K8sAudit = %+v, want %+v", cfg.K8sAudit, wantK8sAudit)
+	}
+}
+
+// TestLoadConfig_K8sAuditAbsentIsZeroValue confirms the UBI-22 default:
+// no [k8s_audit] table at all (every existing config predates this
+// session) decodes to a zero-value K8sAuditConfig -- Cluster == "" is the
+// one signal newAttributionBackend checks to degrade to
+// audit_unattributed/not_configured, never an error.
+func TestLoadConfig_K8sAuditAbsentIsZeroValue(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `stack = "payments"`)
+	withConfigSearchDir(t, dir)
+
+	cfg, err := LoadConfig(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.K8sAudit != (K8sAuditConfig{}) {
+		t.Errorf("K8sAudit = %+v, want zero value", cfg.K8sAudit)
 	}
 }
 

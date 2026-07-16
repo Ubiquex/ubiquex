@@ -189,6 +189,16 @@ func renderConfigTemplate(v configTemplateValues) string {
 	} else {
 		b.WriteString("# region = \"us-east-1\"\n")
 	}
+	b.WriteString("\n")
+
+	b.WriteString("# EKS control-plane audit log attribution for kubernetes_*/helm_release\n")
+	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
+	b.WriteString("# cluster unset means such a drift's attribution records\n")
+	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
+	b.WriteString("[k8s_audit]\n")
+	b.WriteString("# cluster = \"my-eks-cluster\"\n")
+	b.WriteString("# region = \"us-east-1\"\n")
+	b.WriteString("# log_group = \"/aws/eks/my-eks-cluster/cluster\"  # optional; defaults to this shape from cluster\n")
 
 	return b.String()
 }

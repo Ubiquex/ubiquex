@@ -17,10 +17,10 @@ import (
 // convention .git itself uses.
 const configFileName = ".ubx/config"
 
-// Config is .ubx/config's parsed shape -- exactly the five keys UBI-19
-// scoped in (docs/architecture.md): provider identity, provider
-// configuration, default stack, GitHub repository, and .tf directory.
-// --ledger-dir is deliberately not one of them.
+// Config is .ubx/config's parsed shape -- the five keys UBI-19 scoped in
+// (docs/architecture.md): provider identity, provider configuration,
+// default stack, GitHub repository, and .tf directory -- plus UBI-22's
+// [k8s_audit] table. --ledger-dir is deliberately not one of them.
 type Config struct {
 	Provider struct {
 		Path    string `toml:"path"`
@@ -31,6 +31,29 @@ type Config struct {
 	Stack          string         `toml:"stack"`
 	GithubRepo     string         `toml:"github_repo"`
 	TFDir          string         `toml:"tf_dir"`
+	K8sAudit       K8sAuditConfig `toml:"k8s_audit"`
+}
+
+// K8sAuditConfig is .ubx/config's [k8s_audit] table (UBI-22,
+// docs/architecture.md -- Kubernetes support): which EKS cluster's
+// control-plane audit log to search for Kubernetes/Helm drift
+// attribution. Unlike [provider]/[provider_config], this has no CLI flag
+// equivalent -- it's config-only, and entirely optional: a zero-value
+// K8sAuditConfig (Cluster == "") means attribution for a
+// kubernetes_*/helm_release drift degrades to
+// audit_unattributed/not_configured, never blocking detection (see
+// cli/attribution.go's newAttributionBackend).
+type K8sAuditConfig struct {
+	// Cluster is the EKS cluster name. Empty means "not configured" --
+	// the one signal newAttributionBackend checks.
+	Cluster string `toml:"cluster"`
+	// Region is the AWS region the cluster (and its CloudWatch Logs log
+	// group) lives in.
+	Region string `toml:"region"`
+	// LogGroup overrides the CloudWatch Logs log group to search, for a
+	// cluster whose control-plane logging wasn't left at EKS's own
+	// default naming convention. Empty means k8saudit.LogGroupForCluster(Cluster).
+	LogGroup string `toml:"log_group"`
 }
 
 // LoadConfig discovers and parses .ubx/config, walking from the current
