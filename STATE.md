@@ -4,6 +4,73 @@
 
 ## Current phase
 
+**UBI-18 is done (this session, Linear-verified): `ubx scan --all`, bulk
+onboarding from Terraform state — production ladder step 3.** Design
+landed first in docs/architecture.md ("Bulk onboarding") and docs/plan.md
+before code, per session protocol. Four pieces:
+
+1. **New `tfstate/` package** parses Terraform state v4 JSON into
+   `ManagedResource`s: modules (nested, dotted-path extraction from
+   Terraform's own `module.x.module.y` form), `count`/`for_each`
+   instances addressed `name[index]`/`name["key"]` matching Terraform's
+   own convention exactly, `data` sources and any non-`"managed"` entry
+   dropped outright. One `json.Unmarshal` of the whole file — bounded
+   memory, not streaming, accepted at foundational-slice scale and
+   verified against a synthetic 1000-resource state.
+2. **A small, explicit per-type lookup-augmentation table**
+   (`aws_s3_bucket`→`+bucket`, `aws_iam_role`/`aws_iam_user`→`+name`) —
+   deliberately NOT derived from `conformance/registry.go`'s
+   `IdentityFields`, which answers a related but distinct question (which
+   attributes carry stable identity for CloudTrail attribution) and would
+   have silently produced a wrong lookup for `aws_sqs_queue` if conflated
+   (its `IdentityFields` names a distinct `url` field the actual lookup
+   never needs, since `id` already equals it). Every other `RealSafe` type
+   needs no augmentation: its bare `id` in state already is what an extra
+   field would have contributed.
+3. **`ubx scan --all --tfstate <path> [--stack] [--out-dir]`**
+   (`cli/scanall.go`) reuses `core.RunScan`/`core.GenerateProposal`
+   unchanged, once per resource — state provides identity, never truth;
+   every proposal's observed state still comes from a live `ReadResource`
+   call. Stack defaults to the state file's own basename. A module path
+   gets folded into the resource's own address (not just noted in
+   `intent.summary`) — a real "duplicate addresses" case the adversarial
+   tests caught: two different modules can declare a same-type,
+   same-name resource, and without folding, both would collide into the
+   exact same `ubx` address the instant they share a stack. Unknown
+   type / deleted-since-state / unbuildable-lookup resources go into a
+   skipped-summary; the walk never aborts. Bulk *acceptance* stays
+   explicitly out of scope.
+4. **A real bug the live-verification test caught, not a hand-traced
+   one**: every proposal in one `--all` batch shared the exact same
+   (real, unmoving) ledger head as its `parent`, since nothing gets
+   accepted mid-walk — only the first of N generated proposals would
+   ever actually accept. Found only once the live test tried to accept a
+   *second* real onboarded resource (an SNS topic, after an SQS queue
+   already succeeded), not by reasoning through the flow beforehand.
+   Fixed by tracking, purely within the `--all` orchestration, what the
+   head *will be* after accepting every proposal generated so far in the
+   same batch — a proposal's hash is a pure function of its content
+   (`parent` included, `id`/`acceptance`/`status` excluded), so it's
+   computable the moment a proposal is generated, before anyone accepts
+   anything. A regression test (`TestScanAll_AllGeneratedProposalsAcceptInSequence`)
+   now guards this directly, not just via the live test.
+
+**Live-verified end to end against the real account**
+(`TestScanAll_LiveEndToEnd`, gated behind `UBX_CONFORMANCE_LIVE=1`):
+built a small, disposable Terraform config (an SQS queue + an SNS topic —
+Terraform used *only* as a test-fixture generator here, never a runtime
+dependency of `ubx` itself), `terraform apply`d it for real, onboarded
+from the real resulting `terraform.tfstate`, accepted both generated
+proposals, confirmed `ubx status --drift` reported both clean, then
+`terraform destroy`d everything. Account confirmed left exactly as found
+(no matching SQS queues or SNS topics remained).
+
+Filed and tracked in Linear before this session started (`UBI-18`, team
+`ubiquex`, filed directly by Roozbeh) — referenced, not re-typed from
+memory.
+
+## Current phase (previous)
+
 **UBI-17 is done (this session, Linear-verified): `ubx status`, the fleet
 drift view — M1-2's last unstarted piece (production-readiness step 2).**
 Design landed first in docs/architecture.md ("Fleet status") before code,
@@ -1759,8 +1826,21 @@ read-only multi-resource drift report, M1-2 scope per docs/plan.md).
 
 ## Next steps
 
-**M1-2 ("detection core") is now fully done too, with `ubx status` (UBI-17)
-landing its last unstarted piece.** docs/plan.md's M1-2 bullet is annotated
+**Production ladder step 3 (UBI-18, bulk onboarding) is done.** Real gaps
+worth remembering, not quietly forgetting: bulk *acceptance* is
+deliberately out of scope (see docs/architecture.md's Business-frame
+reasoning — a decision to make separately and later, if ever, not a
+default this issue backed into); cloud-side discovery (tag-based
+enumeration, per-type list APIs, for teams with no Terraform state at
+all) is explicitly a different epic, not started; `--all` walks are
+bounded-memory (one `json.Unmarshal` of the whole state file), same
+accepted scale posture as `FoldState`'s own linear ledger walk and `ubx
+status`'s own fleet walk — revisit together if a real state file or
+ledger ever approaches a size where that stops being reasonable, not
+separately. Production ladder step 4, if there is one, isn't scoped yet.
+
+**M1-2 ("detection core") is fully done too, `ubx status` (UBI-17) having
+landed its last unstarted piece.** docs/plan.md's M1-2 bullet is annotated
 "Milestone complete" alongside M3-4's. Both of the wedge's first two
 milestones are done. Next wedge-buildout milestone per docs/plan.md is M5-6
 (retention layer: `why` over drift history, Slack notifications, policy
@@ -1859,6 +1939,21 @@ forgotten, not because anything is blocked on it.
 
 ## Docs debt
 
+**UBI-18's ubiquex-docs work was done in this same session, per protocol,
+and it also cleared UBI-16's carried debt (below) while in the docs
+repo**: new `cli/revert-plan.mdx` and a `concepts/drift.mdx` "Two
+resolutions to a drift" section closed the UBI-16 gap. Discovered along
+the way: `cli/scan.mdx` had never gotten `--propose` documented at all
+(it shipped entirely under the old protocol, and the UBI-16 debt entry
+below only ever named the missing `revert-plan` page, not the missing
+flag on an already-published page) — added alongside this session's own
+`--all`/`--tfstate`/`--out-dir` flags and a full "Bulk onboarding"
+section, plus new `guides/onboarding.mdx` with a real, complete
+walkthrough transcript. `mint validate`/`mint dev`/`mint broken-links`
+all pass clean. See ubiquex-docs' own STATE.md for the full writeup, and
+its own new lesson recorded there: a docs-debt entry should name every
+already-published page a change touches, not just the new ones needed.
+
 **Mid-session protocol change (2026-07-16): CLAUDE.md's session protocol
 now requires ubiquex-docs updates in the SAME session, not batched as
 debt** — discovered as an uncommitted working-tree edit partway through
@@ -1877,12 +1972,12 @@ multiple stacks" clarification added to `concepts/ledger.mdx`'s "Stacks
 are independent" section. `mint validate`/`mint dev`/`mint broken-links`
 all pass clean. See ubiquex-docs' own STATE.md for the full writeup.
 
-**UBI-16's docs debt (previous session, predates the protocol change)
+~~**UBI-16's docs debt (previous session, predates the protocol change)
 remains genuinely open** — not touched this session, since it wasn't this
 session's scope: `ubx revert-plan` still has no CLI reference page, and no
 concepts-level page explains `drift_revert`'s corrective-direction
 semantics. Tracked in ubiquex-docs' own STATE.md now too, carried forward
-until picked up.
+until picked up.~~ **Cleared in the UBI-18 session above.**
 
 **UBI-16 (prior session) opened new debt in ubiquex-docs, deliberately not
 written inline** — the revert path is foundational-slice work (a whole new
@@ -1939,6 +2034,37 @@ obligation starts fresh from whatever slice lands next.
 
 ## Surprises / findings
 
+- 2026-07-16 (UBI-18): **Every proposal generated in one `ubx scan --all`
+  batch shared the exact same `parent` — the ledger's real, on-disk head,
+  which never moves mid-walk since nothing gets accepted until later —
+  so only the first of N proposals anyone tried to accept would ever
+  succeed.** Found only by live-verifying the full flow (an SQS queue's
+  proposal accepted fine; the SNS topic's, generated in the same batch,
+  failed as parent-mismatched), not by reasoning through the orchestration
+  beforehand — the bug is invisible in any test that only accepts *one*
+  generated proposal, which is exactly what every test written before the
+  live one happened to do. Fixed by tracking, within the `--all`
+  orchestration itself, what the head *will be* after accepting every
+  proposal generated so far in the batch, since a proposal's hash is a
+  pure function of its content and is therefore computable the moment
+  it's generated — added a regression test
+  (`TestScanAll_AllGeneratedProposalsAcceptInSequence`) that accepts all
+  three proposals from a batch, specifically so this can't regress
+  silently behind single-proposal-only test coverage again.
+- 2026-07-16 (UBI-18): **`conformance/registry.go`'s `IdentityFields`
+  looked like the obvious thing to reuse for building a lookup from state
+  attributes, and would have been wrong for at least one type.**
+  `aws_sqs_queue`'s `IdentityFields` names `id`, `arn`, and `url` — but
+  the actual required lookup is `{"id": "<queue-url>"}` alone, no
+  separate `url` key at all, since `id` already equals it. `IdentityFields`
+  answers "which attributes carry stable identity for CloudTrail
+  attribution" (UBI-8/UBI-10), a related but genuinely different question
+  from "what does `ReadResource` need" — checked this by re-deriving the
+  correct lookup shape per type from `cli/lookup.mdx`'s already-verified
+  table instead of assuming `IdentityFields` would mechanically transfer,
+  and built a small, separate, explicitly-scoped table instead of
+  importing `conformance` (project-internal test tooling, by its own doc
+  comment) into shipped product code at all.
 - 2026-07-16 (mid-session, not tied to any single ticket): **CLAUDE.md had
   an uncommitted working-tree edit that neither this session's work nor
   any prior commit made** — the session protocol's rule 5 (docs debt is
