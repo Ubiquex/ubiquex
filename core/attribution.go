@@ -48,6 +48,15 @@ const (
 	ReasonNoMatchingEvent = "no_matching_event"
 	ReasonDeliveryWindow  = "delivery_window"
 	ReasonNotLogged       = "not_logged"
+
+	// ReasonNotConfigured means the backend itself needs operator
+	// configuration ubx has no way to derive on its own (UBI-22: which
+	// EKS cluster/log group, unlike AWS's region or GCP's project, isn't
+	// implied by anything already on hand) and that configuration is
+	// absent. Distinct from ReasonNotLogged (attempted and denied/failed)
+	// -- an operator reading `ubx why` should be able to tell "I haven't
+	// set this up" apart from "I set it up and it's failing."
+	ReasonNotConfigured = "not_configured"
 )
 
 // AttributionBackend names which platform-specific audit-log backend
