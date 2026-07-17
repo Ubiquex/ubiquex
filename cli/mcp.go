@@ -59,17 +59,25 @@ sitting there would (see ubx config).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			server := mcp.NewServer(&mcp.Implementation{Name: "ubx", Version: versionString()}, nil)
-			registerWhyTool(server)
-			registerStatusTool(server)
-			registerScanTool(server)
-			if err := server.Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
+			if err := newMCPServer().Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
 			}
 			return nil
 		},
 	}
 	return cmd
+}
+
+// newMCPServer builds the ubx MCP server with all three tools
+// registered -- factored out from newMCPCmd's RunE so tests can connect
+// to it directly over an in-memory transport (mcp.NewInMemoryTransports),
+// never a real stdio subprocess.
+func newMCPServer() *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "ubx", Version: versionString()}, nil)
+	registerWhyTool(server)
+	registerStatusTool(server)
+	registerScanTool(server)
+	return server
 }
 
 // orDot defaults an empty MCP input field to "." -- there's no cobra
