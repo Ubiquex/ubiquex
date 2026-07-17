@@ -162,6 +162,18 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 	return res, nil
 }
 
+// ReadAndFingerprint exports readAndFingerprint's own read pipeline for
+// core/executor (UBI-26): unlike VerifyFreshness, which only compares a
+// fresh read's hash against a recorded one and discards the body,
+// core/executor needs the full observed state itself, to construct an
+// ApplyResourceChange request's PriorState/PlannedState (docs/executor.md
+// -- "Constructing PlannedState without planning"). Behaves identically to
+// what RunScan/VerifyFreshness already do internally; this is a reuse, not
+// a second read pipeline.
+func ReadAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
+	return readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, currentState)
+}
+
 // readAndFingerprint fetches the provider's schema, configures it, reads
 // addr's live state, and fingerprints it. Shared by RunScan and
 // VerifyFreshness so both apply the exact same read pipeline.

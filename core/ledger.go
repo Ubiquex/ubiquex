@@ -26,6 +26,9 @@ func Open(dir string) *Ledger {
 	return &Ledger{dir: dir}
 }
 
+// Dir returns the root directory l was opened with.
+func (l *Ledger) Dir() string { return l.dir }
+
 func (l *Ledger) proposalsDir() string { return filepath.Join(l.dir, "ledger", "proposals") }
 func (l *Ledger) lockPath() string     { return filepath.Join(l.dir, ".ubx", "ledger.lock") }
 func (l *Ledger) proposalPath(id string) string {

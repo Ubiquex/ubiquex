@@ -4,6 +4,158 @@
 
 ## Current phase
 
+**UBI-26 session 2 is done (this session): `core/executor` — the state
+machine + apply-record ledger ops, hermetic against a fake provider with
+scripted failures.** Built exactly against docs/executor.md's spec and
+docs/executor-adversarial.md's program, both written in session 1. No CLI
+surface yet (`ubx ship` doesn't exist as a command until the next slice),
+so no ubiquex-docs update this session — correct per protocol, not deferred
+debt.
+
+**`core/apply.go` (new file, package `core`)**: the `ApplyRecord` type
+family (`ResourceApply`/`Transition`/`ReconciliationAttempt`/`ErrorRecord`/
+`ApplySummary`) exactly as pinned in docs/schema.md's amendment, plus
+`ApplyHash` (own `ubx:apply:v1\n` domain, `Resources` sorted by `(stack,
+type, name)` before hashing — mirroring `canonicalProposalBytes`'s own
+`sortDeltaElements`, a fresh implementation since `ResourceApply`'s
+`address` field shape differs from `Modification`'s `target`). Five new
+`*Ledger` methods, all reusing the existing `acquireLedgerLock`/directory
+conventions rather than inventing new ones:
+
+- `BeginApply(proposalID)` — under the ledger lock, scans every attempt
+  file for this proposal (`ApplyAttempts`), assigns the next attempt
+  number, sets `Parent` to the most recently *sealed* attempt's ID (`""`
+  if none), writes an initial empty record, releases the lock.
+- `SaveApplyProgress(rec)` — durably rewrites an unsealed record (temp file
+  in the same directory, `fsync`, atomic rename) — the concrete mechanism
+  behind docs/executor.md's THE invariant: every call site in `Ship`
+  persists a transition this way *before* attempting the operation it
+  precedes.
+- `SealApply(rec, summary)` — sets `Summary`, computes `ApplyHash`, sets
+  `ID`, persists the final content. Both `SaveApplyProgress`/`SealApply`
+  refuse to touch an already-sealed record (`rec.Sealed()`).
+- `ApplyAttempts(proposalID)` / `ReadApply(proposalID, attempt)` — read
+  paths; a malformed attempt file is `ErrCorruptApplyRecord`, never
+  silently skipped (docs/executor-adversarial.md row 9).
+
+Two small, additive exports on existing `core` files, each a genuine reuse
+rather than a new code path: **`core.ReadAndFingerprint`** (scan.go) simply
+exports the existing private `readAndFingerprint` — `VerifyFreshness` only
+ever compared a hash and discarded the body, but the executor needs the
+full observed JSON itself to build an `ApplyResourceChange` request.
+**`core.ApplyAfter`** (apply.go) factors out the same dot-path substitution
+`FoldState` already performs internally (`dotSet`, unexported, shared) so
+the executor can construct `PlannedState` from a `Modification.After` map
+without a second implementation of "apply a dot-path diff onto a state
+blob." Also added: `Ledger.Dir()`, a one-line accessor (previously
+`dir` was fully private) — needed by `core/executor`'s own tests to
+hand-corrupt an attempt file at its real path for row 9's test.
+
+**`core/executor` (new package)**: `Applier` interface (embeds
+`core.StateReader` for `Schema`/`Configure`/`ReadResource` — reused
+unchanged for both `VerifyFreshness` and this package's own
+reconcile-by-query — plus one new `ApplyResourceChange` method).
+`TerminalError` wraps a provider error that must never be retried within
+one `Ship` invocation (docs/executor.md's "terminal" classification); any
+other error is treated as retryable and triggers reconciliation. `Ship`
+implements the full loop docs/executor.md specifies: canonical
+`(stack, type, name)` execution order (a real, independent sort of
+`Delta.Modifies` — confirmed by reading `canonicalProposalBytes` that
+stored array order is never actually guaranteed sorted, only a transient
+hash-time copy is), per-resource freshness re-verification via
+`core.VerifyFreshness` immediately before each resource's own attempt (not
+once at the top), THE invariant (`in_flight` persisted before
+`ApplyResourceChange` is called), reconcile-by-query via
+`core.ReadAndFingerprint` + a same-package `reconciliationVerdict`
+comparing observed state against `Modification.Before`/`After`'s dot-paths,
+bounded reconciliation retries, and the full idempotency contract.
+
+**A real refinement to the idempotency design, found while implementing,
+not a contradiction of docs/executor.md**: the design doc's idempotency
+table says "keyed by... every prior *sealed* apply record's final state."
+Implementing crash recovery (rows 4/5) showed this needs to be looser in
+one respect: a crashed, *never-sealed* attempt still durably recorded real
+transitions (e.g. `in_flight`) before it died, and those are exactly what
+a re-run must see to know reconciliation is needed at all. `foldResourceHistory`
+therefore folds a resource's last-known state over **every** attempt file
+for a proposal, sealed or not (`ApplyAttempts` already returns unsealed
+ones too, by design) — only the `Parent` hash-chain link itself requires a
+*sealed* predecessor. The doc's own intent ("reconciliation is always the
+source of truth, not the transition log's own say-so") is unchanged; this
+is a precise statement of *which* transitions feed that reconciliation
+decision, not a new behavior.
+
+**All ten rows of docs/executor-adversarial.md's program pass as real,
+hermetic tests** (`core/executor/ship_test.go`, against a `fakeApplier`
+whose resources are keyed by their own `"id"` attribute, mirroring how a
+real provider identifies resources from within state rather than a
+side-channel parameter):
+
+1. Provider killed mid-apply — simulated via a generic transport-style
+   error (`errors.New("connection reset")`), the closest hermetic proxy for
+   "the RPC never resolved"; a literal `kill -9` is explicitly reserved for
+   the later live-verification session against a real provider subprocess.
+2/3. Timeout where the change did/didn't land — `TestShip_TimeoutWhereChangeLanded_ResolvesApplied`/
+   `...DidNotLand_ResolvesFailed`, using a new `fakeApplier.scriptApplyTimeoutButLanded`
+   that returns an error *while also* mutating live state as a side effect,
+   modeling "the provider committed the change before/while the RPC itself
+   failed" precisely (an earlier draft of this test pre-mutated state
+   *before* calling Ship, which — caught by the test actually failing —
+   was indistinguishable from an ordinary second-drift/staleness case
+   rather than what row 2 means; fixed by moving the state mutation inside
+   the scripted apply call itself).
+4/5. Crash between the `in_flight` write and the call / between the call
+   and the result write — both simulated by hand-writing an unsealed
+   attempt file via the real `BeginApply`/`SaveApplyProgress` (never a
+   fabricated shortcut), containing exactly the transitions a real crash at
+   that point would leave, then calling `Ship` again and asserting the new
+   attempt's `Parent` is `""` (attempt 1 was never sealed) and
+   reconciliation — not the stale transition log — decides the outcome.
+6a/6b. Retryable vs. terminal error classification — a terminal error skips
+   reconciliation entirely (asserted directly: `len(ra.Reconciliation) == 0`).
+7. Stale detected mid-partial-apply — a two-resource proposal where the
+   second resource drifts a second time after acceptance but before ship;
+   the first resource's `applied` transition stands, the second is refused
+   before ever reaching `in_flight`, live state on the second is asserted
+   untouched.
+8. Double `ship` invocation racing — two goroutines calling `Ship`
+   concurrently against the same proposal; asserted no attempt-number
+   collision and every attempt file left on disk parses cleanly
+   (`go test -race` clean too).
+9. Apply record corrupted/truncated on re-run — hand-corrupted attempt
+   file, asserted `Ship` returns `core.ErrCorruptApplyRecord` rather than
+   guessing.
+
+Plus two correctness tests beyond the named rows: `ErrAlreadyApplied` is a
+genuine no-op (asserted no new attempt file is written), and the
+per-resource retry budget (`maxApplyAttemptsPerResource`, a package var)
+is enforced — a resource that fails terminally three times is refused a
+fourth attempt entirely, staying `pending` with a budget-exhausted error
+rather than calling `ApplyResourceChange` again.
+
+**`core/apply_test.go` (new, package `core`)**: direct hermetic coverage of
+`ApplyHash` (deterministic regardless of `Resources` order, changes with
+content, excludes only `id`), `BeginApply`/`SealApply`'s attempt-numbering
+and parent-chaining (including the sealed-vs-unsealed distinction above),
+double-seal/save-after-seal rejection, `ApplyAttempts`'s ordering and
+corruption handling, and `ApplyAfter`'s dot-path substitution.
+
+`go build ./...`, `go vet ./...`, `gofmt -l .` (clean), and `go test ./...
+-race` all pass across the whole repository — no regressions in any
+existing package.
+
+**Next slice** (per docs/plan.md's "Executor v1 (UBI-26)" wedge): provider
+`ApplyResourceChange` wiring (v5 + v6, cty-msgpack lessons apply) — a
+concrete `executor.Applier` backed by a real `provider.Client`, including
+the redaction pass (`provider.Redact`) on `ApplyResourceChange`'s returned
+attributes docs/schema.md's amendment requires, which this hermetic slice
+correctly does not yet do (the fake provider's results are never
+persisted-as-if-real). Then `ubx ship <proposal-id>` (CLI, exit codes 0/1/2
+per docs/executor.md), then live verification against real drift on
+`ubx-states`, including a real `kill -9` mid-apply.
+
+## Current phase (previous)
+
 **UBI-26 session 1 is done (this session, docs-only, Linear filed and
 tracked): Phase 2 opens — the executor.** Filed as a new Linear issue
 (`UBI-26`, ubiquex team) per the handoff's own instruction (no other ID was

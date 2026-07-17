@@ -358,6 +358,23 @@
   instead, a shortcut scoped to this kind only. See docs/plan.md's own new
   "Executor v1 (UBI-26)" wedge subsection for the full summary, and
   STATE.md for the session writeup.
+- 2026-07-17 — UBI-26 session 2: `core/apply.go` (the `ApplyRecord` type
+  family, its own `ubx:apply:v1\n`-domain content hash, and `Ledger`'s
+  apply-attempt storage — `BeginApply`/`SaveApplyProgress`/`SealApply`/
+  `ApplyAttempts`/`ReadApply`, reusing the same PID-file ledger lock
+  `Append` already uses) and the new `core/executor` package (the
+  pending→in_flight→applied/failed/unknown_post_timeout state machine
+  itself, `Ship`, against a hermetic fake `Applier`). All ten rows of
+  docs/executor-adversarial.md's program pass as real, hermetic Go tests
+  (the "provider killed" row simulated via a generic transport-style
+  error, not a literal process kill — that's reserved for the later live
+  session's real `kill -9`). `core.ReadAndFingerprint` and `core.ApplyAfter`
+  were added as small, additive exports so the executor could reuse
+  `RunScan`/`VerifyFreshness`'s own read pipeline and `FoldState`'s own
+  dot-path substitution, rather than duplicating either. See STATE.md for
+  the full session writeup, including a real per-resource idempotency
+  refinement found while implementing (folding "last known state" over
+  *every* attempt file, sealed or not, not just sealed ones).
 
 ## Strategy
 
