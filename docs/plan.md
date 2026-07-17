@@ -296,6 +296,26 @@
   ships as a documented, unmeasured placeholder pending that. See
   docs/architecture.md's "Kubernetes support" section and STATE.md for
   the full writeup, including every empirical finding.
+- 2026-07-18 — UBI-24 (Linear-verified): sensitive-override table,
+  closing UBI-22's own `helm_release` redaction gap. Redaction is now
+  the union of a provider's own `Sensitive` schema flags AND a new,
+  ubx-owned `provider/overrides.go` table (`(source, type, path)` →
+  force-redact) — the schema is a floor, never a ceiling; overrides can
+  only add, never remove. Seeded with `helm_release.manifest`/
+  `metadata.values`/`metadata.notes`. A direct audit of both
+  `hashicorp/kubernetes`'s ~20 registered types and `hashicorp/helm`
+  found no further candidates. A precise root-cause correction: Helm's
+  `metadata` isn't a real `NestedBlock` (unlike Kubernetes' own) — it's a
+  compound-typed `Attribute` (`list(object(...))`), a shape tfplugin's
+  wire protocol has no mechanism to flag a sub-field of at all upstream,
+  which is exactly why a ubx-owned, JSON-shape-driven override (not a
+  schema-walk one) is the right fix. Live-verified end to end on a real
+  local `kind` cluster: a `helm_release` with a `set_sensitive` value
+  adopted, and its values-drift path, both grepped by hand for zero real
+  material. A draft (unsubmitted) upstream issue for the Helm provider is
+  saved at docs/upstream/helm-sensitive-flags.md. This gates the
+  `v0.2.0` tag. See docs/architecture.md's "Sensitive overrides" section
+  and STATE.md for the full writeup.
 
 ## Strategy
 

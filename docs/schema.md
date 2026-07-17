@@ -471,6 +471,22 @@ handed back to `core` for fingerprinting/hashing/diffing. By the time
 sensitive; it only recognizes the `$redacted` shape once it's already
 there.
 
+**Amendment (2026-07-18, UBI-24): the provider's own schema is a floor,
+not a ceiling.** `provider.Redact` also consults a small, ubx-owned
+override table (`provider/overrides.go`'s `SensitiveOverrides`, keyed by
+the same `(provider source, type)` pair `conformance.Registry`/
+`core/lookuphints` already use) naming additional attribute paths to
+redact regardless of what the upstream schema flags — closing a real gap
+UBI-22 found: `helm_release.manifest`/`metadata.values`/`metadata.notes`
+can carry a sensitive value's plaintext (rendered into a chart's output)
+without ever being `Sensitive`-flagged upstream. Redaction is the
+**union** of schema flags and this table; the table can only ever ADD an
+attribute to what gets redacted, never remove one the schema itself
+flags. This is purely a `provider`-internal decision about *what*
+triggers a `$redacted` value — the wire shape above, and everything
+`core` does with it, is completely unchanged. See docs/architecture.md's
+"Sensitive overrides" section for the full mechanism.
+
 **Diff behavior**: `core`'s attribute-diff (`diffAttributes`/`diffObjects`)
 treats a `$redacted`-shaped value as atomic, not as a nested object to
 recurse into. Two equal `$redacted` values (same salt, same underlying

@@ -1742,6 +1742,146 @@ session seeds, just not automatic or chart-aware; `ubx` treats a
 entirely separate, uncorrelated resources, exactly as it would for any
 two independently-scanned resources.
 
+## Sensitive overrides (UBI-24)
+
+UBI-22's own Helm finding — `helm_release.manifest` and
+`metadata[0].values`/`metadata[0].notes` are computed text blobs that can
+carry a `set_sensitive` value's plaintext once a chart template renders
+it into output, yet none of them are `Sensitive`-flagged in the real
+provider schema — is a real gap in "secrets must never enter the ledger"
+(UBI-23) as originally built: `provider.Redact` only ever consulted the
+provider's OWN schema flags, which means an upstream provider's own
+under-flagging becomes ubx's own leak. UBI-24 closes it by making the
+provider's schema the *floor*, not the *ceiling*: **redaction is the
+union of the provider's own `Sensitive` flags AND a new, ubx-owned
+override table** — never the schema flags alone, and never a way to
+un-redact something the schema already flags.
+
+### The override table: data, not code
+
+`provider/overrides.go`'s `SensitiveOverrides` is a plain slice of
+`{Source, Type, Path}` entries — deliberately the same "data, not code"
+posture `core/lookuphints` already established for teaching-error hints
+(UBI-20): a small, committed, human-readable table, not a mechanism that
+needs its own decision logic per entry. `Path` is a dot-notation string
+into a resource's *observed JSON*, matching the same convention
+`Modification.Before`/`After` and `core.dotSet` already use elsewhere in
+this project — not a `provider.Block`/`Attribute` reference, since an
+override exists precisely for an attribute the schema itself doesn't (or
+can't) mark, so there's no `Attribute.Sensitive` field to point at in the
+first place.
+
+Seeded from UBI-22's own finding:
+
+```go
+{Source: "hashicorp/helm", Type: "helm_release", Path: "manifest"},
+{Source: "hashicorp/helm", Type: "helm_release", Path: "metadata.values"},
+{Source: "hashicorp/helm", Type: "helm_release", Path: "metadata.notes"},
+```
+
+**An audit pass, run directly against both real schemas rather than
+asserted, checked every one of the ~20 registered `kubernetes_*` types
+plus `helm_release` for computed attributes whose name suggests an echo
+of rendered/free-form input** (`notes`, `manifest`, `output`, `log`,
+`message`, `content`, `template`, `script`, `yaml`, `json`, `result`,
+`rendered`, and similar). **Kubernetes: no further candidates.** Every
+computed attribute matching those terms across all 20 types turned out
+to be a config *enum* incidentally containing a suspect substring
+(`termination_message_policy`, a `File`/`FallbackToLogsOnError`-valued
+policy knob, not user data) — every genuinely computed `kubernetes_*`
+attribute checked (`status`, `resource_version`, `uid`, load-balancer
+`ingress` blocks, ...) is structural/identity data the provider itself
+derives, never a rendering of operator-supplied *values* the way Helm's
+`manifest` is. This tracks with why the gap is Helm-specific in the
+first place: Helm renders a chart's *own template*, which can
+interpolate literally any input value, sensitive or not, into arbitrary
+output; a `kubernetes_*` resource's own attributes map directly to the
+Kubernetes API object's own fields, never to a third-party template's
+rendered output. **Helm: no further candidates beyond the three already
+seeded** — the same targeted check against `helm_release`'s own schema
+found nothing past `manifest`/`metadata.values`/`metadata.notes`
+themselves. This is a documented, honest audit scope — "checked directly
+and found none further," not "unchecked" or "assumed clean."
+
+### A precise correction: `helm_release.metadata` isn't a `NestedBlock` at all
+
+Worth stating exactly, not glossed over as "the same `NestingList`
+thing" — `metadata.values`/`metadata.notes` are NOT reached via
+`Block.NestedBlocks` the way `kubernetes_*`'s own `metadata`/`spec` are.
+Checked directly against the real schema: `helm_release.metadata` is a
+plain `Attribute` whose `Type` is the compound cty type
+`["list",["object",{"values":"string","notes":"string", ...}]]` — the
+attribute's *own* `Type` field describes "a list of objects," entirely
+independent of the `NestedBlocks`/`NestingMode` mechanism
+`kubernetes_*`'s `metadata` genuinely uses. tfplugin's `Sensitive` flag
+is a single bool per top-level `Attribute` — for a compound-typed
+attribute like this one, there is **no wire-protocol mechanism at all**
+for the provider to flag one sub-field of it as sensitive without
+flagging the *entire* attribute (losing `metadata`'s own useful,
+non-sensitive fields — `name`, `namespace`, `chart`, `version`, ...) in
+the process. This isn't hashicorp/helm merely forgetting a flag on
+`values`/`notes` specifically — the schema shape they chose has no way
+to express that granularity upstream at all. (`manifest`, by contrast,
+IS a plain string attribute with no such limitation — flagging it
+`Sensitive` would have been straightforwardly possible upstream; see
+`docs/upstream/helm-sensitive-flags.md`.) This is exactly why a ubx-owned
+override table, operating on the decoded JSON tree rather than the
+schema's own `Block`/`Attribute` structure, is the right fix regardless:
+it needs no cooperation from, and is not blocked by any limitation of,
+the wire protocol's own attribute model.
+
+### Nested paths reuse UBI-22's own list-nesting handling, by JSON shape not schema mechanism
+
+`metadata.values`/`metadata.notes` still land in the observed JSON tree
+exactly like a `NestingList`-nested value would — cty's own encoding
+rules produce the same "one-item array of objects" shape for
+`list(object(...))`-typed attributes as `ctyvalue.go`'s `blockObjectType`
+produces for a real `NestingList` block (confirmed directly: the earlier
+`kubernetes_secret_v1.data`/`aws_secretsmanager_secret_version` style
+"$redacted" checks and this Helm case reach the same array-of-one-object
+JSON shape by two different schema mechanisms). The override
+path-walker exploits exactly that: it operates purely on the *decoded
+JSON*, never on `Block`/`Attribute`/`NestedBlock` at all, so it doesn't
+need to know or care whether an array it encounters came from a real
+`NestedBlock` or a compound-typed `Attribute` — at each path segment, if
+the current JSON node is an array, the *remaining* path (not a new
+segment) is applied to every element, rather than assuming index `[0]`
+specifically. This is the one place UBI-24 deliberately does NOT mirror
+`Redact`'s own schema-driven walk mechanically — it mirrors the JSON
+*shape* that walk already knows how to produce, which turns out to be
+necessary rather than optional, since `helm_release.metadata` couldn't
+be reached by walking `Block.NestedBlocks` even in principle.
+
+### Union semantics: overrides can only add, never remove
+
+`provider.Redact`'s schema-driven pass (`redactBlock`, walking
+`Block.Attributes`/`NestedBlocks`) runs first, exactly as before UBI-24;
+the override table is then consulted *in addition*, redacting whatever
+paths are registered for that `(source, type)` regardless of whether the
+schema already flagged them. An override path that lands on an
+already-redacted value (a real, if not-yet-observed, overlap between a
+schema flag and a registered override) is left alone rather than
+re-hashing an already-opaque marker — a no-op, not a correctness issue,
+but checked directly rather than assumed harmless. There is no mechanism
+in the other direction: nothing in this table, or anywhere else, can mark
+a real `Sensitive: true` schema attribute as safe to reveal. The
+provider's own schema is a floor UBI-24 builds on top of, never a ceiling
+UBI-24 could be talked down from.
+
+### Threading `(source, type)` to the redaction boundary
+
+`provider.Redact` gains two new leading parameters, `source, typeName
+string` — the override table is keyed by exactly the same `(provider
+source, type)` pair `conformance.Registry`/`core/lookuphints` already use
+(UBI-21), so no new keying convention was invented. `typeName` was
+already available at the call site (`core.StateReader.ReadResource`'s own
+`typeName` parameter); `source` was not — `cli/stateadapter.go`'s
+`stateReaderAdapter` and `conformance/harness.go`'s own copy each gain a
+`source` field, populated by `newStateReader`/`AdoptMutateScanDiffConfig`
+from the same `--source` string already threaded through for
+`ScanRequest.ProviderSource` (UBI-21) — no new plumbing concept, the
+existing one reaching one step further.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
