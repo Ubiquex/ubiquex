@@ -121,7 +121,7 @@ always wins if more than one applies.`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 			}
-			stateReader := newStateReader(client.Provider, salt)
+			stateReader := newStateReader(client.Provider, salt, source)
 
 			var driftedCount, unreadableCount int
 			resources := make([]statusResourceJSON, 0, len(fleet))

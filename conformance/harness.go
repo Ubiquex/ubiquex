@@ -18,11 +18,15 @@ import (
 // ~20 lines.
 //
 // salt (UBI-23, docs/architecture.md -- Secrets) redacts Sensitive
-// attributes before core ever sees observed state -- see
-// cli/stateadapter.go's equivalent field for the full reasoning.
+// attributes before core ever sees observed state; source (UBI-24,
+// docs/architecture.md -- Sensitive overrides) is the provider's
+// registry source, consulted alongside salt for the (source, type)-keyed
+// override table -- see cli/stateadapter.go's equivalent fields for the
+// full reasoning.
 type stateReaderAdapter struct {
-	p    provider.Provider
-	salt []byte
+	p      provider.Provider
+	salt   []byte
+	source string
 }
 
 func (a stateReaderAdapter) Schema(ctx context.Context) (any, map[string]any, error) {
@@ -51,12 +55,13 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 	if len(observed) == 0 {
 		return observed, nil
 	}
-	return provider.Redact(rs.Block, a.salt, observed)
+	return provider.Redact(a.source, typeName, rs.Block, a.salt, observed)
 }
 
 // AdoptMutateScanDiffConfig describes one conformance run.
 type AdoptMutateScanDiffConfig struct {
 	ProviderPath   string          // provider binary to Launch (real, or a fakeprovider fixture)
+	Source         string          // provider registry source (e.g. "hashicorp/helm"), for the (source, type)-keyed override table (UBI-24); optional, empty is fine for types with no overrides registered
 	Stack          string          // stack name for the generated proposals
 	Address        core.Address    // resource address (stack is redundant with Stack above but kept on Address for GenerateProposal's use)
 	Lookup         json.RawMessage // the lookup JSON passed to ReadResource, unchanged across all three scans
@@ -118,7 +123,7 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 		}
 		defer client.Close()
 
-		res, err := core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt}, ledger, core.ScanRequest{
+		res, err := core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt, source: cfg.Source}, ledger, core.ScanRequest{
 			Address:        cfg.Address,
 			ProviderConfig: providerConfig,
 			CurrentState:   cfg.Lookup,

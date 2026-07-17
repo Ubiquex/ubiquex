@@ -18,10 +18,16 @@ import (
 // every Sensitive-flagged attribute before core ever sees the observed
 // state, since this adapter is the one place that still holds the
 // concrete *provider.Schema (hence its Sensitive flags) before it's
-// type-erased to core.StateReader's opaque `any`.
+// type-erased to core.StateReader's opaque `any`. source (UBI-24,
+// docs/architecture.md -- Sensitive overrides) is the provider's
+// Terraform-source identity (e.g. "hashicorp/helm") -- the same string
+// already threaded through as ScanRequest.ProviderSource (UBI-21) -- so
+// provider.Redact can also consult the (source, type) -keyed override
+// table alongside the schema's own Sensitive flags.
 type stateReaderAdapter struct {
-	p    provider.Provider
-	salt []byte
+	p      provider.Provider
+	salt   []byte
+	source string
 }
 
 func (a stateReaderAdapter) Schema(ctx context.Context) (any, map[string]any, error) {
@@ -56,12 +62,13 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 	if len(observed) == 0 {
 		return observed, nil
 	}
-	return provider.Redact(rs.Block, a.salt, observed)
+	return provider.Redact(a.source, typeName, rs.Block, a.salt, observed)
 }
 
 // newStateReader wraps a provider.Provider as a core.StateReader. salt is
-// the ledger directory's redaction salt (core.Ledger.Salt) -- see
-// stateReaderAdapter's own doc comment.
-func newStateReader(p provider.Provider, salt []byte) core.StateReader {
-	return stateReaderAdapter{p: p, salt: salt}
+// the ledger directory's redaction salt (core.Ledger.Salt); source is the
+// provider's registry source (e.g. "hashicorp/aws"), empty for a raw
+// --provider path -- see stateReaderAdapter's own doc comment.
+func newStateReader(p provider.Provider, salt []byte, source string) core.StateReader {
+	return stateReaderAdapter{p: p, salt: salt, source: source}
 }

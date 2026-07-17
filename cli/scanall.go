@@ -81,7 +81,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
-	stateReader := newStateReader(client.Provider, salt)
+	stateReader := newStateReader(client.Provider, salt, opts.Source)
 
 	// core.GenerateProposal sets each proposal's Parent from the ledger's
 	// real on-disk head, which never moves during this walk -- nothing
