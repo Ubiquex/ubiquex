@@ -305,14 +305,103 @@ lock for its whole duration, so a `ubx scan`/`why`/`status` invocation is
 never blocked by an in-progress `ship`, matching UBI-20's existing
 "read-only commands are never blocked by ledger-mutating ones" posture.
 
+## Amendment (2026-07-17, UBI-27): shipping resolved `change` proposals
+
+docs/resolver.md's own resolver produces `kind: "change"` proposals
+(creates + modifies, no destroys) whose config may carry `$computed`
+markers — values genuinely unknowable until apply (a new resource's own
+`id`/`arn`, say). Shipping one is a real extension of the same state
+machine above, not a different one: the failure states, freshness
+re-verification, redaction, and idempotency contract all apply unchanged.
+Three things are genuinely new.
+
+### `PlannedState` carries real tfplugin unknowns for `$computed`
+
+Checked directly against the actual library this codebase already uses
+(`github.com/zclconf/go-cty/cty/msgpack`), not assumed: `ctymsgpack.Marshal`
+already fully supports encoding `cty.UnknownVal(ty)` — a real, distinct
+msgpack extension-type encoding (`unknown.go`), not a workaround. The real
+gap is upstream of that: `provider/ctyvalue.go`'s existing
+`encodeDynamicValue` builds its `cty.Value` tree via `ctyjson.Unmarshal`
+straight from a JSON `json.RawMessage` — and JSON has no "unknown" literal
+at all, only `null`. A `$computed` marker in a resolved config can never
+survive that path; it would decode as some JSON object value (the marker
+itself), never as `cty.UnknownVal`.
+
+The fix (session 2+ implementation, pinned here as the design): a new
+construction path that walks the resolved config's JSON tree itself,
+recognizes a `$computed` marker at a given position, and substitutes
+`cty.UnknownVal(<that attribute's cty type, from the schema>)` directly
+into the `cty.Value` tree being assembled — bypassing `ctyjson.Unmarshal`'s
+ordinary null-mapping for exactly those positions, falling through to the
+existing path for everything else. This is the same "strictness lesson"
+UBI-26 already found once (cty-msgpack rejects sloppy encoding) applying a
+second time, for a different reason: not "the shape must match the
+schema exactly" but "there is a real wire-level distinction between null
+and unknown, and JSON can only ever express one of them."
+
+**Left genuinely open, not assumed answered**: whether a real provider's
+`ApplyResourceChange` — called directly, still with no separate
+`PlanResourceChange` phase (the same shortcut `drift_revert` already
+takes, docs/executor.md's own "Constructing `PlannedState` without
+planning" section) — actually accepts and correctly resolves a
+directly-constructed unknown the way it would one produced by its own real
+`PlanResourceChange` response. Real Terraform usage never skips `Plan`;
+some providers may rely on `PlannedPrivate` (opaque bytes only a real
+`PlanResourceChange` call produces) to know how to resolve an unknown
+correctly during `Apply`, in ways a directly-constructed one cannot
+satisfy. This is exactly what
+docs/resolver-adversarial.md's own "unknown-value round-trip through a
+real provider's `PlanResourceChange`/`ApplyResourceChange`" row exists to
+settle empirically, not something asserted safe in advance. If it turns
+out real providers require a genuine `PlanResourceChange` call first, that
+call would need to be added to `provider.Provider` for `change` proposals
+specifically — `drift_revert`'s own no-plan-needed shortcut would be
+unaffected (its restore values are never unknown in the first place).
+
+### Dependent resources: applied outputs feed the next `PlannedState`, mid-walk
+
+Serial, dependency order (docs/resolver.md's own topo-sort) — not the
+`(stack, type, name)` canonical order `drift_revert` uses, since a
+`change` proposal's resources can genuinely depend on each other.
+When a resource with a `$computed`-marked dependent (recorded via
+`depends_on`, docs/schema.md's amendment) finishes `applied`, the
+executor substitutes its real `provider_result` value into every
+sibling's still-pending `PlannedState` wherever that sibling's own config
+named it via `$computed`'s `from` pointer — the same `core.ApplyAfter`-shaped
+substitution `drift_revert` already performs, generalized from "restore a
+recorded value" to "fill in a value that just became known mid-walk."
+A resource is never attempted while any of its `depends_on` entries hasn't
+yet reached `applied` — the existing per-resource freshness/reconciliation
+machinery is unchanged; this only adds a new precondition (dependencies
+satisfied) before a resource's own attempt begins at all.
+
+### Apply records: `$computed` replaced by concrete results
+
+An apply record's `provider_result` (already real, redacted, UBI-26)
+naturally carries the real, concrete value where the resolved config once
+had `$computed` — no new mechanism needed there. What's new: `ubx why`'s
+own rendering of a `change` proposal's `delta.creates`/`modifies` should
+show the `$computed` marker's *resolved* value once shipped, the same way
+it already renders `$redacted` as `(redacted)` rather than the raw marker
+— a presentation-layer concern for the session that actually builds this,
+not a new ledger mechanism.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
-- Any proposal kind other than `drift_revert`.
+- Any proposal kind other than `drift_revert` — **as of UBI-26**. UBI-27's
+  own resolver work (docs/resolver.md) extends `ship` to `change` proposals
+  too, per the amendment above; that extension is designed here, not yet
+  built (session 2+).
 - Parallel execution — across resources within one proposal, or across
-  proposals/stacks. Serial, delta order, full stop.
+  proposals/stacks. Serial, delta/dependency order, full stop.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is
   reported honestly; nothing auto-reverts what already landed. A human
   decides the next step (retry the remainder via another `ship`, or
   re-scan/re-resolve if reality has moved on).
+- `delta.destroys`, for a `change` proposal or any other kind — no kind
+  this codebase produces today carries a real destroy, and shipping one
+  needs its own adversarial thinking (docs/resolver.md's own Scope
+  section).

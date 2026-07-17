@@ -415,6 +415,24 @@
   to match the ledger's own recorded truth, confirmed clean via `ubx
   status --drift`. Closes UBI-26. See STATE.md and
   docs/reliability-report.md for the full writeup and every transcript.
+- 2026-07-17 — UBI-27 session 1 (docs-only): Phase 2 continues, the
+  resolver — v1 scoped to `change` proposals (creates + modifies, no
+  destroys) from hand-written `ubx:intent/v1` files. Design landed across
+  docs/resolver.md (new), docs/schema.md ("Amendment: intent files and
+  resolved `change` proposals"), docs/executor.md ("Amendment: shipping
+  resolved `change` proposals"), and docs/resolver-adversarial.md (new,
+  ten rows). A real correction found before any design work: CLAUDE.md/
+  docs/architecture.md's "v1 XCL typechecker" points at the wrong repo by
+  name — `xcl` is lexer/parser/AST/formatter only (confirmed directly, not
+  assumed); the real type system and graph algorithms live in a separate,
+  Pulumi-targeting repo, `ubx`. Rules lifted from *that* repo's real code
+  instead, with two real gaps found and NOT carried forward as-is: v1's
+  own single-stack resource graph never detected cycles at all (only its
+  workspace-level multi-stack one did), and v1 had neither cross-stack
+  pinning/staleness nor double-run/determinism enforcement — all three are
+  deliberate v2 improvements, reusing `core.DoubleRun`/`VerifyFreshness`'s
+  own staleness shape rather than inventing new mechanisms. See STATE.md
+  for the full session writeup.
 
 ## Strategy
 
@@ -913,13 +931,63 @@ and STATE.md for the session-by-session writeup. The general executor path
 for `change`/`revert` (needs a real resolver) remains deferred, unchanged
 from the scope this wedge always named.
 
+### Resolver v1 (UBI-27)
+
+Phase 2 continues: the resolver (component map #2) — v1 scoped to
+producing `kind: "change"` proposals (creates + modifies, no destroys)
+from hand-written, machine-shaped `ubx:intent/v1` files, not yet from any
+real frontend (diagram/markdown/SDK/LLM — component map #7/#10, still
+future work). Design landed first, docs-only: docs/resolver.md (the
+resolver's own contract and rules), docs/schema.md ("Amendment: intent
+files and resolved `change` proposals" — the intent-file wire format, the
+`Delta.Creates` full node shape pinned for real, a new
+`cross_stack_pin`/`pinned_head` resolution-input kind, `change`'s own
+propose-time validation), docs/executor.md ("Amendment: shipping resolved
+`change` proposals" — real tfplugin unknowns for `$computed`, dependent
+resources fed mid-walk, apply records naturally carrying the resolved
+concrete value), and docs/resolver-adversarial.md (the required-outcome
+program, ten rows).
+
+A real, honest correction made before any design work, not glossed over:
+CLAUDE.md and docs/architecture.md both point at "v1 XCL's typechecker" as
+the source to lift rules from, by name — checked directly rather than
+assumed, `/Users/roozbeh/Ubiquex/xcl` (the repo literally named `xcl`) is
+only ever a lexer/parser/AST/formatter, confirmed by its own README and by
+grepping for `Computed`/`Pending`/graph code and finding none. The real
+type system and graph algorithms this document's own "What carries over
+from v1" section describes live in a *different*, separate repo,
+`/Users/roozbeh/Ubiquex/ubx` (a Pulumi-targeting compiler product, itself
+distinct from both `xcl` and this project). docs/resolver.md lifts its
+rules from *that* repo's real code (`internal/xcl/typechecker`,
+`internal/xcl/ir`, `internal/xcl/scope`, `internal/xcl/crossstack`,
+`internal/xcl/workspace`) instead, with real file:line grounding. Two real
+gaps found there, not carried forward as-is: v1's own single-stack
+resource graph never actually detected cycles (only its separate,
+workspace-level multi-stack graph did — docs/resolver.md's own cycle
+detection is genuinely new code, not a port); and v1 had no cross-stack
+pinning/staleness concept, and no double-run/determinism enforcement, at
+all — both are deliberate v2 improvements over v1, using mechanisms this
+project already built for other reasons (`core.DoubleRun`,
+`VerifyFreshness`'s own staleness shape) rather than inventing new ones.
+
+Sessions 2+ build against the adversarial table: `core/resolver` (hermetic
+against fake schemas/ledger state — type rules, the dependency graph +
+real cycle detection, double-run) → intent-file loading + a CLI surface
+(decided and justified in that session) → cross-stack pinning against real
+ledgers → executor unknown-value wiring, fakeprovider first then real (a
+real, cheap two-resource create chain on `ubx-states`, one resource's
+computed output feeding the other, shipped, a real `kill -9` mid-chain,
+reconciled — cleanup via plain `aws` CLI calls, documented honestly, since
+destroys are out of v1 scope).
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, chat/intent provider, diagrams, markdown intents, the general
-executor path for `change`/`revert` proposal kinds (needs a real resolver;
-UBI-26 above is the narrower `drift_revert`-only v1, not this), policies
-beyond stubs, environments/promotion, Nexus SaaS, naming of proposal ledger
-format for external publication.
+SDK + codegen, chat/intent provider, diagrams, markdown intents, `delta.destroys`
+for any proposal kind (needs its own adversarial thinking — a create can be
+retried safely, a destroy usually can't; UBI-27 above is creates+modifies
+only, not this), a real policy engine (UBI-27's resolver carries a
+policy-stub hook, always empty for now), environments/promotion, Nexus
+SaaS, naming of proposal ledger format for external publication.
 
 ## Risks being managed
 

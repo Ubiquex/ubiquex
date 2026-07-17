@@ -4,6 +4,156 @@
 
 ## Current phase
 
+**UBI-27 session 1 is done (this session, docs-only, Linear filed and
+tracked): Phase 2 continues — the resolver.** Filed as a new Linear issue
+(`UBI-27`, ubiquex team) per the handoff's own instruction (no other ID was
+inferred). v1 scope, pinned in the issue and in docs: `kind: "change"`
+proposals (creates + modifies, NO destroys) resolved from hand-written,
+machine-shaped `ubx:intent/v1` files. Docs-only by design (per the
+handoff: "design lands in docs BEFORE any code... commit session 1
+docs-only"); no code was written, no ubiquex-docs update needed (no
+user-visible CLI surface exists yet).
+
+**A real, honest correction, found before any design work and worth
+stating plainly rather than quietly working around**: CLAUDE.md and
+docs/architecture.md both name "v1 XCL's typechecker" as the thing whose
+type system and graph algorithms inform v2. Checked directly, not
+assumed: `/Users/roozbeh/Ubiquex/xcl` (the repo literally named `xcl`) is
+**only** a lexer/parser/AST/formatter — its own README says exactly that
+("no infrastructure semantics... those live in the `ubx` tool"), and
+confirmed empirically by grepping the whole repo for `Computed`/`Pending`/
+any graph/typecheck code and finding none. The real type system and graph
+algorithms live in a **separate** repo, `/Users/roozbeh/Ubiquex/ubx`
+(distinct from both `xcl` and this project, `ubiquex-cli`) — a
+Pulumi-targeting infrastructure-DSL compiler, with real
+`internal/xcl/typechecker`, `internal/xcl/ir`, `internal/xcl/scope`,
+`internal/xcl/crossstack`, and `internal/xcl/workspace` packages. Every
+rule in docs/resolver.md is lifted from *that* repo's real code (a
+dedicated research pass read it directly, with file:line citations), not
+from `xcl`, which has nothing to lift. This is exactly the kind of
+finding CLAUDE.md's own session protocol asks to be surfaced rather than
+silently worked around ("if implementation reveals a doc is wrong, stop,
+record the finding... and flag it") — flagged here, in docs/plan.md's own
+new wedge subsection, and in docs/resolver.md's own opening section.
+
+**Real rules lifted from v1 (the `ubx` repo), verified by direct reading,
+not assumed from the doc's own one-line summary:**
+
+1. **No `Pending<T>`/`Computed<T>` wrapper type at all** — a binary
+   `ValueKind` (`Resolved` | `Pending`) tags every reference; a resource
+   output, module output, remote/data-source output, or non-`env`-backend
+   `secret()` is always `Pending`. The typechecker hard-errors on a
+   `Pending` value used where `Resolved` is required (v1's only instance:
+   `when`/`extend` conditions) — the *rule shape* this project's own
+   `$computed` marker (drafted at founding, never implemented) already
+   anticipated, now actually built.
+2. **Two real gaps, found and deliberately NOT carried forward as-is**:
+   v1's own single-stack resource graph (`ir/build.go`'s `topoSort`) never
+   detected cycles at all — only its separate, workspace-level multi-stack
+   graph (`workspace.go`'s `TopoSort`, a real `path`/`inStack` DFS that
+   reports the full cycle) did. docs/resolver.md's own cycle detection for
+   the *intra-stack* graph is genuinely new code, borrowing the
+   workspace-level DFS pattern one level down, not a port of anything v1
+   already had there. And v1 has **no pinning or staleness concept for
+   cross-stack refs at all** (`@stack.output` resolves against whatever a
+   live sibling directory currently says, no version, no head, no
+   staleness) and **no double-run/determinism enforcement** (only an
+   unenforced "sort your maps" convention) — both are deliberate v2
+   improvements, reusing mechanisms this project already built for other
+   reasons (`core.DoubleRun`, `VerifyFreshness`'s own resolved-time-vs-
+   accept-time staleness shape) rather than inventing anything new.
+3. **`secret()` and `ephemeral`**: v1 has no `Secret<T>` type and no
+   validation at all preventing a secret from flowing into an arbitrary
+   field (only a backend-name warning) — docs/resolver.md's own
+   `$secret`-must-target-a-schema-`Sensitive`-attribute check is new, real
+   validation, grounded in infrastructure this project already built for a
+   different reason (UBI-23/24's `provider.Schema.Attribute.Sensitive`).
+   `ephemeral` carries over directly as an orthogonal "don't persist this"
+   flag, exactly matching v1's own `IRInput.Ephemeral` posture (layered on
+   top of, never instead of, resolved-vs-computed status).
+
+**Three new/amended documents, plus one wholly new one, in the order the
+handoff specified:**
+
+1. **docs/resolver.md** (new) — the resolver's contract:
+   `(intent file, core.StateReader, provider schema via a new
+   SchemaInspector interface, a policy-stub hook) → resolved Delta,
+   dependency-ordered, run through core.DoubleRun`. `core/resolver` stays
+   provider-import-free by design — the same `any`-typed-schema-handle
+   pattern `core.StateReader`/`core/executor.Applier` already established,
+   a `SchemaInspector` interface (`HasType`/`IsComputed`/`IsSensitive`)
+   standing in for a concrete `*provider.Schema`, with the real adapter
+   living in `cli` later, not `core`. Full intra-stack ref resolution
+   rules (sibling create vs. already-ledgered target; literal substitution
+   vs. `$computed` marking, checked against schema `Computed`, never
+   assumed from a name), the dependency graph + real cycle detection,
+   cross-stack pinning against a neighbor ledger's `FoldState` (recording
+   `pinned_head`, with a precise note on when a cross-stack ref can itself
+   still be `$computed` — the neighbor's own unshipped `change` proposal),
+   and the `op: create | modify` design decision (explicit, not inferred
+   from ledger presence — inferring it would make "modify intent whose
+   target isn't in the ledger" uncatchable, since the resolver would just
+   silently treat it as a create instead).
+2. **docs/schema.md** — "Amendment: intent files and resolved `change`
+   proposals." Pins `ubx:intent/v1`'s wire shape (deliberately
+   machine-shaped, not for hand-typing in production — the pretty
+   frontends are explicit future phases); `Delta.Creates`' full node shape
+   for a resolver-produced create (`config` alongside — never replacing —
+   adoption's own `state` key, plus a new `depends_on` field, also added to
+   the already-pinned `Modification` shape); a new `cross_stack_pin`
+   `resolution.inputs[]` kind carrying the one genuinely new field,
+   `pinned_head`; and `change`'s own propose-time validation (destroys
+   forbidden, unconditionally — not just zero for now; blast radius real,
+   matching `drift_revert`'s own precedent). Purely additive throughout, no
+   `schema_version` bump — the same reasoning as every prior amendment.
+3. **docs/executor.md** — "Amendment: shipping resolved `change`
+   proposals." Three real pieces: (a) `PlannedState` carrying genuine
+   tfplugin unknowns for `$computed` — checked directly against the real
+   `go-cty/cty/msgpack` library (not assumed): `ctymsgpack.Marshal` already
+   fully supports encoding `cty.UnknownVal`, but `encodeDynamicValue`'s
+   existing `ctyjson.Unmarshal`-from-JSON path can never produce one (JSON
+   has no "unknown" literal, only `null`) — the real gap, and the fix (a
+   new JSON-tree-walking construction path substituting `cty.UnknownVal`
+   at exactly a `$computed` marker's position), pinned as design, left for
+   session 2+ to implement. Explicitly flagged as genuinely open, not
+   assumed safe: whether a real provider's `ApplyResourceChange` — called
+   directly, no separate `PlanResourceChange`, the same shortcut
+   `drift_revert` already takes — actually resolves a directly-constructed
+   unknown correctly, since some providers may depend on `PlannedPrivate`
+   bytes only a real `Plan` call produces; this is precisely
+   docs/resolver-adversarial.md's own row 10, to be settled empirically,
+   not asserted in advance. (b) Dependent resources fed mid-walk: a
+   resource's real `provider_result` substituted into every
+   `depends_on`-linked sibling's still-pending `PlannedState` once it
+   reaches `applied`, generalizing `core.ApplyAfter`'s own substitution
+   from "restore a recorded value" to "fill in a value that just became
+   known." (c) Apply records naturally carry the resolved concrete value
+   where `$computed` once was — no new ledger mechanism, a presentation
+   concern for `ubx why` when that session comes.
+4. **docs/resolver-adversarial.md** (new) — the required-outcome program,
+   ten rows exactly as the handoff named them (double-run divergence;
+   circular intra-stack refs; ref to nonexistent resource; cross-stack pin
+   against an empty/missing neighbor ledger; neighbor-advances staleness;
+   `$computed` used where concrete is required; secret ref in a
+   non-secret-capable field; intent for an unrecognized type; modify
+   intent whose target isn't in the ledger; a real unknown-value round
+   trip through `PlanResourceChange`/`ApplyResourceChange`) — row 10
+   explicitly framed as "find out," not "assumed to pass," since it's the
+   one row this session's own research couldn't settle from library code
+   alone. A closing section names what this table doesn't yet cover
+   (multi-hop cross-stack pin chains, a `$computed` value that's itself the
+   target of a third stack's cross-reference, a provider schema changing
+   shape between resolve and ship) rather than silently implying
+   completeness.
+
+**Linear**: `UBI-27`, "Resolver v1: typed intent → resolved change
+proposals (creates/modifies)," filed against team `ubiquex`, full handoff
+scope recorded in the issue description. Left in its default `Backlog`
+state (session 1 of a multi-session ticket; will move once the v1 slices
+land).
+
+## Current phase (previous)
+
 **UBI-26 is closed (this session, session 4, Linear-verified): the live
 adversarial program against real AWS infrastructure.** New
 docs/reliability-report.md, drafted from docs/executor-adversarial.md's own

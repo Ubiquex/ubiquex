@@ -717,6 +717,178 @@ more to the documented set changes no existing proposal's meaning, exactly
 the same reasoning as every additive amendment above). Nothing about
 `Proposal`'s own hashed-content shape changes.
 
+### Amendment: intent files and resolved `change` proposals (2026-07-17, UBI-27)
+
+`kind: "change"` has been a legal `Proposal.Kind` enum value since this
+document's very first draft, never produced by anything until now
+(docs/resolver.md — Resolver v1). This amendment pins two things: the
+hand-authored input format the resolver consumes, and the exact shape of
+the resolved output it produces (closing real gaps the original IR-node
+draft, at the top of this document, left open).
+
+#### The intent file: `ubx:intent/v1`
+
+Deliberately machine-shaped — the pretty frontends (diagram/markdown/SDK/
+LLM-authored intent) are explicit future phases (docs/architecture.md's
+component map #7/#10); this format exists to be emitted by a resolver
+session's own tests today and by a real frontend later, not hand-typed by
+an end user in production.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": {
+    "summary": "provision a read replica for the payments database",
+    "sources": [{ "kind": "manual_edit", "ref": "PR #412" }]
+  },
+  "resources": [
+    {
+      "type": "aws_db_instance",
+      "name": "payments-db-replica",
+      "op": "create",
+      "config": {
+        "instance_class": "db.t3.medium",
+        "replicate_source_db": { "$ref": { "to": "payments.aws_db_instance.payments-db.id" } },
+        "master_password": { "$secret": { "backend": "aws_secrets_manager", "path": "payments/replica-password" } }
+      }
+    },
+    {
+      "type": "aws_db_instance",
+      "name": "payments-db",
+      "op": "modify",
+      "config": { "instance_class": "db.t3.large" }
+    }
+  ]
+}
+```
+
+- **`intent`** reuses `Proposal.Intent`'s own shape exactly (`summary`,
+  `sources[]`) — no new intent-evidence convention.
+- **`resources[].op`** is `"create"` or `"modify"`, always explicit, never
+  inferred from ledger presence — a real design choice, see
+  docs/resolver.md's own "`op`: explicit, not inferred" section for why
+  (inferring it would make "modify intent whose target isn't in the
+  ledger," docs/resolver-adversarial.md's own required row, uncatchable —
+  the resolver would just silently treat it as a create instead).
+  Validated at resolve time: `create` requires the address to be absent
+  from the ledger's `FoldState`; `modify` requires it to be present.
+- **`resources[].config`** is the resource's full desired end-state
+  (never a hand-computed before/after diff) — for `modify`, the resolver
+  diffs this against `FoldState` via the existing `diffAttributes`
+  (already shared by `GenerateProposal`/`GenerateRevertProposal`), the
+  same mechanism drift detection already uses, now a third caller of it
+  rather than a new one.
+- **`config` values** may be plain JSON scalars/objects/arrays (concrete),
+  or one of two new **input-only** markers, resolved away and never
+  appearing in the output proposal:
+  - **`$ref`** — `{ "$ref": { "to": "<address>.<path>" } }`, an intra-stack
+    reference (docs/resolver.md's own resolution rules: substituted with a
+    concrete literal, or a `$computed` marker, depending on whether the
+    referenced attribute is schema-`Computed`).
+  - **`$cross`** — `{ "$cross": { "stack": "...", "ledger_dir": "...", "path": "..." } }`,
+    a cross-stack reference, resolved against the neighbor ledger's own
+    `FoldState` (docs/resolver.md's own cross-stack section). `ledger_dir`
+    is an explicit filesystem path — this does not resolve
+    docs/schema.md's own still-open "cross-stack workspace index format"
+    question (see "Open questions," below); it's v1's own simple, explicit,
+    sufficient answer for now, same posture v1 XCL's own sibling-directory
+    convention already had.
+  - Existing `$secret`/`$ephemeral` markers (already drafted in this
+    document's own founding "IR — resource node" section) are used exactly
+    as originally drafted — no shape change.
+
+#### `Delta.Creates`' full node shape, pinned for real
+
+The original IR-node draft (top of this document) sketched a much richer
+shape (`schema_version`, `kind`, `provider`, `refs`, `lifecycle`) than what
+`adoption`/`drift_adopt` proposals have ever actually produced
+(`core.GenerateProposal`: `{stack, type, name, state}` — record-only,
+never needed dependency info). A `change` proposal's own creates genuinely
+need dependency information `adoption` never did, but not the full
+original sketch either — `lifecycle` is superseded by apply records
+(UBI-26: a proposal's own status is never rewritten; evidence lives in the
+apply record, not in a per-node lifecycle field), and `schema_version`/
+`kind`/`provider` are redundant with information the outer `Proposal`
+already carries. The pinned shape, additive alongside (never replacing)
+adoption's own `state`-keyed one:
+
+```json
+{
+  "stack": "payments",
+  "type": "aws_db_instance",
+  "name": "payments-db-replica",
+  "config": { "...": "resolved: concrete/$computed/$secret/$ephemeral values, never $ref/$cross" },
+  "depends_on": ["payments.aws_db_instance.payments-db"]
+}
+```
+
+- **`config`** replaces `state` for a resolver-produced create (`state`
+  describes what a resource *already, concretely* has — adoption's whole
+  point; `config` describes what's being *submitted* to create it, which
+  may include `$computed` placeholders `state` never needed to represent).
+  Adoption's own `state`-keyed shape is completely unchanged.
+- **`depends_on`** is an explicit list of canonical addresses (`Address.String()`
+  form) — not inferred from array position, even though the *stored* array
+  order also reflects dependency order (docs/resolver.md's own "dependency
+  graph" section: array order is what the executor actually walks;
+  `depends_on` is the authoritative, explicit, position-independent record
+  of why). A `Modification` entry (`delta.modifies`) MAY also carry
+  `depends_on`, for the same reason — an existing resource's own update
+  can depend on a sibling create in the same batch (e.g. referencing a
+  newly created resource's computed ID). This is a purely additive field
+  on the already-pinned `Modification` shape (docs/schema.md's own
+  "Delta element shapes — PINNED" section) — no re-pin, no version bump.
+
+#### Cross-stack pin evidence: a new `resolution.inputs[]` kind
+
+`resolution.inputs[]` (already a flexible, extensible list of "what this
+proposal was resolved against") gains a new `kind`: `"cross_stack_pin"`,
+alongside the existing `"live_state"`:
+
+```json
+{
+  "kind": "cross_stack_pin",
+  "resource": "networking.aws_vpc.main",
+  "observed_hash": "sha256:<hex, of the resolved value pulled from the neighbor's FoldState>",
+  "pinned_head": "<the neighbor ledger's Head() at resolve time>"
+}
+```
+
+`pinned_head` is the one genuinely new field (`ResolutionInput` gains it,
+optional, populated only for `cross_stack_pin` entries) — purely additive,
+no `schema_version` bump, same reasoning as every prior amendment to this
+struct (`lookup`, `provider_checksum`). This is what activates
+neighbor-advance staleness for real: re-deriving the neighbor ledger's
+current `Head()` at accept time and comparing against `pinned_head` catches
+"the neighbor moved since this was resolved" the same way `VerifyFreshness`
+already catches "live cloud state moved since this was resolved," one
+level up (a ledger, not a cloud resource).
+
+#### Validation: `change` proposals never carry destroys
+
+New propose-time structural rule (`core.Validate`, alongside the existing
+per-kind switch): a `KindChange` proposal MUST have `len(delta.destroys) ==
+0` and `blast_radius.destroys == 0` — unconditionally, not just "zero for
+now" — matching docs/resolver.md's own v1 scope line (destroys are out of
+scope entirely, not merely unproduced by today's resolver).
+`blast_radius.creates`/`.modifies` MUST equal `len(delta.creates)`/
+`len(delta.modifies)` exactly — a `change` proposal's blast radius is real
+(same posture `drift_revert` already established: accepting one is a
+decision to actually change cloud, not a record of something that already
+happened).
+
+#### No `schema_version` bump
+
+Everything above is either a new, self-contained object family (the intent
+file, its own `ubx:intent/v1` `kind` tag, never itself hashed or stored in
+the ledger — it's the resolver's *input*, not ledger content) or purely
+additive fields on already-pinned shapes (`Modification.depends_on`,
+`ResolutionInput.pinned_head`, `Delta.Creates`' new but parallel `config`
+key). Nothing about `Proposal`'s own ratified hashed-content shape, domain
+prefix, or canonicalization rules changes.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
