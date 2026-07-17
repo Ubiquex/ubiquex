@@ -1990,6 +1990,168 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
+## Ledger stores (decided 2026-07-17, design room — not yet built)
+
+Two storage questions, decided separately:
+
+**Authoring mediums (md intents, diagrams, SDK code, dialogues) always
+live in git as repo assets.** They are human-authored, PR-reviewed
+artifacts; proposals pin them by `content_hash` in `intent.sources`, so
+the coupling is cryptographic, not locational. Nothing to build — this
+is already the design.
+
+**The ledger's own JSON (proposals/, applies/) gets a configurable
+store** behind a `LedgerStore` interface (the operations `core.Ledger`
+already implicitly defines: read/append proposal, apply-record storage,
+head pointer, lock, salt). The in-repo git directory — today's behavior —
+is the reference implementation and permanent default. Remote object-store
+backed stores are planned for larger-than-repo ledgers, org-central
+ledgers without a checkout, and WORM/retention compliance tiers:
+
+```toml
+[ledger]
+store = "git"                                  # default — in-repo
+# store = "s3://acme-ubx-ledger/payments/"     # AWS
+# store = "gs://acme-ubx-ledger/payments/"     # GCP
+# store = "azblob://ubxledger/payments/"       # Azure
+```
+
+Vocabulary: this is a ledger **store** (the place the files live —
+matching the `LedgerStore` interface name), not a "backend" — there is
+no server, no database; every store holds the same content-addressed,
+hash-chained JSON objects.
+
+What a remote store must solve before it can claim support (each store
+earns "supported" via a conformance suite against the real service —
+lock contention, CAS races, interrupted appends — the same per-provider
+discipline the tfplugin layer uses): distributed locking
+(the PID-file lock doesn't span machines — conditional writes / a lock
+object with TTL), a compare-and-swap head pointer (S3 conditional puts,
+GCS generation preconditions, Azure ETags — realistically via one
+`gocloud.dev/blob` dependency, not three SDKs), and the PR-acceptance
+ceremony (proposals must exist as files in the merged PR for
+`accept --from-merge` to derive signatures — the likely shape: git stays
+the signing surface, the remote store becomes the system of record,
+mirrored on accept). Databases remain ruled out as truth (see the
+founding files-vs-database reasoning); object stores qualify because they
+preserve content-addressing, append-only posture, and independent
+verifiability. A hosted ledger operated by Nexus is this same interface
+with Nexus as the operator — the abstraction pays twice.
+
+### Addressing: derived by rule, never mapped per stack
+
+A ledger address is always `<base store>/<stack>/` — the stack name
+itself is the address segment, derived, never declared:
+
+```
+s3://acme-ledger/acme/prod/          ← base store (config)
+├── payments/{proposals,applies,head}   ← --stack payments
+└── network/{proposals,applies,head}    ← --stack network
+```
+
+Consequences, all deliberate: a new stack needs zero setup (its prefix
+appears on first append); nothing is ever written to the bare base;
+`$cross` resolves by NAME against the same base
+(`{"stack": "network", "pinned_head": ...}` → `<base>/network/head`) —
+no relative filesystem paths in pins, killing the checkout-layout
+fragility; environments are not a ubx concept — an "env" is just a
+deeper base prefix (`.../acme/prod/` vs `.../acme/staging/`), which is
+also the future promotion-model hook, no schema needed; and **the chain
+is per-store**: each stack under a base gets its own head and its own
+chain — for remote stores, docs/schema.md's founding "per-stack hash
+chain" sentence becomes true by construction. Git-local keeps today's
+flat single-chain layout as the supported legacy shape (read forever);
+the `ledger/<stack>/` subdirectory layout is the forward shape.
+
+The one thing ever declared: a cross-stack ref to a stack living in a
+*different* base (another repo, bucket, or team) — genuinely external
+information, undeducible by rule:
+
+```hcl
+ledger {
+  external {
+    network = "s3://other-team-bucket/net/prod/"
+  }
+}
+```
+
+### Config: cascading, per-key, child overrides parent
+
+Config discovery upgrades from nearest-file-wins to an editorconfig-style
+cascade: walk from cwd to root collecting every `.ubx/config*`; resolve
+**per key** (not per file) — the nearest definition of each key wins;
+tables merge key-wise; CLI flags beat everything (UBI-19's precedence,
+per-key). A repo root holds shared `[ledger]`/`[provider]`; an env
+directory overrides only `store`; a stack directory holds `stack =
+"payments"` and any per-stack overrides. Because cascades are powerful
+and invisibly wrong, a provenance surface ships with them: a resolved-
+config view printing every effective value AND which file supplied it.
+
+### Config formats: HCL canonical, TOML supported, YAML supported (strict)
+
+Three formats, one internal config struct — the cascade/merge/provenance
+logic is format-agnostic, written once. Order of preference and
+discovery per directory: `config.hcl` → `config.toml` → `config`
+(legacy TOML name) → `config.yaml` — first found wins for that
+directory; formats never merge within one directory (cascading merges
+across directories only).
+
+- **HCL — canonical.** What `ubx init` writes by default, what docs
+  examples show. The audience's native format, nests cleanly, and
+  `hclsyntax` is already a dependency. Hard constraint: **literal
+  attributes only** — no variables, functions, or interpolation,
+  enforced with the same `expr.Value(nil)` literalness check
+  `tfwrite` already uses; an expression in config is a hard error.
+- **TOML — fully supported, forever.** Already shipped (UBI-19), fully
+  deterministic; existing configs never break. `ubx init --format=toml`.
+- **YAML — supported, strict mode only.** UBI-19's determinism
+  objections are real and stay documented: the parser must refuse
+  implicit type coercion (unquoted `6.60` parsing as float 6.6,
+  `no`/`on`/`off` as booleans are hard errors, not silent surprises) —
+  ambiguity is rejected loudly, never guessed. `ubx init --format=yaml`
+  writes fully-quoted, unambiguous output.
+
+### Multi-provider stacks (decided 2026-07-17, design room — not yet built)
+
+A stack is conceptually multi-provider (the payments example: RDS + S3 +
+helm_release), but every verb today takes one provider per invocation.
+The decided design:
+
+**Config declares the stack's provider set** — a `providers` map of
+source → pinned version (cascade content like any other config table;
+explicit pins only, per standing rule):
+
+```hcl
+providers {
+  "hashicorp/aws"        = "6.60.0"
+  "hashicorp/helm"       = "3.0.2"
+  "hashicorp/kubernetes" = "2.35.1"
+}
+```
+
+**Intent files name only types** — no provider on any resource.
+Inference is type → provider, resolved by asking each declared
+provider's schema which types it owns (never name-prefix guessing);
+ambiguity or an unowned type is a hard error naming the gap. The
+resolver records the winner into each IR node's `provider` field —
+present in the node schema since the founding draft, waiting for exactly
+this — so which binary executes each resource is part of what gets
+reviewed and signed.
+
+**Executor: one dependency walk, a lazily-launched client pool** — the
+graph is provider-agnostic (a `$ref` edge from `aws_db_instance.main.
+endpoint` into a helm_release's values is just an edge); the walk hands
+each node to its own provider client, launched on first use, outputs
+flowing across provider boundaries exactly as within one.
+Scan/status/fleet walks generalize the same way: group by each
+resource's own recorded provider instead of one `--source` flag — which
+flags then retire from resolve (the `providers` block is the truth).
+
+Sequencing: config-block portion lands with UBI-32's cascade work;
+resolver inference + executor pool is its own session, expected before
+or with the SDK (whose codegen shape depends on the multi-provider
+answer).
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

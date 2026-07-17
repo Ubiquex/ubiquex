@@ -567,6 +567,44 @@
   destroy support, executor reversed-walk + destroy state machine, accept
   friction + CLI surface, then a live full-lifecycle finale on real AWS).
 
+- 2026-07-17 — Design-room decision (no session): ledger stores.
+  Recorded in docs/architecture.md §Ledger stores — authoring mediums
+  always live in git as repo assets (hash-pinned evidence, already the
+  design); the ledger's own JSON gets a configurable store behind a
+  future LedgerStore interface: git directory (default, reference
+  implementation) or object stores (s3:// / gs:// / azblob://), each
+  earning support via its own conformance suite (locking, CAS head, PR-
+  acceptance ceremony). Vocabulary: "store" (config key `store`, matching
+  the LedgerStore interface), never "backend" or "location." Filed as
+  a parked ticket; nothing built yet.
+
+- 2026-07-17 — Design-room decision (no session): ledger addressing +
+  config cascade + config formats, extending §Ledger stores in
+  docs/architecture.md. Addressing: `<base store>/<stack>/` derived by
+  rule, never mapped; $cross pins resolve by stack NAME against the base
+  (relative-path fragility dies); envs are just deeper base prefixes;
+  chain becomes per-store (per-stack true by construction on
+  remotes); one `external` table only for cross-base refs. Config:
+  editorconfig-style cascade — per-key resolution, child overrides
+  parent, tables merge key-wise, flags beat all; ships with a
+  provenance view (every value + which file supplied it). Formats: HCL
+  canonical (literal-only, enforced), TOML supported forever, YAML
+  supported strict-mode-only (implicit coercion = hard error) —
+  discovery config.hcl → config.toml → config → config.yaml, first
+  found per directory. UBI-32's scope updated to match.
+
+- 2026-07-17 — Design-room decision (no session): multi-provider stacks.
+  Recorded in docs/architecture.md §Multi-provider stacks — a `providers`
+  config map (source → pinned version) declares a stack's provider set;
+  intent files name only types; type→provider inference via schema
+  ownership (never prefix guessing, ambiguity is a hard error); the
+  resolver records each node's provider into the IR's founding-draft
+  `provider` field (signed per resource); executor runs one dependency
+  walk over a lazily-launched provider-client pool with outputs flowing
+  across provider boundaries. --source/--provider-version retire from
+  resolve when this lands. Config portion rides UBI-32; resolver/executor
+  portion is its own session, before or with the SDK.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
