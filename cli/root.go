@@ -14,6 +14,7 @@ func NewRootCmd() *cobra.Command {
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newAcceptCmd())
+	root.AddCommand(newResolveCmd())
 	root.AddCommand(newProposeCmd())
 	root.AddCommand(newWhyCmd())
 	root.AddCommand(newScanCmd())

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	ghub "github.com/ubiquex/ubiquex-cli/github"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
@@ -114,6 +115,16 @@ func newAcceptCmd() *cobra.Command {
 				}
 			}
 
+			// Cross-stack pins (UBI-27, docs/schema.md's "cross_stack_pin"
+			// resolution inputs) are re-verified unconditionally, not gated
+			// behind an opt-in flag the way live-state reverify is: unlike a
+			// real provider round trip, checking whether a neighbor ledger's
+			// head has moved is a free, local filesystem read, so there's no
+			// cost/latency reason to make an operator ask for it explicitly.
+			if err := resolver.VerifyPins(&p); err != nil {
+				return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
+			}
+
 			accepted, err := core.Accept(ledger, &p)
 			if err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: err}
@@ -173,6 +184,13 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: parse proposal at %s:%s: %w", mergeSHA, proposalFile, err)}
 	}
 
+	// Same unconditional re-verification as the local-file path (see its
+	// own comment): a merge-derived proposal can carry cross_stack_pin
+	// resolution inputs just as easily as one accepted directly from a file.
+	if err := resolver.VerifyPins(&p); err != nil {
+		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
+	}
+
 	ledger := core.Open(ledgerDir)
 	accepted, err := core.AcceptFromMerge(ledger, &p, derived.ClaimedHash, core.MergeAcceptance{
 		MergeSHA:     derived.MergeSHA,
@@ -190,16 +208,16 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 }
 
 // acceptErrorCode classifies core.Accept/core.AcceptFromMerge's failures
-// for the UBI-20 exit-code contract: ErrStaleObservation (VerifyFreshness)
-// and ErrParentMismatch/ErrTrailerHashMismatch (Accept/AcceptFromMerge/
-// Append) all mean "the world moved, or the claimed acceptance doesn't
-// check out since this proposal was resolved" -- an actionable finding
-// (exit 1), matching the "stale block"/"proposal rejected" examples in
-// docs/architecture.md's Hardening pass section. Anything else (a
-// malformed proposal, a double-accept attempt, ledger I/O) is a genuine
-// error (exit 2).
+// for the UBI-20 exit-code contract: ErrStaleObservation (VerifyFreshness),
+// ErrParentMismatch/ErrTrailerHashMismatch (Accept/AcceptFromMerge/Append),
+// and resolver.ErrCrossStackPinStale (VerifyPins) all mean "the world
+// moved, or the claimed acceptance doesn't check out since this proposal
+// was resolved" -- an actionable finding (exit 1), matching the "stale
+// block"/"proposal rejected" examples in docs/architecture.md's Hardening
+// pass section. Anything else (a malformed proposal, a double-accept
+// attempt, ledger I/O) is a genuine error (exit 2).
 func acceptErrorCode(err error) int {
-	if errors.Is(err, core.ErrStaleObservation) || errors.Is(err, core.ErrParentMismatch) || errors.Is(err, core.ErrTrailerHashMismatch) {
+	if errors.Is(err, core.ErrStaleObservation) || errors.Is(err, core.ErrParentMismatch) || errors.Is(err, core.ErrTrailerHashMismatch) || errors.Is(err, resolver.ErrCrossStackPinStale) {
 		return 1
 	}
 	return 2

@@ -445,6 +445,26 @@
   `resolver.VerifyPins` makes neighbor-advance staleness real and tested.
   `core.DiffAttributes` exported (a real third caller now exists, not
   duplicated). See STATE.md for the full session writeup.
+- 2026-07-17 — UBI-27 session 3: CLI surface (`ubx resolve <intent-file>`,
+  a new verb, not a flag on `ubx propose`) + `resolver.VerifyPins` wired
+  into both `ubx accept` paths (local file and `--from-merge`), as an
+  unconditional check — reading a neighbor ledger's head is a free local
+  read, unlike `--reverify-with`'s real provider round trip.
+  `acceptErrorCode` now classifies `resolver.ErrCrossStackPinStale` as exit
+  `1`. A real gap surfaced against the session-1 design doc: docs/
+  resolver.md names `core.StateReader` as an input, but `Resolve()` never
+  actually uses one — only `l.FoldState()` — so `ubx resolve` needs no
+  `--provider-config` and never configures/reads through the provider,
+  only fetches its schema (`cli/schemainspector.go`, a new
+  `SchemaInspector` adapter). New CLI-level tests
+  (`cli/resolve_test.go`), plus a real, built-binary verification of the
+  whole cross-stack pin loop against real ledger directories on disk:
+  resolve with `$cross`, accept while fresh (passes), advance the
+  neighbor, accept again (refused, exit 1, nothing written). ubiquex-docs
+  gained `cli/resolve.mdx` and an accept.mdx "Cross-stack pin
+  verification" section, both with real transcripts;
+  `cli/exit-codes.mdx` updated. `mint validate`/`mint broken-links` pass.
+  See STATE.md for the full session writeup.
 
 ## Strategy
 
@@ -1006,13 +1026,47 @@ that will wire it into `ubx accept`. `core.DiffAttributes` was exported
 (a real second caller now exists, alongside drift's own two) rather than
 duplicated.
 
-Sessions 3+ build the remaining slices: intent-file loading + a CLI
-surface (decided and justified in that session) → cross-stack pinning
-against real ledgers → executor unknown-value wiring, fakeprovider first
-then real (a real, cheap two-resource create chain on `ubx-states`, one
-resource's computed output feeding the other, shipped, a real `kill -9`
-mid-chain, reconciled — cleanup via plain `aws` CLI calls, documented
-honestly, since destroys are out of v1 scope).
+**Session 3 (2026-07-17): CLI surface + cross-stack pinning wired into
+`ubx accept`.** New verb `ubx resolve <intent-file>`, not a flag on
+`ubx propose` — justified inline in cli/resolve.go's own doc comment:
+`ubx propose`'s one narrow, pre-established job (hash an already-resolved
+draft for a PR trailer, refusing anything not already fully resolved)
+would be conflated with a genuinely different operation, the same way
+scan/accept/ship are never merged into one multi-purpose verb; `ubx
+resolve` instead slots into the pipeline exactly like `ubx scan` already
+does (reads some input, produces a draft proposal, unchanged for
+propose/accept to consume). A real gap surfaced against the session-1
+design doc while building this: docs/resolver.md's own contract text names
+"live state via core.StateReader" as an input, but session 2's actual
+`Resolve()` never uses one — only `l.FoldState()` — so `ubx resolve` never
+configures or reads through the provider at all, only fetches its schema
+(no `--provider-config` flag needed, unlike scan/accept). `cli/
+schemainspector.go` bridges `core/resolver.SchemaInspector` to a real
+`*provider.Schemas` dump, the same boundary role `stateReaderAdapter`
+already established for `core.StateReader`/`executor.Applier`.
+`resolver.VerifyPins` (built hermetic in session 2) is now wired into both
+`ubx accept` paths — the local-file path and `acceptFromMerge` — as an
+unconditional check, not opt-in behind a flag the way `--reverify-with`
+is: re-deriving a neighbor ledger's current head is a free, local
+filesystem read, not a real provider round trip, so there's no cost
+reason to make an operator ask for it. `acceptErrorCode` now classifies
+`resolver.ErrCrossStackPinStale` as exit `1`, the same "actionable
+finding" tier as a blocked reverify or a `parent` mismatch. All three new
+CLI-level tests (`cli/resolve_test.go`) pass, plus a live, built-binary
+verification of the full loop — resolve with a `$cross` reference,
+accept while fresh (passes), advance the neighbor ledger, accept the same
+pinned proposal again (refused, exit 1, nothing written) — run directly
+against real ledger directories on disk, not just `go test`.
+ubiquex-docs gained `cli/resolve.mdx` (new) and an accept.mdx
+"Cross-stack pin verification" section, both with transcripts from the
+actual built binary; `cli/exit-codes.mdx` updated for the new verb and
+the new exit-1 case. `mint validate`/`mint broken-links` both pass.
+
+Sessions 4+ build the remaining slice: executor unknown-value wiring,
+fakeprovider first then real (a real, cheap two-resource create chain on
+`ubx-states`, one resource's computed output feeding the other, shipped,
+a real `kill -9` mid-chain, reconciled — cleanup via plain `aws` CLI
+calls, documented honestly, since destroys are out of v1 scope).
 
 ## Deferred (explicitly not now)
 
