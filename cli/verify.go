@@ -1,14 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
 	ghub "github.com/ubiquex/ubiquex-cli/github"
@@ -49,7 +48,7 @@ import (
 // The returned *verifyAcceptanceJSON is always non-nil and is `why --json`'s
 // "verify_acceptance" field, whether or not jsonMode is set (a caller not
 // in JSON mode can simply ignore it).
-func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, repoDir, githubRepo string, jsonMode bool) (*verifyAcceptanceJSON, error) {
+func runVerifyAcceptance(ctx context.Context, out io.Writer, p *core.Proposal, repoDir, githubRepo string, jsonMode bool) (*verifyAcceptanceJSON, error) {
 	if !jsonMode {
 		fmt.Fprintln(out, "--- verify-acceptance ---")
 	}
@@ -62,8 +61,6 @@ func runVerifyAcceptance(cmd *cobra.Command, out io.Writer, p *core.Proposal, re
 	}
 	a := p.Acceptance
 	result := &verifyAcceptanceJSON{Applicable: true, Method: a.Method}
-
-	ctx := cmd.Context()
 
 	exists, err := ghub.CommitExists(ctx, repoDir, a.MergeSHA)
 	if err != nil {

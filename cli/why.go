@@ -62,7 +62,7 @@ func newWhyCmd() *cobra.Command {
 					}
 					return nil
 				}
-				verifyResult, verifyErr := runVerifyAcceptance(cmd, out, p, repoDir, githubRepo, jsonOut)
+				verifyResult, verifyErr := runVerifyAcceptance(cmd.Context(), out, p, repoDir, githubRepo, jsonOut)
 				if jsonOut {
 					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, VerifyAcceptance: verifyResult}
 					if err := writeJSON(out, payload); err != nil {

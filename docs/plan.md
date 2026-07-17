@@ -742,6 +742,22 @@ scope. See docs/architecture.md's "Kubernetes support" section for the
 full design and every empirical finding, and STATE.md for the live
 Stage 2 conformance/attribution results.
 
+### MCP server (UBI-25)
+
+A new `ubx mcp` verb (one binary, not a second executable) serves the
+Model Context Protocol over stdio, so an AI assistant can ask `ubx`
+questions directly instead of a human already knowing the CLI's own
+argument shapes. Three read-only tools —  `ubx_why`, `ubx_status`,
+`ubx_scan` — each a thin wrapper over the exact same `--json` payload
+(`whyJSON`/`statusJSON`/`scanJSON`, UBI-20's `format: 1` contract) the
+CLI itself already produces; no parallel API, no new JSON shape.
+`ubx accept`/`ship`/`writeback`/`revert-plan` (and `scan --surface-as`,
+which opens a real GitHub issue/PR) are deliberately not exposed —
+"boundary by omission: signatures and mutations are human acts," stated
+in both `--help` and the docs page, not left to be inferred from what's
+simply missing. See docs/architecture.md's "MCP server" section for the
+full design, and STATE.md for the live-verification transcript.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, full executor

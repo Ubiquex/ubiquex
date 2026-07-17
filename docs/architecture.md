@@ -1882,6 +1882,114 @@ from the same `--source` string already threaded through for
 `ScanRequest.ProviderSource` (UBI-21) — no new plumbing concept, the
 existing one reaching one step further.
 
+## MCP server (UBI-25)
+
+Every prior session's audience was a human at a terminal, or a CI runner
+consuming an exit code and `--json` payload. UBI-25 adds a third: an AI
+assistant (Claude Code, Claude Desktop, any MCP-speaking client) asking
+`ubx` questions directly, in the same conversation it's already helping
+with — "who changed this bucket and when," without the human needing to
+already know `ubx why`'s argument shape.
+
+### One verb, one binary — not a second binary
+
+`ubx mcp` is a new subcommand, not a separate `cmd/ubx-mcp` binary.
+Every other capability this project has ever shipped lives in the one
+`ubx` binary as a cobra subcommand — a second binary would mean
+goreleaser building, signing, and publishing a second artifact, the
+install docs describing two things to acquire instead of one, and a
+second `PATH` entry to manage, for a command that is otherwise no
+different from any other long-running `ubx` invocation (`ubx mcp` blocks
+serving requests over stdio until the client disconnects, exactly the
+same shape as any other CLI tool that blocks until its work is done — it
+doesn't need a different process model, just a different transport).
+There is no reuse benefit to a second binary either: `ubx mcp`'s tool
+handlers import exactly the same `core`/`provider` packages every other
+`cli/*.go` file already does.
+
+### Three tools, wrapping the existing `--json` contract — not a parallel API
+
+UBI-20's `--json` payloads (`whyJSON`, `statusJSON`, `scanJSON`,
+`format: 1`) are not just "one more output mode" for this feature — they
+ARE the API. Each MCP tool is a thin wrapper that calls the exact same
+underlying primitives (`core.Ledger.Read`/`ProposalsForAddress`,
+`core.Ledger.Fleet`/`core.RunScan`, `core.RunScan`/`core.GenerateProposal`/
+`attributeDrift`) the CLI's own `--json` code path already calls, and
+returns the exact same struct types, JSON-encoded, as the tool's result
+content. A new `computeWhyJSON`/`computeStatusJSON`/`computeScanJSON`
+function per command (`cli/mcp_why.go`/`cli/mcp_status.go`/`cli/mcp_scan.go`)
+holds the shared "do the work, build the payload" logic; the existing
+cobra `RunE` handlers are untouched (their own human-text and `--json`
+paths keep working exactly as before) — the MCP handler is a second,
+independent caller of the same underlying ledger/scan primitives, never
+a different computation or a different JSON shape. `runVerifyAcceptance`
+needed one small, mechanical signature change (`*cobra.Command` →
+`context.Context`, its only real use of the former) to be callable from
+a non-cobra caller at all; nothing about its behavior changed.
+
+- **`ubx_why`** — input: a resource address (`<stack>.<type>.<name>`) or
+  a 64-hex-char proposal ID, exactly like `ubx why`'s own single
+  argument. Output: `whyJSON` — a `chain` (resource address form, newest
+  first) or a single `proposal` (proposal-ID form), attribution already
+  rendered inline in `intent.sources` (the same data `ubx why`'s human
+  view narrates in words).
+- **`ubx_status`** — input: an optional `stack` filter and an optional
+  `drift` flag, exactly like `ubx status`'s own flags. Ledger-only by
+  default (no provider, no credentials, matches `ubx status`'s own
+  posture); `drift: true` requires provider configuration (`provider`/
+  `source`+`provider_version`, `provider_config`) the same way `ubx
+  status --drift` does — supplied as tool input, not silently defaulted,
+  since an MCP client has no `.ubx/config` of its own to fall back on the
+  way a human's shell session might. A missing/wrong provider
+  configuration surfaces as an ordinary tool error with `ubx`'s own
+  message — the teaching-error mechanism (UBI-20) already names the
+  likely fix; there was nothing to add for MCP specifically.
+- **`ubx_scan`** — input: a single resource's `stack`/`type`/`name`/
+  `lookup`, provider identity, exactly like `ubx scan`'s own
+  single-resource flags. Output: the classification (`new`/`drifted`/
+  `unchanged`) and the generated proposal(s), inline in the tool result
+  — never written anywhere the caller didn't ask for (an `out` input
+  mirrors `--out`, writing to disk only if explicitly given), and **never
+  accepted**. This is the one tool capable of a real network read against
+  live infrastructure; it never becomes a write.
+
+### Boundary by omission: signatures and mutations are human acts
+
+`ubx accept`, `ubx propose`'s ship path, `ubx writeback`, `ubx
+revert-plan`'s `--tf-dir` application, and `ubx scan --surface-as` (which
+opens a real GitHub issue/PR) are deliberately **not** exposed as MCP
+tools — not because they couldn't be wired up mechanically, but because
+this trust chain's entire thesis is that accepting a proposal is a
+recorded human (or PR-merge-derived) decision, never something an
+assistant does on a human's behalf mid-conversation. This is stated
+plainly in both `ubx mcp --help` and the docs page, not left to be
+inferred from what's simply missing from the tool list — an omission
+this deliberate is worth naming, not just leaving quiet.
+
+### Tool descriptions are the model's UX
+
+An MCP tool's `Description` field is the only thing standing between an
+assistant reaching for the right tool at the right moment and either
+guessing wrong or not realizing `ubx` can answer the question at all —
+so each of the three says plainly what question it answers ("who
+changed this and when," "what does the ledger think is true right now,
+optionally checked against live state," "does this one resource's live
+state match the ledger") and what its receipt means, not just a
+mechanical parameter list. Input field descriptions carry the same
+weight `--help` text does for the CLI flags they mirror.
+
+### Configuration: the server's own cwd, same discovery as any other invocation
+
+`ubx mcp` looks up `.ubx/config` exactly the way every other `ubx`
+command does — nearest-wins discovery from the server process's own
+working directory (UBI-19), not a new configuration surface. An MCP
+client (Claude Desktop, Claude Code) that launches `ubx mcp` with a
+`cwd` set to a real ledger checkout gets the same defaults a human
+sitting in that directory would; a client that doesn't still works, the
+same way a bare `ubx why <id> --ledger-dir <path>` always has —
+`ledger_dir` is an explicit input on every tool for exactly this reason,
+never assumed from an ambient shell state an MCP server doesn't have.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
