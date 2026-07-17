@@ -904,6 +904,101 @@ additive fields on already-pinned shapes (`Modification.depends_on`,
 key). Nothing about `Proposal`'s own ratified hashed-content shape, domain
 prefix, or canonicalization rules changes.
 
+### Amendment: apply-record lookup key + Fleet discovery (2026-07-17, UBI-29)
+
+UBI-27 closed with one named, unfixed gap (STATE.md, docs/resolver.md and
+docs/executor.md's own "Out of scope" entries): a shipped `change`
+proposal's created resources are correctly applied and durably recorded
+in their own apply record, but invisible afterward to `ubx status`/`ubx
+why <address>`/a future `ubx scan`. `core.Ledger.Fleet` (what `status`
+walks), `ProposalsForAddress`/`LastObservedHash`/`LastObservationTime`
+(what `why <address>` and CloudTrail attribution key off), and
+`FoldState` (what `scan`/`status --drift` diff live reality against) all
+discover a resource's existence exclusively via a
+`resolution.inputs[].resource` entry or `Delta.Creates`' adoption-shaped
+`state` key — and a `change` proposal's own create populates neither: it
+was never *observed*, and its real identity isn't known until `ship`
+applies it, well after the proposal's content hash is sealed, so nothing
+could retroactively add either one.
+
+#### `ResourceApply` gains `lookup`
+
+```json
+{
+  "address": { "stack": "payments", "type": "aws_sqs_queue", "name": "chain-a" },
+  "transitions": [ "...": "unchanged" ],
+  "provider_result": { "id": "https://sqs.../ubx-ubi27-chain-a", "url": "...", "...": "..." },
+  "lookup": { "id": "https://sqs.../ubx-ubi27-chain-a" }
+}
+```
+
+Recorded explicitly, at ship time, the moment a create's `ApplyResourceChange`
+call succeeds — never derived on demand by a later reader. This is a
+deliberate bias, not the only option considered: Fleet/why/status could
+instead re-derive a lookup key from `provider_result` every time they read
+one, with no new field at all. The **Slice 3 lookup-key lesson**
+(docs/schema.md's own "Amendment: persist resource lookup key," UBI-7
+follow-up — the same reasoning that put `resolution.inputs[].lookup` on
+the ledger in the first place, rather than re-deriving a scan's lookup key
+from the resource's own state every time it was needed) applies again
+here unchanged: re-reading a resource must never depend on derivation at
+need-time. `lookup` is `{"id": "<value>"}` — every real provider schema
+this codebase has touched declares an `id` attribute as the resource's own
+primary identifier (`core/lookuphints`' own stored table is about a
+*misleading alternative* key a user might reach for instead of `id`, never
+about `id` itself being insufficient — see `lookupHintText`'s own doc
+comment). If `provider_result` has no non-empty `id` at all, `lookup` is
+left unset — an honest gap (the same "unreadable: no lookup key
+recorded" status `ubx status --drift` already reports for any
+lookup-less resource), never a guessed key.
+
+#### Fleet/why/status/scan: apply records as a second discovery source
+
+`core.Ledger.Fleet`, `ProposalsForAddress`, `LastObservedHash`,
+`LastObservationTime`, and `FoldState` are all extended, identically: for
+a `KindChange` proposal's own `Delta.Creates` entries (recognized by their
+`config` key, `Delta.Creates`' change-proposal shape — never confused with
+adoption's `state`-keyed one), fold that proposal's own apply records
+(`Ledger.ApplyAttempts`) for the resource's **own** most recent transition.
+Discoverable if and only if that resource's own last transition is
+`applied` — **independent of whether the enclosing multi-resource
+`ApplyRecord` itself has been sealed**. A resource's own completion and its
+attempt's overall summary are different things: `core/executor`'s own
+`foldResourceHistory` already established (UBI-27) that a resource can be
+genuinely, durably `applied` — real `provider_result`, real identity —
+while sibling resources in the very same unsealed attempt are still
+pending, in-flight, or failed after a `kill -9`. Gating on "attempt
+sealed" would incorrectly hide a resource that is, in the real world,
+already fully created; gating on "this resource's own last transition is
+`applied`" is the correct and sufficient check, and is exactly what
+prevents a half-created resource (docs/resolver-adversarial.md-style row:
+`kill -9` mid-create) from being surfaced as watchable before it's
+actually done — it simply never reaches `applied` in the first place, no
+special-casing needed.
+
+An apply record predating this amendment (no `lookup` recorded on its
+`ResourceApply` entries — every real apply record shipped before this
+session) is handled gracefully, not as an error: the same fold falls back
+to deriving `{"id": ...}` from `provider_result` directly, exactly the
+logic `shipCreate` itself now runs at ship time. This is not a
+contradiction of "never depend on derivation at need-time" above — that
+principle governs how *new* ship runs record data going forward; tolerating
+an old, already-sealed record via a best-effort read-time derivation is an
+ordinary migration/compatibility concern, the same posture `ResourceApply`
+itself already takes toward any struct field a truly ancient record
+predates (absent, zero-valued, never a hard error). If `provider_result`
+itself has no derivable `id` either (a genuinely old or malformed record),
+the resource is honestly reported as lookup-less, same as above.
+
+#### No `schema_version` bump
+
+`ResourceApply.lookup` is a purely additive, `omitempty` field — the same
+posture every prior additive amendment to this document has taken
+(`ResolutionInput.lookup`/`provider_checksum`/`pinned_head`/`ledger_dir`,
+`Modification.depends_on`). Nothing about `ApplyRecord`'s own hash-relevant
+shape, domain prefix, or canonicalization changes; `canonicalApplyRecordBytes`
+already canonicalizes generically (no fixed field enumeration to update).
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

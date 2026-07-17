@@ -33,10 +33,48 @@ func (l *Ledger) Chain() ([]*Proposal, error) {
 	return chain, nil
 }
 
+// createNodeAddress decodes a Delta.Creates entry's stack/type/name fields
+// -- shared by every UBI-29 discovery fold below and FoldState, since both
+// adoption's {stack,type,name,state} shape and a change proposal's
+// {stack,type,name,config,depends_on} shape (docs/schema.md's amendment)
+// carry these three fields identically. ok is false if raw isn't shaped
+// like a resource node at all, or any of the three fields is empty.
+func createNodeAddress(raw json.RawMessage) (addr Address, ok bool) {
+	var node map[string]interface{}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return Address{}, false
+	}
+	s, _ := node["stack"].(string)
+	ty, _ := node["type"].(string)
+	nm, _ := node["name"].(string)
+	if s == "" || ty == "" || nm == "" {
+		return Address{}, false
+	}
+	return Address{Stack: s, Type: ty, Name: nm}, true
+}
+
+// isChangeCreateNode reports whether raw is a change-proposal create node
+// (docs/schema.md's amendment: {stack,type,name,config,depends_on}) rather
+// than adoption's own {stack,type,name,state} shape -- recognized by the
+// "config" key's presence, never confused with "state".
+func isChangeCreateNode(raw json.RawMessage) bool {
+	var node map[string]interface{}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return false
+	}
+	_, ok := node["config"]
+	return ok
+}
+
 // LastObservedHash returns the most recently recorded observed_hash for
 // addr — the newest resolution.inputs entry, across the whole ledger
-// chain, whose resource matches addr's canonical address string. found is
-// false if the ledger has never recorded addr (never scanned/adopted).
+// chain, whose resource matches addr's canonical address string; falling
+// back (UBI-29) to a change proposal's own shipped-create apply record
+// (docs/schema.md's "Amendment: apply-record lookup key + Fleet
+// discovery") when no resolution.inputs entry exists at all -- a create
+// was never observed via a resolution input, but its real applied result
+// is exactly as good a baseline hash. found is false if the ledger has
+// never recorded addr at all (never scanned/adopted/shipped).
 func (l *Ledger) LastObservedHash(addr Address) (hash string, found bool, err error) {
 	chain, err := l.Chain()
 	if err != nil {
@@ -44,10 +82,32 @@ func (l *Ledger) LastObservedHash(addr Address) (hash string, found bool, err er
 	}
 	target := addr.String()
 	for i := len(chain) - 1; i >= 0; i-- {
-		for _, in := range chain[i].Resolution.Inputs {
+		p := chain[i]
+		for _, in := range p.Resolution.Inputs {
 			if in.Resource == target {
 				return in.ObservedHash, true, nil
 			}
+		}
+		if p.Kind != KindChange {
+			continue
+		}
+		for _, raw := range p.Delta.Creates {
+			a, ok := createNodeAddress(raw)
+			if !ok || a != addr || !isChangeCreateNode(raw) {
+				continue
+			}
+			result, _, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+			if ferr != nil {
+				return "", false, fmt.Errorf("last observed hash: %w", ferr)
+			}
+			if !shipped {
+				continue
+			}
+			h, herr := ObservedHash(result)
+			if herr != nil {
+				return "", false, fmt.Errorf("last observed hash: %s: %w", addr, herr)
+			}
+			return h, true, nil
 		}
 	}
 	return "", false, nil
@@ -57,7 +117,11 @@ func (l *Ledger) LastObservedHash(addr Address) (hash string, found bool, err er
 // that most recently recorded addr's observed state — the same proposal
 // LastObservedHash reads its hash from. Used by AttributeDrift (UBI-10) to
 // bound the CloudTrail correlation window's start: "since" is when ubx last
-// looked at this resource, not an arbitrary lookback. found is false if the
+// looked at this resource, not an arbitrary lookback. Falls back (UBI-29)
+// to a shipped create's own apply-record "applied" transition timestamp --
+// a more precise "since" than resolved_at would be anyway, since it's the
+// exact moment the resource actually came to exist, not when the proposal
+// creating it was resolved (possibly much earlier). found is false if the
 // ledger has never recorded addr.
 func (l *Ledger) LastObservationTime(addr Address) (t time.Time, found bool, err error) {
 	chain, err := l.Chain()
@@ -66,14 +130,36 @@ func (l *Ledger) LastObservationTime(addr Address) (t time.Time, found bool, err
 	}
 	target := addr.String()
 	for i := len(chain) - 1; i >= 0; i-- {
-		for _, in := range chain[i].Resolution.Inputs {
+		p := chain[i]
+		for _, in := range p.Resolution.Inputs {
 			if in.Resource == target {
-				parsed, err := time.Parse(time.RFC3339, chain[i].Resolution.ResolvedAt)
+				parsed, err := time.Parse(time.RFC3339, p.Resolution.ResolvedAt)
 				if err != nil {
-					return time.Time{}, false, fmt.Errorf("last observation time: %s: bad resolved_at %q: %w", addr, chain[i].Resolution.ResolvedAt, err)
+					return time.Time{}, false, fmt.Errorf("last observation time: %s: bad resolved_at %q: %w", addr, p.Resolution.ResolvedAt, err)
 				}
 				return parsed, true, nil
 			}
+		}
+		if p.Kind != KindChange {
+			continue
+		}
+		for _, raw := range p.Delta.Creates {
+			a, ok := createNodeAddress(raw)
+			if !ok || a != addr || !isChangeCreateNode(raw) {
+				continue
+			}
+			_, _, appliedAt, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+			if ferr != nil {
+				return time.Time{}, false, fmt.Errorf("last observation time: %w", ferr)
+			}
+			if !shipped || appliedAt == "" {
+				continue
+			}
+			parsed, perr := time.Parse(time.RFC3339, appliedAt)
+			if perr != nil {
+				return time.Time{}, false, fmt.Errorf("last observation time: %s: bad applied-at %q: %w", addr, appliedAt, perr)
+			}
+			return parsed, true, nil
 		}
 	}
 	return time.Time{}, false, nil
@@ -82,13 +168,14 @@ func (l *Ledger) LastObservationTime(addr Address) (t time.Time, found bool, err
 // ProposalsForAddress returns every proposal in the ledger that recorded an
 // observation of addr — any proposal with a resolution.inputs entry whose
 // Resource matches addr's canonical string form, the same field
-// LastObservedHash/LastObservationTime already key off. In practice this is
-// addr's adoption proposal plus every subsequent drift_adopt, in ledger
-// (oldest-first) order — addr's full recorded history. Used by `ubx why`
-// (UBI-11) to resolve a resource address into its proposal chain, not just
-// a single proposal ID. An empty (nil) result means addr was never
-// recorded; that's not an error, callers decide what "unknown address"
-// should mean at their layer.
+// LastObservedHash/LastObservationTime already key off — plus (UBI-29) the
+// change proposal that created addr, once shipped, even though a create
+// never gets a resolution.inputs entry for its own address. In practice
+// this is addr's adoption (or shipped-create) proposal plus every
+// subsequent drift_adopt/modify, in ledger (oldest-first) order — addr's
+// full recorded history, `ubx why <address>`'s own genesis chain. An empty
+// (nil) result means addr was never recorded; that's not an error, callers
+// decide what "unknown address" should mean at their layer.
 func (l *Ledger) ProposalsForAddress(addr Address) ([]*Proposal, error) {
 	chain, err := l.Chain()
 	if err != nil {
@@ -97,11 +184,31 @@ func (l *Ledger) ProposalsForAddress(addr Address) ([]*Proposal, error) {
 	target := addr.String()
 	var matched []*Proposal
 	for _, p := range chain {
+		found := false
 		for _, in := range p.Resolution.Inputs {
 			if in.Resource == target {
-				matched = append(matched, p)
+				found = true
 				break
 			}
+		}
+		if !found && p.Kind == KindChange {
+			for _, raw := range p.Delta.Creates {
+				a, ok := createNodeAddress(raw)
+				if !ok || a != addr || !isChangeCreateNode(raw) {
+					continue
+				}
+				_, _, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+				if ferr != nil {
+					return nil, fmt.Errorf("proposals for address: %w", ferr)
+				}
+				if shipped {
+					found = true
+				}
+				break
+			}
+		}
+		if found {
+			matched = append(matched, p)
 		}
 	}
 	return matched, nil
@@ -112,7 +219,13 @@ func (l *Ledger) ProposalsForAddress(addr Address) ([]*Proposal, error) {
 // proposals)", restricted to one resource. addr's adoption proposal seeds
 // the state from its full snapshot (Delta.Creates); each subsequent
 // drift_adopt (or any Delta.Modifies touching addr) applies its After diff
-// on top, in ledger order. found is false if addr was never adopted.
+// on top, in ledger order. A change proposal's own create (UBI-29,
+// docs/schema.md's amendment) seeds state the same way, once shipped --
+// from that proposal's own apply record (the resource's real, concrete
+// post-apply attributes), never from Delta.Creates' own config (which may
+// still carry now-stale $computed markers, or simply predates the real
+// applied values entirely). found is false if addr was never adopted, or
+// was created via a change proposal that hasn't shipped (successfully) yet.
 //
 // Accepted limit (UBI-7 follow-up, decided rather than left open): this is
 // an O(chain length) linear walk via Chain(), with no index by address.
@@ -145,6 +258,23 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 			if st, ok := node["state"].(map[string]interface{}); ok {
 				current = st
 				found = true
+				continue
+			}
+			if _, ok := node["config"]; ok {
+				result, _, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+				if ferr != nil {
+					return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+				}
+				if shipped {
+					var seed map[string]interface{}
+					if err := json.Unmarshal(result, &seed); err != nil {
+						return nil, false, fmt.Errorf("fold state: %s: bad provider_result: %w", addr, err)
+					}
+					current = seed
+					found = true
+				}
+				// Not yet shipped (or never applied successfully): leave
+				// found as it was -- exactly like "not yet adopted."
 			}
 		}
 		for _, mod := range p.Delta.Modifies {

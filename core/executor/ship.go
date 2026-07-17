@@ -1103,6 +1103,15 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 			time.Sleep(debugDelayAfterApplySuccess)
 		}
 		ra.ProviderResult = result
+		// UBI-29 (docs/schema.md's own amendment): recorded explicitly,
+		// right here, the moment this create is real -- never left for a
+		// future reader to derive on demand (the same "persist a lookup
+		// key, don't re-derive it at need-time" lesson Slice 3 already
+		// established for resolution.inputs[].lookup). This is what makes
+		// the resource discoverable by core.Ledger.Fleet/FoldState/
+		// ProposalsForAddress/LastObservedHash afterward; core/executor
+		// itself needs to know nothing about any of those readers.
+		ra.Lookup = core.DeriveLookupFromResult(result)
 		recordTransition(ra, core.ResourceApplied, "")
 		*resourcesApplied++
 		return persist()

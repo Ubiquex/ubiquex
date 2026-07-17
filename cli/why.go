@@ -113,7 +113,9 @@ func newWhyCmd() *cobra.Command {
 
 			fmt.Fprintf(out, "%s: %d proposal(s), newest first\n", addr, len(proposals))
 			for _, p := range chain {
-				renderProposalCompact(out, p)
+				if err := renderProposalCompact(out, ledger, p); err != nil {
+					return &ExitCodeError{Code: 2, Err: err}
+				}
 			}
 			return nil
 		},
@@ -222,12 +224,26 @@ func renderModifies(out io.Writer, modifies []core.Modification, indent string) 
 // one summary line) since a chain view shows several entries at once, but
 // still renders attribution in full (see renderIntentSource): "who/when
 // changed this" is exactly what a chain view over a resource is for.
-func renderProposalCompact(out io.Writer, p *core.Proposal) {
+//
+// Apply history is also rendered for drift_revert/change entries (UBI-29)
+// -- the same condition the single-proposal-ID view already gates on --
+// so a resource whose genesis is a shipped create (rather than an
+// adoption) shows the full resolve -> accept -> ship story in its own
+// chain view, not just the accepted decision.
+func renderProposalCompact(out io.Writer, ledger *core.Ledger, p *core.Proposal) error {
 	fmt.Fprintf(out, "- %s %s (%s): %s\n", p.Kind, shortID(p.ID), p.Resolution.ResolvedAt, p.Intent.Summary)
 	for _, s := range p.Intent.Sources {
 		renderIntentSource(out, s, "    ")
 	}
 	renderModifies(out, p.Delta.Modifies, "    ")
+	if p.Kind == core.KindDriftRevert || p.Kind == core.KindChange {
+		attempts, err := ledger.ApplyAttempts(p.ID)
+		if err != nil {
+			return err
+		}
+		renderApplies(out, attempts)
+	}
+	return nil
 }
 
 // shortID is a presentation-layer truncation only (docs/schema.md's hash.go

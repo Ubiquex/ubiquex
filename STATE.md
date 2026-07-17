@@ -4,6 +4,142 @@
 
 ## Current phase
 
+**UBI-29 is done (this session): Fleet visibility for shipped creates —
+closes the one gap UBI-27 left open.** A shipped `change` proposal's
+created resources are now fully first-class: `ubx status`, `ubx why
+<address>`, and a future `ubx scan` all discover them, exactly like an
+adopted resource.
+
+**Root cause, precisely**: `core.Ledger.Fleet`/`ProposalsForAddress`/
+`LastObservedHash`/`LastObservationTime` all discover a resource
+exclusively via a `resolution.inputs[].resource` entry — and a create
+never gets one for its own address (it was never *observed*, and its real
+identity isn't known until `ship` applies it, well after the proposal's
+content hash is sealed). A DEEPER, related gap found while designing the
+fix, not just the Fleet-visibility one UBI-27 named: `core.Ledger.FoldState`
+(what `ubx scan`/`status --drift` diff live reality against, and what
+`core/resolver` itself checks before allowing a `create`/`modify`) only
+ever recognized `Delta.Creates`' adoption-shaped `{state: ...}` key —
+never `Delta.Creates`' change-proposal shape (`{config: ...}`) at all. A
+shipped create was therefore invisible to FoldState too, not just Fleet —
+meaning a future `modify` targeting it would have wrongly resolved as if
+the address didn't exist, and `RunScan` would have classified it `ScanNew`
+forever, never `ScanDrifted`.
+
+**The fix, one mechanism, five call sites**: `core.ResourceApply` gains an
+additive `Lookup json.RawMessage` field (docs/schema.md's own amendment),
+recorded explicitly by `core/executor`'s `shipCreate` the moment a
+create's `ApplyResourceChange` call succeeds — `{"id": <applied id>}`,
+via a new `core.DeriveLookupFromResult` — the same "record explicitly,
+never derive at need-time" lesson Slice 3 already established for
+`resolution.inputs[].lookup`. A new private `core.Ledger.shippedCreateFold`
+(mirroring `core/executor`'s own `foldResourceHistory`, duplicated rather
+than imported since `core` can't import `core/executor`) folds a specific
+`(proposal, address)` pair's own apply records down to: real applied
+result, lookup (falling back to `DeriveLookupFromResult` for an apply
+record that predates this amendment — row 2's own graceful-degrade
+requirement), and the applied-transition timestamp — found if and only if
+that resource's own MOST RECENT transition is `applied`, independent of
+whether the *enclosing* multi-resource `ApplyRecord` itself has been
+sealed. This gating decision matters and is deliberate: UBI-27's own kill
+test already proved one resource can be genuinely, durably `applied` while
+a sibling in the same unsealed attempt is still pending — gating on
+"sealed" would have hidden a resource that, in the real world, already
+exists. `Fleet`, `FoldState`, `ProposalsForAddress`, `LastObservedHash`,
+and `LastObservationTime` (`core/fleet.go`, `core/state.go`) all now fold
+this in alongside their existing `resolution.inputs`-based discovery —
+`FoldState` seeds a shipped create's state from its real applied
+`provider_result`, never from the pre-ship `config` (which may still carry
+stale `$computed` markers). `cli/why.go`'s `renderProposalCompact` also
+gained apply-history rendering for the address-chain view (previously
+only the single-proposal-ID view ever showed it, for any kind) — a small,
+adjacent gap found while making the create-genesis chain actually visible
+end to end.
+
+**`cli/status.go`/`cli/scan.go`/`core/scan.go` needed ZERO changes** —
+confirmed, not assumed: both already consume `Fleet`/`FoldState` as their
+only path to "what does the ledger know," so fixing those two functions
+made the whole rest of the read path correct for free. `GenerateProposal`/
+`GenerateRevertProposal` already produce the right kind (`drift_adopt`/
+`drift_revert`) for anything `RunScan` classifies `ScanDrifted`, regardless
+of a resource's own genesis — no new proposal-generation logic needed
+either.
+
+**Design landed in docs first**: docs/schema.md gained "Amendment:
+apply-record lookup key + Fleet discovery" (the new field, the
+per-resource-not-per-attempt gating rationale, the graceful-fallback
+design, no `schema_version` bump); docs/executor.md gained its own
+amendment section (`shipCreate`'s one new behavior, the sealed-vs-applied
+distinction restated in executor terms); docs/resolver.md's and
+docs/executor.md's own stale "Out of scope" bullets from UBI-27 struck
+through and marked fixed; docs/plan.md gained a "Fleet visibility for
+shipped creates (UBI-29)" wedge subsection and its Deferred-list entry
+resolved.
+
+**Hermetic adversarial coverage** (`core/ubi29_test.go`, new — `core`
+package tests can't import `core/executor`, so a `change` proposal +
+its own apply record is hand-built directly via `Accept`/`BeginApply`/
+`SaveApplyProgress`/`SealApply`, the same convention `core/executor/ship_test.go`'s
+own crash-simulation tests already use): `TestUBI29_Fleet_ShippedCreate_Discoverable`,
+`TestUBI29_FoldState_ShippedCreate_SeedsFromApplyRecord`,
+`TestUBI29_ProposalsForAddress_ShippedCreate_IncludesCreateProposal`,
+`TestUBI29_LastObservedHashAndTime_ShippedCreate` (the happy paths);
+`TestUBI29_CreatedThenDrifted_FullLifecycle` (row 1: a shipped-create
+resource participates in `RunScan`/`GenerateProposal`/`Accept` exactly
+like an adopted one, using `fakeProvider`'s own mutable `.state` field to
+simulate out-of-band drift); `TestUBI29_OldApplyRecord_NoLookupField_DerivesGracefully`
+(row 2: an apply record built with `recordLookup=false`, proving the
+`DeriveLookupFromResult` fallback); `TestUBI29_KillMidCreate_UnsealedRecord_NeverDiscoverable`
+(row 3: a resource whose only transitions are `pending`/`in_flight`, left
+unsealed, confirmed invisible to `Fleet`/`FoldState`/`ProposalsForAddress`/
+`LastObservedHash`); `TestUBI29_MixedAttempt_OnlyAppliedResourceDiscoverable`
+(the design's own key claim, proven directly: within ONE unsealed
+multi-resource attempt, the resource that reached `applied` is
+discoverable while its sibling that didn't is not — gating is
+per-resource, never per-attempt). All pass; full repo `go build ./...`/
+`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1` clean, no
+regressions anywhere.
+
+**Live-verified on real AWS** (account `839333509514`, a fresh scratch
+ledger `ubi29-live`, the same `aws_sqs_queue`+`aws_sqs_queue_policy`
+pattern as UBI-27's own finale): shipped the chain, confirmed `ubx status`
+sees both resources immediately (`kind: change`, not `adoption`) — before
+this session, the exact same command reported "0 resource(s)." A real,
+honest surprise along the way, not a bug: `--drift` fired immediately
+after a clean ship, because shipping two interdependent resources in one
+chain left the queue's own recorded `provider_result` (captured before its
+sibling policy existed) genuinely stale relative to live reality (the
+queue's own `policy` attribute changes once a policy attaches to it, plus
+a benign `region: null` → `"us-east-1"` SDKv2 computed-fill-in quirk) —
+accepted as two honest `drift_adopt`s, establishing a clean baseline. Then
+the actually-requested test: a real `aws sqs tag-queue` out-of-band
+mutation, detected by `status --drift`, CloudTrail attribution attempted
+(fired correctly, honestly reported `cloudtrail_unattributed`/
+`delivery_window` — real delivery lag, the same expected outcome UBI-10's
+own report already documented), resolved and accepted. `ubx why <address>`
+then shows the full genesis chain: `change` (with its own apply history:
+resolve → accept → ship) at the bottom, two `drift_adopt`s above it —
+before this session, `ubx why` on this exact address would have reported
+"no proposals found" (nothing in `resolution.inputs` ever named a
+create's own address). Cleaned up via plain `aws sqs delete-queue`
+(destroys stay out of v1 scope); account confirmed clean via `aws sqs
+list-queues` (zero queues) — `ubx status --drift`, run once more, honestly
+reports both resources `unreadable` afterward (the ledger still thinks
+they exist; the same named, accepted v1 limitation UBI-27's own report
+already established, not a new gap).
+
+Full docs/reliability-report.md gained a new UBI-29 section with every
+transcript above in full, including the "real, honest surprise" writeup.
+ubiquex-docs gained a new `cli/status.mdx` note (a shipped create shows up
+immediately, real transcript) and a new `cli/why.mdx` "A resource's
+genesis is a shipped create" section (the full real create-then-drift
+transcript) — cross-linked both ways; `mint validate`/`mint broken-links`
+both pass. Filed and closed in the same session: **UBI-29**, team
+`ubiquex` (referenced throughout, per the handoff's own instruction — no
+other ID inferred).
+
+## Current phase (previous)
+
 **UBI-27 session 4 is done (this session): executor unknown-value wiring
 + the live create finale on real AWS. UBI-27 is closed.** Sessions 1-3
 built and CLI-surfaced the resolver; this session made `ubx ship` actually

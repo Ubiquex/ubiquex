@@ -72,10 +72,22 @@ type ErrorRecord struct {
 }
 
 // ResourceApply is one per-resource entry of ApplyRecord.Resources.
+//
+// Lookup was added 2026-07-17 (docs/schema.md — "Amendment: apply-record
+// lookup key + Fleet discovery", UBI-29): the JSON object a future
+// ReadResource call needs to find this resource again, recorded
+// explicitly the moment a create's own ApplyResourceChange call succeeds
+// (core/executor's shipCreate) — {"id": "<value>"}, mirroring
+// ResolutionInput.Lookup's own convention and the same "never depend on
+// derivation at need-time" reasoning that field was added for (docs/schema.md's
+// "Amendment: persist resource lookup key", UBI-7 follow-up). Purely
+// additive/omitempty; unset (not guessed) if the applied result has no
+// derivable "id".
 type ResourceApply struct {
 	Address        Address                 `json:"address"`
 	Transitions    []Transition            `json:"transitions,omitempty"`
 	ProviderResult json.RawMessage         `json:"provider_result,omitempty"`
+	Lookup         json.RawMessage         `json:"lookup,omitempty"`
 	Reconciliation []ReconciliationAttempt `json:"reconciliation,omitempty"`
 	Errors         []ErrorRecord           `json:"errors,omitempty"`
 }
@@ -87,6 +99,97 @@ func (ra *ResourceApply) LastState() (state ResourceState, ok bool) {
 		return "", false
 	}
 	return ra.Transitions[len(ra.Transitions)-1].State, true
+}
+
+// DeriveLookupFromResult builds the universal {"id": ...} lookup key from
+// a resource's own applied/observed state (docs/schema.md's UBI-29
+// amendment) -- every real provider schema this codebase has touched
+// declares an "id" attribute as the resource's own primary identifier
+// (core/lookuphints' own stored table is about a MISLEADING alternative
+// key a user might reach for instead of "id", never about "id" itself
+// being insufficient -- see lookupHintText's own doc comment, core/scan.go).
+// Returns nil if result has no non-empty "id" at all -- an honest "can't
+// derive a lookup," never a guess. Used both going forward (shipCreate,
+// at the moment a create succeeds) and as a graceful read-time fallback
+// for an apply record that predates this field (shippedCreateFold).
+func DeriveLookupFromResult(result json.RawMessage) json.RawMessage {
+	if len(result) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(result, &m); err != nil {
+		return nil
+	}
+	idRaw, ok := m["id"]
+	if !ok {
+		return nil
+	}
+	var id interface{}
+	if err := json.Unmarshal(idRaw, &id); err != nil {
+		return nil
+	}
+	if id == nil || id == "" {
+		return nil
+	}
+	b, err := json.Marshal(map[string]interface{}{"id": id})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// shippedCreateFold is the shared per-(proposal, address) apply-record
+// fold every UBI-29 discovery path (FoldState, Fleet, ProposalsForAddress,
+// LastObservedHash, LastObservationTime) uses: a specific resource's own
+// real applied result, its recorded lookup key (falling back to
+// DeriveLookupFromResult for an apply record that predates the Lookup
+// field), and the exact moment it reached applied. found is true only if
+// this resource's own MOST RECENT transition is ResourceApplied --
+// independent of whether the enclosing multi-resource ApplyRecord itself
+// has been sealed (a resource's own completion and its attempt's overall
+// summary are different things; core/executor's own foldResourceHistory
+// established this first, UBI-27 -- mirrored here since core doesn't
+// import core/executor). A resource still pending/in_flight/failed/
+// still_unknown (a real kill mid-create) is never found here, which is
+// exactly what keeps a half-created resource from being surfaced as
+// discoverable before it's actually done.
+func (l *Ledger) shippedCreateFold(proposalID string, addr Address) (result, lookup json.RawMessage, appliedAt string, found bool, err error) {
+	attempts, err := l.ApplyAttempts(proposalID)
+	if err != nil {
+		return nil, nil, "", false, fmt.Errorf("shipped create fold: %w", err)
+	}
+	target := addr.String()
+	var lastState ResourceState
+	var hasState bool
+	for _, a := range attempts {
+		for _, ra := range a.Resources {
+			if ra.Address.String() != target {
+				continue
+			}
+			if st, ok := ra.LastState(); ok {
+				lastState = st
+				hasState = true
+			}
+			if len(ra.ProviderResult) > 0 {
+				result = ra.ProviderResult
+			}
+			if len(ra.Lookup) > 0 {
+				lookup = ra.Lookup
+			}
+			for _, t := range ra.Transitions {
+				if t.State == ResourceApplied {
+					appliedAt = t.At
+				}
+			}
+		}
+	}
+	if !hasState || lastState != ResourceApplied {
+		return nil, nil, "", false, nil
+	}
+	if len(lookup) == 0 {
+		lookup = DeriveLookupFromResult(result)
+	}
+	return result, lookup, appliedAt, true, nil
 }
 
 // ApplySummary is ApplyRecord.Summary -- populated only once an attempt is

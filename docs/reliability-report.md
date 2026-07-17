@@ -678,4 +678,173 @@ permanent, honest record of exactly what happened — including the two
 failed attempts before the Configure fix and the one interrupted attempt
 before the kill-recovery proof — never rewritten or cleaned up to look
 tidier than the real run was.
+
+# UBI-29: Fleet visibility for shipped creates — a real create-then-drift lifecycle
+
+> Same discipline as the sections above: real command output, not
+> reconstructed. Real AWS account `839333509514`, region `us-east-1`,
+> provider `hashicorp/aws` 6.54.0, a fresh scratch ledger
+> (`ubi29-live`). No adjectives.
+
+## Scope
+
+UBI-27 closed with one named gap: a shipped `change` proposal's created
+resources were invisible to `ubx status`/`ubx why <address>` afterward
+(`core.Ledger.Fleet` and friends discover a resource exclusively via a
+`resolution.inputs[].resource` entry, which a create never populates for
+its own address). This section is UBI-29's fix, live-verified: create a
+real chain, confirm `ubx status` sees it, mutate it out-of-band, confirm
+drift and attribution fire, resolve the correction, confirm `ubx why
+<address>` shows the create as genesis.
+
+## The chain, shipped
+
+The same `aws_sqs_queue` + `aws_sqs_queue_policy` pattern as UBI-27's own
+finale — `ubx resolve` → `ubx accept` → `ubx ship`:
+
+```text
+$ ubx ship 533d958735cc0b2b4f6f0e4b0536e1017ae586d243904078cd608e496a548e60 \
+    --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --ledger-dir .
+applied: ubi29demo.aws_sqs_queue.ubi29-queue
+applied: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy
+2 resource(s), 2 applied, 0 failed, 0 still unknown -- outcome: applied
+```
+
+## `ubx status` sees it immediately
+
+```text
+$ ubx status --ledger-dir .
+ubi29demo.aws_sqs_queue.ubi29-queue: change 533d958735cc… (accepted 2026-07-17T15:17:21Z)
+ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: change 533d958735cc… (accepted 2026-07-17T15:17:21Z)
+2 resource(s) (ledger-only, no live comparison)
+```
+
+Before UBI-29, this reported "0 resource(s)" for a stack that had just had
+two real resources shipped into it (see UBI-27's own section above). Both
+resources now show up, `kind: change` — a real, meaningful signal
+distinguishing a shipped-create genesis from an `adoption`.
+
+## A real, honest surprise: `--drift` fires immediately, correctly
+
+```text
+$ ubx status --ledger-dir . --drift --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+drifted: ubi29demo.aws_sqs_queue.ubi29-queue: change 533d958735cc… (accepted 2026-07-17T15:17:21Z)
+drifted: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: change 533d958735cc… (accepted 2026-07-17T15:17:21Z)
+2 resource(s), 2 drifted, 0 unreadable
+```
+
+Not a bug: a real, expected side effect of shipping two interdependent
+resources in the same chain. The queue's own recorded `provider_result`
+was captured the moment IT applied — before its sibling policy resource
+existed — so it legitimately differs from a fresh read taken after the
+whole chain completed:
+
+```text
+$ ubx scan --ledger-dir . --stack ubi29demo --type aws_sqs_queue --name ubi29-queue \
+    --lookup '{"id":"https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi29-queue"}' \
+    --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --no-attribution
+before: {"policy": "", "region": null}
+after:  {"policy": "{\"Statement\":[{\"Action\":\"sqs:SendMessage\",...}]}", "region": "us-east-1"}
+```
+
+`policy` went from empty (nothing attached yet, at the queue's own apply
+time) to the real, now-attached policy document; `region` went from
+`null` to `"us-east-1"` — a benign SDKv2 quirk (a schema-`Computed`
+attribute the provider fills in on a live read but leaves `null` on
+create when never explicitly set), the same class of divergence this
+project's own drift-diffing conventions already document elsewhere
+(`tags`/`tags_all`). Both are accurate: the ledger's recorded state
+really did differ from live reality, for real, traceable reasons — this
+is drift detection working correctly on a genuinely new case (an
+interdependent multi-resource create chain), not a false positive. Both
+`drift_adopt`s were generated and accepted, establishing a clean,
+accurate baseline.
+
+```text
+$ ubx status --ledger-dir . --drift --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+clean: ubi29demo.aws_sqs_queue.ubi29-queue: drift_adopt 45a635e70903… (accepted 2026-07-17T15:20:20Z)
+clean: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: drift_adopt 7078323eadb4… (accepted 2026-07-17T15:20:28Z)
+2 resource(s), 0 drifted, 0 unreadable
+```
+
+## A real out-of-band mutation, detected and attributed
+
+```text
+$ aws sqs tag-queue --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi29-queue --tags incident=UBI-29-live-verify --region us-east-1
+
+$ ubx status --ledger-dir . --drift --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+drifted: ubi29demo.aws_sqs_queue.ubi29-queue: drift_adopt 45a635e70903… (accepted 2026-07-17T15:20:20Z)
+clean: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: drift_adopt 7078323eadb4… (accepted 2026-07-17T15:20:28Z)
+2 resource(s), 1 drifted, 0 unreadable
+```
+
+`ubx scan` (with CloudTrail attribution enabled) confirms the tag change
+and attempts attribution — it fires, honestly reporting it couldn't match
+an event yet (real CloudTrail delivery lag, ~15 minutes, the same
+`cloudtrail_unattributed`/`delivery_window` outcome this project's own
+UBI-10 report already documented as expected, not a failure):
+
+```json
+{
+  "intent": {
+    "sources": [{"kind": "cloudtrail_unattributed", "reason": "delivery_window"}]
+  },
+  "delta": {"modifies": [{"after": {"tags.incident": "UBI-29-live-verify", "tags_all.incident": "UBI-29-live-verify"}}]}
+}
+```
+
+Accepted.
+
+## `ubx why <address>` shows the create as genesis
+
+```text
+$ ubx why ubi29demo.aws_sqs_queue.ubi29-queue --ledger-dir .
+ubi29demo.aws_sqs_queue.ubi29-queue: 3 proposal(s), newest first
+- drift_adopt 7621c361e11c… (2026-07-17T15:21:00Z): record drift on ubi29demo.aws_sqs_queue.ubi29-queue observed outside the ledger
+    source: cloudtrail_unattributed -- too recent for CloudTrail to have delivered a matching event yet
+    change: ubi29demo.aws_sqs_queue.ubi29-queue: tags.incident: (absent) -> "UBI-29-live-verify"
+    change: ubi29demo.aws_sqs_queue.ubi29-queue: tags_all.incident: (absent) -> "UBI-29-live-verify"
+- drift_adopt 45a635e70903… (2026-07-17T15:19:52Z): record drift on ubi29demo.aws_sqs_queue.ubi29-queue observed outside the ledger
+    change: ubi29demo.aws_sqs_queue.ubi29-queue: policy: "" -> "{...}"
+    change: ubi29demo.aws_sqs_queue.ubi29-queue: region: null -> "us-east-1"
+- change 533d958735cc… (2026-07-17T15:15:48Z): UBI-29 live verify: SQS queue + policy, Fleet visibility
+apply history:
+  attempt 1: outcome=applied
+    ubi29demo.aws_sqs_queue.ubi29-queue:
+      pending at 2026-07-17T15:17:22Z
+      in_flight at 2026-07-17T15:17:23Z
+      applied at 2026-07-17T15:17:49Z
+    ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy:
+      pending at 2026-07-17T15:17:49Z
+      in_flight at 2026-07-17T15:17:50Z
+      applied at 2026-07-17T15:18:17Z
+```
+
+The oldest entry is `change`, not `adoption` or "no proposals found" —
+before UBI-29, `ProposalsForAddress` returned nothing at all for this
+address (it only ever matched `resolution.inputs[].resource`, which a
+create never populates for itself), and `ubx why <address>` would have
+reported "no proposals found for ubi29demo.aws_sqs_queue.ubi29-queue."
+The full genesis chain — resolve → accept → ship, then two honest
+drift_adopts — is now the real, complete story `ubx why` tells.
+
+## Cleanup and account state
+
+```text
+$ aws sqs delete-queue --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi29-queue --region us-east-1
+$ aws sqs list-queues --region us-east-1
+(empty -- zero queues in the account)
+```
+
+`ubx status --drift`, run once more after cleanup, honestly reports both
+resources `unreadable` (destroys stay out of v1 scope — this is the same
+"the ledger still thinks it exists, and says so honestly" limitation
+UBI-27's own report already named, not a new gap):
+
+```text
+$ ubx status --ledger-dir . --drift --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+unreadable: ubi29demo.aws_sqs_queue.ubi29-queue: drift_adopt 7621c361e11c… (accepted 2026-07-17T15:21:10Z) -- ... provider returned no state ...
+unreadable: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: drift_adopt 7078323eadb4… (accepted 2026-07-17T15:20:28Z) -- ... context deadline exceeded ...
+2 resource(s), 0 drifted, 2 unreadable
+```
 forward silently.

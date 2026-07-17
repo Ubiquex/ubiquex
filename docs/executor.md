@@ -431,6 +431,47 @@ it already renders `$redacted` as `(redacted)` rather than the raw marker
 — a presentation-layer concern for the session that actually builds this,
 not a new ledger mechanism.
 
+## Amendment (2026-07-17, UBI-29): a shipped create registers itself for future discovery
+
+UBI-27 closed with a real, named gap: `shipChange` correctly creates a
+resource and durably records its full applied state in the apply record,
+but nothing about that record was ever *discoverable* later — `ubx
+status`/`ubx why <address>`/a future `ubx scan` all key off
+`resolution.inputs[].resource`, which a create never populates for its
+own address (see docs/schema.md's own "Amendment: apply-record lookup key
++ Fleet discovery" for the full design). This section pins the one
+executor-side change that amendment depends on.
+
+### `shipCreate` records a lookup key on success
+
+The moment a create's `ApplyResourceChange` call succeeds — same place
+`ra.ProviderResult` is already set — `shipCreate` also sets `ra.Lookup`:
+`{"id": <provider_result.id>}`, or left unset if `provider_result` has no
+non-empty `id` (honest, not guessed). This is the *only* new behavior
+`ship` itself needs; every reader-side fold (`Fleet`, `FoldState`,
+`ProposalsForAddress`, `LastObservedHash`/`LastObservationTime`) lives
+entirely in `core`, not here — `shipChange` doesn't need to know anything
+changed downstream of it.
+
+### Why gating is per-resource, not per-attempt
+
+The natural worry — "does this let a half-created resource, `kill -9`'d
+mid-create, get surfaced as if it were done?" — is already answered by
+this package's own existing invariant, not a new check: `ra.ProviderResult`/
+`ra.Lookup` are only ever set immediately before `recordTransition(ra,
+core.ResourceApplied, "")`. A resource killed before that line has no
+`Lookup` recorded at all and its own last transition is `pending`/
+`in_flight`/`unknown_post_timeout` — never `applied` — so every
+`core`-side discovery fold (which all gate on "this resource's own last
+transition is `applied`," not on whether the *enclosing* multi-resource
+`ApplyRecord` has been sealed) correctly excludes it. The distinction
+matters because sealing describes the whole attempt, and — proven live in
+UBI-27's own kill test — one resource in an attempt can be genuinely,
+durably `applied` while the attempt itself stays unsealed because a
+sibling resource hasn't had its own turn yet. Gating discovery on "sealed"
+would have hidden a resource that, in the real world, already exists;
+gating on the resource's own state is both correct and sufficient.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -438,20 +479,9 @@ not a new ledger mechanism.
   tfplugin unknowns via `provider/ctyvalue.go`'s
   `encodeUnknownAwareDynamicValue`, live-verified against a real two-resource
   AWS chain -- see STATE.md for the full session writeup).
-- **A shipped create becoming discoverable by `ubx status`/`ubx why
-  <address>` afterward** — found live, not designed for in advance:
-  `core.Ledger.Fleet`/`ProposalsForAddress`/`LastObservedHash` all
-  discover a resource exclusively via a `resolution.inputs[].resource`
-  entry, and nothing ever writes one for a create's own address (a create
-  was never observed; its real identifying attributes aren't even known
-  until `ship` applies it, well after the proposal's content hash is
-  sealed — nothing can retroactively add to it). Confirmed live: `ubx
-  status --drift` reported "0 resource(s)" for a stack that had just had
-  two real AWS resources shipped into it. See docs/resolver.md's own "Out
-  of scope" section for the same finding and the likely direction of a
-  fix (`ubx ship` durably recording something ledger-chain-visible once a
-  create lands, functionally equivalent to a synthetic adoption) — left
-  for a follow-up session.
+- ~~A shipped create becoming discoverable by `ubx status`/`ubx why
+  <address>` afterward~~ — **fixed, UBI-29**: see this document's own
+  "Amendment (2026-07-17, UBI-29)" section above.
 - Parallel execution — across resources within one proposal, or across
   proposals/stacks. Serial, delta/dependency order, full stop.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already

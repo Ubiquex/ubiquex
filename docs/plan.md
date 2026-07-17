@@ -491,6 +491,26 @@
   docs/reliability-report.md gained a full UBI-27 section; ubiquex-docs
   gained `cli/ship.mdx` change-proposal coverage and
   `guides/create-flow.mdx`. See STATE.md for the full session writeup.
+- 2026-07-17 — UBI-29 (files and closes): Fleet visibility for shipped
+  creates. `core.Ledger.Fleet`/`FoldState`/`ProposalsForAddress`/
+  `LastObservedHash`/`LastObservationTime` all now fold a `change`
+  proposal's own apply records as a second discovery source, gated on the
+  specific resource's own last transition being `applied` — never on the
+  enclosing multi-resource attempt being sealed. `ResourceApply` gains an
+  additive `lookup` field, recorded explicitly by `shipCreate` at ship
+  time (Slice 3's own "record explicitly, never derive at need-time"
+  lesson), with a graceful read-time fallback for pre-amendment apply
+  records. A deeper, related gap found designing the fix: `FoldState`
+  itself never recognized a change-proposal create's own node shape at
+  all, fixed alongside. Hermetic coverage for all three named adversarial
+  rows plus the design's own key per-resource-not-per-attempt gating
+  claim. Live-verified on real AWS: `ubx status` sees a shipped chain
+  immediately; a real out-of-band mutation was detected, attributed, and
+  corrected; `ubx why <address>` shows the full create-genesis chain where
+  it used to report nothing at all. docs/reliability-report.md gained a
+  UBI-29 section; ubiquex-docs gained a `cli/status.mdx` note and a
+  `cli/why.mdx` "genesis is a shipped create" section. See STATE.md for
+  the full session writeup.
 
 ## Strategy
 
@@ -1122,6 +1142,35 @@ docs/reliability-report.md gained a full UBI-27 section; ubiquex-docs
 gained `cli/ship.mdx`'s change-proposal coverage and a new
 `guides/create-flow.mdx`. See STATE.md for the full session writeup.
 
+### Fleet visibility for shipped creates (UBI-29) — closed
+
+The one gap UBI-27 closed with, fixed as its own ticket rather than
+reopening UBI-27: `core.Ledger.Fleet`/`FoldState`/`ProposalsForAddress`/
+`LastObservedHash`/`LastObservationTime` all now fold a `change`
+proposal's own apply records as a second discovery source, alongside
+`resolution.inputs` — gated on the specific resource's own last transition
+being `applied`, never on the enclosing multi-resource attempt being
+sealed (a resource's own completion and its attempt's overall summary are
+different things, proven live in UBI-27's own kill test). `ResourceApply`
+gains an additive `lookup` field, recorded explicitly by `shipCreate` at
+ship time (the Slice 3 lookup-key lesson: never depend on derivation at
+need-time) — with a graceful, read-time derivation fallback for any apply
+record that predates this amendment. A deeper, related gap found while
+designing the fix: `FoldState` itself never recognized a change-proposal
+create's own `config`-keyed node shape at all (only adoption's
+`state`-keyed one) — fixed alongside, not left as a second ticket, since
+the same fold mechanism serves both. Hermetic coverage for all three named
+adversarial rows (created-then-drifted lifecycle, an apply record
+predating this amendment, a `kill -9` mid-create's unsealed record never
+surfacing) plus the design's own key claim (per-resource, not per-attempt,
+gating) in `core/ubi29_test.go`. Live-verified on real AWS: `ubx status`
+now sees a shipped chain immediately; a real out-of-band `aws sqs
+tag-queue` mutation was detected, attributed, and corrected; `ubx why
+<address>` shows the full create-genesis chain where it used to report
+"no proposals found." See docs/schema.md's own amendment and
+docs/executor.md's own UBI-29 section for the full design; STATE.md for
+the session writeup.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, `delta.destroys`
@@ -1129,13 +1178,11 @@ for any proposal kind (needs its own adversarial thinking — a create can be
 retried safely, a destroy usually can't; UBI-27 above is creates+modifies
 only, not this), a real policy engine (UBI-27's resolver carries a
 policy-stub hook, always empty for now), environments/promotion, Nexus
-SaaS, naming of proposal ledger format for external publication. A shipped
-`change` proposal's creates becoming `ubx status`/`ubx why <address>`
-discoverable (found live, UBI-27 session 4 — `core.Ledger.Fleet` and
-friends key entirely on `resolution.inputs`, which a create never
-populates for its own address; likely fix is `ubx ship` durably recording
-something ledger-chain-visible once a create lands, functionally a
-synthetic adoption — a real follow-up ticket candidate, not designed here).
+SaaS, naming of proposal ledger format for external publication.
+
+~~A shipped `change` proposal's creates becoming `ubx status`/`ubx why
+<address>` discoverable~~ — fixed, UBI-29 (see its own wedge subsection
+below).
 
 ## Risks being managed
 
