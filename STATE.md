@@ -4,6 +4,120 @@
 
 ## Current phase
 
+**UBI-26 session 1 is done (this session, docs-only, Linear filed and
+tracked): Phase 2 opens — the executor.** Filed as a new Linear issue
+(`UBI-26`, ubiquex team) per the handoff's own instruction (no other ID was
+inferred). v1 scope, pinned in the issue and in docs: shipping *accepted*
+`drift_revert` proposals only — not the general `ApplyResourceChange` path
+for every proposal kind (that stays deferred, docs/plan.md, until a real
+resolver exists). This session is docs-only by design (per the handoff:
+"design lands in docs BEFORE any code... commit session 1 as docs-only");
+no code was written, no ubiquex-docs update was needed (nothing user-visible
+shipped — no new CLI surface exists yet).
+
+**Three new/amended documents, in the order the handoff specified:**
+
+1. **docs/schema.md** — "Amendment: apply records (2026-07-17, UBI-26)."
+   Pins a new hash-chained object family, `ledger/applies/<id>.apply.json`
+   (own `schema_version`, own `ubx:apply:v1\n` hash domain — distinct from
+   `Proposal`'s `ubx:proposal:v1\n`), chained two ways: `proposal` (which
+   proposal this attempt executes) and `parent` (the previous *sealed*
+   apply record for the *same* proposal — "" for attempt 1). Per-resource
+   entries carry `address`, `transitions[]` (state + timestamp), `provider_result`
+   (redacted — see below), `reconciliation[]`, and `errors[]`; a top-level
+   `summary` carries the terminal outcome and per-resource counts.
+2. **docs/executor.md** (new) — the failure-state machine spec:
+   `pending → in_flight → applied | failed | unknown_post_timeout`;
+   `unknown_post_timeout → reconcile-by-query (ReadResource) → applied |
+   failed | still_unknown`, bounded retries. THE invariant: `in_flight` is
+   durably persisted *before* `ApplyResourceChange` is called, never after.
+   Freshness (`core.VerifyFreshness`, reused unchanged) is re-verified once
+   per resource, immediately before *that* resource's own attempt — not
+   once at the top of the whole run — so a multi-resource `drift_revert`
+   (legal per docs/schema.md: "at least one `delta.modifies` entry," no
+   upper bound) can correctly detect reality moving mid-partial-apply.
+   `ubx ship` is idempotent by contract (table in docs/executor.md: `applied`
+   skipped, `failed` retried within budget, `still_unknown`/`unknown_post_timeout`
+   reconciled again before any new attempt, staleness-refused resources
+   retried fresh).
+3. **docs/executor-adversarial.md** (new) — the required-outcome program,
+   ten rows (the handoff's nine named scenarios, with the error-taxonomy
+   row split into 6a/6b for retryable vs. terminal, since they have
+   genuinely different required outcomes and deserve separate rows rather
+   than one row asserting two different things). Written in the handoff's
+   own words as "the future published reliability report" — each row states
+   a claim `ubx` makes about its own behavior under a specific injected
+   failure, not just a test-plan checklist. A closing section names what's
+   explicitly *not* yet covered (sub-process-kill-granularity disk faults,
+   indefinitely-hanging providers, clock skew) rather than silently implying
+   the nine/ten rows are failure-space-complete.
+
+**Two real design findings, resolved and documented rather than glossed
+over — exactly the "stop and flag anything that fights the existing schema"
+instruction, though both turned out resolvable without contradicting
+anything already ratified:**
+
+1. **`Proposal.status` can never be rewritten to `applied`/`partially_applied`
+   in place.** `core.Ledger.Append` enforces ledger-entry immutability
+   structurally (`ErrDuplicateProposal`; there is no update path anywhere
+   in this codebase for an already-written proposal file) — and nothing
+   about that invariant should change just because the executor now
+   exists. Resolved by making `applied`/`partially_applied` **derived,
+   reported** values only: any consumer wanting a proposal's effective
+   status folds the most recent *sealed* apply record's `summary.outcome`
+   over the proposal's stored, immutable `accepted` status — the exact
+   same "immutable history, current truth computed by folding over it"
+   posture `core.FoldState`/`core.Ledger.Chain` already establish, applied
+   one level up (proposal → its own apply history, not just address →
+   proposal chain). The stored `.prop.json` file's `status` field is never
+   touched again after `Accept` writes it once. Fully written up in
+   docs/schema.md's own amendment.
+2. **`ApplyResourceChange_Request` (checked directly against the real
+   `tfplugin5`/`tfplugin6` generated Go structs, not assumed) requires
+   `PriorState`, `PlannedState`, *and* `Config`** — all cty-msgpack
+   `DynamicValue`, matching UBI-7's own encoding lessons. Real Terraform
+   usage always derives `PlannedState` via a separate `PlanResourceChange`
+   call that resolves provider-side defaults/unknowns. `drift_revert`'s
+   narrow shape — every restored value is already concrete, already
+   observed once, never a placeholder — is exactly what lets v1 skip a
+   distinct plan phase: `PlannedState` is constructed directly as "the
+   freshly re-verified `PriorState`, with `Modification.After`'s dot-path
+   values substituted in," the same substitution `tfwrite.ApplyModification`
+   already performs for `.tf` writeback, just producing a JSON value to
+   encode instead of an HCL edit. Stated explicitly as a v1-scope shortcut,
+   sound only for `drift_revert`: a future resolver-driven `change`/`revert`
+   kind will need a real plan phase and cannot reuse this substitution.
+
+**Also pinned, both cross-cutting reuses rather than new mechanisms**:
+`provider_result` (whatever `ApplyResourceChange` returns) MUST go through
+the same `provider.Redact` schema-flags-plus-override-table union
+(UBI-23/24) and the same per-ledger salt before ever being written into an
+apply record — secrets are exactly as reachable through an apply as through
+a read. Concurrent `ubx ship` invocations against the same proposal reuse
+the existing `.ubx/lock` PID-file lock (`core.acquireLedgerLock`, built for
+UBI-20's `Append` contention) for attempt-number assignment, the same class
+of check-then-write race closed one level up (per-proposal rather than
+per-stack) — never a second lock file invented for this.
+
+**"Delta order" pinned precisely, a real gap in the existing code surfaced
+while writing this**: `core.canonicalProposalBytes`/`sortDeltaElements` only
+sorts a *transient decoded copy* of `Delta.Modifies` when computing the
+hash — it never mutates the `Proposal` struct's own field, so a proposal's
+*stored* `delta.modifies` array order is not guaranteed to already be
+`(stack, type, name)`-sorted. docs/executor.md pins that `ubx ship` must
+independently re-sort `Delta.Modifies` the same way before iterating,
+rather than trusting stored array order — otherwise "serial, delta order"
+would be an unenforced claim. This is a session-2+ implementation note, not
+a code change made this session (session 1 is docs-only, per the handoff).
+
+**Linear**: `UBI-26`, "Executor v1: ship drift_revert — failure-state
+machine + apply records," filed against team `ubiquex`, full handoff scope
+recorded in the issue description. Left in its default `Backlog` state
+(not moved to Done — session 1 of a multi-session ticket; will move once
+the full v1 slices land).
+
+## Current phase (previous)
+
 **UBI-25 is done (this session, Linear-verified): read-only MCP server —
 `ubx` as assistant tools.** Design landed first in docs/architecture.md
 (new "MCP server" section) and docs/plan.md, per session protocol.

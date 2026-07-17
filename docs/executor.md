@@ -1,0 +1,240 @@
+# Executor v1 — failure-state machine (UBI-26)
+
+> This document is the spec, written before any code. docs/schema.md's
+> "Amendment: apply records" pins the ledger object this machine produces;
+> this document pins the machine itself. docs/executor-adversarial.md pins
+> the program every implementation of it must pass.
+
+## Scope: `drift_revert` only, and why that's not an arbitrary restriction
+
+`ubx ship <proposal-id>` v1 executes exactly one proposal kind:
+`drift_revert`. Every other kind is out of scope for a real, structural
+reason, not just sequencing convenience:
+
+- `adoption`/`drift_adopt` are record-only by construction (all-zero
+  `blast_radius`, docs/schema.md) — there is nothing to ship; accepting one
+  already is the entire action.
+- `change`/`revert` (hand-authored, resolver-produced proposals) don't
+  structurally exist yet — the resolver (component map #2) hasn't been
+  built, and a hand-authored change can legitimately contain `$computed`/
+  `$secret`/unresolved-reference values that only a real plan phase can
+  settle. Shipping those is real future work, not this ticket's.
+- `drift_revert` is the one kind where "what to write back" is *already
+  fully resolved and concrete*: `delta.modifies[].after` holds the ledger's
+  already-recorded, already-concrete value for every attribute being
+  restored — never a placeholder, never something requiring a provider's
+  own plan-time unknown-resolution. This is what lets v1 skip a distinct
+  `PlanResourceChange` phase entirely and go straight to
+  `ApplyResourceChange` — see "Constructing `PlannedState` without
+  planning," below. That shortcut is only sound for exactly this kind.
+
+## Preconditions
+
+`ubx ship <proposal-id>` refuses to start unless:
+
+1. The proposal exists, `Kind == drift_revert`, and `Acceptance != nil`
+   (`Status == accepted` in the stored, immutable sense — see
+   docs/schema.md's "`Proposal.status` is never rewritten" note; ship reads
+   the stored status directly here, since this check runs *before* any
+   apply record exists to fold over).
+2. It is not already fully applied — every resource address in
+   `Delta.Modifies` already resolved to `applied` in some prior sealed
+   apply record for this proposal. If so, `ship` is a no-op: it reports
+   this and exits 0, touching nothing. This is the idempotency contract's
+   simplest case (see "Idempotency," below).
+
+## The state machine
+
+Per resource (one `Delta.Modifies` entry, keyed by its `Address`):
+
+```
+pending ──► in_flight ──► applied
+                       ├─► failed
+                       └─► unknown_post_timeout
+                                 │
+                                 ▼
+                     reconcile-by-query (ReadResource)
+                                 │
+                 ┌───────────────┼───────────────┐
+                 ▼               ▼               ▼
+              applied         failed        still_unknown
+                                          (bounded retries,
+                                        then terminal for
+                                          this attempt)
+```
+
+- **`pending`** — this resource's turn hasn't come yet, or (see "Staleness,"
+  below) it was refused before reaching `in_flight`.
+- **`in_flight`** — the risky operation is about to be, or has been,
+  attempted. **THE invariant of this whole design: the transition to
+  `in_flight` is durably written to the apply record on disk *before*
+  `ApplyResourceChange` is called** — not after, not concurrently. This is
+  what makes "crash between the write and the call" and "crash between the
+  call and the result" two distinct, individually testable, individually
+  recoverable scenarios instead of one ambiguous blur (docs/executor-adversarial.md
+  rows 4–5).
+- **`applied`** — terminal, success. `ApplyResourceChange` returned cleanly,
+  or reconciliation independently confirmed the restored value is live.
+- **`failed`** — terminal for this attempt, but not for the proposal: a
+  future `ubx ship` re-run retries a `failed` resource (within budget — see
+  "Idempotency").
+- **`unknown_post_timeout`** — the RPC didn't resolve into a clear
+  answer before its own deadline (dead provider process, killed `ubx`,
+  network partition to a remote provider, ...). Never treated as `failed`
+  or `applied` directly: reality is asked, not assumed.
+- **reconcile-by-query** — a fresh `ReadResource` call against the same
+  lookup key already recorded in `Resolution.Inputs` (exactly
+  `core.VerifyFreshness`'s own read path, reused, not reinvented). Its
+  result is compared against the restore target (`after`): a match means
+  `applied` (the change landed, whatever `ubx`'s own view of the RPC
+  thought); a match against the *original drifted* value means `failed`
+  (it never landed); anything else (unreadable, a third value neither
+  matches) is inconclusive.
+- **`still_unknown`** — reconciliation was inconclusive after exhausting a
+  bounded retry budget (a package-level var, not a hardcoded constant — same
+  convention as `core.lockWaitTimeout`, so tests can shrink it). Terminal
+  for *this* attempt; a future `ubx ship` re-run reconciles again first,
+  before attempting anything new for that resource.
+
+## Freshness: re-verified before every attempt, not just the first
+
+`core.VerifyFreshness` already exists (built for `ubx accept`) and is reused
+here unchanged, but invoked differently: **once per resource, immediately
+before that resource's own `pending → in_flight` transition** — not once
+at the top of the whole `ship` run. A multi-resource `drift_revert`
+proposal (legal per docs/schema.md: "at least one `delta.modifies` entry,"
+no upper bound) can take long enough, resource to resource, that reality
+moves *during* the run — the second resource's live state can drift a
+second time while the first is still being applied. Re-checking only once,
+up front, would miss exactly that.
+
+**Stale detected mid-partial-apply is refused, never bulldozed**: if
+resource *N* fails freshness after resources *1..N-1* already reached
+`applied` in this same attempt, resources *1..N-1*'s success stands
+untouched (it already happened — nothing to undo), resource *N* (and
+everything after it, in delta order) is refused *before ever reaching
+`in_flight`* — it stays `pending`, with an attached `errors[]` entry
+(`classification: "terminal"` for this attempt — reality actually moved,
+retrying the *same* plan blindly would be wrong; a fresh `ubx scan`/
+`ubx accept` cycle is what's needed, not a `ship` retry). The attempt seals
+as `partially_applied`, not `failed` — partial, real progress is reported
+honestly as partial progress.
+
+## Serial execution in delta order — a precise definition
+
+"Delta order" means the same canonical `(stack, type, name)` lexicographic
+sort docs/schema.md's ratified hashing rules already define for
+`delta.modifies` — **not** whatever order the stored `.prop.json` file's
+JSON array happens to be in. This distinction is real and worth stating
+plainly: `core.canonicalProposalBytes`/`sortDeltaElements` only sorts a
+*transient decoded copy* of `Delta.Modifies` for the purpose of computing
+the hash — it never mutates the `Proposal` struct's own field, so a
+proposal's stored array order is not guaranteed to already be sorted.
+`ubx ship` must independently apply the same `(stack, type, name)` sort to
+`Delta.Modifies` before iterating, rather than trusting stored order —
+otherwise two structurally identical proposals (same hash, since hashing
+already ignores stored order) could execute their resources in a different
+sequence depending on incidental array order, which would make "serial,
+delta order" an unenforced claim rather than a real guarantee. v1 has no
+cross-resource dependency graph (that's a resolver/executor concern this
+project has already ruled out of the *hashing* layer, per schema.md — and
+v1's executor doesn't reintroduce one either); the sort exists purely to
+make execution order deterministic and reproducible across runs, not to
+express dependency.
+
+## Constructing `PlannedState` without planning
+
+`tfplugin{5,6}.ApplyResourceChange_Request` requires `PriorState`,
+`PlannedState`, and `Config` (all `DynamicValue`, cty-msgpack — same
+encoding lessons UBI-7 already established for `ReadResource`). Real
+Terraform usage always produces `PlannedState` via a prior
+`PlanResourceChange` call, which resolves defaults and unknown/computed
+values the provider itself must fill in. `drift_revert`'s narrow shape
+makes that unnecessary in v1: `PlannedState` is mechanically "the freshly
+re-verified `PriorState`, with `Delta.Modifies[].after`'s already-concrete
+dot-path values substituted in" — the same "apply a `Modification` onto a
+state blob" operation `tfwrite.ApplyModification` and `core.diffObjects`'s
+dot-path convention already model, just producing a JSON value to encode
+rather than an HCL edit. No unknowns are ever introduced by a revert
+(every value being restored was, by definition, already concretely observed
+once before), so there is nothing for a real plan phase to resolve that
+this substitution doesn't already capture. `Config` is set identically to
+`PlannedState` for the same reason (a revert has no separate "desired
+config" distinct from the value being restored to).
+
+This is a v1-scope shortcut, stated as such: a future `change`/`revert` kind
+executing hand-authored config, once the resolver exists, will need a real
+`PlanResourceChange` phase and cannot reuse this substitution shortcut.
+
+## Idempotency contract
+
+`ubx ship <proposal-id>` is safe to re-run, by contract, any number of
+times. Per resource, keyed by the union of every prior sealed apply
+record's final state for that address:
+
+| Prior final state | Re-run behavior |
+| --- | --- |
+| `applied` | Skipped entirely — no new transitions recorded for it in the new attempt. |
+| `failed` | Retried from `pending`, if within the per-resource retry budget (a package var); freshness re-verified first, exactly like a first attempt. |
+| `still_unknown` | Reconciliation runs again first (bounded retries, again), *before* any new `ApplyResourceChange` call — never a blind re-apply on top of an unresolved unknown. |
+| Never reached `in_flight` (refused for staleness) | Freshness re-verified fresh; proceeds exactly as a first attempt, once it passes. |
+| No apply record exists yet (first run) | Normal first attempt. |
+
+A `drift_revert` proposal whose every resource is `applied` (across one or
+more attempts) is fully shipped; `ubx ship` reports this and exits 0
+without writing a new apply record at all — a genuine no-op, not an empty
+one.
+
+## Error taxonomy: retryable vs. terminal
+
+- **Retryable**: a transient signal that doesn't rule out the change having
+  landed or being about to — `context.DeadlineExceeded` before a response,
+  a transport-level reset, `unknown_post_timeout` itself. These feed
+  reconciliation and the retry budget; they never immediately fail a
+  resource.
+- **Terminal**: a real, structured diagnostic from the provider
+  (`ApplyResourceChange_Response.Diagnostics`, `Severity: ERROR`) — the
+  provider itself said no. Ends that resource's attempt at `failed`
+  immediately; no retry is attempted within the same `ship` invocation even
+  if retry budget remains (a provider that has already said "this attribute
+  is invalid" is not going to change its answer on an immediate retry with
+  the same input — retrying is a future-`ubx accept`-cycle concern, not a
+  `ship`-loop one).
+- **Stale** (a `VerifyFreshness` mismatch) is its own classification,
+  distinct from both: it means reality changed, not that the provider
+  rejected anything — see "Freshness," above.
+
+## Redaction
+
+`provider_result` (whatever attributes `ApplyResourceChange` returns) goes
+through `provider.Redact` — the same schema-`Sensitive`-flags-plus-override-table
+union UBI-23/24 already built, same per-ledger salt — before ever being
+written into an apply record. No new redaction mechanism; a pure reuse
+(see docs/schema.md's own note on this).
+
+## Concurrency: the same ledger lock, reused
+
+Two concurrent `ubx ship <same-id>` invocations must not race to pick the
+same attempt number or write conflicting apply records. `ship` acquires the
+existing `.ubx/lock` PID-file lock (`core`'s `acquireLedgerLock`, built for
+UBI-20's `Append` contention) for the "read the highest existing sealed
+attempt number for this proposal, decide the next one, create that
+attempt's working file" sequence — the same class of check-then-write race
+`Append` already closes for concurrent `Accept` calls, one level down (per
+proposal, not per stack). Released once the new attempt's working file
+exists; the (possibly long-running) apply loop itself does not hold the
+lock for its whole duration, so a `ubx scan`/`why`/`status` invocation is
+never blocked by an in-progress `ship`, matching UBI-20's existing
+"read-only commands are never blocked by ledger-mutating ones" posture.
+
+## Out of scope for v1, named so it isn't assumed covered
+
+- Any proposal kind other than `drift_revert`.
+- Parallel execution — across resources within one proposal, or across
+  proposals/stacks. Serial, delta order, full stop.
+- A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
+  fills that role, pre-acceptance; once accepted, `ship` executes.
+- Automatic rollback on partial failure. A `partially_applied` outcome is
+  reported honestly; nothing auto-reverts what already landed. A human
+  decides the next step (retry the remainder via another `ship`, or
+  re-scan/re-resolve if reality has moved on).

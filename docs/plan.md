@@ -340,6 +340,24 @@
   connected to the real `ubx mcp` subprocess over real stdio — captured
   for the docs page, cleaned up after. See docs/architecture.md's "MCP
   server" section and STATE.md for the full writeup.
+- 2026-07-17 — UBI-26 session 1 (docs-only): Phase 2 opens, the executor —
+  v1 scoped to shipping accepted `drift_revert` proposals only. Design
+  landed across docs/schema.md ("Amendment: apply records" — a new
+  hash-chained `ledger/applies/<id>.apply.json` object family), the new
+  docs/executor.md (the pending→in_flight→applied/failed/unknown_post_timeout
+  failure-state machine spec), and the new docs/executor-adversarial.md
+  (the required-outcome program, also meant to double as a future
+  published reliability report). Two real design findings resolved and
+  documented, not glossed over: `Proposal.status` can never be rewritten
+  to `applied`/`partially_applied` in place (ledger entries are immutable
+  by construction) — resolved by making those values derived/reported,
+  folded from the latest apply record over the stored `accepted` status;
+  and the real `tfplugin{5,6}` `ApplyResourceChange_Request` proto requires
+  a `PlannedState` a real plan phase would normally produce — `drift_revert`'s
+  always-concrete restore values are what let v1 construct it directly
+  instead, a shortcut scoped to this kind only. See docs/plan.md's own new
+  "Executor v1 (UBI-26)" wedge subsection for the full summary, and
+  STATE.md for the session writeup.
 
 ## Strategy
 
@@ -782,11 +800,64 @@ in both `--help` and the docs page, not left to be inferred from what's
 simply missing. See docs/architecture.md's "MCP server" section for the
 full design, and STATE.md for the live-verification transcript.
 
+### Executor v1 (UBI-26)
+
+Phase 2 opens: the native executor (component map #4), scoped narrowly to
+shipping *accepted* `drift_revert` proposals — not the general
+`ApplyResourceChange` path for every proposal kind, which stays deferred
+(see below) until a real resolver exists to produce `change`/`revert`
+proposals safely. Design landed first, docs-only, across three documents:
+docs/schema.md ("Amendment: apply records" — a new hash-chained
+`ledger/applies/<id>.apply.json` object family, its own `ubx:apply:v1\n`
+hash domain, chained two ways: to the proposal it executes, and to the
+prior attempt for the same proposal), docs/executor.md (the
+pending→in_flight→applied/failed/unknown_post_timeout failure-state
+machine; THE invariant that a state transition is durably persisted
+*before* the risky provider call it precedes; freshness re-verified before
+every attempt, not just the first; serial execution in the same canonical
+`(stack, type, name)` order hashing already defines), and
+docs/executor-adversarial.md (the required-outcome program every
+implementation must pass — also written to double as the project's future
+published reliability report).
+
+A real, load-bearing design resolution, not glossed over: `Proposal.status`
+moving to `applied`/`partially_applied` cannot mean rewriting a proposal's
+stored, hash-chained file in place — `core.Ledger.Append` enforces
+immutability structurally (`ErrDuplicateProposal`), and nothing else in
+this codebase ever mutates an already-written ledger entry. Resolved by
+making `applied`/`partially_applied` **derived, reported** values, folded
+from the most recent sealed apply record's outcome over the stored
+`accepted` status — the same "immutable history, current truth computed by
+folding over it" posture `core.FoldState`/`core.Ledger.Chain` already
+establish, applied one level up (proposal → apply record, not just
+address → proposal chain). See docs/schema.md for the full reasoning.
+
+A second real finding, checked against the actual `tfplugin{5,6}` proto
+rather than assumed: `ApplyResourceChange_Request` requires `PriorState`,
+`PlannedState`, *and* `Config`, all as cty-msgpack `DynamicValue` — real
+Terraform usage always derives `PlannedState` via a separate
+`PlanResourceChange` call. `drift_revert`'s narrow shape (every restored
+value is already concrete, recorded, and observed — never a placeholder)
+is exactly what lets v1 skip a distinct plan phase and construct
+`PlannedState` directly (prior state with the `Modification`'s `after`
+values substituted in, the same dot-path mechanism `tfwrite.ApplyModification`
+already uses) — a shortcut sound only for this one kind, stated as such,
+not assumed to generalize once a resolver-driven `change`/`revert` kind
+exists. See docs/executor.md.
+
+Sessions 2+ build against the adversarial table row by row: `core/executor`
+(hermetic, fake-provider-scripted failures) → provider `ApplyResourceChange`
+wiring → `ubx ship <proposal-id>` CLI → live verification against real
+drift on `ubx-states`, including a real `kill -9` mid-apply and proving the
+re-run reconciles.
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, chat/intent provider, diagrams, markdown intents, full executor
-(ApplyResourceChange path), policies beyond stubs, environments/promotion,
-Nexus SaaS, naming of proposal ledger format for external publication.
+SDK + codegen, chat/intent provider, diagrams, markdown intents, the general
+executor path for `change`/`revert` proposal kinds (needs a real resolver;
+UBI-26 above is the narrower `drift_revert`-only v1, not this), policies
+beyond stubs, environments/promotion, Nexus SaaS, naming of proposal ledger
+format for external publication.
 
 ## Risks being managed
 

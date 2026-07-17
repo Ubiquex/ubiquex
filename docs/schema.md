@@ -570,6 +570,153 @@ session — a deliberate, recorded decision, not a silent gap). See
 docs/architecture.md's "Kubernetes support" section for the full
 reasoning, and STATE.md for the complete Stage 2 writeup.
 
+### Amendment: apply records (2026-07-17, UBI-26)
+
+Phase 2 opens: the executor. v1 scope is narrow and explicit — shipping
+*accepted* `drift_revert` proposals only (see docs/executor.md for the full
+design). This amendment pins the ledger object that records what actually
+happened when `ubx ship` executes one: the **apply record**.
+
+An apply record is a new, distinct object family — `ledger/applies/<id>.apply.json`
+— not a modification to `Proposal`'s own shape. `Proposal.schema_version`
+does not bump; nothing about what a proposal *is* changes. `ApplyRecord`
+carries its own `schema_version`, starting at `1`, per this document's own
+general versioning rule.
+
+```json
+{
+  "schema_version": 1,
+  "id": "<content hash, sealed only>",
+  "proposal": "<the drift_revert proposal's own id>",
+  "parent": "<previous sealed apply record's id for this proposal, or \"\" for attempt 1>",
+  "attempt": 1,
+  "resources": [
+    {
+      "address": { "stack": "payments", "type": "aws_db_instance", "name": "payments-db" },
+      "transitions": [
+        { "state": "pending", "at": "2026-07-17T18:00:00Z" },
+        { "state": "in_flight", "at": "2026-07-17T18:00:01Z" },
+        { "state": "applied", "at": "2026-07-17T18:00:04Z" }
+      ],
+      "provider_result": { "...": "ApplyResourceChange's returned attributes, redacted exactly like ReadResource's own observed state" },
+      "reconciliation": [
+        { "at": "2026-07-17T18:00:32Z", "outcome": "applied", "detail": "ReadResource confirms restored value" }
+      ],
+      "errors": [
+        { "at": "2026-07-17T18:00:30Z", "message": "context deadline exceeded", "classification": "retryable" }
+      ]
+    }
+  ],
+  "summary": {
+    "outcome": "applied",
+    "started_at": "2026-07-17T18:00:00Z",
+    "finished_at": "2026-07-17T18:00:32Z",
+    "resources_applied": 1,
+    "resources_failed": 0,
+    "resources_still_unknown": 0
+  }
+}
+```
+
+### Hash-chained, two ways, one new domain
+
+Like a Proposal, an apply record's `id` is a content hash — domain-prefixed
+SHA-256 (`ubx:apply:v1\n`, same construction as `hashDomainPrefix`, its own
+distinct domain so an apply record's hash can never collide with a
+proposal's, or with any other object's, over the same canonical bytes),
+excluding exactly `id` itself (the only self-referential field — an apply
+record carries no `acceptance`/`status` fields of its own the way a
+Proposal does, since it never needs a separate acceptance step; it *is* the
+evidence, not something layered on top of one).
+
+Two independent chain links, not one:
+
+- **`proposal`** — the accepted `drift_revert` proposal's own `id`. This is
+  the link "which proposal did this attempt execute," not a position in any
+  chain.
+- **`parent`** — the previous *sealed* apply record's `id`, for the *same*
+  proposal. `""` for a proposal's first ship attempt. **Records are
+  append-per-attempt: a re-run creates a new apply record chained to the
+  prior one via `parent`, never edits an already-sealed one.** This mirrors
+  `Proposal.Parent`'s own per-stack chain, one level down: where a stack's
+  ledger chain is proposals chained by stack, one proposal's *apply history*
+  is apply records chained by proposal.
+
+### Sealed vs. live: why an apply record's `id` cannot exist from the start
+
+Every other content-hashed object in this document (Proposal) is complete
+and immutable from the moment it's first written — its hash is computed
+once, over its full final content, before the first byte ever touches disk.
+An apply record cannot work that way, and this is a deliberate divergence,
+not an oversight: **THE invariant** driving the whole executor design
+(docs/executor.md) is that a resource's state transition must be durably
+persisted *before* the risky provider call it precedes (`in_flight` written
+before `ApplyResourceChange` is called) — which means the apply record's
+content necessarily accretes, transition by transition, over the course of
+one running attempt. Its content isn't fixed, so its hash isn't fixed,
+until the attempt reaches a terminal outcome.
+
+Consequently: the on-disk filename during a live attempt is
+`<proposal-id>.attempt-<N>.apply.json` — a deterministic name assigned
+*before* content exists (`N` a monotonic per-proposal attempt counter,
+assigned under the same ledger lock `Append` already uses, see
+docs/executor.md's "double ship invocation racing" case), never a content
+hash. `id` is populated, and the record is renamed/finalized, only once
+`summary` is written and the attempt is sealed. A reader encountering a
+`.apply.json` file with no `id` field yet is looking at an in-progress
+attempt, not a corrupt one; a crash mid-attempt leaves exactly this
+half-written state on disk, which is expected and handled (see the
+adversarial program, docs/executor-adversarial.md), never silently
+resumed by guessing.
+
+### `Proposal.status` is never rewritten — "applied"/"partially_applied" are reported, not stored
+
+`docs/schema.md`'s own draft Proposal shape has always listed `applied` as
+a legal `status` value (`"status": "draft | refined | accepted | applied |
+stale | rejected"`), and this session adds `partially_applied` alongside
+it. But `core.Ledger.Append` enforces — structurally, not just by
+convention — that **ledger entries are immutable once written**
+(`ErrDuplicateProposal`; there is no update path anywhere in this codebase
+for a proposal already on disk). Those two facts would conflict if
+"status may move to applied" meant rewriting the stored `.prop.json`
+file's own `status` field after the fact.
+
+It doesn't. The stored proposal file's `status` is fixed forever at
+`Accept`-time (`accepted`, for everything this codebase generates today)
+and is **never** rewritten to `applied`/`partially_applied` in place —
+doing so would mean mutating a hash-chained ledger entry, which nothing
+else in this system ever does. Instead, `applied`/`partially_applied` are
+**derived, reported values**: any consumer wanting a proposal's effective
+status (`ubx why`, `ubx status`, `ubx ship` itself) computes it by walking
+`ledger/applies/` for that proposal's `id`, taking the most recent sealed
+apply record's `summary.outcome`, and folding it over the stored
+`accepted` status — the same "immutable history, current truth computed by
+folding over it" posture `core.FoldState` and `core.Ledger.Chain` already
+use elsewhere in this codebase, applied one level up. **The evidence lives
+in the apply record; the proposal file's own `status` field is not the
+evidence and is never asked to be.**
+
+### Redaction applies here too
+
+`provider_result` (the attributes `ApplyResourceChange` returns) is exactly
+as capable of carrying a live secret as `ReadResource`'s own observed state
+— it comes from the same provider, over the same wire protocol, describing
+the same resource. It MUST be passed through `provider.Redact` (the same
+schema-`Sensitive`-flags-plus-override-table union UBI-23/24 already built)
+before ever being written into an apply record, using the same per-ledger
+salt (`.ubx/salt`). No new redaction mechanism is needed or introduced —
+this is a reuse, not an amendment to how `$redacted` itself works.
+
+### No `schema_version` bump on `Proposal`
+
+Everything above is either an entirely new object family (`ApplyRecord`,
+own `schema_version`) or a purely additive `status` enum value
+(`partially_applied` — `draft`/`refined`/`accepted`/`applied`/`stale`/
+`rejected` were already legal values in the schema's own draft; adding one
+more to the documented set changes no existing proposal's meaning, exactly
+the same reasoning as every additive amendment above). Nothing about
+`Proposal`'s own hashed-content shape changes.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
