@@ -661,6 +661,75 @@ func TestShip_CrashBetweenCallAndResultWrite_AlreadyLanded_ResolvesApplied(t *te
 	}
 }
 
+// TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApplied
+// is a permanent regression guard for a real bug found live-testing the
+// centerpiece kill -9 scenario against real AWS (UBI-26 session 4,
+// docs/reliability-report.md): a drift_revert whose only change is
+// removing an attribute added out-of-band has an EMPTY After map (nothing
+// to add back -- see core.ApplyAfter's own Before-only-path deletion
+// logic). reconciliationVerdict's first version only ever compared
+// observed state against mod.After's own dot-paths, so it could never
+// conclude "applied" for a pure-deletion revert -- reconciliation reported
+// "still_unknown" forever, even reading a live state that had, in fact,
+// already been correctly corrected by the real ApplyResourceChange call
+// before ubx crashed.
+func TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApplied(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+	addr := core.Address{Stack: "payments", Type: "fake_widget", Name: "api-cache"}
+
+	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod"}))
+	res, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil {
+		t.Fatalf("adopt scan: %v", err)
+	}
+	adoptProp, err := core.GenerateProposal(l, "payments", res)
+	if err != nil {
+		t.Fatalf("adopt generate: %v", err)
+	}
+	if _, err := core.Accept(l, adoptProp); err != nil {
+		t.Fatalf("adopt accept: %v", err)
+	}
+
+	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod", "added": "out-of-band"}))
+	driftRes, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil {
+		t.Fatalf("drift scan: %v", err)
+	}
+	p := acceptRevert(t, l, "payments", driftRes)
+	if len(p.Delta.Modifies[0].After) != 0 {
+		t.Fatalf("mod.After = %+v, want empty (pure deletion)", p.Delta.Modifies[0].After)
+	}
+
+	// Simulate: attempt 1 crashed right after the real apply call landed
+	// (the "added" tag genuinely already removed live), before ubx recorded
+	// the applied transition.
+	rec, err := l.BeginApply(p.ID)
+	if err != nil {
+		t.Fatalf("begin apply: %v", err)
+	}
+	ra := &core.ResourceApply{Address: addr}
+	rec.Resources = append(rec.Resources, ra)
+	recordTransition(ra, core.ResourcePending, "")
+	recordTransition(ra, core.ResourceInFlight, "")
+	if err := l.SaveApplyProgress(rec); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod"}))
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("re-run ship: %v", err)
+	}
+	gotRA := sealed.Resources[0]
+	if st, _ := gotRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("last state = %s, want applied -- reconciliation must recognize a pure-deletion revert already landed", st)
+	}
+	if len(gotRA.Reconciliation) == 0 || gotRA.Reconciliation[0].Outcome != "applied" {
+		t.Fatalf("reconciliation = %+v, want its first attempt to conclude applied", gotRA.Reconciliation)
+	}
+}
+
 // --- row 7: stale detected mid-partial-apply -----------------------------
 
 func TestShip_StaleDetectedMidPartialApply_HaltsRemainingResources(t *testing.T) {

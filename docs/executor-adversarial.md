@@ -7,6 +7,12 @@
 > becomes a claim about the real one. This document is also the future
 > published reliability report: read each row as a claim `ubx` makes about
 > its own behavior under failure, not just a test-plan checklist.
+>
+> **This program's own status against both the hermetic suite and real AWS
+> infrastructure is tracked in docs/reliability-report.md** (UBI-26 session
+> 4) — including two real bugs this table's own live verification found and
+> fixed, and the real transcripts of every row exercised against real
+> cloud.
 
 ## How to read this table
 

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -84,6 +85,32 @@ var (
 	reconcileRetryInterval      = 20 * time.Millisecond
 	maxApplyAttemptsPerResource = 3
 )
+
+// debugDelayAfterInFlight/debugDelayAfterApplySuccess, when non-zero, sleep
+// for that long at two distinct points bracketing the one risky call this
+// whole package exists to make safe: immediately after in_flight is
+// durably persisted but before ApplyResourceChange is ever called (row 4,
+// docs/executor-adversarial.md -- "never landed"), and immediately after
+// ApplyResourceChange returns successfully but before the applied
+// transition/result are persisted (row 5 -- "already landed"). These are
+// deliberate verification seams, not production knobs -- same convention
+// as this codebase's other UBX_*-prefixed test-only env vars
+// (FAKEPROVIDER_MODE, UBX_CONFORMANCE_LIVE, UBX_GITHUB_API_BASE_URL): they
+// make a real `kill -9` at either exact point reproducible on demand
+// (UBI-26's live adversarial verification) rather than a matter of chance
+// timing against a real network call. Both are zero (no delay -- the only
+// behavior anyone running `ubx ship` for real ever sees) unless
+// UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT/UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS
+// is explicitly set to a parseable Go duration (e.g. "3s").
+var (
+	debugDelayAfterInFlight     = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT")
+	debugDelayAfterApplySuccess = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS")
+)
+
+func parseDebugDelay(envVar string) time.Duration {
+	d, _ := time.ParseDuration(os.Getenv(envVar))
+	return d
+}
 
 // Ship executes an accepted drift_revert proposal's delta.modifies, one
 // resource at a time in canonical (stack, type, name) order (docs/executor.md
@@ -260,10 +287,16 @@ func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource strin
 		if err := persist(); err != nil {
 			return nil, fmt.Errorf("ship: persist in_flight: %w", err)
 		}
+		if debugDelayAfterInFlight > 0 {
+			time.Sleep(debugDelayAfterInFlight)
+		}
 
 		result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned)
 
 		if applyErr == nil {
+			if debugDelayAfterApplySuccess > 0 {
+				time.Sleep(debugDelayAfterApplySuccess)
+			}
 			ra.ProviderResult = result
 			recordTransition(ra, core.ResourceApplied, "")
 			resourcesApplied++
@@ -372,26 +405,75 @@ func reconciliationVerdict(observed json.RawMessage, mod core.Modification) (str
 		return "", fmt.Errorf("decode observed state: %w", err)
 	}
 
-	if matchesAll(state, mod.After) {
+	if matchesRestoreTarget(state, mod) {
 		return "applied", nil
 	}
-	if matchesAll(state, mod.Before) {
+	if matchesOriginalDrift(state, mod) {
 		return "failed", nil
 	}
 	return "inconclusive", nil
 }
 
-func matchesAll(state map[string]interface{}, want map[string]json.RawMessage) bool {
-	if len(want) == 0 {
-		return false
+// matchesRestoreTarget reports whether state matches the FULL restore
+// target a shipped revert should produce -- not just mod.After's own
+// dot-paths. Found live (UBI-26 session 4, docs/reliability-report.md): a
+// revert whose only change is removing an attribute added out-of-band has
+// an EMPTY After map (nothing to add back, see core.ApplyAfter's own
+// Before-only-path-deletion logic) -- the original version of this check
+// only ever compared against After, so it could never conclude "applied"
+// for a pure-deletion revert, even when reconciliation was reading a live
+// state that had, in fact, already been correctly corrected. Fixed to also
+// require every Before-only path (something being deleted, not changed) be
+// genuinely ABSENT from the observed state.
+func matchesRestoreTarget(state map[string]interface{}, mod core.Modification) bool {
+	if len(mod.After) == 0 && len(mod.Before) == 0 {
+		return false // nothing recorded to check against -- never conclusive
 	}
-	for path, raw := range want {
-		var wantVal interface{}
-		if err := json.Unmarshal(raw, &wantVal); err != nil {
+	for path, raw := range mod.After {
+		var want interface{}
+		if err := json.Unmarshal(raw, &want); err != nil {
 			return false
 		}
-		gotVal, ok := dotGet(state, path)
-		if !ok || !reflect.DeepEqual(gotVal, wantVal) {
+		got, ok := dotGet(state, path)
+		if !ok || !reflect.DeepEqual(got, want) {
+			return false
+		}
+	}
+	for path := range mod.Before {
+		if _, ok := mod.After[path]; ok {
+			continue // a genuine value change, already checked above
+		}
+		if _, present := dotGet(state, path); present {
+			return false // should have been deleted by the revert, but isn't
+		}
+	}
+	return true
+}
+
+// matchesOriginalDrift reports whether state still matches the ORIGINAL
+// drifted values -- the revert never landed at all. The symmetric
+// counterpart to matchesRestoreTarget: an After-only path (something the
+// revert should have newly added back) must still be absent for this to
+// hold, the same "pure addition" case in reverse.
+func matchesOriginalDrift(state map[string]interface{}, mod core.Modification) bool {
+	if len(mod.Before) == 0 {
+		return false
+	}
+	for path, raw := range mod.Before {
+		var want interface{}
+		if err := json.Unmarshal(raw, &want); err != nil {
+			return false
+		}
+		got, ok := dotGet(state, path)
+		if !ok || !reflect.DeepEqual(got, want) {
+			return false
+		}
+	}
+	for path := range mod.After {
+		if _, ok := mod.Before[path]; ok {
+			continue
+		}
+		if _, present := dotGet(state, path); present {
 			return false
 		}
 	}

@@ -72,7 +72,14 @@ pending ──► in_flight ──► applied
   what makes "crash between the write and the call" and "crash between the
   call and the result" two distinct, individually testable, individually
   recoverable scenarios instead of one ambiguous blur (docs/executor-adversarial.md
-  rows 4–5).
+  rows 4–5). Verified live, not only in hermetic tests (UBI-26 session 4,
+  docs/reliability-report.md): a real `kill -9` at each of these two exact
+  points (before the call, and after it succeeds but before the result is
+  recorded), reproduced on demand via `UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT`/
+  `UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS` (package-level test seams, zero
+  by default — see `core/executor/ship.go`'s own doc comment — the same
+  "env var gates a test-only knob" convention
+  this codebase already uses elsewhere, e.g. `FAKEPROVIDER_MODE`).
 - **`applied`** — terminal, success. `ApplyResourceChange` returned cleanly,
   or reconciliation independently confirmed the restored value is live.
 - **`failed`** — terminal for this attempt, but not for the proposal: a

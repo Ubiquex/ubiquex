@@ -4,6 +4,111 @@
 
 ## Current phase
 
+**UBI-26 is closed (this session, session 4, Linear-verified): the live
+adversarial program against real AWS infrastructure.** New
+docs/reliability-report.md, drafted from docs/executor-adversarial.md's own
+table plus the hermetic suite's results plus this session's own live runs —
+every transcript real, no adjectives, exactly as instructed. This is the
+final slice of a four-session ticket (design → hermetic state machine →
+real provider wiring/CLI → this).
+
+**Real AWS, `ubx-states` bucket (`us-east-1`), the same demo
+ledger/account (`839333509514`) every prior live session on this project
+has used** (`/Users/roozbeh/demo/payments`): three sections, all captured
+into docs/reliability-report.md verbatim.
+
+1. **`ubx`'s first-ever real cloud write.** Real out-of-band drift (an
+   `incident` tag added via `aws s3api`), `scan --propose revert`,
+   `accept`, `ship` — independently verified via `aws s3api
+   get-bucket-tagging`, never just trusted from `ubx`'s own report (the
+   session's own standing instruction, learned from session 3's
+   `ApplyAfter` bug). Matched exactly. A real gap found here: `ubx why`
+   rendered nothing about the apply at all — fixed same-session (below).
+   Idempotent re-`ship` confirmed (`already fully applied`, no second
+   attempt file).
+2. **The centerpiece: a real `kill -9` between a real `ApplyResourceChange`
+   call succeeding and `ubx` recording it.** `core/executor/ship.go` gained
+   two package-level, env-var-gated debug delay seams (zero by default,
+   same convention as `FAKEPROVIDER_MODE`/`UBX_CONFORMANCE_LIVE`):
+   `UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT` and
+   `UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS` — the second is what made
+   this scenario reproducible on demand against a real network call rather
+   than a matter of chance timing. First attempt at the live kill missed
+   the window (the artificial delay elapsed before the kill command ran;
+   recorded honestly in the report rather than discarded — a real,
+   uneventful successful ship). Redone with a longer delay and a single
+   tight `launch & sleep 15; kill -9 $!` shell sequence: confirmed via `aws
+   s3api` that the real mutation had already landed while `ubx`'s own apply
+   record still only showed `pending`→`in_flight`. Re-running `ubx ship`
+   surfaced a **second real bug**: `reconciliationVerdict` could never
+   conclude `applied` for a pure-deletion revert (`After` empty — the same
+   "attribute added out-of-band, nothing to add back" shape as session 3's
+   `ApplyAfter` bug, this time in reconciliation) — reported `still_unknown`
+   forever despite reading a live state that had, in fact, already been
+   corrected. Fixed (`matchesRestoreTarget`/`matchesOriginalDrift`,
+   replacing the old `matchesAll`), rebuilt, re-run against the *same*
+   still-unresolved real proposal (attempt 3): resolved `applied` via
+   reconciliation alone, no new `ApplyResourceChange` call issued, real
+   cloud state unchanged from immediately after the kill. `parent`
+   correctly chains attempt 3 to attempt 2's sealed ID.
+3. **Stale mid-flow, live.** Real drift induced, accepted, then reality
+   mutated a second time for real before shipping. `ubx ship` refused
+   correctly: terminal `ErrStaleObservation`, resource never reached
+   `in_flight`, real cloud state confirmed untouched.
+
+**Two real bugs found and fixed this session, both the same class as
+session 3's `ApplyAfter` bug (a revert that only ever removes an
+out-of-band addition, `After` empty) — one layer over, in reconciliation
+instead of in constructing the plan:**
+
+1. `reconciliationVerdict`'s original `matchesAll(state, mod.After)` could
+   never return true for an empty `want` map — meaning a pure-deletion
+   revert could never be confirmed `applied` by reconciliation, no matter
+   how long it retried. Fixed with `matchesRestoreTarget`/
+   `matchesOriginalDrift`, which also check that every `Before`-only path
+   is genuinely absent (or, for "never landed," still present) from the
+   observed state — not just that `After`'s own paths match. New permanent
+   hermetic regression:
+   `TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApplied`.
+2. `ubx why` never rendered anything about a proposal's own apply history —
+   a real, user-facing incompleteness the ticket's own acceptance criteria
+   named directly ("why tells the full story including the apply"), found
+   the moment Section 1's transcript was being assembled. Fixed:
+   `cli/why.go` gains `renderApplies` (human view: "apply history:", one
+   block per attempt, sealed or not, with every transition/reconciliation/error)
+   and `whyJSON.Applies` (fetched via `ledger.ApplyAttempts(p.ID)` whenever
+   `p.Kind == KindDriftRevert`, regardless of whether it was ever shipped —
+   an empty/nil slice renders nothing). Two new hermetic tests
+   (`TestWhy_ShippedDriftRevert_ShowsApplyHistory`,
+   `TestWhy_JSON_IncludesApplies`) plus live re-verification against the
+   real proposal from Section 1.
+
+**Account left matching the ledger's own recorded truth, not literally
+"untagged"** — this session's own throwaway test tags (`incident`,
+`killtest`, `killtest2`, `staletest`) were all removed; the two tags
+(`hotfix`, `purpose`) the ledger's own `FoldState` already considered
+current truth (recorded by prior sessions, never previously written back
+to the cloud until this session's Section 1) were kept, matching the exact
+convention every prior live-verification session on this same demo ledger
+has followed. Confirmed clean with a final `ubx status --drift`. No IAM
+changes; no resources created or destroyed; every real mutation was a tag
+change on the same pre-existing bucket.
+
+`go build ./...`, `go vet ./...`, `gofmt -l .` (clean), and `go test ./...
+-race` all pass across the whole repository, including the two new bug's
+regression tests.
+
+**ubiquex-docs updated same session** (the new `ubx why` apply-history
+rendering is a real, user-visible behavior change): `cli/why.mdx` gained a
+new "A shipped `drift_revert`'s apply history" section (the real transcript
+from Section 1/2 above) and a `--json` `applies` field example;
+`concepts/apply-record.mdx` and `concepts/why.mdx` cross-link to it.
+`mint validate`/`mint broken-links` both pass clean.
+
+**UBI-26 closed in Linear.** Both repos committed and pushed.
+
+## Current phase (previous)
+
 **UBI-26 session 3 is done (this session): real `ApplyResourceChange`
 wiring + `ubx ship` — the executor's first user-visible surface.** Builds
 directly on session 2's hermetic `core/executor`; every mechanism there is

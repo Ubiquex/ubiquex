@@ -398,6 +398,23 @@
   once given a realistic prior state. See STATE.md for the full session
   writeup, including a second real false start (`PriorState=null`) that
   briefly looked like a design gap and wasn't one.
+- 2026-07-17 — UBI-26 session 4 (closing): the live adversarial program
+  against real AWS (`ubx-states`, `us-east-1`) — docs/reliability-report.md,
+  drafted from docs/executor-adversarial.md's own table plus every
+  hermetic and live result. `ubx`'s first real cloud write (a real
+  `drift_revert`, independently verified via `aws s3api`, not just
+  trusted from the tool's own report); the centerpiece, a real `kill -9`
+  between a real `ApplyResourceChange` call succeeding and `ubx` recording
+  it (`core/executor/ship.go` gained two zero-by-default, env-var-gated
+  debug delay seams to make the exact window reproducible on demand); a
+  real stale-mid-flow refusal. Two more real bugs found and fixed live,
+  same class as session 3's: `reconciliationVerdict` could never conclude
+  `applied` for a pure-deletion revert (empty `After`), and `ubx why`
+  never rendered anything about a proposal's own apply history at all
+  (`cli/why.go` gains `renderApplies`/`whyJSON.Applies`). Account restored
+  to match the ledger's own recorded truth, confirmed clean via `ubx
+  status --drift`. Closes UBI-26. See STATE.md and
+  docs/reliability-report.md for the full writeup and every transcript.
 
 ## Strategy
 
@@ -885,11 +902,16 @@ already uses) — a shortcut sound only for this one kind, stated as such,
 not assumed to generalize once a resolver-driven `change`/`revert` kind
 exists. See docs/executor.md.
 
-Sessions 2+ build against the adversarial table row by row: `core/executor`
-(hermetic, fake-provider-scripted failures) → provider `ApplyResourceChange`
-wiring → `ubx ship <proposal-id>` CLI → live verification against real
-drift on `ubx-states`, including a real `kill -9` mid-apply and proving the
-re-run reconciles.
+**Closed (2026-07-17, session 4)**: `core/executor` (hermetic,
+fake-provider-scripted failures) → provider `ApplyResourceChange` wiring →
+`ubx ship <proposal-id>` CLI → live verification against real drift on
+`ubx-states`, including a real `kill -9` mid-apply, proving the re-run
+reconciles. v1 scope (`drift_revert` only) is complete and
+live-verified end to end; see docs/reliability-report.md for the full
+program's status against both the hermetic suite and real infrastructure,
+and STATE.md for the session-by-session writeup. The general executor path
+for `change`/`revert` (needs a real resolver) remains deferred, unchanged
+from the scope this wedge always named.
 
 ## Deferred (explicitly not now)
 

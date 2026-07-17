@@ -51,12 +51,25 @@ func newWhyCmd() *cobra.Command {
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
+				// UBI-26: a drift_revert's own "full story" includes what
+				// ubx ship actually did, not just the decision -- fetched
+				// for every drift_revert regardless of whether it was ever
+				// shipped (an empty/nil slice renders nothing, see
+				// renderApplies).
+				var attempts []*core.ApplyRecord
+				if p.Kind == core.KindDriftRevert {
+					attempts, err = ledger.ApplyAttempts(p.ID)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
+					}
+				}
 				if !jsonOut {
 					renderProposal(out, p)
+					renderApplies(out, attempts)
 				}
 				if !verifyAcceptance {
 					if jsonOut {
-						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p}); err != nil {
+						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts}); err != nil {
 							return &ExitCodeError{Code: 2, Err: err}
 						}
 					}
@@ -64,7 +77,7 @@ func newWhyCmd() *cobra.Command {
 				}
 				verifyResult, verifyErr := runVerifyAcceptance(cmd.Context(), out, p, repoDir, githubRepo, jsonOut)
 				if jsonOut {
-					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, VerifyAcceptance: verifyResult}
+					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, VerifyAcceptance: verifyResult}
 					if err := writeJSON(out, payload); err != nil {
 						return &ExitCodeError{Code: 2, Err: err}
 					}
@@ -123,6 +136,7 @@ type whyJSON struct {
 	Format           int                   `json:"format"`
 	Proposal         *core.Proposal        `json:"proposal,omitempty"`
 	Chain            []*core.Proposal      `json:"chain,omitempty"`
+	Applies          []*core.ApplyRecord   `json:"applies,omitempty"`
 	VerifyAcceptance *verifyAcceptanceJSON `json:"verify_acceptance,omitempty"`
 }
 
@@ -144,6 +158,47 @@ func renderProposal(out io.Writer, p *core.Proposal) {
 	}
 	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
 	renderModifies(out, p.Delta.Modifies, "")
+}
+
+// renderApplies is UBI-26's own addition to `ubx why`'s single-proposal
+// view: a drift_revert's full story includes what `ubx ship` actually did,
+// not just the decision to revert. A nil/empty attempts (never shipped, or
+// not a drift_revert at all) renders nothing -- silence, not a "no applies"
+// line, matching this command's existing terseness. Every attempt is
+// shown, sealed or not, oldest first (docs/schema.md: an unsealed attempt
+// is a real, honest artifact of an interrupted run, not something to hide).
+func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
+	if len(attempts) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "apply history:")
+	for _, a := range attempts {
+		status := "unsealed (interrupted or still in progress)"
+		if a.Sealed() {
+			status = fmt.Sprintf("outcome=%s", a.Summary.Outcome)
+		}
+		fmt.Fprintf(out, "  attempt %d: %s\n", a.Attempt, status)
+		for _, ra := range a.Resources {
+			fmt.Fprintf(out, "    %s:\n", ra.Address)
+			for _, t := range ra.Transitions {
+				fmt.Fprintf(out, "      %s at %s", t.State, t.At)
+				if t.Detail != "" {
+					fmt.Fprintf(out, " -- %s", t.Detail)
+				}
+				fmt.Fprintln(out)
+			}
+			for _, r := range ra.Reconciliation {
+				fmt.Fprintf(out, "      reconcile: %s at %s", r.Outcome, r.At)
+				if r.Detail != "" {
+					fmt.Fprintf(out, " -- %s", r.Detail)
+				}
+				fmt.Fprintln(out)
+			}
+			for _, e := range ra.Errors {
+				fmt.Fprintf(out, "      error (%s): %s\n", e.Classification, e.Message)
+			}
+		}
+	}
 }
 
 // renderModifies prints each Delta.Modifies entry's changed attributes,
