@@ -190,6 +190,27 @@ func dotSet(m map[string]interface{}, path string, val interface{}) {
 	}
 }
 
+// dotDelete removes a dot-notation path from a generic decoded-JSON map --
+// dotSet's own inverse, for a path that must be REMOVED rather than set to
+// a new value. A missing intermediate object means the path doesn't exist
+// in m at all; a no-op, not an error (ApplyAfter, its only caller, already
+// knows the path existed in some prior observed state, not necessarily in
+// the specific state m it's being applied onto).
+func dotDelete(m map[string]interface{}, path string) {
+	parts := strings.Split(path, ".")
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			delete(m, part)
+			return
+		}
+		next, ok := m[part].(map[string]interface{})
+		if !ok {
+			return
+		}
+		m = next
+	}
+}
+
 // diffAttributes computes the dot-notation attribute diff between two full
 // resource states, restricted to attributes that actually changed —
 // docs/schema.md's pinned Modification shape ("before/after hold only the

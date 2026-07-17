@@ -251,3 +251,64 @@ func TestApplyAfter_SubstitutesDotPathsOntoState(t *testing.T) {
 		t.Fatalf("tags = %v, want Environment=prod", got["tags"])
 	}
 }
+
+// TestApplyAfter_DeletesBeforeOnlyPaths is a permanent regression guard for
+// a real bug found live-testing ubx ship end to end (UBI-26 session 3): an
+// attribute added out-of-band (present in observed/drifted reality, absent
+// from the ledger's own recorded truth) has a Before entry and no After
+// entry at all -- diffAttributes has no ledger value to record for
+// something the ledger never had. ApplyAfter must delete it, not silently
+// carry it forward; a first version of this function only ever set
+// After's own paths and left this case completely untouched.
+func TestApplyAfter_DeletesBeforeOnlyPaths(t *testing.T) {
+	state := json.RawMessage(`{"id":"x","tags":{"Environment":"staging","hotfix":"true"}}`)
+	mod := Modification{
+		Before: map[string]json.RawMessage{
+			"tags.hotfix": json.RawMessage(`"true"`), // added out-of-band, ledger never had it
+		},
+		// After deliberately has NO entry for tags.hotfix.
+	}
+	out, err := ApplyAfter(state, mod)
+	if err != nil {
+		t.Fatalf("apply after: %v", err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	tags, ok := got["tags"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("tags = %v, want a map", got["tags"])
+	}
+	if _, present := tags["hotfix"]; present {
+		t.Fatalf("tags = %v, want hotfix removed entirely", tags)
+	}
+	if tags["Environment"] != "staging" {
+		t.Fatalf("tags.Environment = %v, want untouched staging", tags["Environment"])
+	}
+	if got["id"] != "x" {
+		t.Fatalf("id = %v, want untouched x", got["id"])
+	}
+}
+
+// TestApplyAfter_ChangedPathInBothBeforeAndAfter_UsesAfterNotDeleted
+// guards the other half of the same fix: a path present in BOTH Before and
+// After (an ordinary changed value, not an addition) must be set to
+// After's value, never deleted.
+func TestApplyAfter_ChangedPathInBothBeforeAndAfter_UsesAfterNotDeleted(t *testing.T) {
+	state := json.RawMessage(`{"tags":{"Environment":"staging"}}`)
+	mod := Modification{
+		Before: map[string]json.RawMessage{"tags.Environment": json.RawMessage(`"staging"`)},
+		After:  map[string]json.RawMessage{"tags.Environment": json.RawMessage(`"prod"`)},
+	}
+	out, err := ApplyAfter(state, mod)
+	if err != nil {
+		t.Fatalf("apply after: %v", err)
+	}
+	var got map[string]interface{}
+	json.Unmarshal(out, &got)
+	tags := got["tags"].(map[string]interface{})
+	if tags["Environment"] != "prod" {
+		t.Fatalf("tags.Environment = %v, want prod (not deleted)", tags["Environment"])
+	}
+}

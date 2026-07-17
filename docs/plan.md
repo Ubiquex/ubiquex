@@ -375,6 +375,29 @@
   the full session writeup, including a real per-resource idempotency
   refinement found while implementing (folding "last known state" over
   *every* attempt file, sealed or not, not just sealed ones).
+- 2026-07-17 — UBI-26 session 3: real `ApplyResourceChange` wiring
+  (`provider.Provider` gains it for v5/v6, a new `provider.DiagnosticError`
+  distinguishes a real provider diagnostic from a transport failure) behind
+  the executor's `Applier` interface (`cli/stateadapter.go`'s
+  `stateReaderAdapter`, now also an `executor.Applier` — redaction on the
+  way out, `provider.DiagnosticError`→`executor.TerminalError` on the way
+  in). Redacted restore targets are declined outright, both directions of
+  docs/executor.md's redaction requirement now real. Then the CLI itself:
+  `ubx ship <proposal-id>`, exit codes 0/1/2, `--json`. A real, load-bearing
+  bug found live-testing the whole path end to end against the real
+  built binary (not just unit tests): `core.ApplyAfter` only ever *set*
+  `Modification.After`'s dot-paths, never removing one that existed only in
+  `Before` (an attribute added out-of-band, which the ledger's own truth
+  never had) — a shipped revert reported "applied" while silently leaving
+  the added attribute in place. Fixed (`core.dotDelete`, a permanent
+  regression test both at the `core.ApplyAfter` unit level and end-to-end
+  through `Ship`), and a real `tfplugin{5,6}`/`hashicorp/time` empirical
+  verification (`provider/apply_live_test.go`, gated
+  `UBX_CONFORMANCE_LIVE=1`, no cloud credentials needed) confirms the
+  underlying "construct `PlannedState` without planning" mechanism is sound
+  once given a realistic prior state. See STATE.md for the full session
+  writeup, including a second real false start (`PriorState=null`) that
+  briefly looked like a design gap and wasn't one.
 
 ## Strategy
 

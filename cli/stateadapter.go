@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/executor"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
@@ -65,10 +67,58 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 	return provider.Redact(a.source, typeName, rs.Block, a.salt, observed)
 }
 
+// ApplyResourceChange satisfies executor.Applier (UBI-26, docs/executor.md)
+// on top of the same stateReaderAdapter ReadResource already uses --
+// stateReaderAdapter now implements both core.StateReader and
+// executor.Applier, so newStateReader/newApplier are two views of the same
+// concrete adapter, not two implementations. Redaction applies here in
+// exactly the same way as ReadResource (docs/schema.md's apply-record
+// amendment: "provider_result... MUST go through provider.Redact... before
+// ever being written into an apply record" -- a live secret is exactly as
+// reachable through an apply's returned attributes as through a read's).
+//
+// A provider.DiagnosticError -- a real, structured ERROR-severity
+// diagnostic, never a transport/RPC-level failure -- is wrapped as
+// executor.TerminalError, the signal core/executor's own state machine
+// uses to classify "terminal" (never retried within one ship invocation)
+// rather than "retryable" (docs/executor.md's error taxonomy). Any other
+// error (a dropped connection, a context deadline, ...) is returned as-is,
+// since core/executor already treats "anything that isn't a TerminalError"
+// as retryable.
+func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage) (json.RawMessage, error) {
+	rs, ok := resourceSchema.(*provider.Schema)
+	if !ok {
+		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+	}
+	// docs/executor.md -- "Constructing PlannedState without planning":
+	// config is set identically to plannedState, since a revert has no
+	// separate "desired config" distinct from the value being restored to.
+	result, err := a.p.ApplyResourceChange(ctx, rs, typeName, priorState, plannedState, plannedState)
+	if err != nil {
+		var diag *provider.DiagnosticError
+		if errors.As(err, &diag) {
+			return nil, &executor.TerminalError{Err: err}
+		}
+		return nil, err
+	}
+	if len(result) == 0 {
+		return result, nil
+	}
+	return provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+}
+
 // newStateReader wraps a provider.Provider as a core.StateReader. salt is
 // the ledger directory's redaction salt (core.Ledger.Salt); source is the
 // provider's registry source (e.g. "hashicorp/aws"), empty for a raw
 // --provider path -- see stateReaderAdapter's own doc comment.
 func newStateReader(p provider.Provider, salt []byte, source string) core.StateReader {
+	return stateReaderAdapter{p: p, salt: salt, source: source}
+}
+
+// newApplier wraps a provider.Provider as an executor.Applier (UBI-26) --
+// the same stateReaderAdapter newStateReader builds, since it now
+// implements ApplyResourceChange too. Returned as executor.Applier so
+// ship.go's own call site never needs to know the concrete adapter type.
+func newApplier(p provider.Provider, salt []byte, source string) executor.Applier {
 	return stateReaderAdapter{p: p, salt: salt, source: source}
 }

@@ -166,6 +166,57 @@ This is a v1-scope shortcut, stated as such: a future `change`/`revert` kind
 executing hand-authored config, once the resolver exists, will need a real
 `PlanResourceChange` phase and cannot reuse this substitution shortcut.
 
+**Verified empirically against a real provider binary, not assumed sound
+from the mechanism's own description** (`provider/apply_live_test.go`,
+`hashicorp/time`'s `time_static` resource — pure local computation, no
+cloud credentials needed, gated `UBX_CONFORMANCE_LIVE=1` like every other
+network-touching test in this codebase): a realistic `PriorState` (every
+computed attribute already concrete, as a genuine `ReadResource` call
+against an already-existing resource would return) plus a `PlannedState`
+built via this exact substitution correctly applies the one changed
+attribute while carrying every other attribute forward unchanged — no
+error, no silent data loss.
+
+A real false start along the way, worth recording rather than quietly
+fixed and forgotten: an earlier attempt at this same test used
+`PriorState = null` (modeling a from-scratch create via
+`ApplyResourceChange` directly, no prior `ReadResource` at all) and found
+every computed attribute came back `null`, not computed. This briefly
+looked like a real gap in this section's whole approach — an SDKv2-vintage
+provider's `Apply` only fills in a computed attribute it finds *unknown* in
+`PlannedState` (the marker a real `PlanResourceChange` call produces), and
+`encodeDynamicValue` has no way to express "unknown," only "null" (an
+absent JSON key). It isn't a gap: `drift_revert` never creates a resource
+from scratch, so `PriorState` never comes from anywhere but a real,
+already-successful `ReadResource` call (`core.ReadAndFingerprint`, exactly
+what `Ship`'s own loop uses) against an *already-existing* resource — which
+already carries every computed attribute's real, concrete value, never
+`null`. The corrected test models exactly that shape and passes.
+
+## Redacted after values are declined, not applied
+
+A `drift_revert` whose restore target (`Delta.Modifies[].after`) is itself
+a `$redacted` value (docs/schema.md's `$redacted` value encoding, UBI-23)
+can never be shipped automatically: the ledger holds a salted fingerprint
+of the real secret, never the material itself, so there is nothing for
+`ubx ship` to substitute into `PlannedState` even in principle. Checked
+per resource, before any read/freshness/apply work at all (earlier than
+even the reconciliation-needed check) — if any dot-path in `after` is
+`core.IsRedactedValue`, the *entire* resource is declined for this attempt
+(never a partial apply of just the non-redacted paths: `ApplyResourceChange`
+is one whole-state operation, not an independent per-attribute one, unlike
+`.tf` write-back's own per-attribute decline). The resource stays `pending`
+— it never reaches `in_flight`, and never counts toward the per-resource
+retry budget — with a terminal error naming the affected path(s) and
+pointing at `ubx revert-plan`'s existing manual-reconciliation path
+(docs/architecture.md's Revert path: emits a human-readable plan and,
+where possible, a corrective `.tf` diff — outside of `ubx`'s own apply
+path entirely). This is permanent, not a transient failure: the same
+`drift_revert` will decline identically on every future `ubx ship` re-run,
+since the redacted value never changes — the only way past it is a human
+restoring the real value out-of-band and recording the correction through
+a fresh `ubx scan`/`accept` cycle.
+
 ## Idempotency contract
 
 `ubx ship <proposal-id>` is safe to re-run, by contract, any number of
@@ -178,6 +229,7 @@ record's final state for that address:
 | `failed` | Retried from `pending`, if within the per-resource retry budget (a package var); freshness re-verified first, exactly like a first attempt. |
 | `still_unknown` | Reconciliation runs again first (bounded retries, again), *before* any new `ApplyResourceChange` call — never a blind re-apply on top of an unresolved unknown. |
 | Never reached `in_flight` (refused for staleness) | Freshness re-verified fresh; proceeds exactly as a first attempt, once it passes. |
+| Never reached `in_flight` (declined for a redacted `after` value) | Declined identically again — permanent, not retried (see "Redacted after values are declined," above). |
 | No apply record exists yet (first run) | Normal first attempt. |
 
 A `drift_revert` proposal whose every resource is `applied` (across one or
@@ -204,13 +256,32 @@ one.
   distinct from both: it means reality changed, not that the provider
   rejected anything — see "Freshness," above.
 
-## Redaction
+## Redaction applies at the apply boundary in both directions
 
-`provider_result` (whatever attributes `ApplyResourceChange` returns) goes
-through `provider.Redact` — the same schema-`Sensitive`-flags-plus-override-table
-union UBI-23/24 already built, same per-ledger salt — before ever being
-written into an apply record. No new redaction mechanism; a pure reuse
-(see docs/schema.md's own note on this).
+Two independent, complementary rules — one for what comes *out* of an
+apply, one for what could go *into* one — both a pure reuse of mechanisms
+this codebase already built (UBI-23/24), never a new redaction path:
+
+- **Out**: `provider_result` (whatever attributes `ApplyResourceChange`
+  returns) goes through `provider.Redact` — the same
+  schema-`Sensitive`-flags-plus-override-table union, same per-ledger
+  salt — before ever being written into an apply record
+  (`cli/stateadapter.go`'s `ApplyResourceChange`, mirroring `ReadResource`'s
+  own redaction call exactly). A live secret is exactly as reachable
+  through an apply's returned attributes as through a read's.
+- **In**: a `$redacted` restore target is declined outright, never handed
+  to a real provider at all — see "Redacted after values are declined,"
+  above. `core/executor` itself never redacts anything (it has no
+  knowledge of `provider.Redact` or schema `Sensitive` flags at all,
+  preserving the same core/provider zero-import boundary UBI-23
+  established) — it only recognizes the `$redacted` *shape*
+  (`core.IsRedactedValue`) already present in a proposal's own recorded
+  content, the same wire-convention-only knowledge `core`'s diffing logic
+  already has.
+
+Together these mean the ledger's own security posture — "stores hashes,
+never material" — holds at every point the apply boundary touches, not
+just at scan/read time.
 
 ## Concurrency: the same ledger lock, reused
 

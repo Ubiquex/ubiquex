@@ -4,6 +4,173 @@
 
 ## Current phase
 
+**UBI-26 session 3 is done (this session): real `ApplyResourceChange`
+wiring + `ubx ship` — the executor's first user-visible surface.** Builds
+directly on session 2's hermetic `core/executor`; every mechanism there is
+unchanged, just now driven by a real provider instead of a fake `Applier`.
+ubiquex-docs updated same session (new `cli/ship.mdx` + `concepts/apply-record.mdx`,
+`mint validate`/`mint broken-links` both clean) — this is the first UBI-26
+session with real user-visible CLI surface, so the docs-same-session rule
+applies for the first time on this ticket.
+
+**`provider` package — `ApplyResourceChange` for both wire protocols:**
+
+1. **`provider.Provider` interface gains `ApplyResourceChange`**, implemented
+   on both `v6Provider`/`v5Provider` exactly mirroring `ReadResource`'s own
+   shape: `encodeDynamicValue` for `PriorState`/`PlannedState`/`Config` (all
+   three, cty-msgpack — the real wire requirement, confirmed empirically,
+   see below), the real RPC, `decodeDynamicValue` on the response.
+2. **New `provider.DiagnosticError`** — `diagnosticError[D]` (the generic
+   helper `Configure`/`ReadResource`/`Schema` already shared) now returns
+   this concrete type instead of a bare `fmt.Errorf`, byte-identical
+   `Error()` text, zero behavior change for existing callers. This is the
+   signal `docs/executor.md`'s error taxonomy depends on: a real,
+   structured provider diagnostic vs. a transport/RPC-level failure, and
+   until this session there was no way to tell them apart from the
+   returned `error` alone.
+3. **`provider/internal/fakeprovider` gained `ApplyResourceChange` handlers**
+   (both protocols), driven by a new `FAKEPROVIDER_APPLY_MODE` env var
+   (`ok`/`diagnostic-error`/`hang`) — reusing the same "scriptable failure"
+   spirit session 2's own fake `Applier` established, now at the real
+   subprocess/gRPC/cty-msgpack level. A real design correction made while
+   building this, caught by a confusing manual test result before it became
+   a permanent test bug: `ApplyResourceChange`'s "ok" path initially reused
+   `ReadResource`'s own `echoWidgetState` (which unconditionally re-injects
+   `FAKEPROVIDER_EXTRA_TAG` into its response, simulating "an out-of-band
+   change is newly visible") — reusing that for *apply* made it impossible
+   to tell "ubx correctly reverted this" apart from "the fixture re-injected
+   the drift into its own apply response regardless." Split into a separate
+   `echoAppliedState` (no `FAKEPROVIDER_EXTRA_TAG` reinjection — a real
+   apply is deterministic in its own inputs) sharing the computed-id
+   fill-in logic via a new `decodeWidgetState` helper.
+4. **Hermetic tests** (`provider/apply_test.go`): happy path (both
+   protocols, real cty-msgpack round trip through the fake subprocess),
+   diagnostic-error → `*DiagnosticError` specifically, and a real
+   client-context-timeout → a plain gRPC `DeadlineExceeded` status, never a
+   `*DiagnosticError` (confirming the retryable/terminal signal is correct
+   at the wire level, not just asserted).
+5. **A real empirical verification against a real provider binary**
+   (`provider/apply_live_test.go`, `hashicorp/time`'s `time_static` — no
+   cloud credentials needed, pure local computation, gated
+   `UBX_CONFORMANCE_LIVE=1` like every other network-touching test in this
+   codebase): confirms docs/executor.md's "Constructing `PlannedState`
+   without planning" mechanism is sound once given a realistic prior state
+   (every computed attribute already concrete, as a genuine `ReadResource`
+   call against an already-existing resource would return) — the real
+   provider correctly carries every attribute *not* named in
+   `Modification.After` forward unchanged while applying the one that is.
+   **A real false start along the way, recorded rather than quietly
+   fixed**: an earlier version of this same test used `PriorState = null`
+   (a from-scratch create via `ApplyResourceChange` directly, no prior
+   `ReadResource`) and found every computed attribute came back `null`, not
+   computed — briefly looking like a real gap in the whole "no separate
+   plan phase" design. It wasn't: an SDKv2-vintage provider's `Apply` only
+   fills in a computed attribute it finds *unknown* in `PlannedState` (the
+   marker a real `PlanResourceChange` call produces, which
+   `encodeDynamicValue` has no way to express — only `null`, meaning
+   "explicitly absent," not "compute this"). `drift_revert` never creates
+   from scratch, so this never actually applies to it — the corrected test
+   models the real shape and passes. Both attempts are documented directly
+   in the test's own doc comment, not just here.
+
+**`cli/stateadapter.go` — the adapter, extended, not duplicated:**
+`stateReaderAdapter` gains `ApplyResourceChange`, satisfying
+`executor.Applier` on top of the exact same struct `core.StateReader`
+already uses (`newApplier`, alongside the existing `newStateReader`, both
+views of one adapter). Redaction on the way out
+(`provider.Redact(a.source, typeName, rs.Block, a.salt, result)`, identical
+call shape to `ReadResource`'s own); `provider.DiagnosticError` wrapped as
+`executor.TerminalError` on the way in, anything else passed through as
+retryable — `cli` is the one place that imports both `provider` and
+`core/executor`, exactly the same "adapter lives where both are needed"
+posture `core`/`provider`'s own boundary already established.
+
+**`core/executor` — redacted restore targets declined, both redaction
+directions now real** (docs/executor.md gained two new sections: "Redacted
+after values are declined, not applied" and the reframed "Redaction applies
+at the apply boundary in both directions"): checked per resource, before
+any read/freshness/apply work at all — `redactedAfterPaths(mod)` finds any
+`core.IsRedactedValue` dot-path in `Modification.After`, and if any exist,
+the *whole* resource is declined (never a partial apply of just the
+non-redacted paths — `ApplyResourceChange` is one whole-state operation,
+unlike `.tf` write-back's own per-attribute decline). Declined permanently,
+not retried: the resource stays `pending` forever on every future `ubx
+ship` re-run, since the redacted value never changes — the only way past it
+is a human restoring the real value out-of-band through `ubx revert-plan`'s
+existing manual path, named directly in the error message. Two new
+hermetic tests confirm this (declined-not-applied-or-read, and
+retried-forever-never-silently-skipped across three re-runs).
+
+**A second real, load-bearing bug found live-testing the whole path end to
+end (not just via unit tests) — fixed in already-committed session-2 code,
+not new code**: `core.ApplyAfter` (added session 2) only ever *set*
+`Modification.After`'s dot-paths onto the prior state; it never removed a
+path that existed only in `Before` (docs/schema.md's own diff convention:
+an attribute present in observed/drifted reality but absent from the
+ledger's own recorded truth — e.g. a tag added out-of-band — has a `Before`
+entry and *no* `After` entry at all, since there's no ledger value to
+record for something the ledger never had). Reverting that means deleting
+the attribute from live reality; `ApplyAfter`'s pure-substitution model had
+no way to express that. Manually shipping a real revert against the real
+built binary (fakeprovider subprocess, `FAKEPROVIDER_EXTRA_TAG` simulating
+an added tag) surfaced this directly: `ubx ship` reported "applied"
+cleanly, but the added tag was still there afterward. Fixed with a new
+`core.dotDelete` (state.go, alongside `dotSet`) and `ApplyAfter` now
+deleting every `Before`-only path after applying every `After` one; a path
+present in *both* (an ordinary changed value) is unaffected. Three new
+permanent regression tests: two direct `core.ApplyAfter` unit tests
+(delete case, and the changed-value case staying non-deleted) plus one
+full end-to-end test through `Ship` itself
+(`TestShip_RevertRemovesAttributeAddedOutOfBand`), not just the unit level.
+
+**`ubx ship <proposal-id>`** (`cli/ship.go`, registered in `root.go`): the
+CLI wrapper over `executor.Ship`, in the same shape every other UBI-20-audited
+command uses (`LoadConfig`/`applyProviderDefaults`/`resolveProviderBinary`/
+`provider.Launch`/`ledger.Salt()`). A friendly early exit (wrong kind, not
+accepted) before ever launching a provider, even though `executor.Ship`
+enforces both authoritatively too. Exit codes: `0` applied (including the
+`ErrAlreadyApplied` no-op, reported with the latest sealed apply record as
+evidence, not an empty response), `1` `partially_applied`/`failed` (an
+actionable finding), `2` a genuine error. `--json` wraps the sealed
+`*core.ApplyRecord` directly under `format`/`apply_record` — the same
+"wrap, don't re-derive" convention `whyJSON`'s `Proposal` field already
+established, not a bespoke shape.
+
+**Live-verified against the real built binary, not just `go test`**
+(fakeprovider subprocess standing in for a real provider, exactly the same
+posture UBI-9's own early conformance work used before real cloud accounts
+were available): the full `scan --propose revert` → `accept` → `ship`
+sequence, an idempotent re-`ship` (`already fully applied`), `--json`
+output, a simulated terminal provider diagnostic (`FAKEPROVIDER_APPLY_MODE=diagnostic-error`,
+exit `1`), and a hand-constructed redacted-restore-target proposal (exit
+`1`, declined) — every transcript in the new docs pages is real output from
+these runs, not hand-written. This is also exactly the process that found
+both the `FAKEPROVIDER_EXTRA_TAG`-reinjection fixture wrinkle and the real
+`core.ApplyAfter` deletion bug above — neither was visible from the
+hermetic test suite alone, both were caught before shipping by actually
+running the built binary end to end.
+
+**ubiquex-docs updated same session**: new `cli/ship.mdx` (every transcript
+real, captured from the built binary) and new `concepts/apply-record.mdx`
+(the state machine, idempotency table, both-directions redaction, scope);
+`cli/exit-codes.mdx` gained a `ubx ship` section; cross-links added from
+`cli/revert-plan.mdx` (a `<Note>` distinguishing the two commands now that
+both exist), `concepts/proposal.mdx`, and `concepts/secrets.mdx`. `docs.json`
+nav updated. `mint validate`/`mint broken-links` both pass clean.
+
+`go build ./...`, `go vet ./...`, `gofmt -l .` (clean), and `go test ./...
+-race` all pass across the whole repository, including the new
+`UBX_CONFORMANCE_LIVE=1`-gated real-provider test.
+
+**Next slice** (per docs/plan.md's "Executor v1 (UBI-26)" wedge): turn the
+full docs/executor-adversarial.md program green against a *real* cloud
+resource on `ubx-states` (not just the fakeprovider subprocess this session
+used) — real drift, accept revert, `ubx ship` restores it, second ship a
+no-op, `ubx why` showing the full story including the apply record, and a
+real `kill -9` mid-apply proving the re-run reconciles.
+
+## Current phase (previous)
+
 **UBI-26 session 2 is done (this session): `core/executor` — the state
 machine + apply-record ledger ops, hermetic against a fake provider with
 scripted failures.** Built exactly against docs/executor.md's spec and

@@ -26,6 +26,16 @@
 // ok-v5/ok-v6's ReadResource response regardless of current_state — see
 // echoWidgetState.
 //
+// FAKEPROVIDER_APPLY_MODE (UBI-26, ok-v5/ok-v6 only) selects
+// ApplyResourceChange's behavior:
+//
+//	""/"ok"           echoes planned_state back (same computed-id fill-in as
+//	                  ReadResource), simulating a clean apply
+//	"diagnostic-error" returns one ERROR-severity Diagnostic and no new_state --
+//	                  the "terminal" half of docs/executor.md's error taxonomy
+//	"hang"            never responds -- the caller's own context deadline is
+//	                  what must fire; the "retryable" half of the taxonomy
+//
 // conformance-v5/conformance-v6 are driven by:
 //
 //	FAKEPROVIDER_RESOURCE_TYPE   the resource type name to advertise (e.g. "aws_instance")
@@ -201,6 +211,27 @@ func (s *fakeProviderServerV6) ReadResource(_ context.Context, req *tfplugin6.Re
 	return &tfplugin6.ReadResource_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
 }
 
+func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfplugin6.ApplyResourceChange_Request) (*tfplugin6.ApplyResourceChange_Response, error) {
+	switch os.Getenv("FAKEPROVIDER_APPLY_MODE") {
+	case "diagnostic-error":
+		return &tfplugin6.ApplyResourceChange_Response{
+			Diagnostics: []*tfplugin6.Diagnostic{{
+				Severity: tfplugin6.Diagnostic_ERROR,
+				Summary:  "invalid attribute value",
+				Detail:   "fakeprovider: simulated terminal diagnostic",
+			}},
+		}, nil
+	case "hang":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	out, err := echoAppliedState(req.PlannedState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin6.ApplyResourceChange_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
+}
+
 type fakeProviderServerV5 struct {
 	tfplugin5.UnimplementedProviderServer
 }
@@ -241,6 +272,27 @@ func (s *fakeProviderServerV5) ReadResource(_ context.Context, req *tfplugin5.Re
 	return &tfplugin5.ReadResource_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
 }
 
+func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfplugin5.ApplyResourceChange_Request) (*tfplugin5.ApplyResourceChange_Response, error) {
+	switch os.Getenv("FAKEPROVIDER_APPLY_MODE") {
+	case "diagnostic-error":
+		return &tfplugin5.ApplyResourceChange_Response{
+			Diagnostics: []*tfplugin5.Diagnostic{{
+				Severity: tfplugin5.Diagnostic_ERROR,
+				Summary:  "invalid attribute value",
+				Detail:   "fakeprovider: simulated terminal diagnostic",
+			}},
+		}, nil
+	case "hang":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	out, err := echoAppliedState(req.PlannedState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin5.ApplyResourceChange_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
+}
+
 // fakeWidgetType mirrors the fake_widget schema advertised above (id/name
 // string, tags map of string) as a cty type, so this fixture can do real
 // cty-msgpack decode/encode — same wire encoding ubx's provider package
@@ -264,17 +316,19 @@ var fakeWidgetType = cty.Object(map[string]cty.Type{
 // separate process launches that pass the identical lookup both times —
 // varying the lookup itself doesn't model that scenario, since a real
 // caller keeps asking the same question and gets a different answer.
+//
+// Deliberately NOT reused for ApplyResourceChange (see echoAppliedState):
+// a real provider's Apply is a deterministic function of exactly what it
+// was asked to plan, never something that also re-discovers an unrelated
+// out-of-band change on the side -- that's what ReadResource/reconciliation
+// are for. Reusing this same "re-inject the drift" behavior for apply too
+// would make it impossible for a test (or a manual CLI run, UBI-26 session
+// 3) to tell "ubx correctly reverted this" apart from "the fixture
+// re-injected the drift into its own apply response regardless."
 func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
-	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
+	vals, err := decodeWidgetState(msgpackBytes)
 	if err != nil {
-		return nil, fmt.Errorf("fakeprovider: decode current_state: %w", err)
-	}
-	vals := val.AsValueMap()
-	if vals["id"].IsNull() {
-		vals["id"] = cty.StringVal("computed-id")
-	}
-	if vals["tags"].IsNull() {
-		vals["tags"] = cty.MapValEmpty(cty.String)
+		return nil, err
 	}
 	if extra := os.Getenv("FAKEPROVIDER_EXTRA_TAG"); extra != "" {
 		if k, v, ok := strings.Cut(extra, "="); ok {
@@ -287,6 +341,36 @@ func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
 		}
 	}
 	return ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
+}
+
+// echoAppliedState stands in for a real provider's ApplyResourceChange
+// logic (UBI-26): decodes planned_state, fills in "id" if left null (the
+// same computed-attribute convention echoWidgetState uses), and re-encodes
+// exactly what it was asked to plan -- no FAKEPROVIDER_EXTRA_TAG
+// reinjection, since a real Apply is deterministic in its own inputs.
+func echoAppliedState(msgpackBytes []byte) ([]byte, error) {
+	vals, err := decodeWidgetState(msgpackBytes)
+	if err != nil {
+		return nil, err
+	}
+	return ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
+}
+
+// decodeWidgetState is echoWidgetState/echoAppliedState's shared decode +
+// computed-id-fill-in step.
+func decodeWidgetState(msgpackBytes []byte) (map[string]cty.Value, error) {
+	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
+	if err != nil {
+		return nil, fmt.Errorf("fakeprovider: decode state: %w", err)
+	}
+	vals := val.AsValueMap()
+	if vals["id"].IsNull() {
+		vals["id"] = cty.StringVal("computed-id")
+	}
+	if vals["tags"].IsNull() {
+		vals["tags"] = cty.MapValEmpty(cty.String)
+	}
+	return vals, nil
 }
 
 // --- conformance mode: a generic, env-var-shaped resource, one per UBI-9

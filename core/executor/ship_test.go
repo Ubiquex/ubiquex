@@ -214,6 +214,17 @@ func singleResourceRevert(t *testing.T) (*core.Ledger, *fakeApplier, core.Addres
 	return l, fake, addr, p
 }
 
+// fakeStateWithTags builds a fake_widget-shaped state that also carries a
+// "tags" map -- needed to reproduce a real bug found live-testing ubx ship
+// end to end (UBI-26 session 3): a key added to a map attribute
+// out-of-band has no After entry at all (diffAttributes has no ledger
+// value to record for something the ledger never had), only a Before one,
+// and a revert must delete it, not silently leave it in place.
+func fakeStateWithTags(addr core.Address, value string, tags map[string]string) json.RawMessage {
+	b, _ := json.Marshal(map[string]interface{}{"id": addr.String(), "value": value, "tags": tags})
+	return json.RawMessage(b)
+}
+
 // --- happy path ---------------------------------------------------------
 
 func TestShip_SingleResource_AppliesCleanly(t *testing.T) {
@@ -243,6 +254,74 @@ func TestShip_SingleResource_AppliesCleanly(t *testing.T) {
 	json.Unmarshal(live, &m)
 	if m["value"] != "v1" {
 		t.Fatalf("live value = %v, want v1 (restored)", m["value"])
+	}
+}
+
+// TestShip_RevertRemovesAttributeAddedOutOfBand is a permanent end-to-end
+// regression guard (through the real Ship loop, not just core.ApplyAfter's
+// own unit test) for the bug found live-testing this session: a tag added
+// out-of-band -- present in drifted reality, never in the ledger's own
+// recorded truth -- must be REMOVED by a shipped revert, not silently
+// carried forward because it has no After entry to substitute.
+func TestShip_RevertRemovesAttributeAddedOutOfBand(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+	addr := core.Address{Stack: "payments", Type: "fake_widget", Name: "api-cache"}
+
+	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod"}))
+	res, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil {
+		t.Fatalf("adopt scan: %v", err)
+	}
+	adoptProp, err := core.GenerateProposal(l, "payments", res)
+	if err != nil {
+		t.Fatalf("adopt generate: %v", err)
+	}
+	if _, err := core.Accept(l, adoptProp); err != nil {
+		t.Fatalf("adopt accept: %v", err)
+	}
+
+	// Out-of-band change: a "hotfix" tag added, never recorded in the ledger.
+	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod", "hotfix": "true"}))
+	driftRes, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil {
+		t.Fatalf("drift scan: %v", err)
+	}
+	if driftRes.Outcome != core.ScanDrifted {
+		t.Fatalf("outcome = %v, want ScanDrifted", driftRes.Outcome)
+	}
+	p := acceptRevert(t, l, "payments", driftRes)
+
+	// Confirm the proposal itself has the expected asymmetric shape before
+	// shipping it: Before names the added tag, After does not.
+	mod := p.Delta.Modifies[0]
+	if _, ok := mod.Before["tags.hotfix"]; !ok {
+		t.Fatalf("mod.Before = %+v, want a tags.hotfix entry", mod.Before)
+	}
+	if _, ok := mod.After["tags.hotfix"]; ok {
+		t.Fatalf("mod.After = %+v, want no tags.hotfix entry (the ledger never had one)", mod.After)
+	}
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %q, want applied", sealed.Summary.Outcome)
+	}
+
+	live, err := fake.ReadResource(context.Background(), nil, "fake_widget", lookupJSON(addr))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var m map[string]interface{}
+	json.Unmarshal(live, &m)
+	tags, _ := m["tags"].(map[string]interface{})
+	if _, present := tags["hotfix"]; present {
+		t.Fatalf("live tags = %v, want hotfix removed -- ship reported \"applied\" but left the added tag in place", tags)
+	}
+	if tags["env"] != "prod" {
+		t.Fatalf("live tags = %v, want env untouched", tags)
 	}
 }
 
@@ -310,6 +389,65 @@ func TestShip_RejectsUnacceptedProposal(t *testing.T) {
 	// Deliberately never accepted -- p.Acceptance is nil.
 	if _, err := Ship(context.Background(), l, fake, "", nil, p); !errors.Is(err, ErrNotAccepted) {
 		t.Fatalf("err = %v, want ErrNotAccepted", err)
+	}
+}
+
+// --- redacted after values are declined, never applied -------------------
+
+func TestShip_RedactedAfterValue_Declined_NeverAppliesOrReads(t *testing.T) {
+	l, fake, addr, p := singleResourceRevert(t)
+
+	// Simulate a redacted restore target -- as if the attribute being
+	// reverted were provider-Sensitive-flagged (UBI-23/24): mod.After holds
+	// a $redacted marker, never the real material.
+	p.Delta.Modifies[0].After["value"] = json.RawMessage(`{"$redacted":{"sha256":"deadbeef"}}`)
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "failed" {
+		t.Fatalf("outcome = %q, want failed", sealed.Summary.Outcome)
+	}
+	ra := sealed.Resources[0]
+	if st, _ := ra.LastState(); st != core.ResourcePending {
+		t.Fatalf("last state = %s, want pending (declined before ever attempting anything)", st)
+	}
+	if len(ra.Errors) != 1 || ra.Errors[0].Classification != core.ErrorTerminal {
+		t.Fatalf("errors = %+v, want exactly one terminal decline", ra.Errors)
+	}
+
+	// Confirm nothing was ever attempted against the live resource --
+	// still exactly the drifted "v2" value, never a literal "$redacted"
+	// string written to it, and never silently reverted either.
+	live, err := fake.ReadResource(context.Background(), nil, "fake_widget", lookupJSON(addr))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var m map[string]interface{}
+	json.Unmarshal(live, &m)
+	if m["value"] != "v2" {
+		t.Fatalf("live value = %v, want untouched v2 -- ship must never construct a live apply from a redacted value", m["value"])
+	}
+}
+
+func TestShip_RedactedAfterValue_RetriedForever_NeverSilentlySkipped(t *testing.T) {
+	// A declined resource stays "pending" forever (never reaches
+	// in_flight, never counts toward the retry budget), so a re-run
+	// declines it again identically rather than treating it as
+	// already-resolved -- the only way out is a human using `ubx
+	// revert-plan`'s manual path.
+	l, fake, _, p := singleResourceRevert(t)
+	p.Delta.Modifies[0].After["value"] = json.RawMessage(`{"$redacted":{"sha256":"deadbeef"}}`)
+
+	for i := 0; i < 3; i++ {
+		sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+		if err != nil {
+			t.Fatalf("ship attempt %d: %v", i+1, err)
+		}
+		if sealed.Summary.Outcome != "failed" {
+			t.Fatalf("attempt %d: outcome = %q, want failed", i+1, sealed.Summary.Outcome)
+		}
 	}
 }
 

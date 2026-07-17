@@ -149,6 +149,25 @@ func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource strin
 			continue
 		}
 
+		// docs/executor.md -- "Redacted after values are declined, not
+		// applied": the ledger holds a salted hash, not the real secret
+		// material, so ubx can never construct a live apply from it. This
+		// is checked before any read/freshness/apply work at all, and
+		// declines the whole resource (never a partial apply of just the
+		// non-redacted paths) -- ApplyResourceChange is a single whole-state
+		// operation, not an independent per-attribute one.
+		if paths := redactedAfterPaths(m); len(paths) > 0 {
+			recordTransition(ra, core.ResourcePending, "")
+			recordError(ra, fmt.Sprintf(
+				"declined: after value(s) at %s are redacted -- the ledger holds a salted hash, not the real secret material, and ubx will never construct a live apply from it; use `ubx revert-plan` for this resource's manual reconciliation steps instead",
+				strings.Join(paths, ", ")), core.ErrorTerminal)
+			resourcesFailed++
+			if err := persist(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		lookup, haveLookup := lookupFor(p, m.Target)
 
 		// Reconcile first if the last thing we know about this resource is
@@ -481,6 +500,23 @@ func lookupFor(p *core.Proposal, addr core.Address) (json.RawMessage, bool) {
 		}
 	}
 	return nil, false
+}
+
+// redactedAfterPaths returns every dot-path in mod.After whose value is a
+// $redacted marker (core.IsRedactedValue) -- sorted, for a deterministic
+// error message. A drift_revert whose restore target is itself redacted
+// can never be shipped automatically (docs/executor.md, docs/schema.md's
+// apply-record amendment): the ledger never held the real material to
+// begin with.
+func redactedAfterPaths(mod core.Modification) []string {
+	var paths []string
+	for path, raw := range mod.After {
+		if core.IsRedactedValue(raw) {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func recordTransition(ra *core.ResourceApply, state core.ResourceState, detail string) {

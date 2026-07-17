@@ -412,6 +412,21 @@ func (l *Ledger) writeApplyFile(rec *ApplyRecord) error {
 // directly from a drift_revert's already-concrete restore values, without
 // a separate plan phase (docs/executor.md -- "Constructing PlannedState
 // without planning").
+//
+// A path present in Before but absent from After is DELETED from the
+// result, not left untouched -- found empirically, not assumed, while
+// live-testing ubx ship end to end (UBI-26 session 3): diffAttributes
+// records an attribute that exists in observed/drifted reality but not in
+// the ledger's own recorded truth (e.g. a tag added out-of-band) with an
+// entry in Before and none in After at all, since there is no ledger value
+// to record for something the ledger never had. Reverting that means
+// removing the attribute from live reality, which a pure dotSet-based
+// substitution can never do on its own -- it only ever sets values,
+// never un-sets one. Confirmed against a real scenario before fixing:
+// shipping a drift_revert that should remove an added tag left the tag in
+// place, "applied" reported cleanly with no error, silently wrong. A path
+// present in both Before and After (an ordinary changed value) is
+// unaffected -- After's dotSet already runs first and wins.
 func ApplyAfter(state json.RawMessage, mod Modification) (json.RawMessage, error) {
 	var current map[string]interface{}
 	if err := json.Unmarshal(state, &current); err != nil {
@@ -423,6 +438,12 @@ func ApplyAfter(state json.RawMessage, mod Modification) (json.RawMessage, error
 			return nil, fmt.Errorf("apply after: bad after[%q]: %w", path, err)
 		}
 		dotSet(current, path, v)
+	}
+	for path := range mod.Before {
+		if _, ok := mod.After[path]; ok {
+			continue // a genuine value change, already applied above
+		}
+		dotDelete(current, path)
 	}
 	b, err := json.Marshal(current)
 	if err != nil {

@@ -47,6 +47,20 @@ type Provider interface {
 	// sent as null. Returns the provider's view of the resource's current
 	// state, as JSON shaped the same way.
 	ReadResource(ctx context.Context, resourceSchema *Schema, typeName string, currentState json.RawMessage) (json.RawMessage, error)
+
+	// ApplyResourceChange asks the provider to move a resource from
+	// priorState to plannedState (UBI-26, docs/executor.md). Both are JSON
+	// objects shaped per resourceSchema's attributes, the same convention
+	// ReadResource's currentState uses. config is sent identically to
+	// plannedState (see docs/executor.md — "Constructing PlannedState
+	// without planning": v1 has no separate desired-config distinct from
+	// the value being restored to). Returns the provider's post-apply
+	// state. An error satisfying errors.As(err, *DiagnosticError) means the
+	// provider itself returned a real, structured ERROR diagnostic — never
+	// a transport/RPC-level failure — which core/executor's caller (see
+	// cli/stateadapter.go) uses to classify "terminal" (docs/executor.md's
+	// error taxonomy) rather than blindly retrying.
+	ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error)
 }
 
 // newProvider builds the protocol-appropriate Provider for a negotiated
@@ -62,9 +76,25 @@ func newProvider(version int, conn *grpc.ClientConn) (Provider, error) {
 	}
 }
 
-// diagnosticError renders a set of provider diagnostics as a single error,
-// or nil if none of them are error-severity. Warnings are ignored here —
-// ubx has no channel to surface them to yet.
+// DiagnosticError wraps one or more ERROR-severity diagnostics a provider
+// RPC returned -- as opposed to a transport/RPC-level failure (a dropped
+// connection, a context deadline, ...), which surfaces as a plain,
+// undecorated error instead. This distinction matters beyond ApplyResourceChange
+// (UBI-26): it's what lets a caller (cli/stateadapter.go) classify a real,
+// structured provider answer as "terminal" rather than something merely
+// ambiguous or transient -- docs/executor.md's error taxonomy is built on
+// exactly this signal.
+type DiagnosticError struct {
+	Messages []string
+}
+
+func (e *DiagnosticError) Error() string {
+	return fmt.Sprintf("provider returned %d diagnostic error(s): %s", len(e.Messages), strings.Join(e.Messages, "; "))
+}
+
+// diagnosticError renders a set of provider diagnostics as a single
+// *DiagnosticError, or nil if none of them are error-severity. Warnings are
+// ignored here — ubx has no channel to surface them to yet.
 func diagnosticError[D any](diags []D, severity func(D) int32, errorSeverity int32, text func(D) string) error {
 	var msgs []string
 	for _, d := range diags {
@@ -75,7 +105,7 @@ func diagnosticError[D any](diags []D, severity func(D) int32, errorSeverity int
 	if len(msgs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("provider returned %d diagnostic error(s): %s", len(msgs), strings.Join(msgs, "; "))
+	return &DiagnosticError{Messages: msgs}
 }
 
 type v6Provider struct {
@@ -122,6 +152,34 @@ func (p *v6Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 	resp, err := p.client.ReadResource(ctx, &tfplugin6.ReadResource_Request{
 		TypeName:     typeName,
 		CurrentState: &tfplugin6.DynamicValue{Msgpack: payload},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := diagnosticErrorV6(resp.Diagnostics); err != nil {
+		return nil, err
+	}
+	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
+}
+
+func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
+	if err != nil {
+		return nil, fmt.Errorf("encode prior state: %w", err)
+	}
+	plannedPayload, err := encodeDynamicValue(resourceSchema.Block, plannedState)
+	if err != nil {
+		return nil, fmt.Errorf("encode planned state: %w", err)
+	}
+	configPayload, err := encodeDynamicValue(resourceSchema.Block, config)
+	if err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin6.ApplyResourceChange_Request{
+		TypeName:     typeName,
+		PriorState:   &tfplugin6.DynamicValue{Msgpack: priorPayload},
+		PlannedState: &tfplugin6.DynamicValue{Msgpack: plannedPayload},
+		Config:       &tfplugin6.DynamicValue{Msgpack: configPayload},
 	})
 	if err != nil {
 		return nil, err
@@ -184,6 +242,34 @@ func (p *v5Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 	resp, err := p.client.ReadResource(ctx, &tfplugin5.ReadResource_Request{
 		TypeName:     typeName,
 		CurrentState: &tfplugin5.DynamicValue{Msgpack: payload},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := diagnosticErrorV5(resp.Diagnostics); err != nil {
+		return nil, err
+	}
+	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
+}
+
+func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
+	if err != nil {
+		return nil, fmt.Errorf("encode prior state: %w", err)
+	}
+	plannedPayload, err := encodeDynamicValue(resourceSchema.Block, plannedState)
+	if err != nil {
+		return nil, fmt.Errorf("encode planned state: %w", err)
+	}
+	configPayload, err := encodeDynamicValue(resourceSchema.Block, config)
+	if err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin5.ApplyResourceChange_Request{
+		TypeName:     typeName,
+		PriorState:   &tfplugin5.DynamicValue{Msgpack: priorPayload},
+		PlannedState: &tfplugin5.DynamicValue{Msgpack: plannedPayload},
+		Config:       &tfplugin5.DynamicValue{Msgpack: configPayload},
 	})
 	if err != nil {
 		return nil, err
