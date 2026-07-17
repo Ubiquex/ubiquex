@@ -21,6 +21,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newRevertPlanCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newMCPCmd())
 
 	return root
 }
