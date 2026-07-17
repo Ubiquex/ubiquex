@@ -388,3 +388,294 @@ of these need real cloud infrastructure specifically to be meaningfully
 tested — they're process-level/filesystem-level scenarios already exactly
 reproduced hermetically — so this is a scope note, not a gap being carried
 forward silently.
+
+# UBI-27: shipping resolved `change` proposals — a real create chain on AWS
+
+> Same discipline as the UBI-26 report above: every transcript below is
+> real command output from this session, not reconstructed. Real AWS
+> account `839333509514`, region `us-east-1`, provider `hashicorp/aws`
+> 6.54.0. Ledger directory: a fresh scratch directory
+> (`ubi27-create-chain`), not the long-lived `payments`/`ubx-states` demo
+> ledger above — this work creates and destroys real resources, and stays
+> out of that ledger's own history on purpose. No adjectives.
+
+## Scope
+
+docs/resolver.md's resolver produces `kind: "change"` proposals (creates +
+modifies, no destroys); docs/executor.md's UBI-27 amendment extends `ubx
+ship` to execute them — real tfplugin `Unknown` values for `$computed`,
+dependency-ordered execution, applied outputs fed into still-pending
+siblings mid-walk. This section is that mechanism's own first real-world
+test: a genuine two-resource AWS create chain, shipped for real, killed
+mid-chain on purpose, and reconciled.
+
+## The chain
+
+`aws_sqs_queue` (a queue) plus `aws_sqs_queue_policy` (a resource-based
+policy attached to it via `queue_url`, `Required`, plain string) — cheap,
+safe, and a genuine dependency: `queue_url` is only known once the queue
+itself has been created (`aws_sqs_queue.url` is schema-`Computed`). The
+policy's own `policy` attribute is a static, self-contained IAM document
+(`Resource: "*"`, scoped to whichever queue it's attached to via
+`queue_url`) — deliberately not templated with the queue's ARN, since
+`$computed` substitution only ever replaces a whole config value, never
+interpolates into a larger string (docs/resolver-adversarial.md row 6's
+own boundary).
+
+```json
+{
+  "type": "aws_sqs_queue_policy", "name": "chain-a-policy", "op": "create",
+  "config": {
+    "queue_url": {"$ref": {"to": "ubi27demo.aws_sqs_queue.chain-a.url"}},
+    "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AllowAccountSend\",\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::839333509514:root\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"*\"}]}"
+  }
+}
+```
+
+`ubx resolve` correctly marks `queue_url` `$computed` (schema-`Computed`,
+referenced before its own resource exists) and records `depends_on`:
+
+```text
+$ ubx resolve intent-chain-a.json --source hashicorp/aws --provider-version 6.54.0 --out resolved-chain-a.json
+resolved: ubi27demo: 2 create(s), 0 modify(ies)
+```
+
+```json
+{
+  "config": {
+    "policy": "...",
+    "queue_url": {"$computed": {"from": "ubi27demo.aws_sqs_queue.chain-a.url"}}
+  },
+  "depends_on": ["ubi27demo.aws_sqs_queue.chain-a"],
+  "name": "chain-a-policy", "stack": "ubi27demo", "type": "aws_sqs_queue_policy"
+}
+```
+
+## A real bug found shipping this for the first time: Configure was never called for a create
+
+`ubx accept` then `ubx ship` against the real AWS provider:
+
+```text
+$ ubx ship 15f5a53484d3e413ab6bf1a6a5517e0fd68e898efaf0726a37c8683159f68f8b \
+    --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --ledger-dir .
+unknown_post_timeout: ubi27demo.aws_sqs_queue.chain-a
+  retryable: rpc error: code = Unavailable desc = error reading from server: EOF
+pending: ubi27demo.aws_sqs_queue_policy.chain-a-policy
+  terminal: blocked: dependency ubi27demo.aws_sqs_queue.chain-a has not applied -- refusing to ship a resource ahead of what it depends on
+2 resource(s), 0 applied, 1 failed, 1 still unknown -- outcome: failed
+```
+
+`aws sqs list-queues` confirmed nothing was actually created — the RPC
+genuinely never landed; this wasn't a false negative. Root cause,
+diagnosed by reproducing the exact `ApplyResourceChange` call directly
+against the acquired provider binary: `core/executor`'s new `shipCreate`
+never called `Applier.Configure` at all. Drift_revert's own modify path
+gets `Configure` for free, indirectly, through `core.ReadAndFingerprint`/
+`core.VerifyFreshness` (both call it internally before every read) — but
+a create never reads anything first, so it reached a real AWS provider
+that had never been told its region or credentials existed. Against
+`terraform-provider-aws` this didn't surface as a clean configuration
+error: the request killed the provider subprocess outright, surfacing to
+`ubx` as a bare transport EOF, indistinguishable at first glance from a
+genuine mid-call crash. Fixed by calling `app.Configure(ctx,
+providerSchema, providerConfig)` explicitly in `shipCreate`, before the
+first create's own schema is even used — the exact fix, and nothing more,
+recorded in docs/executor.md's own amendment.
+
+Re-run, same proposal, same real AWS account, after the fix:
+
+```text
+$ ubx ship 15f5a53484d3e413ab6bf1a6a5517e0fd68e898efaf0726a37c8683159f68f8b \
+    --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --ledger-dir .
+applied: ubi27demo.aws_sqs_queue.chain-a
+applied: ubi27demo.aws_sqs_queue_policy.chain-a-policy
+2 resource(s), 2 applied, 0 failed, 0 still unknown -- outcome: applied
+```
+
+`ubx` created real infrastructure for the first time. Verified
+independently, never trusting `ubx`'s own report:
+
+```text
+$ aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-a --attribute-names All --region us-east-1
+{
+  "QueueArn": "arn:aws:sqs:us-east-1:839333509514:ubx-ubi27-chain-a",
+  "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AllowAccountSend\",...,\"Resource\":\"*\"}]}",
+  ...
+}
+```
+
+And the flowed value itself, read directly from the sealed apply record
+(not from `ubx`'s own summary line): the policy's own applied
+`provider_result.queue_url` is byte-identical to the queue's own applied
+`provider_result.url` — the `$computed` marker was replaced with the
+queue's REAL, just-created URL, never a guess, never left as the marker:
+
+```text
+ubi27demo.aws_sqs_queue.chain-a          -> url: https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-a
+ubi27demo.aws_sqs_queue_policy.chain-a-policy -> queue_url: https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-a
+```
+
+Both the resolve-time double-run mismatch fix (below) and this Configure
+fix are covered by real fixes in the code, not just noted here: see
+`core/executor/ship.go`'s `shipCreate`/`shipModifyNode` and
+`core/resolver/resolver.go`'s `Resolve`.
+
+## A second, unrelated real bug found the same session: `resolved_at` could break `DoubleRun`
+
+Encountered running the full test suite after the AWS work above, not
+during the live run itself: `core/resolver`'s own
+`TestResolve_RefToExistingLedgeredResource_AlwaysConcrete` failed once,
+non-deterministically, with `resolve: double-run mismatch`. `resolveOnce`
+called `time.Now()` itself, fresh, on each of `core.DoubleRun`'s two
+internal calls — a resolve whose two calls happened to straddle a
+one-second boundary (RFC3339's own resolution) produced two genuinely
+different `resolved_at` strings, a false-positive `ErrDoubleRunMismatch`
+over a value that was never supposed to be checked for run-to-run
+stability. Reproduced deliberately hard to pin down (didn't recur in 15
+back-to-back runs after first appearing, nor in a 50-run stress loop after
+the fix) — real, rare, and load-bearing for anyone running `ubx resolve`
+for real, not a flaky-test annoyance to shrug off. Fixed by capturing
+`resolvedAt` once, before either `DoubleRun` call, and threading it
+through `resolveOnce` as a parameter instead of letting the function ask
+the clock itself.
+
+## The kill: a fresh chain, killed for real between one resource applying and the next starting
+
+A second, independent chain (`chain-b`/`chain-b-policy`, same shape) —
+resolved and accepted the same way. `ubx ship` run in the background with
+a new debug-only delay hook (`UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES=20s`,
+`core/executor/ship.go` — sleeps in `shipChange`'s own loop, after one
+resource's processing is fully durably persisted and before the next
+resource is even looked at; zero, and invisible, in every real `ubx ship`
+that doesn't set it), polling the ledger's own live apply-record file
+every two seconds until the queue showed `applied` and the policy had not
+yet started:
+
+```text
+poll 9: queue_state=applied policy_started=no
+WINDOW OPEN - killing now
+```
+
+`kill -9` issued at that exact instant. The process died immediately
+(confirmed via `ps`). The unsealed attempt file left behind, read
+directly off disk — no guessing, no reconstruction:
+
+```json
+{
+  "attempt": 1,
+  "resources": [
+    {
+      "address": {"stack": "ubi27demo", "type": "aws_sqs_queue", "name": "chain-b"},
+      "transitions": [
+        {"state": "pending", "at": "2026-07-17T14:24:34Z"},
+        {"state": "in_flight", "at": "2026-07-17T14:24:35Z"},
+        {"state": "applied", "at": "2026-07-17T14:25:01Z"}
+      ],
+      "provider_result": {"url": "https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-b", "arn": "arn:aws:sqs:us-east-1:839333509514:ubx-ubi27-chain-b", "...": "..."}
+    }
+  ]
+}
+```
+
+One resource entry, not two: `chain-b-policy` was never even reached, so
+it never got a `ResourceApply` entry in this attempt at all — not "pending
+with no transitions," genuinely absent, since `shipChange`'s own loop
+appends a resource's entry only when it's actually that resource's turn.
+No `summary`/`id` at all — unsealed, exactly what a kill at that instant
+leaves behind. Verified independently: the queue existed for real
+(`aws sqs list-queues`); no policy was attached yet (`get-queue-attributes
+--attribute-names Policy` returned nothing).
+
+Re-run, no delay this time — a human just noticing the process died and
+re-running `ubx ship`:
+
+```text
+$ ubx ship c532743b0180a15601d50821c8e7e9774b3e8777f95105ac4c49461879f526f5 \
+    --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --ledger-dir .
+applied: ubi27demo.aws_sqs_queue.chain-b
+applied: ubi27demo.aws_sqs_queue_policy.chain-b-policy
+2 resource(s), 2 applied, 0 failed, 0 still unknown -- outcome: applied
+```
+
+`ubx why` shows the full, honest story across both attempts:
+
+```text
+$ ubx why c532743b0180a15601d50821c8e7e9774b3e8777f95105ac4c49461879f526f5 --ledger-dir .
+apply history:
+  attempt 1: unsealed (interrupted or still in progress)
+    ubi27demo.aws_sqs_queue.chain-b:
+      pending at 2026-07-17T14:24:34Z
+      in_flight at 2026-07-17T14:24:35Z
+      applied at 2026-07-17T14:25:01Z
+  attempt 2: outcome=applied
+    ubi27demo.aws_sqs_queue.chain-b:
+      applied at 2026-07-17T14:25:41Z -- already applied in a prior attempt
+    ubi27demo.aws_sqs_queue_policy.chain-b-policy:
+      pending at 2026-07-17T14:25:41Z
+      in_flight at 2026-07-17T14:25:42Z
+      applied at 2026-07-17T14:26:09Z
+```
+
+The queue was never re-created, confirmed via AWS itself, not just via
+`ubx`'s own report — `CreatedTimestamp` unchanged across the two attempts
+(`1784298275`), only `LastModifiedTimestamp` moving forward (when the
+policy attached). And the dependent completed using the FIRST attempt's
+real, already-recorded output, not a fresh guess or a duplicate: attempt
+2's own apply record shows `chain-b`'s `provider_result` empty (a
+pass-through confirmation never re-captures it) while `chain-b-policy`'s
+own `queue_url` is the queue's real URL anyway — recovered by
+`foldResourceHistory`'s own `lastProviderResult` fold from attempt 1's
+history, exactly the mechanism this design depends on, proven live:
+
+```text
+ubi27demo.aws_sqs_queue.chain-b               -> no provider_result recorded this attempt (pass-through)
+ubi27demo.aws_sqs_queue_policy.chain-b-policy -> url/queue_url: https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-b
+```
+
+## Cleanup and a real, honest gap found doing it
+
+Destroys are out of v1 scope (docs/resolver.md's own Scope section) — both
+queues were deleted via plain `aws sqs delete-queue` calls, never through
+`ubx`:
+
+```text
+$ aws sqs delete-queue --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-a --region us-east-1
+$ aws sqs delete-queue --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi27-chain-b --region us-east-1
+$ aws sqs list-queues --region us-east-1
+(empty -- zero queues in the account)
+```
+
+Attempting to confirm this the way UBI-26's own report did (`ubx status
+--drift`) surfaced a real, separate, load-bearing gap rather than a clean
+confirmation:
+
+```text
+$ ubx status --ledger-dir . --drift --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+0 resource(s), 0 drifted, 0 unreadable
+```
+
+This is not "confirmed clean" — it's "invisible." `core.Ledger.Fleet`
+(what `ubx status` walks) discovers a resource exclusively via a
+`resolution.inputs[].resource` entry, and a `change` proposal's own create
+never gets one for its own address (only `cross_stack_pin`/`live_state`
+kinds exist today; neither fits a resource that was never observed, only
+created). The real lookup key a future scan would need isn't even known
+until `ship` applies it — after the proposal's content hash is already
+sealed, so nothing can retroactively add to it. The account is genuinely
+clean (confirmed authoritatively via `aws sqs list-queues` above, not via
+`ubx`), but `ubx` itself has no way to know that, or to have known these
+resources existed at all once shipped. Recorded as a real, unresolved
+finding in docs/resolver.md and docs/executor.md's own "Out of scope"
+sections and in STATE.md — left for a follow-up session, not silently
+patched around here.
+
+## Account state at the end of this section
+
+Zero SQS queues in the account (`aws sqs list-queues`, no name filter).
+No IAM changes. The two ledger proposals (`15f5a53...`, `c532743b...`) and
+their apply-record history remain in the scratch ledger directory as a
+permanent, honest record of exactly what happened — including the two
+failed attempts before the Configure fix and the one interrupted attempt
+before the kill-recovery proof — never rewritten or cleaned up to look
+tidier than the real run was.
+forward silently.

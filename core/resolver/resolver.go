@@ -165,10 +165,23 @@ type batchEntry struct {
 // resolution runs through core.DoubleRun (docs/resolver-adversarial.md row
 // 1): called twice, byte-compared, a hard failure on any divergence,
 // v1 XCL never had an equivalent check at all.
+//
+// resolvedAt is captured ONCE here, before either DoubleRun call, and
+// threaded into both -- found live (UBI-27, executor session): resolveOnce
+// used to call time.Now() itself, so a resolve whose two DoubleRun calls
+// happened to straddle a second boundary (RFC3339's own resolution)
+// produced two genuinely different resolved_at strings, a false-positive
+// ErrDoubleRunMismatch over a real value that was never supposed to be
+// checked for run-to-run stability in the first place -- rare (didn't
+// reproduce in 15 back-to-back runs) but real, and load-bearing for any
+// caller running `ubx resolve` for real. Fixed at the one place that
+// actually varies between the two calls, not by weakening DoubleRun's own
+// comparison.
 func Resolve(l *core.Ledger, schema SchemaInspector, intent *IntentFile) (*core.Proposal, error) {
+	resolvedAt := time.Now().UTC().Format(time.RFC3339)
 	var resolved *core.Proposal
 	_, err := core.DoubleRun(func() ([]byte, error) {
-		p, err := resolveOnce(l, schema, intent)
+		p, err := resolveOnce(l, schema, intent, resolvedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +198,7 @@ func Resolve(l *core.Ledger, schema SchemaInspector, intent *IntentFile) (*core.
 	return resolved, nil
 }
 
-func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile) (*core.Proposal, error) {
+func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, resolvedAt string) (*core.Proposal, error) {
 	if intent.Kind != IntentFileKind {
 		return nil, fmt.Errorf("%w: got %q", ErrUnknownIntentKind, intent.Kind)
 	}
@@ -333,7 +346,7 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile) (*c
 			Modifies: modifies,
 		},
 		Resolution: core.Resolution{
-			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
+			ResolvedAt: resolvedAt,
 			Inputs:     resolutionInputs,
 		},
 		CostDelta: core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},

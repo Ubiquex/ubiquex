@@ -163,15 +163,25 @@ func (p *v6Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 }
 
 func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+	// priorState keeps the plain encoder: it either represents an
+	// already-observed, fully concrete resource (drift_revert; every
+	// attribute present) or a genuine from-scratch create, encoded as
+	// literal JSON "null" by the caller (core/executor) -- ctyjson's own
+	// null-token handling already produces the correct top-level
+	// cty.NullVal(ty) for that case, no unknown-awareness needed here.
+	// plannedState/config use the unknown-aware encoder (ctyvalue.go's
+	// UBI-27 fix): a $computed marker, or a schema-Computed attribute the
+	// resolved config never set at all, both need to reach the wire as a
+	// real cty.UnknownVal, not Null.
 	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
 	if err != nil {
 		return nil, fmt.Errorf("encode prior state: %w", err)
 	}
-	plannedPayload, err := encodeDynamicValue(resourceSchema.Block, plannedState)
+	plannedPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, plannedState)
 	if err != nil {
 		return nil, fmt.Errorf("encode planned state: %w", err)
 	}
-	configPayload, err := encodeDynamicValue(resourceSchema.Block, config)
+	configPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, config)
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
 	}
@@ -253,15 +263,17 @@ func (p *v5Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 }
 
 func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+	// See v6Provider.ApplyResourceChange's own comment: priorState stays
+	// on the plain encoder, plannedState/config use the unknown-aware one.
 	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
 	if err != nil {
 		return nil, fmt.Errorf("encode prior state: %w", err)
 	}
-	plannedPayload, err := encodeDynamicValue(resourceSchema.Block, plannedState)
+	plannedPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, plannedState)
 	if err != nil {
 		return nil, fmt.Errorf("encode planned state: %w", err)
 	}
-	configPayload, err := encodeDynamicValue(resourceSchema.Block, config)
+	configPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, config)
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
 	}

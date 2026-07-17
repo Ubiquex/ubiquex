@@ -340,22 +340,66 @@ second time, for a different reason: not "the shape must match the
 schema exactly" but "there is a real wire-level distinction between null
 and unknown, and JSON can only ever express one of them."
 
-**Left genuinely open, not assumed answered**: whether a real provider's
-`ApplyResourceChange` — called directly, still with no separate
-`PlanResourceChange` phase (the same shortcut `drift_revert` already
-takes, docs/executor.md's own "Constructing `PlannedState` without
-planning" section) — actually accepts and correctly resolves a
-directly-constructed unknown the way it would one produced by its own real
-`PlanResourceChange` response. Real Terraform usage never skips `Plan`;
-some providers may rely on `PlannedPrivate` (opaque bytes only a real
-`PlanResourceChange` call produces) to know how to resolve an unknown
-correctly during `Apply`, in ways a directly-constructed one cannot
-satisfy. This is exactly what
-docs/resolver-adversarial.md's own "unknown-value round-trip through a
-real provider's `PlanResourceChange`/`ApplyResourceChange`" row exists to
-settle empirically, not something asserted safe in advance. If it turns
-out real providers require a genuine `PlanResourceChange` call first, that
-call would need to be added to `provider.Provider` for `change` proposals
+**A second, real gap found while actually implementing this (not named in
+the paragraph above, which only ever describes the explicit-marker case)**:
+an explicit `$computed` marker is not the only place `PlannedState` needs
+an `Unknown`. A brand-new resource's own never-referenced attributes — its
+`id`/`arn`/`url`, on a from-scratch create nothing in the same batch even
+points at — are simply *absent* from the resolver's own emitted `config`
+(the resolver only ever marks `$computed` on a **reference** to a
+not-yet-known attribute; it has no reason to annotate a resource's own
+untouched attributes at all). Left alone, an absent-but-schema-`Computed`
+attribute encodes as `Null` — indistinguishable, on the wire, from "this
+provider doesn't support this attribute" — and (confirmed empirically the
+same way the false start above was) a real SDKv2-vintage provider's
+`Apply` returns it as `null`, never actually computing it. The fix
+(`provider/ctyvalue.go`'s `encodeUnknownAwareDynamicValue`) treats these
+as one mechanism, not two: walking the resolved config against the
+schema's own `Block` (not just its flattened `cty.Type`, which erases the
+`Computed` flag), any attribute that is either an explicit `$computed`
+marker OR schema-`Computed` and simply absent from the config becomes
+`cty.UnknownVal`. Verified empirically against a real provider for both
+cases (`hashicorp/time`'s `time_static`, `provider/apply_live_test.go`):
+`TestApplyResourceChange_RealProvider_TimeStatic_Create` (a genuine
+from-scratch create — `PriorState` the real JSON `null` literal, not an
+all-null object — every schema-`Computed` attribute the config never set
+comes back a real computed value, not `null`) and
+`TestApplyResourceChange_RealProvider_TimeStatic_ComputedMarker` (an
+explicit `{"$computed": {...}}` marker left in `PlannedState`, as it would
+sit for a same-batch dependency not yet applied, also resolves correctly).
+This settles docs/resolver-adversarial.md's row 10 both ways.
+
+A related, easily-missed detail confirmed alongside this: `PriorState` for
+a genuine create must be the literal JSON `null` token
+(`json.RawMessage("null")`), not an empty/absent input — `encodeDynamicValue`'s
+existing "empty input defaults to `{}`" convenience (unchanged, still used
+for `PriorState` here) would otherwise silently produce an all-null
+*object* value, not the true top-level `cty.NullVal(ty)` a real provider's
+`Apply` needs to recognize "this doesn't exist yet." `ctyjson.Unmarshal`
+already returns the correct `cty.NullVal` given the literal token; the
+only change needed was at the *call site* (core/executor), not in
+`encodeDynamicValue` itself.
+
+**Resolved empirically (docs/resolver-adversarial.md row 10), not assumed
+safe in advance**: whether a real provider's `ApplyResourceChange` — called
+directly, still with no separate `PlanResourceChange` phase (the same
+shortcut `drift_revert` already takes, docs/executor.md's own
+"Constructing `PlannedState` without planning" section) — actually accepts
+and correctly resolves a directly-constructed unknown the way it would one
+produced by its own real `PlanResourceChange` response. Real Terraform
+usage never skips `Plan`; some providers might rely on `PlannedPrivate`
+(opaque bytes only a real `PlanResourceChange` call produces) to know how
+to resolve an unknown correctly during `Apply`, in ways a
+directly-constructed one couldn't satisfy — that concern turned out not to
+apply to `hashicorp/time`'s `time_static` (the two tests named above): a
+directly-constructed `Unknown`, with no prior `PlanResourceChange` call at
+all, resolves into a real, correctly-computed value on `Apply`. This is
+one real provider, not an exhaustive survey — the no-separate-plan-phase
+shortcut is confirmed to extend safely to at least one genuinely
+SDKv2-vintage provider's real unknowns, not proven true of every provider
+`ubx` might ever ship a `change` proposal against. If a future provider is
+found that requires a genuine `PlanResourceChange` call first, that call
+would need to be added to `provider.Provider` for `change` proposals
 specifically — `drift_revert`'s own no-plan-needed shortcut would be
 unaffected (its restore values are never unknown in the first place).
 
@@ -389,10 +433,25 @@ not a new ledger mechanism.
 
 ## Out of scope for v1, named so it isn't assumed covered
 
-- Any proposal kind other than `drift_revert` — **as of UBI-26**. UBI-27's
-  own resolver work (docs/resolver.md) extends `ship` to `change` proposals
-  too, per the amendment above; that extension is designed here, not yet
-  built (session 2+).
+- Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
+  (`change` shipping is now built: `core/executor`'s `shipChange`, real
+  tfplugin unknowns via `provider/ctyvalue.go`'s
+  `encodeUnknownAwareDynamicValue`, live-verified against a real two-resource
+  AWS chain -- see STATE.md for the full session writeup).
+- **A shipped create becoming discoverable by `ubx status`/`ubx why
+  <address>` afterward** — found live, not designed for in advance:
+  `core.Ledger.Fleet`/`ProposalsForAddress`/`LastObservedHash` all
+  discover a resource exclusively via a `resolution.inputs[].resource`
+  entry, and nothing ever writes one for a create's own address (a create
+  was never observed; its real identifying attributes aren't even known
+  until `ship` applies it, well after the proposal's content hash is
+  sealed — nothing can retroactively add to it). Confirmed live: `ubx
+  status --drift` reported "0 resource(s)" for a stack that had just had
+  two real AWS resources shipped into it. See docs/resolver.md's own "Out
+  of scope" section for the same finding and the likely direction of a
+  fix (`ubx ship` durably recording something ledger-chain-visible once a
+  create lands, functionally equivalent to a synthetic adoption) — left
+  for a follow-up session.
 - Parallel execution — across resources within one proposal, or across
   proposals/stacks. Serial, delta/dependency order, full stop.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already

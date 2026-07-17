@@ -51,13 +51,13 @@ func newWhyCmd() *cobra.Command {
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
-				// UBI-26: a drift_revert's own "full story" includes what
-				// ubx ship actually did, not just the decision -- fetched
-				// for every drift_revert regardless of whether it was ever
-				// shipped (an empty/nil slice renders nothing, see
-				// renderApplies).
+				// UBI-26/27: a drift_revert or change proposal's own "full
+				// story" includes what ubx ship actually did, not just the
+				// decision -- fetched for every shippable kind regardless
+				// of whether it was ever shipped (an empty/nil slice
+				// renders nothing, see renderApplies).
 				var attempts []*core.ApplyRecord
-				if p.Kind == core.KindDriftRevert {
+				if p.Kind == core.KindDriftRevert || p.Kind == core.KindChange {
 					attempts, err = ledger.ApplyAttempts(p.ID)
 					if err != nil {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}

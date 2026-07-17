@@ -37,21 +37,25 @@ func newShipCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "ship <proposal-id>",
-		Short: "Execute an accepted drift_revert proposal against live cloud -- the only command that applies",
-		Long: `Executes an already-accepted drift_revert proposal: restores the resource's live state to
-match the ledger's recorded truth, one resource at a time. This is the one ubx command that changes
-real infrastructure -- accept/why/status/scan/revert-plan only ever read or record.
+		Short: "Execute an accepted drift_revert or change proposal against live cloud -- the only command that applies",
+		Long: `Executes an already-accepted drift_revert or change proposal: for a drift_revert, restores the
+resource's live state to match the ledger's recorded truth; for a change (UBI-27, "ubx resolve"'s own
+output), creates and modifies resources for real, in real dependency order, feeding each resource's
+real applied output into any sibling still carrying a $computed marker pointing at it. This is the one
+ubx command that changes real infrastructure -- accept/why/status/scan/revert-plan/resolve only ever
+read or record.
 
 Safe to re-run: ubx ship is idempotent by contract (docs/executor.md). A resource already applied in a
-prior attempt is skipped; a resource left in an unresolved state (a crash, a timeout) is reconciled
-against live reality before anything new is attempted; a resource whose restore target is itself a
+prior attempt is skipped -- including, for a change proposal, recovering its real applied output from
+the ledger so a still-pending dependent can proceed correctly even after a crash between the two; a
+resource left in an unresolved state (a crash, a timeout) is reconciled against live reality before
+anything new is attempted where a lookup key exists; a resource whose restore target is itself a
 redacted ($redacted) value is declined every time -- ubx never constructs a live apply from a salted
 hash, use "ubx revert-plan" for that resource's manual reconciliation steps instead.
 
-Freshness is re-verified for every resource, immediately before its own attempt -- not just once at
-the start -- so reality moving mid-run is refused, never bulldozed. Only drift_revert proposals can be
-shipped; every other kind is either record-only (nothing to ship) or needs a resolver ubx doesn't have
-yet.`,
+Freshness is re-verified for every modified resource, immediately before its own attempt -- not just
+once at the start -- so reality moving mid-run is refused, never bulldozed. Only drift_revert and
+change proposals can be shipped; every other kind is record-only (nothing to ship).`,
 		Args: cobra.ExactArgs(1),
 		// Exit code is the CI contract (docs/exit-codes.mdx): 0 applied (or
 		// already fully applied -- a genuine no-op), 1 partially applied or
@@ -80,8 +84,8 @@ yet.`,
 			// executor.Ship enforces both of these authoritatively too
 			// (ErrUnsupportedKind/ErrNotAccepted), this just avoids the
 			// acquire/launch round trip for an obviously-wrong proposal.
-			if p.Kind != core.KindDriftRevert {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is kind %q, not drift_revert -- ship only executes reverts", p.ID, p.Kind)}
+			if p.Kind != core.KindDriftRevert && p.Kind != core.KindChange {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is kind %q -- ship only executes drift_revert or change proposals", p.ID, p.Kind)}
 			}
 			if p.Acceptance == nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is not accepted", p.ID)}

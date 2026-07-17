@@ -22,9 +22,11 @@ import (
 // real tfplugin provider identifies a resource from within its own state
 // rather than a side-channel parameter.
 type fakeApplier struct {
-	mu        sync.Mutex
-	resources map[string]json.RawMessage
-	scripts   map[string][]applyStep
+	mu            sync.Mutex
+	resources     map[string]json.RawMessage
+	scripts       map[string][]applyStep
+	createCounter int
+	createScripts map[string][]applyStep // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
 }
 
 type applyStep struct {
@@ -65,7 +67,39 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 	defer f.mu.Unlock()
 	id, ok := extractID(plannedState)
 	if !ok {
-		return nil, fmt.Errorf("fake: plannedState has no id: %s", plannedState)
+		// A genuine from-scratch create (UBI-27, docs/executor.md's own
+		// amendment): PriorState is the literal JSON "null" ship.go's
+		// shipCreate constructs, and the resolved config has no "id" at
+		// all (never referenced by anything, so core/resolver never
+		// marked it $computed). Assign one, the same role a real
+		// provider's Apply plays once handed a genuine Unknown
+		// (provider/ctyvalue.go's encodeUnknownAwareDynamicValue) --
+		// never for a modify, where a missing id is a real bug, not a
+		// create, hence the priorState check.
+		if string(priorState) != "null" {
+			return nil, fmt.Errorf("fake: plannedState has no id: %s", plannedState)
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(plannedState, &m); err != nil {
+			return nil, fmt.Errorf("fake: decode plannedState: %w", err)
+		}
+		if v, _ := m["value"].(string); v != "" {
+			if steps, ok := f.createScripts[v]; ok && len(steps) > 0 {
+				step := steps[0]
+				f.createScripts[v] = steps[1:]
+				if step.err != nil {
+					return nil, step.err
+				}
+			}
+		}
+		f.createCounter++
+		id = fmt.Sprintf("created-%d", f.createCounter)
+		m["id"] = id
+		b, err := json.Marshal(m)
+		if err != nil {
+			return nil, err
+		}
+		plannedState = b
 	}
 	if steps, ok := f.scripts[id]; ok && len(steps) > 0 {
 		step := steps[0]
@@ -91,6 +125,20 @@ func (f *fakeApplier) scriptApplyError(id string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scripts[id] = append(f.scripts[id], applyStep{err: err})
+}
+
+// scriptCreateFailure schedules the next ApplyResourceChange call for a
+// CREATE whose resolved config's own "value" field equals value to
+// return err instead -- a create has no id yet at script-time, so this is
+// keyed by content instead, the same role scriptApplyError plays for an
+// already-identified (modify) resource.
+func (f *fakeApplier) scriptCreateFailure(value string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createScripts == nil {
+		f.createScripts = map[string][]applyStep{}
+	}
+	f.createScripts[value] = append(f.createScripts[value], applyStep{err: err})
 }
 
 // scriptApplyTimeoutButLanded schedules the next ApplyResourceChange call
@@ -197,6 +245,57 @@ func acceptRevert(t *testing.T, l *core.Ledger, stack string, results ...*core.S
 	accepted, err := core.Accept(l, combined)
 	if err != nil {
 		t.Fatalf("accept revert: %v", err)
+	}
+	return accepted
+}
+
+// changeCreateJSON builds one delta.creates entry's raw JSON, matching
+// core/resolver's own emitted node shape (docs/schema.md's "Amendment:
+// intent files and resolved change proposals") -- hand-built here rather
+// than actually resolved, the same "don't depend on core/resolver for an
+// executor test" posture acceptRevert already takes for drift_revert
+// (core/executor stays independently testable from core/resolver).
+func changeCreateJSON(t *testing.T, addr core.Address, config string, dependsOn ...string) json.RawMessage {
+	t.Helper()
+	node := map[string]interface{}{
+		"stack":  addr.Stack,
+		"type":   addr.Type,
+		"name":   addr.Name,
+		"config": json.RawMessage(config),
+	}
+	if len(dependsOn) > 0 {
+		node["depends_on"] = dependsOn
+	}
+	b, err := json.Marshal(node)
+	if err != nil {
+		t.Fatalf("build create node: %v", err)
+	}
+	return b
+}
+
+// acceptChange builds and accepts a kind:"change" proposal directly from
+// already-built delta.creates nodes.
+func acceptChange(t *testing.T, l *core.Ledger, stack string, creates []json.RawMessage) *core.Proposal {
+	t.Helper()
+	head, err := l.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	p := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         stack,
+		Parent:        head,
+		Kind:          core.KindChange,
+		Intent:        core.Intent{Summary: "test change"},
+		Delta:         core.Delta{Creates: creates},
+		Resolution:    core.Resolution{ResolvedAt: time.Now().UTC().Format(time.RFC3339)},
+		CostDelta:     core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},
+		BlastRadius:   core.BlastRadius{Creates: int64(len(creates))},
+		Status:        core.StatusDraft,
+	}
+	accepted, err := core.Accept(l, p)
+	if err != nil {
+		t.Fatalf("accept change: %v", err)
 	}
 	return accepted
 }
@@ -864,5 +963,219 @@ func TestShip_CorruptApplyRecord_RefusesToGuess(t *testing.T) {
 
 	if _, err := Ship(context.Background(), l, fake, "", nil, p); !errors.Is(err, core.ErrCorruptApplyRecord) {
 		t.Fatalf("err = %v, want ErrCorruptApplyRecord", err)
+	}
+}
+
+// --- shipping change proposals (UBI-27) --------------------------------
+
+// TestShip_ChangeProposal_CreateChain_FeedsComputedOutputForward is the
+// centerpiece happy path: "mirror" creates a resource whose config
+// carries a $computed marker pointing at "primary"'s not-yet-known id.
+// Confirms shipChange ships primary first, then substitutes primary's
+// REAL applied id into mirror's PlannedState before mirror's own apply
+// call -- never the marker itself, never a guess.
+func TestShip_ChangeProposal_CreateChain_FeedsComputedOutputForward(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	primary := core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"}
+	mirror := core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"}
+
+	creates := []json.RawMessage{
+		changeCreateJSON(t, primary, `{"value":"v1"}`),
+		changeCreateJSON(t, mirror, `{"value":{"$computed":{"from":"payments.fake_widget.primary.id"}}}`, primary.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %s, want applied", sealed.Summary.Outcome)
+	}
+
+	var primaryRA, mirrorRA *core.ResourceApply
+	for _, ra := range sealed.Resources {
+		switch ra.Address.String() {
+		case primary.String():
+			primaryRA = ra
+		case mirror.String():
+			mirrorRA = ra
+		}
+	}
+	if primaryRA == nil || mirrorRA == nil {
+		t.Fatalf("expected resource_apply entries for both primary and mirror, got %+v", sealed.Resources)
+	}
+	if st, _ := primaryRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("primary state = %s, want applied", st)
+	}
+	if st, _ := mirrorRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("mirror state = %s, want applied", st)
+	}
+
+	var primaryResult struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(primaryRA.ProviderResult, &primaryResult); err != nil {
+		t.Fatalf("decode primary result: %v", err)
+	}
+	if primaryResult.ID == "" {
+		t.Fatal("primary's applied result has no id -- the fake's own create fill-in didn't run")
+	}
+
+	var mirrorResult struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(mirrorRA.ProviderResult, &mirrorResult); err != nil {
+		t.Fatalf("decode mirror result: %v", err)
+	}
+	if mirrorResult.Value != primaryResult.ID {
+		t.Fatalf("mirror.value = %q, want primary's real applied id %q -- the $computed marker was not correctly substituted mid-walk", mirrorResult.Value, primaryResult.ID)
+	}
+}
+
+// TestShip_ChangeProposal_DependentNeverAttemptedBeforeDependencyApplies
+// is the first of the two adversarial rows requested for UBI-27's
+// executor session: "dependent shipped before its dependency's output
+// exists" must be structurally impossible, not merely undesirable.
+// primary's create fails terminally; mirror (which depends on it) must
+// never be attempted at all -- confirmed both by its own recorded state
+// (blocked, never in_flight) and by the fake provider's own resource
+// store staying completely empty (mirror's ApplyResourceChange was never
+// even called).
+func TestShip_ChangeProposal_DependentNeverAttemptedBeforeDependencyApplies(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	primary := core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"}
+	mirror := core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"}
+
+	creates := []json.RawMessage{
+		changeCreateJSON(t, primary, `{"value":"v1"}`),
+		changeCreateJSON(t, mirror, `{"value":{"$computed":{"from":"payments.fake_widget.primary.id"}}}`, primary.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	fake.scriptCreateFailure("v1", &TerminalError{Err: errors.New("simulated: primary create rejected")})
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "failed" {
+		t.Fatalf("outcome = %s, want failed (nothing applied)", sealed.Summary.Outcome)
+	}
+
+	var primaryRA, mirrorRA *core.ResourceApply
+	for _, ra := range sealed.Resources {
+		switch ra.Address.String() {
+		case primary.String():
+			primaryRA = ra
+		case mirror.String():
+			mirrorRA = ra
+		}
+	}
+	if primaryRA == nil || mirrorRA == nil {
+		t.Fatalf("expected resource_apply entries for both primary and mirror, got %+v", sealed.Resources)
+	}
+	if st, _ := primaryRA.LastState(); st != core.ResourceFailed {
+		t.Fatalf("primary state = %s, want failed", st)
+	}
+	for _, tr := range mirrorRA.Transitions {
+		if tr.State == core.ResourceInFlight {
+			t.Fatal("mirror reached in_flight -- it must never be attempted while its dependency has not applied")
+		}
+	}
+	if len(mirrorRA.Errors) == 0 || mirrorRA.Errors[0].Message == "" {
+		t.Fatal("expected mirror to record a clear blocked-on-dependency error, not silence")
+	}
+	if len(fake.resources) != 0 {
+		t.Fatalf("fake.resources = %+v, want empty -- neither primary (failed) nor mirror (blocked) should have landed anything", fake.resources)
+	}
+}
+
+// TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_RecoversRealOutputOnRerun
+// is the second requested adversarial row: a real `kill -9` between one
+// resource's apply completing and the next one's own turn beginning.
+// Attempt 1 is hand-built to show primary already `applied`, with a real
+// ProviderResult, and left UNSEALED -- exactly what a process kill at
+// that exact point leaves on disk (the same convention
+// TestShip_CrashBetweenInFlightWriteAndCall_NeverLanded_RetriedAsFailed
+// already established for a single-resource drift_revert). A fresh
+// Ship() call must recognize primary as already applied (never
+// re-applying it against the fake provider a second time) and recover its
+// REAL recorded output from history to correctly ship mirror.
+func TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_RecoversRealOutputOnRerun(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	primary := core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"}
+	mirror := core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"}
+
+	creates := []json.RawMessage{
+		changeCreateJSON(t, primary, `{"value":"v1"}`),
+		changeCreateJSON(t, mirror, `{"value":{"$computed":{"from":"payments.fake_widget.primary.id"}}}`, primary.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	rec, err := l.BeginApply(p.ID)
+	if err != nil {
+		t.Fatalf("begin apply: %v", err)
+	}
+	primaryResult := json.RawMessage(`{"id":"primary-real-id","value":"v1"}`)
+	ra := &core.ResourceApply{Address: primary}
+	rec.Resources = append(rec.Resources, ra)
+	recordTransition(ra, core.ResourcePending, "")
+	recordTransition(ra, core.ResourceInFlight, "")
+	ra.ProviderResult = primaryResult
+	recordTransition(ra, core.ResourceApplied, "")
+	if err := l.SaveApplyProgress(rec); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+	// Attempt 1 is never sealed -- the process died before mirror's own
+	// turn ever began.
+
+	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	if err != nil {
+		t.Fatalf("re-run ship: %v", err)
+	}
+	if sealed.Attempt != 2 {
+		t.Fatalf("attempt = %d, want 2", sealed.Attempt)
+	}
+
+	var primaryRA, mirrorRA *core.ResourceApply
+	for _, ra := range sealed.Resources {
+		switch ra.Address.String() {
+		case primary.String():
+			primaryRA = ra
+		case mirror.String():
+			mirrorRA = ra
+		}
+	}
+	if primaryRA == nil || mirrorRA == nil {
+		t.Fatalf("expected resource_apply entries for both primary and mirror, got %+v", sealed.Resources)
+	}
+	if st, _ := primaryRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("primary state = %s, want applied (recognized from attempt 1's own history, never re-applied)", st)
+	}
+	if len(primaryRA.Transitions) != 1 {
+		t.Fatalf("primary should show only a single pass-through confirmation transition in attempt 2, got %+v", primaryRA.Transitions)
+	}
+	if st, _ := mirrorRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("mirror state = %s, want applied", st)
+	}
+	if _, exists := fake.resources["primary-real-id"]; exists {
+		t.Fatal("primary was re-applied for real against the fake provider -- it should have been recognized as already-applied from attempt 1's own history and skipped entirely")
+	}
+
+	var mirrorResult struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(mirrorRA.ProviderResult, &mirrorResult); err != nil {
+		t.Fatalf("decode mirror result: %v", err)
+	}
+	if mirrorResult.Value != "primary-real-id" {
+		t.Fatalf("mirror.value = %q, want primary's REAL recorded id %q (recovered from attempt 1's own history, not lost)", mirrorResult.Value, "primary-real-id")
 	}
 }

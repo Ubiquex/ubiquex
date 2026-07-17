@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -79,6 +80,326 @@ func encodeDynamicValue(block Block, in json.RawMessage) ([]byte, error) {
 		return nil, fmt.Errorf("encode value: msgpack: %w", err)
 	}
 	return out, nil
+}
+
+// computedMarkerKey mirrors core/resolver's own "$computed" marker key
+// (docs/schema.md's value-encoding conventions). provider and core/resolver
+// don't import each other -- this string is the wire-format convention
+// both independently conform to, the same pattern provider/redact.go's
+// redactedMarkerKey already establishes for "$redacted".
+const computedMarkerKey = "$computed"
+
+// isComputedMarker reports whether v -- a decoded-generic JSON value -- is
+// exactly {"$computed": {...}}, mirroring core/resolver's own
+// isComputedMarker (refs.go).
+func isComputedMarker(v interface{}) bool {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) != 1 {
+		return false
+	}
+	_, ok = m[computedMarkerKey]
+	return ok
+}
+
+// encodeUnknownAwareDynamicValue is encodeDynamicValue's own JSON-path,
+// unknown-aware sibling (docs/executor.md's UBI-27 amendment) -- used only
+// for constructing a `change` proposal's PlannedState/Config, never for
+// ReadResource's currentState/Configure's config (where an attribute
+// simply absent from the caller's JSON genuinely means "unknown to ubx,
+// ask the provider," and Null is the correct encoding, exactly as
+// encodeDynamicValue already does).
+//
+// A real create's PlannedState needs a wire-level distinction JSON alone
+// can never express: "the provider will compute this" (Unknown) versus
+// "genuinely absent, leave it null" (Null). ctyjson.Unmarshal always maps
+// a missing key to Null; a real SDKv2-vintage provider's Apply only fills
+// in a Computed attribute it finds Unknown, never one it finds Null
+// (confirmed empirically, provider/apply_live_test.go's own false start).
+// Two independent situations both resolve to Unknown here, walking the
+// resolved config against the schema's own Block (not just its flattened
+// cty.Type, which erases the Computed flag): an explicit
+// {"$computed": {...}} marker (a same-batch dependency's not-yet-applied
+// output, docs/resolver.md), and any schema-Computed attribute the
+// resolved config simply never set at all (a brand-new resource's own
+// id/arn/url on a from-scratch create) -- the second case is NOT named in
+// docs/executor.md's original amendment text, which only describes the
+// marker case; it was found empirically while actually wiring this up
+// (core/executor session, UBI-27) and is recorded as a real, load-bearing
+// correction to that design, not silently patched in.
+//
+// Everything else encodes identically to encodeDynamicValue (a present,
+// non-marker value decodes exactly like ctyjson.Unmarshal would; a present
+// null stays null; only an ABSENT-and-Computed attribute differs).
+func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, error) {
+	ty, err := blockObjectType(block)
+	if err != nil {
+		return nil, err
+	}
+	var generic interface{}
+	if len(in) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(in))
+		dec.UseNumber()
+		if err := dec.Decode(&generic); err != nil {
+			return nil, fmt.Errorf("encode value: decode json: %w", err)
+		}
+	}
+	val, err := encodeBlockValue(block, generic)
+	if err != nil {
+		return nil, fmt.Errorf("encode value: %w", err)
+	}
+	out, err := ctymsgpack.Marshal(val, ty)
+	if err != nil {
+		return nil, fmt.Errorf("encode value: msgpack: %w", err)
+	}
+	return out, nil
+}
+
+// encodeBlockValue builds one object-typed cty.Value for block, driven by
+// its own Attributes/NestedBlocks (not just the flattened cty.Type
+// blockObjectType produces) -- the only way to know, per attribute,
+// whether it's Computed and therefore eligible for the absent-means-Unknown
+// treatment above.
+func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
+	m, _ := generic.(map[string]interface{})
+	vals := make(map[string]cty.Value, len(block.Attributes)+len(block.NestedBlocks))
+
+	for _, a := range block.Attributes {
+		aty, err := ctyjson.UnmarshalType(a.Type)
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("attribute %q: parse type: %w", a.Name, err)
+		}
+		raw, present := m[a.Name]
+		switch {
+		case present && isComputedMarker(raw):
+			vals[a.Name] = cty.UnknownVal(aty)
+		case !present && a.Computed:
+			vals[a.Name] = cty.UnknownVal(aty)
+		case !present:
+			vals[a.Name] = cty.NullVal(aty)
+		default:
+			val, err := encodeGenericValue(aty, raw)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("attribute %q: %w", a.Name, err)
+			}
+			vals[a.Name] = val
+		}
+	}
+
+	for _, nb := range block.NestedBlocks {
+		raw, present := m[nb.TypeName]
+		val, err := encodeNestedBlockValue(nb, raw, present)
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("nested block %q: %w", nb.TypeName, err)
+		}
+		vals[nb.TypeName] = val
+	}
+
+	if len(vals) == 0 {
+		return cty.EmptyObjectVal, nil
+	}
+	return cty.ObjectVal(vals), nil
+}
+
+// encodeNestedBlockValue mirrors blockObjectType's own Single/List/Set/Map
+// nesting shapes, recursing encodeBlockValue per element. A NestedBlock
+// carries no Computed flag of its own (only its inner Attributes do, per
+// tfplugin's schema model) -- an absent nested block encodes exactly like
+// encodeDynamicValue's existing behavior (empty collection / null single),
+// never Unknown at the block level itself.
+func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.Value, error) {
+	inner, err := blockObjectType(nb.Block)
+	if err != nil {
+		return cty.NilVal, err
+	}
+	switch nb.Nesting {
+	case NestingList, NestingSet:
+		if !present || raw == nil {
+			if nb.Nesting == NestingSet {
+				return cty.SetValEmpty(inner), nil
+			}
+			return cty.ListValEmpty(inner), nil
+		}
+		arr, ok := raw.([]interface{})
+		if !ok {
+			return cty.NilVal, fmt.Errorf("array required, got %T", raw)
+		}
+		vals := make([]cty.Value, 0, len(arr))
+		for i, item := range arr {
+			im, _ := item.(map[string]interface{})
+			v, err := encodeBlockValue(nb.Block, im)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("[%d]: %w", i, err)
+			}
+			vals = append(vals, v)
+		}
+		if nb.Nesting == NestingSet {
+			if len(vals) == 0 {
+				return cty.SetValEmpty(inner), nil
+			}
+			return cty.SetVal(vals), nil
+		}
+		if len(vals) == 0 {
+			return cty.ListValEmpty(inner), nil
+		}
+		return cty.ListVal(vals), nil
+	case NestingMap:
+		if !present || raw == nil {
+			return cty.MapValEmpty(inner), nil
+		}
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			return cty.NilVal, fmt.Errorf("object required, got %T", raw)
+		}
+		vals := make(map[string]cty.Value, len(m))
+		for k, item := range m {
+			im, _ := item.(map[string]interface{})
+			v, err := encodeBlockValue(nb.Block, im)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("%s: %w", k, err)
+			}
+			vals[k] = v
+		}
+		if len(vals) == 0 {
+			return cty.MapValEmpty(inner), nil
+		}
+		return cty.MapVal(vals), nil
+	default: // Single, Group
+		if !present || raw == nil {
+			return cty.NullVal(inner), nil
+		}
+		m, _ := raw.(map[string]interface{})
+		return encodeBlockValue(nb.Block, m)
+	}
+}
+
+// encodeGenericValue converts a decoded-generic JSON value (json.Number
+// for numbers, since callers decode with UseNumber) into a cty.Value of
+// type ty, recognizing a {"$computed": {...}} marker at ANY position
+// (not just a top-level attribute) -- a marker can sit nested inside a
+// list/map-typed attribute's own value (e.g. a "tags" map whose one entry
+// is computed). Mirrors go-cty's own cty/json unmarshal.go rules for
+// primitive/list/set/map types (object types never arise here: a schema
+// Attribute's own Type is always primitive/list/set/map -- object shapes
+// only ever come from NestedBlocks, handled by encodeBlockValue/
+// encodeNestedBlockValue above -- the object case below exists purely for
+// defensiveness, matching ctyjson.Unmarshal's own missing-key-is-null
+// rule, never actually exercised by a real provider schema this codebase
+// has seen).
+func encodeGenericValue(ty cty.Type, raw interface{}) (cty.Value, error) {
+	if isComputedMarker(raw) {
+		return cty.UnknownVal(ty), nil
+	}
+	if raw == nil {
+		return cty.NullVal(ty), nil
+	}
+	switch {
+	case ty.IsPrimitiveType():
+		return encodePrimitiveValue(ty, raw)
+	case ty.IsListType(), ty.IsSetType():
+		arr, ok := raw.([]interface{})
+		if !ok {
+			return cty.NilVal, fmt.Errorf("array required, got %T", raw)
+		}
+		ety := ty.ElementType()
+		vals := make([]cty.Value, 0, len(arr))
+		for i, item := range arr {
+			v, err := encodeGenericValue(ety, item)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("[%d]: %w", i, err)
+			}
+			vals = append(vals, v)
+		}
+		if ty.IsSetType() {
+			if len(vals) == 0 {
+				return cty.SetValEmpty(ety), nil
+			}
+			return cty.SetVal(vals), nil
+		}
+		if len(vals) == 0 {
+			return cty.ListValEmpty(ety), nil
+		}
+		return cty.ListVal(vals), nil
+	case ty.IsMapType():
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			return cty.NilVal, fmt.Errorf("object required, got %T", raw)
+		}
+		ety := ty.ElementType()
+		vals := make(map[string]cty.Value, len(m))
+		for k, v := range m {
+			val, err := encodeGenericValue(ety, v)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("%s: %w", k, err)
+			}
+			vals[k] = val
+		}
+		if len(vals) == 0 {
+			return cty.MapValEmpty(ety), nil
+		}
+		return cty.MapVal(vals), nil
+	case ty.IsObjectType():
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			return cty.NilVal, fmt.Errorf("object required, got %T", raw)
+		}
+		atys := ty.AttributeTypes()
+		vals := make(map[string]cty.Value, len(atys))
+		for name, aty := range atys {
+			v, present := m[name]
+			if !present {
+				vals[name] = cty.NullVal(aty)
+				continue
+			}
+			val, err := encodeGenericValue(aty, v)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("%s: %w", name, err)
+			}
+			vals[name] = val
+		}
+		if len(vals) == 0 {
+			return cty.EmptyObjectVal, nil
+		}
+		return cty.ObjectVal(vals), nil
+	default:
+		return cty.NilVal, fmt.Errorf("unsupported type %s", ty.FriendlyName())
+	}
+}
+
+// encodePrimitiveValue mirrors go-cty's own cty/json unmarshalPrimitive
+// for the three primitive types a real provider schema ever declares.
+func encodePrimitiveValue(ty cty.Type, raw interface{}) (cty.Value, error) {
+	switch ty {
+	case cty.Bool:
+		b, ok := raw.(bool)
+		if !ok {
+			return cty.NilVal, fmt.Errorf("bool required, got %T", raw)
+		}
+		return cty.BoolVal(b), nil
+	case cty.Number:
+		switch v := raw.(type) {
+		case json.Number:
+			val, err := cty.ParseNumberVal(string(v))
+			if err != nil {
+				return cty.NilVal, err
+			}
+			return val, nil
+		case float64:
+			return cty.NumberFloatVal(v), nil
+		default:
+			return cty.NilVal, fmt.Errorf("number required, got %T", raw)
+		}
+	case cty.String:
+		switch v := raw.(type) {
+		case string:
+			return cty.StringVal(v), nil
+		case json.Number:
+			return cty.StringVal(string(v)), nil
+		default:
+			return cty.NilVal, fmt.Errorf("string required, got %T", raw)
+		}
+	default:
+		return cty.NilVal, fmt.Errorf("unsupported primitive type %s", ty.FriendlyName())
+	}
 }
 
 // decodeDynamicValue is encodeDynamicValue's inverse: given a schema block

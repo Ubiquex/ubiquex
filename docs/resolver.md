@@ -325,3 +325,25 @@ docs/resolver-adversarial.md's own row for this.
 - Anything about *shipping* a resolved `change` proposal's `$computed`
   values as real tfplugin unknowns — that's docs/executor.md's own
   amendment, a distinct concern from resolving them.
+- **A created resource becoming discoverable by `ubx status`/`ubx why
+  <address>` after it ships** — found live (UBI-27's own AWS finale
+  session), not designed for in advance. `core.Ledger.Fleet` (what `ubx
+  status` walks) and `ProposalsForAddress`/`LastObservedHash` (what `ubx
+  why <address>` and freshness re-verification key off) all discover a
+  resource exclusively via a `resolution.inputs[].resource` entry — and a
+  `change` proposal's own create never gets one for its own address (only
+  `cross_stack_pin`/`live_state` entries exist today, and neither fits: a
+  create was never *observed*, it's brand new). The real identifying
+  attributes a future scan would need to look this resource up again
+  (its `Lookup` key) aren't even known until `ubx ship` actually applies
+  it — well after the proposal's own content hash is sealed, so nothing
+  can retroactively add a resolution input to it. Confirmed live: after
+  shipping a real two-resource AWS chain, `ubx status --drift` reported
+  "0 resource(s)" for the stack, not because nothing existed, but because
+  Fleet's own discovery mechanism has no path to it at all. Fixing this
+  needs its own design (most likely: `ubx ship` durably records something
+  ledger-chain-visible once a create lands, functionally equivalent to a
+  synthetic adoption — not a resolver-time change, since the resolver
+  never has the information needed), not a rushed patch — left for a
+  follow-up session, recorded here and in STATE.md rather than silently
+  left undiscovered.

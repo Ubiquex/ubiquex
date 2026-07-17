@@ -63,9 +63,9 @@ func (e *TerminalError) Unwrap() error { return e.Err }
 
 var (
 	// ErrUnsupportedKind means Ship was asked to execute a proposal kind
-	// other than drift_revert -- v1's only supported kind (docs/executor.md
-	// -- Scope).
-	ErrUnsupportedKind = errors.New("ship: only drift_revert proposals can be shipped")
+	// other than drift_revert or change -- v1's only two shippable kinds
+	// (docs/executor.md -- Scope, extended by the UBI-27 amendment).
+	ErrUnsupportedKind = errors.New("ship: only drift_revert or change proposals can be shipped")
 
 	// ErrNotAccepted means Ship was asked to execute a proposal that was
 	// never accepted (no Acceptance recorded).
@@ -76,6 +76,32 @@ var (
 	// simplest case (docs/executor.md): Ship is a genuine no-op, and writes
 	// no new apply record at all.
 	ErrAlreadyApplied = errors.New("ship: proposal is already fully applied")
+
+	// ErrDependencyCycle means a change proposal's own delta.creates/
+	// .modifies depends_on edges form a cycle -- should already be
+	// unreachable by the time a proposal is accepted (core/resolver's own
+	// topoSort would have refused to resolve it), so this is ship.go's own
+	// defense against a corrupt or hand-tampered proposal file, never a
+	// real resolver output. Never silently broken or arbitrarily ordered.
+	ErrDependencyCycle = errors.New("ship: circular dependency between resources in this proposal")
+
+	// ErrDependencyNotApplied means a $computed marker names a dependency
+	// address that hasn't reached applied yet -- should already be
+	// unreachable given ship's own "never attempt a resource ahead of its
+	// depends_on" precondition; a real occurrence means the resolved
+	// config's own $computed targets don't match its depends_on edges (a
+	// resolver bug or a tampered proposal), not something to guess past.
+	ErrDependencyNotApplied = errors.New("ship: a $computed marker's dependency has not applied")
+
+	// ErrMalformedComputedMarker means a $computed marker's "from" pointer
+	// isn't a well-formed "<stack>.<type>.<name>.<path>" address.
+	ErrMalformedComputedMarker = errors.New("ship: malformed $computed marker")
+
+	// ErrDependencyOutputMissing means a $computed marker's "from" path
+	// doesn't exist anywhere in the dependency's own real applied result --
+	// the schema promised it, but the provider's actual response doesn't
+	// have it.
+	ErrDependencyOutputMissing = errors.New("ship: dependency's applied output has no value at the referenced path")
 )
 
 // Retry/reconciliation budgets -- package vars, not constants, so tests can
@@ -105,6 +131,17 @@ var (
 var (
 	debugDelayAfterInFlight     = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT")
 	debugDelayAfterApplySuccess = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS")
+
+	// debugDelayBetweenChangeResources (UBI-27) sleeps in shipChange's own
+	// loop, after one resource's own processing is fully durably persisted
+	// (applied, failed, or blocked) and before the next resource in topo
+	// order is even looked at -- a reliable, reproducible window for a real
+	// `kill -9` to land exactly "between one resource applying for real and
+	// the next one starting," the multi-resource counterpart to
+	// debugDelayAfterInFlight/debugDelayAfterApplySuccess's own
+	// single-resource windows. UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES,
+	// same convention (zero/unset -- no delay -- in every real `ubx ship`).
+	debugDelayBetweenChangeResources = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES")
 )
 
 func parseDebugDelay(envVar string) time.Duration {
@@ -112,15 +149,29 @@ func parseDebugDelay(envVar string) time.Duration {
 	return d
 }
 
-// Ship executes an accepted drift_revert proposal's delta.modifies, one
-// resource at a time in canonical (stack, type, name) order (docs/executor.md
-// -- "Serial execution in delta order"), producing and sealing exactly one
-// new core.ApplyRecord, chained to this proposal's own prior attempts (if
-// any). See docs/executor.md for the full state machine this implements.
+// Ship executes an accepted proposal -- drift_revert's delta.modifies, or
+// (UBI-27) a change proposal's delta.creates + delta.modifies together --
+// dispatching to the shape-appropriate implementation. See docs/executor.md
+// for the full state machine both share.
 func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
-	if p.Kind != core.KindDriftRevert {
+	switch p.Kind {
+	case core.KindDriftRevert:
+		return shipDriftRevert(ctx, l, app, providerSource, providerConfig, p)
+	case core.KindChange:
+		return shipChange(ctx, l, app, providerSource, providerConfig, p)
+	default:
 		return nil, fmt.Errorf("%w: got %s", ErrUnsupportedKind, p.Kind)
 	}
+}
+
+// shipDriftRevert executes an accepted drift_revert proposal's
+// delta.modifies, one resource at a time in canonical (stack, type, name)
+// order (docs/executor.md -- "Serial execution in delta order"), producing
+// and sealing exactly one new core.ApplyRecord, chained to this proposal's
+// own prior attempts (if any). This is Ship's own pre-UBI-27 body, renamed
+// but otherwise unchanged -- see docs/executor.md for the full state
+// machine this implements.
+func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
 	if p.Acceptance == nil {
 		return nil, ErrNotAccepted
 	}
@@ -332,6 +383,14 @@ func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource strin
 		}
 	}
 
+	return sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, halted)
+}
+
+// sealOutcome computes a completed ship loop's overall outcome (applied |
+// partially_applied | failed) and seals rec -- the shared tail both
+// shipDriftRevert and shipChange use, so the outcome-classification rule
+// itself can never drift between the two shippable kinds.
+func sealOutcome(l *core.Ledger, rec *core.ApplyRecord, startedAt string, resourcesApplied, resourcesFailed, resourcesStillUnknown int64, halted bool) (*core.ApplyRecord, error) {
 	outcome := "applied"
 	switch {
 	case resourcesApplied == 0 && (resourcesFailed > 0 || resourcesStillUnknown > 0):
@@ -504,11 +563,20 @@ func dotGet(m map[string]interface{}, path string) (v interface{}, ok bool) {
 // resourceHistory is what Ship already knows about one resource address
 // from every apply attempt recorded so far, sealed or not.
 type resourceHistory struct {
-	lastState        core.ResourceState
-	hasState         bool
-	attemptsInFlight int // number of historical attempts that actually issued an ApplyResourceChange call for this address
+	lastState          core.ResourceState
+	hasState           bool
+	attemptsInFlight   int             // number of historical attempts that actually issued an ApplyResourceChange call for this address
+	lastProviderResult json.RawMessage // most recent non-empty ProviderResult ever recorded for this address, across all attempts (UBI-27: a killed-and-restarted ship recovers a dependency's real output from here, not just from what the current invocation itself computed)
 }
 
+// foldResourceHistory folds addr's own ProviderResult forward as
+// "the most recent non-empty one ever recorded," NOT "whatever the latest
+// attempt's own entry says" -- a later attempt that finds this address
+// already applied only ever records a pass-through confirmation
+// transition (see the "already applied in a prior attempt" branches
+// below), with no ProviderResult of its own, so naively preferring the
+// latest attempt would silently lose the real value the FIRST attempt
+// that actually applied it captured.
 func foldResourceHistory(attempts []*core.ApplyRecord, addr core.Address) resourceHistory {
 	var h resourceHistory
 	target := addr.String()
@@ -520,6 +588,9 @@ func foldResourceHistory(attempts []*core.ApplyRecord, addr core.Address) resour
 			if st, ok := ra.LastState(); ok {
 				h.lastState = st
 				h.hasState = true
+			}
+			if len(ra.ProviderResult) > 0 {
+				h.lastProviderResult = ra.ProviderResult
 			}
 			for _, t := range ra.Transitions {
 				if t.State == core.ResourceInFlight {
@@ -535,6 +606,19 @@ func foldResourceHistory(attempts []*core.ApplyRecord, addr core.Address) resour
 func allAlreadyApplied(attempts []*core.ApplyRecord, modifies []core.Modification) bool {
 	for _, m := range modifies {
 		h := foldResourceHistory(attempts, m.Target)
+		if !(h.hasState && h.lastState == core.ResourceApplied) {
+			return false
+		}
+	}
+	return true
+}
+
+// allAddressesApplied is allAlreadyApplied's own generalization for
+// shipChange, whose resources aren't all Modifications with a .Target --
+// creates and modifies share one plain []core.Address view here instead.
+func allAddressesApplied(attempts []*core.ApplyRecord, addrs []core.Address) bool {
+	for _, addr := range addrs {
+		h := foldResourceHistory(attempts, addr)
 		if !(h.hasState && h.lastState == core.ResourceApplied) {
 			return false
 		}
@@ -572,6 +656,606 @@ func sortedModifies(mods []core.Modification) []core.Modification {
 		return a.Name < b.Name
 	})
 	return sorted
+}
+
+// --- shipping change proposals (UBI-27) -------------------------------
+
+// createNode is core/executor's own typed view of a kind:"change"
+// proposal's Delta.Creates entries (docs/schema.md's "Amendment: intent
+// files and resolved change proposals") -- distinct from adoption's own
+// state-keyed shape sharing the same []json.RawMessage slot. Only ever
+// unmarshaled when p.Kind == core.KindChange.
+type createNode struct {
+	Stack     string          `json:"stack"`
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	Config    json.RawMessage `json:"config"`
+	DependsOn []string        `json:"depends_on,omitempty"`
+}
+
+// changeNode is one delta.creates or delta.modifies entry of a
+// kind:"change" proposal, prepared for shipChange's own combined,
+// dependency-ordered walk. Exactly one of create/modify is non-nil.
+type changeNode struct {
+	addr      core.Address
+	dependsOn []string
+	create    *createNode
+	modify    *core.Modification
+}
+
+// changeNodesOf decodes p's own delta.creates/.modifies into one combined,
+// dependency-ordered walk list -- re-deriving the execution order from
+// each entry's own depends_on field (Address.String() form) rather than
+// trusting stored array order, generalizing "ubx ship independently
+// applies its own sort" (docs/executor.md's "Serial execution in delta
+// order," written for drift_revert's fixed canonical sort) to a real
+// dependency graph, since a change proposal's resources can genuinely
+// depend on each other. Root-visit order among resources with no
+// dependency relation to each other is their own addresses' alphabetical
+// order -- deterministic and reproducible across runs, the same tie-break
+// convention sortedModifies already uses.
+func changeNodesOf(p *core.Proposal) ([]*changeNode, error) {
+	byAddr := make(map[string]*changeNode, len(p.Delta.Creates)+len(p.Delta.Modifies))
+	keys := make([]string, 0, len(p.Delta.Creates)+len(p.Delta.Modifies))
+
+	for _, raw := range p.Delta.Creates {
+		var cn createNode
+		if err := json.Unmarshal(raw, &cn); err != nil {
+			return nil, fmt.Errorf("decode create node: %w", err)
+		}
+		addr := core.Address{Stack: cn.Stack, Type: cn.Type, Name: cn.Name}
+		key := addr.String()
+		byAddr[key] = &changeNode{addr: addr, dependsOn: cn.DependsOn, create: &cn}
+		keys = append(keys, key)
+	}
+	for i := range p.Delta.Modifies {
+		m := &p.Delta.Modifies[i]
+		key := m.Target.String()
+		byAddr[key] = &changeNode{addr: m.Target, dependsOn: m.DependsOn, modify: m}
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+	topoOrder, err := topoSortAddresses(keys, func(key string) []string { return byAddr[key].dependsOn })
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*changeNode, 0, len(topoOrder))
+	for _, key := range topoOrder {
+		out = append(out, byAddr[key])
+	}
+	return out, nil
+}
+
+// topoSortAddresses orders addrs so every address appears after every
+// address its own edges point at -- the same DFS path/inProgress/done
+// pattern core/resolver's own topoSort uses (core/executor doesn't import
+// core/resolver; this is a small, independent instance of the same
+// general algorithm, not a shared dependency). edgesOf(addr) must return
+// only addresses also present in addrs; a cycle is ErrDependencyCycle,
+// naming the full cycle path -- never silently broken or arbitrarily
+// ordered. In practice a cycle here means a corrupt or hand-tampered
+// proposal file: core/resolver's own topoSort would already have refused
+// to resolve one at resolve time.
+func topoSortAddresses(addrs []string, edgesOf func(addr string) []string) ([]string, error) {
+	const (
+		unvisited = iota
+		inProgress
+		done
+	)
+	state := make(map[string]int, len(addrs))
+	var order []string
+	var path []string
+
+	var visit func(addr string) error
+	visit = func(addr string) error {
+		switch state[addr] {
+		case done:
+			return nil
+		case inProgress:
+			cycleStart := 0
+			for i, p := range path {
+				if p == addr {
+					cycleStart = i
+					break
+				}
+			}
+			cycle := append(append([]string{}, path[cycleStart:]...), addr)
+			return fmt.Errorf("%w: %s", ErrDependencyCycle, strings.Join(cycle, " -> "))
+		}
+		state[addr] = inProgress
+		path = append(path, addr)
+		for _, dep := range edgesOf(addr) {
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		state[addr] = done
+		order = append(order, addr)
+		return nil
+	}
+
+	for _, a := range addrs {
+		if err := visit(a); err != nil {
+			return nil, err
+		}
+	}
+	return order, nil
+}
+
+// computedMarkerKey mirrors core/resolver's own "$computed" marker key
+// (docs/schema.md's value-encoding conventions). core/executor and
+// core/resolver don't import each other -- this string is the wire-format
+// convention both independently conform to, the same pattern
+// provider/redact.go's redactedMarkerKey already establishes for
+// "$redacted".
+const computedMarkerKey = "$computed"
+
+// substituteComputed walks v's JSON tree (already decoded-generic) and
+// replaces every {"$computed": {"from": "<stack>.<type>.<name>.<path>"}}
+// marker with the concrete value read (via core.DotGet) from
+// resultsByAddr[<address>] at <path> -- docs/executor.md's amendment:
+// "applied outputs feed into dependents' PlannedState, mid-walk." Every
+// dependency address a marker names MUST already be a key of
+// resultsByAddr by the time this runs (shipChange's own topo order + "no
+// resource ships ahead of its own depends_on" precondition guarantees
+// it) -- ErrDependencyNotApplied if not, never silently left as the
+// marker itself or guessed at.
+func substituteComputed(v interface{}, resultsByAddr map[string]json.RawMessage) (interface{}, error) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if len(t) == 1 {
+			if inner, ok := t[computedMarkerKey].(map[string]interface{}); ok {
+				from, _ := inner["from"].(string)
+				addr, path, err := splitComputedFrom(from)
+				if err != nil {
+					return nil, err
+				}
+				result, known := resultsByAddr[addr]
+				if !known {
+					return nil, fmt.Errorf("%w: %s", ErrDependencyNotApplied, addr)
+				}
+				val, found, err := core.DotGet(result, path)
+				if err != nil {
+					return nil, fmt.Errorf("resolve %s: %w", from, err)
+				}
+				if !found {
+					return nil, fmt.Errorf("%w: %s", ErrDependencyOutputMissing, from)
+				}
+				var out interface{}
+				if err := json.Unmarshal(val, &out); err != nil {
+					return nil, fmt.Errorf("resolve %s: decode: %w", from, err)
+				}
+				return out, nil
+			}
+		}
+		out := make(map[string]interface{}, len(t))
+		for k, vv := range t {
+			rv, err := substituteComputed(vv, resultsByAddr)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = rv
+		}
+		return out, nil
+	case []interface{}:
+		out := make([]interface{}, len(t))
+		for i, vv := range t {
+			rv, err := substituteComputed(vv, resultsByAddr)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = rv
+		}
+		return out, nil
+	default:
+		return v, nil
+	}
+}
+
+// substituteModificationComputed returns a copy of m with every $computed
+// marker in After's own dot-path values substituted per substituteComputed
+// -- never mutating the proposal's own Modification in place (the
+// original, marker-bearing After is what a future `ubx why`/re-resolve
+// must keep reading; only ship's own transient PlannedState construction
+// and reconciliation-verdict comparison need the substituted, concrete
+// form).
+func substituteModificationComputed(m core.Modification, resultsByAddr map[string]json.RawMessage) (core.Modification, error) {
+	if len(m.After) == 0 {
+		return m, nil
+	}
+	out := m
+	out.After = make(map[string]json.RawMessage, len(m.After))
+	for path, raw := range m.After {
+		var v interface{}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return core.Modification{}, fmt.Errorf("after[%q]: %w", path, err)
+		}
+		sv, err := substituteComputed(v, resultsByAddr)
+		if err != nil {
+			return core.Modification{}, fmt.Errorf("after[%q]: %w", path, err)
+		}
+		b, err := json.Marshal(sv)
+		if err != nil {
+			return core.Modification{}, fmt.Errorf("after[%q]: %w", path, err)
+		}
+		out.After[path] = b
+	}
+	return out, nil
+}
+
+// splitComputedFrom splits a $computed marker's "from" pointer
+// ("<stack>.<type>.<name>.<path>") into its address portion and attribute
+// path -- the same SplitN(s, ".", 4) convention core/resolver's own
+// splitRefTarget uses for $ref/$cross targets.
+func splitComputedFrom(s string) (addr, path string, err error) {
+	parts := strings.SplitN(s, ".", 4)
+	if len(parts) != 4 {
+		return "", "", fmt.Errorf("%w: %q", ErrMalformedComputedMarker, s)
+	}
+	return strings.Join(parts[:3], "."), parts[3], nil
+}
+
+// shipChange executes an accepted kind:"change" proposal's delta.creates
+// and delta.modifies together, in real dependency order (changeNodesOf's
+// own topo-sort) -- docs/executor.md's UBI-27 amendment. A resource whose
+// own depends_on names another resource in this same proposal is never
+// attempted until that dependency has reached applied -- checked against
+// both this invocation's own progress and every prior attempt's durably
+// recorded result, so a `ubx ship` killed between one resource applying
+// and the next starting recovers the completed one's REAL output on
+// re-run (foldResourceHistory's own lastProviderResult), rather than
+// re-creating it or losing the value a dependent needs.
+//
+// Unlike shipDriftRevert's single "halted" flag (one stale resource blocks
+// every resource after it in a fixed canonical order), a blocked resource
+// here only blocks its OWN dependents -- an independent resource elsewhere
+// in the same proposal still proceeds. sealOutcome is always called with
+// halted=false for this reason; "partially_applied" still correctly
+// surfaces via resourcesFailed/resourcesStillUnknown alone.
+func shipChange(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
+	if p.Acceptance == nil {
+		return nil, ErrNotAccepted
+	}
+
+	nodes, err := changeNodesOf(p)
+	if err != nil {
+		return nil, fmt.Errorf("ship: %w", err)
+	}
+
+	attempts, err := l.ApplyAttempts(p.ID)
+	if err != nil {
+		return nil, fmt.Errorf("ship: %w", err)
+	}
+
+	addrs := make([]core.Address, 0, len(nodes))
+	for _, n := range nodes {
+		addrs = append(addrs, n.addr)
+	}
+	if allAddressesApplied(attempts, addrs) {
+		return nil, ErrAlreadyApplied
+	}
+
+	rec, err := l.BeginApply(p.ID)
+	if err != nil {
+		return nil, fmt.Errorf("ship: %w", err)
+	}
+
+	startedAt := nowRFC3339()
+	persist := func() error {
+		if err := l.SaveApplyProgress(rec); err != nil {
+			return fmt.Errorf("ship: %w", err)
+		}
+		return nil
+	}
+
+	// Seed resultsByAddr from every node already fully applied in a PRIOR
+	// attempt -- the recovery path a kill-and-restart depends on: a later
+	// attempt's own pass-through confirmation never re-records
+	// ProviderResult (see foldResourceHistory's own comment), so this must
+	// come from history, not from this invocation's own (so far empty)
+	// progress.
+	resultsByAddr := make(map[string]json.RawMessage, len(nodes))
+	for _, n := range nodes {
+		hist := foldResourceHistory(attempts, n.addr)
+		if hist.hasState && hist.lastState == core.ResourceApplied && len(hist.lastProviderResult) > 0 {
+			resultsByAddr[n.addr.String()] = hist.lastProviderResult
+		}
+	}
+
+	var resourcesApplied, resourcesFailed, resourcesStillUnknown int64
+
+	for _, n := range nodes {
+		key := n.addr.String()
+		ra := &core.ResourceApply{Address: n.addr}
+		rec.Resources = append(rec.Resources, ra)
+		hist := foldResourceHistory(attempts, n.addr)
+
+		if hist.hasState && hist.lastState == core.ResourceApplied {
+			recordTransition(ra, core.ResourceApplied, "already applied in a prior attempt")
+			resourcesApplied++
+			if err := persist(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		var missingDep string
+		for _, dep := range n.dependsOn {
+			if _, ok := resultsByAddr[dep]; !ok {
+				missingDep = dep
+				break
+			}
+		}
+		if missingDep != "" {
+			recordTransition(ra, core.ResourcePending, "")
+			recordError(ra, fmt.Sprintf("blocked: dependency %s has not applied -- refusing to ship a resource ahead of what it depends on", missingDep), core.ErrorTerminal)
+			resourcesFailed++
+			if err := persist(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		var stepErr error
+		if n.create != nil {
+			stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+		} else {
+			stepErr = shipModifyNode(ctx, app, providerSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+		}
+		if stepErr != nil {
+			return nil, stepErr
+		}
+		if st, ok := ra.LastState(); ok && st == core.ResourceApplied {
+			resultsByAddr[key] = ra.ProviderResult
+		}
+		if debugDelayBetweenChangeResources > 0 {
+			time.Sleep(debugDelayBetweenChangeResources)
+		}
+	}
+
+	return sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, false)
+}
+
+// shipCreate ships one delta.creates entry: PriorState is the literal
+// JSON "null" (a genuine from-scratch create, docs/executor.md's
+// amendment -- never an empty/absent input, which encodeDynamicValue's
+// own "defaults to {}" convenience would otherwise turn into an all-null
+// OBJECT rather than the true top-level null a real provider's Apply
+// needs to recognize "this doesn't exist yet"). PlannedState is cn.Config
+// with every $computed marker substituted for its dependency's real,
+// already-applied value; any of cn.Config's OWN schema-Computed
+// attributes it never set at all are left for provider/ctyvalue.go's
+// encodeUnknownAwareDynamicValue to mark Unknown, not resolved here.
+//
+// A real, load-bearing bug found live-testing this against AWS for the
+// first time (UBI-27's own live finale): a create never goes through
+// core.ReadAndFingerprint/core.VerifyFreshness at all (there is nothing
+// to read yet), and those are the ONLY places drift_revert's own modify
+// path ever calls Applier.Configure -- so a create-only change proposal
+// reached ApplyResourceChange against a real provider that had NEVER been
+// configured (no region, no credentials). Against terraform-provider-aws
+// this didn't surface as a clean error: the request killed the provider
+// subprocess outright, surfacing to ubx as a bare transport EOF
+// ("rpc error: code = Unavailable desc = error reading from server:
+// EOF"), indistinguishable at first glance from a genuine crash-mid-call.
+// Configure is called explicitly here, every time, before the first
+// create's schema is even used -- the same repeated-Configure pattern
+// core.readAndFingerprint's own callers already establish for modify
+// (VerifyFreshness and ReadAndFingerprint each call it again), confirmed
+// safe there against a real provider across UBI-26's own live sessions.
+func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage, cn *createNode, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
+	recordTransition(ra, core.ResourcePending, "")
+
+	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
+		recordError(ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	var raw interface{}
+	if err := json.Unmarshal(cn.Config, &raw); err != nil {
+		recordError(ra, fmt.Sprintf("decode config: %v", err), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+	substituted, err := substituteComputed(raw, resultsByAddr)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+	planned, err := json.Marshal(substituted)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	providerSchema, resourceSchemas, err := app.Schema(ctx)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	}
+	if err := app.Configure(ctx, providerSchema, providerConfig); err != nil {
+		recordError(ra, fmt.Sprintf("configure provider: %v", err), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	}
+
+	// THE invariant (docs/executor.md): in_flight is durably persisted
+	// before the risky ApplyResourceChange call, never after.
+	recordTransition(ra, core.ResourceInFlight, "")
+	if err := persist(); err != nil {
+		return fmt.Errorf("ship: persist in_flight: %w", err)
+	}
+	if debugDelayAfterInFlight > 0 {
+		time.Sleep(debugDelayAfterInFlight)
+	}
+
+	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned)
+
+	if applyErr == nil {
+		if debugDelayAfterApplySuccess > 0 {
+			time.Sleep(debugDelayAfterApplySuccess)
+		}
+		ra.ProviderResult = result
+		recordTransition(ra, core.ResourceApplied, "")
+		*resourcesApplied++
+		return persist()
+	}
+
+	var terminal *TerminalError
+	if errors.As(applyErr, &terminal) {
+		recordError(ra, terminal.Error(), core.ErrorTerminal)
+		recordTransition(ra, core.ResourceFailed, "")
+		*resourcesFailed++
+		return persist()
+	}
+
+	// Retryable/ambiguous: unlike a modify (which can reconcile-by-query
+	// against the resource's own already-known lookup key), a create that
+	// fails ambiguously has no identity to look anything up by yet -- the
+	// resource may or may not exist in the real provider. This is a real,
+	// named v1 limitation, not silently swept: it's left unknown_post_timeout
+	// and NOT retried automatically within this invocation; a human must
+	// resolve it (e.g. a real `aws` CLI check for whatever identity the
+	// provider might have assigned) before the next `ubx ship` can safely
+	// proceed past it. core/resolver's own $computed dependents downstream
+	// of this resource stay correctly blocked (shipChange's own
+	// missing-dependency check) until that happens.
+	recordError(ra, applyErr.Error(), core.ErrorRetryable)
+	recordTransition(ra, core.ResourceUnknownPostTimeout, "")
+	*resourcesStillUnknown++
+	return persist()
+}
+
+// shipModifyNode ships one delta.modifies entry within a change proposal
+// -- the same freshness/read/apply/reconcile shape shipDriftRevert's own
+// per-resource logic already uses, extended only to substitute any
+// $computed marker in m.After before core.ApplyAfter/reconciliation ever
+// see it (m itself, and the proposal's own recorded content, are never
+// mutated -- substituteModificationComputed returns a copy).
+func shipModifyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, m core.Modification, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
+	if paths := redactedAfterPaths(m); len(paths) > 0 {
+		recordTransition(ra, core.ResourcePending, "")
+		recordError(ra, fmt.Sprintf(
+			"declined: after value(s) at %s are redacted -- the ledger holds a salted hash, not the real secret material, and ubx will never construct a live apply from it; use `ubx revert-plan` for this resource's manual reconciliation steps instead",
+			strings.Join(paths, ", ")), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	lookup, haveLookup := lookupFor(p, m.Target)
+
+	if hist.hasState && needsReconciliation(hist.lastState) {
+		recordTransition(ra, core.ResourcePending, "")
+		if !haveLookup {
+			recordError(ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+			*resourcesFailed++
+			return persist()
+		}
+		substitutedMod, err := substituteModificationComputed(m, resultsByAddr)
+		if err != nil {
+			recordError(ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+			*resourcesFailed++
+			return persist()
+		}
+		outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, ra)
+		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
+		return persist()
+	}
+
+	recordTransition(ra, core.ResourcePending, "")
+
+	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
+		recordError(ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	if err := core.VerifyFreshness(ctx, app, m.Target, providerSource, providerConfig, p); err != nil {
+		if errors.Is(err, core.ErrStaleObservation) {
+			recordError(ra, err.Error(), core.ErrorTerminal)
+		} else {
+			recordError(ra, err.Error(), core.ErrorRetryable)
+		}
+		*resourcesFailed++
+		return persist()
+	}
+
+	if !haveLookup {
+		recordError(ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	observed, _, err := core.ReadAndFingerprint(ctx, app, m.Target, providerSource, providerConfig, lookup)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("read prior state: %v", err), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	}
+
+	substitutedMod, err := substituteModificationComputed(m, resultsByAddr)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	planned, err := core.ApplyAfter(observed, substitutedMod)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+	_, resourceSchemas, err := app.Schema(ctx)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	}
+
+	recordTransition(ra, core.ResourceInFlight, "")
+	if err := persist(); err != nil {
+		return fmt.Errorf("ship: persist in_flight: %w", err)
+	}
+	if debugDelayAfterInFlight > 0 {
+		time.Sleep(debugDelayAfterInFlight)
+	}
+
+	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned)
+
+	if applyErr == nil {
+		if debugDelayAfterApplySuccess > 0 {
+			time.Sleep(debugDelayAfterApplySuccess)
+		}
+		ra.ProviderResult = result
+		recordTransition(ra, core.ResourceApplied, "")
+		*resourcesApplied++
+		return persist()
+	}
+
+	var terminal *TerminalError
+	if errors.As(applyErr, &terminal) {
+		recordError(ra, terminal.Error(), core.ErrorTerminal)
+		recordTransition(ra, core.ResourceFailed, "")
+		*resourcesFailed++
+		return persist()
+	}
+
+	recordError(ra, applyErr.Error(), core.ErrorRetryable)
+	recordTransition(ra, core.ResourceUnknownPostTimeout, "")
+	if err := persist(); err != nil {
+		return err
+	}
+	outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, ra)
+	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
+	return persist()
 }
 
 func lookupFor(p *core.Proposal, addr core.Address) (json.RawMessage, bool) {

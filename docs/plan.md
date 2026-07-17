@@ -465,6 +465,32 @@
   verification" section, both with real transcripts;
   `cli/exit-codes.mdx` updated. `mint validate`/`mint broken-links` pass.
   See STATE.md for the full session writeup.
+- 2026-07-17 — UBI-27 session 4 (closes UBI-27): executor unknown-value
+  wiring + the live create finale. `provider/ctyvalue.go`'s
+  `encodeUnknownAwareDynamicValue` (real `cty.UnknownVal` for `$computed`
+  markers AND schema-`Computed`-but-unset attributes, the latter found
+  live, not in the original design) verified against a real provider
+  (`hashicorp/time`, resolver-adversarial row 10, settled both ways).
+  `core/executor/ship.go` gained `shipChange` — creates + modifies
+  together, real dependency order, applied outputs fed forward via
+  `foldResourceHistory`'s new `lastProviderResult` (survives a kill
+  between resources). Two real bugs found and fixed live: `shipCreate`
+  never called `Applier.Configure` (a real AWS provider crashed with a
+  bare transport EOF rather than a clean error); `core/resolver.Resolve`
+  called `time.Now()` fresh per `DoubleRun` call, a rare false-positive
+  mismatch across a second boundary. Live-verified on real AWS (account
+  `839333509514`): a real `aws_sqs_queue`+`aws_sqs_queue_policy` chain
+  shipped for real — the first real cloud creates this codebase has ever
+  made — plus a real `kill -9` between the two resources, correctly
+  recovered on re-run, verified independently via `aws sqs`. Cleaned up
+  via plain `aws` CLI (destroys stay out of v1 scope). One real,
+  unresolved gap found doing that cleanup, recorded as a follow-up rather
+  than rushed: a shipped create is invisible to `ubx status`/`ubx why
+  <address>` afterward (`Fleet`'s discovery keys entirely on
+  `resolution.inputs`, which a create never populates for itself).
+  docs/reliability-report.md gained a full UBI-27 section; ubiquex-docs
+  gained `cli/ship.mdx` change-proposal coverage and
+  `guides/create-flow.mdx`. See STATE.md for the full session writeup.
 
 ## Strategy
 
@@ -1062,11 +1088,39 @@ ubiquex-docs gained `cli/resolve.mdx` (new) and an accept.mdx
 actual built binary; `cli/exit-codes.mdx` updated for the new verb and
 the new exit-1 case. `mint validate`/`mint broken-links` both pass.
 
-Sessions 4+ build the remaining slice: executor unknown-value wiring,
-fakeprovider first then real (a real, cheap two-resource create chain on
-`ubx-states`, one resource's computed output feeding the other, shipped,
-a real `kill -9` mid-chain, reconciled — cleanup via plain `aws` CLI
-calls, documented honestly, since destroys are out of v1 scope).
+**Session 4 (2026-07-17): executor unknown-value wiring + the live create
+finale on real AWS. UBI-27 closed.** `provider/ctyvalue.go`'s
+`encodeUnknownAwareDynamicValue` fixes the JSON-path gap named in session
+1 — a `$computed` marker OR any schema-`Computed` attribute the resolved
+config never set (the second case found live, not in the original
+design) both become a real `cty.UnknownVal`, verified empirically against
+`hashicorp/time` (docs/resolver-adversarial.md row 10, settled both ways).
+`core/executor/ship.go` gained `shipChange` (creates + modifies together,
+real dependency order re-derived from `depends_on`, applied outputs fed
+into still-pending siblings via `foldResourceHistory`'s new
+`lastProviderResult` — recovering a dependency's real output across a
+crash/kill, not just within one invocation). Two real bugs found and
+fixed live: `shipCreate` never called `Applier.Configure` (surfaced
+against real AWS as a bare transport EOF, not a clean error — drift_revert
+gets `Configure` for free through `ReadAndFingerprint`, a create never
+reads anything first); and `core/resolver.Resolve` called `time.Now()`
+fresh on each `DoubleRun` call, a rare but real false-positive mismatch
+when the two calls straddle a second boundary. Live-verified on real AWS
+(account `839333509514`): a real `aws_sqs_queue` + `aws_sqs_queue_policy`
+chain, shipped for real (the first real cloud creates this codebase has
+ever made), a real `kill -9` between the two resources (a new
+`UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES` hook plus a poll loop pinpointed
+the exact window), correctly recovered on re-run — verified independently
+via `aws sqs`, never just `ubx`'s own report. Cleaned up via plain `aws`
+CLI (destroys stay out of v1 scope). One real, unresolved gap found doing
+that cleanup: a shipped create is invisible to `ubx status`/`ubx why
+<address>` afterward (`core.Ledger.Fleet`'s discovery is keyed entirely on
+`resolution.inputs`, which a create never populates for its own address) —
+recorded in docs/resolver.md/docs/executor.md's "Out of scope" sections
+and STATE.md, left for a follow-up ticket rather than a rushed patch.
+docs/reliability-report.md gained a full UBI-27 section; ubiquex-docs
+gained `cli/ship.mdx`'s change-proposal coverage and a new
+`guides/create-flow.mdx`. See STATE.md for the full session writeup.
 
 ## Deferred (explicitly not now)
 
@@ -1075,7 +1129,13 @@ for any proposal kind (needs its own adversarial thinking — a create can be
 retried safely, a destroy usually can't; UBI-27 above is creates+modifies
 only, not this), a real policy engine (UBI-27's resolver carries a
 policy-stub hook, always empty for now), environments/promotion, Nexus
-SaaS, naming of proposal ledger format for external publication.
+SaaS, naming of proposal ledger format for external publication. A shipped
+`change` proposal's creates becoming `ubx status`/`ubx why <address>`
+discoverable (found live, UBI-27 session 4 — `core.Ledger.Fleet` and
+friends key entirely on `resolution.inputs`, which a create never
+populates for its own address; likely fix is `ubx ship` durably recording
+something ledger-chain-visible once a create lands, functionally a
+synthetic adoption — a real follow-up ticket candidate, not designed here).
 
 ## Risks being managed
 

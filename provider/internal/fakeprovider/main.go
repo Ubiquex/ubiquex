@@ -357,17 +357,25 @@ func echoAppliedState(msgpackBytes []byte) ([]byte, error) {
 }
 
 // decodeWidgetState is echoWidgetState/echoAppliedState's shared decode +
-// computed-id-fill-in step.
+// computed-id-fill-in step. "id" is filled in when it's either Null (the
+// pre-UBI-27 convention: an absent JSON key decoded through
+// encodeDynamicValue) or genuinely Unknown (UBI-27:
+// encodeUnknownAwareDynamicValue's own real cty.UnknownVal, for a
+// from-scratch create or an explicit $computed marker) -- a real
+// SDKv2-vintage provider's Apply only ever actually computes an attribute
+// it finds Unknown, never one it finds Null (docs/executor.md's own
+// empirical finding), but this fixture accepts either shape so it keeps
+// working against both encoders' output.
 func decodeWidgetState(msgpackBytes []byte) (map[string]cty.Value, error) {
 	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
 	if err != nil {
 		return nil, fmt.Errorf("fakeprovider: decode state: %w", err)
 	}
 	vals := val.AsValueMap()
-	if vals["id"].IsNull() {
+	if id := vals["id"]; id.IsNull() || !id.IsKnown() {
 		vals["id"] = cty.StringVal("computed-id")
 	}
-	if vals["tags"].IsNull() {
+	if tags := vals["tags"]; tags.IsNull() || !tags.IsKnown() {
 		vals["tags"] = cty.MapValEmpty(cty.String)
 	}
 	return vals, nil

@@ -4,6 +4,174 @@
 
 ## Current phase
 
+**UBI-27 session 4 is done (this session): executor unknown-value wiring
++ the live create finale on real AWS. UBI-27 is closed.** Sessions 1-3
+built and CLI-surfaced the resolver; this session made `ubx ship` actually
+execute a resolved `change` proposal for real, then proved it on real AWS
+infrastructure — the first time this codebase has ever created cloud
+resources, not just read or reverted them.
+
+**`provider/ctyvalue.go` gained `encodeUnknownAwareDynamicValue`** (plus
+`encodeBlockValue`/`encodeNestedBlockValue`/`encodeGenericValue`/
+`encodePrimitiveValue`), the fix docs/executor.md's session-1 amendment
+named but didn't build: a `$computed` marker, or any schema-`Computed`
+attribute the resolved config simply never set, both become a real
+`cty.UnknownVal` in `PlannedState`/`Config` — never `Null`, which a real
+SDKv2-vintage provider's `Apply` silently leaves un-computed. **A second
+gap, not named in the original amendment, found by actually building
+this**: the amendment only ever described the explicit-marker case;
+"a brand-new resource's own never-referenced Computed attribute" (its own
+`id`/`arn` on a from-scratch create) needed the exact same treatment,
+walking the schema's own `Block` (not just its flattened `cty.Type`, which
+erases `Computed`) rather than the JSON tree alone. Wired into
+`provider.go`'s `ApplyResourceChange` for `plannedState`/`config` only —
+`priorState` keeps the plain encoder (a genuine create's `PriorState` is
+literal JSON `"null"`, which `ctyjson.Unmarshal` already turns into the
+correct top-level `cty.NullVal` given the right input; the fix needed was
+at the call site, not in encoding `null` itself). Verified empirically
+against a real provider, not assumed from the fixture alone
+(`provider/apply_live_test.go`, `hashicorp/time`'s `time_static`):
+`TestApplyResourceChange_RealProvider_TimeStatic_Create` (absent-Computed
+attributes) and `_ComputedMarker` (an explicit marker) — both settle
+docs/resolver-adversarial.md's row 10 empirically: a directly-constructed
+`Unknown`, no separate `PlanResourceChange` call, resolves correctly
+during a real provider's `Apply`.
+
+**`core/executor/ship.go` gained `shipChange`**, a new code path for
+`core.KindChange` proposals, alongside the renamed (body otherwise
+unchanged) `shipDriftRevert` — `Ship()` itself is now a 3-line dispatcher.
+`changeNodesOf` decodes `delta.creates`/`delta.modifies` into one combined
+list and re-derives execution order from each entry's own `depends_on`
+field via `topoSortAddresses` (a small, independent DFS instance,
+mirroring `core/resolver`'s own `topoSort` pattern without importing it —
+`core/executor` stays resolver-import-free). A resource is never attempted
+while any `depends_on` entry hasn't reached `applied` — checked against
+both this invocation's own progress and every prior attempt's durably
+recorded result (`foldResourceHistory` gained `lastProviderResult`,
+folding the most recent NON-EMPTY `ProviderResult` across all attempts,
+never just "whatever the latest attempt says," since a later attempt's own
+pass-through confirmation never re-records it). `substituteComputed`
+walks a create's config (or a modify's `After` map, via
+`substituteModificationComputed`) replacing every `$computed` marker with
+its dependency's real value via `core.DotGet` against `resultsByAddr` —
+mutating nothing in place, the proposal's own recorded content stays
+exactly as resolved. `shipCreate` constructs `PriorState = json.RawMessage("null")`
+and calls `Applier.ApplyResourceChange` with the substituted config.
+
+**A real, load-bearing bug found live-shipping this against AWS for the
+first time**: `shipCreate` never called `Applier.Configure` at all.
+`shipDriftRevert`'s own modify path gets it for free, indirectly, through
+`core.ReadAndFingerprint`/`core.VerifyFreshness` (both call it internally
+before every read) — but a create never reads anything first, so it
+reached a real, never-configured `terraform-provider-aws`. This didn't
+surface as a clean error: the request killed the provider subprocess
+outright, surfacing to `ubx` as a bare transport EOF
+(`rpc error: code = Unavailable desc = error reading from server: EOF`),
+indistinguishable at first glance from a genuine mid-call crash. Found by
+reproducing the exact `ApplyResourceChange` call directly against the
+acquired binary (bypassing the CLI) and noticing it succeeded there, where
+the only difference was an explicit `Configure` call the debug harness
+made and the CLI path never did. Fixed by calling `app.Configure(ctx,
+providerSchema, providerConfig)` explicitly in `shipCreate`, before the
+first create's own schema is even used.
+
+**A second, unrelated real bug found running the full test suite the same
+session**: `core/resolver`'s `TestResolve_RefToExistingLedgeredResource_AlwaysConcrete`
+failed once with a `DoubleRun` mismatch, non-deterministically.
+`resolveOnce` called `time.Now()` itself on each of `DoubleRun`'s two
+internal calls — a resolve whose two calls straddled a one-second boundary
+(RFC3339's own resolution) produced two genuinely different `resolved_at`
+strings, a false-positive mismatch over a value never meant to be checked
+for run-to-run stability. Rare (didn't reproduce in 15 runs after first
+appearing, nor a 50-run stress loop after the fix) but real and
+load-bearing for anyone running `ubx resolve` for real. Fixed by capturing
+`resolvedAt` once in `Resolve()`, before either `DoubleRun` call, and
+threading it into `resolveOnce` as a parameter.
+
+**A new debug-only hook**: `UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES`
+(`core/executor/ship.go`), sleeping in `shipChange`'s own loop after one
+resource is fully durably persisted and before the next is even looked at
+— the multi-resource counterpart to the existing
+`UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT`/`_AFTER_APPLY_SUCCESS` hooks, needed
+because "kill -9 between resource 1 and resource 2" (this session's own
+ask) is a window BETWEEN two resources, not within one resource's own
+apply call. Zero (no delay, invisible) unless explicitly set.
+
+**Hermetic adversarial coverage** (`core/executor/ship_test.go`, a
+`fakeApplier` extended to support creates — auto-assigning an id when
+`plannedState` has none and `priorState` is literal `"null"`, plus
+`scriptCreateFailure` keyed by a create's own content since no id exists
+yet to key by): `TestShip_ChangeProposal_CreateChain_FeedsComputedOutputForward`
+(happy path), `TestShip_ChangeProposal_DependentNeverAttemptedBeforeDependencyApplies`
+(the "dependent shipped before dependency's output exists" adversarial
+row — structurally impossible, proven by an empty `fake.resources` map),
+`TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_RecoversRealOutputOnRerun`
+(the kill row, hand-building a crashed attempt-1 file the same way this
+file's own pre-existing crash tests do). `provider/internal/fakeprovider`'s
+`decodeWidgetState` extended to recognize genuinely-Unknown (not just
+Null) `id`/`tags` and fill them in — the fixture's own stand-in for a real
+provider's Computed-attribute behavior. A new CLI-level test
+(`cli/ship_change_test.go`) proves the full `resolve → accept → ship → why`
+pipeline against the real `fakeprovider` binary (not just Go-level fakes)
+before spending real AWS calls on the same mechanism. `cli/why.go` fixed
+alongside (`ubx why` never fetched apply history for `KindChange`
+proposals at all — only `KindDriftRevert` — a one-line gap found while
+building the CLI test).
+
+**Live, on real AWS** (account `839333509514`, region `us-east-1`, a
+fresh scratch ledger, not the long-lived `payments`/`ubx-states` one):
+`aws_sqs_queue` + `aws_sqs_queue_policy` (the policy's `queue_url`
+depending on the queue's own computed `url`) — resolved, accepted,
+shipped for real (after the Configure fix above; the first two attempts,
+before the fix, failed exactly as described and are preserved honestly in
+the apply record, not scrubbed). Verified independently via `aws sqs
+get-queue-attributes`, and the flowed value cross-checked directly in the
+sealed apply record (the policy's `queue_url` byte-identical to the
+queue's own applied `url`). A second, fresh chain was shipped with a REAL
+`kill -9` (via the new debug hook + a poll loop watching the live apply
+file) between the queue applying and the policy's own turn beginning;
+`ubx why` shows the full, honest two-attempt story; the queue's own AWS
+`CreatedTimestamp` proves it was never re-created on re-run, and the
+policy's own applied `queue_url` proves the dependency's REAL output was
+recovered from attempt 1's history, not lost or re-derived. Both queues
+deleted via plain `aws sqs delete-queue` afterward (destroys are out of
+v1 scope) — `aws sqs list-queues` confirms the account is genuinely clean.
+
+**A real, unresolved gap found doing that same cleanup check, not fixed
+this session**: `ubx status --drift` reported "0 resource(s)" for the
+stack that had just had two real resources shipped into it — not because
+they don't exist, but because `core.Ledger.Fleet` (what `status` walks)
+and `ProposalsForAddress`/`LastObservedHash` (what `why <address>` and
+freshness re-verification key off) all discover a resource exclusively via
+a `resolution.inputs[].resource` entry, and a `change` proposal's own
+create never gets one for its own address (a create was never observed —
+its real lookup key isn't even known until `ship` applies it, well after
+the proposal's content hash is sealed, so nothing can retroactively add
+one). A shipped create is correctly applied and durably recorded in its
+own apply record, but **invisible** to `status`/`why <address>` going
+forward. Recorded in docs/resolver.md and docs/executor.md's own "Out of
+scope" sections — the likely fix is `ubx ship` durably recording something
+ledger-chain-visible once a create lands (functionally a synthetic
+adoption), not a resolver-time change. Left for a follow-up session/ticket,
+not silently patched around.
+
+Full docs/reliability-report.md now has a UBI-27 section with every
+transcript above in full (both real bugs, both live chains, the cleanup
+gap). ubiquex-docs gained `cli/ship.mdx`'s own "Shipping a change
+proposal" section (a blocked-dependency example generated for real, not
+hand-written) and a new `guides/create-flow.mdx` walkthrough built from
+the real AWS transcripts; `mint validate`/`mint broken-links` both pass.
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./...
+-race -count=1` clean.
+
+**UBI-27 is closed** — all four sessions' work (design, hermetic
+resolver, CLI surface + cross-stack pinning, executor + live finale) is
+built, tested, live-verified, and documented. The one real, open item
+(Fleet/status discoverability of shipped creates) is recorded as a named
+gap for a future ticket, not a loose end pretending to be closed.
+
+## Current phase (previous)
+
 **UBI-27 session 3 is done (this session): CLI surface + cross-stack
 pinning wired into `ubx accept`.** Session 2 built `core/resolver`
 hermetic; this session gave it a real CLI surface and closed the loop
