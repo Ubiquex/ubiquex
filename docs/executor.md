@@ -472,6 +472,221 @@ sibling resource hasn't had its own turn yet. Gating discovery on "sealed"
 would have hidden a resource that, in the real world, already exists;
 gating on the resource's own state is both correct and sufficient.
 
+## Amendment (2026-07-17, UBI-30): shipping destroys — reversed order, wire mechanics, the destroy state-machine branch
+
+Design only, this session (docs/plan.md's own wedge subsection has the full
+session breakdown) — every mechanism named below is session 2+ `core/executor`
+work of the same ticket; nothing here is built yet. docs/resolver.md's own
+amendment pins the intent/orphan-protection half that produces a resolved
+destroy; docs/schema.md's own amendment pins the wire shape and validation;
+this section pins how `ubx ship` actually executes one. docs/destroys-adversarial.md
+pins the required-outcome program every implementation of this section must
+pass.
+
+### One combined topological walk, not two
+
+`shipChange`'s existing `changeNodesOf` (`core/executor/ship.go`, built for
+UBI-27) already does the hard part this needs: it decodes
+`Delta.Creates`/`Delta.Modifies` into one `byAddr` map keyed by each entry's
+own `depends_on`, and calls a single `topoSortAddresses` over the combined
+key set — re-deriving execution order from the graph itself, never trusting
+stored array position (docs/resolver.md's own array-order-mirrors-dependency-
+order convention notwithstanding — the executor independently verifies it,
+the same "don't trust stored order, re-derive the guarantee" discipline
+"Serial execution in delta order," above, already established for
+`drift_revert`'s simpler canonical sort). `Delta.Destroys` extends the exact
+same map: each destroy entry becomes a `changeNode` (a new `destroy
+*core.DestroyEntry` field alongside `create`/`modify`, exactly one of the
+three ever set on a given node), keyed by its own `depends_on` — docs/resolver.md's
+own orphan-protection walk populates that list with the **reverse** edge set
+(which surviving resources currently depend on this destroy target), not the
+forward set a create/modify's own `depends_on` carries.
+
+"Creates forward, destroys reversed" is therefore not two separate walks
+glued together — it is what one topo-sort over one graph produces for free,
+because `depends_on`'s *meaning* never changes ("this node's own operation
+must not execute before every named address's own operation has completed")
+while the edge set feeding a destroy node happens to run the opposite
+direction from the edge set feeding a create/modify node. A worked example
+makes the interleaving concrete: one proposal creates a replacement resource,
+re-points a dependent at it, and destroys the original — `create(new)` has no
+dependency (eligible to run first); `modify(dependent)` depends_on
+`create(new)` (must repoint only after the replacement exists);
+`destroy(original)` depends_on `modify(dependent)` (the reverse edge: the
+dependent, while it still pointed at `original`, is exactly what made
+`original` non-orphan; only once the dependent has repointed away is
+destroying `original` safe). One topo-sort produces
+`create(new) → modify(dependent) → destroy(original)` — correctly
+interleaved across all three arrays, never "all creates, then all modifies,
+then all destroys" the way a naive phase-based walk would assume, and never
+requiring a proposal-level field beyond what `depends_on` already provides.
+`topoSortAddresses`'s own cycle detection (unchanged, reused) still applies
+across the combined graph — a cycle spanning a create and a destroy (only
+possible from a malformed or hand-tampered proposal file; docs/resolver.md's
+own resolver would already have refused to produce one) is refused the same
+way, `ErrDependencyCycle` naming the full path.
+
+### Wire mechanics: `ApplyResourceChange` with a null `PlannedState`
+
+Checked directly against the real `tfplugin{5,6}` protocol convention (the
+same discipline "Constructing `PlannedState` without planning," above,
+already applied for `drift_revert`), not invented: a provider recognizes a
+destroy specifically by `PriorState` being non-null while `PlannedState` is
+the literal `null` (`cty.NullVal` — the same "the literal JSON `null` token,
+not an empty/absent input" distinction UBI-27's own amendment already got
+right for a from-scratch create's `PriorState`, the mirror-image case here).
+Concretely: `PriorState` is the resource's own freshly re-read live state
+(from the mandatory pre-attempt freshness recheck's own `ReadResource` call,
+reused — never `delta.destroys[].state`'s resolve-time snapshot directly,
+which may be stale by ship time, exactly the same "freshness re-verified,
+not just asserted" posture already governing every other kind); `PlannedState`
+is `null`; `Config` is `null` (there is no desired end-state config for a
+resource being removed — the mirror image of `drift_revert`'s own "`Config`
+set identically to `PlannedState`" reasoning, here neither carries anything
+since nothing is being configured). No separate `PlanResourceChange` call —
+the same v1-wide shortcut every other kind this codebase ships already takes.
+
+### Freshness before every destroy attempt: three-way, not binary
+
+Every other kind's freshness check is binary — matches, or refused as stale.
+A destroy target's pre-attempt recheck is three-way, and the third outcome
+is not a refusal:
+
+1. **Present, matches the recorded `destroy_target` state exactly**
+   (docs/schema.md's own new `resolution.inputs[].kind == "destroy_target"`,
+   `observed_hash` re-verified against a fresh read) — proceed: durably write
+   `pending → in_flight` (THE invariant, unchanged, reused for a destroy
+   exactly as for a create/modify) *before* calling `ApplyResourceChange`, as
+   always.
+2. **Present, but drifted from the recorded state** — refused, exactly like
+   "Stale detected mid-partial-apply," above, generalized: the resource stays
+   `pending`, gains a terminal `errors[]` entry for this attempt. This is
+   docs/destroys-adversarial.md's "destroy target drifted since acceptance"
+   row: destroying a resource that changed since it was signed away would
+   mean losing state the operator never actually reviewed — the whole reason
+   `delta.destroys[].state` is carried inline in the proposal at all
+   (docs/resolver.md's own reasoning) is defeated if the executor ships a
+   destroy against a target that no longer matches what was shown at
+   sign-time.
+3. **Absent already** — short-circuits to a terminal **`already_absent`**
+   outcome directly: never reaches `in_flight`, never calls
+   `ApplyResourceChange` (there is nothing to destroy). Sharply distinguished
+   from outcome 2 — a resource that is already gone carries none of the
+   "operator never got to review this" risk that drifted-but-still-present
+   does (there is nothing left to lose), so this is a legitimate, low-friction
+   terminal success, not a refusal. This is docs/destroys-adversarial.md's
+   "destroy of already-absent resource" row, and it is deliberately a
+   *different* mechanism from outcome 2's refusal, not a variant of it —
+   conflating "gone" with "changed" would either refuse a harmless
+   already-done destroy (wrong) or silently ship a destroy against
+   unexpectedly-different live state (worse).
+
+Per docs/schema.md's own "Reconciliation, reused" section: this pre-attempt
+check, for a destroy resource specifically, is itself recorded as a
+`ReconciliationAttempt` (`present_matches` | `present_drifted` | `absent`) —
+a genuine reuse of the existing `ResourceApply.Reconciliation` mechanism one
+step earlier than its only prior use (post-`unknown_post_timeout`), not a
+new field.
+
+### The destroy branch of the state machine: `destroyed` vs. `already_absent`, disambiguated by the prior observation
+
+The core `pending → in_flight → applied | failed | unknown_post_timeout`
+machine (the diagram, above) is reused entirely unchanged for a destroy — no
+new top-level state. What's new is the *meaning* layered onto
+`applied`/reconciliation for a destroy resource specifically, via
+`Reconciliation[].Outcome`'s two new legal values:
+
+- A clean `ApplyResourceChange` response (or a post-timeout reconcile-by-query
+  that reads back not-found) resolves the resource's terminal state to
+  `applied`, `Outcome: "destroyed"` — but **only when the immediately
+  preceding `Reconciliation` entry for this same resource recorded
+  `present_matches`.** That preceding entry is the pre-attempt freshness check
+  itself (above) — it is what makes a bare "not found" read, inherently
+  ambiguous in isolation (was it just destroyed, or was it already gone and
+  nobody checked?), attributable to this specific attempt: reality was
+  confirmed present and matching, immediately before the call, so its absence
+  now is this attempt's own doing. "Immediately preceding" is resolved by
+  folding the resource's own transition/reconciliation history across the
+  `parent` chain of apply records for this proposal (`foldResourceHistory`,
+  UBI-27's own mechanism, reused unchanged, not re-derived) — not scoped to
+  the current attempt's own array alone: a resource durably written
+  `in_flight` in attempt N, then `kill -9`'d before attempt N's own result was
+  recorded (docs/destroys-adversarial.md's own "kill -9 mid-destroy, after
+  the call" row), has no reconciliation entry of its own yet in the *new*
+  attempt N+1 — folding across `parent` finds attempt N's pre-attempt
+  `present_matches` check regardless, so N+1's own reconcile-by-query still
+  resolves `destroyed`, correctly, rather than falling back to treating a
+  bare not-found as fresh `already_absent` just because this particular
+  attempt never ran its own pre-check. A resource that never reached
+  `in_flight` in any prior attempt (docs/destroys-adversarial.md's "kill -9
+  mid-destroy, before the call" row) has no such history to fold over, so its
+  next attempt runs an ordinary fresh pre-check instead, exactly as a true
+  first attempt would. This is docs/destroys-adversarial.md's "timeout with
+  destroy actually landed" row, extended with the disambiguation the plain
+  create/modify version of this same mechanism never needed (a create/modify
+  reconciles against a specific *value*; a destroy
+  reconciles against *presence itself*, which "not found" alone can't
+  attribute without the prior observation).
+- A post-timeout reconcile-by-query that reads back the *original*
+  (pre-destroy, still-present) state resolves `failed` — the call never
+  actually landed, exactly the same "match against the original value means
+  failed" pattern reconciliation already uses for `drift_revert`, mirrored:
+  for a destroy, "the original value" is presence itself, not a specific
+  attribute's old value. Docs/destroys-adversarial.md's "timeout with it not
+  landed" row.
+- Anything else (a third value, or a genuinely unreadable target) resolves
+  `still_unknown`, same bounded-retry, terminal-for-this-attempt posture as
+  every other kind.
+- The **already-absent short-circuit** (above) never enters this branch at
+  all — it resolves directly from the pre-attempt check, `Outcome:
+  "already_absent"`, without ever reaching `in_flight` or calling
+  `ApplyResourceChange`.
+
+`ubx why <address>`'s own rendering (UBI-27's own amendment already
+established the convention of rendering resolved/applied values in place of
+markers) gains the equivalent duty here: rendering a destroyed address's
+terminal apply record should show which of `destroyed`/`already_absent`
+actually happened, not just "applied" — the whole point of recording the
+distinction is that a human reading the biography later can tell "`ubx` did
+this" from "this was already gone by the time `ubx` got here." Presentation-layer
+work for the session that actually builds it, not a new ledger mechanism,
+the same framing UBI-27's "Apply records: `$computed` replaced by concrete
+results" section already used for its own rendering gap. This is also
+docs/destroys-adversarial.md's "why on a destroyed address" row: the full
+biography, including which of the two outcomes closed the chain.
+
+### Idempotency: a re-run's own destroy behavior
+
+Extending the existing "Idempotency contract" table, above, with the
+destroy-specific rows: a resource whose most recent transition is
+`applied`/`Outcome: destroyed` or `Outcome: already_absent` is skipped
+entirely on re-run, identical to any other kind's `applied` row; a resource
+left `still_unknown` re-runs reconciliation first, before any new
+`ApplyResourceChange` call, identical to any other kind; a resource refused
+for staleness (outcome 2, above) re-verifies freshness fresh on the next
+`ubx ship` invocation, exactly as today. Docs/destroys-adversarial.md's
+"re-ship after partial destroy" row is this table's own existing
+`partially_applied` handling, applied to a mixed create+destroy proposal
+unchanged — no destroy-specific idempotency exception exists; the existing
+table's rows already cover every case once `destroyed`/`already_absent` are
+understood as flavors of `applied`, not new top-level terminal states.
+
+### Concurrency: unchanged
+
+Docs/destroys-adversarial.md's "destroy racing a concurrent scan" row needs
+no new mechanism: `ubx scan`/`status --drift` are pure readers against
+`FoldState`/`Fleet` and never take the ledger lock (docs/executor.md's own
+"Concurrency" section, above, unchanged) — a scan racing an in-progress
+destroy either observes the resource still present (pre-`in_flight` or
+mid-flight) or already gone (post-tombstone `FoldState` fold, docs/schema.md's
+own amendment), both individually consistent reads; there is no window where
+a concurrent scan can observe a torn or partially-destroyed state, since the
+apply record's own transitions are the only thing that changes and a scan
+never reads mid-write apply-record content (`.apply.json` files mid-attempt
+have no sealed `id` yet, docs/schema.md's own "Sealed vs. live" section — a
+reader either sees the last *sealed* apply record or none, never a
+half-written one).
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -490,7 +705,9 @@ gating on the resource's own state is both correct and sufficient.
   reported honestly; nothing auto-reverts what already landed. A human
   decides the next step (retry the remainder via another `ship`, or
   re-scan/re-resolve if reality has moved on).
-- `delta.destroys`, for a `change` proposal or any other kind — no kind
+- ~~`delta.destroys`, for a `change` proposal or any other kind — no kind
   this codebase produces today carries a real destroy, and shipping one
   needs its own adversarial thinking (docs/resolver.md's own Scope
-  section).
+  section).~~ — **designed, UBI-30** (see "Amendment (2026-07-17, UBI-30):
+  shipping destroys," above); execution code is still session 2+ work of
+  that ticket, not built in the session that wrote the design.

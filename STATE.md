@@ -4,7 +4,170 @@
 
 ## Current phase
 
-**UBI-29 is done (this session): Fleet visibility for shipped creates —
+**UBI-30 session 1 is done (this session): Destroys v1 — design lands in
+docs, no code.** Phase 2 continues with the executor's last verb. Filed as
+its own new Linear issue, **UBI-30** ("Destroys v1: explicit intent,
+reversed ordering, tombstone records"), team `ubiquex` — no other ID
+inferred, per the handoff's own instruction. This session is entirely
+docs-first, per this project's own session protocol (CLAUDE.md — "a plan
+change is not real until it lands in docs/plan.md," "design landed first,
+docs-only" already established for both UBI-26 and UBI-27); zero Go code
+changed. Sessions 2+ (resolver destroy support → executor reversed-walk +
+destroy state machine → accept friction + CLI surface → live AWS finale)
+are unstarted.
+
+Four documents amended/created, cross-referencing each other exactly the
+way UBI-26/UBI-27's own docs-first sessions did:
+
+**docs/resolver.md** ("Amendment (2026-07-17, UBI-30): destroys —
+explicit intent, resolve-time orphan protection"). Three real design
+decisions, not just "add a destroys array":
+
+- **Destroys are a dedicated `destroys[]` list in `ubx:intent/v1`, a
+  sibling to `resources[]`, never an `op: "destroy"` value on a
+  `resources[]` entry.** Rejected the `op`-value approach directly: a
+  destroy has no `config` to submit, so folding it into `resources[]`
+  would mean either a dangling `config` field or a special-cased
+  "config not required if op is destroy" branch everywhere `resources[]`
+  is consumed. A dedicated list has neither problem.
+- **Never inferred from absence — stated as a permanent boundary, not a
+  v1 scope line.** A resource the ledger has that an intent file simply
+  doesn't mention is not a destroy signal, now or ever; `ubx scan`'s own
+  `ScanNew`/`ScanDrifted` classification already treats "not mentioned" as
+  "not yet observed," never "gone," and the cost of guessing wrong in the
+  destroy direction (real infrastructure deleted before anyone notices) is
+  categorically worse than guessing wrong on create/modify (correctable by
+  a follow-up proposal). Absence-based detection gets a real future
+  home — a WARN-only diagnostic — but that diagnostic never becomes a
+  resolver-internal trigger for populating `delta.destroys`, even later.
+- **Resolve-time orphan protection, checked against the whole ledger, not
+  just the current intent batch.** Intra-stack: walks every accepted
+  proposal in the stack's own chain for any `depends_on` entry naming the
+  destroy target, from a resource not itself being destroyed in the same
+  batch — refuses if one is found (a same-batch mutual destroy of both the
+  target and its dependent is fine; the executor's reversed walk handles
+  that correctly). Cross-stack: honestly bounded, not silently assumed
+  solved — the producing stack has no built-in index of who has ever
+  pinned against it (docs/schema.md's own long-standing "cross-stack
+  workspace index format" open question), so this is best-effort via an
+  explicit, operator-supplied `known_dependents` list of neighbor
+  `ledger_dir`s (the same "explicit path over a fancy registry" instinct
+  already used twice elsewhere in this document), with the gap recorded
+  as honest evidence (`cross_stack_orphan_check: "not_performed"`) rather
+  than silently omitted, when no dependents are named.
+
+**docs/schema.md** ("Amendment: destroys"). The ratification half:
+
+- **`Delta.Destroys`' element shape re-pinned**: from a bare `Address` to
+  `{address, state, depends_on}` — full `FoldState`-folded state inline
+  (a deliberate divergence from `Modification`'s changed-attributes-only
+  economy: a human signing away a resource needs to see everything being
+  lost, not a hash to separately chase down), plus `depends_on` reusing
+  `Modification.DependsOn`'s exact field and meaning, populated by the
+  resolver's own orphan-protection walk with the *reverse* edge set. **This
+  project's first real, non-additive hashed-content shape change** —
+  `core.SchemaVersion` bumps `1` → `2` once destroy support ships (session
+  2+). Checked, not assumed: the migration cost is genuinely near-zero,
+  since `core.Validate` has forbidden a non-empty `delta.destroys`
+  unconditionally for every proposal kind this codebase has ever produced
+  — there is no real ledger entry anywhere with the old bare-`Address`
+  shape populated to migrate.
+- **Two new `resolution.inputs[]` kinds**: `destroy_target` (required per
+  destroy entry, mirroring `delta.modifies`' own existing
+  observed-hash-plus-lookup requirement, propose-time validated) and
+  `cross_stack_orphan_check` (evidence-only, never required, recording
+  either `checked_clear` or an honest `not_performed`).
+- **`--confirm-destroys`**: this project's first hardcoded acceptance-time
+  friction invariant, distinct in kind from every other check in the
+  schema (which are all either structural validation or freshness/staleness
+  detection the system verifies for itself) — `ubx accept` refuses any
+  proposal with `blast_radius.destroys > 0` unless invoked with this flag.
+  Deliberately friction, not validation: the proposal is already fully
+  valid, orphan-checked, and fresh by the time this gate is reached: its
+  only job is confirming a human actually meant to accept something with
+  teeth. v1 hardcodes it; a real policy engine (still just a stub hook)
+  generalizes this later.
+- **Tombstone posture**: a destroyed address's full proposal chain is
+  never rewritten or collapsed — the destroy proposal is its terminal
+  record, `ubx why` renders the complete biography forever, exactly the
+  same "immutable history, current truth computed by folding over it"
+  discipline UBI-26's own "`Proposal.status` is never rewritten" section
+  already established, extended from one proposal's status to a whole
+  resource's existence. The one real behavioral extension this requires,
+  named explicitly: `FoldState` must fold a fully-destroyed (sealed,
+  terminal `destroyed`/`already_absent`) address back to "does not exist"
+  — otherwise a destroyed address would wrongly refuse every future
+  `op: "create"` against the same address forever. Whether `ubx why`
+  renders a second lifecycle under a later-recreated same address as one
+  continuous chain or two distinct ones is named as a real, open
+  presentation question, not resolved this session.
+
+**docs/executor.md** ("Amendment: shipping destroys"). The execution half
+— every mechanism reuses something this codebase already built, nothing
+invented from scratch:
+
+- **One combined topological walk, not two.** `core/executor/ship.go`'s
+  existing `changeNodesOf` (UBI-27) already builds one `byAddr` map from
+  creates'/modifies' own `depends_on` and topo-sorts it once via
+  `topoSortAddresses`. Destroys extend the identical map (a new `destroy
+  *core.DestroyEntry` field on `changeNode`), keyed by the identical field,
+  populated with the reverse edge set instead of the forward one.
+  "Creates forward, destroys reversed" falls out of this as one emergent
+  order, not a second mechanism — worked through with a concrete
+  create-repoint-destroy example in the doc itself.
+- **Wire mechanics**: checked directly against the real `tfplugin{5,6}`
+  convention (not invented) — a destroy is `PriorState` non-null (freshly
+  re-read live state, never the resolve-time snapshot directly),
+  `PlannedState` the literal `null`, `Config` the literal `null`. No
+  separate `PlanResourceChange` call, the same v1-wide shortcut every
+  other kind already takes.
+- **Three-way freshness precheck**, not binary: present-and-matching
+  (proceed), present-but-drifted (refuse — docs/destroys-adversarial.md's
+  own "drifted since acceptance" row), or already-absent (short-circuit
+  directly to a terminal `already_absent` outcome, no `in_flight`, no
+  `ApplyResourceChange` call at all — deliberately a different mechanism
+  from the drifted-refusal case, not a variant of it).
+- **`destroyed` vs. `already_absent` disambiguation**: reuses
+  `ResourceApply.Reconciliation` one step earlier than its only prior use
+  (the pre-attempt check itself becomes a `ReconciliationAttempt`), no new
+  ledger field. A post-timeout not-found read resolves `destroyed` only
+  when the immediately preceding reconciliation entry recorded
+  `present_matches` — and that lookup folds across the `parent` attempt
+  chain via the existing `foldResourceHistory` (UBI-27), so a `kill -9`
+  between a destroy landing and its result being recorded still resolves
+  correctly on the next attempt rather than misreporting a genuine
+  ubx-caused destroy as `already_absent`.
+
+**docs/destroys-adversarial.md** (new): eleven required-outcome rows —
+drift since acceptance; kill -9 before the call; kill -9 after the call;
+timeout landed; timeout not landed; already-absent target; orphan-protection
+refusal; mixed create+destroy ordering; destroy racing a concurrent scan;
+re-ship after partial destroy; `ubx why` on a destroyed address. Plus a
+named-gaps section (concurrent same-proposal `ship` races specific to a
+destroy; cross-stack orphan refusal against a real second ledger; recreate-
+under-same-address; a destroy target with no meaningful destroy semantics
+in its own provider schema) — not silently assumed handled.
+
+**Nothing found fighting ratified schema** — the one thing this session
+was told to stop and flag if it happened. The closest thing to friction:
+`Delta.Destroys`' original 2026-07-10 pinned shape (bare `Address`) had to
+be re-pinned, which the hashing ratification's own rules explicitly
+anticipate needing a `schema_version` bump for — not a fight, exactly the
+mechanism the ratification exists to invoke when a real need for it shows
+up, which this is the first case of.
+
+docs/plan.md gained a changelog entry and a new "Destroys v1 (UBI-30)"
+wedge subsection; its "Deferred" list's `delta.destroys` bullet is struck
+through with a pointer to the new subsection (design is no longer
+deferred; the resolver/executor code implementing it still is). No
+user-visible CLI surface exists yet (no new command/flag shipped this
+session), so ubiquex-docs has nothing to update this session — not a
+docs-debt exception, since CLAUDE.md's same-session-docs rule only applies
+once a user-visible change actually ships.
+
+## Current phase (previous)
+
+**UBI-29 is done: Fleet visibility for shipped creates —
 closes the one gap UBI-27 left open.** A shipped `change` proposal's
 created resources are now fully first-class: `ubx status`, `ubx why
 <address>`, and a future `ubx scan` all discover them, exactly like an

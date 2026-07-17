@@ -523,6 +523,49 @@
   only, never stored keys, per-tenant ephemeral runners, ubx-agent as
   the single runner codebase. Trust framing per mode disclosed honestly,
   never blurred.
+- 2026-07-17 — UBI-30 session 1: destroys, the executor's last verb —
+  design landed docs-only, no code. Filed as its own ticket (UBI-30), team
+  `ubiquex`. docs/resolver.md gained "Amendment (UBI-30): destroys" — a
+  dedicated `destroys[]` list in `ubx:intent/v1` (never an `op: "destroy"`
+  on `resources[]`, and never inferred from a resource's absence, now or
+  ever — a permanent boundary, not a v1 scope line), resolve-time orphan
+  protection (intra-stack via the existing `depends_on` reverse-edge walk
+  across the whole ledger chain; cross-stack best-effort via an explicit
+  `known_dependents` list, honestly recorded as `not_performed` when
+  omitted rather than silently assumed clear). docs/schema.md gained
+  "Amendment: destroys" — `Delta.Destroys`' element shape re-pinned from a
+  bare `Address` to `{address, state, depends_on}` (a real hashed-content
+  shape change, `schema_version` bump to 2 — checked, the migration cost
+  is genuinely near-zero since no proposal of any kind has ever populated
+  `delta.destroys` under the old shape), two new `resolution.inputs[]`
+  kinds (`destroy_target`, required; `cross_stack_orphan_check`,
+  evidence-only), the `--confirm-destroys` accept-time flag (this
+  project's first hardcoded acceptance-friction invariant, distinct from
+  every other validation/staleness check in the schema), and the tombstone
+  posture (`FoldState` folds a fully-destroyed address back to absent,
+  enabling recreation under the same address later, while the ledger
+  chain itself is never rewritten — `ubx why` renders the complete
+  biography forever). docs/executor.md gained "Amendment: shipping
+  destroys" — one combined topological walk across creates/modifies/
+  destroys (`changeNodesOf`'s existing `byAddr`/`topoSortAddresses`
+  extended, not duplicated — "reversed" ordering falls out of destroy
+  entries' `depends_on` carrying the reverse edge set, not a second
+  mechanism), `ApplyResourceChange` wire mechanics for a destroy (`PriorState`
+  freshly re-read, `PlannedState`/`Config` both the literal `null`), a
+  three-way freshness precheck (matches / drifted-refuse / already-absent-
+  short-circuit), and the `destroyed`-vs-`already_absent` disambiguation
+  (reusing `ResourceApply.Reconciliation` one step earlier than its only
+  prior use, folded across the `parent` attempt chain via the existing
+  `foldResourceHistory`, never a new field). docs/destroys-adversarial.md
+  is new: eleven required-outcome rows (drift since acceptance; kill -9
+  before/after the call; timeout landed/not-landed; already-absent target;
+  orphan-protection refusal; mixed create+destroy ordering; destroy racing
+  a concurrent scan; re-ship after partial destroy; `ubx why` on a
+  destroyed address), plus named gaps this table doesn't yet cover. See
+  §Destroys v1 (UBI-30) below, STATE.md for the session writeup, and
+  Linear UBI-30 for the full session breakdown (sessions 2+: resolver
+  destroy support, executor reversed-walk + destroy state machine, accept
+  friction + CLI surface, then a live full-lifecycle finale on real AWS).
 
 ## Strategy
 
@@ -1183,14 +1226,71 @@ tag-queue` mutation was detected, attributed, and corrected; `ubx why
 docs/executor.md's own UBI-29 section for the full design; STATE.md for
 the session writeup.
 
+### Destroys v1 (UBI-30)
+
+Phase 2 continues: destroys, the executor's last verb — the one operation
+named and deliberately deferred at every prior mention of destroys in this
+plan (UBI-27's own scope line; UBI-29's own out-of-scope note) since a
+create/modify can be retried safely and a destroy usually can't. Design
+landed first, docs-only, across four documents, the same "spec before
+code" discipline UBI-26/UBI-27 already established: docs/resolver.md
+("Amendment: destroys" — a dedicated intent-file `destroys[]` list,
+never an `op` value and never inferred from absence, permanently, not just
+for v1; resolve-time orphan protection checked against the whole ledger,
+not just the current batch), docs/schema.md ("Amendment: destroys" —
+`Delta.Destroys`' element shape re-pinned to carry full folded state plus
+`depends_on`, requiring this project's first-ever `schema_version` bump;
+two new `resolution.inputs[]` kinds; the `--confirm-destroys` accept-time
+invariant; the tombstone posture), docs/executor.md ("Amendment: shipping
+destroys" — one combined topological walk, real `tfplugin` wire mechanics
+for a destroy, the three-way freshness precheck, the `destroyed`-vs-
+`already_absent` disambiguation), and docs/destroys-adversarial.md (the
+required-outcome program, eleven rows).
+
+A real design resolution worth restating plainly, not left implicit:
+"reversed ordering" (this ticket's own title) is not a second execution
+mode bolted onto the existing one. `core/executor`'s `changeNodesOf`
+(UBI-27) already builds one combined dependency graph from creates' and
+modifies' own `depends_on` edges and topo-sorts it once; destroys extend
+the identical map, keyed by the identical field, with the *reverse* edge
+set (which surviving resources depend on the destroy target) rather than
+the forward set. One topo-sort, over one graph, produces "creates forward,
+destroys reversed, correctly interleaved with modifies" as a single
+emergent order — never three separately-ordered phases. The other real
+resolution: the old-vs-new-state ambiguity a destroy's own `unknown_post_timeout`
+reconciliation faces (a bare "not found" read means nothing on its own —
+was it just destroyed, or already gone?) is resolved by reusing
+`ResourceApply.Reconciliation` one step earlier than its only prior use
+(the mandatory pre-attempt freshness recheck, now recorded for a destroy
+specifically), folded across the `parent` attempt chain via the existing
+`foldResourceHistory` — no new ledger field, the same "reuse the
+mechanism, extend its use" instinct this project has applied at every
+prior amendment.
+
+Filed as its own ticket, **UBI-30**, team `ubiquex` (referenced throughout
+per the handoff's own instruction — no other ID inferred). Sessions 2+,
+not this one: resolver destroy support (orphan check hermetic) → executor
+reversed-walk + destroy state machine (fakeprovider fault injection per
+docs/destroys-adversarial.md's own table) → accept friction + CLI surface
+→ a live finale on real AWS (create a chain, drift it, resolve the drift,
+destroy it through the signed flow with `--confirm-destroys`, `kill -9`
+mid-destroy, reconcile, verify absence via the `aws` CLI independently,
+`ubx why` reading the complete biography from genesis to tombstone).
+Commit for this session is docs-only; see STATE.md for the full writeup.
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, chat/intent provider, diagrams, markdown intents, `delta.destroys`
-for any proposal kind (needs its own adversarial thinking — a create can be
-retried safely, a destroy usually can't; UBI-27 above is creates+modifies
-only, not this), a real policy engine (UBI-27's resolver carries a
-policy-stub hook, always empty for now), environments/promotion, Nexus
-SaaS, naming of proposal ledger format for external publication.
+SDK + codegen, chat/intent provider, diagrams, markdown intents, a real
+policy engine (UBI-27's resolver carries a policy-stub hook, always empty
+for now), environments/promotion, Nexus SaaS, naming of proposal ledger
+format for external publication.
+
+~~`delta.destroys` for any proposal kind (needs its own adversarial
+thinking — a create can be retried safely, a destroy usually can't;
+UBI-27 above is creates+modifies only, not this)~~ — **designed, UBI-30**
+(see its own wedge subsection above); resolver/executor *code* is still
+session 2+ work of that ticket, not deferred any longer as a design
+question.
 
 ~~A shipped `change` proposal's creates becoming `ubx status`/`ubx why
 <address>` discoverable~~ — fixed, UBI-29 (see its own wedge subsection

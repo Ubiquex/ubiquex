@@ -881,18 +881,20 @@ resource). `core/resolver.VerifyPins` implements exactly this re-check,
 hermetically tested; wiring it into `ubx accept` is later CLI-session
 work, not this one's.
 
-#### Validation: `change` proposals never carry destroys
+#### ~~Validation: `change` proposals never carry destroys~~ — superseded, UBI-30
 
-New propose-time structural rule (`core.Validate`, alongside the existing
+~~New propose-time structural rule (`core.Validate`, alongside the existing
 per-kind switch): a `KindChange` proposal MUST have `len(delta.destroys) ==
 0` and `blast_radius.destroys == 0` — unconditionally, not just "zero for
 now" — matching docs/resolver.md's own v1 scope line (destroys are out of
-scope entirely, not merely unproduced by today's resolver).
-`blast_radius.creates`/`.modifies` MUST equal `len(delta.creates)`/
-`len(delta.modifies)` exactly — a `change` proposal's blast radius is real
-(same posture `drift_revert` already established: accepting one is a
-decision to actually change cloud, not a record of something that already
-happened).
+scope entirely, not merely unproduced by today's resolver).~~ This rule
+held from UBI-27 until this session; see "Amendment: destroys" below for
+the rule that replaces it. `blast_radius.creates`/`.modifies` MUST equal
+`len(delta.creates)`/`len(delta.modifies)` exactly — a `change` proposal's
+blast radius is real (same posture `drift_revert` already established:
+accepting one is a decision to actually change cloud, not a record of
+something that already happened) — this half is unchanged and still
+enforced.
 
 #### No `schema_version` bump
 
@@ -999,6 +1001,247 @@ posture every prior additive amendment to this document has taken
 shape, domain prefix, or canonicalization changes; `canonicalApplyRecordBytes`
 already canonicalizes generically (no fixed field enumeration to update).
 
+### Amendment: destroys (2026-07-17, UBI-30)
+
+Phase 2 continues: destroys, the executor's last verb. Design only, this
+session — docs/resolver.md's own "Amendment (2026-07-17, UBI-30)" pins the
+intent-file/orphan-protection half; this amendment pins the ratification
+half (the wire shape, its validation, and the tombstone posture); docs/
+executor.md's own amendment pins execution; docs/destroys-adversarial.md
+pins the required-outcome program. No code lands with this session; every
+`core.Validate`/struct change named below is session 2+ implementation
+work of the same ticket.
+
+#### `Delta.Destroys`' element shape, re-pinned — a `schema_version` bump
+
+The original "Delta element shapes — PINNED (2026-07-10)" section fixed
+`delta.destroys`' element as a bare `Address` (`{stack, type, name}`). That
+shape is superseded — docs/resolver.md's own amendment explains why a
+destroy needs to carry more than an address (a human signing away a
+resource needs to see what's being lost, inline, not a hash to separately
+chase down) and why ordering needs to be explicit, the same way
+`Modification.DependsOn` already is:
+
+```json
+{
+  "address": { "stack": "payments", "type": "aws_db_instance", "name": "old-payments-db" },
+  "state": { "...": "the resource's full FoldState-folded config at resolve time -- what will be lost" },
+  "depends_on": ["payments.aws_db_instance.replica-of-old"]
+}
+```
+
+- **`address`** — unchanged in shape (`Address`), now nested rather than
+  being the whole element.
+- **`state`** — the resource's complete folded state, the same shape
+  `adoption`/`drift_adopt`'s own `Delta.Creates[].state` already carries
+  (record-only, concrete, no `$computed`/`$ref` markers — a destroy target
+  is by definition an already-ledgered, already-concrete resource,
+  `FoldState`'s own postcondition). Deliberately the *whole* state, not a
+  changed-attributes-only diff the way `Modification.Before`/`.After` are —
+  see docs/resolver.md's own reasoning for why that economy doesn't apply
+  here.
+- **`depends_on`** — reuses `Modification.DependsOn`'s exact field name and
+  meaning ("this element's own operation must not execute before every
+  named address's own operation, in this same proposal, has completed") —
+  populated by docs/resolver.md's own orphan-protection walk with the
+  **reverse**-edge set (which surviving resources currently depend on this
+  destroy target), not the forward set a create/modify's own `depends_on`
+  would carry. The meaning of the field never changes across creates,
+  modifies, and destroys — only which edge set populates it does, and that
+  difference is exactly what makes "destroys execute in reversed order"
+  fall out of one topological walk instead of needing a second mechanism.
+  See docs/executor.md's own amendment for the walk itself.
+
+**This is a hashed-content shape change** (`Delta.Destroys`' own element
+type), and per this document's own hashing ratification below ("Any
+further change to hashed-content shape... requires a `schema_version` bump
+and an explicit migration path"), `core.SchemaVersion` bumps from `1` to
+`2` the moment destroy support ships (session 2+ code, not this session).
+**The migration cost is genuinely unusual — close to zero, checked, not
+assumed:** `core.Validate` has forbidden a non-empty `delta.destroys` for
+*every* proposal kind this codebase has ever produced, unconditionally,
+since before this pinned shape even existed (`validateKind`,
+`core/validate.go`) — there is no real ledger entry anywhere, in this
+project's own history or in any deployment it's ever had, with a populated
+`delta.destroys` under the old bare-`Address` shape to migrate. The
+version bump exists on principle (a hashed array-element shape changed,
+full stop — the rule doesn't carve out an exception for "but nothing used
+it yet") and to protect any external tooling that might have been built
+against the original 2026-07-10 draft shape, not because a real migration
+script is needed for this codebase's own ledgers.
+
+#### New `resolution.inputs[]` kinds: `destroy_target`, `cross_stack_orphan_check`
+
+Mirroring `delta.modifies`' own existing rule (every modify needs a
+corresponding `resolution.inputs` entry proving its "before" was actually
+observed): every `delta.destroys` entry requires a matching
+`resolution.inputs` entry, a new `kind`:
+
+```json
+{
+  "kind": "destroy_target",
+  "resource": "payments.aws_db_instance.old-payments-db",
+  "observed_hash": "sha256:<hex, of the same full state recorded in delta.destroys[].state>",
+  "lookup": { "id": "old-payments-db" }
+}
+```
+
+`observed_hash` gives the same "provable against what was actually
+observed, not merely asserted" guarantee `delta.modifies` already has;
+`lookup` is required (not merely `omitempty` the way `ResolutionInput.Lookup`
+is for `live_state` entries) because the executor's freshness recheck and
+reconcile-by-query — both mandatory for every destroy attempt, docs/
+executor.md's own amendment — have no other way to find the resource
+again. **Enforced as propose-time validation**, extending
+`validateModifiesHaveResolutionInputs` (renamed in code to reflect it now
+covers both arrays, or given a sibling function — an implementation
+decision for session 2+, not fixed here) the same way: a `delta.destroys`
+entry with no matching `destroy_target` resolution input, or one with an
+empty `observed_hash` or `lookup`, is rejected before it can be hashed.
+
+The second new kind, `cross_stack_orphan_check`, is **not** required —
+it's evidence, not a claim of correctness the resolver can't actually back:
+
+```json
+{
+  "kind": "cross_stack_orphan_check",
+  "resource": "payments.aws_db_instance.old-payments-db",
+  "status": "not_performed | checked_clear",
+  "checked_ledger_dirs": ["../networking/ledger"]
+}
+```
+
+`status: "checked_clear"` means every `ledger_dir` in docs/resolver.md's
+own `known_dependents` input was walked and none pinned this address;
+`"not_performed"` means `known_dependents` was empty or omitted — the
+resolve still succeeds (cross-stack orphan protection is best-effort by
+design, docs/resolver.md's own reasoning), but the gap is recorded as
+honest evidence a human reviewing the proposal can see, never silently
+absent. If a named neighbor's ledger *does* pin this address, resolve
+fails hard instead (docs/resolver.md's "Orphan protection" section) — no
+`cross_stack_orphan_check` entry is ever recorded for a destroy that didn't
+happen; there is nothing to record evidence about.
+
+#### Validation: destroys are now legal for `change` proposals
+
+Supersedes the struck-through section above. A `KindChange` proposal MAY
+now carry `delta.destroys`; `blast_radius.destroys` MUST equal
+`len(delta.destroys)` exactly — the same "a change proposal's blast radius
+is real" posture already governing `.creates`/`.modifies`. Every
+`delta.destroys` entry's `address` MUST be present in `FoldState` at
+resolve time (docs/resolver.md's own resolve-time validation) — this is a
+resolver-side check, not a `core.Validate` one (`core.Validate` has no
+`StateReader`/ledger access; it validates proposal-internal consistency
+only, the same boundary every other kind-specific rule in this file
+already respects).
+
+#### Accept-time friction: `--confirm-destroys`
+
+The first real invariant with teeth this codebase gives an operator,
+distinct from every other check in this document (which are all either
+structural validation or freshness/staleness detection — things the
+system itself verifies): **`ubx accept` refuses to accept any proposal
+whose `blast_radius.destroys > 0` unless invoked with an explicit
+`--confirm-destroys` flag** — hardcoded in v1, not policy-engine-driven
+(docs/resolver.md's own policy-stub hook stays an empty slice for
+everything named in this amendment too; a real policy engine, component
+map #9, generalizes this into a configurable rule later, but v1 ships the
+narrow, hardcoded version rather than waiting on a policy engine that
+doesn't exist yet). This is deliberately **friction**, not validation —
+the proposal is already fully valid, resolved, orphan-checked, and
+fresh; `--confirm-destroys`'s only job is making sure a human actually
+meant to accept something with teeth, the same spirit as a cloud
+console's own "type the resource name to confirm deletion" pattern,
+adapted to a CLI's own idiom (a flag, not an interactive prompt — `ubx`'s
+other commands are already scriptable/non-interactive by convention, and
+this shouldn't be the one exception). Missing the flag is a hard refusal,
+exit code in the same "actionable finding" tier `resolver.ErrCrossStackPinStale`
+already occupies — never a warning that lets acceptance proceed anyway.
+
+#### Reconciliation, reused: the pre-attempt freshness check disambiguates a post-timeout read
+
+No new field on `ResourceApply`/`ApplyRecord` is needed for this — a
+genuine reuse, not an amendment to either struct's shape. `ResourceApply.Reconciliation`
+(docs/schema.md's own "Amendment: apply records," UBI-26) has, until now,
+only ever been populated *after* an `unknown_post_timeout`. For a
+`delta.destroys` resource specifically, docs/executor.md's own amendment
+extends its use one step earlier: the mandatory pre-attempt freshness
+recheck (every resource gets one before `in_flight`, docs/executor.md's
+existing "Freshness" section, unchanged) is itself recorded as a
+`ReconciliationAttempt` for a destroy target, with `Outcome` one of three
+new legal values — `present_matches` (proceed to `in_flight`),
+`present_drifted` (refuse, terminal for this attempt — docs/executor.md's
+amendment), or `absent` (short-circuit straight to a terminal
+`already_absent` outcome, described below, never reaching `in_flight` at
+all, since there's nothing to call `ApplyResourceChange` against). This
+pre-check entry is what later disambiguates an otherwise-ambiguous
+not-found read from post-timeout reconciliation: a `destroyed` outcome is
+only ever recorded when the *immediately preceding* reconciliation entry
+for the same resource was `present_matches` — proving the resource
+existed, matching its signed state, right before this attempt, so its
+absence now is attributable to this attempt and not to some earlier,
+unrelated disappearance. `Outcome`'s existing legal values (`applied` |
+`failed` | `inconclusive`) gain `destroyed` | `already_absent` alongside
+them — purely additive to a free-form string field, no Go struct change,
+same posture as every other additive amendment in this document.
+
+#### Tombstone posture: permanent history, terminal record, nothing erased
+
+A destroyed address's own proposal chain — genesis (adoption or a
+change-proposal create) through every drift/modify in between, ending at
+the accepted destroy proposal — is never rewritten, never removed, and
+never collapsed. The destroy proposal is that chain's **terminal record**:
+`ubx why <address>` continues to render the complete biography, oldest to
+newest, exactly as it does today for any other address (docs/schema.md's
+own "`Proposal.status` is never rewritten" section already established
+this posture for a proposal's own *status*; this extends the same
+"immutable history, current truth computed by folding over it" discipline
+to a resource's entire existence, not just one proposal's derived state).
+Nothing in `core.Ledger.Append`'s own append-only contract changes to make
+this true — a destroy proposal, and the apply record that ships it, are
+ledger entries exactly like any other, subject to the exact same
+immutability `ErrDuplicateProposal` already enforces.
+
+**`FoldState` folds a fully-destroyed address back to absent** — this is
+the one real behavioral extension this posture requires, named explicitly
+rather than left ambiguous: once a `delta.destroys` entry's own apply
+record reaches a sealed, terminal `destroyed` or `already_absent` outcome
+(and that is the address's own *most recent* transition — the same
+"per-resource, not per-attempt" gating principle docs/schema.md's UBI-29
+amendment already established for shipped creates, reused unchanged, not
+reinvented for a third time), `FoldState(addr)` reports the resource does
+not exist. This is what a "tombstone" means here, the same sense a
+tombstone carries in any append-only/log-structured store (Cassandra's
+own usage is the direct analogy): a permanent marker recording that a
+deletion happened, retained forever in history, while the *live* view
+built by folding over that history correctly reports "gone." This is also
+what makes docs/resolver.md's own `op: "create"` validation
+(`FoldState`-absent required) behave correctly for a re-created resource
+under the same `(stack, type, name)` address after a genuine destroy —
+without this fold, a destroyed address would incorrectly refuse every
+future create against it forever, which is not what "destroyed" should
+mean. Whether `ubx why <address>` renders a second genesis-through-tombstone
+lifecycle, if one is later created under the same address, as one
+continuous chain or as two visually distinct lifecycles sharing one
+address is a real, open presentation question — named here rather than
+silently assumed either way, left for the session that actually implements
+`ubx why`'s rendering of this case (not blocking `FoldState`'s own
+correctness, which doesn't depend on the answer).
+
+#### `schema_version` bump: exactly what changes
+
+`Delta.Destroys`' element shape (`Address` → `{address, state, depends_on}`)
+is the one change requiring `core.SchemaVersion`'s bump to `2`. Everything
+else in this amendment is additive by the same reasoning every prior
+amendment in this document has used: two new `resolution.inputs[].kind`
+values (`destroy_target`, `cross_stack_orphan_check`), two new
+`ReconciliationAttempt.Outcome` string values, and a CLI-layer acceptance
+gate (`--confirm-destroys`) that touches no hashed-content shape at all.
+None of the canonical hashing rules themselves change (domain prefix,
+exclusion list, number encoding) — only the ratified array-sort rule's own
+target shape does, which is exactly the class of change the ratification
+below already anticipates needing a version bump for.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
@@ -1038,7 +1281,12 @@ already canonicalizes generically (no fixed field enumeration to update).
   make the hash sensitive to resolver internals and graph algorithm choice,
   which is exactly the nondeterminism this section exists to rule out.) See
   §Proposal's "Delta element shapes — PINNED" for exactly where `stack`/
-  `type`/`name` come from on each array's element shape. Any other array with
+  `type`/`name` come from on each array's element shape — for
+  `delta.destroys` specifically, from its own nested `address` field since
+  the "Amendment: destroys" (UBI-30) re-pin, not from the element's
+  top level (`schema_version` 2 only; `deltaSortKey`'s own destroy-element
+  branch reads `element.address.{stack,type,name}`, not
+  `element.{stack,type,name}`). Any other array with
   hash-significant order must have its own explicit, documented sort key —
   no array may rely on insertion/map-iteration order.
 - Determinism rules feeding the hash: no map-iteration ordering anywhere

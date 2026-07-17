@@ -10,7 +10,7 @@
 > `$computed` value becomes a real tfplugin unknown at apply time.
 > docs/resolver-adversarial.md pins the required-outcome program.
 
-## Scope: `change` proposals, creates + modifies, no destroys
+## Scope: `change` proposals, creates + modifies, ~~no destroys~~
 
 v1 of the resolver takes a hand-written, machine-shaped **intent file**
 (`ubx:intent/v1`, docs/schema.md's own new amendment) and produces a
@@ -18,11 +18,15 @@ resolved `kind: "change"` proposal — `core.KindChange`, already a legal
 enum value in this codebase since the very first schema draft, never
 actually produced by anything until now. In scope: `delta.creates` (new
 resources) and `delta.modifies` (declarative updates to resources the
-ledger already has). **Explicitly out of scope: `delta.destroys`.** A
-`change` proposal this resolver produces must have zero destroys, always —
-this is a v1 scope line, not a technical limitation; destroys need their
-own adversarial thinking (a create can be retried safely, a destroy
-usually can't) that's real future work, not this ticket's.
+ledger already has). ~~Explicitly out of scope: `delta.destroys`.~~ A
+`change` proposal this resolver produced had to have zero destroys, always
+— a deliberate v1 scope line, not a technical limitation; destroys needed
+their own adversarial thinking (a create can be retried safely, a destroy
+usually can't) before being taken on. **That design now exists**: see
+"Amendment (2026-07-17, UBI-30): destroys," below — the design is pinned,
+but resolver *code* implementing it is still session 2+ work of that same
+ticket (this document is amended docs-first, per this project's own
+session protocol, before any of it is built).
 
 Also out of scope, named so it isn't assumed covered: diagram/markdown/SDK
 frontends (docs/architecture.md's component map #7 — "Authoring
@@ -312,9 +316,194 @@ established. A resolver whose own logic isn't actually deterministic
 resolve time, never silently produces an unstable hash later. See
 docs/resolver-adversarial.md's own row for this.
 
+## Amendment (2026-07-17, UBI-30): destroys — explicit intent, resolve-time orphan protection
+
+Design only, session 1 of UBI-30 — no code lands with this amendment (see
+docs/plan.md's own wedge subsection for the full session breakdown). This
+closes the line "Scope," above, has always drawn — not by revisiting
+*whether* destroys belong in `change` proposals (they always did,
+structurally: the very first `Proposal` draft's `delta.destroys` array
+predates this resolver by a full session, docs/schema.md's original "IR —
+resource node" section), but by giving them the same design rigor
+creates/modifies already got in UBI-27, rather than shipping a destroy path
+that's just "creates, but backwards" and calling it done. docs/schema.md's
+own amendment (below) pins the wire-format/validation half of this;
+docs/executor.md's own amendment pins how a resolved destroy actually
+executes; docs/destroys-adversarial.md pins the required-outcome program.
+
+### Destroys are a distinct, explicit intent-file list — never inferred
+
+`ubx:intent/v1` (docs/schema.md's own amendment) gains a new top-level
+field, a sibling to `resources[]`, not a new `op` value on an existing
+resource entry:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": { "summary": "decommission the old standby replica", "sources": [...] },
+  "resources": [ "...": "creates/modifies, unchanged" ],
+  "destroys": [
+    "payments.aws_db_instance.old-payments-db"
+  ]
+}
+```
+
+Each `destroys[]` entry is a canonical address string (`Address.String()`
+form, `<stack>.<type>.<name>` — the exact convention `$ref`'s own `to`
+field and `Modification.Target` already use) naming a resource the intent
+author wants gone. This was a real design choice, not the obvious one:
+putting `op: "destroy"` on a `resources[]` entry (matching `create`/
+`modify`'s own shape) was the first design considered and rejected, for the
+same reason `op` itself is explicit rather than inferred (see "`op: create
+| modify` — explicit, not inferred," above) taken one step further — a
+destroy has no `config` to submit, only an address to remove, so folding it
+into `resources[]` would mean either a `resources[]` entry with a dangling,
+meaningless `config` field, or a special-cased "config not required if op
+is destroy" branch in every consumer of `resources[]` from here on. A
+dedicated list has no such awkwardness, and keeps the intent file's own
+top-level shape self-documenting: `resources[]` is "what to build or
+change," `destroys[]` is "what to remove," never conflated.
+
+**Never inferred from absence — a permanent boundary, not a v1-scope
+one.** The obvious alternative — a resource the ledger already has, that
+this intent's `resources[]` simply doesn't mention, is implicitly a
+destroy — is rejected outright, not just for this ticket but as a
+permanent design posture: `ubx scan`'s own `ScanNew`/`ScanDrifted`
+classification already treats "not yet observed" as exactly that, never as
+"gone," and destroy is the one operation this codebase's own architecture
+("wedge reads and records before it ever writes," docs/architecture.md)
+must never guess at from a negative signal. A resource silently dropped
+from a hand-authored intent file (a typo, an incomplete edit, a stale
+copy-paste) must never be read as "destroy this" — the cost of guessing
+wrong in the destroy direction is categorically worse than guessing wrong
+in the create/modify direction (a wrongly-inferred create/modify is
+corrected by a subsequent proposal; a wrongly-inferred destroy has already
+deleted real infrastructure by the time anyone notices). Absence-based
+detection has a real, legitimate future home — a **WARN-only** diagnostic
+(a future `ubx resolve`/`ubx scan` mode surfacing "the ledger knows about
+`payments.aws_db_instance.old-standby`; this intent doesn't mention it —
+did you mean to destroy it?") — but that is strictly advisory, never a
+resolver-internal trigger for actually populating `delta.destroys`, now or
+ever. Unlike every other "later" in this document, this one names a
+boundary that stays fixed even after the advisory diagnostic exists.
+
+### Resolve-time validation: symmetric to `op`, opposite direction
+
+Exactly like `op: "create"` requires the address to be absent from
+`FoldState` and `op: "modify"` requires it present (see "`op: create |
+modify`," above, unchanged): every `destroys[]` entry requires its address
+to be **present** in `FoldState` — a destroy naming an address the ledger
+has never recorded, or one already tombstoned by a prior destroy proposal
+(docs/schema.md's own tombstone posture, below), is a hard resolve-time
+error, never silently ignored or treated as a no-op. This is the
+destroy-specific instance of docs/resolver-adversarial.md's row 9 pattern
+("declared operation doesn't match ledger reality"), extended to a third
+operation — a new adversarial row for this table, not a reinterpretation of
+an existing one (docs/destroys-adversarial.md's own table, not
+docs/resolver-adversarial.md's, since it's destroy-specific machinery being
+tested, not the create/modify resolver path).
+
+### Orphan protection: reverse edges, checked against the whole ledger, not just this batch
+
+This is the real, new design work this amendment exists for — not just
+"add a third array and reverse the loop." A destroy target may be
+referenced by another resource's already-recorded dependency edge, and
+removing it out from under that reference would silently orphan the
+referencing resource — exactly the kind of blast this resolver's whole
+"typed intent, checked before anything ships" premise exists to catch
+before a human signs it, not after `ubx ship` finds out the hard way from
+the provider's own rejection (or, worse, doesn't — some providers happily
+leave a dangling reference rather than erroring).
+
+Two edge sources, checked differently, both against the **ledger**, never
+against just the intent file currently being resolved:
+
+1. **Intra-stack.** `depends_on` (docs/schema.md's "Amendment: intent files
+   and resolved `change` proposals," UBI-27 — recorded on any
+   `Delta.Creates` or `Modification` entry, in any proposal this stack's
+   ledger has ever accepted) is already the exact record of "resource X's
+   own resolved config named resource Y via `$ref`." Resolving a destroy
+   for Y walks every accepted proposal in this stack's chain
+   (`core.Ledger.Chain`, the same full-ledger walk `FoldState` itself
+   already performs) for any `depends_on` entry naming Y's address, from a
+   resource that is (a) not itself already tombstoned by a prior destroy,
+   and (b) not *also* being destroyed in this same destroy batch. A
+   same-batch mutual destroy (destroying Y and its dependent X together) is
+   not an orphan — the executor's own reversed-dependency walk
+   (docs/executor.md's amendment, below) guarantees X is destroyed before Y
+   in that case, so nothing is ever left pointing at a hole. Only a destroy
+   that would leave a **surviving** referencing resource pointed at
+   nothing is refused. The addresses collected here (X, Y's own
+   dependents) become Y's destroy entry's own `depends_on` list — see
+   "`delta.destroys` carries full folded state," below, and
+   docs/executor.md's amendment for why this is the one mechanism that also
+   makes destroy *ordering* correct, not a separate concern from orphan
+   detection.
+2. **Cross-stack.** The mirror-image problem is structurally harder, and
+   this amendment is honest about exactly where it stops rather than
+   quietly assuming a solve. A `$cross` reference is recorded entirely on
+   the *consuming* stack's own ledger
+   (`resolution.inputs[].kind == "cross_stack_pin"`, carrying `ledger_dir`
+   — the producing stack's location, as seen by the consumer, "Cross-stack
+   refs," above) — the producing stack (the one being asked to destroy
+   something) has no built-in index of who, if anyone, has ever pinned
+   against it; docs/schema.md's own "Open questions" already names this
+   precise gap ("cross-stack workspace index format," tracked, not
+   blocking, since founding). This resolver does not invent a registry to
+   close that gap now. Instead, cross-stack orphan protection is
+   **best-effort and explicit** — the same "simple, explicit convention
+   over a fancy registry" instinct this document has already applied twice
+   (`ledger_dir` itself; `$cross`'s own shape): the resolver's own contract
+   gains an optional `known_dependents []string` input (ledger
+   directories), supplied by the operator resolving the destroy — exactly
+   as explicit as `$cross.ledger_dir` already is from the consuming side —
+   and resolving a destroy walks each named neighbor's own ledger chain for
+   a `cross_stack_pin` entry pinning this stack's destroy target. **Naming
+   zero dependents does not mean "no dependents exist"** — it means none
+   were checked, and this is surfaced honestly rather than silently: a
+   destroy resolved with an empty (or omitted) `known_dependents` list
+   still succeeds, but the resolved proposal's own `resolution.inputs`
+   records a `cross_stack_orphan_check` entry with `status:
+   "not_performed"` (docs/schema.md's own amendment, below) — never
+   silently absent, never presented as equivalent to a real check. This
+   mirrors `cloudtrail_unattributed`'s own "record the gap as evidence,
+   don't just omit it" discipline (docs/schema.md, UBI-10) applied to a
+   structural gap instead of a network one.
+
+A cycle-detection-shaped concern worth naming, not a new mechanism: unlike
+the intra-stack dependency *graph* built for ordering creates ("The
+dependency graph and real cycle detection," above), orphan protection
+itself is not a graph search — it's a direct reverse-index lookup ("who
+points at this one address"), computed once per destroy target. No new
+cycle-detection logic is needed for the lookup itself; the combined
+graph produced *from* that lookup (creates/modifies' forward edges plus
+destroys' reverse edges, all in one proposal) is what still needs the
+existing cycle detector run over it once, unchanged — see docs/executor.md's
+amendment for why this stays one topo-sort, not two.
+
+### `delta.destroys` carries full folded state, not just an address — a deliberate divergence from `Modification`'s terser shape
+
+`Modification.Before`/`.After` deliberately hold only the attributes that
+*changed* (docs/schema.md's own pinned "Delta element shapes" section) — a
+destroy has no such economy available, and shouldn't reach for one:
+**everything** about the resource is being lost, not a subset of its
+attributes, so a human reviewing and signing a destroy proposal needs to
+see the resource's own full, real, `FoldState`-folded config inline, in the
+proposal itself — not a hash they'd have to separately dereference against
+a ledger they may not have open at review time. This is a hashed-content
+shape change to `Delta.Destroys`' pinned element type — see docs/schema.md's
+own amendment for the exact new shape, the `schema_version` bump this
+requires, and why the migration cost is unusually low (no proposal, of any
+kind, has ever actually populated `delta.destroys` — `core.Validate`
+forbids it unconditionally for every kind that exists today).
+
 ## Out of scope for v1, named so it isn't assumed covered
 
-- `delta.destroys` (see Scope, above).
+- ~~`delta.destroys` (see Scope, above).~~ — **designed, UBI-30** (see the
+  Amendment below); resolver *code* producing a populated `delta.destroys`
+  is still session 2+ of that ticket, not this document's own session.
 - A real policy engine — the hook exists, always returns empty for now.
 - Diagram/markdown/SDK/LLM-authored intent frontends — the intent-file
   format is deliberately machine-shaped for exactly this reason (a pretty
