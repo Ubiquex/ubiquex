@@ -42,6 +42,7 @@ func TestValidate_ModifiesRequiresNonEmptyObservedHash(t *testing.T) {
 
 func TestValidate_ModifiesWithMatchingResolutionInputPasses(t *testing.T) {
 	p := sampleProposal()
+	p.Delta.Creates = nil
 	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "payments-db"}
 	p.Delta.Modifies = []Modification{modificationFor(addr)}
 	p.Resolution.Inputs = []ResolutionInput{
@@ -122,7 +123,12 @@ func TestValidate_AdoptionRecordOnlyPasses(t *testing.T) {
 
 func TestValidate_NonAdoptionKindUnaffectedByAdoptionRule(t *testing.T) {
 	p := sampleProposal()
-	p.Kind = KindChange
+	// KindRevert (not drift_revert) has no kind-specific rules at all as of
+	// UBI-27 -- KindChange no longer qualifies as "an arbitrary kind with no
+	// rules" now that validateChange exists, so this test uses the one kind
+	// that still is.
+	p.Kind = KindRevert
+	p.Delta.Creates = nil
 	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "payments-db"}
 	p.Delta.Modifies = []Modification{modificationFor(addr)}
 	p.Delta.Destroys = []Address{{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}

@@ -297,7 +297,7 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 			return nil, fmt.Errorf("generate proposal: %w: %s has a prior observed_hash but no reconstructable state",
 				ErrCorruptLedgerEntry, res.Address)
 		}
-		before, after, err := diffAttributes(prevState, res.Observed)
+		before, after, err := DiffAttributes(prevState, res.Observed)
 		if err != nil {
 			return nil, fmt.Errorf("generate proposal: %w", err)
 		}
@@ -339,7 +339,7 @@ func GenerateRevertProposal(l *Ledger, stack string, res *ScanResult) (*Proposal
 			ErrCorruptLedgerEntry, res.Address)
 	}
 
-	before, after, err := diffAttributes(res.Observed, prevState)
+	before, after, err := DiffAttributes(res.Observed, prevState)
 	if err != nil {
 		return nil, fmt.Errorf("generate revert proposal: %w", err)
 	}

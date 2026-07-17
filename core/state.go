@@ -211,13 +211,55 @@ func dotDelete(m map[string]interface{}, path string) {
 	}
 }
 
-// diffAttributes computes the dot-notation attribute diff between two full
+// DotGet reads the value at a dot-notation path out of a resource's
+// observed state, returned as its own canonical json.RawMessage — shared
+// by core/resolver (UBI-27, resolving a $ref/$cross marker to a concrete
+// literal from a sibling's or a neighbor ledger's already-known state) the
+// same way dotSet/dotDelete are already shared internally by ApplyAfter.
+// found is false if any segment of the path is missing.
+func DotGet(state json.RawMessage, path string) (value json.RawMessage, found bool, err error) {
+	var m map[string]interface{}
+	if err := json.Unmarshal(state, &m); err != nil {
+		return nil, false, fmt.Errorf("dot get: decode state: %w", err)
+	}
+	v, ok := dotGetGeneric(m, path)
+	if !ok {
+		return nil, false, nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, false, fmt.Errorf("dot get: %w", err)
+	}
+	return b, true, nil
+}
+
+func dotGetGeneric(m map[string]interface{}, path string) (interface{}, bool) {
+	parts := strings.Split(path, ".")
+	cur := interface{}(m)
+	for _, part := range parts {
+		mm, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		v, ok := mm[part]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}
+
+// DiffAttributes computes the dot-notation attribute diff between two full
 // resource states, restricted to attributes that actually changed —
 // docs/schema.md's pinned Modification shape ("before/after hold only the
 // attributes that changed, not full resource state"). Nested objects
 // recurse (producing dot-paths); arrays and scalars are compared as
-// atomic values.
-func diffAttributes(beforeState, afterState json.RawMessage) (before, after map[string]json.RawMessage, err error) {
+// atomic values. Exported (2026-07-17, UBI-27) so core/resolver can reuse
+// it for a "modify" intent's before/after, the same mechanism
+// GenerateProposal/GenerateRevertProposal already use for drift -- one
+// diff mechanism, three callers, not three.
+func DiffAttributes(beforeState, afterState json.RawMessage) (before, after map[string]json.RawMessage, err error) {
 	var b, a map[string]interface{}
 	if err := json.Unmarshal(beforeState, &b); err != nil {
 		return nil, nil, fmt.Errorf("diff attributes: decode before: %w", err)

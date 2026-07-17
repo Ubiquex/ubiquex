@@ -10,7 +10,7 @@ func TestDiffAttributes_NestedDotPath(t *testing.T) {
 	before := json.RawMessage(`{"tags":{"env":"prod","owner":"payments"},"count":3}`)
 	after := json.RawMessage(`{"tags":{"env":"staging","owner":"payments"},"count":3}`)
 
-	b, a, err := diffAttributes(before, after)
+	b, a, err := DiffAttributes(before, after)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestDiffAttributes_AddedAndRemovedKeys(t *testing.T) {
 	before := json.RawMessage(`{"a":1}`)
 	after := json.RawMessage(`{"b":2}`)
 
-	b, a, err := diffAttributes(before, after)
+	b, a, err := DiffAttributes(before, after)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestDiffAttributes_ArraysAreAtomic(t *testing.T) {
 	before := json.RawMessage(`{"list":[1,2,3]}`)
 	after := json.RawMessage(`{"list":[1,2,4]}`)
 
-	b, a, err := diffAttributes(before, after)
+	b, a, err := DiffAttributes(before, after)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestDiffAttributes_ArraysAreAtomic(t *testing.T) {
 
 func TestDiffAttributes_NoChangesProducesEmptyDiff(t *testing.T) {
 	same := json.RawMessage(`{"a":1,"nested":{"b":2}}`)
-	b, a, err := diffAttributes(same, same)
+	b, a, err := DiffAttributes(same, same)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDiffAttributes_NoChangesProducesEmptyDiff(t *testing.T) {
 // sub-path.
 func TestDiffAttributes_RedactedValueUnchangedProducesNoDiff(t *testing.T) {
 	same := json.RawMessage(`{"password":{"$redacted":{"sha256":"abc123"}}}`)
-	b, a, err := diffAttributes(same, same)
+	b, a, err := DiffAttributes(same, same)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestDiffAttributes_RedactedValueChangedIsAtomic(t *testing.T) {
 	before := json.RawMessage(`{"password":{"$redacted":{"sha256":"hash-of-old-value"}}}`)
 	after := json.RawMessage(`{"password":{"$redacted":{"sha256":"hash-of-new-value"}}}`)
 
-	b, a, err := diffAttributes(before, after)
+	b, a, err := DiffAttributes(before, after)
 	if err != nil {
 		t.Fatalf("diffAttributes: %v", err)
 	}

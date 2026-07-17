@@ -149,7 +149,7 @@ func TestLedgerAppend_TwoConcurrentAccepts(t *testing.T) {
 			Kind:          KindChange,
 			Intent:        Intent{Summary: summary},
 			Resolution:    Resolution{ResolvedAt: "2026-07-16T00:00:00Z"},
-			BlastRadius:   BlastRadius{Creates: 1},
+			BlastRadius:   BlastRadius{},
 			Status:        StatusDraft,
 		}
 	}

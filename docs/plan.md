@@ -433,6 +433,18 @@
   deliberate v2 improvements, reusing `core.DoubleRun`/`VerifyFreshness`'s
   own staleness shape rather than inventing new mechanisms. See STATE.md
   for the full session writeup.
+- 2026-07-17 — UBI-27 session 2: `core/resolver` built hermetic against
+  fake schemas/ledger state — type rules, the dependency graph with real
+  cycle detection, `core.DoubleRun` reused unchanged. All nine hermetic
+  rows of docs/resolver-adversarial.md's program pass as real tests (row
+  10 is real-provider live-session work). A real gap found and fixed while
+  implementing, not assumed correct from the session-1 design alone: the
+  `$cross` marker's drafted shape never actually named the target
+  resource's `type`/`name` — corrected to reuse `$ref`'s own `to` shape;
+  `ResolutionInput` gained `LedgerDir` alongside `PinnedHead`, and a new
+  `resolver.VerifyPins` makes neighbor-advance staleness real and tested.
+  `core.DiffAttributes` exported (a real third caller now exists, not
+  duplicated). See STATE.md for the full session writeup.
 
 ## Strategy
 
@@ -970,15 +982,37 @@ all — both are deliberate v2 improvements over v1, using mechanisms this
 project already built for other reasons (`core.DoubleRun`,
 `VerifyFreshness`'s own staleness shape) rather than inventing new ones.
 
-Sessions 2+ build against the adversarial table: `core/resolver` (hermetic
-against fake schemas/ledger state — type rules, the dependency graph +
-real cycle detection, double-run) → intent-file loading + a CLI surface
-(decided and justified in that session) → cross-stack pinning against real
-ledgers → executor unknown-value wiring, fakeprovider first then real (a
-real, cheap two-resource create chain on `ubx-states`, one resource's
-computed output feeding the other, shipped, a real `kill -9` mid-chain,
-reconciled — cleanup via plain `aws` CLI calls, documented honestly, since
-destroys are out of v1 scope).
+**Session 2 (2026-07-17): `core/resolver` built hermetic against fake
+schemas/ledger state**, exactly the shape above — type rules
+($ref/$cross/$secret/$computed/$ephemeral, checked against a
+`SchemaInspector` interface, never a concrete `*provider.Schema` — the same
+provider-import-free shape `core/executor.Applier` already established),
+the dependency graph with real cycle detection (a DFS `path`/`inStack`
+pattern borrowed from v1's own *workspace-level* detector, since its
+single-stack one never had this at all), and `core.DoubleRun` reused
+unchanged. All nine hermetic rows of docs/resolver-adversarial.md's own
+program pass as real tests (row 10, a real provider's `PlanResourceChange`/
+`ApplyResourceChange` round trip, is explicitly live-session work, not
+this slice's). A real gap found and fixed *while implementing*, not
+assumed correct from the session-1 design doc alone: the `$cross` marker's
+own drafted shape (`{stack, ledger_dir, path}`) never actually named the
+target resource's `type`/`name` at all — corrected to reuse `$ref`'s own
+`to` shape (`{ledger_dir, to}`); `ResolutionInput` also gained a
+`LedgerDir` field alongside `PinnedHead` (re-verifying a pin needs to know
+*where* to re-derive the neighbor's current head from) and a new
+`resolver.VerifyPins` function makes neighbor-advance staleness
+(adversarial row 5) real and hermetically tested, ahead of the CLI session
+that will wire it into `ubx accept`. `core.DiffAttributes` was exported
+(a real second caller now exists, alongside drift's own two) rather than
+duplicated.
+
+Sessions 3+ build the remaining slices: intent-file loading + a CLI
+surface (decided and justified in that session) → cross-stack pinning
+against real ledgers → executor unknown-value wiring, fakeprovider first
+then real (a real, cheap two-resource create chain on `ubx-states`, one
+resource's computed output feeding the other, shipped, a real `kill -9`
+mid-chain, reconciled — cleanup via plain `aws` CLI calls, documented
+honestly, since destroys are out of v1 scope).
 
 ## Deferred (explicitly not now)
 

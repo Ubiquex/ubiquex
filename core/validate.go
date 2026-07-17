@@ -79,6 +79,32 @@ func validateKind(p *Proposal) error {
 		if err := validateDriftRevert(p); err != nil {
 			return err
 		}
+	case KindChange:
+		if err := validateChange(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateChange enforces docs/schema.md's "Amendment: intent files and
+// resolved change proposals" (UBI-27): a change proposal's blast radius is
+// real (like drift_revert's — accepting one is a decision to actually
+// change cloud), and destroys are forbidden unconditionally, not just
+// "zero for now" — v1's resolver (docs/resolver.md) never produces one,
+// and this is a scope line, not a happenstance of what's implemented yet.
+func validateChange(p *Proposal) error {
+	if len(p.Delta.Destroys) != 0 {
+		return errors.New("change proposals must not have delta.destroys entries (out of v1 scope)")
+	}
+	if p.BlastRadius.Destroys != 0 {
+		return fmt.Errorf("change proposals must have zero blast_radius.destroys, got %d", p.BlastRadius.Destroys)
+	}
+	if want := int64(len(p.Delta.Creates)); p.BlastRadius.Creates != want {
+		return fmt.Errorf("change proposals must have blast_radius.creates == len(delta.creates) (%d), got %d", want, p.BlastRadius.Creates)
+	}
+	if want := int64(len(p.Delta.Modifies)); p.BlastRadius.Modifies != want {
+		return fmt.Errorf("change proposals must have blast_radius.modifies == len(delta.modifies) (%d), got %d", want, p.BlastRadius.Modifies)
 	}
 	return nil
 }

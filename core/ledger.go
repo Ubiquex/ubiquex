@@ -29,6 +29,19 @@ func Open(dir string) *Ledger {
 // Dir returns the root directory l was opened with.
 func (l *Ledger) Dir() string { return l.dir }
 
+// Exists reports whether l has ever actually been used (Append creates
+// ledger/proposals on its first write) -- distinct from "this ledger has
+// no record of address X" (FoldState's own found=false), which never
+// errors and never tells you whether the ledger itself was ever
+// initialized at all. core/resolver (UBI-27) needs this distinction for a
+// cross-stack pin against an empty/missing neighbor ledger_dir: "no ledger
+// here at all" and "a real ledger that's simply never recorded this
+// address" are different, both-real scenarios, not the same "not found."
+func (l *Ledger) Exists() bool {
+	_, err := os.Stat(filepath.Join(l.dir, "ledger"))
+	return err == nil
+}
+
 func (l *Ledger) proposalsDir() string { return filepath.Join(l.dir, "ledger", "proposals") }
 func (l *Ledger) lockPath() string     { return filepath.Join(l.dir, ".ubx", "ledger.lock") }
 func (l *Ledger) proposalPath(id string) string {

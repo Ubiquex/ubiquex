@@ -787,14 +787,21 @@ an end user in production.
     reference (docs/resolver.md's own resolution rules: substituted with a
     concrete literal, or a `$computed` marker, depending on whether the
     referenced attribute is schema-`Computed`).
-  - **`$cross`** — `{ "$cross": { "stack": "...", "ledger_dir": "...", "path": "..." } }`,
+  - **`$cross`** — `{ "$cross": { "ledger_dir": "...", "to": "<address>.<path>" } }`,
     a cross-stack reference, resolved against the neighbor ledger's own
     `FoldState` (docs/resolver.md's own cross-stack section). `ledger_dir`
     is an explicit filesystem path — this does not resolve
     docs/schema.md's own still-open "cross-stack workspace index format"
     question (see "Open questions," below); it's v1's own simple, explicit,
     sufficient answer for now, same posture v1 XCL's own sibling-directory
-    convention already had.
+    convention already had. **Corrected during implementation** (UBI-27
+    session 2, found by actually writing the resolver, not assumed correct
+    from the design doc alone): the session-1 draft of this shape had a
+    separate `"stack"` field alongside `"path"`, which never actually named
+    the target resource's own `type`/`name` at all — structurally
+    incomplete. Fixed to reuse `$ref`'s own `to` shape exactly
+    (`<stack>.<type>.<name>.<path>`), with `ledger_dir` as the one
+    genuinely new field — consistent with `$ref`, not a second convention.
   - Existing `$secret`/`$ephemeral` markers (already drafted in this
     document's own founding "IR — resource node" section) are used exactly
     as originally drafted — no shape change.
@@ -852,19 +859,27 @@ alongside the existing `"live_state"`:
   "kind": "cross_stack_pin",
   "resource": "networking.aws_vpc.main",
   "observed_hash": "sha256:<hex, of the resolved value pulled from the neighbor's FoldState>",
-  "pinned_head": "<the neighbor ledger's Head() at resolve time>"
+  "pinned_head": "<the neighbor ledger's Head() at resolve time>",
+  "ledger_dir": "<the neighbor's own ledger directory, from $cross.ledger_dir>"
 }
 ```
 
-`pinned_head` is the one genuinely new field (`ResolutionInput` gains it,
-optional, populated only for `cross_stack_pin` entries) — purely additive,
-no `schema_version` bump, same reasoning as every prior amendment to this
-struct (`lookup`, `provider_checksum`). This is what activates
-neighbor-advance staleness for real: re-deriving the neighbor ledger's
-current `Head()` at accept time and comparing against `pinned_head` catches
-"the neighbor moved since this was resolved" the same way `VerifyFreshness`
-already catches "live cloud state moved since this was resolved," one
-level up (a ledger, not a cloud resource).
+`pinned_head` and `ledger_dir` are the two genuinely new fields
+(`ResolutionInput` gains both, optional, populated only for
+`cross_stack_pin` entries) — purely additive, no `schema_version` bump,
+same reasoning as every prior amendment to this struct (`lookup`,
+`provider_checksum`). `ledger_dir` was found missing from the original
+draft of this amendment while actually implementing it (`core/resolver`,
+UBI-27 session 2): re-verifying a pin needs to know *where* to re-derive
+the neighbor's current head from, and nothing else in a resolved proposal
+records that. This is what activates neighbor-advance staleness for real:
+re-deriving the neighbor ledger's current `Head()` (via `ledger_dir`) and
+comparing against `pinned_head` catches "the neighbor moved since this was
+resolved" the same way `VerifyFreshness` already catches "live cloud state
+moved since this was resolved," one level up (a ledger, not a cloud
+resource). `core/resolver.VerifyPins` implements exactly this re-check,
+hermetically tested; wiring it into `ubx accept` is later CLI-session
+work, not this one's.
 
 #### Validation: `change` proposals never carry destroys
 

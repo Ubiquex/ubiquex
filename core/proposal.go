@@ -153,10 +153,24 @@ func ParseAddress(s string) (addr Address, ok bool) {
 // Resolution.Inputs entry with a non-empty ObservedHash — see validate.go —
 // so a proposal's claimed "before" is provable against what was actually
 // observed, not just asserted.
+//
+// DependsOn was added 2026-07-17 (docs/schema.md — "Amendment: intent
+// files and resolved change proposals", UBI-27): canonical addresses
+// (Address.String() form) this modification must not be executed before —
+// e.g. a modify referencing a sibling create's not-yet-known computed
+// output in the same change proposal. Purely additive/optional; a
+// drift_revert's own Modification entries never set it (order never
+// mattered there — every restore value was already fully known). The
+// *authoritative* record of execution order, independent of stored array
+// position (core/resolver, UBI-27, also topo-sorts delta.creates/.modifies
+// themselves before emitting them, but a future executor session
+// consulting cross-array order should read this field, not infer from
+// position).
 type Modification struct {
-	Target Address                    `json:"target"`
-	Before map[string]json.RawMessage `json:"before,omitempty"`
-	After  map[string]json.RawMessage `json:"after,omitempty"`
+	Target    Address                    `json:"target"`
+	Before    map[string]json.RawMessage `json:"before,omitempty"`
+	After     map[string]json.RawMessage `json:"after,omitempty"`
+	DependsOn []string                   `json:"depends_on,omitempty"`
 }
 
 // Delta is Proposal.Delta. Creates stays opaque JSON — typed IR resource
@@ -199,12 +213,32 @@ type Resolution struct {
 // Attribution evidence — which build of which provider is responsible for
 // this reading — independent of ObservedHash, which fingerprints the
 // resource's state, not the tool that read it.
+//
+// PinnedHead was added 2026-07-17 (docs/schema.md — "Amendment: intent
+// files and resolved change proposals", UBI-27): populated only for
+// Kind == "cross_stack_pin" entries — the neighbor ledger's own Head() at
+// resolve time. This is what activates neighbor-advance staleness for
+// real: re-deriving the neighbor's current Head() at accept time and
+// comparing against PinnedHead catches "the neighbor moved since this was
+// resolved," the same "resolved-time truth vs. accept-time reality" shape
+// VerifyFreshness already enforces for live cloud state, one level up (a
+// ledger, not a cloud resource).
+//
+// LedgerDir was added alongside PinnedHead, for the same "cross_stack_pin"
+// entries: the neighbor's own ledger directory (the $cross marker's own
+// "ledger_dir" field, carried through) -- a real gap found implementing
+// the resolver, not in the original amendment text: re-verifying a pin
+// needs to know WHERE to re-derive the neighbor's current head from, and
+// nothing else in a resolved proposal records that. Purely additive,
+// same reasoning as every other amendment to this struct.
 type ResolutionInput struct {
 	Kind             string          `json:"kind"`
 	Resource         string          `json:"resource"`
 	ObservedHash     string          `json:"observed_hash"`
 	Lookup           json.RawMessage `json:"lookup,omitempty"`
 	ProviderChecksum string          `json:"provider_checksum,omitempty"`
+	PinnedHead       string          `json:"pinned_head,omitempty"`
+	LedgerDir        string          `json:"ledger_dir,omitempty"`
 }
 
 // CostDelta is Proposal.CostDelta. MonthlyUSD is left as raw JSON because

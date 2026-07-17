@@ -4,6 +4,144 @@
 
 ## Current phase
 
+**UBI-27 session 2 is done (this session): `core/resolver` — type rules,
+graph, double-run, hermetic against fake schemas and ledger state.** Built
+exactly against docs/resolver.md's spec and docs/resolver-adversarial.md's
+program, both written in session 1. No CLI surface yet (no `ubx resolve`/
+`propose --from-intent` command exists until a later session), so no
+ubiquex-docs update this session — correct per protocol, not deferred
+debt.
+
+**Package layout**: `core/resolver` (a subpackage of `core`, mirroring the
+`core/executor`/`core/lookuphints` precedent) — `resolver.go` (types,
+errors, `Resolve`/`resolveOnce`, `VerifyPins`), `refs.go` (marker
+recognition + `$ref`/`$cross`/`$secret`/`$computed`/`$ephemeral`
+resolution), `graph.go` (`topoSort`, the real cycle detection v1 XCL's own
+single-stack graph never had). Provider-import-free by design: a
+`SchemaInspector` interface (`HasType`/`IsComputed`/`IsSensitive`) stands
+in for a concrete `*provider.Schema`, the exact same shape
+`core/executor.Applier` already established for the same reason (`core`
+never imports `provider`) — hermetic tests use a small fake; a real
+adapter (alongside `stateReaderAdapter`) is later CLI-session work.
+
+**`core` gained four small, additive pieces this session, each because a
+real second caller now needed them, not speculatively**:
+
+1. **`core.DiffAttributes`** — exported (previously private `diffAttributes`).
+   `core/resolver` needed exactly the same before/after diff
+   `GenerateProposal`/`GenerateRevertProposal` already use for drift, for
+   an `op: "modify"` intent's full-desired-config against `FoldState` —
+   one mechanism, three callers now, not three, per docs/resolver.md's own
+   plan.
+2. **`core.DotGet`** (`state.go`, alongside `dotSet`/`dotDelete`) — reads a
+   dot-notation path out of a `json.RawMessage` state blob, returning
+   another `json.RawMessage`. Used by `$ref`/`$cross` resolution against an
+   already-ledgered (not-in-this-batch) resource's `FoldState`.
+3. **`core.Ledger.Exists()`** — whether a ledger directory has ever
+   actually been used (checks for `ledger/`'s own existence), distinct
+   from `FoldState`'s `found=false` (which never distinguishes "no ledger
+   here at all" from "a real ledger that just never recorded this
+   address"). Needed for docs/resolver-adversarial.md row 4's two
+   distinguishable sub-cases.
+4. **`core.Validate`'s `validateChange`** — `KindChange` proposals now have
+   real structural rules for the first time (destroys forbidden
+   unconditionally, blast radius must equal real create/modify counts),
+   exactly matching docs/schema.md's own amendment. Three existing tests
+   that had been using `KindChange` as a stand-in "arbitrary kind with no
+   rules" (an implicit assumption that stopped being true) were fixed —
+   two adjusted their own `Delta`/`BlastRadius` to stay internally
+   consistent, one switched to `KindRevert` (still genuinely unvalidated)
+   to preserve its original intent.
+
+**Two new, purely additive fields**: `Modification.DependsOn []string` and
+`ResolutionInput.PinnedHead`/`LedgerDir string` — exactly as
+docs/schema.md's own amendment described, except for one correction (next).
+
+**A real, honest correction found by actually implementing the design, not
+assumed correct from the session-1 spec alone**: the `$cross` marker's
+drafted shape (`{"$cross": {"stack": "...", "ledger_dir": "...", "path":
+"..."}}`) never actually named the target resource's own `type`/`name` at
+all — structurally incomplete, impossible to resolve as written. Corrected
+to reuse `$ref`'s own `to` shape exactly (`{"$cross": {"ledger_dir": "...",
+"to": "<stack>.<type>.<name>.<path>"}}`), with `ledger_dir` as the one
+genuinely new field — one convention, not two. Found and fixed
+immediately upon writing `resolveCross`, before any test was written
+against the wrong shape. A second, related gap: re-verifying a cross-stack
+pin later needs to know *which* neighbor ledger directory to re-open —
+nothing in the original amendment recorded this, so `ResolutionInput`
+gained `LedgerDir` alongside `PinnedHead`. Both corrections are recorded
+directly in docs/schema.md's own amendment text (not silently patched),
+per protocol.
+
+**`resolver.VerifyPins`** (new, `resolver.go`) makes docs/resolver-adversarial.md
+row 5 ("neighbor advances between resolve and accept") real and
+hermetically tested this session, ahead of schedule — re-derives every
+`cross_stack_pin` resolution-input's neighbor ledger's current `Head()`
+and compares against the recorded `PinnedHead`, `ErrCrossStackPinStale` on
+a mismatch. Wiring this into `ubx accept` itself is explicit later
+CLI-session work (docs/plan.md's own "Resolver v1" wedge), not this one's
+— the mechanism is built and proven now, the integration comes with the
+CLI surface.
+
+**All nine hermetic rows of docs/resolver-adversarial.md's program pass as
+real tests** (`core/resolver/resolver_test.go`, a `fakeSchema`
+`SchemaInspector` plus real `*core.Ledger`s via `t.TempDir()`, seeded
+through the real `GenerateProposal`/`Accept` pipeline via a `seedLedger`
+helper — never hand-constructed ledger content):
+
+1. Double-run divergence — a `flakySchema` wrapping the fake, alternating
+   `IsComputed`'s answer for one specific (deliberately non-computed) path
+   across calls so *both* of `core.DoubleRun`'s two runs succeed but
+   disagree on the actual resolved bytes (an earlier version of this test
+   alternated a genuinely-computed path instead, which just made the
+   *first* run error out — `DoubleRun` never even attempts a second run if
+   the first one fails, so that version could never have exercised the
+   mismatch path at all; caught by actually running it, not assumed
+   correct from the test's own intent).
+2. Circular intra-stack refs — two resources referencing each other;
+   `ErrCycleDetected` naming the full cycle path. Genuinely new code, not
+   ported from anywhere in v1 (see session 1's own finding).
+3. Ref to nonexistent resource — `ErrRefNotFound`.
+4. Cross-stack pin against an empty/missing neighbor ledger — two distinct
+   sub-cases, both tested: a `ledger_dir` that's never been touched at all
+   (`ErrNeighborLedgerMissing`, via `Ledger.Exists()`) vs. a real neighbor
+   ledger that simply never recorded the target address
+   (`ErrCrossStackAddressNotFound`).
+5. Neighbor advances between resolve and accept — folded into the
+   cross-stack happy-path test: `VerifyPins` passes right after resolving,
+   then a second real proposal accepted against the neighbor ledger makes
+   a second `VerifyPins` call correctly fail with `ErrCrossStackPinStale`.
+6. `$computed` used where a concrete value is required — a real, natural
+   three-resource chain: `c` refs `b`'s `peer` field (not schema-`Computed`
+   on `aws_db_instance`), but `b`'s own resolved value there is itself
+   `$computed` (inherited from `b`'s own ref to `a`'s real `Computed`
+   `id`) — `c`'s ref correctly fails, since the schema's promise that this
+   attribute is concrete doesn't hold in the actual resolved chain.
+7. Secret ref in a non-`Sensitive` field — `ErrSecretNotSensitive`; a
+   positive test (a genuinely `Sensitive` field) confirms the marker is
+   preserved unchanged in the output.
+8. Intent for a type the schema lacks — `ErrUnknownType`.
+9. Modify intent whose target isn't in the ledger — `ErrModifyTargetMissing`;
+   the symmetric `create`-but-already-exists case
+   (`ErrCreateTargetExists`) is also tested.
+
+Plus structural tests beyond the named rows: unrecognized intent-file
+`kind`, an invalid `op` string, a duplicate resource address in one
+intent file, `$ephemeral`'s atomic pass-through, and `core.Validate`
+correctly rejecting a `change` proposal carrying `delta.destroys`.
+
+`go build ./...`, `go vet ./...`, `gofmt -l .` (clean), and `go test ./...
+-race` all pass across the whole repository — no regressions in any
+existing package.
+
+**Next slice** (per docs/plan.md's "Resolver v1 (UBI-27)" wedge):
+intent-file loading + a CLI surface (verb vs. flag — decide and justify),
+then cross-stack pinning wired against real ledgers (including
+`VerifyPins` actually plugged into `ubx accept`), then executor
+unknown-value wiring.
+
+## Current phase (previous)
+
 **UBI-27 session 1 is done (this session, docs-only, Linear filed and
 tracked): Phase 2 continues — the resolver.** Filed as a new Linear issue
 (`UBI-27`, ubiquex team) per the handoff's own instruction (no other ID was
