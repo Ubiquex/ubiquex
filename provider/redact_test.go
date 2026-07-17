@@ -30,7 +30,7 @@ func TestRedact_TopLevelSensitiveAttribute(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"id":"widget-1","password":"hunter2"}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRedact_NestedSingleBlock(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"auth":{"password":"s3cr3t","username":"alice"}}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestRedact_NestedListBlock(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"credential":[{"secret":"one"},{"secret":"two"}]}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRedact_NestedSetBlock(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"credential":[{"secret":"one"}]}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRedact_NestedMapBlock(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"profile":{"prod":{"password":"prod-secret"},"staging":{"password":"staging-secret"}}}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRedact_WholeValueRedactedRegardlessOfType(t *testing.T) {
 	}}
 	observed := json.RawMessage(`{"passwords":["pw1","pw2","pw3"]}`)
 
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRedact_WholeValueRedactedRegardlessOfType(t *testing.T) {
 func TestRedact_NonSensitiveUntouched(t *testing.T) {
 	block := Block{Attributes: []Attribute{{Name: "name", Sensitive: false}}}
 	observed := json.RawMessage(`{"name":"widget-1"}`)
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestRedact_NonSensitiveUntouched(t *testing.T) {
 func TestRedact_MissingAttributeSkippedGracefully(t *testing.T) {
 	block := Block{Attributes: []Attribute{{Name: "password", Sensitive: true}}}
 	observed := json.RawMessage(`{"id":"widget-1"}`)
-	out, err := Redact(block, []byte("salt"), observed)
+	out, err := Redact("", "", block, []byte("salt"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -208,11 +208,11 @@ func TestRedact_DeterministicSameSaltSameValue(t *testing.T) {
 	block := Block{Attributes: []Attribute{{Name: "password", Sensitive: true}}}
 	salt := []byte("fixed-salt")
 
-	out1, err := Redact(block, salt, json.RawMessage(`{"password":"hunter2"}`))
+	out1, err := Redact("", "", block, salt, json.RawMessage(`{"password":"hunter2"}`))
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
-	out2, err := Redact(block, salt, json.RawMessage(`{"password":"hunter2"}`))
+	out2, err := Redact("", "", block, salt, json.RawMessage(`{"password":"hunter2"}`))
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestRedact_DeterministicSameSaltSameValue(t *testing.T) {
 		t.Fatalf("expected same salt+value to produce the same hash, got %s vs %s", h1, h2)
 	}
 
-	out3, err := Redact(block, salt, json.RawMessage(`{"password":"different-value"}`))
+	out3, err := Redact("", "", block, salt, json.RawMessage(`{"password":"different-value"}`))
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
@@ -241,11 +241,11 @@ func TestRedact_DifferentSaltDifferentHash(t *testing.T) {
 	block := Block{Attributes: []Attribute{{Name: "password", Sensitive: true}}}
 	observed := json.RawMessage(`{"password":"hunter2"}`)
 
-	out1, err := Redact(block, []byte("salt-one"), observed)
+	out1, err := Redact("", "", block, []byte("salt-one"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
-	out2, err := Redact(block, []byte("salt-two"), observed)
+	out2, err := Redact("", "", block, []byte("salt-two"), observed)
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
