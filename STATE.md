@@ -4,6 +4,119 @@
 
 ## Current phase
 
+**UBI-25 is done (this session, Linear-verified): read-only MCP server —
+`ubx` as assistant tools.** Design landed first in docs/architecture.md
+(new "MCP server" section) and docs/plan.md, per session protocol.
+
+**One verb, one binary**: `ubx mcp` — a cobra subcommand like every other
+verb, not a second `cmd/ubx-mcp` executable. Justified plainly: a second
+binary would mean goreleaser building/signing/publishing a second
+artifact, a second install-docs entry, a second `PATH` concern, for a
+command that's otherwise just another `ubx` invocation that happens to
+block on stdio instead of running once and exiting.
+
+**Three tools, wrapping the existing `--json` contract, not a parallel
+API**: `ubx_why`/`ubx_status`/`ubx_scan`, each a thin wrapper over new
+`computeWhyJSON`/`computeStatusJSON`/`computeScanJSON` functions
+(`cli/mcp_why.go`/`cli/mcp_status.go`/`cli/mcp_scan.go`) that hold the
+exact same "do the work, build the payload" logic the CLI's own
+`--json` code path already runs — same `whyJSON`/`statusJSON`/`scanJSON`
+struct types, same underlying `core.Ledger`/`core.RunScan`/
+`core.GenerateProposal`/`attributeDrift` calls, never a different
+computation or JSON shape. The existing cobra `RunE` handlers for
+`why`/`status`/`scan` are untouched (their own human-text and `--json`
+paths keep working exactly as before) — the MCP handler is a second,
+independent caller of the same primitives. One small, mechanical,
+pre-existing signature change was needed to make this possible:
+`runVerifyAcceptance` took a `*cobra.Command` purely for `.Context()`;
+now takes `context.Context` directly, its only real caller (`cli/why.go`)
+updated accordingly, behavior unchanged.
+
+**Boundary by omission, stated plainly, not left to be inferred**: `ubx
+accept`/`ship`/`writeback`/`revert-plan` (and `scan --surface-as`, which
+opens a real GitHub issue/PR) are not exposed as tools. Accepting a
+proposal is a recorded human (or PR-merge-derived) decision, never
+something an assistant does mid-conversation. Both `ubx mcp --help` and
+the new docs page say this directly.
+
+**Tool descriptions written as the model's own UX**: each of the three
+names plainly what question it answers ("who changed this and when,"
+"what's the current fleet, optionally checked against live state," "does
+this one resource's live state match the ledger") and what its receipt
+means — not a mechanical parameter list. Every input field carries the
+same descriptive weight `--help` text gives the CLI flag it mirrors.
+Config discovery is unchanged from every other `ubx` command: nearest
+`.ubx/config` from the server process's own working directory (UBI-19) —
+an MCP client pointed at a real ledger checkout gets the same defaults a
+human sitting there would; `ledger_dir` (and friends) stay explicit tool
+inputs regardless, since a server has no ambient shell state to fall back
+on the way a human's session might.
+
+**A real, load-bearing SDK gotcha, found by actually calling the tools
+over the real protocol, not assumed safe from the Go types alone**:
+`mcp.AddTool`'s automatic output-schema generation (via reflection) infers
+"array" from `json.RawMessage`'s underlying `[]byte` — but
+`core.Proposal` uses `json.RawMessage` throughout for canonical-JSON
+encoding (`CostDelta.MonthlyUSD`, `Modification.Before/After`,
+`ResolutionInput.Lookup`, ...), and the real runtime value is often a
+JSON *object* (a lookup key, say), which then fails the generator's own
+output validation — a real, reproducible crash
+(`session.CallTool` panicking with `"type: ...has type \"object\", want
+one of \"null, array\""`), caught during this session's own hermetic
+smoke-testing before it ever reached a real client. Fixed by using `any`
+as every tool handler's output type — the SDK's own doc comment names
+this exact escape hatch ("if the output type is 'any', no output schema
+is generated"); the payload is still returned as structured JSON content
+exactly as before, just unvalidated against a schema that couldn't
+correctly describe canonical-JSON's own "anything, by design" fields in
+the first place.
+
+**Hermetic tests** (`cli/mcp_test.go`, connected via
+`mcp.NewInMemoryTransports` — never a real stdio subprocess): tool
+listing (all three present, every mutating verb confirmed absent),
+`ubx_why` by resource address and by proposal ID, the adversarial cases
+this ticket named explicitly (unknown address, no ledger, drift without
+provider — every one surfaces as `IsError: true` with a real message,
+not a panic or a silent empty result), `ubx_status` ledger-only and
+drift-checked, `ubx_scan` on a never-seen resource (with a follow-up
+`ubx_status` call confirming it was never accepted — `ubx_scan` must
+never mutate the ledger), and a tool-description substantiveness check.
+
+**Live-verified against the real `ubx-states` ledger**
+(`/Users/roozbeh/demo/payments`, the same real ledger/S3 bucket this
+project's own live-verification work has used since UBI-9/UBI-10): tagged
+the real bucket (`purpose=ubx-mcp-live-verify`), scanned it for real
+(`--source hashicorp/aws`, real CloudTrail attribution enabled) against
+the ledger, accepted the resulting `drift_adopt`, then — using a real MCP
+client (the same `github.com/modelcontextprotocol/go-sdk`, over a real
+stdio subprocess, `mcp.CommandTransport`, not the in-memory harness the
+hermetic tests use) — called `ubx_why` for real, asking "who changed this
+bucket and when." The real response named the real IAM identity
+(`arn:aws:iam::839333509514:user/roozbeh`), a real `PutBucketTagging`
+event, and a real timestamp — alongside an honestly `cloudtrail_unattributed`
+drift from an earlier session (reason `delivery_window`), preserved in
+the same chain. `claude mcp add`/`list`/`remove` were also verified for
+real (a scratch project, a real built `ubx` binary on `PATH`, `✔
+Connected`) before writing the docs page's own client-setup instructions
+— not assumed correct from memory of the command's shape. Bucket restored
+to untagged afterward (`aws s3api delete-bucket-tagging`, confirmed via
+`get-bucket-tagging` → `NoSuchTagSet`). The demo ledger's own
+last-recorded state now includes this session's real tag as "current" —
+deliberately not scanned again to record the cleanup itself, matching
+every prior live-verification session's own convention (the next real
+scan against this bucket will correctly detect it's untagged again, drift
+detection doing exactly its job).
+
+ubiquex-docs updated same session: new `guides/mcp.mdx` ("ubx + your AI
+assistant") with the real transcript above (trimmed to the two newest
+CloudTrail events of 24 real matches, for readability), Claude Desktop
+config JSON and a verified `claude mcp add` command, the boundary-by-
+omission stance, and the full `--help` text; cross-links added from
+`cli/why.mdx`/`cli/status.mdx`/`cli/scan.mdx`. `mint validate`/`mint
+broken-links` both pass clean.
+
+## Current phase (previous)
+
 **UBI-24 is done (this session, Linear-verified): sensitive-override
 table, closing UBI-22's own `helm_release` redaction gap.** This gates
 the `v0.2.0` tag. Design landed first in docs/schema.md (a short
