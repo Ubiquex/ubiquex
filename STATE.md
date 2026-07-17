@@ -4,6 +4,112 @@
 
 ## Current phase
 
+**UBI-24 is done (this session, Linear-verified): sensitive-override
+table, closing UBI-22's own `helm_release` redaction gap.** This gates
+the `v0.2.0` tag. Design landed first in docs/schema.md (a short
+amendment to the existing `$redacted` section) and docs/architecture.md
+(new "Sensitive overrides" section), per session protocol.
+
+**The union model**: `provider.Redact` now consults a small, ubx-owned
+override table (`provider/overrides.go`'s `SensitiveOverrides`, `(source,
+type, path) → force-redact`, the same "data, not code" posture
+`core/lookuphints` already established) alongside the provider's own
+schema `Sensitive` flags — the schema is a floor, never a ceiling.
+Redaction is the union of both; the table can only ADD an attribute to
+what gets redacted, never remove one the schema itself flags (checked
+directly: an attribute both schema-`Sensitive` and override-listed is
+redacted once, the override pass recognizes an already-`$redacted` value
+and leaves it alone rather than re-hashing it). Seeded from UBI-22's own
+finding: `helm_release.manifest`/`metadata.values`/`metadata.notes`.
+
+**A real audit, run directly not asserted**: checked every one of the
+~20 registered `kubernetes_*` types plus `helm_release` for computed
+attributes whose name suggests an echo of rendered/free-form input.
+Found no further candidates on either side — every genuinely computed
+`kubernetes_*` attribute is structural/identity data the provider itself
+derives (a few "message"/"values"-substring matches turned out to be
+config enums like `termination_message_policy`, not real hits); Helm's
+own schema had nothing past the three already seeded.
+
+**A precise correction to how the UBI-22 finding was originally
+described**: `helm_release.metadata` is NOT a real `NestedBlock` the way
+`kubernetes_*`'s own `metadata`/`spec` are — checked directly against the
+schema, it's a plain `Attribute` whose `Type` is the compound cty type
+`list(object({...}))`. tfplugin's `Sensitive` flag is a single bool per
+top-level `Attribute` — there is no wire-protocol mechanism at all to
+flag one sub-field of a compound-typed attribute without flagging the
+entire thing (losing `metadata`'s useful non-sensitive fields in the
+process). This is exactly why the override table operates on the
+*decoded JSON tree* directly (`redactOverridePath`, walking dot-notation
+paths, generalizing the same "if the current node is an array, apply the
+remaining path to every element" rule `provider.Redact`'s own schema-driven
+List/Set handling already uses) rather than on `Block`/`Attribute`/
+`NestedBlock` at all — it needs no schema cooperation and isn't blocked
+by any limitation of the wire protocol's own attribute model. `manifest`,
+by contrast, is a plain string attribute with no such limitation —
+flagging it `Sensitive` upstream would have been straightforward.
+
+**Plumbing**: `provider.Redact` gained two new leading parameters,
+`source, typeName string` (the same `(provider source, type)` key
+`conformance.Registry`/`core/lookuphints` already use, UBI-21).
+`typeName` was already available at the call site; `source` was not —
+`cli/stateadapter.go`'s `stateReaderAdapter` and `conformance/harness.go`'s
+own copy each gained a `source` field, threaded from the same `--source`
+string already used for `ScanRequest.ProviderSource`. All four
+`newStateReader` call sites (`cli/scan.go`, `cli/scanall.go`,
+`cli/status.go`, `cli/accept.go`) and `conformance.AdoptMutateScanDiffConfig`
+(a new `Source` field) updated accordingly.
+
+**Hermetic tests** (`provider/overrides_test.go`): override-only
+attribute redacted (no schema flag at all), override+schema-flag union
+(both redacted, neither skipped), a nested path inside a real
+list-wrapped block (`metadata.values`, matching the exact `helm_release`
+shape), the same path applied across every element of a multi-item list
+(not just index 0), a non-matching `(source, type)` left completely
+untouched, and the already-redacted-value skip. Plus a permanent
+regression guard on the real seed data itself
+(`TestSensitiveOverrides_HelmReleaseSeeded`).
+
+**Live-verified on a real, local `kind` cluster** (created and destroyed
+for the run, `kind create cluster`/`kind delete cluster`): a real
+`helm_release` with a secret-looking value (`--set-string dbPassword=...`,
+standing in for a real `set_sensitive` value — what actually lands in
+the release's own resolved state is identical either way, since
+Terraform's `set_sensitive` only hides the value from Terraform's own
+plan output, not from what Helm itself stores) adopted cleanly with
+`metadata.values`/`metadata.notes` both `$redacted`; the generated
+proposal file grepped by hand for the real secret string — zero matches.
+Rotated the value via a real `helm upgrade`; the drift-path proposal
+showed `before`/`after` both `$redacted` at different hashes, grepped
+again for both the old and new real values — zero matches, both times.
+`ubx why` (human and `--json`) confirmed clean too. A new permanent
+conformance test, `TestConformance_HelmReleaseSensitiveOverride`
+(gated `UBX_CONFORMANCE_LIVE=1` + `requireKubeContext`), captures this
+exact sequence as a repeatable regression check — run for real against a
+fresh cluster to confirm it passes, not just written and assumed. The
+pre-existing `TestConformance_HelmRelease` also gained `Source:
+"hashicorp/helm"` (a real gap: it hadn't been exercising the override
+path at all until this session, since `AdoptMutateScanDiffConfig.Source`
+didn't exist before UBI-24).
+
+**A draft (unsubmitted) upstream issue** for `terraform-provider-helm`
+is saved at `docs/upstream/helm-sensitive-flags.md` — documents the gap,
+a real reproduction, and several fix options (flag `manifest` directly;
+flag all of `metadata`; restructure it into a real nested block; or, at
+minimum, document the limitation). Submitting it is explicitly Roozbeh's
+call, not done as part of this session.
+
+ubiquex-docs updated same session: `concepts/secrets.mdx` gained a new
+"The provider's schema is a floor, not a ceiling" section (the exact
+"we do not treat upstream flags as the ceiling" framing); `cli/scan.mdx`'s
+own Helm section had its example transcript and `Warning` corrected —
+they previously showed `metadata[0].values` as *raw* JSON and described
+the gap as still-open; now, correctly, redacted (unconditionally, since
+the override applies regardless of what a given chart's values actually
+contain) and closed. `mint validate`/`mint broken-links` both pass clean.
+
+## Current phase (previous)
+
 **UBI-22 is done (this session, Linear-verified): Kubernetes support —
 the first non-cloud-provider provider, both stages completed.** Design
 landed first in docs/architecture.md ("Kubernetes support") and
