@@ -512,6 +512,18 @@
   `cli/why.mdx` "genesis is a shipped create" section. See STATE.md for
   the full session writeup.
 
+- 2026-07-17 — Design-room decision (no session): Nexus execution
+  topology. Recorded in §Execution topology below. Initially decided as
+  two modes with hosted execution refused; REVISED same day by founder
+  decision to a three-mode model — self-hosted agent, managed agent, and
+  Nexus-hosted execution ("Nexus Runs") as the convenience tier. The
+  surviving unqualified invariant across all modes: Nexus can never
+  apply anything a human didn't sign (no signing authority, signed-hash-
+  only execution). Hosted mode's guardrails: OIDC dynamic federation
+  only, never stored keys, per-tenant ephemeral runners, ubx-agent as
+  the single runner codebase. Trust framing per mode disclosed honestly,
+  never blurred.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1183,6 +1195,49 @@ SaaS, naming of proposal ledger format for external publication.
 ~~A shipped `change` proposal's creates becoming `ubx status`/`ubx why
 <address>` discoverable~~ — fixed, UBI-29 (see its own wedge subsection
 below).
+
+## Execution topology (decided 2026-07-17, revised same day)
+
+The invariant that holds unqualified on every tier: **Nexus can never
+apply anything a human didn't sign** — execution, wherever it runs,
+consumes only accepted, hash-bound proposals; Nexus holds no signing
+authority and cannot mint acceptance.
+
+Customer-facing execution modes (customer chooses):
+
+1. **Agent (self-hosted)**: customer-operated ubx-agent (UBI-28,
+   parked), customer credentials, Nexus coordinates and observes.
+   The zero-inbound-access mode for security-sensitive buyers.
+2. **Managed agent**: Nexus operates the agent's lifecycle (config,
+   upgrades, health, scheduling); the container runs inside the
+   customer's environment; credentials never cross the boundary.
+   Control plane ours, data plane theirs (the GitHub Actions runner
+   model).
+3. **Nexus-hosted execution ("Nexus Runs")**: Nexus-operated runners
+   execute accepted proposals — the convenience tier (click-to-ship,
+   zero customer-side setup). Guardrails, non-negotiable: credentials
+   via OIDC dynamic federation ONLY (customer cloud trusts the runner
+   identity per-workspace, short-lived tokens — stored access keys are
+   never offered under any mode); per-tenant ephemeral runners; the
+   runner is ubx-agent operated by Nexus, one codebase; execution
+   consumes signed hashes only, identical to modes 1–2.
+
+Trust framing per mode, stated honestly in security docs: modes 1–2
+carry "Nexus cannot touch your cloud"; mode 3 carries "Nexus can only
+execute what you cryptographically approved" — qualified, disclosed,
+never blurred.
+
+Customer AWS access for Nexus's own (read-only) features: ExternalId-
+scoped cross-account IAM role, reviewable as code, read-only permissions
+plus `cloudtrail:LookupEvents` — or agent-push mode with zero inbound
+access for customers whose security posture requires it. Never stored
+access keys, never write permissions outside mode 3's OIDC-federated
+runner sessions.
+
+Corollary: UBI-28 (ubx-agent) is the execution engine of all three
+modes — self-hosted, managed, and Nexus-operated are one binary with
+three operators. Its unparking should be evaluated against the Nexus
+timeline, not standalone.
 
 ## Risks being managed
 
