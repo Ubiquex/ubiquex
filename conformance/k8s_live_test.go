@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,7 @@ func TestConformance_HelmRelease(t *testing.T) {
 
 	RunAdoptMutateScanDiff(t, AdoptMutateScanDiffConfig{
 		ProviderPath:   providerPath,
+		Source:         "hashicorp/helm",
 		Stack:          "conformance",
 		Address:        core.Address{Stack: "conformance", Type: "helm_release", Name: "myrelease"},
 		Lookup:         MustMarshal(map[string]string{"id": "myrelease", "name": "myrelease", "namespace": ns}),
@@ -272,4 +274,124 @@ func TestConformance_HelmRelease(t *testing.T) {
 			}
 		},
 	})
+}
+
+// TestConformance_HelmReleaseSensitiveOverride is UBI-24's own live
+// cross-check: a real Helm release carrying a secret-looking value
+// (standing in for a real terraform-provider-helm set_sensitive value --
+// what actually lands in the release's own resolved values is identical
+// either way, since Terraform's set_sensitive only hides the value from
+// Terraform's own plan output, not from what Helm itself stores) must
+// adopt with metadata.values/metadata.notes/manifest redacted via
+// provider/overrides.go's table -- schema Sensitive flags alone (UBI-23)
+// would have missed this entirely, the exact gap UBI-22 found and UBI-24
+// closes. Uses its own ledger directory (not RunAdoptMutateScanDiff's
+// private t.TempDir()) specifically so the generated proposal file can
+// be grepped for zero real material, both on adopt and after a real
+// values change (the drift path) -- the literal "grep the proposal file"
+// requirement this ticket names explicitly.
+func TestConformance_HelmReleaseSensitiveOverride(t *testing.T) {
+	RequireLive(t)
+	kubeContext := requireKubeContext(t)
+	providerPath := realHelmProviderPath(t)
+	ns := uniqueName("ubx-conf")
+	chartDir := t.TempDir()
+	ledgerDir := t.TempDir()
+	const secretV1 = "s3ns1t1ve-helm-v4lue"
+	const secretV2 = "r0tated-helm-s3cr3t-v2"
+
+	runKubectl(t, "create", "namespace", ns)
+	t.Cleanup(func() { runKubectl(t, "delete", "namespace", ns, "--ignore-not-found") })
+
+	if out, err := exec.Command("helm", "create", chartDir+"/testchart").CombinedOutput(); err != nil {
+		t.Fatalf("helm create: %v\n%s", err, out)
+	}
+	install := exec.Command("helm", "install", "myrelease", chartDir+"/testchart", "-n", ns,
+		"--set", "replicaCount=1", "--set-string", "dbPassword="+secretV1)
+	if out, err := install.CombinedOutput(); err != nil {
+		t.Fatalf("helm install: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("helm", "uninstall", "myrelease", "-n", ns).Run() })
+
+	providerConfig := helmKubeconfigProviderConfig(kubeContext)
+	lookup := MustMarshal(map[string]string{"id": "myrelease", "name": "myrelease", "namespace": ns})
+	ledger := core.Open(ledgerDir)
+
+	scan := func(step string) *core.ScanResult {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		client, err := provider.Launch(ctx, providerPath)
+		if err != nil {
+			t.Fatalf("%s: launch provider: %v", step, err)
+		}
+		defer client.Close()
+		salt, err := ledger.Salt()
+		if err != nil {
+			t.Fatalf("%s: ledger salt: %v", step, err)
+		}
+		res, err := core.RunScan(ctx, stateReaderAdapter{p: client.Provider, salt: salt, source: "hashicorp/helm"}, ledger, core.ScanRequest{
+			Address:        core.Address{Stack: "conformance", Type: "helm_release", Name: "myrelease"},
+			ProviderConfig: providerConfig,
+			CurrentState:   lookup,
+		})
+		if err != nil {
+			t.Fatalf("%s: RunScan: %v", step, err)
+		}
+		return res
+	}
+	acceptAndWriteProposal := func(step string, res *core.ScanResult) string {
+		t.Helper()
+		proposal, err := core.GenerateProposal(ledger, "conformance", res)
+		if err != nil {
+			t.Fatalf("%s: GenerateProposal: %v", step, err)
+		}
+		b, err := json.MarshalIndent(proposal, "", "  ")
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", step, err)
+		}
+		path := filepath.Join(ledgerDir, step+".json")
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatalf("%s: write: %v", step, err)
+		}
+		if _, err := core.Accept(ledger, proposal); err != nil {
+			t.Fatalf("%s: Accept: %v", step, err)
+		}
+		return path
+	}
+	requireNoMaterial := func(path string, secrets ...string) {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range secrets {
+			if strings.Contains(string(raw), s) {
+				t.Fatalf("proposal file %s leaked real secret material %q:\n%s", path, s, raw)
+			}
+		}
+		if !strings.Contains(string(raw), "$redacted") {
+			t.Fatalf("expected proposal file %s to contain a $redacted marker, got:\n%s", path, raw)
+		}
+	}
+
+	res1 := scan("adopt")
+	if res1.Outcome != core.ScanNew {
+		t.Fatalf("scan 1: Outcome = %v, want ScanNew", res1.Outcome)
+	}
+	adoptPath := acceptAndWriteProposal("adopt", res1)
+	requireNoMaterial(adoptPath, secretV1, secretV2)
+
+	upgrade := exec.Command("helm", "upgrade", "myrelease", chartDir+"/testchart", "-n", ns,
+		"--set", "replicaCount=1", "--set-string", "dbPassword="+secretV2)
+	if out, err := upgrade.CombinedOutput(); err != nil {
+		t.Fatalf("helm upgrade: %v\n%s", err, out)
+	}
+
+	res2 := scan("drift")
+	if res2.Outcome != core.ScanDrifted {
+		t.Fatalf("scan 2: Outcome = %v, want ScanDrifted", res2.Outcome)
+	}
+	driftPath := acceptAndWriteProposal("drift", res2)
+	requireNoMaterial(driftPath, secretV1, secretV2)
 }
