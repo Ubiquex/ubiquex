@@ -157,11 +157,16 @@ func sortDeltaElements(arr []interface{}) {
 }
 
 // deltaSortKey extracts a (stack, type, name) sort key from one delta
-// array element, per docs/schema.md's pinned shapes (2026-07-10): Creates
-// elements are IR resource nodes with stack/type/name as direct fields;
-// Destroys elements are Address objects, also stack/type/name direct;
-// Modifies elements are {target: Address, before, after}, so the key comes
-// from the nested target object. All three shapes are now pinned, so this
+// array element, per docs/schema.md's pinned shapes: Creates elements are
+// IR resource nodes with stack/type/name as direct fields; Modifies
+// elements are {target: Address, before, after}, so the key comes from the
+// nested target object. Destroys elements were bare Address objects
+// (stack/type/name direct) in the original 2026-07-10 pin; re-pinned
+// 2026-07-17 (docs/schema.md — "Amendment: destroys", UBI-30,
+// SchemaVersion 2) to DestroyEntry{address, state, depends_on}, so the key
+// now comes from the nested address object instead — the same "look for a
+// nested object under a known key" shape Modifies' own target already
+// established, not a new pattern. All three shapes are now pinned, so this
 // no longer needs to guess — a map lacking these fields, or a non-object
 // element, is a proposal that doesn't conform to the pinned shape and sorts
 // as if empty (a hash produced from an unpinned/malformed shape is
@@ -174,6 +179,8 @@ func deltaSortKey(el interface{}) (stack, typ, name string) {
 	}
 	if target, ok := obj["target"].(map[string]interface{}); ok {
 		obj = target
+	} else if address, ok := obj["address"].(map[string]interface{}); ok {
+		obj = address
 	}
 	stack, _ = obj["stack"].(string)
 	typ, _ = obj["type"].(string)

@@ -101,7 +101,7 @@ func TestValidate_AdoptionRejectsDestroys(t *testing.T) {
 	p := sampleProposal()
 	p.Kind = KindAdoption
 	p.BlastRadius = BlastRadius{}
-	p.Delta.Destroys = []Address{{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}
+	p.Delta.Destroys = []DestroyEntry{{Address: Address{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}}
 
 	err := Validate(p)
 	if !errors.Is(err, ErrInvalidProposal) {
@@ -130,10 +130,12 @@ func TestValidate_NonAdoptionKindUnaffectedByAdoptionRule(t *testing.T) {
 	p.Kind = KindRevert
 	p.Delta.Creates = nil
 	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "payments-db"}
+	destroyAddr := Address{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}
 	p.Delta.Modifies = []Modification{modificationFor(addr)}
-	p.Delta.Destroys = []Address{{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}
+	p.Delta.Destroys = []DestroyEntry{{Address: destroyAddr}}
 	p.Resolution.Inputs = []ResolutionInput{
 		{Kind: "live_state", Resource: addr.String(), ObservedHash: "sha256:abc123"},
+		{Kind: "destroy_target", Resource: destroyAddr.String(), ObservedHash: "sha256:def456", Lookup: json.RawMessage(`{"id":"old-db"}`)},
 	}
 	p.BlastRadius = BlastRadius{Creates: 1, Modifies: 1, Destroys: 1}
 
@@ -162,7 +164,7 @@ func TestValidate_DriftAdoptRejectsDestroys(t *testing.T) {
 	p := sampleProposal()
 	p.Kind = KindDriftAdopt
 	p.BlastRadius = BlastRadius{}
-	p.Delta.Destroys = []Address{{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}
+	p.Delta.Destroys = []DestroyEntry{{Address: Address{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}}}
 
 	err := Validate(p)
 	if !errors.Is(err, ErrInvalidProposal) {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -15,6 +16,12 @@ var ErrInvalidProposal = errors.New("invalid proposal")
 //   - every Delta.Modifies entry must have a matching Resolution.Inputs
 //     entry with a non-empty ObservedHash, so a proposal's claimed "before"
 //     is provable against what was actually observed, not just asserted;
+//   - every Delta.Destroys entry must have a matching Resolution.Inputs
+//     entry of kind "destroy_target" with a non-empty ObservedHash AND
+//     Lookup (docs/schema.md — "Amendment: destroys", UBI-30) — a destroy
+//     target needs a lookup key the way a modify's own "before" doesn't,
+//     since the executor's freshness recheck and reconcile-by-query have
+//     no other way to find the resource again;
 //   - kind-specific rules: KindAdoption must be record-only (docs/schema.md:
 //     all-zero blast_radius, no modifies/destroys). KindDriftAdopt is also
 //     record-only against the cloud (all-zero blast_radius, no destroys) but
@@ -27,6 +34,9 @@ var ErrInvalidProposal = errors.New("invalid proposal")
 // content already known to violate these rules.
 func Validate(p *Proposal) error {
 	if err := validateModifiesHaveResolutionInputs(p); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidProposal, err)
+	}
+	if err := validateDestroysHaveResolutionInputs(p); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidProposal, err)
 	}
 	if err := validateKind(p); err != nil {
@@ -51,6 +61,44 @@ func validateModifiesHaveResolutionInputs(p *Proposal) error {
 		}
 		if hash == "" {
 			return fmt.Errorf("resolution.inputs entry for %q has an empty observed_hash", addr)
+		}
+	}
+	return nil
+}
+
+// validateDestroysHaveResolutionInputs enforces docs/schema.md's
+// "Amendment: destroys" (UBI-30): every delta.destroys entry needs its own
+// dedicated resolution.inputs entry, kind "destroy_target" specifically
+// (not just any entry sharing its Resource string, unlike modifies' looser
+// check above) — carrying both a non-empty ObservedHash (the same
+// "provable against what was actually observed" guarantee modifies already
+// has) and a non-empty Lookup (required, not merely omitempty the way it
+// is for a live_state entry: the executor's freshness recheck and
+// reconcile-by-query have no other way to find the resource again).
+func validateDestroysHaveResolutionInputs(p *Proposal) error {
+	type destroyEvidence struct {
+		observedHash string
+		lookup       json.RawMessage
+	}
+	evidence := make(map[string]destroyEvidence, len(p.Resolution.Inputs))
+	for _, in := range p.Resolution.Inputs {
+		if in.Kind != "destroy_target" || in.Resource == "" {
+			continue
+		}
+		evidence[in.Resource] = destroyEvidence{observedHash: in.ObservedHash, lookup: in.Lookup}
+	}
+	for _, d := range p.Delta.Destroys {
+		addr := d.Address.String()
+		ev, ok := evidence[addr]
+		if !ok {
+			return fmt.Errorf("delta.destroys entry for %q has no matching resolution.inputs entry with kind \"destroy_target\" "+
+				"(docs/schema.md requires one, with an observed_hash and lookup, for every destroy target)", addr)
+		}
+		if ev.observedHash == "" {
+			return fmt.Errorf("resolution.inputs destroy_target entry for %q has an empty observed_hash", addr)
+		}
+		if len(ev.lookup) == 0 {
+			return fmt.Errorf("resolution.inputs destroy_target entry for %q has an empty lookup", addr)
 		}
 	}
 	return nil
@@ -88,23 +136,23 @@ func validateKind(p *Proposal) error {
 }
 
 // validateChange enforces docs/schema.md's "Amendment: intent files and
-// resolved change proposals" (UBI-27): a change proposal's blast radius is
-// real (like drift_revert's — accepting one is a decision to actually
-// change cloud), and destroys are forbidden unconditionally, not just
-// "zero for now" — v1's resolver (docs/resolver.md) never produces one,
-// and this is a scope line, not a happenstance of what's implemented yet.
+// resolved change proposals" (UBI-27) together with its later "Amendment:
+// destroys" (UBI-30): a change proposal's blast radius is real (like
+// drift_revert's — accepting one is a decision to actually change cloud),
+// across all three delta arrays now, not just creates/modifies. Destroys
+// were forbidden unconditionally for a change proposal from UBI-27 until
+// this session (docs/resolver.md's own v1 scope line, superseded by
+// docs/resolver.md's "Amendment (UBI-30): destroys") — that restriction is
+// gone; a change proposal may now legitimately carry delta.destroys.
 func validateChange(p *Proposal) error {
-	if len(p.Delta.Destroys) != 0 {
-		return errors.New("change proposals must not have delta.destroys entries (out of v1 scope)")
-	}
-	if p.BlastRadius.Destroys != 0 {
-		return fmt.Errorf("change proposals must have zero blast_radius.destroys, got %d", p.BlastRadius.Destroys)
-	}
 	if want := int64(len(p.Delta.Creates)); p.BlastRadius.Creates != want {
 		return fmt.Errorf("change proposals must have blast_radius.creates == len(delta.creates) (%d), got %d", want, p.BlastRadius.Creates)
 	}
 	if want := int64(len(p.Delta.Modifies)); p.BlastRadius.Modifies != want {
 		return fmt.Errorf("change proposals must have blast_radius.modifies == len(delta.modifies) (%d), got %d", want, p.BlastRadius.Modifies)
+	}
+	if want := int64(len(p.Delta.Destroys)); p.BlastRadius.Destroys != want {
+		return fmt.Errorf("change proposals must have blast_radius.destroys == len(delta.destroys) (%d), got %d", want, p.BlastRadius.Destroys)
 	}
 	return nil
 }

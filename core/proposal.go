@@ -11,7 +11,17 @@ import (
 // SchemaVersion is the current schema_version for Proposal objects. The
 // ledger is forever; any change to hashed-content shape requires bumping
 // this and providing a migration (docs/schema.md Ratification note).
-const SchemaVersion = 1
+//
+// Bumped 1 -> 2 (2026-07-17, UBI-30, docs/schema.md "Amendment: destroys"):
+// Delta.Destroys' own element shape changed from a bare Address to
+// DestroyEntry (address + full folded state + depends_on) -- a real,
+// hashed-content shape change, not an additive field. The migration cost
+// is genuinely near-zero, checked rather than assumed: core.Validate has
+// forbidden a non-empty delta.destroys unconditionally for every proposal
+// kind this codebase has ever produced, since before this shape existed --
+// there is no real ledger entry anywhere with the old bare-Address shape
+// populated to migrate.
+const SchemaVersion = 2
 
 // Proposal is the typed proposal object per docs/schema.md §Proposal.
 type Proposal struct {
@@ -173,19 +183,55 @@ type Modification struct {
 	DependsOn []string                   `json:"depends_on,omitempty"`
 }
 
+// DestroyEntry is one element of Delta.Destroys (docs/schema.md —
+// "Amendment: destroys", UBI-30) — re-pinned from a bare Address
+// (2026-07-10 draft) to this richer shape, a real hashed-content shape
+// change (SchemaVersion 1 -> 2).
+//
+// Address is unchanged in shape, now nested rather than being the whole
+// element (deltaSortKey, canonical.go, reads it the same way it already
+// reads Modification.Target).
+//
+// State is the resource's complete FoldState-folded config at resolve
+// time — deliberately the WHOLE state, not a changed-attributes-only diff
+// the way Modification.Before/After are: everything about the resource is
+// being lost, not a subset of its attributes, so a human signing away a
+// destroy needs to see it inline, not a hash to separately dereference
+// (docs/resolver.md's own reasoning).
+//
+// DependsOn reuses Modification.DependsOn's exact field name and meaning
+// ("this element's own operation must not execute before every named
+// address's own operation, in this same proposal, has completed") —
+// populated by core/resolver's own orphan-protection walk with the
+// REVERSE edge set (which other same-batch elements must run first: a
+// sibling destroy whose own historical dependency graph names this
+// target, or a sibling modify that repoints away from it), never the
+// forward set a create/modify's own DependsOn would carry. The meaning of
+// the field never changes across creates/modifies/destroys — only which
+// edge set populates it does, which is exactly what makes "destroys
+// execute in reversed order" fall out of one combined topological walk
+// (docs/executor.md's own amendment) instead of needing a second
+// mechanism.
+type DestroyEntry struct {
+	Address   Address         `json:"address"`
+	State     json.RawMessage `json:"state"`
+	DependsOn []string        `json:"depends_on,omitempty"`
+}
+
 // Delta is Proposal.Delta. Creates stays opaque JSON — typed IR resource
 // nodes don't exist yet (docs/architecture.md component map #1-2 hasn't
 // been built; Slice 2/3 only need to hash and ledger hand-written/adoption
 // proposals, not construct one from a resolver) — but its elements are
 // still expected to carry direct stack/type/name fields per the IR
 // resource node shape shown under §IR above, which sortDeltaElements relies
-// on. Modifies and Destroys have a pinned shape (see Address, Modification
-// above); their sort-key extraction (deltaSortKey, canonical.go) reads
-// those fields directly now rather than guessing at an unpinned shape.
+// on. Modifies and Destroys have a pinned shape (see Address, Modification,
+// DestroyEntry above); their sort-key extraction (deltaSortKey,
+// canonical.go) reads those fields directly now rather than guessing at an
+// unpinned shape.
 type Delta struct {
 	Creates  []json.RawMessage `json:"creates,omitempty"`
 	Modifies []Modification    `json:"modifies,omitempty"`
-	Destroys []Address         `json:"destroys,omitempty"`
+	Destroys []DestroyEntry    `json:"destroys,omitempty"`
 }
 
 // Resolution is Proposal.Resolution.
@@ -231,14 +277,26 @@ type Resolution struct {
 // needs to know WHERE to re-derive the neighbor's current head from, and
 // nothing else in a resolved proposal records that. Purely additive,
 // same reasoning as every other amendment to this struct.
+// Status and CheckedLedgerDirs were added 2026-07-17 (docs/schema.md —
+// "Amendment: destroys", UBI-30), both populated only for Kind ==
+// "cross_stack_orphan_check" entries: Status is "checked_clear" (every
+// ledger_dir in CheckedLedgerDirs was walked and none pinned this
+// address) or "not_performed" (no known_dependents were named at resolve
+// time — cross-stack orphan protection is best-effort by design,
+// docs/resolver.md's own reasoning; this records the gap as honest
+// evidence rather than leaving it silently indistinguishable from a real
+// check). Purely additive, same reasoning as every other amendment to
+// this struct.
 type ResolutionInput struct {
-	Kind             string          `json:"kind"`
-	Resource         string          `json:"resource"`
-	ObservedHash     string          `json:"observed_hash"`
-	Lookup           json.RawMessage `json:"lookup,omitempty"`
-	ProviderChecksum string          `json:"provider_checksum,omitempty"`
-	PinnedHead       string          `json:"pinned_head,omitempty"`
-	LedgerDir        string          `json:"ledger_dir,omitempty"`
+	Kind              string          `json:"kind"`
+	Resource          string          `json:"resource"`
+	ObservedHash      string          `json:"observed_hash"`
+	Lookup            json.RawMessage `json:"lookup,omitempty"`
+	ProviderChecksum  string          `json:"provider_checksum,omitempty"`
+	PinnedHead        string          `json:"pinned_head,omitempty"`
+	LedgerDir         string          `json:"ledger_dir,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	CheckedLedgerDirs []string        `json:"checked_ledger_dirs,omitempty"`
 }
 
 // CostDelta is Proposal.CostDelta. MonthlyUSD is left as raw JSON because

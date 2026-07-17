@@ -483,6 +483,50 @@ destroys' reverse edges, all in one proposal) is what still needs the
 existing cycle detector run over it once, unchanged — see docs/executor.md's
 amendment for why this stays one topo-sort, not two.
 
+**Two things found while actually implementing this (`core/resolver`,
+UBI-30 session 2), not assumed correct from the design above alone:**
+
+- **Intra-stack `depends_on` only ever exists for a ref recorded while its
+  target was in the *same* resolve batch — never for a ref to an
+  already-ledgered resource the batch didn't touch.** Re-checked directly
+  against `scanRefEdges`'s own code, not assumed: a `$ref` to an address
+  outside the current batch resolves against `FoldState` (case 2 of
+  "Intra-stack refs," above) and contributes **no** `depends_on` edge at
+  all — only a same-batch sibling ref does. This means the intra-stack
+  orphan walk above is real and correct exactly as scoped ("`depends_on`...
+  is already the exact record of 'resource X's own resolved config named
+  resource Y via `$ref`'" — true as written), but its actual reach is
+  narrower than it might first read: it only ever catches a dependent that
+  was created or modified *in the same original proposal* as the resource
+  it depends on, never a dependent from some later, separate proposal that
+  happened to reference an already-existing resource's value (that
+  reference leaves no recorded edge anywhere to walk). This is the same
+  "best-effort, not exhaustive" honesty this section already gives
+  cross-stack orphan protection, just discovered to apply to the
+  intra-stack half too, once actually implemented — named here rather than
+  quietly assumed complete. See docs/destroys-adversarial.md's own "what
+  this table doesn't yet cover" for the adversarial-program-level
+  consequence.
+- **A same-batch `$ref` into a destroy target must be rejected outright, or
+  the "handled" case above isn't actually sound.** The "handled" branch
+  (a historical dependent X is being modified in this same batch, so its
+  own operation — not its destruction — is what Y's destroy waits on)
+  silently assumes X's *new* config no longer points at Y. Nothing in the
+  design above enforced that until this session's implementation added it:
+  `core/resolver/refs.go`'s `resolveRef` now refuses (`ErrRefToDestroyTarget`)
+  any `$ref`/`$cross` that resolves to an address this same proposal is
+  also destroying — a real, load-bearing validation rule, not previously
+  named. This is what makes "handled" true rather than merely hoped: by
+  the time a same-batch modify's config is fully resolved, it is
+  *provably* free of any reference to the destroy target, never just
+  assumed to be.
+
+`ubx resolve`'s own CLI surface (session 2) made `known_dependents`
+concrete as a repeatable `--known-dependent <ledger_dir>` flag, threaded
+straight into `resolver.Resolve`'s own new parameter of the same name —
+the plain, direct instantiation of "operator-supplied ledger directories"
+this section already named, not a new decision.
+
 ### `delta.destroys` carries full folded state, not just an address — a deliberate divergence from `Modification`'s terser shape
 
 `Modification.Before`/`.After` deliberately hold only the attributes that

@@ -65,6 +65,21 @@ target whose provider schema has no meaningful "destroy" semantics at all
 replace in the provider's own model, the same category `conformance/registry.go`
 already parks a few AWS types under for adopt/mutate — whether that
 category needs its own destroy row is a real question for the session that
-first exercises a destroy against a live parked type, not decided here).
+first exercises a destroy against a live parked type, not decided here);
+**a dependent resource from a proposal that never shared a resolve batch
+with the resource it depends on** -- found while implementing session 2
+(`core/resolver`), not assumed in the original design: intra-stack orphan
+protection walks recorded `depends_on` edges, which only ever exist for a
+`$ref` recorded while its target was in the *same* resolve batch
+(docs/resolver.md's own "Orphan protection" section, its own session-2
+addendum) -- a resource created later that happens to hardcode an earlier
+resource's value as a plain literal (never through `$ref` at all) leaves no
+edge anywhere to walk, so a destroy of the earlier resource would not be
+refused even though real infrastructure still depends on it. This is a
+real, named gap in the *intra-stack* half of orphan protection, not just
+the cross-stack half this table already named as best-effort -- a future
+row/mechanism (e.g. a provider-side dependency check at ship time, or
+requiring every cross-reference to go through `$ref` even for
+already-ledgered targets) is a candidate for later, not designed here.
 These are candidates for a later extension of this table, not silently
 assumed handled by rows 1–11 above.

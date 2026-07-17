@@ -164,12 +164,16 @@ func scanRefEdges(v interface{}, batch map[string]*batchEntry) ([]string, error)
 // docs/resolver.md's own rules. path is the dot-notation attribute path to
 // v itself (root call: ""), used only for $secret's IsSensitive check --
 // the one place resolution needs to know exactly where in typeName's own
-// schema this value sits.
-func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema SchemaInspector, batch map[string]*batchEntry) (interface{}, []core.ResolutionInput, error) {
+// schema this value sits. destroyAddrs is the current batch's own
+// destroys[] set (docs/resolver.md's "Amendment (UBI-30): destroys") --
+// threaded through so resolveRef can refuse a $ref into a resource this
+// same proposal is removing (ErrRefToDestroyTarget); nil/empty for a
+// proposal with no destroys, same as always.
+func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema SchemaInspector, batch map[string]*batchEntry, destroyAddrs map[string]bool) (interface{}, []core.ResolutionInput, error) {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		if inner, ok := asMarker(t, markerRef); ok {
-			return resolveRef(inner, batch, l, schema)
+			return resolveRef(inner, batch, destroyAddrs, l, schema)
 		}
 		if inner, ok := asMarker(t, markerCross); ok {
 			return resolveCross(inner)
@@ -195,7 +199,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 			if path != "" {
 				childPath = path + "." + k
 			}
-			rv, inputs, err := resolveValue(t[k], childPath, typeName, l, schema, batch)
+			rv, inputs, err := resolveValue(t[k], childPath, typeName, l, schema, batch, destroyAddrs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -207,7 +211,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 		out := make([]interface{}, len(t))
 		var allInputs []core.ResolutionInput
 		for i, vv := range t {
-			rv, inputs, err := resolveValue(vv, path, typeName, l, schema, batch)
+			rv, inputs, err := resolveValue(vv, path, typeName, l, schema, batch, destroyAddrs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -223,12 +227,21 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 // resolveRef resolves one $ref marker's inner {"to": "..."} -- either to a
 // sibling create/modify in this same batch (already resolved, by topo
 // order) or an already-ledgered resource this batch doesn't touch
-// (docs/resolver.md's own two cases).
-func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, l *core.Ledger, schema SchemaInspector) (interface{}, []core.ResolutionInput, error) {
+// (docs/resolver.md's own two cases). A target this same proposal is also
+// destroying is refused outright (ErrRefToDestroyTarget, docs/resolver.md's
+// "Amendment (UBI-30): destroys") -- referencing a resource whose value is
+// being removed in the same breath is never sound, and rejecting it here
+// is what guarantees a same-batch modify that depends on a destroy target
+// (the "handled" case in resolveDestroys) provably no longer references it
+// by the time that modify's own config is resolved.
+func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, destroyAddrs map[string]bool, l *core.Ledger, schema SchemaInspector) (interface{}, []core.ResolutionInput, error) {
 	to, _ := inner["to"].(string)
 	addrStr, attrPath, err := splitRefTarget(to)
 	if err != nil {
 		return nil, nil, err
+	}
+	if destroyAddrs[addrStr] {
+		return nil, nil, fmt.Errorf("%w: %s.%s", ErrRefToDestroyTarget, addrStr, attrPath)
 	}
 
 	if target, inBatch := batch[addrStr]; inBatch {

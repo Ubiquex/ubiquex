@@ -119,3 +119,52 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 	})
 	return entries, nil
 }
+
+// LastLookup returns the most recently recorded lookup key for addr — the
+// same "latest resolution.inputs entry, falling back to a shipped create's
+// own recorded lookup" precedence Fleet already establishes across every
+// address at once, scoped here to one address (the same per-address-walk
+// convention LastObservedHash/LastObservationTime already use rather than
+// filtering a full Fleet() call). Added for core/resolver (UBI-30,
+// docs/schema.md's "Amendment: destroys"): a delta.destroys entry's own
+// resolution.inputs["destroy_target"] requires a Lookup, and a destroy
+// target is, by construction, already-ledgered (docs/resolver.md's own
+// resolve-time presence validation) — its lookup key was already recorded
+// when it was first observed/adopted/shipped, so this never derives a new
+// one at need-time (Slice 3's own lesson, reused again). found is false if
+// addr was never given a lookup key at all (an ancient apply record
+// predating UBI-29, with no derivable "id" either) — distinct from "addr
+// was never recorded," which is a FoldState/resolver concern, not this
+// function's.
+func (l *Ledger) LastLookup(addr Address) (lookup json.RawMessage, found bool, err error) {
+	chain, err := l.Chain()
+	if err != nil {
+		return nil, false, fmt.Errorf("last lookup: %w", err)
+	}
+	target := addr.String()
+	for i := len(chain) - 1; i >= 0; i-- {
+		p := chain[i]
+		for _, in := range p.Resolution.Inputs {
+			if in.Resource == target && len(in.Lookup) > 0 {
+				return in.Lookup, true, nil
+			}
+		}
+		if p.Kind != KindChange {
+			continue
+		}
+		for _, raw := range p.Delta.Creates {
+			a, ok := createNodeAddress(raw)
+			if !ok || a != addr || !isChangeCreateNode(raw) {
+				continue
+			}
+			_, lookup, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+			if ferr != nil {
+				return nil, false, fmt.Errorf("last lookup: %w", ferr)
+			}
+			if shipped && len(lookup) > 0 {
+				return lookup, true, nil
+			}
+		}
+	}
+	return nil, false, nil
+}

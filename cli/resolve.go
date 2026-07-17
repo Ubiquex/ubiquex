@@ -41,17 +41,28 @@ func newResolveCmd() *cobra.Command {
 		providerVersion string
 		out             string
 		timeout         time.Duration
+		knownDependents []string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "resolve <intent-file>",
 		Short: "Resolve a typed ubx:intent/v1 file into a draft change proposal",
 		Long: `Resolves a hand-written, machine-shaped intent file (ubx:intent/v1) into a draft
-kind:"change" proposal -- creates and modifies, never destroys (v1 scope, docs/resolver.md).
+kind:"change" proposal -- creates, modifies, and destroys (docs/resolver.md).
 Intra-stack references are checked against the ledger's own dependency graph (with real cycle
 detection) and emitted in dependency order; cross-stack references are pinned against a neighbor
 ledger's current head, activating neighbor-advance staleness for real once the proposal is accepted
 (see "ubx accept"'s own pin re-verification).
+
+A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
+never inferred from a resource's absence) and resolve-time orphan-protected: a destroy target
+still referenced by another live resource this proposal doesn't also destroy or update is refused.
+Intra-stack orphan checks are automatic, against this ledger's own history; cross-stack orphan
+checks are best-effort and explicit -- pass --known-dependent (repeatable) for every neighbor
+stack's ledger directory that might have pinned a cross-stack reference against a destroy target
+in this stack. Omitting it doesn't mean "no dependents exist" -- it means none were checked, and
+the resolved proposal records that gap honestly (resolution.inputs' own cross_stack_orphan_check
+entry) rather than silently.
 
 The result is a draft: it has no id or acceptance yet. Pipe it into "ubx propose" for a PR-body
 trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generates.`,
@@ -96,13 +107,14 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			}
 
 			ledger := core.Open(ledgerDir)
-			p, err := resolver.Resolve(ledger, newSchemaInspector(schemas), &intent)
+			p, err := resolver.Resolve(ledger, newSchemaInspector(schemas), &intent, knownDependents)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
 			out2 := cmd.OutOrStdout()
-			fmt.Fprintf(out2, "resolved: %s: %d create(s), %d modify(ies)\n", intent.Stack, len(p.Delta.Creates), len(p.Delta.Modifies))
+			fmt.Fprintf(out2, "resolved: %s: %d create(s), %d modify(ies), %d destroy(s)\n",
+				intent.Stack, len(p.Delta.Creates), len(p.Delta.Modifies), len(p.Delta.Destroys))
 
 			b, err := json.MarshalIndent(p, "", "  ")
 			if err != nil {
@@ -125,6 +137,8 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "write the resolved proposal here instead of stdout")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching the provider and fetching its schema")
+	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
+		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
 
 	return cmd
 }

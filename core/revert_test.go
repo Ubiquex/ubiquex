@@ -300,7 +300,7 @@ func TestValidateDriftRevert_RejectsCreatesOrDestroys(t *testing.T) {
 	}
 
 	withDestroys := base()
-	withDestroys.Delta.Destroys = []Address{testAddr()}
+	withDestroys.Delta.Destroys = []DestroyEntry{{Address: testAddr()}}
 	if err := Validate(withDestroys); err == nil {
 		t.Fatal("expected an error: drift_revert must not have delta.destroys")
 	}

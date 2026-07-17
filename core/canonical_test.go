@@ -84,10 +84,10 @@ func TestHash_DestroysOrderNotSignificant(t *testing.T) {
 	y := Address{Stack: "payments", Type: "aws_db_instance", Name: "y"}
 
 	a := sampleProposal()
-	a.Delta.Destroys = []Address{x, y}
+	a.Delta.Destroys = []DestroyEntry{{Address: x}, {Address: y}}
 
 	b := sampleProposal()
-	b.Delta.Destroys = []Address{y, x}
+	b.Delta.Destroys = []DestroyEntry{{Address: y}, {Address: x}}
 
 	ha, err := Hash(a)
 	if err != nil {

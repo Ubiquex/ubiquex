@@ -605,6 +605,60 @@
   resolve when this lands. Config portion rides UBI-32; resolver/executor
   portion is its own session, before or with the SDK.
 
+- 2026-07-17 — Design-room decision (no session): Phase 3 medium order
+  reversed — markdown before SDK. Founding order (SDK → chat → md) was
+  preference, not dependency; revised path after UBI-30 (destroys) is:
+  multi-provider session (unchanged, still first — md stacks hit the
+  one-provider wall exactly like SDK would) → intent provider + md
+  medium (the LLM interface: adapters, structured-output validation,
+  conformance gating, BYO keys — md-first means intent-provider-first;
+  extraction quality is gated on that conformance suite, which IS the
+  work) → chat (nearly free once the intent provider exists — same
+  interface, different input shape) → SDK after (typed authoring, IDE
+  safety, round-trip projection, codegen wait behind it, accepted
+  consciously). Rationale: md is the demo-gold AI-native medium, less
+  build than SDK (no codegen/npm/hermetic-JS-sandbox), and delivers two
+  mediums (md + chat) for one infrastructure build.
+
+- 2026-07-17 — Design-room decision (no session): SDK languages — TS,
+  Go, and Python all supported, in that ship order; filed as UBI-33
+  (umbrella: the multi-language contract — a language-neutral conformance
+  suite of golden intent/v1 JSON IS the spec, written before any language
+  ships; shared codegen IR model with per-language templates, no
+  TS-isms), UBI-34 (TypeScript first, ≈6–9 sessions, hermetic sandbox is
+  the hard part), UBI-35 (Go second, ≈3–5 — compiled-program evaluator
+  cheat may make it cheaper than TS, verify empirically), UBI-36 (Python
+  last, demand-gated — hardest sandbox, no cheat). Frictionless-future
+  prep noted in UBI-33: intent/v1 emission stays the stable importable
+  contract; golden files stored language-neutrally. Sequencing: after
+  the md/chat mediums per the medium-order reversal above.
+
+- 2026-07-17 — UBI-30 session 2: `core/resolver` destroy support, real
+  code, hermetic. `Delta.Destroys` re-pinned to `{address, state,
+  depends_on}` (`core.SchemaVersion` 1 → 2, this project's first
+  non-additive hashed-content shape change — migration cost near-zero,
+  checked: no proposal of any kind ever populated the old shape).
+  `core.Validate` now lets `KindChange` carry destroys; `core/resolver`
+  gained `IntentFile.Destroys`, `Resolve`'s new `knownDependents`
+  parameter, presence validation, intra-stack orphan protection (a real
+  `depends_on` ledger walk), cross-stack orphan protection
+  (`known_dependents`, honest `not_performed`/`checked_clear`), and a new
+  `ErrRefToDestroyTarget` rule (found necessary while implementing, not
+  in session 1's design) rejecting a `$ref`/`$cross` into a same-batch
+  destroy target. New `ubx resolve --known-dependent` flag. A real bug
+  found building ubiquex-docs' own CLI transcripts, not just a docs
+  polish item: orphan protection originally treated a `depends_on` edge
+  as permanent once recorded, wrongly re-refusing a destroy whose
+  dependent had since been repointed away by a separate proposal — fixed
+  to track each address's own most-recently-recorded `depends_on` only,
+  with a dedicated regression test. Full suite (`go build`/`go vet`/
+  `gofmt -l .`/`go test ./... -race -count=1`) clean. docs/resolver.md and
+  docs/destroys-adversarial.md gained session-2 addenda recording both
+  real findings above. ubiquex-docs' `cli/resolve.mdx` updated with real
+  transcripts against the actual built binary (`mint validate`/`mint
+  broken-links` clean). See §Destroys v1 (UBI-30) above and STATE.md for
+  the full session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1306,15 +1360,55 @@ mechanism, extend its use" instinct this project has applied at every
 prior amendment.
 
 Filed as its own ticket, **UBI-30**, team `ubiquex` (referenced throughout
-per the handoff's own instruction — no other ID inferred). Sessions 2+,
-not this one: resolver destroy support (orphan check hermetic) → executor
-reversed-walk + destroy state machine (fakeprovider fault injection per
-docs/destroys-adversarial.md's own table) → accept friction + CLI surface
-→ a live finale on real AWS (create a chain, drift it, resolve the drift,
-destroy it through the signed flow with `--confirm-destroys`, `kill -9`
-mid-destroy, reconcile, verify absence via the `aws` CLI independently,
-`ubx why` reading the complete biography from genesis to tombstone).
-Commit for this session is docs-only; see STATE.md for the full writeup.
+per the handoff's own instruction — no other ID inferred). Session 1 was
+docs-only. Still queued: executor reversed-walk + destroy state machine
+(fakeprovider fault injection per docs/destroys-adversarial.md's own
+table) → accept friction + CLI surface → a live finale on real AWS (create
+a chain, drift it, resolve the drift, destroy it through the signed flow
+with `--confirm-destroys`, `kill -9` mid-destroy, reconcile, verify
+absence via the `aws` CLI independently, `ubx why` reading the complete
+biography from genesis to tombstone).
+
+**Session 2 (2026-07-17): `core/resolver` destroy support, hermetic —
+orphan protection real and tested.** `Delta.Destroys`' element shape
+re-pinned for real (`core.DestroyEntry{Address, State, DependsOn}`,
+`core.SchemaVersion` bumped 1 → 2 — this project's first non-additive
+hashed-content shape change, migration cost genuinely near-zero since no
+proposal of any kind had ever populated the old shape). `core/validate.go`
+now lets `KindChange` carry destroys (blast_radius checked across all
+three delta arrays) and requires a `destroy_target` resolution input
+(observed_hash + lookup) per destroy entry, mirroring modifies' own rule.
+`core/resolver` gained `IntentFile.Destroys []string`, `Resolve`'s own new
+`knownDependents []string` parameter, and the full design: presence
+validation, intra-stack orphan protection (a historical `depends_on` walk
+over the ledger's own chain), cross-stack orphan protection
+(`known_dependents`, honestly recording `not_performed`/`checked_clear`),
+and `$ref`/`$cross` rejection into a same-batch destroy target
+(`ErrRefToDestroyTarget` — a new rule found necessary while implementing,
+not named in session 1's design, without which the "handled" same-batch
+case wouldn't actually be sound). New `ubx resolve --known-dependent`
+(repeatable) CLI flag. Full repo `go build`/`go vet`/`gofmt -l .`/`go test
+./... -race -count=1` clean, no regressions.
+
+A real bug found and fixed while building real CLI transcripts for
+ubiquex-docs, not caught by the hermetic suite alone: the intra-stack
+orphan walk originally accumulated every historical `depends_on` mention
+forever, so a destroy stayed wrongly refused even after its dependent had
+genuinely been repointed away by a later, separate proposal. Fixed to
+track each address's own most recently recorded `depends_on` only (the
+same "current truth folded from history" precedence `FoldState`/`Fleet`
+already use elsewhere), with a new hermetic regression test
+(`core/resolver/destroys_test.go`) added specifically to catch this
+scenario. docs/resolver.md gained a session-2 addendum recording this and
+a second real scope-limit finding (intra-stack orphan protection can only
+ever see a dependency that was itself recorded via `$ref` in the same
+batch as its target — a plain hardcoded-literal reference leaves no edge
+to find); docs/destroys-adversarial.md's own "what this table doesn't yet
+cover" section gained the matching entry. ubiquex-docs' `cli/resolve.mdx`
+updated with the new flag and a full "Destroying a resource" section,
+every transcript real against the actual built binary (`mint
+validate`/`mint broken-links` both pass). See STATE.md for the full
+session writeup.
 
 ## Deferred (explicitly not now)
 

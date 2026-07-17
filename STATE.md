@@ -4,8 +4,156 @@
 
 ## Current phase
 
-**UBI-30 session 1 is done (this session): Destroys v1 — design lands in
-docs, no code.** Phase 2 continues with the executor's last verb. Filed as
+**UBI-30 session 2 is done (this session): `core/resolver` destroy
+support — real code, hermetic, orphan protection tested.** Session 1
+(previous) was docs-only; this session builds the resolver half of the
+design it landed, per docs/plan.md's own sessioning
+(resolver → executor → accept friction/CLI → live AWS finale). Still
+queued: executor reversed-walk + destroy state machine, `--confirm-destroys`
+accept friction, and the live full-lifecycle finale.
+
+**What landed, precisely.** `core/proposal.go`: `Delta.Destroys`' element
+shape re-pinned from a bare `Address` to `core.DestroyEntry{Address,
+State, DependsOn}` — this project's **first real, non-additive
+hashed-content shape change**, `core.SchemaVersion` bumped `1` → `2`. The
+migration cost is genuinely near-zero, checked rather than assumed:
+`core.Validate` had forbidden a non-empty `delta.destroys` unconditionally
+for every proposal kind this codebase has ever produced, since before the
+old shape even existed — there is no real ledger entry anywhere with the
+bare-`Address` shape populated to migrate. `ResolutionInput` gained two
+additive fields, `Status`/`CheckedLedgerDirs`, for a new
+`cross_stack_orphan_check` resolution-input kind. `core/fleet.go` gained
+`Ledger.LastLookup(addr)` — the same "most recent wins" per-address walk
+`LastObservedHash`/`LastObservationTime` already establish, scoped to
+lookup keys, reused by the resolver so a destroy target's required
+`resolution.inputs["destroy_target"].Lookup` is never derived at
+need-time, always the address's own already-recorded key. `core/canonical.go`'s
+`deltaSortKey` now reads a destroy element's nested `address` field
+(mirroring how it already reads `Modification.target`).
+
+`core/validate.go`: `validateChange` no longer forbids destroys — a
+`KindChange` proposal's `blast_radius` is now checked across all three
+delta arrays (creates/modifies/destroys), not just the first two. A new
+`validateDestroysHaveResolutionInputs` requires every `delta.destroys`
+entry to have a matching `resolution.inputs` entry of kind
+`"destroy_target"` specifically, with both a non-empty `observed_hash`
+*and* `lookup` (stricter than modifies' own rule, which only requires the
+hash — a destroy target's freshness recheck and reconcile-by-query, once
+the executor session builds them, have no other way to find the resource
+again).
+
+`core/resolver` (new file `destroys.go`, plus wiring in `resolver.go`/
+`refs.go`): `IntentFile` gained `Destroys []string` — a dedicated
+top-level list of canonical addresses, never an `op: "destroy"` value on
+a `resources[]` entry, never inferred from a resource's absence.
+`Resolve`/`resolveOnce` gained a new `knownDependents []string` parameter
+(the concrete instantiation of docs/resolver.md's own "operator-supplied
+ledger directories" framing), threaded through to a new
+`crossStackOrphanCheck`. `parseDestroyBatch` validates presence (`FoldState`
+must find it — `ErrDestroyTargetMissing` otherwise), rejects duplicates
+(`ErrDuplicateDestroy`) and any address appearing in both `resources[]`
+and `destroys[]` (`ErrDestroyResourceConflict`). `resolveDestroys` builds
+each `DestroyEntry`'s full folded state and `DependsOn` via
+`historicalReverseDependents` — a real, three-way classification per
+historical dependent found: mutual same-batch destroy (add to
+`DependsOn`, ordered first), same-batch modify ("handled" — its own
+operation must complete first, add to `DependsOn`), or a live,
+untouched dependent (refuse, `ErrDestroyOrphaned`). The destroy batch's
+own stored order is topo-sorted (reusing `topoSort`, the same DFS creates
+already use) — but restricted to destroy-internal edges only, a fix
+needed because a destroy's `DependsOn` can legitimately point at a
+same-batch *modify*, which isn't itself a destroy target and would
+otherwise confuse the shared topo-sort's closed-graph assumption (found
+while writing the very first orphan test, not assumed correct from the
+design).
+
+**A real, load-bearing rule invented during implementation, not named in
+session 1's design**: `core/resolver/refs.go`'s `resolveRef` now refuses
+(`ErrRefToDestroyTarget`) any `$ref`/`$cross` that resolves to an address
+this same proposal is also destroying. Without this, the "handled"
+same-batch-modify case wouldn't actually be sound — it depends on the
+modify's *new* config provably no longer referencing the destroy target,
+which this rejection is what guarantees, not hope.
+
+**Cross-stack orphan protection**: `crossStackOrphanCheck` walks every
+named `knownDependents` ledger for a `cross_stack_pin` resolution input
+naming the destroy target, refusing (`ErrDestroyOrphaned`) if found,
+recording `checked_clear` (with the checked dirs) or `not_performed`
+(none named) otherwise — never silently indistinguishable from a real
+check. A named dependent that isn't actually an initialized ledger is a
+hard error (`ErrDependentLedgerMissing`) — almost certainly a real
+mistake, not an intentional gap.
+
+**A real bug found and fixed, not while writing hermetic tests but while
+building real CLI transcripts for ubiquex-docs** (worth stating plainly,
+since it's exactly the kind of gap a docs session's own "verify against
+the actual built binary" discipline exists to catch): the original
+`historicalReverseDependents` accumulated *every* historical `depends_on`
+mention forever, so a destroy stayed wrongly refused even after its
+dependent had genuinely been repointed away by a later, separate
+proposal — the cross-proposal analog of the same-batch "handled" case,
+which the design never explicitly extended across proposals. Fixed to
+track each address's own **most recently recorded** `depends_on` only
+(the same "current truth folded from history" precedence `FoldState`/
+`Fleet` already use for state/lookup, applied here to `depends_on`), with
+a new dedicated hermetic regression test
+(`TestResolve_DestroyNoLongerOrphaned_AfterDependentRepointed`,
+`core/resolver/destroys_test.go`) reproducing the exact scenario.
+
+**Hermetic coverage** (`core/resolver/destroys_test.go`, new): happy paths
+(basic destroy with full state/lookup/blast_radius/resolution-inputs
+correctness, `core.Validate` passing on a real resolver-produced destroy
+proposal; mutual same-batch destroy with correct reversed order; the
+same-batch-modify "handled" case; cross-stack `checked_clear`) and
+rejections (missing target, duplicate destroy, resource/destroy conflict,
+`$ref` into a destroy target, intra-stack orphan refusal, cross-stack
+orphan refusal against a real second ledger, a missing named dependent
+ledger, the repointed-dependent regression above, blast_radius mismatch,
+a hand-tampered proposal missing its `destroy_target` resolution input).
+Existing tests broken by the type change
+(`core/canonical_test.go`, `core/revert_test.go`, `core/validate_test.go`,
+`core/resolver/resolver_test.go`) fixed in place — one test
+(`TestValidate_ChangeProposalWithDestroys_Rejected`) removed outright,
+superseded since destroys are now legal for `KindChange`. Full repo `go
+build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions anywhere.
+
+**CLI surface**: `ubx resolve` gained a repeatable `--known-dependent
+<ledger_dir>` flag, its own help text updated to describe destroys
+(no longer "never destroys").
+
+**ubiquex-docs updated same session** (user-visible change: new intent
+field, new flag): `cli/resolve.mdx` gained a full "Destroying a resource"
+section plus flag-table/frontmatter updates — every transcript captured
+from the actual built binary (`cmd/ubx` + `provider/internal/fakeprovider`,
+`FAKEPROVIDER_MODE=ok-v6`) against real temporary ledger directories, not
+hand-written: adopt via `ubx scan`/`ubx accept`, link a dependent via a
+same-batch `$ref`-bearing modify, observe the real orphan refusal,
+repoint the dependent away in a separate proposal, observe the destroy
+succeed; a real second ledger directory for the cross-stack refusal
+transcript, with a genuine `$cross` pin recorded against the destroy
+target. This transcript work is what surfaced the "most recently
+recorded `depends_on`" bug above — found by actually using the feature,
+not just by the hermetic suite. `mint validate`/`mint broken-links` both
+pass. Committed and pushed to `ubiquex-docs` (`fbae2f2`).
+
+Docs updated for two more implementation findings, per session protocol
+("if implementation reveals a doc is wrong, stop, record the finding"):
+docs/resolver.md's own "Orphan protection" section gained a session-2
+addendum recording (a) the "most recently recorded" fix above and (b) a
+second, real scope-limit — intra-stack orphan protection can only ever
+see a dependency recorded via `$ref` *within the same resolve batch* as
+its target, never a plain hardcoded-literal reference to an
+already-ledgered resource (which records no edge at all); and the new
+`ErrRefToDestroyTarget` rule. docs/destroys-adversarial.md's own "what
+this table doesn't yet cover" section gained the matching scope-limit
+entry. docs/plan.md gained a session-2 paragraph under §Destroys v1
+(UBI-30) and a changelog entry.
+
+## Current phase (previous)
+
+**UBI-30 session 1 is done: Destroys v1 — design lands in
+docs, no code.** Filed as
 its own new Linear issue, **UBI-30** ("Destroys v1: explicit intent,
 reversed ordering, tombstone records"), team `ubiquex` — no other ID
 inferred, per the handoff's own instruction. This session is entirely
