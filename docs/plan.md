@@ -316,6 +316,30 @@
   saved at docs/upstream/helm-sensitive-flags.md. This gates the
   `v0.2.0` tag. See docs/architecture.md's "Sensitive overrides" section
   and STATE.md for the full writeup.
+- 2026-07-18 — UBI-25 (Linear-verified): read-only MCP server. A new
+  `ubx mcp` verb (one binary, not a second executable) serves the Model
+  Context Protocol over stdio via `github.com/modelcontextprotocol/go-sdk`
+  — three tools (`ubx_why`/`ubx_status`/`ubx_scan`), each a thin wrapper
+  over the exact `whyJSON`/`statusJSON`/`scanJSON` payload the equivalent
+  `--json` CLI command already produces (new `computeWhyJSON`/
+  `computeStatusJSON`/`computeScanJSON` functions shared by both callers
+  — no parallel API, no new JSON shape). `ubx accept`/`ship`/`writeback`/
+  `revert-plan`/`scan --surface-as` are deliberately not exposed —
+  "boundary by omission," stated in both `--help` and the docs page. A
+  real, load-bearing SDK gotcha found by actually calling the tools over
+  the real protocol, not assumed safe from the Go types alone: automatic
+  output-schema generation from `*core.Proposal`'s own `json.RawMessage`
+  fields (used throughout for canonical-JSON hashing) infers "array" from
+  the underlying `[]byte`, which then fails validation against the real
+  (often-object-shaped) runtime value — fixed by using `any` as each
+  tool's output type, which the SDK's own docs already name as the way to
+  skip a schema it can't correctly generate here. Live-verified against
+  the real `ubx-states` ledger: a real `PutBucketTagging`/`DeleteBucketTagging`
+  mutation, scanned and accepted with real CloudTrail attribution, then
+  asked "who changed this bucket and when" via a real MCP client
+  connected to the real `ubx mcp` subprocess over real stdio — captured
+  for the docs page, cleaned up after. See docs/architecture.md's "MCP
+  server" section and STATE.md for the full writeup.
 
 ## Strategy
 
