@@ -1990,7 +1990,7 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
-## Ledger stores (decided 2026-07-17, design room — not yet built)
+## Ledger stores (decided 2026-07-17, design room; config cascade/formats built UBI-32 Arc A session 1, LedgerStore/remote stores/addressing still not built)
 
 Two storage questions, decided separately:
 
@@ -2075,7 +2075,7 @@ ledger {
 }
 ```
 
-### Config: cascading, per-key, child overrides parent
+### Config: cascading, per-key, child overrides parent (built, UBI-32 Arc A session 1)
 
 Config discovery upgrades from nearest-file-wins to an editorconfig-style
 cascade: walk from cwd to root collecting every `.ubx/config*`; resolve
@@ -2087,7 +2087,65 @@ directory overrides only `store`; a stack directory holds `stack =
 and invisibly wrong, a provenance surface ships with them: a resolved-
 config view printing every effective value AND which file supplied it.
 
-### Config formats: HCL canonical, TOML supported, YAML supported (strict)
+**Built, UBI-32 Arc A session 1.** The merge happens on a **generic
+tree**, not the typed `Config` struct directly: each discovered file
+parses into its own `map[string]any` (nested tables are nested maps,
+recursively — a TOML `[provider_configs."hashicorp/aws"]` table, an
+HCL `provider_configs = { "hashicorp/aws" = { ... } }` attribute, and a
+YAML `provider_configs: {hashicorp/aws: {...}}` mapping all parse to the
+*identical* Go shape before merge ever runs), so the merge/provenance
+logic is written exactly once and never needs to know which format
+produced a given layer. The fold walks layers **root-to-nearest**
+(reverse of discovery order) and merges recursively: if both the
+accumulator and the new layer hold a map at some key, recurse into it
+key-by-key; otherwise the new layer's value replaces the accumulator's
+outright and its own file is recorded as that key's provenance. This is
+what makes "tables merge key-wise" true at every nesting depth, not just
+the top level — a child directory setting only
+`provider_configs."hashicorp/aws".region` leaves every *other* key of
+that same source's config (and every other source's config entirely)
+intact from whatever parent supplied them. Once folded, the final
+generic tree is JSON-round-tripped into `Config` (`json.Marshal` then
+`json.Unmarshal`, `Config`'s own struct tags now carry matching `json`
+tags alongside `toml`) — one decode step for all three formats, never
+three separate struct-decode paths.
+
+**Provenance keys are dotted paths**, the same *style*
+`Modification.After`/`core/state.go`'s `dotSet` and `tfwrite`'s own
+attribute-path splitting already use elsewhere in this project for
+locating a value inside nested JSON — but neither of those has to
+quote a segment, since a resource attribute name is always a bare
+identifier. A provider source string (`hashicorp/aws`) is not, so
+provenance paths need their own, new quoting rule: any map key that
+isn't a bare identifier (`[A-Za-z_][A-Za-z0-9_]*`) is rendered
+double-quoted. Examples: `stack`, `provider.source`,
+`providers."hashicorp/aws"`, `provider_configs."hashicorp/aws".region`,
+`k8s_audit.cluster`.
+
+`ubx config` (the provenance view itself) prints every key the merged
+generic tree actually holds, including one the unknown-key check just
+warned about — deliberate, not an oversight: the warning already flags
+it as unrecognized, and the view's whole job is showing what the
+cascade genuinely contains, not silently filtering to `Config`'s own
+known fields a second time.
+
+**Unknown-key detection moved from BurntSushi's `MetaData.Undecoded()`
+to a hand-written schema-shape walk**, because that mechanism is
+struct-decode-specific and stops applying the moment parsing targets a
+generic map instead (confirmed empirically: decoding into
+`map[string]any` reports *every* key as "undecoded," since no struct
+field ever consumes any of them — useless as a signal in this shape).
+Each layer's own generic tree is checked, at parse time, against the
+known top-level keys (`stack`, `github_repo`, `tf_dir`, `provider`,
+`provider_config`, `providers`, `provider_configs`, `k8s_audit`) and the
+known sub-keys of `provider`/`k8s_audit` specifically; `provider_config`/
+`providers`/`provider_configs` are freeform by design (arbitrary
+provider-defined keys) and never checked below their own top level. A
+warning still names the exact file the typo came from — checked per
+layer before the merge, not after, so provenance of the warning itself
+never blurs across files the way a post-merge check would.
+
+### Config formats: HCL canonical, TOML supported, YAML supported (strict) (built, UBI-32 Arc A session 1)
 
 Three formats, one internal config struct — the cascade/merge/provenance
 logic is format-agnostic, written once. Order of preference and
@@ -2102,14 +2160,41 @@ across directories only).
   attributes only** — no variables, functions, or interpolation,
   enforced with the same `expr.Value(nil)` literalness check
   `tfwrite` already uses; an expression in config is a hard error.
+  **Every table is a top-level attribute holding an object-constructor
+  expression** (`provider = { source = "...", version = "..." }`,
+  `providers = { "hashicorp/aws" = "6.60.0" }`), never an HCL block —
+  confirmed necessary, not a stylistic choice: `hclsyntax` blocks don't
+  permit a quoted string as an argument name at all (verified directly
+  against the parser; see the Multi-provider stacks section's own
+  correction above), so `providers`/`provider_configs`'s source-string
+  keys have no valid block-argument spelling. Using attribute-object
+  syntax uniformly also means literalness checking is a single
+  `attr.Expr.Value(nil)` call per top-level attribute — `Value(nil)`
+  already recurses through an entire object-constructor expression, so
+  one call proves an whole table's every nested value is a literal, no
+  separate per-block walk needed.
 - **TOML — fully supported, forever.** Already shipped (UBI-19), fully
   deterministic; existing configs never break. `ubx init --format=toml`.
 - **YAML — supported, strict mode only.** UBI-19's determinism
-  objections are real and stay documented: the parser must refuse
-  implicit type coercion (unquoted `6.60` parsing as float 6.6,
-  `no`/`on`/`off` as booleans are hard errors, not silent surprises) —
-  ambiguity is rejected loudly, never guessed. `ubx init --format=yaml`
-  writes fully-quoted, unambiguous output.
+  objections are real and stay documented — but confirmed, not assumed,
+  against the actual library this session (`gopkg.in/yaml.v3`): its own
+  implicit-typing resolver already treats `no`/`yes`/`on`/`off` (any
+  case) as `!!str`, never `!!bool` — the classic YAML 1.1 Norway-problem
+  ambiguity this project worried about turns out not to exist in this
+  specific library at all, so nothing has to reject that case for it to
+  be safe. What's real and confirmed: decoding a bare `6.60` into a
+  generic value silently produces `float64(6.6)` — the trailing zero,
+  and therefore the distinction between "6.60" and "6.6" as a provider
+  version string, is gone the instant it's parsed, with no error raised
+  anywhere. The parser refuses this specific case with a round-trip
+  check on every plain (unquoted) numeric scalar: format the resolved
+  number back to text canonically and compare against the token actually
+  written; any mismatch (`6.60`→`6.6`, `007`→`7`, `1e3`→`1000`) is a hard
+  error naming the offending value, never a silent narrowing. A quoted
+  scalar (`"6.60"`) is exempt by construction — quoting is exactly how a
+  YAML author already asserts "treat this as a string," so a quoted
+  value is never coerced or checked, only a bare one. `ubx init
+  --format=yaml` writes fully-quoted, unambiguous output.
 
 ### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet built session 5; live finale done session 6)
 
@@ -2121,13 +2206,22 @@ The decided design:
 source → pinned version (cascade content like any other config table;
 explicit pins only, per standing rule):
 
-```hcl
-providers {
-  "hashicorp/aws"        = "6.60.0"
-  "hashicorp/helm"       = "3.0.2"
-  "hashicorp/kubernetes" = "2.35.1"
-}
+```toml
+[providers]
+"hashicorp/aws"        = "6.60.0"
+"hashicorp/helm"       = "3.0.2"
+"hashicorp/kubernetes" = "2.35.1"
 ```
+
+(shown in TOML — the still-current shipped format as of UBI-43. UBI-32
+Arc A's own "Config formats" section below found this exact sketch's own
+HCL rendering invalid the moment it was actually parsed: HCL native
+syntax refuses a quoted string as a *block argument name*
+(`providers { "hashicorp/aws" = ... }` → hard parse error, "Argument
+names must not be quoted"). Corrected there to
+`providers = { "hashicorp/aws" = "6.60.0", ... }` — an attribute holding
+an object-constructor expression, where quoted keys ARE valid — never
+silently left as a sketch nobody had actually run through the parser.)
 
 **Intent files name only types** — no provider on any resource.
 Inference is type → provider, resolved by asking each declared

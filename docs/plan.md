@@ -974,6 +974,30 @@
   throughout, including the mid-guide provider swap and both GCP
   findings); `mint validate`/`mint broken-links` both clean. UBI-43
   closed in Linear this session, arc complete (sessions 1-6).
+- 2026-07-18 — UBI-32 Arc A session 1: config cascade + formats, design,
+  real code, live-verified, ubiquex-docs -- all in one session. New arc,
+  unparked by founder decision after UBI-43 closed; runs as two sub-arcs
+  per the ticket, config first (Arc A, done this session), `LedgerStore`/
+  remote stores/addressing second (Arc B, not started). Cascade
+  discovery upgraded from UBI-19's nearest-file-wins to a per-key,
+  editorconfig-style merge across every `.ubx/config*` from cwd to the
+  filesystem root, three formats (HCL canonical -- now `ubx init`'s own
+  default, a real behavior change -- TOML forever, YAML strict-only), a
+  new provenance view (`ubx config`). A real design bug found and fixed
+  before any code existed to hide it: docs/architecture.md's own
+  Multi-provider stacks section had sketched
+  `providers { "hashicorp/aws" = "6.60.0" }` as HCL — parsed directly
+  against `hclsyntax` this session, it's a hard parse error (block
+  arguments can't be quoted); corrected to
+  `providers = { "hashicorp/aws" = "6.60.0" }`, an attribute holding an
+  object-constructor expression, confirmed to parse. A second real gap
+  found live and fixed the same session: `ubx init`'s own overwrite
+  check only compared the exact target filename, so it could have
+  silently shadowed an existing config under a different format's name;
+  now checks discovery's own winner instead. See §Config cascade +
+  formats below for the full session and STATE.md for the empirical
+  findings (yaml.v3's own resolver, BurntSushi's `Undecoded()` not
+  applying to generic-map decode).
 
 ## Strategy
 
@@ -2135,6 +2159,118 @@ changed this session beyond `conformance/registry.go`'s own new note --
 this was a live verification and documentation session, not an
 implementation one. **UBI-43 closed in Linear, arc complete (sessions
 1-6)**.
+
+### Config cascade + formats (UBI-32 Arc A)
+
+UBI-32 unparked by founder decision the moment UBI-43 closed, running as
+two sub-arcs, config first. Arc A's own scope, per the ticket: upgrade
+`.ubx/config` discovery from UBI-19's nearest-file-wins to a per-key,
+editorconfig-style cascade (child overrides parent, tables merge
+key-wise, CLI flags still beat everything); a provenance surface
+(resolved value + which file supplied it); a per-directory stack
+default; and three supported formats (HCL canonical, TOML forever, YAML
+strict-only) sharing one internal struct. Explicitly sequenced to land
+*before* UBI-41 (the markdown intent provider), so `[intent]` config
+never has to touch the legacy nearest-file-wins loader at all. Arc B
+(`LedgerStore` extraction, remote stores, addressing) is the larger,
+separate arc and has not started.
+
+**Session 1 (2026-07-18): design, real code, live-verified, ubiquex-docs
+-- all in one session.** docs/architecture.md's own "Config: cascading,
+per-key, child overrides parent" section gained the settled
+implementation design before any code existed to hide it: the cascade
+merges on a **generic tree** (`map[string]any`, nested tables as nested
+maps), not the typed `Config` struct directly, so the merge/provenance
+logic is written exactly once and is genuinely format-agnostic — each
+format's own parser only has to produce that one shared shape. Its own
+"Config formats" section gained the concrete per-format mechanics:
+HCL's literal-only enforcement reusing `tfwrite`'s own `expr.Value(nil)`
+technique, and a real correction to how HCL renders `providers`/
+`provider_configs` (an attribute holding an object-constructor
+expression, `key = { ... }`, never an HCL block — quoted keys aren't
+valid as block argument names at all, found by parsing the design's own
+prior sketch directly against `hclsyntax` rather than assuming it would
+work). YAML's strict mode got a real, confirmed-not-assumed narrowing of
+scope: `gopkg.in/yaml.v3`'s own implicit resolver already treats
+`no`/`yes`/`on`/`off` as `!!str`, never `!!bool` (checked directly against
+the library), so the only real coercion risk strict mode has to guard
+against is numeric precision loss (a bare `6.60` silently becoming
+`float64(6.6)`) — caught with a round-trip format-and-compare check on
+every plain numeric scalar, quoted values exempt by construction. New
+docs/config-cascade-adversarial.md: 11 rows covering conflicting keys at
+different cascade levels (both a top-level key and a key nested inside
+a table, proving sibling keys survive a partial override), cross-format
+cascade chains, same-directory multi-format precedence, both YAML
+coercion cases (the real one refused, the assumed-but-not-actually-real
+one proven safe instead of just left untested), an HCL literal-only
+violation failing the whole file (matching the existing malformed-TOML
+precedent, no partial per-key salvage), the per-directory stack default,
+format-blind provenance correctness, and unknown-key warnings checked
+identically across all three formats (necessary because
+`BurntSushi/toml`'s own `MetaData.Undecoded()` — the mechanism UBI-19's
+original loader used — turns out not to apply once parsing targets a
+generic map instead of the `Config` struct directly; confirmed by
+decoding a real TOML fixture into `map[string]interface{}` and observing
+every key reported as "undecoded," not just the genuinely-unknown one).
+
+**Real code, same session.** New `cli/configcascade.go` (discovery,
+generic-tree merge, provenance, unknown-key checks — `LoadConfig` itself
+now a thin wrapper over `LoadConfigResolved`, so every existing call site
+across the codebase kept working unchanged), `cli/confighcl.go` (the HCL
+generic parser plus `ctyToGeneric`), `cli/configyaml.go` (the YAML strict
+parser, `yaml.Node`-level, empirically confirmed against
+`gopkg.in/yaml.v3` before being written, not assumed), `cli/configtoml.go`
+(a thin wrapper — BurntSushi already decodes into the exact
+`map[string]any` shape the cascade needs, no conversion required). New
+`gopkg.in/yaml.v3` dependency — the second non-stdlib dependency this
+project has added purely for config parsing, after `BurntSushi/toml`.
+`Config`'s own struct gained matching `json` tags alongside its existing
+`toml` ones, since the merged generic tree now decodes into it via one
+JSON round-trip rather than three separate format-specific struct
+decoders. All 11 adversarial rows became real hermetic tests in
+`cli/configcascade_test.go`; every pre-existing config/init/status/
+providerpool test (40+ across the package) still passes unchanged,
+proving the cascade is a strict superset of UBI-19's nearest-file-wins
+for every case that only ever had one file in play.
+
+**`ubx init --format=hcl|toml|yaml` (HCL default) and `ubx config` (the
+provenance view), both built and live-verified.** `ubx init`'s own
+default written format changed from an extensionless TOML `.ubx/config`
+to canonical `.ubx/config.hcl` — a real, deliberate behavior change,
+not silently absorbed (the legacy name stays fully supported for
+*reading*, forever, per configcascade.go's own discovery order). New
+`ubx config`: walks the same cascade, prints every effective value and
+exactly which file supplied it. A real gap found live, fixed the same
+session (not left for later): `ubx init`'s own overwrite-protection
+only ever compared against the exact target filename, so a bare
+`ubx init` run a second time in a directory that already had a working
+legacy `.ubx/config` would have silently written an empty
+`.ubx/config.hcl` right alongside it — and since `config.hcl` wins
+discovery, every value the existing config supplied would have vanished
+from `ubx`'s own point of view with no error or warning anywhere. Fixed
+by checking discovery's own winner, not just the target path, before
+writing; `--force` still proceeds once a caller has explicitly opted
+in. **Live-verified against the real built binary**: a genuine
+multi-level, cross-format cascade (root `.ubx/config.hcl`, an
+intermediate `.ubx/config.toml`, a leaf `.ubx/config.yaml`, one key each)
+resolved correctly with correct per-key provenance; both YAML violation
+cases (`version: 6.60` refused naming the file and token, `github_repo:
+no` loading cleanly as a string) and both HCL violation cases
+(interpolation, a function call) reproduced exactly as designed; the
+`ubx init` shadow-conflict refusal and its `--force` override both
+confirmed. Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout.
+
+ubiquex-docs updated the same session (user-visible: new command, new
+default format, new flag): `cli/config.mdx` rewritten for the cascade,
+all three formats, and the `ubx config` provenance view (every
+transcript re-verified against the real built binary); `cli/init.mdx`
+gained `--format` and the shadow-conflict warning; `cli/exit-codes.mdx`
+added `ubx config` to the no-finding-concept group. `mint validate`/
+`mint broken-links` both clean. Both repos committed and pushed.
+
+Queued for a later session: Arc B (`LedgerStore` extraction, remote
+stores, addressing) — not started.
 
 ## Deferred (explicitly not now)
 

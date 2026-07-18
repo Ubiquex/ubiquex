@@ -23,6 +23,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newShipCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newConfigCmd())
 	root.AddCommand(newMCPCmd())
 
 	return root

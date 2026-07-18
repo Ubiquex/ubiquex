@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 )
 
-// configFileName is the file every ubx command looks for, relative to
-// whatever directory Discovery lands on (docs/architecture.md — Config
-// defaults, UBI-19): "nearest .ubx/config wins", the same discovery
-// convention .git itself uses.
+// configFileName is the legacy, extensionless file name UBI-19
+// originally used (relative to a `.ubx/` directory) -- still the third
+// entry in configcascade.go's own per-directory discovery order
+// (`config.hcl` -> `config.toml` -> `config` -> `config.yaml`), kept
+// forever so no existing config silently stops being found.
 const configFileName = ".ubx/config"
 
 // Config is .ubx/config's parsed shape -- the five keys UBI-19 scoped in
@@ -23,19 +22,29 @@ const configFileName = ".ubx/config"
 // default stack, GitHub repository, and .tf directory -- plus UBI-22's
 // [k8s_audit] table, and UBI-43's own [providers]/[provider_configs]
 // tables (below). --ledger-dir is deliberately not one of them.
+//
+// `json` tags (added UBI-32 Arc A, alongside the pre-existing `toml`
+// ones) exist for exactly one reason: the cascade loader
+// (configcascade.go) merges every format's own parsed generic tree
+// BEFORE ever touching this struct, then decodes the single merged
+// result via one JSON round-trip -- one decode path for all three
+// formats, rather than three separate format-specific struct decoders.
+// The `toml` tags stay for symmetry and because they're a precise
+// mirror of the `json` ones (both name the identical key), not because
+// TOML still decodes into this struct directly anywhere.
 type Config struct {
 	Provider struct {
-		Path    string `toml:"path"`
-		Source  string `toml:"source"`
-		Version string `toml:"version"`
-	} `toml:"provider"`
-	ProviderConfig  map[string]any            `toml:"provider_config"`
-	Providers       map[string]string         `toml:"providers"`
-	ProviderConfigs map[string]map[string]any `toml:"provider_configs"`
-	Stack           string                    `toml:"stack"`
-	GithubRepo      string                    `toml:"github_repo"`
-	TFDir           string                    `toml:"tf_dir"`
-	K8sAudit        K8sAuditConfig            `toml:"k8s_audit"`
+		Path    string `toml:"path" json:"path"`
+		Source  string `toml:"source" json:"source"`
+		Version string `toml:"version" json:"version"`
+	} `toml:"provider" json:"provider"`
+	ProviderConfig  map[string]any            `toml:"provider_config" json:"provider_config"`
+	Providers       map[string]string         `toml:"providers" json:"providers"`
+	ProviderConfigs map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
+	Stack           string                    `toml:"stack" json:"stack"`
+	GithubRepo      string                    `toml:"github_repo" json:"github_repo"`
+	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
+	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 }
 
 // Providers/ProviderConfigs are .ubx/config's own [providers]/
@@ -82,45 +91,38 @@ type Config struct {
 type K8sAuditConfig struct {
 	// Cluster is the EKS cluster name. Empty means "not configured" --
 	// the one signal newAttributionBackend checks.
-	Cluster string `toml:"cluster"`
+	Cluster string `toml:"cluster" json:"cluster"`
 	// Region is the AWS region the cluster (and its CloudWatch Logs log
 	// group) lives in.
-	Region string `toml:"region"`
+	Region string `toml:"region" json:"region"`
 	// LogGroup overrides the CloudWatch Logs log group to search, for a
 	// cluster whose control-plane logging wasn't left at EKS's own
 	// default naming convention. Empty means k8saudit.LogGroupForCluster(Cluster).
-	LogGroup string `toml:"log_group"`
+	LogGroup string `toml:"log_group" json:"log_group"`
 }
 
-// LoadConfig discovers and parses .ubx/config, walking from the current
-// working directory upward through parent directories and using the
-// first one found. Returns a zero Config (not an error) if none exists
-// anywhere up to the filesystem root -- config is optional everywhere;
-// every value it could supply simply falls through to that flag's own
-// existing default/required behavior instead. Unknown keys are reported
-// as warnings to warnOut and otherwise ignored; a file that isn't valid
-// TOML at all is a hard error.
+// LoadConfig discovers and parses the full .ubx/config cascade (UBI-32
+// Arc A -- see configcascade.go and docs/architecture.md's "Config:
+// cascading, per-key, child overrides parent"), walking from the current
+// working directory upward through every parent directory, merging every
+// `.ubx/config*` found per key, nearest wins. Returns a zero Config (not
+// an error) if none exists anywhere up to the filesystem root -- config
+// is optional everywhere; every value it could supply simply falls
+// through to that flag's own existing default/required behavior instead.
+// Unknown keys are reported as warnings to warnOut and otherwise
+// ignored; a file that isn't valid in its own format at all is a hard
+// error. Most callers want this; a caller that also needs to explain
+// *where* each value came from (the provenance view, `ubx config`) wants
+// LoadConfigResolved instead.
 func LoadConfig(warnOut io.Writer) (*Config, error) {
-	path, err := findConfig()
+	rc, err := LoadConfigResolved(warnOut)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, err
 	}
-	if path == "" {
-		return &Config{}, nil
-	}
-
-	var cfg Config
-	meta, err := toml.DecodeFile(path, &cfg)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	for _, key := range meta.Undecoded() {
-		fmt.Fprintf(warnOut, "warning: %s: unknown config key %q (ignored)\n", path, key)
-	}
-	return &cfg, nil
+	return rc.Config, nil
 }
 
-// configSearchStartDir returns where findConfig starts walking upward
+// configSearchStartDir returns where the cascade starts walking upward
 // from -- the real working directory in production. A package var (not a
 // bare os.Getwd() call) purely so tests can point it at an isolated temp
 // directory instead: without this seam, every test in this package would
@@ -129,27 +131,6 @@ func LoadConfig(warnOut io.Writer) (*Config, error) {
 // developer's home directory, say) -- exactly the kind of host-machine-
 // state leak `go test ./...` staying hermetic is supposed to rule out.
 var configSearchStartDir = os.Getwd
-
-// findConfig walks from configSearchStartDir() upward through parent
-// directories looking for .ubx/config, returning "" (not an error) if it
-// reaches the filesystem root without finding one.
-func findConfig() (string, error) {
-	dir, err := configSearchStartDir()
-	if err != nil {
-		return "", err
-	}
-	for {
-		candidate := filepath.Join(dir, configFileName)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
-	}
-}
 
 // applyStackDefault fills stack from cfg if --stack wasn't explicitly
 // given on the command line. CLI flag always wins; config only ever
