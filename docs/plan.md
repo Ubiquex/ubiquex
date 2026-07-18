@@ -719,6 +719,38 @@
   docs/reliability-report.md gained a full UBI-30 section (real
   transcripts). See STATE.md for the full session writeup.
 
+- 2026-07-18 — UBI-43 session 1: multi-provider stacks, docs-first.
+  Recorded in docs/architecture.md §Multi-provider stacks (2026-07-17,
+  design room); this session lands the resolver/executor design in the
+  two documents that govern them. docs/resolver.md: type→provider
+  inference against each declared provider's own schema (never
+  name-prefix guessing), a `providers` config map riding the config
+  loader UBI-19 already shipped (doesn't block on UBI-32's own cascade
+  work), a rare explicit `"provider"` hint to break a genuine ambiguity,
+  the dependency graph confirmed already provider-agnostic (checked
+  directly, zero changes needed), destroys inferring their provider fresh
+  against the currently-declared set rather than trusting history, and a
+  staged `--source`/`--provider-version` retirement plan (deprecated, not
+  broken, no cutover committed to a session number). docs/executor.md: a
+  lazily-launched client pool keyed by `{source, version}`, the existing
+  combined topo-walk confirmed unchanged (walks addresses, never
+  consults provider), a provider launch failure classified as a per-node
+  terminal error rather than a whole-walk abort (the existing
+  `partially_applied` outcome, not a new failure category), and
+  scan/status/fleet's own generalization to grouping by each resource's
+  recorded provider. A real design tension found and resolved, not
+  glossed over: docs/schema.md's own UBI-27 pinning had explicitly
+  dropped a `provider` field from the IR node shape as "redundant" —
+  true only under the single-provider invariant that amendment predates;
+  reinstated (all three delta kinds, additive, no `schema_version` bump)
+  in docs/schema.md's own new amendment. New
+  docs/multi-provider-adversarial.md: seven required-outcome rows
+  (ambiguous type with/without a hint, unowned type, provider launch
+  failure mid-walk, a cross-provider `$ref` chain, `kill -9` between
+  providers, per-provider freshness independence). Filed as its own
+  ticket, **UBI-43**, team `ubiquex`. No code this session — see §Multi-
+  provider stacks below and STATE.md for the full session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1598,6 +1630,63 @@ consistency in a real account — left for a future session's own
 retry-budget tuning. docs/executor.md gained a session-5 addendum;
 docs/reliability-report.md gained a full "UBI-30" section, real
 transcripts throughout. See STATE.md for the full session writeup.
+
+### Multi-provider stacks (UBI-43)
+
+Phase 2 continues: every prior session (UBI-26 through UBI-30) built
+`ubx` against exactly one provider per invocation — real, but not what
+docs/architecture.md's own payments example actually is (RDS + S3 +
+`helm_release`, one stack, three provider binaries). Design landed first,
+docs-only, across three documents, the same "spec before code" discipline
+every prior amendment in this project has used: docs/resolver.md
+("Amendment: multi-provider stacks — type→provider inference" — the
+`providers` config map, schema-ownership inference with a hard error on
+ambiguity or an unowned type, a rare explicit hint to break a genuine
+ambiguity, destroys inferring fresh rather than trusting history, a
+staged flag-retirement plan), docs/executor.md ("Amendment: multi-provider
+stacks — one walk, a lazily-launched client pool" — the pool keyed by
+`{source, version}`, the existing combined topo-walk confirmed unchanged,
+a launch failure classified as a per-node terminal error, scan/status/
+fleet's own grouping generalization), docs/schema.md ("Amendment: the
+`provider` field returns — no longer redundant" — reinstating a field
+UBI-27 had explicitly dropped, additive, no `schema_version` bump), and
+docs/multi-provider-adversarial.md (the required-outcome program, seven
+rows).
+
+A real design tension found and resolved while writing this, not silently
+glossed over: docs/schema.md's own UBI-27 pinning of `Delta.Creates`'
+node shape had explicitly called a `provider` field "redundant with
+information the outer `Proposal` already carries" — true at the time
+(one provider per invocation, so which binary executed a node was never
+in question), false now that one `change` proposal can span providers.
+Reinstated on all three delta kinds (creates, modifies, destroys — a
+destroy needs to know which provider to call exactly as much as a create
+does), resolver-populated, never hand-authored except the narrow
+ambiguity-breaking hint.
+
+A real design resolution worth restating plainly, the same "one
+mechanism, not a second one" instinct this project keeps applying:
+neither the resolver's own dependency graph nor the executor's own
+combined topo-walk needed *any* change to become multi-provider-capable —
+confirmed by reading the actual code (`core/resolver/graph.go`,
+`core/executor/ship.go`), not assumed from the design alone. Both already
+operate purely on canonical addresses and `depends_on`/`$ref`/`$computed`
+edges; type and provider were never consulted while building or walking
+either. Multi-provider changes *which client* the executor's own walk
+calls at each step (a pool lookup instead of one closed-over `Applier`),
+never the walk's own shape, order, or the graph's own construction.
+
+Filed as its own ticket, **UBI-43**, team `ubiquex`. Session 1 (this
+session) is docs-only. Still queued: `core/resolver`'s own type→provider
+inference code (hermetic against fake multi-provider `SchemaInspector`
+sets), `core/executor`'s own client pool and per-node dispatch (hermetic
+against a fake `Applier` pool scripting docs/multi-provider-adversarial.md's
+seven rows), `.ubx/config`'s own `providers` table wiring (rides UBI-19's
+existing loader, doesn't block on UBI-32), CLI surface changes
+(`--source`/`--provider-version` deprecation staging, never a breaking
+cutover in one session), and the live finale: a real payments-shaped
+stack (`hashicorp/aws` + a second real provider) shipped as ONE signed
+proposal on real infrastructure.
 
 ## Deferred (explicitly not now)
 

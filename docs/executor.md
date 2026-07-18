@@ -904,6 +904,103 @@ for every destroy path rather than skipping straight to `Apply`. Full repo
 `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
 clean, no regressions.
 
+## Amendment (2026-07-18, UBI-43): multi-provider stacks — one walk, a lazily-launched client pool
+
+`core/executor`'s own `Applier` — the one provider client every ship node
+function (`shipCreate`/`shipModifyNode`/`shipDestroyNode`, plus
+`reconcileLoop`/`reconcileDestroyLoop`) closes over — has been exactly one
+value per `ubx ship` invocation since UBI-26. docs/architecture.md
+§Multi-provider stacks decided the shape; this is `core/executor`'s own
+half, mirroring docs/resolver.md's own amendment.
+
+### The client pool: keyed by `(source, version)`, launched on first use
+
+A pool replaces the single `app Applier` parameter — a
+`map[providerKey]Applier`, keyed by exactly the `{source, version}` pair
+docs/schema.md's own amended
+`provider` field records on each node (docs/resolver.md's own amendment:
+the resolver already resolved and signed this at resolve time; the
+executor never re-infers it, only launches what was recorded). A provider
+is launched the first time any node needing it comes up in the walk —
+never eagerly at the start, and never more than once for a given
+`(source, version)` pair within one `ubx ship` invocation, reusing exactly
+`provider.Acquire`/`provider.Launch`'s own existing per-source-version
+resolution (`UBX_PROVIDER_MIRROR` → cache → registry) that today's
+single-provider path already uses, just keyed N ways instead of once. The
+whole pool is torn down (every launched client `Close()`d) when the `ubx
+ship` invocation ends, not per-node — a provider serving three nodes in
+one walk is launched once and reused for all three.
+
+### One combined topological walk — unchanged, still not two
+
+**Confirmed by reading the actual graph-building code, not assumed**: the
+combined topo-sort UBI-30's own amendment already established ("creates
+forward, destroys reversed, interleaved with modifies... one combined
+topo-sort over one graph produces this for free") stays exactly as it is.
+The walk itself has never consulted type or provider — it walks canonical
+addresses and `depends_on` edges. Multi-provider changes *which client*
+each step in that same walk calls (`pool.Get(ctx, node's own recorded
+provider)` instead of the one closed-over `app`), never the walk's own
+shape or order. A `$ref`/`$computed` edge from an `aws_db_instance` node
+into a `helm_release` node is walked identically to a same-provider edge —
+"outputs flowing across provider boundaries exactly as within one"
+(docs/architecture.md's own wording) is already true of the existing
+`resultsByAddr`/`ApplyAfter` substitution mechanism, which operates on
+plain Go values with no provider-awareness at all. No new mechanism
+needed here, confirmed rather than assumed.
+
+### Provider launch failure mid-walk: a per-node terminal error, not a whole-walk abort
+
+A launch failure for provider *X* (bad credentials, network failure
+acquiring the binary, a crashed handshake) terminally fails every
+still-pending node whose recorded provider is *X* — `errors[]` naming the
+launch failure, never reaching `in_flight` — while nodes already
+in-flight or still pending against a *different, already-launched-fine*
+provider proceed in their own dependency order, unaffected. This is not a
+new failure category: it's `partially_applied`, the same honest, no-auto-
+rollback outcome this document's own "Out of scope" section already
+commits to for any partial failure — a provider that fails to launch is
+just one more reason a specific node can't proceed, reported exactly like
+any other terminal error would be. A human decides the next step (fix
+whatever blocked provider *X*'s launch, then re-run `ubx ship` — the
+already-applied nodes are skipped via the existing idempotency contract,
+untouched).
+
+### Freshness, reconciliation, and destroy's three-way precheck: all per-provider, no new mechanism
+
+Every existing per-resource mechanism this document already specifies —
+the freshness recheck before every modify attempt, destroy's own
+three-way precheck (present-matching/present-drifted/absent), reconcile-
+by-query after an ambiguous timeout — already operates through whichever
+`Applier` a given node uses. Multi-provider changes nothing about *how*
+these work, only which pool entry supplies the `Applier` for a given
+node's own turn. A cross-provider `$ref` chain (an `aws_db_instance`'s
+real applied `endpoint` feeding a `helm_release`'s `values`) is not a new
+case for this substitution either — it already happens through plain Go
+values (`resultsByAddr`), with no provider identity threaded through the
+substitution itself.
+
+### Scan/status/fleet: grouping by each resource's own recorded provider
+
+`ubx scan --type/--name` (one resource, one provider) needs no change —
+scanning a single, already-known-type resource is inherently a
+single-provider operation regardless of how many providers a stack
+declares. `ubx scan --all` (bulk onboarding) and `ubx status --drift`
+(the whole-fleet walk) generalize the same way the executor's own walk
+does: group the fleet's resources by each one's own recorded provider
+(read from the ledger's own history — a shipped `change` node's `provider`
+field, or, for an adopted/drift-recorded resource that predates this
+amendment and never got a `provider` field written, the single provider
+that invocation's own `--source`/`--provider` implied, same reasoning as
+docs/schema.md's own "no `schema_version` bump" justification), then walk
+each group against its own lazily-launched pool entry — one provider
+launch per distinct source in the fleet, not one per resource. A single
+`--source`/`--provider-version` flag can no longer express "the provider"
+for a genuinely multi-provider fleet; see docs/resolver.md's own
+retirement-staging section for the deprecation plan (deprecated, staged,
+never a breaking cutover in one session) — `ubx status --drift`/`ubx scan
+--all` follow the identical staging, not a separate one.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -916,6 +1013,10 @@ clean, no regressions.
   "Amendment (2026-07-17, UBI-29)" section above.
 - Parallel execution — across resources within one proposal, or across
   proposals/stacks. Serial, delta/dependency order, full stop.
+- Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
+  client pool) — **designed, UBI-43** (see the Amendment above); the
+  client pool and per-node provider dispatch are later-session code, not
+  this document's own session.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is

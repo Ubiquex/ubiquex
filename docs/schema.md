@@ -1242,6 +1242,68 @@ exclusion list, number encoding) — only the ratified array-sort rule's own
 target shape does, which is exactly the class of change the ratification
 below already anticipates needing a version bump for.
 
+### Amendment: the `provider` field returns — no longer redundant (2026-07-18, UBI-43)
+
+The founding IR-node draft (top of this document) sketched a `provider:
+{source, version}` field on every resource node. `Delta.Creates`' own
+pinning (UBI-27, above) dropped it as "redundant with information the
+outer `Proposal` already carries" — true at the time, since every verb
+launched exactly one provider per invocation, so which binary executed a
+given node was never in question; it was whichever one the CLI was told
+to use. **Multi-provider stacks (docs/architecture.md §Multi-provider
+stacks) break that invariant**: a single `change` proposal can now name
+resources whose types are owned by different provider binaries entirely
+(`aws_db_instance` + `helm_release` in one proposal, one signed unit).
+Which binary executes which node is real, resolver-decided information
+again — the same category of fact `depends_on` already is: computed, not
+authored, and worth a human reviewing and signing off on, because a wrong
+inference (the resolver picking the wrong provider for an ambiguous type)
+is exactly the kind of mistake this project's whole thesis exists to catch
+before it reaches `ubx ship`.
+
+Reinstated, unchanged from the founding draft's own shape, on all three
+delta element kinds — `Delta.Creates`, `Modification` (`delta.modifies`),
+and `Delta.Destroys`' element (symmetry: a destroy needs to know which
+provider to call exactly as much as a create does):
+
+```json
+{
+  "stack": "payments",
+  "type": "aws_db_instance",
+  "name": "payments-db-replica",
+  "provider": {"source": "registry.terraform.io/hashicorp/aws", "version": "6.60.0"},
+  "config": { "...": "unchanged" },
+  "depends_on": ["payments.aws_db_instance.payments-db"]
+}
+```
+
+**Resolver-populated, never hand-authored** — the intent file's own
+`resources[]`/`destroys[]` entries never carry a `provider` field
+themselves, the same "computed, not authored" posture `depends_on` already
+has. The one narrow exception: an intent file MAY set a same-shaped
+`"provider": {"source": "..."}` hint directly on an individual `resources[]`
+entry, consulted *only* to break a genuine type-ownership ambiguity
+between two or more declared providers that both claim the same type —
+ordinarily absent, and refused at resolve time if the named source isn't
+one of the stack's own declared `providers` (docs/architecture.md's own
+config-map). See docs/resolver.md's own amendment for the full
+type→provider inference algorithm this field is the recorded output of.
+
+**No `schema_version` bump.** Purely additive, the same reasoning as every
+prior additive amendment in this document (`lookup`, `provider_checksum`,
+`Modification.depends_on`): every proposal recorded before this amendment
+was resolved against exactly one provider per the single-provider
+invariant that held at the time, so an absent `provider` field on an old
+proposal is never ambiguous — it unambiguously means "the one provider
+that CLI invocation was given," recoverable from context even though it
+was never written down. A reader doesn't need to migrate anything to keep
+interpreting old proposals correctly; the field is simply absent where it
+was always implied. Hashing: `provider` participates in the canonical hash
+like any other content field — no exclusion, no special treatment — which
+means altering a signed proposal's own provider assignment after the fact
+(without a fresh resolve/accept) is caught exactly like altering any other
+field would be.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

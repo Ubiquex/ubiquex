@@ -543,11 +543,153 @@ requires, and why the migration cost is unusually low (no proposal, of any
 kind, has ever actually populated `delta.destroys` — `core.Validate`
 forbids it unconditionally for every kind that exists today).
 
+## Amendment (2026-07-18, UBI-43): multi-provider stacks — type→provider inference
+
+Every verb today launches exactly one provider per invocation
+(`--provider`, or `--source`+`--provider-version`) — a real, load-bearing
+simplification that held fine through UBI-26/27/29/30, but doesn't match
+docs/architecture.md's own payments example (RDS + S3 + `helm_release`,
+one stack, three provider binaries). docs/architecture.md §Multi-provider
+stacks (design room, 2026-07-17) decided the shape; this amendment is
+`core/resolver`'s own half of it.
+
+### The `providers` config map — declared, not inferred, from where
+
+A stack's provider set is a `providers` table (source → pinned version,
+explicit pins only — the same standing rule every other version pin in
+this project already follows) in `.ubx/config`. This rides the config
+loader UBI-19 already shipped (TOML today, HCL/YAML per
+docs/architecture.md §Config formats) — it does **not** need to
+wait for UBI-32's own cascade semantics (child-overrides-parent, a
+provenance view) to unpark. A flat `providers` table in the nearest
+`.ubx/config` resolves correctly today, exactly like every other config
+key this project already reads without cascade; UBI-32, whenever it
+unparks, upgrades *how* that table is found and merged across directories,
+not *whether* it works. This session's own design doesn't block on it.
+
+```toml
+[providers]
+"hashicorp/aws" = "6.60.0"
+"hashicorp/helm" = "3.0.2"
+"hashicorp/kubernetes" = "2.35.1"
+```
+
+### Type→provider inference: schema ownership, never name-prefix guessing
+
+`ubx resolve` already launches a provider for exactly one reason today —
+"its schema is what tells the resolver which attributes are `Computed` or
+`Sensitive`" (this document's own opening description) — a free, no-
+credentials, no-state-mutating round trip (`GetProviderSchema` only,
+docs/architecture.md's own "a provider's schema costs nothing" finding,
+UBI-9). Multi-provider generalizes this from one round trip to N: resolve
+launches every provider named in the stack's `providers` map, and builds
+one `SchemaInspector` (this document's own "Schema boundary" section,
+above — `HasType`/`IsComputed`/`IsSensitive`) per provider instead of one
+globally. No new interface — the existing one, instantiated N times.
+
+For each `resources[]`/`destroys[]` entry's own `type`, every declared
+provider's `HasType(type)` is asked. The three outcomes:
+
+- **Exactly one match** — that provider owns the type. Used, no friction.
+- **Zero matches** — hard error naming the type and every provider
+  checked: `resolve: no declared provider owns type "aws_db_instance" —
+  checked: hashicorp/helm, hashicorp/kubernetes`. Never silently skipped,
+  never guessed from the type name's own prefix (`aws_*` "looking like"
+  AWS is exactly the kind of heuristic this design explicitly rejects —
+  see docs/architecture.md's own wording: "never name-prefix guessing").
+- **More than one match** — a real ambiguity (two declared providers both
+  advertise the same type name — plausible for forked/vendored providers,
+  or two versions of a provider family declared under different sources)
+  — hard error naming every owner found, *unless* the entry carries an
+  explicit `"provider": {"source": "..."}` hint (docs/schema.md's own
+  amendment) naming which declared source to use. The hint is consulted
+  only to break a tie; it's refused at resolve time if it doesn't name one
+  of the stack's own declared providers, and never accepted as a way to
+  route a type to a provider that doesn't actually claim it (`HasType`
+  still has to return true for the hinted provider, or the hint itself is
+  the error).
+
+The winner is recorded into the resolved node's own `provider` field —
+`{source, version}`, the version being the `providers` map's own pin *at
+resolve time*, not re-derived later — signed as part of the proposal
+exactly like `depends_on` already is.
+
+### Destroys infer their provider exactly like creates/modifies — never inherited from history
+
+A destroy target's provider is **not** read from whichever provider
+originally created it (no proposal recorded that historically before this
+amendment, and even once every new proposal does, trusting stale history
+over the stack's own current declared set would be exactly the kind of
+silent drift this project exists to catch, not reproduce). It's inferred
+fresh, the identical schema-ownership check, against the *currently*
+declared `providers` map. If the provider that used to own this type has
+since been quietly dropped from config, destroy resolution hard-errors
+exactly like any other unowned-type case — a deliberate friction point: a
+stack's own provider set narrowing shouldn't let a destroy sail through
+unnoticed against a provider nobody declares anymore.
+
+### The dependency graph stays exactly as it is — already provider-agnostic, checked directly
+
+**Zero changes needed here — confirmed by reading the actual code, not
+assumed from the design alone.** `topoSort`/`edgesOf` (this document's own
+"dependency graph" section, above) operate purely on canonical addresses
+(`Address.String()`) and `$ref`/`$computed`/`depends_on` edges between
+them — type and provider are never consulted while building or walking
+the graph. A `$ref` edge from an `aws_db_instance` node into a
+`helm_release` node's `values` is exactly the same kind of edge as two
+same-provider nodes referencing each other; the graph has no way to know,
+and no reason to care, that the two ends resolve to different provider
+binaries. This is the same "one combined mechanism, not a second one"
+shape docs/executor.md's own destroy amendment already established for
+reversed ordering — multi-provider gets it for free here too.
+
+### Determinism: provider selection is a pure function, the existing double-run guarantee already covers it
+
+This document's own "Determinism" section (above) already requires
+`ubx resolve` to run its whole resolution twice and hard-fail on any byte
+divergence. Type→provider inference introduces no new source of
+nondeterminism to that guarantee: for a fixed `(declared providers, type)`
+input, `HasType` always returns the same answer (a provider's own schema
+doesn't change mid-resolve), so the winner is always the same winner on
+both runs. Nothing new to test here beyond the existing double-run
+coverage exercising a multi-provider resolve at all.
+
+### `--source`/`--provider-version` retirement: deprecated, staged, never a breaking cutover
+
+A single-provider stack (no `providers` config present) keeps working
+*exactly* as it does today — `--provider`/`--source`+`--provider-version`
+unambiguous, one provider, unchanged behavior, unchanged flags. Once a
+stack declares a `providers` map, that map is the authority for that
+stack, and the singular flags stop being meaningful for it (multiple
+providers now genuinely need launching, not one) — but retirement is
+staged, not a breaking cutover in one session:
+
+1. **Now (this amendment)**: both mechanisms coexist. `providers` config,
+   when present, is used; the singular flags remain fully functional as
+   the single-provider path for every stack that hasn't adopted the
+   config map yet.
+2. **Later (a future session, not committed to a number here)**: using
+   the singular flags against a stack that also declares `providers`
+   config emits a deprecation warning rather than silently picking one
+   source over the other.
+3. **Eventually (a major-version-shaped change, explicitly not scheduled
+   by this amendment)**: the singular flags retire for good, `providers`
+   config becomes required for every stack.
+
+Scan/status/fleet's own equivalent generalization — grouping by each
+resource's own recorded provider instead of a single `--source` — is
+docs/executor.md's own half of this amendment, not resolver's.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - ~~`delta.destroys` (see Scope, above).~~ — **designed, UBI-30** (see the
   Amendment below); resolver *code* producing a populated `delta.destroys`
   is still session 2+ of that ticket, not this document's own session.
+- Multi-provider stacks (a single `change` proposal spanning more than one
+  provider binary) — **designed, UBI-43** (see the Amendment above);
+  resolver *code* performing type→provider inference and populating each
+  node's `provider` field is a later session of that ticket, not this
+  document's own session.
 - A real policy engine — the hook exists, always returns empty for now.
 - Diagram/markdown/SDK/LLM-authored intent frontends — the intent-file
   format is deliberately machine-shaped for exactly this reason (a pretty

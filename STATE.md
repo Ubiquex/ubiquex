@@ -4,7 +4,96 @@
 
 ## Current phase
 
-**UBI-30 is closed (this session, sessions 4-5 combined, Linear-verified):
+**UBI-43 session 1 is done (this session, docs-only, Linear filed and
+tracked): multi-provider stacks — the design lands in
+docs/resolver.md/docs/executor.md/docs/schema.md, no code.** New arc,
+per docs/architecture.md §Multi-provider stacks (2026-07-17, design
+room). Filed as **UBI-43**, team `ubiquex`, currently "In Progress."
+
+**docs/resolver.md gained "Amendment: multi-provider stacks —
+type→provider inference."** A `providers` config map (source → pinned
+version) declares a stack's provider set, riding `.ubx/config`'s own
+loader UBI-19 already shipped — deliberately **not** blocked on UBI-32's
+own cascade semantics unparking; a flat table in the nearest `.ubx/config`
+works today. Type→provider inference asks every declared provider's own
+`SchemaInspector.HasType` (the existing interface, reused per-provider
+instead of once globally, no new interface): exactly one match wins;
+zero matches is a hard error naming the type and everything checked;
+more than one match is a hard error too, *unless* the intent-file entry
+carries an explicit `"provider": {"source": "..."}` hint to break the
+tie (refused if the hint doesn't name an actual owner). The winner is
+recorded into the resolved node's own `provider` field. Destroys infer
+fresh against the *currently* declared set, never inherited from
+history. **Confirmed, not assumed, by reading the actual graph code**:
+`core/resolver/graph.go`'s `topoSort`/`edgesOf` are purely address-based
+already — zero changes needed for multi-provider graphs. Determinism:
+the existing double-run guarantee already covers provider inference,
+since it's a pure function of `(declared providers, type)`.
+`--source`/`--provider-version` retirement is staged (deprecated, never
+a breaking cutover in one session) — three explicit stages, none of them
+scheduled to a session number yet.
+
+**docs/executor.md gained "Amendment: multi-provider stacks — one walk,
+a lazily-launched client pool."** The single `app Applier` every ship
+node function closes over becomes a pool, keyed by `{source, version}`,
+launched on first use, torn down at the end of the `ubx ship` invocation.
+**Confirmed, not assumed**: `core/executor/ship.go`'s own combined
+topo-walk (UBI-30's "creates forward, destroys reversed" mechanism)
+needed zero changes — it already walks addresses/`depends_on` only, never
+consulting type or provider; multi-provider just changes which pool entry
+supplies the `Applier` at each step. A provider launch failure mid-walk
+is a per-node terminal error (every node needing that provider fails,
+`errors[]` naming why; every node against an already-fine provider
+proceeds unaffected) — the existing `partially_applied` outcome, not a
+new failure category. Cross-provider `$ref`/`$computed` substitution
+needs no new mechanism either: `resultsByAddr`/`ApplyAfter` already
+operate on plain Go values with no provider-awareness. Scan/status/fleet
+generalize to grouping by each resource's own recorded provider instead
+of one `--source` flag.
+
+**A real design tension found and resolved, not glossed over**:
+docs/schema.md's own UBI-27 pinning had explicitly dropped a `provider`
+field from `Delta.Creates`' node shape as "redundant with information
+the outer `Proposal` already carries" — true only under the
+single-provider-per-invocation invariant that amendment predates, false
+now. docs/schema.md gained "Amendment: the `provider` field returns — no
+longer redundant": reinstated on all three delta element kinds (creates,
+modifies, destroys — symmetric, since a destroy needs to know which
+provider to call exactly as much as a create does), resolver-populated,
+never hand-authored except the narrow ambiguity-breaking hint, purely
+additive (no `schema_version` bump — an absent field on any
+pre-amendment proposal unambiguously means "the one provider that
+invocation was given," recoverable from context, nothing to migrate).
+
+**New docs/multi-provider-adversarial.md**: seven required-outcome rows
+— ambiguous type with/without a resolving hint, unowned type, provider
+launch failure mid-walk (a per-node terminal error, not a whole-walk
+abort), a cross-provider `$ref` chain, `kill -9` between providers (the
+pool launches the not-yet-launched provider fresh on re-run, no
+re-attempt against the already-`applied` one), per-provider freshness
+independence (one provider's drift never blocks or contaminates a
+sibling node against a different, undrifted provider). "What this table
+doesn't yet cover" names six real gaps explicitly: duplicate
+source-at-different-versions config, a provider's own schema shifting
+between resolve and ship, a genuinely circular cross-provider dependency,
+scan/status's own multi-provider fleet-grouping (no code yet to test),
+and the deprecation-warning stage itself (not yet built).
+
+docs/plan.md gained a session-1 changelog entry and a new "###
+Multi-provider stacks (UBI-43)" arc section (mirroring "### Destroys v1
+(UBI-30)"'s own shape) naming what's still queued: `core/resolver`'s own
+inference code, `core/executor`'s own client pool, `.ubx/config`'s
+`providers` table wiring, CLI deprecation staging, and the live finale
+— a real payments-shaped stack (`hashicorp/aws` + a second real
+provider) shipped as ONE signed proposal on real infrastructure.
+
+No ubiquex-cli code changed this session — confirmed via `git status`
+(docs/ only) and `go build ./...` (clean, untouched). ubiquex-docs
+untouched too — nothing user-visible shipped yet to document.
+
+## Current phase (previous)
+
+**UBI-30 is closed (sessions 4-5 combined, Linear-verified):
 `FoldState`'s tombstone-fold, `ubx why`'s destroyed/already_absent
 rendering, a critical live-AWS `PlanResourceChange` bug found and fixed,
 and the full live finale, real, against real AWS.** Session 3's own two
