@@ -596,8 +596,16 @@ new top-level state. What's new is the *meaning* layered onto
 `applied`/reconciliation for a destroy resource specifically, via
 `Reconciliation[].Outcome`'s two new legal values:
 
-- A clean `ApplyResourceChange` response (or a post-timeout reconcile-by-query
-  that reads back not-found) resolves the resource's terminal state to
+- ~~A clean `ApplyResourceChange` response... resolves the resource's
+  terminal state to `applied`, `Outcome: "destroyed"` directly.~~
+  **Superseded by "Amendment (UBI-44): universal post-destroy read-back,"
+  below** — a clean `ApplyResourceChange` response is no longer sufficient
+  on its own; it now earns `destroyed` only via the same post-destroy
+  read-back reconcile-by-query a post-timeout resolution already used. The
+  paragraph below describes the read-back's own resolution logic, which is
+  unchanged; what changed is *when* it runs — universally now, not just
+  after an ambiguous `Apply` result. A post-timeout reconcile-by-query
+  that reads back not-found resolves the resource's terminal state to
   `applied`, `Outcome: "destroyed"` — but **only when the immediately
   preceding `Reconciliation` entry for this same resource recorded
   `present_matches`.** That preceding entry is the pre-attempt freshness check
@@ -1430,6 +1438,174 @@ empty one (the exact signal `cli/resolve.go`/`cli/ship.go` branch on);
 given, warns and names the flag when something was. Full repo `go build
 ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1` clean,
 no regressions.
+
+## Amendment (2026-07-19, UBI-44): universal post-destroy read-back — provider-reported success is never sufficient
+
+Found live, not hypothesized: a real `google_pubsub_topic` destroy, shipped
+the ordinary way (a create-genesis resource, whose recorded lookup is
+always the universal `{"id": "..."}`, never a type-specific companion
+field), reported `applied`/`Outcome: "destroyed"` — the exact path Session
+5's fix (above) was supposed to have made trustworthy — while the real
+topic stayed live in GCP. Root cause confirmed this session by direct
+experiment against the real provider (`hashicorp/google` 7.40.0,
+protocol v5), not assumed from Session 5's own AWS finding: `Apply`'s
+response was `NewState: null`, zero diagnostics, zero error — the
+byte-for-byte identical shape a *genuine* destroy produces — yet Cloud
+Audit Logs showed **zero** `DeleteTopic` calls across four separate
+"successful" attempts (real `ubx ship`, and three isolated variations
+driving the wire protocol directly). Filling in the resource's `name`
+attribute correctly (the short-form topic ID, distinct from `id`, the
+full path — empty in every one of those four attempts, since `ubx`'s
+universal lookup only ever records `id`) made the delete genuinely
+happen on the next attempt, audit-log-confirmed, both via real Terraform
+and via `ubx`'s own wire calls in isolation.
+
+**This is not the same mechanism Session 5 fixed, and conflating them
+would have been the real mistake here.** Session 5's bug was an empty
+`PlannedPrivate` — the shim never recognizing a genuine destroy at all
+without it — and `shipDestroyNode` already calls `PlanResourceChange`
+unconditionally before every destroy `Apply`, exactly as that fix
+requires. `PlannedPrivate` came back empty in *every* attempt this
+session made against `google_pubsub_topic` — including the one that
+actually deleted the topic — so it was never the deciding factor here.
+The real cause is `PriorState` itself being incomplete in a way this
+specific resource's `Delete` implementation can't recognize as a real
+target, so it fabricates a clean, diagnostics-free success rather than
+erroring. Two genuinely different root causes, one identical symptom:
+**a provider can say "success" without it being true, for reasons that
+will keep multiplying across types and SDK generations.** Patching this
+one cause (e.g., generalizing the lookup-hint mechanism to require
+`name` alongside `id` for this type, `conformance/registry.go`'s own
+already-named follow-up) would close *this* instance and leave the
+class of bug — provider-reported success as the sole signal for a
+`destroyed` verdict — open for the next one.
+
+**The fix is structural, not a lookup-hint patch: a post-destroy
+read-back is now the universal, only way a `destroyed` verdict is
+earned. Provider-reported success is never sufficient by itself.**
+
+- `shipDestroyNode`'s own `Apply` call succeeding (`applyErr == nil`) no
+  longer resolves `applied`/`destroyed` directly. It now transitions to
+  `unknown_post_timeout` — the pre-existing "ambiguous, go verify"
+  state — and always runs the same reconcile-by-query loop a genuinely
+  ambiguous `Apply` error already triggered. The read-back is what earns
+  the verdict, exactly as an ambiguous outcome already required;
+  "provider said success" no longer skips it.
+- The reconcile loop's own resolution logic for an **ambiguous RPC result**
+  (`applyClaimedSuccess=false`, the pre-existing path) is unchanged: a
+  not-found read (with the pre-attempt `present_matches` precondition
+  already established) resolves `destroyed`; a read that still finds the
+  resource present is *immediately* conclusive — presence itself proves
+  the call never landed — and resolves `failed`, no retry.
+- For a **clean, provider-claimed success** (`applyClaimedSuccess=true`,
+  the new universal path), a present read is deliberately *not*
+  immediately conclusive — real eventual-consistency lag (SQS's own ~60s
+  figure) can look identical to a lie until the budget's own tail is
+  reached, so every attempt but the last records `inconclusive` and
+  retries. Only the **final** attempt, still present, earns the
+  definitive verdict: `Outcome: "provider_reported_success_but_present"`,
+  detail "the provider reported a successful destroy, but a post-destroy
+  read-back found the resource still present after the full retry
+  budget — the delete never actually happened" — a materially more
+  serious finding than an ordinary ambiguous-RPC `failed`, since it means
+  the provider actively lied, not just that the network hiccuped, and
+  `ubx why`'s own biography rendering should be able to say so plainly
+  rather than folding it into the same generic wording an honest
+  ambiguous failure gets. This final-attempt verdict is a definitive
+  `failed`, deliberately never the vaguer `still_unknown` — a read that
+  clearly and repeatedly says "still here" is not genuinely ambiguous the
+  way a failing RPC is; it is a clear, repeated "no" to the destroyed
+  question.
+- **Terminal `Apply` errors are unaffected — no read-back added for
+  them.** A real, structured `ERROR`-severity diagnostic is already the
+  provider's own honest negative answer (this document's own error
+  taxonomy, above: "the provider itself said no"); the asymmetry this
+  amendment is built on is specifically about *trusting a rosy answer*,
+  not a downbeat one. A false negative (provider claims failure, but the
+  delete actually landed) is a categorically safer class of bug than a
+  false positive (provider claims success, ledger records the resource
+  gone, it's still live) — the first surfaces as a resource `ubx status`
+  correctly still shows as present and a retry cleans up; the second is
+  exactly the silent, undetectable trust violation this project's whole
+  thesis exists to prevent. Adding a read-back to every terminal failure
+  too would only add cost, not close a real risk.
+- The **already-absent short-circuit** (the three-way freshness
+  precheck, above) is unaffected — it never calls `Apply` at all, so
+  there's nothing for a lying response to attach to.
+
+**Co-scoped with UBI-42 (the reconcile retry budget), not deferred
+separately — the universal read-back makes the existing budget's own
+inadequacy load-bearing for every single destroy, not just the rare
+ambiguous ones it used to gate.** The pre-existing budget
+(`maxReconcileAttempts = 5`, `reconcileRetryInterval = 20ms` — ~100ms
+total, still exactly what create/modify's own unrelated `reconcileLoop`
+uses, untouched) was already known too short for genuine cloud eventual
+consistency (Session 5's own finding: SQS's real deletion-visibility lag
+can outlast 60 seconds); shipping the universal read-back on top of that
+same fixed interval for destroy would turn *every* destroy against a
+provider with any real propagation lag into a spurious `failed`, even
+though the delete genuinely happened — a regression this amendment
+cannot ship alongside. Fixed together, destroy-specifically: a new,
+separate backoff schedule (`destroyReconcileBackoffSchedule`,
+`core/executor/ship.go`) — 10 steps from 50ms up to a 15s ceiling,
+summing to roughly 64 seconds of total budget, comfortably past AWS's
+own documented ~60-second SQS lag. The common case (a provider with
+synchronous, immediate consistency — GCP Pub/Sub's own real behavior,
+confirmed by this session's own live finding once fixed: real deletion
+confirmed via Cloud Audit Logs immediately) resolves on the very first
+read, before any sleep at all — the schedule's cost is paid only by the
+genuine long tail, never by the ordinary case. A persistent lie (a
+provider that never actually deletes, ever) now costs one full
+~64-second budget per attempt before resolving a definitive `failed`
+(`provider_reported_success_but_present`, above — never rounded down to
+the vaguer `still_unknown`), then a hard `retry budget exhausted`
+failure once `maxApplyAttemptsPerResource` (3) is spent across re-ship
+attempts — a real, bounded cost for surfacing a serious finding loudly,
+not a silent infinite hang.
+
+**Hermetic**: `core/executor`'s own local `fakeApplier` (`ship_test.go`)
+gains two new fault-injection modes, the package's own established
+convention (never `provider/internal/fakeprovider`, which this package
+has never imported — the same `core`/`provider` zero-import boundary
+UBI-23 established) — `scriptLyingDestroy` (`ApplyResourceChange` for a
+destroy reports success, `NewState: null`, no diagnostics, while the
+resource stays present, the exact shape found live) and
+`scriptDelayedAbsence` (a genuine destroy that keeps reading back
+present for exactly N further reads first, modeling real bounded
+eventual-consistency lag rather than a lie). New tests prove: a lying
+destroy resolves `provider_reported_success_but_present`/`failed`, never
+`destroyed`, and a retried re-ship against a still-lying provider fails
+again rather than ever accepting the claim; an honest, synchronously-
+consistent destroy still resolves `destroyed` on the very first
+reconcile read, with no added retries or sleeps; a destroy with genuine,
+bounded propagation delay still resolves `destroyed` once
+`destroyReconcileBackoffSchedule` reaches it, retried through the
+intervening `inconclusive` reads rather than giving up early.
+`provider/internal/fakeprovider` (the real, subprocess, wire-protocol
+fixture `cli`/`conformance` tests launch) separately gains the identical
+lying-destroy fault mode (`FAKEPROVIDER_APPLY_MODE=lying-destroy`),
+exercised by `cli/ship_lying_destroy_test.go`, proving the same behavior
+through the real tfplugin wire protocol, not just an in-process interface
+mock — gated behind `UBX_TEST_SLOW=1`, skipped by default: this path
+genuinely pays the full ~64-second production retry budget (unlike
+`core/executor`'s own suite, this package can't reach in and shrink an
+unexported var from outside), so it's a real, opt-in regression check,
+not part of the fast default `go test ./...` run. See
+docs/destroys-adversarial.md for the corresponding new adversarial rows.
+
+**Live**: the exact `google_pubsub_topic` destroy that lied was re-run
+against real GCP with the fix in place — see docs/reliability-report.md's
+own new chapter for the full transcript (create, adopt with the
+universal `{"id":...}` lookup, destroy, and this time a genuine
+`DeleteTopic` call confirmed via Cloud Audit Logs, the topic actually
+gone via `gcloud pubsub topics describe`). The earlier session's false
+`destroyed` ledger record is never edited — corrected forward, per this
+project's own append-only posture, the same discipline UBI-30's own
+false-tombstone recovery already established: a fresh `ubx scan` against
+the address rediscovers the resource (`FoldState`'s tombstone-fold
+correctly excluded it from `ubx status` while treating the ledger's own
+chain as permanently accurate history, not something to rewrite), and a
+new, correctly-verified destroy proposal closes it for real.
 
 ## Out of scope for v1, named so it isn't assumed covered
 

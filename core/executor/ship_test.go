@@ -22,17 +22,20 @@ import (
 // real tfplugin provider identifies a resource from within its own state
 // rather than a side-channel parameter.
 type fakeApplier struct {
-	mu            sync.Mutex
-	resources     map[string]json.RawMessage
-	scripts       map[string][]applyStep
-	createCounter int
-	createScripts map[string][]applyStep // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
+	mu             sync.Mutex
+	resources      map[string]json.RawMessage
+	scripts        map[string][]applyStep
+	createCounter  int
+	createScripts  map[string][]applyStep // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
+	readsRemaining map[string]int         // UBI-44/42: id -> ReadResource calls remaining before it reports absent, for scriptDelayedAbsence
 }
 
 type applyStep struct {
-	err           error           // if set, ApplyResourceChange returns this error
-	landsAs       json.RawMessage // modify/create: if set, the resource's live state is mutated to this value as a side effect, even though err is also returned -- simulates a provider that committed the change server-side despite the RPC itself failing/timing out
-	destroyLanded bool            // destroy (UBI-30): if true, the resource is actually deleted server-side as a side effect, even though err is also returned -- the destroy-specific counterpart to landsAs (a destroy has no "value" to land as, only gone-or-not)
+	err                 error           // if set, ApplyResourceChange returns this error
+	landsAs             json.RawMessage // modify/create: if set, the resource's live state is mutated to this value as a side effect, even though err is also returned -- simulates a provider that committed the change server-side despite the RPC itself failing/timing out
+	destroyLanded       bool            // destroy (UBI-30): if true, the resource is actually deleted server-side as a side effect, even though err is also returned -- the destroy-specific counterpart to landsAs (a destroy has no "value" to land as, only gone-or-not)
+	lyingDestroy        bool            // destroy (UBI-44): if true, ApplyResourceChange reports a clean success (nil error, the correct "null" NewState) while the resource stays present -- the exact shape found live against a real google_pubsub_topic: no error, no diagnostics, and nothing actually deleted.
+	delayedAbsenceReads int             // destroy (UBI-42): if > 0, ApplyResourceChange reports a clean success and the destroy genuinely lands eventually, but the resource keeps reading back present for exactly this many further ReadResource calls first -- a real, bounded eventual-consistency lag, distinct from lyingDestroy's permanent lie.
 }
 
 func newFakeApplier() *fakeApplier {
@@ -53,6 +56,19 @@ func (f *fakeApplier) ReadResource(ctx context.Context, resourceSchema any, type
 	id, ok := extractID(currentState)
 	if !ok {
 		return nil, fmt.Errorf("fake: currentState has no id: %s", currentState)
+	}
+	// UBI-44/42: genuine, bounded eventual-consistency lag -- the resource
+	// stays observably present for a fixed number of reads after its own
+	// destroy landed, then reports absent, simulating a real cloud
+	// provider's own deletion-visibility window (SQS's own ~60s figure,
+	// UBI-30) rather than an instantaneous, always-consistent fake.
+	if remaining, scripted := f.readsRemaining[id]; scripted {
+		if remaining > 0 {
+			f.readsRemaining[id] = remaining - 1
+		} else {
+			delete(f.readsRemaining, id)
+			delete(f.resources, id)
+		}
 	}
 	state, ok := f.resources[id]
 	if !ok {
@@ -97,6 +113,25 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 		if steps, ok := f.scripts[id]; ok && len(steps) > 0 {
 			step := steps[0]
 			f.scripts[id] = steps[1:]
+			if step.lyingDestroy {
+				// UBI-44: reports the identical clean-success shape a
+				// genuine destroy produces (nil error, literal "null"
+				// NewState) but never actually removes the resource --
+				// the exact response the real google_pubsub_topic gave.
+				return json.RawMessage("null"), nil
+			}
+			if step.delayedAbsenceReads > 0 {
+				// UBI-42: a genuine destroy, eventually -- but resources[id]
+				// is deliberately NOT deleted here; ReadResource's own
+				// countdown (below) is what removes it, after the scripted
+				// number of reads, simulating real deletion-visibility lag
+				// rather than an instantaneous fake.
+				if f.readsRemaining == nil {
+					f.readsRemaining = map[string]int{}
+				}
+				f.readsRemaining[id] = step.delayedAbsenceReads
+				return json.RawMessage("null"), nil
+			}
 			if step.destroyLanded {
 				delete(f.resources, id)
 			}
@@ -184,6 +219,36 @@ func (f *fakeApplier) scriptDestroyOutcome(id string, err error, destroyLanded b
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scripts[id] = append(f.scripts[id], applyStep{err: err, destroyLanded: destroyLanded})
+}
+
+// scriptLyingDestroy (UBI-44) schedules the next ApplyResourceChange call
+// for a destroy of id to report a clean success -- nil error, the correct
+// literal "null" NewState, indistinguishable at the wire-protocol level
+// from a genuine destroy -- while never actually removing the resource.
+// This is the fixture-level reproduction of what a real
+// google_pubsub_topic destroy did against real GCP: no error, no
+// diagnostics, and zero real DeleteTopic calls (confirmed via Cloud Audit
+// Logs). Proves shipDestroyNode's own universal post-destroy read-back
+// (docs/executor.md's UBI-44 amendment) catches a lie a provider's own
+// response gives no other signal of.
+func (f *fakeApplier) scriptLyingDestroy(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts[id] = append(f.scripts[id], applyStep{lyingDestroy: true})
+}
+
+// scriptDelayedAbsence (UBI-42) schedules the next ApplyResourceChange call
+// for a destroy of id to report a clean success and genuinely land, but
+// keep reading back present for exactly readsBeforeAbsent further
+// ReadResource calls first -- simulating a real cloud provider's own
+// bounded deletion-visibility lag (SQS's own ~60-second figure, UBI-30)
+// rather than an always-instantly-consistent fake. Proves the new
+// destroyReconcileBackoffSchedule (UBI-42) reaches a genuinely
+// slow-but-real absence instead of giving up too soon.
+func (f *fakeApplier) scriptDelayedAbsence(id string, readsBeforeAbsent int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts[id] = append(f.scripts[id], applyStep{delayedAbsenceReads: readsBeforeAbsent})
 }
 
 func (f *fakeApplier) scriptApplyError(id string, err error) {

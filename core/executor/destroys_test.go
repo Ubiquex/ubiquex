@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ubiquex/ubiquex-cli/core"
 )
@@ -324,6 +325,127 @@ func TestShipDestroy_MixedProposal_ReversedOrder(t *testing.T) {
 	}
 	if _, exists := fake.resources[dependentAddr.String()]; !exists {
 		t.Fatal("dependent must still exist, only modified")
+	}
+}
+
+// shrinkDestroyReconcileBackoff swaps in a short, fixed-shape backoff
+// schedule for the duration of one test (same convention as
+// core's own lockWaitTimeout/lockRetryInterval seams) -- the real
+// production schedule spans ~64 real seconds to reach AWS's own
+// documented ~60-second SQS deletion-visibility lag (UBI-42); a hermetic
+// test proving the retry mechanism itself needs none of that real wall-
+// clock time.
+func shrinkDestroyReconcileBackoff(t *testing.T) {
+	t.Helper()
+	orig := destroyReconcileBackoffSchedule
+	destroyReconcileBackoffSchedule = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { destroyReconcileBackoffSchedule = orig })
+}
+
+// --- UBI-44: a clean ApplyResourceChange response is never sufficient ------
+
+// TestShipDestroy_LyingApplySuccess_NeverResolvesDestroyed proves
+// docs/executor.md's own UBI-44 amendment directly: a provider that
+// reports a clean destroy success (nil error, the correct "null"
+// NewState) while never actually deleting the resource -- the exact shape
+// found live against a real google_pubsub_topic, confirmed via Cloud Audit
+// Logs showing zero real DeleteTopic calls -- must never resolve
+// "destroyed". The post-destroy read-back (universal now, not just after
+// an ambiguous Apply) catches it every time.
+func TestShipDestroy_LyingApplySuccess_NeverResolvesDestroyed(t *testing.T) {
+	shrinkDestroyReconcileBackoff(t) // a permanent lie burns the whole budget every time -- keep it hermetic-fast
+	l, fake, addr, p := singleResourceDestroy(t)
+	fake.scriptLyingDestroy(addr.String())
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "failed" {
+		t.Fatalf("outcome = %s, want failed -- a lying provider must never produce a clean applied summary", sealed.Summary.Outcome)
+	}
+	ra := sealed.Resources[0]
+	if st, _ := ra.LastState(); st != core.ResourceFailed {
+		t.Fatalf("last state = %s, want failed", st)
+	}
+	last := ra.Reconciliation[len(ra.Reconciliation)-1]
+	if last.Outcome != "provider_reported_success_but_present" {
+		t.Fatalf("final reconciliation outcome = %s, want provider_reported_success_but_present -- a materially more serious finding than an ordinary ambiguous failure", last.Outcome)
+	}
+	if _, exists := fake.resources[addr.String()]; !exists {
+		t.Fatal("resource must still exist -- the provider's own claimed success was never real")
+	}
+
+	// The resource is still present and still matches -- a re-run must
+	// retry the destroy normally, exactly like any other failed attempt,
+	// never treat the false "destroyed" claim as final.
+	fake.scriptLyingDestroy(addr.String()) // the lie persists on a genuine, unfixed provider
+	sealed2, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("retry ship: %v", err)
+	}
+	if st, _ := sealed2.Resources[0].LastState(); st != core.ResourceFailed {
+		t.Fatalf("retry last state = %s, want failed again -- still lying", st)
+	}
+}
+
+// TestShipDestroy_CleanApply_NoUnnecessaryRetries proves the universal
+// read-back's own cost claim: a synchronously-consistent provider (the
+// ordinary, honest case -- confirmed live for GCP Pub/Sub, UBI-44) still
+// resolves "destroyed" on the very first post-destroy read, with no added
+// retries or sleeps, so the fix's own cost is paid only by a genuine slow
+// or lying tail, never by the common case. TestShipDestroy_CleanApply
+// already asserts the exact reconciliation shape; this test asserts the
+// same thing framed explicitly around the new universal path's own cost.
+func TestShipDestroy_CleanApply_NoUnnecessaryRetries(t *testing.T) {
+	l, fake, _, p := singleResourceDestroy(t)
+
+	start := time.Now()
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("ship took %s -- the honest, synchronously-consistent case must resolve on the very first read-back, no backoff sleep", elapsed)
+	}
+	ra := sealed.Resources[0]
+	if len(ra.Reconciliation) != 2 {
+		t.Fatalf("reconciliation = %+v, want exactly 2 entries (present_matches precheck, destroyed confirmation) -- no extra retries", ra.Reconciliation)
+	}
+}
+
+// TestShipDestroy_DelayedAbsence_ResolvesDestroyed proves UBI-42's own
+// co-scoped fix: a destroy that genuinely lands, but whose absence isn't
+// visible on the read side for a few real reads (bounded, eventual-
+// consistency lag -- SQS's own ~60-second figure, UBI-30, is the real
+// motivating case), still correctly resolves "destroyed" once
+// destroyReconcileBackoffSchedule's own retries reach it, rather than
+// timing out into a false "still_unknown"/"failed" the way the
+// pre-UBI-42 100ms budget would have.
+func TestShipDestroy_DelayedAbsence_ResolvesDestroyed(t *testing.T) {
+	shrinkDestroyReconcileBackoff(t)
+	l, fake, addr, p := singleResourceDestroy(t)
+	fake.scriptDelayedAbsence(addr.String(), 3) // present for 3 more reads, then gone
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %s, want applied -- a genuine, if delayed, destroy must still resolve destroyed", sealed.Summary.Outcome)
+	}
+	ra := sealed.Resources[0]
+	if st, _ := ra.LastState(); st != core.ResourceApplied {
+		t.Fatalf("last state = %s, want applied", st)
+	}
+	last := ra.Reconciliation[len(ra.Reconciliation)-1]
+	if last.Outcome != "destroyed" {
+		t.Fatalf("final reconciliation outcome = %s, want destroyed", last.Outcome)
+	}
+	// present_matches precheck, 3 inconclusive-but-present retries, destroyed.
+	if len(ra.Reconciliation) != 5 {
+		t.Fatalf("reconciliation = %+v, want exactly 5 entries -- the delayed reads must actually have been retried, not skipped or short-circuited", ra.Reconciliation)
 	}
 }
 

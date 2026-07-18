@@ -1096,3 +1096,214 @@ reconciliation earlier in this session's own investigation (before the
 impact was never fully isolated). Not fixed this session — a real,
 separate, named gap for `core/executor`'s own retry-budget tuning, not a
 destroys-specific defect.
+
+# UBI-44: a destroy that lied — provider-reported success is never sufficient
+
+> Same discipline as the sections above: real command output, not
+> reconstructed. Real GCP project `personal-273114`, provider
+> `hashicorp/google` 7.40.0. No adjectives.
+
+## Scope
+
+Found live in UBI-43 session 5's own finale (previous arc): a real
+`google_pubsub_topic` destroy, shipped the ordinary way, reported
+`applied`/`Outcome: "destroyed"` in the ledger while the real GCP topic
+stayed live — filed as its own issue rather than patched under time
+pressure. This section is that issue closed: the mechanism diagnosed for
+real (not assumed to be a repeat of UBI-30's own `PlannedPrivate` bug),
+`core/executor`'s own destroy verdict made structurally honest (a
+post-destroy read-back is now the *only* way `destroyed` is ever earned,
+universally, not just after an ambiguous `Apply` result), and the exact
+scenario that lied re-run against real GCP with the fix in place.
+
+## Diagnosing the mechanism, for real — not assumed
+
+The obvious hypothesis was "another `PlannedPrivate` no-op, same shape as
+UBI-30." Checked directly rather than assumed: `shipDestroyNode` already
+calls `PlanResourceChange` unconditionally before every destroy `Apply`
+(UBI-30's own fix), and `PlannedPrivate` came back **empty in every
+attempt this session made** — including the one that later actually
+deleted the topic. Not the same mechanism.
+
+Reproduced live, four separate ways (a real `ubx ship`, and three
+isolated variations driving the wire protocol directly against
+`hashicorp/google` 7.40.0, protocol v5): every one produced a clean,
+diagnostics-free success —
+
+```text
+$ ubx ship 5baf0108c345… --provider ./terraform-provider-google --provider-config '{"project":"personal-273114"}' --ledger-dir .
+applied: ubi44.google_pubsub_topic.ubi44-diag-1784414350
+1 resource(s), 1 applied, 0 failed, 0 still unknown -- outcome: applied
+```
+
+— while Cloud Audit Logs showed **zero** real `DeleteTopic` calls across
+all four:
+
+```text
+$ gcloud logging read 'resource.type="pubsub_topic" AND protoPayload.resourceName:"ubi44-diag-1784414350"' --project personal-273114 --freshness=1d
+TIMESTAMP                       METHOD_NAME                             CODE
+2026-07-18T22:41:35.807461840Z  google.pubsub.v1.Publisher.CreateTopic
+```
+
+Only `CreateTopic`. The topic was still there:
+
+```text
+$ gcloud pubsub topics describe ubi44-diag-1784414350 --project personal-273114
+name: projects/personal-273114/topics/ubi44-diag-1784414350
+```
+
+Real root cause, isolated by direct experiment: `google_pubsub_topic`'s
+own `Delete` needs its `name` attribute (the short-form topic ID,
+distinct from `id`, the full path) populated in `PriorState` to actually
+issue the real API call. `ubx`'s universal `{"id": "..."}`-only lookup
+never fills `name` — confirmed by manually filling it in correctly
+(short form, matching real Terraform's own `import`) against a second
+throwaway topic and watching a genuine `DeleteTopic` call finally appear
+in the audit log, and the topic actually gone:
+
+```text
+$ gcloud pubsub topics describe ubi44-diag2-1784415588 --project personal-273114
+ERROR: (gcloud.pubsub.topics.describe) NOT_FOUND: Resource not found (resource=ubi44-diag2-1784415588)
+$ gcloud logging read '...' --project personal-273114
+TIMESTAMP                       METHOD_NAME                             CODE
+2026-07-18T23:00:30.368342969Z  google.pubsub.v1.Publisher.DeleteTopic
+2026-07-18T22:59:48.840384014Z  google.pubsub.v1.Publisher.CreateTopic
+```
+
+Two genuinely different root causes (UBI-30's empty `PlannedPrivate`;
+this session's incomplete `PriorState`) produce the **identical
+symptom**: a provider can say "success" without it being true. That's
+the real finding — not this one type's own lookup gap, which is
+real but narrower.
+
+## The fix: a mandatory post-destroy read-back, universally
+
+`shipDestroyNode`'s own `Apply` call succeeding no longer resolves
+`applied`/`destroyed` directly — it now runs the same reconcile-by-query
+loop an ambiguous `Apply` error already required, universally. Co-scoped
+with UBI-42 (the reconcile retry budget was already known too short for
+real cloud eventual consistency — SQS's own ~60s figure, UBI-30's own
+finding): a new backoff schedule (~64 seconds total) replaces destroy's
+own fixed 100ms budget, so the universal check doesn't turn a real,
+slow-but-genuine delete into a false failure. Full design:
+docs/executor.md's own UBI-44 amendment; full hermetic proof:
+`core/executor/destroys_test.go`'s new tests, plus
+`cli/ship_lying_destroy_test.go` proving the identical behavior through
+the real tfplugin wire protocol.
+
+## Live re-run: the exact scenario, fixed binary
+
+The identical shape that lied — adopt via the universal `{"id":...}`
+lookup, resolve a destroy, `--confirm-destroys`, ship — re-run against a
+fresh real topic with the fix in place:
+
+```text
+$ ubx ship ef1a7f6b8ba8… --provider ./terraform-provider-google --provider-config '{"project":"personal-273114"}' --ledger-dir .
+failed: ubi44.google_pubsub_topic.ubi44-fixed-1784417122
+  terminal: the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened
+1 resource(s), 0 applied, 1 failed, 0 still unknown -- outcome: failed
+```
+
+Took ~58 real seconds (the full backoff schedule, genuinely exhausted —
+this session's own control experiment already proved the underlying
+`name`-completeness gap isn't fixed by this session's own work, so this
+resource genuinely cannot be deleted via the universal lookup alone; see
+"What this section doesn't cover," below). Verified via `gcloud`,
+matching the honest report this time, not contradicting it:
+
+```text
+$ gcloud pubsub topics describe ubi44-fixed-1784417122 --project personal-273114
+name: projects/personal-273114/topics/ubi44-fixed-1784417122
+```
+
+`ubx why` renders the complete, honest attempt — every intervening
+`inconclusive` retry, the final `provider_reported_success_but_present`
+verdict, and the terminal error message, all real:
+
+```text
+$ ubx why ef1a7f6b8ba8… --ledger-dir .
+...
+apply history:
+  attempt 1: outcome=failed
+    ubi44.google_pubsub_topic.ubi44-fixed-1784417122:
+      pending at 2026-07-18T23:26:15Z
+      in_flight at 2026-07-18T23:26:16Z
+      unknown_post_timeout at 2026-07-18T23:26:16Z -- provider reported a successful destroy -- verifying via a post-destroy read-back before recording it as destroyed
+      failed at 2026-07-18T23:27:13Z -- provider reported success but a post-destroy read-back found the resource still present
+      reconcile: present_matches at 2026-07-18T23:26:16Z
+      reconcile: inconclusive at 2026-07-18T23:26:17Z -- still present after a reported successful destroy -- retrying to allow for real propagation lag before concluding the provider's claim was false
+      (... 7 more inconclusive retries, spaced per the backoff schedule ...)
+      reconcile: provider_reported_success_but_present at 2026-07-18T23:27:13Z -- the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened
+      error (terminal): the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened
+```
+
+## The false record from the diagnosis session, corrected forward — never edited
+
+The very first reproduction (`ubi44-diag-1784414350`, above) left a
+literal false `destroyed` record in its own scratch ledger, written by
+this exact bug before the fix existed. It stands, permanently, exactly
+as it was recorded — never edited, per this project's own append-only
+posture (the same discipline UBI-30's own false-tombstone recovery
+established):
+
+```text
+$ ubx why ubi44.google_pubsub_topic.ubi44-diag-1784414350 --ledger-dir .
+ubi44.google_pubsub_topic.ubi44-diag-1784414350: 2 proposal(s), newest first
+- change 5baf0108c345… (2026-07-18T22:42:52Z): UBI-44 diagnosis: destroy the throwaway pubsub topic
+    destroy: ubi44.google_pubsub_topic.ubi44-diag-1784414350
+apply history:
+  attempt 1: outcome=applied
+    ubi44.google_pubsub_topic.ubi44-diag-1784414350:
+      pending at 2026-07-18T22:43:18Z
+      in_flight at 2026-07-18T22:43:19Z
+      applied at 2026-07-18T22:43:19Z (destroyed)
+      reconcile: present_matches at 2026-07-18T22:43:19Z
+      reconcile: destroyed at 2026-07-18T22:43:19Z
+- adoption 7cddb5e3d163… (2026-07-18T22:41:49Z): adopt existing ubi44.google_pubsub_topic.ubi44-diag-1784414350 into the ledger (discovered by scan)
+```
+
+The real topic behind this address happens to be genuinely gone now too
+— but via a real Terraform `destroy` in this session's own control
+experiment (proving the root cause, above), not through `ubx`. Unlike
+UBI-30's own false tombstones (where the live resource was still there,
+requiring a fresh `ubx scan` to rediscover it as `new` and destroy it for
+real), there is no live resource left to rediscover here — the ledger's
+false belief and current reality happen to now agree, by coincidence of
+an out-of-band action, not because the false record was ever corrected
+through `ubx` itself. The record's own permanent dishonesty about *how*
+this address became empty is exactly the point: a future reader of this
+exact chain sees the truth (the destroy was signed and shipped, `ubx`
+believed it worked, and this reliability report is the only place that
+says otherwise) rather than a silently rewritten "it worked after all."
+
+## Cleanup and account state
+
+Both throwaway topics from the diagnosis session, and the fixed-binary
+re-run's own topic, are confirmed gone from the real account — the
+first two via the real Terraform control experiment and a direct
+`gcloud pubsub topics delete` (the underlying lookup-completeness gap
+means `ubx` itself cannot yet close this loop automatically), the third
+by hand after the live re-run above:
+
+```text
+$ gcloud pubsub topics list --project personal-273114
+Listed 0 items.
+```
+
+## What this section doesn't cover
+
+**The underlying `name`-completeness gap for `google_pubsub_topic`'s
+destroy path is not fixed by this session's own work, and was never
+meant to be** — this session's fix (a mandatory post-destroy read-back)
+makes `ubx` *honest* about a destroy that can't actually succeed via the
+universal `{"id":...}` lookup; it does not make that destroy succeed.
+Closing that specific gap needs the alternative fix path UBI-44's own
+filing already named — a smarter, per-type lookup (generalizing
+`core/lookuphints`'/`conformance/registry.go`'s own "both required
+together" shape to the destroy path specifically) — deliberately left
+for its own session, not folded into this one. `google_storage_bucket`
+(the other `RealSafe` GCP type with the identical "id alone isn't
+enough" read-side gotcha, per `conformance/registry.go`) was named as a
+plausible sibling risk in UBI-44's own filing but not separately
+verified this session — audited by inspection of the identical shape,
+not by a live repro of its own.

@@ -1035,6 +1035,20 @@
   loader skip any file the cascade walk already consumed. `ubx config`
   now reports which ceiling rule fired and where. See §Ledger stores'
   own addendum entry below for the full session.
+- 2026-07-19 — UBI-44 (co-scoped with UBI-42): a real `google_pubsub_topic`
+  destroy found live (UBI-43 session 5) reporting `destroyed` while the
+  real topic stayed alive — diagnosed for real (not assumed a UBI-30
+  repeat: `PlannedPrivate` was empty in every attempt, including the one
+  that worked), root cause isolated via Cloud Audit Logs to an incomplete
+  `PriorState` this session's own universal lookup never fills. Fixed
+  structurally: a provider's claimed destroy success is never sufficient
+  by itself — `shipDestroyNode`'s own post-destroy read-back is now
+  universal, not just for ambiguous `Apply` results, with a new
+  `destroyReconcileBackoffSchedule` (~64s, co-scoped with UBI-42's own
+  named retry-budget gap) so the fix doesn't turn real propagation lag
+  into a false failure. Live re-run against real GCP confirms the exact
+  scenario that lied now honestly reports `failed` instead. See §A
+  destroy that lied below for the full session.
 
 ## Strategy
 
@@ -1915,6 +1929,84 @@ consistency in a real account — left for a future session's own
 retry-budget tuning. docs/executor.md gained a session-5 addendum;
 docs/reliability-report.md gained a full "UBI-30" section, real
 transcripts throughout. See STATE.md for the full session writeup.
+
+### A destroy that lied: universal post-destroy read-back (UBI-44, co-scoped with UBI-42)
+
+Found live in UBI-43 session 5's own finale: a real `google_pubsub_topic`
+destroy reported `applied`/`Outcome: "destroyed"` while the real GCP
+topic stayed live — filed as its own issue rather than patched under
+time pressure. Diagnosed for real, not assumed a repeat of UBI-30's own
+`PlannedPrivate` no-op: `shipDestroyNode` already calls
+`PlanResourceChange` unconditionally (UBI-30's own fix), and
+`PlannedPrivate` came back empty in every attempt this session made
+against the real provider, including the one that later actually
+deleted the topic — ruling that mechanism out directly rather than by
+assumption. Root cause isolated by direct experiment against real GCP,
+four separate ways (a real `ubx ship` plus three isolated wire-protocol
+variations): `google_pubsub_topic`'s own `Delete` needs its `name`
+attribute (the short-form topic ID, distinct from `id`) populated in
+`PriorState`, which `ubx`'s universal `{"id": "..."}`-only lookup never
+supplies — confirmed via Cloud Audit Logs showing zero real
+`DeleteTopic` calls across all four attempts, and a genuine `DeleteTopic`
+call appearing the moment `name` was filled in correctly.
+
+The real finding: two genuinely different root causes (UBI-30's empty
+`PlannedPrivate`; this session's incomplete `PriorState`) produce the
+identical symptom — a clean, diagnostics-free provider "success" that
+isn't true. Patching this one type's own lookup gap would close this
+instance and leave the class of bug open for the next SDK quirk. Fixed
+structurally instead: `shipDestroyNode`'s own `Apply` call succeeding no
+longer resolves `destroyed` directly — it now runs the same
+reconcile-by-query loop an ambiguous `Apply` result already required,
+universally. A present read after a *claimed* success is deliberately
+not immediately conclusive (real propagation lag can look identical to a
+lie) — only the read-back's own final attempt, still present, earns the
+distinctly-worded `provider_reported_success_but_present` verdict, never
+silently upgraded to `destroyed`, and never rounded down to the vaguer
+`still_unknown` either (a read that clearly and repeatedly says "still
+here" is not genuinely ambiguous). Terminal `Apply` errors are
+unaffected — a real, structured diagnostic is already the provider's own
+honest negative answer, and adding a read-back there would only cost
+without closing a real risk.
+
+**Co-scoped with UBI-42, not deferred separately**, since the universal
+read-back makes the pre-existing retry budget's own inadequacy
+load-bearing for every destroy, not just the rare ambiguous ones it used
+to gate: destroy's own reconcile budget became a ten-step backoff
+schedule (`destroyReconcileBackoffSchedule`, `core/executor/ship.go`,
+~64 seconds total, comfortably past AWS's own documented ~60-second SQS
+lag UBI-30 found), separate from create/modify's own unrelated
+`reconcileLoop` budget, untouched. The common, honest case (a
+synchronously-consistent provider) resolves on the very first read, no
+added cost at all.
+
+New hermetic tests, `core/executor/destroys_test.go` (a lying destroy
+never resolves `destroyed`, retried and still fails on re-ship; the
+honest case adds zero extra reads; a genuine bounded propagation delay
+still resolves `destroyed` once the schedule reaches it) plus
+`core/executor/ship_test.go`'s new `scriptLyingDestroy`/
+`scriptDelayedAbsence` fault-injection helpers. `provider/internal/fakeprovider`
+gained the identical lying-destroy mode (`FAKEPROVIDER_APPLY_MODE=lying-destroy`),
+proven through the real tfplugin wire protocol by
+`cli/ship_lying_destroy_test.go` — gated behind `UBX_TEST_SLOW=1` since
+it genuinely pays the real ~64-second budget and can't reach in to
+shrink `core/executor`'s own unexported var. Three new
+docs/destroys-adversarial.md rows (12-14). Live re-run against real GCP
+with the fix in place: the exact scenario that lied now correctly
+reports `failed`/`provider_reported_success_but_present` instead —
+confirmed honest via `gcloud` (the topic genuinely still there, matching
+the report) and Cloud Audit Logs (still zero `DeleteTopic` calls — the
+underlying lookup-completeness gap is a real, separate, still-open
+follow-up, not fixed by this session's own read-back-honesty work). The
+original diagnosis session's own false `destroyed` record stands
+permanently, uncorrected by edit, per this project's own append-only
+posture — docs/reliability-report.md's own new "UBI-44" section has the
+full transcripts. docs/executor.md gained the full design amendment.
+ubiquex-docs updated the same session (`cli/ship.mdx`'s own new "A
+provider that reports success without it being true" section,
+`guides/destroy-flow.mdx` cross-linked); `mint validate`/`mint
+broken-links` both clean. Account left clean. See STATE.md for the full
+session writeup.
 
 ### Multi-provider stacks (UBI-43)
 

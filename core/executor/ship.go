@@ -186,8 +186,40 @@ var (
 // Retry/reconciliation budgets -- package vars, not constants, so tests can
 // shrink them (same convention as core's lockWaitTimeout/lockRetryInterval).
 var (
-	maxReconcileAttempts        = 5
-	reconcileRetryInterval      = 20 * time.Millisecond
+	// maxReconcileAttempts/reconcileRetryInterval are create/modify's own
+	// reconcileLoop budget, unchanged -- a different problem from destroy's
+	// own (below): a modify/create reconciles against a specific attribute
+	// value, not presence itself, and this session's own live finding
+	// (UBI-44/UBI-42) was specifically about destroy's absence-confirmation
+	// lag, never measured or claimed here.
+	maxReconcileAttempts   = 5
+	reconcileRetryInterval = 20 * time.Millisecond
+
+	// destroyReconcileBackoffSchedule replaces a single fixed interval for
+	// destroy's own reconcile-by-query (UBI-42, co-scoped with UBI-44's own
+	// universal post-destroy read-back, below): a real cloud provider's own
+	// deletion-visibility lag (SQS's own documented ~60 seconds, confirmed
+	// live, UBI-30's finale) can easily outlast a short fixed budget, and
+	// the universal read-back now pays this cost on *every* destroy, not
+	// just the rare ambiguous ones a fixed 100ms budget used to gate --
+	// paying a uniformly-long fixed interval on every attempt would be its
+	// own regression. A backoff schedule keeps the common case (a
+	// synchronously-consistent provider -- confirmed live for GCP Pub/Sub,
+	// UBI-44) resolving on the very first read, at essentially zero added
+	// cost, while still reaching a real cloud's own slow tail: ten steps
+	// summing to ~63.75s, comfortably past AWS's own ~60-second figure.
+	destroyReconcileBackoffSchedule = []time.Duration{
+		50 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		15 * time.Second,
+		15 * time.Second,
+		15 * time.Second,
+	}
 	maxApplyAttemptsPerResource = 3
 )
 
@@ -678,6 +710,17 @@ type resourceHistory struct {
 	// Reconciliation Outcomes are "applied"/"failed"/"inconclusive"); only
 	// shipDestroyNode ever reads this field.
 	lastReconciliationOutcome string
+
+	// lastApplyClaimedSuccess folds forward whether the most recent
+	// transition INTO ResourceUnknownPostTimeout for this address (UBI-44)
+	// was reached because ApplyResourceChange itself reported success (a
+	// non-empty Detail, "provider reported a successful destroy...") or
+	// because the RPC was merely ambiguous (empty Detail, unchanged from
+	// before this amendment). Lets a resumed reconciliation (after a
+	// kill -9 between recording unknown_post_timeout and finishing the
+	// read-back) still record the correct, honestly-worded outcome instead
+	// of silently defaulting to the ambiguous-RPC wording.
+	lastApplyClaimedSuccess bool
 }
 
 // foldResourceHistory folds addr's own ProviderResult forward as
@@ -710,6 +753,11 @@ func foldResourceHistory(attempts []*core.ApplyRecord, addr core.Address) resour
 				if t.State == core.ResourceInFlight {
 					h.attemptsInFlight++
 					break // count once per attempt, regardless of how many transitions it recorded
+				}
+			}
+			for _, t := range ra.Transitions {
+				if t.State == core.ResourceUnknownPostTimeout {
+					h.lastApplyClaimedSuccess = t.Detail != "" // last one wins, same convention as lastReconciliationOutcome above
 				}
 			}
 		}
@@ -1497,7 +1545,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 			return persist()
 		}
 		priorPresentMatches := hist.lastReconciliationOutcome == "present_matches"
-		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, priorPresentMatches, ra)
+		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, priorPresentMatches, hist.lastApplyClaimedSuccess, ra)
 		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
 		return persist()
 	}
@@ -1597,14 +1645,33 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		if debugDelayAfterApplySuccess > 0 {
 			time.Sleep(debugDelayAfterApplySuccess)
 		}
-		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "destroyed"})
-		recordTransition(ra, core.ResourceApplied, "")
-		*resourcesApplied++
+		// UBI-44: a clean ApplyResourceChange response is never sufficient
+		// on its own -- found live, against a real google_pubsub_topic,
+		// against real GCP: the provider returned this exact shape (no
+		// error, a genuine top-level null NewState) while Cloud Audit Logs
+		// showed zero DeleteTopic calls ever made. The same mandatory
+		// post-destroy read-back an ambiguous Apply result already
+		// required (below) now runs unconditionally here too -- the read-
+		// back earns the destroyed verdict; the provider's own reported
+		// success never does, by itself. applyClaimedSuccess=true lets
+		// reconcileDestroyLoop distinguish "the provider actively lied"
+		// from "the RPC itself was merely ambiguous" in what it records.
+		recordTransition(ra, core.ResourceUnknownPostTimeout, "provider reported a successful destroy -- verifying via a post-destroy read-back before recording it as destroyed")
+		if err := persist(); err != nil {
+			return err
+		}
+		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, true, ra)
+		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
 		return persist()
 	}
 
 	var terminal *TerminalError
 	if errors.As(applyErr, &terminal) {
+		// A real, structured ERROR diagnostic is the provider's own honest
+		// negative answer -- this document's error taxonomy already trusts
+		// it without a read-back (docs/executor.md's UBI-44 amendment: the
+		// asymmetry is specifically about trusting a rosy answer, not a
+		// downbeat one). No reconciliation needed here.
 		recordError(ra, terminal.Error(), core.ErrorTerminal)
 		recordTransition(ra, core.ResourceFailed, "")
 		*resourcesFailed++
@@ -1617,15 +1684,16 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 	if err := persist(); err != nil {
 		return err
 	}
-	outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, ra)
+	outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, false, ra)
 	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
 	return persist()
 }
 
 // reconcileDestroyLoop repeatedly reads addr's live state (reconcile-by-query)
-// after a destroy attempt's own result was ambiguous, up to
-// maxReconcileAttempts times, distinguishing "destroyed" from
-// "already_absent"/"failed" per docs/executor.md's own amendment:
+// -- universally now (UBI-44), not just after an ambiguous Apply result --
+// up to len(destroyReconcileBackoffSchedule) times, distinguishing
+// "destroyed" from "already_absent"/"failed" per docs/executor.md's own
+// amendment:
 //
 //   - A not-found read (core.ErrResourceUnreadable) resolves "destroyed"
 //     -- but ONLY when priorPresentMatches is true, i.e. the immediately
@@ -1638,15 +1706,29 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 //   - A successful read (the target is still reachable) resolves "failed"
 //     -- presence itself, not a specific attribute's old value, is what
 //     proves the call never landed (unlike a modify's reconciliation,
-//     which compares specific before/after dot-paths).
-//   - Any other read failure is inconclusive, retried after
-//     reconcileRetryInterval.
+//     which compares specific before/after dot-paths). If the provider
+//     had itself claimed success (applyClaimedSuccess), this is recorded
+//     as "provider_reported_success_but_present" instead of a plain
+//     "failed" -- a materially more serious finding (the provider lied),
+//     not an ordinary ambiguous-RPC failure.
+//   - Any other read failure is inconclusive, retried per
+//     destroyReconcileBackoffSchedule.
 //
 // Exhausting the budget without a conclusive answer resolves
 // still_unknown. Every attempt is appended to ra.Reconciliation; the final
 // transition is always recorded before returning.
-func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches bool, ra *core.ResourceApply) core.ResourceState {
-	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
+// applyClaimedSuccess (UBI-44) distinguishes, purely in what gets recorded,
+// why this loop is running at all: true means ApplyResourceChange itself
+// reported success (docs/executor.md's own amendment -- a clean response is
+// never sufficient by itself, so this read-back is what actually earns the
+// destroyed verdict); false means the RPC was merely ambiguous (a
+// retryable error, or a resumed unresolved state folded from history). Both
+// still resolve identically on a genuine not-found read (destroyed) or an
+// exhausted budget (still_unknown) -- only the "still present" case's own
+// wording differs, since "the provider actively lied" is a materially more
+// serious finding than "the RPC hiccuped and we're not sure."
+func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches, applyClaimedSuccess bool, ra *core.ResourceApply) core.ResourceState {
+	for attempt := 0; attempt < len(destroyReconcileBackoffSchedule); attempt++ {
 		_, _, err := core.ReadAndFingerprint(ctx, app, addr, providerSource, providerConfig, lookup)
 		at := nowRFC3339()
 		switch {
@@ -1663,11 +1745,41 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 		case err != nil:
 			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
 		default:
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "failed"})
-			recordTransition(ra, core.ResourceFailed, "confirmed by reconciliation: destroy never landed")
-			return core.ResourceFailed
+			if !applyClaimedSuccess {
+				// Unchanged: an ambiguous RPC result plus a present read is
+				// immediately conclusive -- presence itself proves the call
+				// never landed, no reason to wait further.
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "failed"})
+				recordTransition(ra, core.ResourceFailed, "confirmed by reconciliation: destroy never landed")
+				return core.ResourceFailed
+			}
+			// UBI-42/44: the provider itself claimed success, so a present
+			// read isn't immediately conclusive the way it is above -- real
+			// eventual-consistency lag (SQS's own ~60s figure) can look
+			// identical to a lie until the budget's own tail is reached.
+			// Only the final attempt, still present, earns the definitive
+			// "the provider lied" verdict; every earlier one just retries.
+			if attempt == len(destroyReconcileBackoffSchedule)-1 {
+				detail := "the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened"
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+					At: at, Outcome: "provider_reported_success_but_present",
+					Detail: detail,
+				})
+				// Unlike the ambiguous-RPC path (whose own recordError already
+				// ran in shipDestroyNode before this loop), Apply itself
+				// reported no error here -- record one now, so ubx ship's
+				// human report (printShipReport) shows *why*, not just "failed"
+				// with nothing underneath it.
+				recordError(ra, detail, core.ErrorTerminal)
+				recordTransition(ra, core.ResourceFailed, "provider reported success but a post-destroy read-back found the resource still present")
+				return core.ResourceFailed
+			}
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+				At: at, Outcome: "inconclusive",
+				Detail: "still present after a reported successful destroy -- retrying to allow for real propagation lag before concluding the provider's claim was false",
+			})
 		}
-		time.Sleep(reconcileRetryInterval)
+		time.Sleep(destroyReconcileBackoffSchedule[attempt])
 	}
 	recordTransition(ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
 	return core.ResourceStillUnknown

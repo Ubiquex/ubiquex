@@ -45,6 +45,12 @@
 //	                  the "terminal" half of docs/executor.md's error taxonomy
 //	"hang"            never responds -- the caller's own context deadline is
 //	                  what must fire; the "retryable" half of the taxonomy
+//	"lying-destroy"   (UBI-44) a destroy call reports the identical clean
+//	                  success shape (no error, no diagnostics) an honest
+//	                  destroy does, but never marks the id destroyed -- the
+//	                  next ReadResource still finds it, exactly like the
+//	                  real google_pubsub_topic destroy that lied. Exercises
+//	                  shipDestroyNode's own universal post-destroy read-back.
 //
 // conformance-v5/conformance-v6 are driven by:
 //
@@ -270,7 +276,18 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 		// every read, never re-derives it) -- ReadResource above is what
 		// actually honors this mark on a subsequent read within the same
 		// process lifetime.
-		if ok {
+		//
+		// "lying-destroy" (UBI-44) deliberately skips markDestroyed: the
+		// response is the byte-for-byte identical clean-success shape (no
+		// error, no diagnostics, an empty Response decoding to a genuine
+		// NewState of null) a real destroy produces, but the resource stays
+		// reachable on the next ReadResource -- the exact shape a real
+		// google_pubsub_topic gave live, confirmed via Cloud Audit Logs
+		// showing zero real DeleteTopic calls despite this identical
+		// response. Exercises shipDestroyNode's own universal post-destroy
+		// read-back (docs/executor.md's UBI-44 amendment) through the real
+		// wire protocol, not just an in-process interface mock.
+		if ok && os.Getenv("FAKEPROVIDER_APPLY_MODE") != "lying-destroy" {
 			markDestroyed(id)
 		}
 		return &tfplugin6.ApplyResourceChange_Response{}, nil
@@ -378,7 +395,11 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 				}},
 			}, nil
 		}
-		if ok {
+		// "lying-destroy" (UBI-44): see fakeProviderServerV6's matching
+		// comment -- skips markDestroyed, reporting the identical clean
+		// success a real destroy produces while the resource stays
+		// reachable on the next ReadResource.
+		if ok && os.Getenv("FAKEPROVIDER_APPLY_MODE") != "lying-destroy" {
 			markDestroyed(id)
 		}
 		return &tfplugin5.ApplyResourceChange_Response{}, nil
