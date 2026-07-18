@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -185,6 +187,58 @@ func TestLedger_CorruptedHeadFile(t *testing.T) {
 	_, err := l.Head()
 	if !errors.Is(err, ErrCorruptLedgerHead) {
 		t.Fatalf("got %v, want ErrCorruptLedgerHead", err)
+	}
+}
+
+// TestLedger_InterruptedAppendResumes is UBI-32 Arc B's own real finding
+// (docs/architecture.md's "A real gap found while building this"): a
+// crash between writing the proposal object and advancing the head used
+// to leave no path to recovery at all -- a retry of the identical Append
+// call reported ErrDuplicateProposal for a proposal that was never
+// actually accepted (the head never moved). Reproduced directly here by
+// poking the store the way a crash would leave it (object written, head
+// untouched), then retrying through the normal, public Append path.
+func TestLedger_InterruptedAppendResumes(t *testing.T) {
+	dir := t.TempDir()
+	l := Open(dir)
+	ctx := context.Background()
+
+	p := sampleProposal()
+	hash, err := validateAndHash(p)
+	if err != nil {
+		t.Fatalf("validateAndHash: %v", err)
+	}
+	p.ID = hash
+	p.Status = StatusAccepted
+	p.Acceptance = &Acceptance{Method: "local", Approvers: []string{"tester"}, AcceptedAt: "2026-07-19T00:00:00Z"}
+
+	b, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := l.store.WriteProposalIfAbsent(ctx, p.ID, b); err != nil {
+		t.Fatalf("simulate interrupted append (write proposal, no head advance): %v", err)
+	}
+	if head, err := l.Head(); err != nil || head != "" {
+		t.Fatalf("test setup: head = %q, err = %v -- want empty (genesis) before the resume", head, err)
+	}
+
+	// The retry: exactly what a real retry after the crash would send.
+	if err := l.Append(p); err != nil {
+		t.Fatalf("Append (resume): %v, want a clean resume, not an error", err)
+	}
+	head, err := l.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if head != p.ID {
+		t.Fatalf("head = %q, want %q -- the head must now be correctly advanced", head, p.ID)
+	}
+
+	// A third call for the same, now-truly-accepted proposal must still be
+	// a genuine duplicate -- the fix must never weaken this case (row 5).
+	if err := l.Append(p); !errors.Is(err, ErrDuplicateProposal) {
+		t.Fatalf("got %v, want ErrDuplicateProposal on a genuinely-already-accepted retry", err)
 	}
 }
 

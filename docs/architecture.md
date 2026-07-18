@@ -1990,7 +1990,7 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
-## Ledger stores (decided 2026-07-17, design room; config cascade/formats built UBI-32 Arc A session 1, LedgerStore/remote stores/addressing still not built)
+## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A session 1; LedgerStore interface + git reference impl + s3 store + addressing built UBI-32 Arc B session 1, live-verified against real S3 -- gs/azblob designed, not wired; PR-acceptance ceremony designed, not built; see STATE.md for exactly which CLI commands are wired)
 
 Two storage questions, decided separately:
 
@@ -2038,6 +2038,200 @@ preserve content-addressing, append-only posture, and independent
 verifiability. A hosted ledger operated by Nexus is this same interface
 with Nexus as the operator — the abstraction pays twice.
 
+### `LedgerStore` interface (built, UBI-32 Arc B session 1)
+
+Extracted from `core.Ledger`'s own actual filesystem calls — read
+directly, not assumed from the design sketch above — across
+`core/ledger.go`, `core/lock.go`, `core/salt.go`, and `core/apply.go`.
+One finding worth stating plainly before the interface itself: **every
+read path that walks the whole chain — `Chain()`, `Fleet()`,
+`ProposalsForAddress()`, `LastObservedHash()`, `FoldState()` — does it by
+following `Parent` links back from `Head()`, calling `Read(id)`
+repeatedly. None of them ever lists a directory.** The *only* operation
+that needs a real list is `ApplyAttempts` (discovering which attempt
+numbers exist for one proposal). This matters directly for a remote
+store: no "list every proposal" primitive is needed at all, which is the
+one operation object stores are worst at making cheap and consistent.
+
+```go
+type LedgerStore interface {
+    ReadProposal(ctx context.Context, id string) ([]byte, error)
+    WriteProposalIfAbsent(ctx context.Context, id string, data []byte) error
+
+    Head(ctx context.Context) (string, error)
+    AdvanceHead(ctx context.Context, expectedPrev, newHead string) error
+
+    ReadApply(ctx context.Context, proposalID string, attempt int64) ([]byte, error)
+    WriteApply(ctx context.Context, proposalID string, attempt int64, data []byte) error
+    ListApplyAttempts(ctx context.Context, proposalID string) ([]int64, error)
+
+    Lock(ctx context.Context, ttl time.Duration) (release func(context.Context) error, err error)
+
+    ReadSalt(ctx context.Context) ([]byte, bool, error)
+    WriteSaltIfAbsent(ctx context.Context, salt []byte) error
+}
+```
+
+Byte-level, deliberately: JSON marshal/unmarshal (and `ErrCorruptLedgerEntry`/
+`ErrCorruptLedgerHead`/`ErrCorruptApplyRecord`'s own decoding) stays exactly
+where it already lives in `core/ledger.go`/`core/apply.go` — the store
+only ever moves bytes, so corrupted-content detection is identical
+regardless of which store produced the bytes, never duplicated per store.
+
+**`WriteProposalIfAbsent`/`WriteSaltIfAbsent` are create-only** — the
+store refuses (a distinguishable error) rather than overwrites if the key
+already exists, which is what makes proposal immutability
+(`ErrDuplicateProposal`) and the salt's own race-safe first-use generation
+store-agnostic properties rather than something the git store alone
+enforces via a `Stat`-then-write race window. `WriteApply` is the one
+write that's deliberately NOT create-only: `SaveApplyProgress` calls it
+repeatedly for the *same* attempt number as an apply progresses
+(docs/executor.md's own THE invariant — durable before every risky step),
+so it's a plain idempotent overwrite by design, sealed only once
+`SealApply` writes its final content.
+
+#### `Head`/`AdvanceHead`: a compare-and-swap, not a mutable pointer file
+
+The git store keeps today's exact behavior — `Head` reads
+`.ubx/ledger.lock`; `AdvanceHead` writes it, entirely safe because the
+existing `.ubx/lock` PID-file lock already serializes every caller before
+either runs (mutual exclusion, not optimism — zero behavior change).
+
+A remote store can't assume that kind of exclusion survives a lock's own
+TTL expiring mid-write (see Locking, below) or a network partition, so its
+`Head`/`AdvanceHead` need a real, independent correctness guarantee, not
+just "the lock should have prevented this." The design: **every
+`AdvanceHead` call creates one new, permanent, content-addressed object —
+never overwrites a mutable one** — keyed by the *previous* head it's
+advancing from:
+
+```
+<prefix>/heads/genesis          → the first proposal's own ID
+<prefix>/heads/<proposal-A-id>  → proposal B's ID (B's parent is A)
+<prefix>/heads/<proposal-B-id>  → proposal C's ID (C's parent is B)
+```
+
+`AdvanceHead(ctx, expectedPrev, newHead)` writes `heads/<expectedPrev-or-
+"genesis">` with `newHead` as its content, using the store's own
+create-only write. Two callers racing to advance from the *same*
+`expectedPrev` can't both succeed: the second one's create-only write
+fails outright (this is a genuine, portable guarantee, confirmed directly
+against `gocloud.dev/blob`'s own source before relying on it — its
+`WriterOptions.IfNotExist` is honored identically across every driver,
+returning `gcerrors.FailedPrecondition` on conflict; `s3blob` implements
+it via S3's own native `If-None-Match: *` conditional write, a real
+server-side atomic guarantee, not a client-side check-then-write race).
+This is a genuine compare-and-swap, expressed entirely through one
+portable primitive every `gocloud.dev/blob` driver already exposes — no
+provider-specific ETag/generation-precondition code needed anywhere, the
+exact "one dependency, not three SDKs" property the design room wanted.
+
+Resolving the *current* head is then "follow `heads/` edges forward from
+genesis until one is missing" — correct, but `O(chain length)` requests
+in the worst case. A `head-hint` object (a plain, non-atomically-
+overwritten cache of the last-known head, updated best-effort after every
+successful `AdvanceHead`) bounds the common case to "however stale the
+hint is" rather than always walking from genesis — `Head()` reads the
+hint first, then keeps following edges forward from there. Correctness
+never depends on the hint being right or even present; it's purely a cost
+optimization, checked directly, not assumed, against
+`core/state.go`'s own `Chain()` doc comment: "Ledgers are expected to be
+small at this stage" — the same foundational-slice assumption already
+governing the existing full-chain linear walk, extended to the remote
+case rather than contradicted by it.
+
+#### Locking: a TTL, not a PID, is the staleness signal
+
+The concrete interface method is `Lock(ctx, ttl) (release, error)`. A
+remote store implements it with the identical create-only primitive
+`AdvanceHead` uses — a `lock` object, created only if absent, holding an
+expiry timestamp — but its staleness check is necessarily weaker than
+git-local's: `acquireLedgerLock`'s PID-liveness check
+(`processRunning`) only works because git-local is inherently
+single-machine; a remote store has no equivalent "is the holder's process
+still alive" signal at all, so **an expired TTL, not a dead PID, is the
+only staleness signal a remote store can ever have.** A lock past its own
+recorded expiry is treated as abandoned and reclaimed outright — real,
+honest boundary, not glossed over: a holder that's simply slow (a large
+apply, a network hiccup) past its own TTL looks identical to one that's
+truly dead, which is exactly why `ubx ship`'s own freshness/CAS checks
+(never just the lock) are what actually prevent a reclaimed-too-early
+lock from corrupting anything — the lock is a contention/fairness
+optimization on top of `AdvanceHead`'s own CAS, never the sole correctness
+guarantee, for either store.
+
+#### A real gap found while building this, fixed for both stores
+
+`Append`'s existing duplicate check (`os.Stat` the proposal path, refuse
+if present) was written assuming "the proposal file exists" and "this
+proposal has already been fully accepted" are the same fact. They aren't:
+a crash between writing the proposal object and advancing the head
+leaves the first true but not the second — and retrying the identical
+`Append` call, before this session, would have hit `ErrDuplicateProposal`
+on a proposal that was *never actually accepted* (the head never moved),
+with no path to recovery at all. Not a hypothetical: `core/ledger_test.go`
+already had `TestLedger_DuplicateProposalRejected` covering the *genuinely
+already-accepted* case, but nothing covered the crash-in-between case —
+confirmed by writing a new test,
+`TestLedger_InterruptedAppendResumes`, that reproduces the exact crash
+shape (a proposal file written directly, bypassing `Append`, with the
+head deliberately left at that proposal's own `Parent`) against the
+pre-session code before fixing anything. Fixed once, store-agnostically,
+in `core/ledger.go`'s own `Append`: a proposal whose object already exists
+is only `ErrDuplicateProposal` if the *head already reflects it* (this ID
+is the current head or reachable from it); if the proposal object exists
+but the head still names its own `Parent` as current, `Append` resumes —
+verifies the existing object's content matches, then just completes the
+head-advance step — rather than refusing a recoverable, interrupted
+operation as if it were a genuine duplicate. Applies identically to
+git-local (a real, if rare, gap that existed before this session, now
+closed) and every remote store alike.
+
+#### Salt: a git-local side effect stays git-local
+
+`Salt`'s existing `.gitignore` maintenance (`ensureGitignored`) is a real
+behavior, but it's a *git-directory-specific* one — a remote store's salt
+object was never at risk of an accidental `git add -A` in the first
+place, so `WriteSaltIfAbsent` itself stays a pure store operation; the
+`.gitignore` bookkeeping lives one layer up, in the git store's own
+implementation, called only there, never promoted into the shared
+interface as if every store needed an equivalent.
+
+#### PR-acceptance ceremony: designed this session, not yet built
+
+`ubx accept --from-merge`'s own verification (docs/schema.md's `pr_merge`
+amendment; [`ubx accept`](https://github.com/Ubiquex/ubiquex-docs)'s own
+CLI reference) is entirely about **git and GitHub history** — the merge
+commit exists, `--proposal-file` at that commit still hashes to the PR
+body's trailer, the reviewers are whatever the GitHub API says right now
+— and none of that changes one bit for a stack whose store is remote.
+The proposal file the ceremony verifies against still has to exist as a
+real, committed file in the merged PR; a remote store changes *where the
+accepted record ends up living*, never *what's being verified* or *how*.
+
+The designed shape: **git stays the signing surface, the remote store
+becomes the system of record, mirrored on accept.** Concretely, once
+`AcceptFromMerge`'s existing git/GitHub verification succeeds exactly as
+it does today, the resulting accepted proposal is written through the
+stack's configured `LedgerStore` (`WriteProposalIfAbsent` +
+`AdvanceHead`) rather than assumed to already be "in the ledger" just
+because it's a file in a merged commit. The git-committed proposal file
+is never deleted or treated as disposable afterward — git history is
+permanent regardless — but it stops being where `ubx why`/`ubx status`/
+a subsequent accept's own `Head()` check actually read from, for a
+remote-store stack, the moment this ships: those all read the mirrored,
+authoritative copy in the configured store instead. `ubx why
+--verify-acceptance` keeps re-deriving its git/GitHub checks exactly as
+today, entirely independent of which store holds the accepted record —
+the ceremony's own evidence trail was never the store's concern to begin
+with.
+
+Not built this session — a real design pass, per this arc's own scope,
+ahead of `cli/accept.go` ever being touched for it. See
+docs/ledgerstore-adversarial.md's own "what this table doesn't yet cover"
+for the concrete gap this leaves (a `--from-merge` acceptance against a
+remote-store stack is not yet exercised end-to-end).
+
 ### Addressing: derived by rule, never mapped per stack
 
 A ledger address is always `<base store>/<stack>/` — the stack name
@@ -2074,6 +2268,45 @@ ledger {
   }
 }
 ```
+
+#### URI prefix, built (UBI-32 Arc B session 1): path-style, translated internally
+
+`s3://acme-ledger/acme/prod/`'s own path segment (`acme/prod/`) is **not**
+something any `gocloud.dev/blob` driver understands natively — checked
+directly against `s3blob`'s own `URLOpener` before relying on it: it reads
+only the URL's host as the bucket name, nothing from the path. The
+generic `blob.OpenBucket` mux does support a prefix, but only via its own
+`?prefix=` query parameter, uniformly across every scheme. `ubx`'s own
+store-URI parser is the translation layer: it splits a configured
+`store` URI into `scheme://host` (opened via `blob.OpenBucket` unchanged)
+and the path component (appended as `?prefix=<path>` before opening) —
+giving the nicer, doc-matching path-style syntax the design already
+committed to, without that syntax needing to be something every cloud's
+own driver has to understand. `--stack`/config's `stack` value is then
+appended as a further prefix segment on top of whatever the configured
+`store` already carries, exactly matching the diagram above.
+
+#### A real, deliberate consequence: `--stack` is required to *open* a remote ledger
+
+Git-local's flat, single-chain legacy layout means one `--ledger-dir`
+can hold several stacks' proposals interleaved in one chain
+([concepts/ledger.mdx](https://github.com/Ubiquex/ubiquex-docs)'s own
+"stacks are independent, but not physically separated" — unaffected by
+this arc, kept forever) — so a command like `ubx why <proposal-id>` never
+needed to know a stack ahead of time to open the right ledger: there's
+only ever one, for that `--ledger-dir`. A remote store's own per-stack
+chain (`<base>/<stack>/`, above) breaks that assumption on purpose — each
+stack is a genuinely separate chain, at a separate address, so *opening*
+one at all requires knowing which stack first. This is a real, honest
+API consequence, not smoothed over: a command whose argument itself names
+a stack (a resource address, `<stack>.<type>.<name>`) can still derive it
+directly and needs nothing new; a command whose argument is a bare
+proposal ID (no stack encoded anywhere in it) genuinely cannot resolve
+which remote chain to open without an explicit `--stack` — cheap and
+already-supported for a git-local, multi-stack-in-one-chain setup where
+it's optional, newly *required* the moment `.ubx/config`'s `[ledger]`
+table names a non-`git` store. See docs/ledgerstore-adversarial.md for the
+required-outcome row this becomes.
 
 ### Config: cascading, per-key, child overrides parent (built, UBI-32 Arc A session 1)
 

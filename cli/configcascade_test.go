@@ -350,6 +350,57 @@ bogus_field = "oops"
 	}
 }
 
+// --- [ledger] table (UBI-32 Arc B) ------------------------------------------
+
+func TestCascade_LedgerStoreParsed(t *testing.T) {
+	dir := t.TempDir()
+	writeCascadeFile(t, dir, "config", `
+[ledger]
+store = "s3://acme-ledger/acme/prod/"
+`)
+	withConfigSearchDir(t, dir)
+
+	rc, err := LoadConfigResolved(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfigResolved: %v", err)
+	}
+	if rc.Config.Ledger.Store != "s3://acme-ledger/acme/prod/" {
+		t.Fatalf("Ledger.Store = %q, want the configured s3 URI", rc.Config.Ledger.Store)
+	}
+}
+
+func TestCascade_LedgerAbsentIsZeroValue(t *testing.T) {
+	dir := t.TempDir()
+	writeCascadeFile(t, dir, "config", `stack = "payments"`)
+	withConfigSearchDir(t, dir)
+
+	rc, err := LoadConfigResolved(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfigResolved: %v", err)
+	}
+	if rc.Config.Ledger.Store != "" {
+		t.Fatalf("Ledger.Store = %q, want empty (no [ledger] table at all -- every config predating this session)", rc.Config.Ledger.Store)
+	}
+}
+
+func TestCascade_UnknownLedgerSubKeyWarns(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCascadeFile(t, dir, "config", `
+[ledger]
+store = "git"
+bogus_field = "oops"
+`)
+	withConfigSearchDir(t, dir)
+
+	var warnings bytes.Buffer
+	if _, err := LoadConfigResolved(&warnings); err != nil {
+		t.Fatalf("LoadConfigResolved: %v", err)
+	}
+	if !strings.Contains(warnings.String(), "ledger.bogus_field") || !strings.Contains(warnings.String(), file) {
+		t.Fatalf("expected a warning naming ledger.bogus_field and %q, got: %s", file, warnings.String())
+	}
+}
+
 // --- HCL blocks are rejected outright (confighcl.go's own design) ----------
 
 func TestConfigHCL_BlocksRejected(t *testing.T) {

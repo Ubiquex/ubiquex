@@ -94,7 +94,11 @@ func newAcceptCmd() *cobra.Command {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 			}
 
-			ledger := core.Open(ledgerDir)
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, p.Stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
+			}
+			defer closeLedger()
 
 			if reverifyWith != "" || reverifySource != "" {
 				if resourceType == "" || resourceName == "" {

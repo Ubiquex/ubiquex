@@ -45,6 +45,20 @@ type Config struct {
 	GithubRepo      string                    `toml:"github_repo" json:"github_repo"`
 	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
 	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
+	Ledger          LedgerConfig              `toml:"ledger" json:"ledger"`
+}
+
+// LedgerConfig is .ubx/config's [ledger] table (UBI-32 Arc B,
+// docs/architecture.md -- "Ledger stores"): which LedgerStore backs this
+// stack. Store empty or "git" means today's exact in-repo directory
+// behavior, driven by --ledger-dir alone, unchanged -- Store only ever
+// names a remote store (s3://bucket/prefix/, gs://.../azblob://...; gs/
+// azblob designed but not yet wired, see docs/ledgerstore-adversarial.md).
+// A stack name is always appended to Store as a further path segment
+// (docs/architecture.md's own addressing rule, <base store>/<stack>/),
+// never configured separately here.
+type LedgerConfig struct {
+	Store string `toml:"store" json:"store"`
 }
 
 // Providers/ProviderConfigs are .ubx/config's own [providers]/

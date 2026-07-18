@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
 	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
@@ -141,7 +140,12 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				providers = []resolver.DeclaredProvider{{Source: source, Version: providerVersion, Schema: newSchemaInspector(schemas)}}
 			}
 
-			ledger := core.Open(ledgerDir)
+			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, intent.Stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+			}
+			defer closeLedger()
+
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}

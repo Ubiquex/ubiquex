@@ -998,6 +998,29 @@
   formats below for the full session and STATE.md for the empirical
   findings (yaml.v3's own resolver, BurntSushi's `Undecoded()` not
   applying to generic-map decode).
+- 2026-07-19 — UBI-32 Arc B session 1: `LedgerStore` interface extracted
+  from `core.Ledger`'s own actual filesystem operations (confirmed by
+  reading the code directly: every chain-walking read goes through
+  `Head()`+`Read()`, never a directory listing), a git-directory
+  reference implementation (zero behavior change, full pre-existing
+  suite passes unmodified), and a new `ledgerstore` package implementing
+  the same interface against `gocloud.dev/blob` (s3 wired and
+  conformance-tested hermetically and live against real S3; gs/azblob
+  tried and deliberately backed out after `go mod tidy` showed dozens of
+  new transitive dependencies apiece — real evidence the harness doesn't
+  make them cheap, not silently forced through). A real gap found and
+  fixed for both stores: `Append`'s duplicate check used to treat a
+  crash between writing a proposal object and advancing the head as an
+  unrecoverable duplicate; it now resumes correctly. `Head`/`AdvanceHead`
+  is a genuine compare-and-swap for the blob store (immutable
+  parent-keyed edge objects, S3's own native `If-None-Match` conditional
+  write under the hood), not an optimistic overwrite. A first CLI slice
+  wired (`.ubx/config`'s new `[ledger]` table, `ubx resolve`/`ubx accept`/
+  `ubx ship --stack`), live-verified end to end against real S3; the rest
+  of the CLI surface still opens git-local unconditionally, named as
+  follow-up. See §Ledger stores below for the full session and STATE.md
+  for the empirical findings (gocloud.dev/blob's own `IfNotExist`
+  semantics, the live-only lock-timeout tuning).
 
 ## Strategy
 
@@ -2271,6 +2294,159 @@ added `ubx config` to the no-finding-concept group. `mint validate`/
 
 Queued for a later session: Arc B (`LedgerStore` extraction, remote
 stores, addressing) — not started.
+
+### Ledger stores: `LedgerStore` + remote stores + addressing (UBI-32 Arc B)
+
+The larger of UBI-32's two arcs, per the ticket: extract a `LedgerStore`
+interface from `core.Ledger`'s own implicit filesystem operations (the
+git-directory implementation becomes the reference implementation, zero
+behavior change proved by the full pre-existing test suite passing
+unmodified); remote object stores via `gocloud.dev/blob` (s3:// first,
+gs:///azblob:// through the identical code path if the harness makes them
+cheap); per-store conformance against real infrastructure, not just
+design — distributed locking, a compare-and-swap head pointer, interrupted
+appends, corrupted objects; the `<base store>/<stack>/` addressing rule;
+and a PR-acceptance ceremony design pass for a remote-store stack (git
+stays the signing surface, the remote store becomes the system of record,
+mirrored on accept).
+
+**Session 1 (2026-07-19): design landed, LedgerStore extracted with a
+real git reference implementation, s3 support built and
+conformance-tested hermetically and live, a first slice of the CLI
+wired.** See docs/architecture.md's own "`LedgerStore` interface,"
+"Addressing," and "PR-acceptance ceremony" sections (all amended this
+session) for the settled design, and docs/ledgerstore-adversarial.md
+(new, 12 rows) for the required-outcome program.
+
+**The interface, extracted from what `core.Ledger` actually does, not
+designed from the sketch alone.** Read directly across
+`core/ledger.go`/`core/lock.go`/`core/salt.go`/`core/apply.go` before
+writing anything: every chain-walking read (`Chain`/`Fleet`/
+`ProposalsForAddress`/`LastObservedHash`/`FoldState`) goes through
+`Head()`+`Read()` repeatedly, never a directory listing -- only
+`ApplyAttempts` needs one. `LedgerStore` (new `core/ledgerstore.go`) is
+byte-level (`ReadProposal`/`WriteProposalIfAbsent`, `Head`/`AdvanceHead`,
+`ReadApply`/`WriteApply`/`ListApplyAttempts`, `Lock`, `ReadSalt`/
+`WriteSaltIfAbsent`) -- JSON marshal/unmarshal and corruption detection
+stay exactly where they already lived. New `core/gitledgerstore.go`: the
+git-directory reference implementation, today's exact filesystem code
+moved verbatim (same paths, same PID-file lock, same temp+fsync+rename
+apply durability). `core/ledger.go`/`core/apply.go`/`core/salt.go`
+rewritten to delegate to `l.store`; `core/lock.go` deleted (content
+moved). **Zero behavior change proved**: the full pre-existing test
+suite passes unmodified; `lock_test.go`'s own direct tests of
+`acquireLedgerLock`/`lockFilePath` mechanically retargeted at
+`gitLedgerStore` (the only test file that touched unexported git-specific
+methods directly -- every other existing test used the public `Ledger`
+API or literal on-disk paths, unaffected).
+
+**A real gap found and closed for both stores, not assumed away.**
+`Append`'s existing duplicate check conflated "the proposal object
+exists" with "this proposal was actually accepted" -- a crash between
+writing the object and advancing the head left no path to recovery: a
+retry reported `ErrDuplicateProposal` for a proposal whose head never
+actually moved. Fixed store-agnostically in `core.Ledger.Append`: an
+existing object is only a genuine duplicate if the head no longer names
+its own `Parent` as current; otherwise `Append` resumes, verifying the
+object's content before completing the head-advance. New
+`TestLedger_InterruptedAppendResumes` (git) and
+`TestStore_InterruptedAppendResumes` (blob) both prove it. Salt's own
+first-use generation gained the identical race-safety
+(`WriteSaltIfAbsent`'s create-only semantics, a real gap the original
+plain read-then-write left open, never exercised by any prior test).
+
+**`Head`/`AdvanceHead`: a genuine compare-and-swap for the blob store, not
+an optimistic overwrite.** Confirmed directly against `gocloud.dev/blob`'s
+own source before relying on it: `WriterOptions.IfNotExist` is honored
+identically across every driver, returning `gcerrors.FailedPrecondition`
+on conflict; `s3blob` implements it via S3's own native `If-None-Match: *`
+conditional write (a real 2024-era S3 feature, not a client-side
+check-then-write race). The design: every `AdvanceHead` call creates one
+new, permanent, content-addressed `heads/<parent-id>` edge object --
+never overwrites a mutable pointer -- so two callers racing to advance
+from the same parent can't both win; resolving the current head is
+"follow edges forward from a best-effort cached hint until one is
+missing," never a directory listing. Locking uses the identical
+create-only primitive for a TTL'd lock object -- an expired TTL, not a
+dead PID, is the only staleness signal a multi-machine store can ever
+have (git-local's own PID-liveness check has no equivalent once more than
+one machine is involved); an expired lock is reclaimed via a best-effort
+delete-then-retry, safe because the actual winner is still decided by the
+create-only write underneath regardless of who deletes first.
+
+**New `ledgerstore` package, kept out of `core` deliberately** (core stays
+dependency-free, the same inversion `cloudtrail`/`gcpaudit`/`k8saudit`
+already establish for their own heavy SDK dependencies): one generic
+`Store` implementing `core.LedgerStore` against any `*blob.Bucket`, so
+s3/gs/azblob all reach the identical code once `blob.OpenBucket` hands
+one back. `Open`'s own path-style-to-query-param URI translation
+(`s3://bucket/acme/prod/` → `s3://bucket?prefix=acme%2Fprod%2F`) is a
+real, necessary translation layer, not a style choice -- confirmed
+directly against `s3blob`'s `URLOpener` that no driver understands a
+path segment as a prefix at all; only the generic `?prefix=` query
+parameter does. **gs/azblob tried and deliberately backed out**: their
+own driver packages pull in the full Azure SDK and GCP's own
+monitoring/tracing/OpenTelemetry exporter stacks, checked directly via
+`go mod tidy` (dozens of new transitive dependencies) before deciding --
+real evidence the harness does not make them cheap in the way this
+arc's own scope conditioned adding them on, not silently forced through.
+Only `s3blob` is wired (10 lines in `go.mod`, 40 in `go.sum`).
+
+**Conformance, hermetic then live, matching every adversarial row.** New
+`ledgerstore/store_test.go`: the full suite run against a `memblob`
+bucket standing in for every cloud (CAS races via real goroutines,
+lock contention/TTL-expiry reclaim, interrupted-append resume, corrupted
+proposal/head-edge/apply objects, `ListApplyAttempts` pagination
+correctness, salt races) -- 17 tests, all passing. **Live, against real
+S3** (the existing `ubx-states` bucket, a fresh key prefix per test,
+cleaned up after): new `ledgerstore/internal/lockprobe`, a tiny real
+subprocess, so lock contention and CAS races are proven across genuinely
+independent OS processes, not goroutines sharing one process's memory --
+`TestLive_S3_BasicRoundTrip`, `TestLive_S3_CASRace_RealConcurrentProcesses`,
+`TestLive_S3_LockContention_RealConcurrentProcesses`, and
+`TestLive_S3_LockTTLExpiry_RealReclaim` all pass against the real service.
+A real, live-only finding along the way: the package's own default
+lock-wait timeout (3s, copied from git-local's own tight local-file
+retry budget) was too short for genuine real-network contention --
+every poll here is an actual S3 round trip, not a local stat -- raised to
+30s/250ms, confirmed against the real service before trusting the new
+defaults.
+
+**A first slice of the CLI wired, the rest named as follow-up.** New
+`.ubx/config` `[ledger]` table (`store` key, cascade-validated,
+`ubx init` templates updated in all three formats) and
+`cli/ledgeropen.go`'s `openLedgerForStack` -- git/absent store unchanged,
+a remote store opens at `<store>/<stack>/` and requires `stack`
+non-empty (a real, deliberate API consequence: a remote store's own
+per-stack chain means opening one at all requires knowing which stack
+first, unlike git-local's flat, shared, stack-agnostic chain). Wired into
+`ubx resolve` (stack from the intent file), `ubx accept` for local
+acceptance (stack from the parsed proposal file -- `--from-merge`/the
+PR-ceremony path untouched, matching this session's own design-only
+scope for it), and `ubx ship` (a new `--stack` flag, since a bare
+proposal ID carries no stack of its own to derive one from). **Live-verified
+end to end**: a real `ubx resolve` → `ubx accept` → `ubx ship` chain
+against a stack backed by real S3 (a fake-provider resource, so the
+*infrastructure* is fake but the *ledger* is genuinely real S3, verified
+independently by reading the exact `proposals/`/`heads/`/`applies/`
+objects back via `aws s3api`), plus the `--stack`-required refusal firing
+correctly when omitted against a remote store. `ubx why`, `ubx status`,
+`ubx scan`/`--all`, `ubx revert-plan`, `ubx writeback`, `ubx propose`,
+the MCP surface, and `accept --from-merge` all still open git-local
+unconditionally -- queued, not forgotten (see STATE.md).
+
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout. ubiquex-docs updated the
+same session: new `concepts/ledger-stores.mdx` (the `[ledger]` table,
+addressing, the `--stack` consequence, real transcripts against the
+built binary), cross-linked from `concepts/ledger.mdx`/`cli/config.mdx`/
+`cli/ship.mdx`. `mint validate`/`mint broken-links` both clean. Both
+repos committed and pushed.
+
+Queued for a later session: Arc B's own remaining CLI wiring (the
+commands named above), gs/azblob (if a lighter-weight path into their
+own SDKs is ever found, or the dependency cost is judged acceptable
+later), and the PR-acceptance ceremony's real implementation.
 
 ## Deferred (explicitly not now)
 

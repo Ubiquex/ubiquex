@@ -234,6 +234,13 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	b.WriteString("# cluster = \"my-eks-cluster\"\n")
 	b.WriteString("# region = \"us-east-1\"\n")
 	b.WriteString("# log_group = \"/aws/eks/my-eks-cluster/cluster\"  # optional; defaults to this shape from cluster\n")
+	b.WriteString("\n")
+
+	b.WriteString("# Which LedgerStore backs this stack -- absent or \"git\" is today's exact\n")
+	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
+	b.WriteString("# always appended as a further path segment, never configured here.\n")
+	b.WriteString("[ledger]\n")
+	b.WriteString("# store = \"s3://acme-ledger/acme/prod/\"\n")
 
 	return b.String()
 }
@@ -316,7 +323,12 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
 	b.WriteString("# cluster unset means such a drift's attribution records\n")
 	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
-	b.WriteString("# k8s_audit = {\n#   cluster = \"my-eks-cluster\"\n#   region = \"us-east-1\"\n#   log_group = \"/aws/eks/my-eks-cluster/cluster\"\n# }\n")
+	b.WriteString("# k8s_audit = {\n#   cluster = \"my-eks-cluster\"\n#   region = \"us-east-1\"\n#   log_group = \"/aws/eks/my-eks-cluster/cluster\"\n# }\n\n")
+
+	b.WriteString("# Which LedgerStore backs this stack -- absent or \"git\" is today's exact\n")
+	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
+	b.WriteString("# always appended as a further path segment, never configured here.\n")
+	b.WriteString("# ledger = {\n#   store = \"s3://acme-ledger/acme/prod/\"\n# }\n")
 
 	return b.String()
 }
@@ -395,7 +407,12 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
 	b.WriteString("# cluster unset means such a drift's attribution records\n")
 	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
-	b.WriteString("# k8s_audit:\n#   cluster: \"my-eks-cluster\"\n#   region: \"us-east-1\"\n#   log_group: \"/aws/eks/my-eks-cluster/cluster\"\n")
+	b.WriteString("# k8s_audit:\n#   cluster: \"my-eks-cluster\"\n#   region: \"us-east-1\"\n#   log_group: \"/aws/eks/my-eks-cluster/cluster\"\n\n")
+
+	b.WriteString("# Which LedgerStore backs this stack -- absent or \"git\" is today's exact\n")
+	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
+	b.WriteString("# always appended as a further path segment, never configured here.\n")
+	b.WriteString("# ledger:\n#   store: \"s3://acme-ledger/acme/prod/\"\n")
 
 	return b.String()
 }

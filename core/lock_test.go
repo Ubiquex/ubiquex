@@ -25,49 +25,55 @@ func withShortLockTimeouts(t *testing.T) {
 	t.Cleanup(func() { lockWaitTimeout, lockRetryInterval = origTimeout, origRetry })
 }
 
-func TestAcquireLedgerLock_AcquireThenRelease(t *testing.T) {
-	l := Open(t.TempDir())
+// TestGitLedgerStore_LockAcquireThenRelease exercises gitLedgerStore's own
+// Lock/release directly (UBI-32 Arc B moved this out of *Ledger and into
+// the git-directory LedgerStore implementation; the lock file's own path
+// and behavior are otherwise byte-for-byte unchanged).
+func TestGitLedgerStore_LockAcquireThenRelease(t *testing.T) {
+	ctx := context.Background()
+	store := newGitLedgerStore(t.TempDir())
 
-	release, err := l.acquireLedgerLock()
+	release, err := store.Lock(ctx, 0)
 	if err != nil {
-		t.Fatalf("acquireLedgerLock: %v", err)
+		t.Fatalf("Lock: %v", err)
 	}
-	if _, statErr := os.Stat(l.lockFilePath()); statErr != nil {
+	if _, statErr := os.Stat(store.lockFilePath()); statErr != nil {
 		t.Fatalf("expected lock file to exist while held: %v", statErr)
 	}
-	if err := release(); err != nil {
+	if err := release(ctx); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if _, statErr := os.Stat(l.lockFilePath()); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(store.lockFilePath()); !os.IsNotExist(statErr) {
 		t.Fatalf("expected lock file removed after release, stat err = %v", statErr)
 	}
 
 	// Re-acquiring after release must succeed -- the file is genuinely
 	// gone, not just conceptually "available."
-	release2, err := l.acquireLedgerLock()
+	release2, err := store.Lock(ctx, 0)
 	if err != nil {
-		t.Fatalf("second acquireLedgerLock: %v", err)
+		t.Fatalf("second Lock: %v", err)
 	}
-	release2()
+	release2(ctx)
 }
 
-// TestAcquireLedgerLock_HeldByLiveProcess_TimesOut is the "two concurrent
+// TestGitLedgerStore_LockHeldByLiveProcess_TimesOut is the "two concurrent
 // accepts" adversarial case (UBI-20 workstream 4): a lock genuinely held
 // by a still-running process (our own test process's real PID stands in)
 // must be waited out, then reported clearly -- never silently broken.
-func TestAcquireLedgerLock_HeldByLiveProcess_TimesOut(t *testing.T) {
+func TestGitLedgerStore_LockHeldByLiveProcess_TimesOut(t *testing.T) {
 	withShortLockTimeouts(t)
-	l := Open(t.TempDir())
+	ctx := context.Background()
+	store := newGitLedgerStore(t.TempDir())
 
-	if err := os.MkdirAll(filepath.Dir(l.lockFilePath()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.lockFilePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(l.lockFilePath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(store.lockFilePath(), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	start := time.Now()
-	_, err := l.acquireLedgerLock()
+	_, err := store.Lock(ctx, 0)
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, ErrLedgerLocked) {
@@ -81,15 +87,16 @@ func TestAcquireLedgerLock_HeldByLiveProcess_TimesOut(t *testing.T) {
 	}
 }
 
-// TestAcquireLedgerLock_StaleFromKilledProcess is UBI-20's other named
+// TestGitLedgerStore_LockStaleFromKilledProcess is UBI-20's other named
 // adversarial case: a lock file naming a PID that has already exited
 // (killed, crashed, or otherwise never reached its own release) must be
 // detected and reported with explicit recovery guidance, immediately --
 // not waited out for the full contention timeout, since there is nothing
 // to wait for once the holder is confirmed dead.
-func TestAcquireLedgerLock_StaleFromKilledProcess(t *testing.T) {
+func TestGitLedgerStore_LockStaleFromKilledProcess(t *testing.T) {
 	withShortLockTimeouts(t)
-	l := Open(t.TempDir())
+	ctx := context.Background()
+	store := newGitLedgerStore(t.TempDir())
 
 	// A short-lived subprocess whose PID is guaranteed to have exited by
 	// the time Wait() returns -- a real "killed process," not a made-up
@@ -100,15 +107,15 @@ func TestAcquireLedgerLock_StaleFromKilledProcess(t *testing.T) {
 	}
 	deadPID := cmd.Process.Pid
 
-	if err := os.MkdirAll(filepath.Dir(l.lockFilePath()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.lockFilePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(l.lockFilePath(), []byte(strconv.Itoa(deadPID)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(store.lockFilePath(), []byte(strconv.Itoa(deadPID)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	start := time.Now()
-	_, err := l.acquireLedgerLock()
+	_, err := store.Lock(ctx, 0)
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, ErrStaleLedgerLock) {
@@ -117,7 +124,7 @@ func TestAcquireLedgerLock_StaleFromKilledProcess(t *testing.T) {
 	if !strings.Contains(err.Error(), strconv.Itoa(deadPID)) {
 		t.Errorf("expected the dead pid named in the error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "remove") || !strings.Contains(err.Error(), l.lockFilePath()) {
+	if !strings.Contains(err.Error(), "remove") || !strings.Contains(err.Error(), store.lockFilePath()) {
 		t.Errorf("expected recovery guidance naming the lock file, got: %v", err)
 	}
 	if elapsed >= lockWaitTimeout {
@@ -126,7 +133,7 @@ func TestAcquireLedgerLock_StaleFromKilledProcess(t *testing.T) {
 
 	// Confirmed stale, but NOT auto-removed -- the file must still be
 	// there; recovery is an explicit, deliberate operator action.
-	if _, statErr := os.Stat(l.lockFilePath()); statErr != nil {
+	if _, statErr := os.Stat(store.lockFilePath()); statErr != nil {
 		t.Errorf("a stale lock must not be silently removed by the failed acquirer: %v", statErr)
 	}
 }
@@ -198,11 +205,11 @@ func TestRunScan_NotBlockedByHeldLedgerLock(t *testing.T) {
 	ledgerDir := t.TempDir()
 	l := Open(ledgerDir)
 
-	release, err := l.acquireLedgerLock()
+	release, err := l.store.Lock(context.Background(), ledgerLockTTL)
 	if err != nil {
-		t.Fatalf("acquireLedgerLock: %v", err)
+		t.Fatalf("Lock: %v", err)
 	}
-	defer release()
+	defer release(context.Background())
 
 	fp := &fakeProvider{state: json.RawMessage(`{"id":"x"}`)}
 	done := make(chan struct{})

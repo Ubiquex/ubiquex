@@ -2,14 +2,11 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 )
 
 // applyHashDomainPrefix is prepended to canonical bytes before hashing an
@@ -363,14 +360,6 @@ var (
 	ErrCorruptApplyRecord = errors.New("corrupt apply record")
 )
 
-func (l *Ledger) appliesDir() string { return filepath.Join(l.dir, "ledger", "applies") }
-
-func (l *Ledger) applyPath(proposalID string, attempt int64) string {
-	return filepath.Join(l.appliesDir(), fmt.Sprintf("%s.attempt-%d.apply.json", proposalID, attempt))
-}
-
-var applyFilenamePattern = regexp.MustCompile(`^([0-9a-f]{64})\.attempt-([0-9]+)\.apply\.json$`)
-
 // ApplyAttempts returns every attempt recorded for proposalID so far --
 // sealed or still-live/crashed -- ordered oldest (attempt 1) first. A
 // crashed, never-sealed attempt is returned exactly as it is on disk (no
@@ -381,41 +370,22 @@ var applyFilenamePattern = regexp.MustCompile(`^([0-9a-f]{64})\.attempt-([0-9]+)
 // silently skipped -- guessing at what a corrupt record might have said is
 // exactly what docs/executor-adversarial.md's row 9 forbids.
 func (l *Ledger) ApplyAttempts(proposalID string) ([]*ApplyRecord, error) {
-	entries, err := os.ReadDir(l.appliesDir())
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	ctx := context.Background()
+	attempts, err := l.store.ListApplyAttempts(ctx, proposalID)
 	if err != nil {
 		return nil, fmt.Errorf("apply attempts: %w", err)
 	}
+	sort.Slice(attempts, func(i, j int) bool { return attempts[i] < attempts[j] })
 
-	type found struct {
-		attempt int64
-		name    string
-	}
-	var matches []found
-	for _, e := range entries {
-		m := applyFilenamePattern.FindStringSubmatch(e.Name())
-		if m == nil || m[1] != proposalID {
-			continue
-		}
-		n, err := strconv.ParseInt(m[2], 10, 64)
+	records := make([]*ApplyRecord, 0, len(attempts))
+	for _, n := range attempts {
+		b, err := l.store.ReadApply(ctx, proposalID, n)
 		if err != nil {
-			continue
-		}
-		matches = append(matches, found{attempt: n, name: e.Name()})
-	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].attempt < matches[j].attempt })
-
-	records := make([]*ApplyRecord, 0, len(matches))
-	for _, m := range matches {
-		b, err := os.ReadFile(filepath.Join(l.appliesDir(), m.name))
-		if err != nil {
-			return nil, fmt.Errorf("apply attempts: read %s: %w", m.name, err)
+			return nil, fmt.Errorf("apply attempts: attempt %d: %w", n, err)
 		}
 		var r ApplyRecord
 		if err := json.Unmarshal(b, &r); err != nil {
-			return nil, fmt.Errorf("apply attempts: %s: %w: %v", m.name, ErrCorruptApplyRecord, err)
+			return nil, fmt.Errorf("apply attempts: attempt %d: %w: %v", n, ErrCorruptApplyRecord, err)
 		}
 		records = append(records, &r)
 	}
@@ -424,8 +394,8 @@ func (l *Ledger) ApplyAttempts(proposalID string) ([]*ApplyRecord, error) {
 
 // ReadApply reads one specific attempt by (proposal ID, attempt number).
 func (l *Ledger) ReadApply(proposalID string, attempt int64) (*ApplyRecord, error) {
-	b, err := os.ReadFile(l.applyPath(proposalID, attempt))
-	if errors.Is(err, os.ErrNotExist) {
+	b, err := l.store.ReadApply(context.Background(), proposalID, attempt)
+	if errors.Is(err, ErrStoreObjectNotFound) {
 		return nil, fmt.Errorf("apply %s attempt %d: %w", proposalID, attempt, ErrApplyRecordNotFound)
 	}
 	if err != nil {
@@ -446,11 +416,12 @@ func (l *Ledger) ReadApply(proposalID string, attempt int64) (*ApplyRecord, erro
 // file, and returns it. The lock is held only for this decide-then-create
 // sequence, not the caller's whole apply loop.
 func (l *Ledger) BeginApply(proposalID string) (*ApplyRecord, error) {
-	release, err := l.acquireLedgerLock()
+	ctx := context.Background()
+	release, err := l.store.Lock(ctx, ledgerLockTTL)
 	if err != nil {
 		return nil, fmt.Errorf("begin apply: %w", err)
 	}
-	defer release()
+	defer release(ctx)
 
 	attempts, err := l.ApplyAttempts(proposalID)
 	if err != nil {
@@ -510,40 +481,17 @@ func (l *Ledger) SealApply(rec *ApplyRecord, summary ApplySummary) (*ApplyRecord
 	return rec, nil
 }
 
-// writeApplyFile durably writes rec to its deterministic attempt path:
-// write to a temp file in the same directory, fsync, then atomic rename --
-// so a crash mid-write never leaves a half-written, ambiguously-corrupt
-// file in the record's real place. This is the write-side half of the
-// durability THE invariant depends on; ApplyAttempts/ReadApply's
-// ErrCorruptApplyRecord is the read-side half, for the rare case a write
-// is interrupted below even this (e.g. mid-rename on an unusual
-// filesystem).
+// writeApplyFile marshals rec and durably writes it via the store --
+// durability itself (temp+fsync+rename for a local filesystem; a single
+// atomic object PUT for a real object store) is each store's own
+// responsibility, per LedgerStore.WriteApply's own contract, matching
+// docs/executor.md's THE invariant either way.
 func (l *Ledger) writeApplyFile(rec *ApplyRecord) error {
-	if err := os.MkdirAll(l.appliesDir(), 0o755); err != nil {
-		return fmt.Errorf("write apply record: %w", err)
-	}
 	b, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("write apply record: marshal: %w", err)
 	}
-	tmp, err := os.CreateTemp(l.appliesDir(), ".apply-*.tmp")
-	if err != nil {
-		return fmt.Errorf("write apply record: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath) // no-op once successfully renamed below
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write apply record: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write apply record: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write apply record: %w", err)
-	}
-	if err := os.Rename(tmpPath, l.applyPath(rec.Proposal, rec.Attempt)); err != nil {
+	if err := l.store.WriteApply(context.Background(), rec.Proposal, rec.Attempt, b); err != nil {
 		return fmt.Errorf("write apply record: %w", err)
 	}
 	return nil

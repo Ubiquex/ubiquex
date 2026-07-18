@@ -27,6 +27,7 @@ import (
 func newShipCmd() *cobra.Command {
 	var (
 		ledgerDir       string
+		stack           string
 		providerPath    string
 		source          string
 		providerVersion string
@@ -70,8 +71,14 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
 			}
+			applyStackDefault(cmd, &stack, cfg)
 
-			ledger := core.Open(ledgerDir)
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+			}
+			defer closeLedger()
+
 			p, err := ledger.Read(args[0])
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
@@ -160,6 +167,7 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open -- required only when .ubx/config's [ledger] store is a remote store (a bare proposal id carries no stack of its own to derive it from); unused for the default git store")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source)")
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
