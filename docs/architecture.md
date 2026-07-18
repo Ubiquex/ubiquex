@@ -2111,7 +2111,7 @@ across directories only).
   ambiguity is rejected loudly, never guessed. `ubx init --format=yaml`
   writes fully-quoted, unambiguous output.
 
-### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet built session 5)
+### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet built session 5; live finale done session 6)
 
 A stack is conceptually multi-provider (the payments example: RDS + S3 +
 helm_release), but every verb today takes one provider per invocation.
@@ -2182,6 +2182,19 @@ mechanism a brand-new resource's own resolve already uses, now exported
 for this reuse) — see docs/executor.md's own session-5 addendum for the
 full mechanism and its live verification against two real provider
 subprocesses.
+
+**Live finale done, UBI-43 session 6**: a real `aws_sqs_queue` +
+`google_service_account` (real AWS account, real GCP project
+`personal-273114`), one intent file, a genuine cross-provider `$ref`,
+resolved → accepted → shipped as ONE signed proposal, real drift on both
+providers correctly detected and attributed, account left clean
+afterward. The originally-planned second provider (`hashicorp/time`) was
+swapped for a real second cloud provider mid-session after a live probe
+found `time_static` structurally can't support `ubx`'s own drift model at
+all (every attribute but `id` comes back null from a minimal lookup) —
+see docs/executor.md's own session-6 addendum for the full finding and
+two further, real, GCP-specific gaps found along the way (filed as
+UBI-44 for the more serious one, a destroy that silently doesn't destroy).
 
 ## Component map (build order)
 

@@ -595,7 +595,16 @@ var Registry = []TypeSpec{
 			"NOT given a LookupHint for the same reason as google_storage_bucket " +
 			"above, plus this one: there is no error to attach a hint's message to in " +
 			"the first place. See STATE.md for the fuller writeup of this gap. " +
-			"Verified by creating a throwaway topic, testing it, and deleting it.",
+			"Verified by creating a throwaway topic, testing it, and deleting it. " +
+			"UBI-44 (found live, UBI-43 session 5's own live finale): the identical " +
+			"\"id\" alone is incomplete gap reaches the DESTROY path too, and there " +
+			"it's more dangerous -- ubx ship of a delta.destroys entry for a topic " +
+			"shipped the ordinary way (whose recorded lookup is always the universal " +
+			"{\"id\": \"...\"}, never \"name\") reported the resource destroyed in the " +
+			"ledger's own reconciliation record, but the real topic was still live " +
+			"afterward. Not fixed here -- tracked as its own issue since it's a " +
+			"correctness gap in core/executor's own reconcileDestroyLoop trusting the " +
+			"provider's response, not just a conformance-fixture quirk.",
 		Implemented: true,
 	},
 	{Type: "google_pubsub_subscription", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,

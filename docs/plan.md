@@ -920,6 +920,60 @@
   table doesn't cover" updated to note the code now exists (formal
   per-row adversarial treatment of scan/status specifically still not
   built out). Full repo build/vet/fmt/test clean, no regressions.
+- 2026-07-18 — UBI-43 session 6: the live finale, real infrastructure, no
+  code changes (this session found and documented, rather than fixed,
+  three real gaps -- see below). A real `aws_sqs_queue` +
+  `google_service_account` in one intent file (real AWS account, real GCP
+  project `personal-273114`, billing-enabled, already used by UBI-21's
+  own live gcpaudit verification), a genuine cross-provider `$ref` (the
+  service account's `description` holding the queue's own real `Computed`
+  `arn`), resolved with no `--provider`/`--source` at all -> accepted ->
+  shipped as ONE signed proposal, both resources reaching `applied`.
+  Verified independently against both clouds' own APIs, not just `ubx`'s
+  own report. **A real plan change, found live, not silently absorbed**:
+  the originally-chosen second provider (`hashicorp/time`, an earlier
+  session's own `AskUserQuestion` decision) was swapped for a real second
+  cloud provider (GCP) after a direct empirical probe against the real
+  `hashicorp/time` binary found `time_static`'s `ReadResource` returns
+  every attribute but `id` as null when given only the universal
+  `{"id":...}` lookup `core.DeriveLookupFromResult` always derives --
+  drift detection is structurally impossible for this type, not merely
+  "unattributable" as the earlier decision anticipated. Flagged to the
+  user before spending real infrastructure time on a premise just found
+  false; the user chose GCP. **Two further real GCP findings, live**:
+  `google_service_account`'s own drift detection works correctly through
+  `ubx`'s ordinary automatic lookup, but its Cloud Audit Log entries name
+  the resource by a numeric `unique_id` never present in its own observed
+  state, so its real, correctly-detected drift is currently
+  unattributable (extends the already-documented `google_secret_manager_secret`
+  gap to service accounts too). `google_pubsub_topic` (previously proven
+  to attribute correctly) has the opposite problem -- its own minimal
+  `{"id":...}` lookup can't observe a real `labels` mutation at all, and,
+  more seriously, a real `ubx ship` destroy of one reported `destroyed`
+  in the ledger's own reconciliation record while the real GCP topic
+  stayed live -- found only because this session verified independently
+  rather than trusting the report; the real leaked topic was deleted by
+  hand, and the finding filed as **UBI-44** (`ubiquex` team) rather than
+  patched under time pressure, since it's a `core/executor`
+  `reconcileDestroyLoop` correctness gap, not a fixture quirk.
+  `google_project_iam_custom_role` was the one type found, live, with
+  neither gap -- added to the same stack to complete the demonstration
+  honestly: a real out-of-band `permissions` mutation, correctly detected
+  by `ubx status --drift` with zero manual assistance, correctly
+  attributed to a real `UpdateRole` event on the first attempt. `ubx why`
+  on both the queue and the custom role shows the complete, honest
+  biography of each, real attribution included. Every resource this
+  session created (four addresses total) was decommissioned via one real
+  `ubx ship` destroy proposal; verified independently afterward that both
+  accounts are genuinely clean (the one exception being the `google_pubsub_topic`
+  finding above, hand-cleaned). `conformance/registry.go`'s own
+  `google_pubsub_topic` entry gained a note recording the destroy-side
+  finding. docs/executor.md gained a session-6 addendum; docs/architecture.md's
+  own multi-provider section marked the live finale done. ubiquex-docs
+  gained a new guide, `guides/multi-provider-flow.mdx` (real transcripts
+  throughout, including the mid-guide provider swap and both GCP
+  findings); `mint validate`/`mint broken-links` both clean. UBI-43
+  closed in Linear this session, arc complete (sessions 1-6).
 
 ## Strategy
 
@@ -2003,11 +2057,84 @@ built"); docs/executor.md gained a session-5 addendum; docs/multi-
 provider-adversarial.md's own "what this table doesn't cover" updated.
 Full repo build/vet/fmt/test clean, no regressions.
 
-Still queued: the live finale against real cloud infrastructure — a real
-payments-shaped stack (`hashicorp/aws` + a second real provider) shipped
-as ONE signed proposal on real infrastructure. Every session through
-session 5 has used fixture subprocesses (`UBX_PROVIDER_MIRROR`, no
-network), never two real cloud providers.
+**Session 6 (2026-07-18): the live finale, real infrastructure, arc
+complete.** A real `aws_sqs_queue` + `google_service_account` (real AWS
+account, real GCP project `personal-273114`), one intent file, a genuine
+cross-provider `$ref` (the service account's `description` holding the
+queue's own real `Computed` `arn`), resolved with no `--provider`/
+`--source` at all -> accepted -> shipped as ONE signed proposal, both
+resources reaching `applied` -- verified independently against both
+clouds' own APIs, not just `ubx`'s own report.
+
+**A real plan change, found live, not silently absorbed.** The
+originally-chosen second provider (`hashicorp/time`, an earlier session's
+own `AskUserQuestion` decision) was swapped for a real second cloud
+provider after a direct empirical probe against the real `hashicorp/time`
+binary found something the earlier decision hadn't anticipated:
+`ReadResource` given only `{"id":...}` -- the *universal* shape
+`core.DeriveLookupFromResult` derives for every resource type, no
+exceptions -- returns every other attribute as `null`. Not "attribution
+comes back unattributed" (the anticipated, accepted tradeoff), but
+"drift detection itself is structurally impossible" for this type.
+Flagged to the user before spending real infrastructure time on a
+premise just found false; GCP was chosen instead, the option the earlier
+decision had explicitly set aside pending confirmed credentials --
+confirmed available this session (`gcloud`'s own Application Default
+Credentials, already authenticated against `personal-273114`).
+
+**Two further real GCP findings, live, not assumed from the design
+alone.** `google_service_account`'s own drift detection works correctly
+through `ubx`'s ordinary automatic lookup (a real `display_name`
+mutation was correctly detected as drifted) -- but its Cloud Audit Log
+entries name the resource by a numeric `unique_id` never present in the
+resource's own observed state, so its real, correctly-detected drift is
+currently unattributable. This extends, rather than contradicts, an
+already-documented limitation (`gcpaudit/client.go`'s own doc comment
+already named the identical class of gap for
+`google_secret_manager_secret`, a numeric project number instead of the
+project ID). `google_pubsub_topic` (previously proven, in an earlier
+session, to attribute correctly) has the opposite problem: its own
+minimal `{"id":...}` lookup can't observe a real `labels` mutation at
+all -- and, more seriously, a real `ubx ship` destroy of one reported
+`destroyed` in the ledger's own reconciliation record while the real GCP
+topic stayed live, found only because this session verified
+independently rather than trusting the report. Not fixed live -- the
+real leaked topic was deleted by hand to leave the account clean, and
+the finding filed as its own issue, **UBI-44** (`ubiquex` team), rather
+than patched under time pressure: it's a `core/executor`
+`reconcileDestroyLoop` correctness gap (trusting a provider's response
+without verifying it), not a conformance-fixture curiosity, and deserves
+its own root-cause investigation. `conformance/registry.go`'s own
+`google_pubsub_topic` entry gained a note recording this destroy-side
+finding alongside its already-documented read-side one.
+
+`google_project_iam_custom_role` was the one real type found, live, with
+neither gap -- added to the same stack specifically to complete the
+"both providers, both attributed" demonstration honestly, once the two
+structural gaps above were found: a real out-of-band `permissions`
+mutation, correctly detected by `ubx status --drift` with zero manual
+assistance, correctly attributed to a real `UpdateRole` event on the
+first attempt. `ubx why` on both the queue and the custom role shows the
+complete, honest biography of each, real attribution included.
+
+**Cleanup, real, through `ubx`.** Every resource this session created
+(the queue, the service account, the custom role, and the pubsub topic --
+four addresses total) was decommissioned via one real `ubx ship` of a
+`delta.destroys` proposal. Verified independently afterward, directly
+against both clouds: the queue and service account are genuinely gone;
+the custom role is GCP's own correct soft-deleted state; the pubsub
+topic (per the finding above) needed a direct, manual delete to actually
+leave the account clean.
+
+docs/executor.md gained a session-6 addendum; docs/architecture.md's own
+multi-provider section marked the live finale done. ubiquex-docs gained
+a new guide, `guides/multi-provider-flow.mdx` (real transcripts
+throughout, including the mid-session provider swap and both GCP
+findings); `mint validate`/`mint broken-links` both clean. No code
+changed this session beyond `conformance/registry.go`'s own new note --
+this was a live verification and documentation session, not an
+implementation one. **UBI-43 closed in Linear, arc complete (sessions
+1-6)**.
 
 ## Deferred (explicitly not now)
 

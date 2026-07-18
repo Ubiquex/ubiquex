@@ -1191,6 +1191,142 @@ suite.)
 Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race
 -count=1` clean throughout.
 
+### Session 6 (2026-07-18): the live finale — real AWS + real GCP, one signed proposal, drift on both, both attributed
+
+The last remaining item this arc's own "Out of scope" note named: a
+genuinely multi-provider stack shipped on real infrastructure, not
+fixtures. `hashicorp/aws@6.54.0` + `hashicorp/google@7.40.0`, declared in
+one real `.ubx/config` `[providers]` table, project `personal-273114`
+(the same real, billing-enabled GCP project UBI-21's own live gcpaudit
+verification used).
+
+**A real design change made mid-session, not silently absorbed**: the
+session originally planned to use `hashicorp/time`'s `time_static` as the
+second provider (a decision an earlier `AskUserQuestion` had already
+settled). Before spending real infrastructure time on it, a direct
+empirical probe against the real `hashicorp/time` binary found something
+the earlier decision hadn't anticipated: `ReadResource` given only
+`{"id": "..."}` — the *universal* shape `core.DeriveLookupFromResult`
+derives for every resource type, no exceptions — returns every attribute
+except `id` as `null`. Not "attribution comes back unattributed" (the
+anticipated, accepted tradeoff), but "drift detection itself is
+structurally impossible" — `ubx status --drift`/`ubx scan` would report
+permanent, meaningless null-diffs for any shipped `time_static` resource,
+never a real signal. Flagged to the user rather than proceeding on a
+premise just discovered false; the user chose to switch to a real second
+cloud provider instead (GCP), the option the original decision had
+explicitly set aside pending confirmed credentials — confirmed available
+this session (`gcloud`'s own Application Default Credentials, already
+authenticated against `personal-273114`).
+
+**The stack**: `aws_sqs_queue.ubi43-payments-queue` (tags, a real
+`Computed` `arn`) + `google_service_account.ubi43-payments-svc` (whose
+`description` — a real, mutable, non-`Computed` field — holds a `$ref` to
+the queue's own `arn`). Resolved with no `--provider`/`--source` at all
+(`cfg.Providers` non-empty); the resolved proposal correctly inferred
+`hashicorp/aws` for the queue and `hashicorp/google` for the service
+account, and correctly recorded the real cross-provider `depends_on`.
+Accepted and shipped as ONE signed proposal — both resources reached
+`applied`. Verified independently, directly against each cloud's own API
+(never trusting `ubx`'s own report alone): the queue is real
+(`aws sqs get-queue-url` resolves it); the service account's own
+`description`, read back via the real IAM API, is byte-identical to the
+queue's own real, applied ARN.
+
+**A real, unplanned finding surfaced immediately by drift-checking the
+freshly-shipped queue**: `ubx status --drift` reported it `drifted`
+before any out-of-band change was made at all. Root cause, confirmed by
+comparing the apply record's own `provider_result` against a fresh live
+read: `aws_sqs_queue`'s real `ApplyResourceChange` response left `region`
+absent (`null`), while a subsequent `ReadResource` call populates it —
+a genuine provider round-trip completeness gap (the Apply response and
+the Read response for the same, unchanged resource don't agree), not any
+real out-of-band event. Correctly, honestly reported as
+`cloudtrail_unattributed`/`delivery_window` (no real CloudTrail event
+exists for it, since nothing actually happened in AWS) — resolved by
+accepting that one real, informative `drift_adopt` before proceeding, the
+same "record what's actually true" posture this project takes everywhere
+else, not a shortcut around it.
+
+**Real out-of-band drift + attribution, both providers**: a real
+`aws sqs tag-queue` call (bypassing `ubx`) added a tag; `ubx scan`
+correctly detected it and, once CloudTrail delivered the event (a real,
+measured delivery lag, well within the existing 5-minute retry budget
+this arc's own prior AWS live sessions established), correctly attributed
+it to the real IAM principal, event, and timestamp. The GCP half needed
+two real, live-discovered course corrections before landing on a resource
+type that could genuinely demonstrate both halves at once — see the
+"Two real GCP findings" note below; the type that worked cleanly,
+`google_project_iam_custom_role`, got a real out-of-band `permissions`
+update (via the IAM REST API, `gcloud`'s own CLI session having expired
+mid-session — Application Default Credentials, unaffected, were used for
+every GCP call instead) that `ubx status --drift` detected automatically
+(no manual lookup assistance needed, unlike the two types tried first)
+and `gcp_audit` attributed correctly on the very first attempt. `ubx why`
+on both addresses shows the complete, honest biography of each, including
+the real attribution record.
+
+**Two real GCP findings, surfaced live, not assumed from the design
+alone**:
+1. `google_service_account`: its own drift *detection* works correctly
+   through `ubx`'s ordinary automatic `{"id":...}`-only lookup (a real
+   `display_name` mutation was correctly detected as drifted) — but its
+   own Cloud Audit Log entries name the resource by a numeric `unique_id`
+   (confirmed directly via `logging.googleapis.com` entries), which never
+   appears anywhere in the resource's own observed state
+   (`identityCandidates` only ever tries `id`/`arn`/`name`) — so its
+   drift, though real and correctly detected, is currently
+   unattributable (`audit_unattributed`/`no_matching_event`). The same
+   class of gap `gcpaudit/client.go`'s own doc comment already named for
+   `google_secret_manager_secret` (a numeric project number instead of
+   the project ID), now confirmed to also affect service accounts —
+   extends, rather than contradicts, that already-documented limitation.
+2. `google_pubsub_topic` (the one type already proven, in an earlier
+   session, to attribute correctly): its own minimal `{"id":...}` lookup
+   — the *only* shape `ubx`'s own automatic pipeline ever uses — returns
+   not just `name` empty (the already-documented gap) but `labels` empty
+   too, meaning its own drift can never be detected automatically at all,
+   only when a caller manually supplies `id`+`name` both (confirmed via a
+   direct provider probe) — something `ubx status --drift`'s own
+   ledger-recorded lookup never does. **Worse: the identical gap reaches
+   the DESTROY path.** A `ubx ship` of this topic's `delta.destroys` entry
+   reported `destroyed` in the ledger's own reconciliation record, but the
+   real GCP topic was still live afterward — confirmed directly against
+   the Pub/Sub API. Not fixed live; the real leaked topic was deleted by
+   hand to leave the account clean. Filed as its own issue (UBI-44,
+   `ubiquex` team) rather than patched under time pressure mid-session —
+   this is a correctness gap in `core/executor`'s own `reconcileDestroyLoop`
+   trusting the provider's response, not a conformance-fixture curiosity,
+   and deserves its own root-cause investigation. `conformance/registry.go`'s
+   own `google_pubsub_topic` entry gained a note recording the destroy-side
+   finding alongside its existing read-side one.
+
+`google_project_iam_custom_role` was the one real type found, live, with
+neither gap: `id` alone sufficient for real automatic drift detection,
+and its own audit-log `resourceName` genuinely matches its own `id`
+(a real path, not a numeric surrogate) — added to the same stack
+specifically to complete the "both providers, both attributed"
+demonstration honestly, once the two structural gaps above were found.
+
+**Cleanup, real, through `ubx`**: every resource this session created —
+the queue, the service account, the custom role, and the pubsub topic —
+was decommissioned via one real `ubx ship` of a `delta.destroys`
+proposal naming all four addresses. Verified independently afterward,
+directly against both clouds: the queue and service account are
+genuinely gone; the custom role is GCP's own correct soft-deleted state;
+the pubsub topic (per the finding above) needed a direct, manual delete
+to actually leave the account clean.
+
+docs/executor.md's own "Out of scope" bullet updated (fixed, sessions
+3-6, no longer "still open"). ubiquex-docs gained a new guide,
+`guides/multi-provider-flow.mdx` (real transcripts throughout, including
+the note explaining why the drift/attribution demonstration ended up
+using a third GCP resource type rather than the one originally shipped);
+`mint validate`/`mint broken-links` both clean. Full repo
+`go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions (no code changed this session beyond
+`conformance/registry.go`'s own new note).
+
 ### Session 4 (2026-07-18): the `providerConfig` gap closed — `ApplierPool.Get` returns config too, `.ubx/config` wiring, real CLI verification
 
 Session 3's own named gap (`providerConfig` stayed one global value
@@ -1310,17 +1446,20 @@ no regressions.
 - ~~Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
   client pool; `providerConfig` one global value regardless of provider;
   no `.ubx/config` wiring) — executor + CLI code.~~ — **fixed, UBI-43
-  sessions 3-5** (see the "Session 3"/"Session 4"/"Session 5" addenda
-  above): `ApplierPool`, `SingleApplierPool`, per-node pool dispatch in
-  `shipChange`, `ApplierPool.Get` returning each provider's own config,
-  `.ubx/config`'s `[providers]`/`[provider_configs]` tables live-wired
-  into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
-  deprecation staging, and `ubx status --drift`/`ubx scan --all`'s own
+  sessions 3-6** (see the "Session 3"/"Session 4"/"Session 5"/"Session 6"
+  addenda above/below): `ApplierPool`, `SingleApplierPool`, per-node pool
+  dispatch in `shipChange`, `ApplierPool.Get` returning each provider's
+  own config, `.ubx/config`'s `[providers]`/`[provider_configs]` tables
+  live-wired into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
+  deprecation staging, `ubx status --drift`/`ubx scan --all`'s own
   fleet-grouping by each resource's own recorded or freshly type-inferred
   provider — all hermetic, and live-verified against the real binary with
-  two genuinely separate provider subprocesses. Still open, named
-  explicitly rather than assumed solved: the live finale against real
-  cloud infrastructure (two real providers, not fixtures).
+  two genuinely separate provider subprocesses — and, finally, the live
+  finale against real cloud infrastructure (session 6): a real
+  `aws_sqs_queue` + `google_service_account` in one intent file, a
+  genuine cross-provider `$ref`, resolved → accepted → shipped as ONE
+  signed proposal on real AWS + real GCP, drift on both providers
+  detected and attributed, account left clean afterward.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is
