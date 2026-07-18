@@ -18,6 +18,25 @@ type FleetEntry struct {
 	ProposalID string
 	AcceptedAt string          // "" if the latest touching proposal was somehow never accepted (shouldn't happen via Accept/AcceptFromMerge, kept defensive)
 	Lookup     json.RawMessage // from the latest resolution.inputs entry recorded for Address; nil if none was ever recorded (see docs/schema.md's lookup amendment)
+
+	// Provider is docs/schema.md's own "Amendment: the provider field
+	// returns" (UBI-43), read back the same "most recent wins, falling
+	// back to the shipped create's own recorded value" way Lookup already
+	// is: a KindChange proposal's own Delta.Modifies/Delta.Destroys entry
+	// for Address, if the winning proposal's own latest touch names one
+	// directly, else whichever provider originally created Address (a
+	// later drift_adopt/drift_revert never carries one at all --
+	// core/scan.go's own Modification entries never populate it -- so
+	// falling through here is the common case for any address that's ever
+	// drifted after its own creation, not an edge case). Nil for a
+	// resource this ledger only ever adopted or drift-recorded, or one
+	// created before this amendment -- see docs/executor.md's own
+	// "Scan/status/fleet" section for how a caller is expected to handle
+	// that: attribute it to whichever single provider the invocation's
+	// own --source/--provider named, or, for a genuinely multi-provider
+	// stack, infer it fresh by type against the declared set (the same
+	// mechanism core/resolver already uses for a brand-new resource).
+	Provider *ProviderRef
 }
 
 // Fleet returns one FleetEntry per distinct resource address the ledger has
@@ -66,6 +85,7 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 	latest := map[string]*Proposal{}
 	latestInput := map[string]ResolutionInput{}
 	latestShippedLookup := map[string]json.RawMessage{}
+	latestShippedProvider := map[string]*ProviderRef{}
 	tombstoned := map[string]bool{}
 	for _, p := range chain {
 		for _, in := range p.Resolution.Inputs {
@@ -99,6 +119,7 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 			addrStr := addr.String()
 			latest[addrStr] = p
 			latestShippedLookup[addrStr] = lookup
+			latestShippedProvider[addrStr] = createNodeProvider(raw)
 			tombstoned[addrStr] = false
 		}
 		for i := range p.Delta.Destroys {
@@ -134,12 +155,17 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 		if len(lookup) == 0 {
 			lookup = latestShippedLookup[addrStr]
 		}
+		provider := nodeProviderForAddress(p, addr)
+		if provider == nil {
+			provider = latestShippedProvider[addrStr]
+		}
 		entries = append(entries, FleetEntry{
 			Address:    addr,
 			Kind:       p.Kind,
 			ProposalID: p.ID,
 			AcceptedAt: acceptedAt,
 			Lookup:     lookup,
+			Provider:   provider,
 		})
 	}
 
@@ -147,6 +173,34 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 		return entries[i].Address.String() < entries[j].Address.String()
 	})
 	return entries, nil
+}
+
+// nodeProviderForAddress finds addr's own recorded provider within p's
+// Delta.Modifies/Delta.Destroys specifically (never Delta.Creates -- the
+// caller's own create-ships branch already handles that case, since a
+// create's provider is only real once the create has actually shipped,
+// the identical gating Lookup's own latestShippedLookup already applies).
+// nil if p doesn't carry an explicit provider for addr at all -- p.Kind
+// != KindChange, or a KindChange proposal whose only touch of addr was a
+// resolution.inputs entry from an adopt/drift path with no Modification/
+// DestroyEntry of its own (shouldn't happen in practice, since those
+// entries are always KindAdoption/KindDriftAdopt/KindDriftRevert, but
+// checked directly rather than assumed).
+func nodeProviderForAddress(p *Proposal, addr Address) *ProviderRef {
+	if p.Kind != KindChange {
+		return nil
+	}
+	for i := range p.Delta.Modifies {
+		if p.Delta.Modifies[i].Target == addr {
+			return p.Delta.Modifies[i].Provider
+		}
+	}
+	for i := range p.Delta.Destroys {
+		if p.Delta.Destroys[i].Address == addr {
+			return p.Delta.Destroys[i].Provider
+		}
+	}
+	return nil
 }
 
 // LastLookup returns the most recently recorded lookup key for addr — the

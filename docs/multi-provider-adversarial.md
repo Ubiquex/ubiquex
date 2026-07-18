@@ -62,9 +62,13 @@ graph" section) is address-based and provider-agnostic, so it should catch
 this identically to a same-provider cycle, but this table doesn't yet
 include a row proving that specific claim for a cross-provider instance;
 `ubx status --drift`/`ubx scan --all`'s own multi-provider fleet-grouping
-behavior (docs/executor.md's own amendment names the design; this table's
-rows are all `ubx ship`/`ubx resolve` scenarios, not scan/status ones — a
-future session's own adversarial rows once that code exists); and
+behavior — built and live-verified, UBI-43 session 5 (docs/executor.md's
+own session-5 addendum), but this table's own rows are still all `ubx
+ship`/`ubx resolve` scenarios; a genuine per-row adversarial treatment of
+scan/status's own multi-provider failure modes (an ambiguous type across
+two declared providers during inference, a provider that launches fine
+for one Fleet entry but fails for another mid-walk, ...) is a future
+session's own work, not yet built out row-by-row here; and
 `.ubx/config`'s own two version-pinning failure modes beyond a plain
 version mismatch (UBI-43 session 4, live-verified for the plain case —
 see docs/executor.md's own session-4 addendum) — a `[providers]` entry

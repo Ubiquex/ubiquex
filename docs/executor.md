@@ -1085,6 +1085,112 @@ docs/resolver.md's own session 2 already established. Full repo `go
 build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
 clean, no regressions.
 
+### Session 5 (2026-07-18): `ubx status --drift`/`ubx scan --all` fleet-grouping — the last single-provider surface closed
+
+Closes the one gap session 3-4's own "Out of scope" note named explicitly:
+`core.Ledger.Fleet` now carries each resource's own recorded provider
+(`FleetEntry.Provider *core.ProviderRef`), read back the identical "most
+recent wins, falls back to the shipped create's own recorded value"
+precedence `Lookup` already established — a `KindChange` proposal's own
+`Delta.Modifies`/`Delta.Destroys` entry for the address if the winning
+proposal names one directly (`core/fleet.go`'s new
+`nodeProviderForAddress`), else whichever provider originally created the
+address (`createNodeProvider`, mirroring `createNodeAddress`'s own
+permissive decode). `nil` for a resource this ledger only ever adopted or
+drift-recorded — `core/scan.go`'s own `Modification`/adoption-create nodes
+never carry a provider field at all, matching every prior amendment's own
+"additive, no `schema_version` bump" posture.
+
+`resolver.InferProvider` (previously package-private `inferProvider`) is
+now exported — the exact mechanism a brand-new resource's own resolve
+already uses to answer "which declared provider owns this type," reused
+verbatim rather than reinvented in `cli/` for a legacy Fleet entry with no
+recorded provider of its own.
+
+**`cli/status.go`/`cli/scanall.go` both branch on `cfg.Providers`**,
+mirroring session 4's own `cli/resolve.go`/`cli/ship.go` convention
+exactly (`warnIfLegacyProviderFlagsGiven`, empty falls back to today's
+`--provider`/`--source` flow byte-for-byte unchanged). `status.go`'s own
+walk is genuinely mixed: an entry with its own recorded `Provider` routes
+straight to `pool.Get(source, version)`, no inference at all; an entry
+with `Provider == nil` (adopted/drift-only history) triggers
+`declaredProvidersForInference` — built lazily, once, only on the first
+such entry encountered, launching every declared provider via the same
+already-open pool (never a second launch for an entry whose provider was
+already resolved via `pool.Get` for an earlier entry). `scanall.go`'s own
+walk has no such mix — every tfstate-enumerated resource has zero ledger
+history by construction, so inference runs eagerly for every one, built
+once up front rather than lazily.
+
+**New `cli/schemainspector.go`'s `resourceTypeSchemaInspector`**: a second,
+narrower `resolver.SchemaInspector` adapter alongside the existing
+`schemaInspectorAdapter` — backed directly by the type-erased
+`map[string]any` `executor.Applier.Schema()` returns (each value a
+concrete `*provider.Schema` boxed as `any`), not the concrete
+`*provider.Schemas` the existing adapter needs and a pool-launched
+`Applier` never hands back. Implements only `HasType` for real (a map
+lookup); `IsComputed`/`IsSensitive` are harmless always-false stubs,
+confirmed sufficient by reading `InferProvider`'s own body — it never
+calls either. This is what lets `declaredProvidersForInference`
+(`cli/providerpool.go`) reuse the SAME already-launched pool entries for
+inference, rather than launching every declared provider a second time
+just to answer a schema question.
+
+**Shared classification helpers** (`cli/status.go`): `classifyFleetEntry`/
+`unreadableNoLookup`/`unreadableProviderUnavailable` factor the
+clean/drifted/unreadable `core.RunScan` classification (and its exact
+human/JSON wording) out of the old single-provider-only inline loop, so
+both the single- and multi-provider walks report identically-worded
+outcomes rather than two copies drifting apart over time.
+`unreadableProviderUnavailable`'s own wording deliberately matches
+`shipChange`'s `"provider unavailable: %v"` (session 3's own error
+taxonomy) — the same underlying condition (a declared provider that
+wouldn't launch, or a type no declared provider owns), surfaced from a
+different call site.
+
+**Hermetic coverage**: `core/fleet_provider_test.go` (5 new tests) proves
+the Provider-precedence logic in isolation — from a shipped create, from
+a later modify (current touch wins over stale history), nil for an
+adopted resource, persistence through a later provider-less drift touch,
+and from an accepted-but-unshipped destroy. `cli/multiprovider_fleet_test.go`
+proves `resourceTypeSchemaInspector`'s `HasType` correctness and
+`declaredProvidersForInference`'s own lazy-launch-once/cached-on-reuse/
+launch-failure-propagates behavior, using the same injectable `launchFunc`
+seam `cli/providerpool_test.go` already established — never a real
+provider binary or network access. `classifyFleetEntry`'s own clean/
+drifted/unreadable classification is a pure extraction of logic
+`cli/status_test.go`'s existing 8 cases already exercised end-to-end
+through the single-provider branch (which now calls the identical
+helper) — all 8 still pass unchanged, proving the extraction didn't
+alter behavior.
+
+**Live-verified against the real built binary**, the same
+`UBX_PROVIDER_MIRROR`-plus-wrapper-script technique session 4's own
+verification used, this time driving `provider/internal/fakeprovider`'s
+`conformance-v6` mode with two genuinely distinct `FAKEPROVIDER_RESOURCE_TYPE`
+values (`aws_db_instance` for a `hashicorp/aws@6.60.0` mirror entry,
+`time_static` for `hashicorp/time@1.0.0`) against a real `.ubx/config`
+`[providers]` table declaring both: `ubx resolve` on a `time_static`
+create correctly inferred `hashicorp/time` with neither `--provider` nor
+`--source` given at all; `ubx status --drift` on a legacy-adopted
+`aws_db_instance` entry (`Provider == nil`) correctly launched both
+declared providers, inferred `hashicorp/aws` as the sole owner, and
+reported `clean`; a real out-of-band mutation (`FAKEPROVIDER_MUTATE_ATTR`)
+against that same live subprocess was then correctly reported `drifted`,
+exit code 1; `ubx scan --all` against a two-provider `.ubx/config` and a
+one-resource tfstate file correctly inferred and routed to
+`hashicorp/aws` as well. (A real `ubx ship` of the `time_static` create
+wasn't reachable in this smoke test — `conformance-v6` mode has no
+`ApplyResourceChange` handler at all, session 4's own already-documented
+limitation; the routing/inference machinery this session actually built
+is what's under test, and it's what an entry's own recorded `Provider`
+short-circuits at ship time regardless — proven separately, hermetically,
+by `core/fleet_provider_test.go` and session 3's own `core/executor`
+suite.)
+
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race
+-count=1` clean throughout.
+
 ### Session 4 (2026-07-18): the `providerConfig` gap closed — `ApplierPool.Get` returns config too, `.ubx/config` wiring, real CLI verification
 
 Session 3's own named gap (`providerConfig` stayed one global value
@@ -1204,17 +1310,17 @@ no regressions.
 - ~~Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
   client pool; `providerConfig` one global value regardless of provider;
   no `.ubx/config` wiring) — executor + CLI code.~~ — **fixed, UBI-43
-  sessions 3-4** (see the "Session 3"/"Session 4" addenda above):
-  `ApplierPool`, `SingleApplierPool`, per-node pool dispatch in
+  sessions 3-5** (see the "Session 3"/"Session 4"/"Session 5" addenda
+  above): `ApplierPool`, `SingleApplierPool`, per-node pool dispatch in
   `shipChange`, `ApplierPool.Get` returning each provider's own config,
   `.ubx/config`'s `[providers]`/`[provider_configs]` tables live-wired
   into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
-  deprecation staging — all hermetic, and live-verified against the real
-  binary with two genuinely separate provider subprocesses. Still open,
-  named explicitly rather than assumed solved: `ubx scan`/`ubx status
-  --drift`'s own multi-provider fleet-grouping (docs/architecture.md's
-  own "Not yet built" note), and the live finale against real cloud
-  infrastructure (two real providers, not fixtures).
+  deprecation staging, and `ubx status --drift`/`ubx scan --all`'s own
+  fleet-grouping by each resource's own recorded or freshly type-inferred
+  provider — all hermetic, and live-verified against the real binary with
+  two genuinely separate provider subprocesses. Still open, named
+  explicitly rather than assumed solved: the live finale against real
+  cloud infrastructure (two real providers, not fixtures).
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is

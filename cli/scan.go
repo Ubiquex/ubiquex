@@ -82,6 +82,9 @@ func newScanCmd() *cobra.Command {
 				if tfstatePath == "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all requires --tfstate")}
 				}
+				if len(cfg.Providers) > 0 {
+					warnIfLegacyProviderFlagsGiven(cmd)
+				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
 				return runScanAll(ctx, cmd.OutOrStdout(), scanAllOptions{
@@ -94,6 +97,8 @@ func newScanCmd() *cobra.Command {
 					Source:          source,
 					ProviderVersion: providerVersion,
 					ProviderConfig:  providerConfig,
+					Providers:       cfg.Providers,
+					ProviderConfigs: cfg.ProviderConfigs,
 					Timeout:         timeout,
 				})
 			}

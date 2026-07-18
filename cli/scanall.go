@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
 	"github.com/ubiquex/ubiquex-cli/tfstate"
 )
@@ -20,6 +21,16 @@ import (
 // struct since runScanAll (unlike the single-resource path) has its own
 // distinct set of required/optional flags -- see docs/architecture.md's
 // "Bulk onboarding" section for the full design this implements.
+//
+// Providers/ProviderConfigs (UBI-43 session 5) is .ubx/config's own
+// [providers]/[provider_configs] tables, non-empty for a real
+// multi-provider stack -- when set, every enumerated resource gets its
+// provider inferred fresh by type (resolver.InferProvider) against the
+// declared set, since a tfstate-imported resource has no ledger history
+// of its own to fall back on at all (unlike cli/status.go's mixed
+// legacy/explicit Fleet case). ProviderPath/Source/ProviderVersion are
+// ignored when Providers is non-empty, mirroring cli/resolve.go's own
+// established single-vs-multi branching convention.
 type scanAllOptions struct {
 	TFStatePath     string
 	Stack           string
@@ -30,6 +41,8 @@ type scanAllOptions struct {
 	Source          string
 	ProviderVersion string
 	ProviderConfig  string
+	Providers       map[string]string
+	ProviderConfigs map[string]map[string]any
 	Timeout         time.Duration
 }
 
@@ -60,16 +73,6 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		stack = stackFromStateFilename(opts.TFStatePath)
 	}
 
-	path, checksum, err := resolveProviderBinary(ctx, opts.ProviderPath, opts.Source, opts.ProviderVersion)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
-	}
-	client, err := provider.Launch(ctx, path)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
-	}
-	defer client.Close()
-
 	if opts.OutDir != "" {
 		if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
@@ -81,7 +84,43 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
-	stateReader := newStateReader(client.Provider, salt, opts.Source)
+
+	// docs/architecture.md's own "Bulk onboarding" section, generalized for
+	// UBI-43 session 5: a real [providers] table means every enumerated
+	// resource gets its provider inferred fresh by type, since a
+	// tfstate-imported resource has no ledger history to carry a recorded
+	// provider forward from at all (unlike cli/status.go's mixed legacy/
+	// explicit Fleet case) -- built eagerly, not lazily, since virtually
+	// every resource in a multi-provider walk needs it.
+	var (
+		stateReader core.StateReader
+		pool        *providerPool
+		declared    []resolver.DeclaredProvider
+		checksum    string
+	)
+	if len(opts.Providers) > 0 {
+		pool, err = newProviderPool(salt, opts.Providers, opts.ProviderConfigs)
+		if err != nil {
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+		}
+		defer pool.Close()
+		declared, err = declaredProvidersForInference(ctx, pool, opts.Providers)
+		if err != nil {
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+		}
+	} else {
+		var path string
+		path, checksum, err = resolveProviderBinary(ctx, opts.ProviderPath, opts.Source, opts.ProviderVersion)
+		if err != nil {
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+		}
+		client, err := provider.Launch(ctx, path)
+		if err != nil {
+			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+		}
+		defer client.Close()
+		stateReader = newStateReader(client.Provider, salt, opts.Source)
+	}
 
 	// core.GenerateProposal sets each proposal's Parent from the ledger's
 	// real on-disk head, which never moves during this walk -- nothing
@@ -125,12 +164,32 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 			continue
 		}
 
-		res, err := core.RunScan(ctx, stateReader, ledger, core.ScanRequest{
+		app := stateReader
+		providerConfig := json.RawMessage(opts.ProviderConfig)
+		providerSource := opts.Source
+		if pool != nil {
+			winner, ierr := resolver.InferProvider(declared, r.Type, nil)
+			if ierr != nil {
+				skipped["provider read failed"]++
+				fmt.Fprintf(out, "skipped: %s -- %v\n", addr, ierr)
+				continue
+			}
+			var cerr error
+			app, providerConfig, cerr = pool.Get(ctx, winner.Source, winner.Version)
+			if cerr != nil {
+				skipped["provider read failed"]++
+				fmt.Fprintf(out, "skipped: %s -- provider unavailable: %v\n", addr, cerr)
+				continue
+			}
+			providerSource = winner.Source
+		}
+
+		res, err := core.RunScan(ctx, app, ledger, core.ScanRequest{
 			Address:          addr,
-			ProviderConfig:   json.RawMessage(opts.ProviderConfig),
+			ProviderConfig:   providerConfig,
 			CurrentState:     lookup,
 			ProviderChecksum: checksum,
-			ProviderSource:   opts.Source,
+			ProviderSource:   providerSource,
 		})
 		if err != nil {
 			skipped["provider read failed"]++

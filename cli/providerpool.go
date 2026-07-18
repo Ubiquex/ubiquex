@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/ubiquex/ubiquex-cli/core/executor"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
@@ -145,6 +146,39 @@ func (p *providerPool) Close() error {
 		return fmt.Errorf("close provider pool: %v", errs)
 	}
 	return nil
+}
+
+// declaredProvidersForInference launches every source in versions via pool
+// (its own Get-level caching means a source already launched for an
+// explicitly-provider-tagged Fleet entry is never launched twice) and
+// wraps each into a resolver.DeclaredProvider backed by
+// resourceTypeSchemaInspector -- the set resolver.InferProvider needs to
+// answer "which declared provider owns this type" for a legacy/adopted
+// Fleet entry with no recorded provider of its own (cli/status.go,
+// cli/scanall.go, UBI-43 session 5). Called lazily -- only once the walk
+// actually hits its first such entry -- so a stack where every resource
+// already carries its own recorded provider never pays for this at all.
+// sortedProviderSources keeps the result (and therefore any
+// ErrAmbiguousType's own "checked:" listing) in reproducible order.
+func declaredProvidersForInference(ctx context.Context, pool *providerPool, versions map[string]string) ([]resolver.DeclaredProvider, error) {
+	sources := sortedProviderSources(versions)
+	declared := make([]resolver.DeclaredProvider, 0, len(sources))
+	for _, source := range sources {
+		app, _, err := pool.Get(ctx, source, versions[source])
+		if err != nil {
+			return nil, fmt.Errorf("declared providers: %w", err)
+		}
+		_, resourceSchemas, err := app.Schema(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("declared providers: %s: schema: %w", source, err)
+		}
+		declared = append(declared, resolver.DeclaredProvider{
+			Source:  source,
+			Version: versions[source],
+			Schema:  resourceTypeSchemaInspector{resourceSchemas: resourceSchemas},
+		})
+	}
+	return declared, nil
 }
 
 // sortedProviderSources returns versions' own keys, sorted -- determinism

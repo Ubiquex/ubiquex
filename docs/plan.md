@@ -864,6 +864,62 @@
   ubiquex-docs updated same session (new `.ubx/config` tables are
   user-visible). Full repo build/vet/fmt/test clean, no regressions. See
   STATE.md for the full session writeup.
+- 2026-07-18 — UBI-43 session 5: the last single-provider surface closed
+  -- `ubx status --drift`/`ubx scan --all`'s own multi-provider fleet-
+  grouping. `core.Ledger.Fleet` gained `FleetEntry.Provider
+  *core.ProviderRef` (`core/fleet.go`'s new `nodeProviderForAddress`/
+  `createNodeProvider`), read back with the identical "most recent wins,
+  falls back to the shipped create's own recorded value" precedence
+  `Lookup` already established -- nil for a resource this ledger only
+  ever adopted or drift-recorded (`core/scan.go` never populates a
+  provider). `resolver.inferProvider` exported as `InferProvider` for
+  reuse (no behavior change to its own 3 existing call sites) -- the same
+  type-to-provider inference a brand-new resource's own resolve already
+  uses, now also driving a legacy Fleet entry with no recorded provider
+  of its own. `cli/status.go`/`cli/scanall.go` both branch on
+  `cfg.Providers`, mirroring session 4's own `resolve.go`/`ship.go`
+  convention exactly (`warnIfLegacyProviderFlagsGiven`, empty falls back
+  to today's single-provider flow unchanged). New
+  `cli/schemainspector.go`'s `resourceTypeSchemaInspector`: a second,
+  narrower `resolver.SchemaInspector` adapter backed directly by
+  `executor.Applier.Schema()`'s own type-erased `map[string]any` (`HasType`
+  real, `IsComputed`/`IsSensitive` harmless stubs -- confirmed sufficient
+  since `InferProvider` never calls either), letting
+  `declaredProvidersForInference` (`cli/providerpool.go`) reuse the SAME
+  already-launched pool entries rather than launching every declared
+  provider a second time. New shared classification helpers in
+  `cli/status.go` (`classifyFleetEntry`/`unreadableNoLookup`/
+  `unreadableProviderUnavailable`) so the single- and multi-provider walks
+  report identically-worded outcomes. New `core/fleet_provider_test.go`
+  (5 tests: Provider from a shipped create, from a modify -- current touch
+  wins over stale history --, nil for an adopted resource, persistence
+  through a later provider-less drift touch, from an accepted-but-
+  unshipped destroy) and new `cli/multiprovider_fleet_test.go`
+  (`resourceTypeSchemaInspector`'s `HasType`, `declaredProvidersForInference`'s
+  lazy-launch-once/cached-on-reuse/launch-failure-propagation, via the
+  same injectable `launchFunc` seam `cli/providerpool_test.go` already
+  established). `classifyFleetEntry`'s own clean/drifted/unreadable
+  classification is a pure extraction -- `cli/status_test.go`'s existing 8
+  cases all still pass unchanged, proving it. **Live-verified against the
+  real built binary**: the same `UBX_PROVIDER_MIRROR`-plus-wrapper-script
+  technique session 4 used, this time with two distinct
+  `FAKEPROVIDER_RESOURCE_TYPE` values (`aws_db_instance`/`time_static`)
+  against a real two-entry `.ubx/config` `[providers]` table -- `ubx
+  resolve` correctly inferred `hashicorp/time` with no `--provider`/
+  `--source` given at all; `ubx status --drift` on a legacy-adopted entry
+  (`Provider == nil`) correctly inferred `hashicorp/aws` and reported
+  `clean`, then correctly reported `drifted` (exit 1) after a real
+  out-of-band mutation; `ubx scan --all` against the same two-provider
+  config correctly inferred and routed too. (A real `ubx ship` of the
+  `time_static` create wasn't reachable -- `conformance-v6` mode has no
+  `ApplyResourceChange` handler, session 4's own already-documented
+  limitation; the routing/inference machinery under test here is
+  independent of that gap.) docs/architecture.md's own status line
+  updated (built, not "still not built"); docs/executor.md gained a
+  session-5 addendum; docs/multi-provider-adversarial.md's own "what this
+  table doesn't cover" updated to note the code now exists (formal
+  per-row adversarial treatment of scan/status specifically still not
+  built out). Full repo build/vet/fmt/test clean, no regressions.
 
 ## Strategy
 
@@ -1904,14 +1960,54 @@ provider-adversarial.md all updated; ubiquex-docs updated same session
 (new config tables are user-visible). Full repo build/vet/fmt/test
 clean, no regressions.
 
-Still queued: `ubx scan`/`ubx status --drift`'s own multi-provider fleet-
-grouping (docs/architecture.md's own "Not yet built" note — a separate,
-larger feature: walking a whole historical fleet across mixed providers,
-not a single proposal's own nodes), and the live finale against real
-cloud infrastructure: a real payments-shaped stack (`hashicorp/aws` + a
-second real provider) shipped as ONE signed proposal on real
-infrastructure — this session's own live verification used two fixture
-subprocesses, not two real cloud providers.
+**Session 5 (2026-07-18): `ubx status --drift`/`ubx scan --all`'s own
+multi-provider fleet-grouping, real code, live-verified.** The one
+remaining gap session 4 left named explicitly: walking a whole historical
+*fleet* across mixed providers is a different problem from routing a
+single proposal's own nodes (session 3-4's own work) — a fleet entry's
+provider has to come from somewhere other than a single invocation's own
+`--source` flag. `core.Ledger.Fleet` gained `FleetEntry.Provider
+*core.ProviderRef`, read back with the identical "most recent wins, falls
+back to the shipped create's own recorded value" precedence `Lookup`
+already established; nil for a resource this ledger only ever adopted or
+drift-recorded (`core/scan.go` never populates one). `resolver.inferProvider`
+exported as `InferProvider` — no behavior change to its own three existing
+call sites — so a legacy Fleet entry with no recorded provider of its own
+gets one inferred fresh by type, the identical mechanism a brand-new
+resource's own resolve already uses, never a second one invented in
+`cli/`. `cli/status.go`/`cli/scanall.go` both branch on `cfg.Providers`,
+mirroring session 4's own convention exactly. New
+`cli/schemainspector.go`'s `resourceTypeSchemaInspector` lets
+`declaredProvidersForInference` (`cli/providerpool.go`) reuse the SAME
+already-launched pool entries for inference — never a second launch of
+every declared provider just to answer a schema question — since a
+pool-returned `Applier.Schema()` is type-erased differently than the
+existing `schemaInspectorAdapter` needs. New shared `classifyFleetEntry`/
+`unreadableNoLookup`/`unreadableProviderUnavailable` helpers so the
+single- and multi-provider walks report identically-worded outcomes,
+rather than two copies drifting apart. New `core/fleet_provider_test.go`
+(5 tests) and `cli/multiprovider_fleet_test.go` (3 tests, using the same
+injectable `launchFunc` seam `cli/providerpool_test.go` already
+established); `cli/status_test.go`'s existing 8 cases all still pass
+unchanged, proving `classifyFleetEntry`'s extraction didn't alter
+behavior. **Live-verified against the real built binary**: the same
+`UBX_PROVIDER_MIRROR`-plus-wrapper-script technique session 4 used, this
+time with two distinct `FAKEPROVIDER_RESOURCE_TYPE` values against a real
+two-entry `.ubx/config` `[providers]` table — `ubx resolve` correctly
+inferred the right provider with no `--provider`/`--source` given at all;
+`ubx status --drift` on a legacy-adopted entry correctly inferred its
+provider and reported `clean`, then correctly reported `drifted` after a
+real out-of-band mutation; `ubx scan --all` routed correctly too.
+docs/architecture.md's own status line updated (built, not "still not
+built"); docs/executor.md gained a session-5 addendum; docs/multi-
+provider-adversarial.md's own "what this table doesn't cover" updated.
+Full repo build/vet/fmt/test clean, no regressions.
+
+Still queued: the live finale against real cloud infrastructure — a real
+payments-shaped stack (`hashicorp/aws` + a second real provider) shipped
+as ONE signed proposal on real infrastructure. Every session through
+session 5 has used fixture subprocesses (`UBX_PROVIDER_MIRROR`, no
+network), never two real cloud providers.
 
 ## Deferred (explicitly not now)
 

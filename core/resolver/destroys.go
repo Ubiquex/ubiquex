@@ -180,7 +180,7 @@ func resolveDestroys(
 		if ferr != nil {
 			return nil, nil, fmt.Errorf("resolve destroy %s: %w", addr, ferr)
 		}
-		prov, perr := inferProvider(providers, addr.Type, nil) // no per-entry hint for destroys -- docs/schema.md's own amendment
+		prov, perr := InferProvider(providers, addr.Type, nil) // no per-entry hint for destroys -- docs/schema.md's own amendment
 		if perr != nil {
 			return nil, nil, perr
 		}

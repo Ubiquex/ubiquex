@@ -62,7 +62,7 @@ type ProviderHint struct {
 	Source string `json:"source"`
 }
 
-// inferProvider implements docs/resolver.md's own type→provider inference:
+// InferProvider implements docs/resolver.md's own type→provider inference:
 // ask every declared provider's own schema whether it owns typeName.
 // Exactly one match wins outright, no friction. Zero matches is
 // ErrUnknownType, naming every provider checked -- the same sentinel a
@@ -74,7 +74,14 @@ type ProviderHint struct {
 // hint's source isn't declared at all; ErrProviderHintDoesNotOwnType if
 // it's declared but doesn't genuinely own typeName -- the hint can only
 // select among real owners, never manufacture ownership).
-func inferProvider(providers []DeclaredProvider, typeName string, hint *ProviderHint) (DeclaredProvider, error) {
+//
+// Exported (2026-07-18, UBI-43 session 5) for `ubx status --drift`/
+// `ubx scan --all`'s own multi-provider fleet-grouping (cli/status.go,
+// cli/scanall.go): a legacy/adopted Fleet entry with no recorded provider
+// of its own needs its provider inferred fresh by type, the identical
+// mechanism a brand-new resource's own resolve already uses -- one
+// mechanism, reused, not a second one invented in cli/.
+func InferProvider(providers []DeclaredProvider, typeName string, hint *ProviderHint) (DeclaredProvider, error) {
 	var owners []DeclaredProvider
 	for _, p := range providers {
 		if p.Schema.HasType(typeName) {
@@ -385,7 +392,7 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 	order := make([]string, 0, len(intent.Resources))
 
 	for _, ri := range intent.Resources {
-		prov, err := inferProvider(providers, ri.Type, ri.Provider)
+		prov, err := InferProvider(providers, ri.Type, ri.Provider)
 		if err != nil {
 			return nil, err
 		}

@@ -2111,7 +2111,7 @@ across directories only).
   ambiguity is rejected loudly, never guessed. `ubx init --format=yaml`
   writes fully-quoted, unambiguous output.
 
-### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet still not built)
+### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet built session 5)
 
 A stack is conceptually multi-provider (the payments example: RDS + S3 +
 helm_release), but every verb today takes one provider per invocation.
@@ -2152,7 +2152,7 @@ resolver inference + executor pool is its own session, expected before
 or with the SDK (whose codegen shape depends on the multi-provider
 answer).
 
-**Built, UBI-43 sessions 2-4, real code**: resolver inference
+**Built, UBI-43 sessions 2-5, real code**: resolver inference
 (docs/resolver.md's own amendment), the executor's client pool
 (docs/executor.md's own amendment), and `.ubx/config`'s `[providers]`
 table wiring for `ubx resolve`/`ubx ship` specifically — the config-block
@@ -2172,8 +2172,16 @@ config together, never a single global blob). `--source`/
 stage 1 (both mechanisms coexist) and stage 2 (a deprecation warning when
 both a `[providers]` table and the singular flags are given) are both
 built; stage 3 (the flags retired for good) is explicitly not scheduled.
-**Not yet built**: scan/status/fleet's own multi-provider grouping —
-still exactly one `--source` per invocation for those commands.
+
+**Built, UBI-43 session 5**: `ubx status --drift`/`ubx scan --all`'s own
+multi-provider fleet-grouping — each Fleet entry routes to its own
+recorded provider (`core.Ledger.Fleet`'s new `Provider` field), or, for a
+legacy/adopted entry with no recorded provider of its own, one inferred
+fresh by type against the declared set (the identical `resolver.InferProvider`
+mechanism a brand-new resource's own resolve already uses, now exported
+for this reuse) — see docs/executor.md's own session-5 addendum for the
+full mechanism and its live verification against two real provider
+subprocesses.
 
 ## Component map (build order)
 

@@ -53,6 +53,24 @@ func createNodeAddress(raw json.RawMessage) (addr Address, ok bool) {
 	return Address{Stack: s, Type: ty, Name: nm}, true
 }
 
+// createNodeProvider decodes a change-proposal create node's own
+// "provider" key (docs/schema.md's "Amendment: the provider field
+// returns", UBI-43) -- nil, not an error, for a create node predating
+// that amendment (the field is additive) or a raw value that doesn't
+// decode into the expected {source, version} shape at all. Mirrors
+// createNodeAddress's own permissive, never-erroring decode style: a
+// node this can't make sense of contributes no provider information,
+// same as one that was never resolver-produced at all.
+func createNodeProvider(raw json.RawMessage) *ProviderRef {
+	var node struct {
+		Provider *ProviderRef `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return nil
+	}
+	return node.Provider
+}
+
 // isChangeCreateNode reports whether raw is a change-proposal create node
 // (docs/schema.md's amendment: {stack,type,name,config,depends_on}) rather
 // than adoption's own {stack,type,name,state} shape -- recognized by the

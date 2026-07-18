@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
@@ -108,89 +110,103 @@ always wins if more than one applies.`,
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
-			path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
-			}
-			client, err := provider.Launch(ctx, path)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
-			}
-			defer client.Close()
 			salt, err := ledger.Salt()
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 			}
-			stateReader := newStateReader(client.Provider, salt, source)
 
 			var driftedCount, unreadableCount int
 			resources := make([]statusResourceJSON, 0, len(fleet))
-			for _, e := range fleet {
-				entry := statusResourceJSON{
-					Address:    addressToJSON(e.Address),
-					Kind:       string(e.Kind),
-					ProposalID: e.ProposalID,
-					AcceptedAt: e.AcceptedAt,
-				}
 
-				if len(e.Lookup) == 0 {
-					unreadableCount++
-					entry.Status = "unreadable"
-					entry.Reason = "no lookup key recorded for this resource (authored before the resolution.inputs lookup amendment, or never had one)"
-					if !jsonOut {
-						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
-							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
-					}
-					resources = append(resources, entry)
-					continue
-				}
-
-				res, err := core.RunScan(ctx, stateReader, ledger, core.ScanRequest{
-					Address:        e.Address,
-					ProviderConfig: json.RawMessage(providerConfig),
-					CurrentState:   e.Lookup,
-					ProviderSource: source,
-				})
+			// docs/executor.md's own "Scan/status/fleet" section: a real
+			// [providers] table means grouping the fleet by each
+			// resource's own recorded provider instead of one --source
+			// flag. A legacy/adopted entry with no recorded provider of
+			// its own gets one inferred fresh by type, against every
+			// declared provider -- the identical mechanism `ubx resolve`
+			// already uses for a brand-new resource
+			// (resolver.InferProvider), built lazily here (only launching
+			// every declared provider if at least one entry actually
+			// needs it) rather than always paying for it up front.
+			if len(cfg.Providers) > 0 {
+				warnIfLegacyProviderFlagsGiven(cmd)
+				pool, err := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
-					unreadableCount++
-					entry.Status = "unreadable"
-					entry.Reason = err.Error()
-					if !jsonOut {
-						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %v\n",
-							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, err)
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+				}
+				defer pool.Close()
+
+				var declared []resolver.DeclaredProvider
+				for _, e := range fleet {
+					if len(e.Lookup) == 0 {
+						unreadableCount++
+						resources = append(resources, unreadableNoLookup(out, jsonOut, e))
+						continue
+					}
+
+					provSource, provVersion := "", ""
+					switch {
+					case e.Provider != nil:
+						provSource, provVersion = e.Provider.Source, e.Provider.Version
+					default:
+						if declared == nil {
+							declared, err = declaredProvidersForInference(ctx, pool, cfg.Providers)
+							if err != nil {
+								return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+							}
+						}
+						winner, ierr := resolver.InferProvider(declared, e.Address.Type, nil)
+						if ierr != nil {
+							unreadableCount++
+							resources = append(resources, unreadableProviderUnavailable(out, jsonOut, e, ierr))
+							continue
+						}
+						provSource, provVersion = winner.Source, winner.Version
+					}
+
+					app, providerConfig, gerr := pool.Get(ctx, provSource, provVersion)
+					if gerr != nil {
+						unreadableCount++
+						resources = append(resources, unreadableProviderUnavailable(out, jsonOut, e, gerr))
+						continue
+					}
+
+					entry, drifted, unreadable := classifyFleetEntry(ctx, out, jsonOut, ledger, app, providerConfig, provSource, e)
+					if drifted {
+						driftedCount++
+					}
+					if unreadable {
+						unreadableCount++
 					}
 					resources = append(resources, entry)
-					continue
 				}
+			} else {
+				path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+				}
+				client, err := provider.Launch(ctx, path)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+				}
+				defer client.Close()
+				stateReader := newStateReader(client.Provider, salt, source)
 
-				switch res.Outcome {
-				case core.ScanUnchanged:
-					entry.Status = "clean"
-					if !jsonOut {
-						fmt.Fprintf(out, "clean: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+				for _, e := range fleet {
+					if len(e.Lookup) == 0 {
+						unreadableCount++
+						resources = append(resources, unreadableNoLookup(out, jsonOut, e))
+						continue
 					}
-				case core.ScanDrifted:
-					driftedCount++
-					entry.Status = "drifted"
-					if !jsonOut {
-						fmt.Fprintf(out, "drifted: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+					entry, drifted, unreadable := classifyFleetEntry(ctx, out, jsonOut, ledger, stateReader, json.RawMessage(providerConfig), source, e)
+					if drifted {
+						driftedCount++
 					}
-				default:
-					// ScanNew: the ledger has a resolution.inputs entry for
-					// this address (that's how Fleet found it) but FoldState
-					// can't reconstruct any prior state for it -- a
-					// malformed/hand-authored proposal, not something a
-					// well-formed scan-generated ledger ever produces (see
-					// docs/architecture.md).
-					unreadableCount++
-					entry.Status = "unreadable"
-					entry.Reason = "ledger has no reconstructable prior state for this address"
-					if !jsonOut {
-						fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
-							e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+					if unreadable {
+						unreadableCount++
 					}
+					resources = append(resources, entry)
 				}
-				resources = append(resources, entry)
 			}
 
 			if jsonOut {
@@ -259,4 +275,111 @@ type statusSummaryJSON struct {
 	Total      int `json:"total"`
 	Drifted    int `json:"drifted"`
 	Unreadable int `json:"unreadable"`
+}
+
+// unreadableNoLookup builds e's "unreadable" entry for the "no lookup key
+// recorded" case -- factored out of the single-provider walk (this
+// session, UBI-43) so both it and the new multi-provider walk report the
+// identical reason string rather than two copies drifting apart.
+func unreadableNoLookup(out io.Writer, jsonOut bool, e core.FleetEntry) statusResourceJSON {
+	entry := statusResourceJSON{
+		Address:    addressToJSON(e.Address),
+		Kind:       string(e.Kind),
+		ProposalID: e.ProposalID,
+		AcceptedAt: e.AcceptedAt,
+		Status:     "unreadable",
+		Reason:     "no lookup key recorded for this resource (authored before the resolution.inputs lookup amendment, or never had one)",
+	}
+	if !jsonOut {
+		fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
+			e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+	}
+	return entry
+}
+
+// unreadableProviderUnavailable builds e's "unreadable" entry when its own
+// provider couldn't be resolved or launched at all (an undeclared/
+// ambiguous type during inference, or a real launch failure from the
+// pool) -- the multi-provider walk's own analogue of the failures
+// classifyFleetEntry's own RunScan call already reports, worded to match
+// core/executor/ship.go's "provider unavailable: %v" (docs/executor.md's
+// own error taxonomy) since both are the same underlying condition, just
+// surfaced from different call sites.
+func unreadableProviderUnavailable(out io.Writer, jsonOut bool, e core.FleetEntry, err error) statusResourceJSON {
+	entry := statusResourceJSON{
+		Address:    addressToJSON(e.Address),
+		Kind:       string(e.Kind),
+		ProposalID: e.ProposalID,
+		AcceptedAt: e.AcceptedAt,
+		Status:     "unreadable",
+		Reason:     fmt.Sprintf("provider unavailable: %v", err),
+	}
+	if !jsonOut {
+		fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
+			e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+	}
+	return entry
+}
+
+// classifyFleetEntry runs one Fleet entry through core.RunScan against app
+// (a single-provider stack's own already-launched stateReader, or a
+// multi-provider stack's own pool.Get result for e's specific provider)
+// and classifies the outcome clean/drifted/unreadable -- factored out of
+// the RunE body (UBI-43 session 5) so the single- and multi-provider walks
+// share one classification path instead of two copies. e must already be
+// known to carry a non-empty Lookup (callers check that themselves, via
+// unreadableNoLookup, before ever reaching here, since that check is
+// identical in both walks and doesn't need app/providerConfig/
+// providerSource at all).
+func classifyFleetEntry(ctx context.Context, out io.Writer, jsonOut bool, ledger *core.Ledger, app core.StateReader, providerConfig json.RawMessage, providerSource string, e core.FleetEntry) (entry statusResourceJSON, drifted, unreadable bool) {
+	entry = statusResourceJSON{
+		Address:    addressToJSON(e.Address),
+		Kind:       string(e.Kind),
+		ProposalID: e.ProposalID,
+		AcceptedAt: e.AcceptedAt,
+	}
+
+	res, err := core.RunScan(ctx, app, ledger, core.ScanRequest{
+		Address:        e.Address,
+		ProviderConfig: providerConfig,
+		CurrentState:   e.Lookup,
+		ProviderSource: providerSource,
+	})
+	if err != nil {
+		entry.Status = "unreadable"
+		entry.Reason = err.Error()
+		if !jsonOut {
+			fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %v\n",
+				e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, err)
+		}
+		return entry, false, true
+	}
+
+	switch res.Outcome {
+	case core.ScanUnchanged:
+		entry.Status = "clean"
+		if !jsonOut {
+			fmt.Fprintf(out, "clean: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+		}
+		return entry, false, false
+	case core.ScanDrifted:
+		entry.Status = "drifted"
+		if !jsonOut {
+			fmt.Fprintf(out, "drifted: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+		}
+		return entry, true, false
+	default:
+		// ScanNew: the ledger has a resolution.inputs entry for this
+		// address (that's how Fleet found it) but FoldState can't
+		// reconstruct any prior state for it -- a malformed/hand-authored
+		// proposal, not something a well-formed scan-generated ledger
+		// ever produces (see docs/architecture.md).
+		entry.Status = "unreadable"
+		entry.Reason = "ledger has no reconstructable prior state for this address"
+		if !jsonOut {
+			fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
+				e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+		}
+		return entry, false, true
+	}
 }
