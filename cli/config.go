@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -20,19 +21,54 @@ const configFileName = ".ubx/config"
 // Config is .ubx/config's parsed shape -- the five keys UBI-19 scoped in
 // (docs/architecture.md): provider identity, provider configuration,
 // default stack, GitHub repository, and .tf directory -- plus UBI-22's
-// [k8s_audit] table. --ledger-dir is deliberately not one of them.
+// [k8s_audit] table, and UBI-43's own [providers]/[provider_configs]
+// tables (below). --ledger-dir is deliberately not one of them.
 type Config struct {
 	Provider struct {
 		Path    string `toml:"path"`
 		Source  string `toml:"source"`
 		Version string `toml:"version"`
 	} `toml:"provider"`
-	ProviderConfig map[string]any `toml:"provider_config"`
-	Stack          string         `toml:"stack"`
-	GithubRepo     string         `toml:"github_repo"`
-	TFDir          string         `toml:"tf_dir"`
-	K8sAudit       K8sAuditConfig `toml:"k8s_audit"`
+	ProviderConfig  map[string]any            `toml:"provider_config"`
+	Providers       map[string]string         `toml:"providers"`
+	ProviderConfigs map[string]map[string]any `toml:"provider_configs"`
+	Stack           string                    `toml:"stack"`
+	GithubRepo      string                    `toml:"github_repo"`
+	TFDir           string                    `toml:"tf_dir"`
+	K8sAudit        K8sAuditConfig            `toml:"k8s_audit"`
 }
+
+// Providers/ProviderConfigs are .ubx/config's own [providers]/
+// [provider_configs] tables (2026-07-18, UBI-43 session 4,
+// docs/architecture.md §Multi-provider stacks): a stack's whole declared
+// provider set, and each one's own configuration. Deliberately two
+// separate tables, not one nested one -- [providers] is exactly the
+// shape docs/architecture.md's own design room text already ratified
+// (source → pinned version, a flat map, explicit pins only), never
+// reopened by this session; [provider_configs] is new, additive, this
+// session's own decision for the config shape the design left open
+// ("likely per-source config values"):
+//
+//	[providers]
+//	"hashicorp/aws"  = "6.60.0"
+//	"hashicorp/helm" = "3.0.2"
+//
+//	[provider_configs."hashicorp/aws"]
+//	region = "us-east-1"
+//
+//	[provider_configs."hashicorp/helm"]
+//	kubeconfig = "~/.kube/config"
+//
+// A source with no matching [provider_configs] entry gets an empty `{}`
+// config -- exactly `--provider-config`'s own existing default for a
+// single-provider stack, extended per-source rather than reinvented.
+// Both are empty (nil maps) for a single-provider stack that hasn't
+// adopted this yet -- cli/ship.go and cli/resolve.go fall back to
+// today's exact --provider/--source/--provider-config flow unchanged
+// when Providers is empty; see cli/providerpool.go for the concrete
+// executor.ApplierPool this table drives once it's populated, and
+// docs/resolver.md's own staged --source/--provider-version retirement
+// plan for what happens when both a table and a flag are given at once.
 
 // K8sAuditConfig is .ubx/config's [k8s_audit] table (UBI-22,
 // docs/architecture.md -- Kubernetes support): which EKS cluster's
@@ -156,6 +192,32 @@ func applyProviderConfigDefault(cmd *cobra.Command, providerConfig *string, cfg 
 	}
 	*providerConfig = string(b)
 	return nil
+}
+
+// warnIfLegacyProviderFlagsGiven implements docs/resolver.md's own staged
+// --source/--provider-version retirement plan, stage 2 (2026-07-18,
+// UBI-43 session 4): once a stack declares a real [providers] table,
+// that table is the authority for it, and the singular
+// --provider/--source/--provider-version/--provider-config flags stop
+// being meaningful -- but a caller who still passes them (muscle memory,
+// a script written before this stack adopted the table) gets a warning,
+// not a silent override or a hard error. Config always wins; the flags
+// are simply ignored, loudly. Callers only reach this once they've
+// already confirmed cfg.Providers is non-empty -- it doesn't re-check
+// that itself, so it can't be misused as the sole gate.
+func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
+	var given []string
+	for _, name := range []string{"provider", "source", "provider-version", "provider-config"} {
+		if cmd.Flags().Changed(name) {
+			given = append(given, "--"+name)
+		}
+	}
+	if len(given) == 0 {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: %s ignored -- this stack declares a [providers] table in .ubx/config, which is the authority for a multi-provider stack\n",
+		strings.Join(given, ", "))
 }
 
 // applyGithubRepoDefault fills githubRepo from cfg if --github-repo

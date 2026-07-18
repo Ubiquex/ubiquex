@@ -303,3 +303,100 @@ func TestApplyProviderConfigDefault_CLIWins(t *testing.T) {
 		t.Fatalf("providerConfig = %s, want the CLI-supplied value untouched", *providerConfig)
 	}
 }
+
+// --- [providers]/[provider_configs] (2026-07-18, UBI-43 session 4) -------
+
+func TestLoadConfig_MultiProviderTables(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+stack = "payments"
+
+[providers]
+"hashicorp/aws" = "6.60.0"
+"hashicorp/helm" = "3.0.2"
+
+[provider_configs."hashicorp/aws"]
+region = "us-east-1"
+
+[provider_configs."hashicorp/helm"]
+kubeconfig = "~/.kube/config"
+`)
+	withConfigSearchDir(t, dir)
+
+	cfg, err := LoadConfig(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	wantProviders := map[string]string{"hashicorp/aws": "6.60.0", "hashicorp/helm": "3.0.2"}
+	if len(cfg.Providers) != len(wantProviders) {
+		t.Fatalf("Providers = %+v, want %+v", cfg.Providers, wantProviders)
+	}
+	for source, version := range wantProviders {
+		if cfg.Providers[source] != version {
+			t.Errorf("Providers[%q] = %q, want %q", source, cfg.Providers[source], version)
+		}
+	}
+	if cfg.ProviderConfigs["hashicorp/aws"]["region"] != "us-east-1" {
+		t.Errorf("ProviderConfigs[hashicorp/aws][region] = %v, want us-east-1", cfg.ProviderConfigs["hashicorp/aws"]["region"])
+	}
+	if cfg.ProviderConfigs["hashicorp/helm"]["kubeconfig"] != "~/.kube/config" {
+		t.Errorf("ProviderConfigs[hashicorp/helm][kubeconfig] = %v, want ~/.kube/config", cfg.ProviderConfigs["hashicorp/helm"]["kubeconfig"])
+	}
+}
+
+// TestLoadConfig_ProvidersAbsentIsNilNotEmptyMap confirms a single-provider
+// stack (no [providers] table at all -- every config predating this
+// session) decodes to a genuinely nil (not just empty) map -- the one
+// signal cli/ship.go and cli/resolve.go check (len(cfg.Providers) > 0) to
+// fall back to today's --provider/--source flow unchanged.
+func TestLoadConfig_ProvidersAbsentIsNilNotEmptyMap(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `stack = "payments"`)
+	withConfigSearchDir(t, dir)
+
+	cfg, err := LoadConfig(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Providers) != 0 {
+		t.Fatalf("Providers = %+v, want empty", cfg.Providers)
+	}
+}
+
+func TestWarnIfLegacyProviderFlagsGiven_NoneGiven_NoWarning(t *testing.T) {
+	cmd := &cobra.Command{}
+	var providerPath, source, providerVersion, providerConfig string
+	cmd.Flags().StringVar(&providerPath, "provider", "", "")
+	cmd.Flags().StringVar(&source, "source", "", "")
+	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "", "")
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	warnIfLegacyProviderFlagsGiven(cmd)
+	if stderr.Len() != 0 {
+		t.Fatalf("expected no warning when no legacy flag was given, got: %s", stderr.String())
+	}
+}
+
+func TestWarnIfLegacyProviderFlagsGiven_SourceGiven_WarnsNamingIt(t *testing.T) {
+	cmd := &cobra.Command{}
+	var providerPath, source, providerVersion, providerConfig string
+	cmd.Flags().StringVar(&providerPath, "provider", "", "")
+	cmd.Flags().StringVar(&source, "source", "", "")
+	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "", "")
+	if err := cmd.Flags().Set("source", "hashicorp/aws"); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	warnIfLegacyProviderFlagsGiven(cmd)
+	if !bytes.Contains(stderr.Bytes(), []byte("--source")) {
+		t.Fatalf("expected a warning naming --source, got: %s", stderr.String())
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("[providers]")) {
+		t.Fatalf("expected the warning to explain the [providers] table is the authority, got: %s", stderr.String())
+	}
+}

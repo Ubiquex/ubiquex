@@ -457,7 +457,7 @@ func fakeStateWithTags(addr core.Address, value string, tags map[string]string) 
 
 func TestShip_SingleResource_AppliesCleanly(t *testing.T) {
 	l, fake, addr, p := singleResourceRevert(t)
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestShip_RevertRemovesAttributeAddedOutOfBand(t *testing.T) {
 		t.Fatalf("mod.After = %+v, want no tags.hotfix entry (the ledger never had one)", mod.After)
 	}
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestShip_MultiResource_SerialDeltaOrder(t *testing.T) {
 	resA := driftFake(t, l, fake, addrA, "v2")
 	p := acceptRevert(t, l, "payments", resB, resA)
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -599,7 +599,7 @@ func TestShip_RejectsUnsupportedKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
-	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, accepted); !errors.Is(err, ErrUnsupportedKind) {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", accepted); !errors.Is(err, ErrUnsupportedKind) {
 		t.Fatalf("err = %v, want ErrUnsupportedKind", err)
 	}
 }
@@ -615,7 +615,7 @@ func TestShip_RejectsUnacceptedProposal(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 	// Deliberately never accepted -- p.Acceptance is nil.
-	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p); !errors.Is(err, ErrNotAccepted) {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p); !errors.Is(err, ErrNotAccepted) {
 		t.Fatalf("err = %v, want ErrNotAccepted", err)
 	}
 }
@@ -630,7 +630,7 @@ func TestShip_RedactedAfterValue_Declined_NeverAppliesOrReads(t *testing.T) {
 	// a $redacted marker, never the real material.
 	p.Delta.Modifies[0].After["value"] = json.RawMessage(`{"$redacted":{"sha256":"deadbeef"}}`)
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestShip_RedactedAfterValue_RetriedForever_NeverSilentlySkipped(t *testing.
 	p.Delta.Modifies[0].After["value"] = json.RawMessage(`{"$redacted":{"sha256":"deadbeef"}}`)
 
 	for i := 0; i < 3; i++ {
-		sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+		sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 		if err != nil {
 			t.Fatalf("ship attempt %d: %v", i+1, err)
 		}
@@ -683,10 +683,10 @@ func TestShip_RedactedAfterValue_RetriedForever_NeverSilentlySkipped(t *testing.
 
 func TestShip_AlreadyFullyApplied_IsANoOp(t *testing.T) {
 	l, fake, _, p := singleResourceRevert(t)
-	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p); err != nil {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p); err != nil {
 		t.Fatalf("first ship: %v", err)
 	}
-	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p); !errors.Is(err, ErrAlreadyApplied) {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p); !errors.Is(err, ErrAlreadyApplied) {
 		t.Fatalf("second ship: err = %v, want ErrAlreadyApplied", err)
 	}
 	attempts, err := l.ApplyAttempts(p.ID)
@@ -705,7 +705,7 @@ func TestShip_RetryBudgetExhausted_RefusesFurtherAttempts(t *testing.T) {
 
 	for i := 0; i < maxApplyAttemptsPerResource; i++ {
 		fake.scriptApplyError(addr.String(), &TerminalError{Err: errors.New("invalid attribute value")})
-		sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+		sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 		if err != nil {
 			t.Fatalf("ship attempt %d: %v", i+1, err)
 		}
@@ -716,7 +716,7 @@ func TestShip_RetryBudgetExhausted_RefusesFurtherAttempts(t *testing.T) {
 
 	// The budget is now exhausted -- a further ship must refuse to issue
 	// another ApplyResourceChange call at all, rather than retry forever.
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship after budget exhausted: %v", err)
 	}
@@ -742,7 +742,7 @@ func TestShip_RetryableError_TriggersReconciliation_ResolvesFailed(t *testing.T)
 	fake.scriptApplyError(addr.String(), errors.New("connection reset"))
 	// Live state stays at the drifted value ("v2") -- the change never landed.
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -765,7 +765,7 @@ func TestShip_TerminalError_FailsImmediately_NoReconciliation(t *testing.T) {
 	l, fake, addr, p := singleResourceRevert(t)
 	fake.scriptApplyError(addr.String(), &TerminalError{Err: errors.New("invalid attribute value")})
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -791,7 +791,7 @@ func TestShip_TimeoutWhereChangeLanded_ResolvesApplied(t *testing.T) {
 	// by the time reconciliation gets a chance to look.
 	fake.scriptApplyTimeoutButLanded(addr.String(), context.DeadlineExceeded, fakeState(addr, "v1"))
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -809,7 +809,7 @@ func TestShip_TimeoutWhereChangeDidNotLand_ResolvesFailed(t *testing.T) {
 	fake.scriptApplyError(addr.String(), context.DeadlineExceeded)
 	// Live state stays at "v2" (the drifted value) -- it never landed.
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestShip_CrashBetweenInFlightWriteAndCall_NeverLanded_RetriedAsFailed(t *te
 	// Attempt 1 is left unsealed forever -- never touched again.
 
 	// Live state is unchanged ("v2") -- the call genuinely never happened.
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}
@@ -876,7 +876,7 @@ func TestShip_CrashBetweenCallAndResultWrite_AlreadyLanded_ResolvesApplied(t *te
 	// died -- live state already shows the restored value.
 	fake.setState(addr.String(), fakeState(addr, "v1"))
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}
@@ -945,7 +945,7 @@ func TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApp
 	}
 	fake.setState(addr.String(), fakeStateWithTags(addr, "v1", map[string]string{"env": "prod"}))
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}
@@ -975,7 +975,7 @@ func TestShip_StaleDetectedMidPartialApply_HaltsRemainingResources(t *testing.T)
 	// reality moved again since this proposal was resolved.
 	fake.setState(addr2.String(), fakeState(addr2, "v3-surprise"))
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -1028,7 +1028,7 @@ func TestShip_ConcurrentInvocations_NeverCollideOnAttemptNumber(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+			sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 			errs[i] = err
 			if sealed != nil {
 				attempts[i] = sealed.Attempt
@@ -1090,7 +1090,7 @@ func TestShip_CorruptApplyRecord_RefusesToGuess(t *testing.T) {
 		t.Fatalf("corrupt file: %v", err)
 	}
 
-	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p); !errors.Is(err, core.ErrCorruptApplyRecord) {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p); !errors.Is(err, core.ErrCorruptApplyRecord) {
 		t.Fatalf("err = %v, want ErrCorruptApplyRecord", err)
 	}
 }
@@ -1116,7 +1116,7 @@ func TestShip_ChangeProposal_CreateChain_FeedsComputedOutputForward(t *testing.T
 	}
 	p := acceptChange(t, l, "payments", creates)
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -1188,7 +1188,7 @@ func TestShip_ChangeProposal_DependentNeverAttemptedBeforeDependencyApplies(t *t
 
 	fake.scriptCreateFailure("v1", &TerminalError{Err: errors.New("simulated: primary create rejected")})
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -1265,7 +1265,7 @@ func TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_Re
 	// Attempt 1 is never sealed -- the process died before mirror's own
 	// turn ever began.
 
-	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}

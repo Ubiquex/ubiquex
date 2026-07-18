@@ -64,6 +64,12 @@ include a row proving that specific claim for a cross-provider instance;
 `ubx status --drift`/`ubx scan --all`'s own multi-provider fleet-grouping
 behavior (docs/executor.md's own amendment names the design; this table's
 rows are all `ubx ship`/`ubx resolve` scenarios, not scan/status ones — a
-future session's own adversarial rows once that code exists); and the
-`--source`/`--provider-version` deprecation-warning stage itself (staged,
-not yet built — nothing to test adversarially until stage 2 lands).
+future session's own adversarial rows once that code exists); and
+`.ubx/config`'s own two version-pinning failure modes beyond a plain
+version mismatch (UBI-43 session 4, live-verified for the plain case —
+see docs/executor.md's own session-4 addendum) — a `[providers]` entry
+whose pinned version doesn't exist in the acquire cache/registry at all,
+and two stacks sharing a ledger directory with genuinely conflicting
+`[provider_configs]` for the same source (a config-layering question, not
+a `providerPool` one, since each `ubx` invocation only ever reads one
+`.ubx/config`).

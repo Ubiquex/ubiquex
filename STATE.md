@@ -4,7 +4,138 @@
 
 ## Current phase
 
-**UBI-43 session 3 is done (this session): `core/executor`'s own client
+**UBI-43 session 4 is done (this session): the `providerConfig` gap
+closed, `.ubx/config`'s `[providers]`/`[provider_configs]` tables
+live-wired into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
+deprecation staging built, real code, hermetic, live-verified against
+the real binary.** Sessions 1-3 (previous) built the design, resolver
+inference, and the executor client pool. This session closes session 3's
+own named gap and wires the whole thing up to a real config file and a
+real CLI, per docs/plan.md's own sessioning (resolver → executor →
+config/CLI wiring → live AWS finale, mirroring UBI-30's own destroys
+arc) — the config/CLI-wiring step.
+
+**What landed, precisely.** `core/executor.ApplierPool.Get`'s own
+signature changed from `(Applier, error)` to `(Applier, json.RawMessage,
+error)` — each pool entry now carries its own resolved config alongside
+its own Applier, read together by the identical `pool.Get` call
+`shipChange`'s own loop already made. `Ship`/`shipChange` dropped their
+own `providerConfig` parameter entirely — it was never anything but a
+single-provider stand-in for what the pool now supplies correctly, per
+node. `shipCreate`/`shipModifyNode`/`shipDestroyNode` needed **zero**
+signature changes — they already took `providerConfig` as an explicit
+parameter, never a package-level global, so only `shipChange`'s own
+loop's *sourcing* of that value changed. `providerSource` is now threaded
+per-node too (into `shipDestroyNode`/`shipModifyNode`), a real if minor
+correctness fix alongside the config one: a node's own teaching-error
+hints previously named whichever provider the *invocation* launched with,
+not necessarily the one that node actually used. `SingleApplierPool`
+gained a matching second `config` parameter.
+
+**New `cli/providerpool.go`**: the concrete, cli-side `ApplierPool`
+implementation `.ubx/config`'s own new `[providers]`/`[provider_configs]`
+tables (`cli/config.go`) drive — the config-shape decision
+docs/architecture.md's own design left open ("likely per-source config
+values") resolved as a sibling table, source-keyed, additive alongside
+the already-ratified `[providers]` shape, never reopening it. Lazily
+launches on first `Get` for a given source@version, never eagerly, never
+more than once; refuses outright — never silently substitutes — a source
+this stack doesn't declare, or a version that no longer matches the
+currently-pinned one (a proposal signed against one version, launched
+against a different one the operator has since re-pinned, is exactly the
+silent-drift risk this whole project exists to catch, not reproduce).
+The real `provider.Acquire`/`provider.Launch` machinery sits behind an
+injectable `launchFunc` seam — production always uses the real one;
+hermetic tests swap in a fake, proving the pool's own caching/config-
+routing/version-mismatch/`Close` logic without a real provider binary or
+network access at all.
+
+**`cli/resolve.go`/`cli/ship.go` both branch on `cfg.Providers`**:
+non-empty means a real multi-provider stack — resolve launches *every*
+declared provider *eagerly*, in sorted-source order (determinism:
+type→provider inference needs to ask every declared provider, not just
+the ones a specific intent file happens to touch — unlike the executor's
+own lazy pool, which only launches what a given proposal's nodes
+actually need); empty falls back to today's exact `--provider`/
+`--source`/`--provider-config` single-provider flow, byte-for-byte
+unchanged. New `warnIfLegacyProviderFlagsGiven` (`cli/config.go`) —
+docs/resolver.md's own staged retirement plan, stage 2 — warns to
+stderr, naming exactly which flags were ignored, whenever a stack with a
+real `[providers]` table also receives `--provider`/`--source`/
+`--provider-version`/`--provider-config`. Config always wins; the flags
+are simply ignored, loudly, never silently overridden nor honored
+instead.
+
+**Live-verified against the real built binary, not just hermetic** — a
+real `ubx resolve` → `ubx accept` → `ubx ship` chain against two
+genuinely separate provider subprocesses (`UBX_PROVIDER_MIRROR`, no
+network: two `provider/internal/fakeprovider` copies in `conformance-v6`
+mode, one advertising `aws_db_instance` and one `helm_release` via
+`FAKEPROVIDER_RESOURCE_TYPE`, each reached through a tiny wrapper script
+setting its own env before exec'ing the shared binary, since a mirror
+entry only names a path, never an environment) — confirmed: the resolved
+proposal records the correct `provider` field on each node
+(`hashicorp/aws`→`aws_db_instance`, `hashicorp/helm`→`helm_release`,
+never crossed); the deprecation warning fires and names exactly
+`--source, --provider-version` when both a table and the flags are
+given; and a version bump in `.ubx/config` after a proposal was already
+signed refuses only the one affected node
+(`provider unavailable: provider "hashicorp/aws" is pinned to 6.61.0 ...
+but this proposal recorded 6.60.0 -- re-resolve against the current
+config`) while the sibling node against the *different*, unaffected
+`hashicorp/helm` provider proceeds to its own independent outcome — real
+proof of docs/multi-provider-adversarial.md's own row 4 shape against
+the actual binary, not just the hermetic fake. Full apply completion
+wasn't reachable in this specific smoke test (`conformance-v6` mode was
+built for UBI-9's own read-only adopt/mutate/scan-diff testing and has no
+`ApplyResourceChange` handler at all — a fixture limitation, not a bug);
+the real apply mechanics themselves are already exhaustively covered by
+`core/executor`'s own hermetic suite from sessions 2-3, and this smoke
+test's own actual job — proving the new CLI-level config→pool→routing
+wiring works, live, not just faked — is fully satisfied regardless.
+
+**Hermetic coverage**: `core/executor`'s own session-3 tests untouched
+and still green (the `ApplierPool` signature change didn't invalidate
+anything they already proved, only added a second return value every
+fake already had to start returning). New `cli/providerpool_test.go` (8
+tests, an injectable `launchFunc` standing in for real Acquire/Launch):
+lazy launch cached on a second `Get`; per-source config returned
+correctly with an explicit no-cross-contamination assertion (AWS's own
+config keys never leak into Helm's, or vice versa); a declared source
+with no `[provider_configs]` entry defaults to `{}`; an undeclared source
+is refused, launch never attempted; a version mismatch is refused,
+launch never attempted; an empty version (`Ship`'s own drift_revert
+dispatch shape) resolves against the currently-pinned version; a launch
+failure propagates; `Close` closes every client actually launched and no
+others (a declared-but-never-used provider is never even opened). New
+`cli/config_test.go` cases: `[providers]`/`[provider_configs]` decode
+correctly; their absence decodes to a genuinely nil map, not just an
+empty one — the exact signal `cli/resolve.go`/`cli/ship.go` branch on;
+`warnIfLegacyProviderFlagsGiven` stays silent with nothing legacy given,
+warns and names the flag otherwise. Full repo `go build ./...`/
+`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1` clean, no
+regressions.
+
+docs/architecture.md's own multi-provider status line updated (built,
+not "not yet built," with an explicit "scan/status/fleet still not
+built" caveat). docs/resolver.md/docs/executor.md each gained a
+session-4 addendum recording the CLI wiring, the live verification, and
+the hermetic coverage above; docs/executor.md's own "Out of scope"
+bullet updated from "fixed, session 3" to "fixed, sessions 3-4."
+docs/multi-provider-adversarial.md's "what this table doesn't cover"
+updated (the deprecation-warning-stage gap closed; two new, real,
+narrower gaps named instead — a pinned version that doesn't exist in the
+cache/registry at all, and cross-stack `[provider_configs]` layering).
+ubiquex-docs updated same session (`.ubx/config`'s new tables are real,
+user-visible, real-transcript-verified): `cli/config.mdx` gained a full
+"Multi-provider stacks" section; `cli/resolve.mdx`/`cli/ship.mdx` each
+gained a note/section and a "Related" link. `mint validate`/`mint
+broken-links` both clean (after fixing one self-inflicted anchor-slug
+mismatch, caught by `mint broken-links` itself before commit).
+
+## Current phase (previous)
+
+**UBI-43 session 3 is done: `core/executor`'s own client
 pool — real code, hermetic, adversarial rows 4/6/7 green.** Session 1 was
 docs-only; session 2 (previous) built resolver inference. This session
 builds the executor half, per docs/plan.md's own sessioning (resolver →

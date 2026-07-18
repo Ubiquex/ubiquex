@@ -70,10 +70,6 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
 			}
-			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
-			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-			}
 
 			ledger := core.Open(ledgerDir)
 			p, err := ledger.Read(args[0])
@@ -94,35 +90,51 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
-			path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-			}
-			client, err := provider.Launch(ctx, path)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-			}
-			defer client.Close()
-
 			salt, err := ledger.Salt()
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
 			}
-			applier := newApplier(client.Provider, salt, source)
+
+			// docs/executor.md's own "Amendment (UBI-43): multi-provider
+			// stacks" client pool -- a stack with a real [providers] table
+			// in .ubx/config gets a genuine multi-entry pool (cli/providerpool.go),
+			// lazily launching whichever providers this specific proposal's
+			// own nodes actually need; a single-provider stack (no table)
+			// keeps working exactly as it always has, one provider launched
+			// up front, wrapped in the trivial SingleApplierPool. Never both
+			// at once -- see docs/resolver.md's own staged
+			// --source/--provider-version retirement plan for what happens
+			// when a table AND the singular flags are both given.
+			var pool executor.ApplierPool
+			if len(cfg.Providers) > 0 {
+				warnIfLegacyProviderFlagsGiven(cmd)
+				pp, err := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				}
+				defer pp.Close()
+				pool = pp
+			} else {
+				applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
+				if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				}
+				path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				}
+				client, err := provider.Launch(ctx, path)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				}
+				defer client.Close()
+				applier := newApplier(client.Provider, salt, source)
+				pool = executor.SingleApplierPool(applier, json.RawMessage(providerConfig))
+			}
 
 			out := cmd.OutOrStdout()
 
-			// A single declared provider -- exactly today's --provider/
-			// --source behavior, now expressed as the trivial one-entry
-			// case of core/executor's own multi-provider client pool
-			// (docs/executor.md's own "Amendment (UBI-43): multi-provider
-			// stacks" -- the providers config map's own CLI wiring is
-			// later session work, not this one's; --provider/--source stay
-			// fully functional for a single-provider stack, per
-			// docs/resolver.md's own staged retirement plan).
-			pool := executor.SingleApplierPool(applier)
-
-			sealed, err := executor.Ship(ctx, ledger, pool, source, json.RawMessage(providerConfig), p)
+			sealed, err := executor.Ship(ctx, ledger, pool, source, p)
 			if errors.Is(err, executor.ErrAlreadyApplied) {
 				return reportAlreadyApplied(out, ledger, p, jsonOut)
 			}

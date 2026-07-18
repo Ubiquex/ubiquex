@@ -818,6 +818,53 @@
   scope" bullet updated from designed to fixed. Full repo build/vet/fmt/
   test clean, no regressions. See STATE.md for the full session writeup.
 
+- 2026-07-18 — UBI-43 session 4: session 3's own named gap closed
+  (`ApplierPool.Get` now returns `(Applier, json.RawMessage, error)` --
+  each pool entry carries its own resolved config, never a single global
+  blob), `.ubx/config`'s `[providers]`/`[provider_configs]` tables live-
+  wired into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
+  deprecation staging built. `Ship`/`shipChange` no longer take a
+  `providerConfig` parameter at all; `shipCreate`/`shipModifyNode`/
+  `shipDestroyNode` needed no changes (already took it as an explicit
+  param). `SingleApplierPool` gained a second `config` parameter to
+  match. New `cli/providerpool.go`: the concrete `ApplierPool`
+  `.ubx/config`'s own new tables drive, lazily launching via an
+  injectable `launchFunc` seam (real `provider.Acquire`/`Launch` in
+  production, a fake in `cli/providerpool_test.go`'s own hermetic
+  suite), refusing outright -- never silently substituting -- an
+  undeclared source or a version that no longer matches the current pin
+  (a proposal signed against one version, launched against a different
+  one, is exactly the silent drift this project exists to catch).
+  `cli/resolve.go`/`cli/ship.go` both branch on `cfg.Providers`: non-empty
+  means a real multi-provider stack (resolve launches every declared
+  provider eagerly, sorted, to fetch its own schema; ship's own pool
+  launches lazily, only what a proposal's nodes actually need); empty
+  falls back to today's exact single-provider flow, byte-for-byte
+  unchanged. New `warnIfLegacyProviderFlagsGiven` (`cli/config.go`) warns
+  to stderr, naming exactly which flags were ignored, when a stack with a
+  real `[providers]` table also receives `--provider`/`--source`/etc.
+  **Live-verified against the real built binary**, not just hermetic: a
+  real `ubx resolve` -> `ubx accept` -> `ubx ship` chain against two
+  genuinely separate provider subprocesses (`UBX_PROVIDER_MIRROR`, no
+  network -- two `conformance-v6` fakeprovider copies, each wrapped in a
+  small shell script setting its own `FAKEPROVIDER_RESOURCE_TYPE` before
+  exec) confirmed correct per-node routing, the deprecation warning
+  firing and naming the right flags, and a version-mismatch refusal that
+  only blocks the one affected node while a sibling against a different
+  provider proceeds independently. New `cli/providerpool_test.go`
+  (8 tests: lazy launch/caching, per-source config with an explicit
+  no-cross-contamination assertion, missing-config default, undeclared
+  source, version mismatch, empty-version-uses-pinned, launch-failure
+  propagation, `Close` closing only launched clients) and new
+  `cli/config_test.go` cases (table parsing, nil-vs-empty-map, the
+  deprecation warning's own silent/warning paths). docs/architecture.md's
+  own status line updated (built, not "not yet built"); docs/resolver.md/
+  docs/executor.md each gained a session-4 addendum; docs/multi-provider-
+  adversarial.md's own "what this table doesn't cover" updated.
+  ubiquex-docs updated same session (new `.ubx/config` tables are
+  user-visible). Full repo build/vet/fmt/test clean, no regressions. See
+  STATE.md for the full session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1825,13 +1872,46 @@ wrap — no CLI-visible behavior change this session. docs/executor.md
 gained a session-3 addendum; its own "Out of scope" bullet updated from
 designed to fixed. Full repo build/vet/fmt/test clean, no regressions.
 
-Still queued: per-provider *configuration* (named above, not yet built),
-`.ubx/config`'s own `providers` table wiring (rides UBI-19's existing
-loader, doesn't block on UBI-32), CLI surface changes
-(`--source`/`--provider-version` deprecation staging, never a breaking
-cutover in one session), and the live finale: a real payments-shaped
-stack (`hashicorp/aws` + a second real provider) shipped as ONE signed
-proposal on real infrastructure.
+**Session 4 (2026-07-18): the `providerConfig` gap closed, `.ubx/config`
+wiring, deprecation staging, real code, live-verified.**
+`ApplierPool.Get` now returns `(Applier, json.RawMessage, error)` — each
+pool entry carries its own resolved config, never a single global blob;
+`Ship`/`shipChange` dropped the `providerConfig` parameter entirely (the
+per-node functions already took it explicitly, so only the loop's own
+sourcing changed); `SingleApplierPool` gained a matching second
+parameter. New `cli/providerpool.go`: the concrete `ApplierPool`
+`.ubx/config`'s own new `[providers]`/`[provider_configs]` tables drive
+(the config-shape decision this arc's own design left open — a sibling
+table, source-keyed, additive alongside `[providers]`, never reopening
+that table's own already-ratified shape), lazily launching via an
+injectable `launchFunc` seam, refusing outright rather than silently
+substituting an undeclared source or a version that no longer matches
+the current pin. `cli/resolve.go`/`cli/ship.go` both branch on
+`cfg.Providers`: non-empty is a real multi-provider stack (resolve
+launches every declared provider eagerly, sorted, for its own schema;
+ship's own pool stays lazy); empty is today's exact single-provider flow,
+byte-for-byte unchanged. `--source`/`--provider-version` deprecation
+stage 2 built: a stderr warning naming exactly which flags were ignored,
+config always winning regardless. **Live-verified against the real built
+binary**, not just hermetic: a real `ubx resolve` → `ubx accept` →
+`ubx ship` chain against two genuinely separate provider subprocesses
+(`UBX_PROVIDER_MIRROR`, no network) confirmed correct per-node routing,
+the deprecation warning, and a version-mismatch refusal blocking only the
+one affected node while an unrelated sibling proceeds independently. New
+`cli/providerpool_test.go` (8 tests) and `cli/config_test.go` cases.
+docs/architecture.md/docs/resolver.md/docs/executor.md/docs/multi-
+provider-adversarial.md all updated; ubiquex-docs updated same session
+(new config tables are user-visible). Full repo build/vet/fmt/test
+clean, no regressions.
+
+Still queued: `ubx scan`/`ubx status --drift`'s own multi-provider fleet-
+grouping (docs/architecture.md's own "Not yet built" note — a separate,
+larger feature: walking a whole historical fleet across mixed providers,
+not a single proposal's own nodes), and the live finale against real
+cloud infrastructure: a real payments-shaped stack (`hashicorp/aws` + a
+second real provider) shipped as ONE signed proposal on real
+infrastructure — this session's own live verification used two fixture
+subprocesses, not two real cloud providers.
 
 ## Deferred (explicitly not now)
 

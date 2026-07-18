@@ -2111,7 +2111,7 @@ across directories only).
   ambiguity is rejected loudly, never guessed. `ubx init --format=yaml`
   writes fully-quoted, unambiguous output.
 
-### Multi-provider stacks (decided 2026-07-17, design room — not yet built)
+### Multi-provider stacks (decided 2026-07-17, design room — resolve/ship built UBI-43 sessions 2-4; scan/status/fleet still not built)
 
 A stack is conceptually multi-provider (the payments example: RDS + S3 +
 helm_release), but every verb today takes one provider per invocation.
@@ -2151,6 +2151,29 @@ Sequencing: config-block portion lands with UBI-32's cascade work;
 resolver inference + executor pool is its own session, expected before
 or with the SDK (whose codegen shape depends on the multi-provider
 answer).
+
+**Built, UBI-43 sessions 2-4, real code**: resolver inference
+(docs/resolver.md's own amendment), the executor's client pool
+(docs/executor.md's own amendment), and `.ubx/config`'s `[providers]`
+table wiring for `ubx resolve`/`ubx ship` specifically — the config-block
+portion did **not** end up waiting for UBI-32's own cascade work after
+all (found while actually building it: a flat `[providers]` table in the
+nearest `.ubx/config` resolves correctly today via the loader UBI-19
+already shipped; UBI-32, whenever it unparks, only changes *how* that
+table is found and merged across directories, not whether it works now).
+Per-provider *configuration* — the design's own open question, "likely
+per-source config values" — resolved as a sibling `[provider_configs]`
+table, source-keyed, additive alongside `[providers]` rather than
+reopening its own already-decided shape; see docs/executor.md's own
+session-4 addendum for the full mechanism
+(`executor.ApplierPool.Get` returns an Applier and its own resolved
+config together, never a single global blob). `--source`/
+`--provider-version` retirement is staged, not a breaking cutover:
+stage 1 (both mechanisms coexist) and stage 2 (a deprecation warning when
+both a `[providers]` table and the singular flags are given) are both
+built; stage 3 (the flags retired for good) is explicitly not scheduled.
+**Not yet built**: scan/status/fleet's own multi-provider grouping —
+still exactly one `--source` per invocation for those commands.
 
 ## Component map (build order)
 

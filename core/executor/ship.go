@@ -83,30 +83,49 @@ type Applier interface {
 // establishes, unchanged -- a concrete implementation backed by
 // provider.Acquire/provider.Launch lives in cli/, the one place that
 // already bridges both packages for Applier itself.
+//
+// Get also returns config -- docs/executor.md's own session-3 addendum
+// named this gap explicitly rather than leaving it silently unsolved: a
+// single global providerConfig threaded through every node regardless of
+// provider is correct only for a single-provider stack (AWS's own region
+// config is never going to be the right thing to hand a Helm/Kubernetes
+// provider's own Configure call). Each pool entry now carries its own
+// resolved config alongside its own Applier -- shipChange's own per-node
+// loop reads both together, the same single pool.Get call it already
+// makes.
 type ApplierPool interface {
-	// Get returns the Applier for source@version. An error here means the
-	// provider could not be launched at all (bad credentials, an
+	// Get returns the Applier for source@version and its own resolved
+	// provider_config (docs/architecture.md §Multi-provider stacks' own
+	// per-provider configuration -- session 4's amendment). An error here
+	// means the provider could not be launched at all (bad credentials, an
 	// unreachable registry, a crashed handshake) -- shipChange classifies
 	// this as a per-node terminal failure for every node needing that
 	// specific provider, never a whole-walk abort (docs/executor.md's own
 	// "Provider launch failure mid-walk" section, docs/multi-provider-
 	// adversarial.md row 4).
-	Get(ctx context.Context, source, version string) (Applier, error)
+	Get(ctx context.Context, source, version string) (Applier, json.RawMessage, error)
 }
 
-// SingleApplierPool wraps one already-launched Applier into the trivial,
-// always-succeeds ApplierPool a single-provider stack needs -- exactly
-// today's `--provider`/`--source` CLI flow (docs/resolver.md's own staged
-// retirement plan: single-provider stays fully functional, unchanged,
-// until real `providers` config wiring lands in a later session). Get
-// ignores its own source/version arguments entirely and always returns
-// app -- there is only one provider in this pool, so there is nothing to
-// route between.
-func SingleApplierPool(app Applier) ApplierPool { return singleApplierPool{app} }
+// SingleApplierPool wraps one already-launched Applier and its own fixed
+// config into the trivial, always-succeeds ApplierPool a single-provider
+// stack needs -- exactly today's `--provider`/`--source`/`--provider-config`
+// CLI flow (docs/resolver.md's own staged retirement plan: single-provider
+// stays fully functional, unchanged, once real `providers` config wiring
+// lands). Get ignores its own source/version arguments entirely and always
+// returns (app, config) -- there is only one provider in this pool, so
+// there is nothing to route between.
+func SingleApplierPool(app Applier, config json.RawMessage) ApplierPool {
+	return singleApplierPool{app: app, config: config}
+}
 
-type singleApplierPool struct{ app Applier }
+type singleApplierPool struct {
+	app    Applier
+	config json.RawMessage
+}
 
-func (p singleApplierPool) Get(context.Context, string, string) (Applier, error) { return p.app, nil }
+func (p singleApplierPool) Get(context.Context, string, string) (Applier, json.RawMessage, error) {
+	return p.app, p.config, nil
+}
 
 // TerminalError wraps a provider error that must not be retried within a
 // single ship invocation -- docs/executor.md's "terminal" classification: a
@@ -217,22 +236,26 @@ func parseDebugDelay(envVar string) time.Duration {
 //
 // pool is docs/executor.md's own "Amendment (2026-07-18, UBI-43):
 // multi-provider stacks" client pool -- a change proposal's own combined
-// walk (shipChange) routes each node to its own recorded provider via
-// pool.Get; a drift_revert is single-provider by construction (it
-// predates this whole concept, and core/scan.go never records a
-// provider on its own Modification entries), so shipDriftRevert keeps
-// taking one plain Applier, resolved from pool here, once, exactly as
-// SingleApplierPool's own callers already expect.
-func Ship(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
+// walk (shipChange) routes each node to its own recorded provider (and
+// that provider's own config, session 4's own amendment) via pool.Get;
+// a drift_revert is single-provider by construction (it predates this
+// whole concept, and core/scan.go never records a provider on its own
+// Modification entries), so shipDriftRevert keeps taking one plain
+// Applier and its own config, resolved from pool here, once, exactly as
+// SingleApplierPool's own callers already expect. providerConfig no
+// longer exists as a Ship-level parameter -- it comes exclusively from
+// the pool now, per provider, never a single value assumed correct for
+// every node.
+func Ship(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, p *core.Proposal) (*core.ApplyRecord, error) {
 	switch p.Kind {
 	case core.KindDriftRevert:
-		app, err := pool.Get(ctx, providerSource, "")
+		app, providerConfig, err := pool.Get(ctx, providerSource, "")
 		if err != nil {
 			return nil, fmt.Errorf("ship: %w", err)
 		}
 		return shipDriftRevert(ctx, l, app, providerSource, providerConfig, p)
 	case core.KindChange:
-		return shipChange(ctx, l, pool, providerSource, providerConfig, p)
+		return shipChange(ctx, l, pool, providerSource, p)
 	default:
 		return nil, fmt.Errorf("%w: got %s", ErrUnsupportedKind, p.Kind)
 	}
@@ -1042,7 +1065,7 @@ func splitComputedFrom(s string) (addr, path string, err error) {
 // in the same proposal still proceeds. sealOutcome is always called with
 // halted=false for this reason; "partially_applied" still correctly
 // surfaces via resourcesFailed/resourcesStillUnknown alone.
-func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
+func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, p *core.Proposal) (*core.ApplyRecord, error) {
 	if p.Acceptance == nil {
 		return nil, ErrNotAccepted
 	}
@@ -1149,7 +1172,7 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 		if n.provider != nil {
 			provSource, provVersion = n.provider.Source, n.provider.Version
 		}
-		app, err := pool.Get(ctx, provSource, provVersion)
+		app, providerConfig, err := pool.Get(ctx, provSource, provVersion)
 		if err != nil {
 			recordTransition(ra, core.ResourcePending, "")
 			recordError(ra, fmt.Sprintf("provider unavailable: %v", err), core.ErrorTerminal)
@@ -1165,9 +1188,9 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 		case n.create != nil:
 			stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		case n.destroy != nil:
-			stepErr = shipDestroyNode(ctx, app, providerSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+			stepErr = shipDestroyNode(ctx, app, provSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		default:
-			stepErr = shipModifyNode(ctx, app, providerSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+			stepErr = shipModifyNode(ctx, app, provSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		}
 		if stepErr != nil {
 			return nil, stepErr

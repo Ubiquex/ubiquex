@@ -1085,6 +1085,110 @@ docs/resolver.md's own session 2 already established. Full repo `go
 build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
 clean, no regressions.
 
+### Session 4 (2026-07-18): the `providerConfig` gap closed — `ApplierPool.Get` returns config too, `.ubx/config` wiring, real CLI verification
+
+Session 3's own named gap (`providerConfig` stayed one global value
+across every node regardless of provider) is closed by changing what
+`ApplierPool.Get` returns: `(Applier, json.RawMessage, error)`, not just
+`(Applier, error)` — each pool entry now carries its own resolved config
+alongside its own Applier, read together by the identical `pool.Get` call
+`shipChange`'s own loop already made. `Ship`/`shipChange` no longer take
+a `providerConfig` parameter at all — it was never anything but a
+single-provider stand-in for what the pool now supplies correctly, per
+node. `shipDriftRevert` is still untouched internally; `Ship`'s own
+dispatcher just resolves its one `(Applier, config)` pair from the pool
+once, exactly as before. `shipCreate`/`shipModifyNode`/`shipDestroyNode`
+needed no signature changes at all — they already took `providerConfig`
+as an explicit parameter (never a package-level global), so threading the
+per-node value through was purely `shipChange`'s own loop's concern.
+`providerSource` is now threaded per-node too, into `shipDestroyNode`/
+`shipModifyNode` (a real, if minor, correctness fix alongside the config
+one: a node's own teaching-error hints (`lookupHintText`) previously named
+whichever provider the *invocation* was launched with, not necessarily
+the one that specific node actually used).
+
+**`SingleApplierPool` gained a second parameter** (`config
+json.RawMessage`) to match — a single-provider stack's own config, fixed,
+returned alongside its one Applier regardless of what source/version is
+asked. `cli/ship.go` passes today's `--provider-config` value straight
+through, unchanged in meaning.
+
+**New `cli/providerpool.go`**: the concrete, cli-side `ApplierPool`
+implementation `.ubx/config`'s own new `[providers]`/`[provider_configs]`
+tables (`cli/config.go`) drive — docs/architecture.md's own open config-
+shape question ("likely per-source config values") resolved as a sibling
+table, source-keyed, additive alongside `[providers]`, never reopening
+that table's own already-decided shape. Lazily launches on first `Get`
+for a given source@version (never eagerly, never more than once), refuses
+outright — never silently substitutes — a source this stack doesn't
+declare or a version that no longer matches the current pin (a proposal
+signed against one version, launched against a different one the
+operator has since re-pinned, is exactly the silent-drift risk this
+whole project exists to catch, not reproduce). The real
+`provider.Acquire`/`provider.Launch` machinery is reached through an
+injectable `launchFunc` seam — production always uses the real one;
+`cli/providerpool_test.go`'s own hermetic tests swap in a fake to prove
+the pool's own caching/config-routing/version-mismatch/`Close` logic
+without a real provider binary or network access at all.
+
+**`cli/resolve.go`/`cli/ship.go` both branch on `cfg.Providers`**:
+non-empty means a real multi-provider stack (resolve launches every
+declared provider eagerly to fetch its own schema, in sorted order;
+ship's own pool launches lazily, only what a given proposal's nodes
+actually need); empty falls back to today's exact `--provider`/`--source`/
+`--provider-config` single-provider flow, byte-for-byte unchanged.
+`--source`/`--provider-version` retirement stage 2 (docs/resolver.md's
+own staged plan) is built: `warnIfLegacyProviderFlagsGiven`
+(`cli/config.go`) warns to stderr, naming exactly which flags were
+ignored, whenever a stack with a real `[providers]` table also receives
+them.
+
+**Live-verified against the real built binary, not just hermetic**: a
+real `ubx resolve` → `ubx accept` → `ubx ship` chain against two
+genuinely separate provider subprocesses (`UBX_PROVIDER_MIRROR`, no
+network — `provider/internal/fakeprovider`'s own `conformance-v6` mode,
+one copy per `FAKEPROVIDER_RESOURCE_TYPE`, each wrapped in a small shell
+script setting its own env before exec'ing the shared binary, since the
+mirror only names a path, not an environment) — confirmed each resource
+routes to the correct provider (each reaches its own correct `Configure`/
+`ReadResource` freshness precheck, `in_flight`, independently), the
+deprecation warning fires and names the right flags, and a version bump
+in `.ubx/config` after a proposal was already signed refuses that one
+node (`provider unavailable: provider "acme/widget" is pinned to 2.0.0
+... but this proposal recorded 1.0.0`) while a sibling node against a
+*different*, unaffected provider proceeds to its own independent outcome
+— real, live proof of docs/multi-provider-adversarial.md's own row 4
+shape, not just the hermetic fake. (Full apply completion wasn't
+reachable in this specific smoke test — `conformance-v6` mode was built
+for UBI-9's own read-only adopt/mutate/scan-diff testing and has no
+`ApplyResourceChange` handler at all; the real apply mechanics themselves
+are already exhaustively covered by `core/executor`'s own hermetic suite,
+sessions 2-3. This smoke test's own job — proving the new CLI-level
+config→pool→routing wiring actually works, live, not just in a fake —
+is fully satisfied regardless.)
+
+**Hermetic coverage**: `core/executor`'s own session-3 tests untouched
+and still green (the `ApplierPool` signature change didn't invalidate
+what they already proved, only added a second return value every fake
+already had to start returning). New `cli/providerpool_test.go`: lazy
+launch cached on a second `Get`; per-source config returned correctly,
+with an explicit assertion that one provider's config never leaks into
+another's; a declared source with no `[provider_configs]` entry defaults
+to `{}` (the same default `--provider-config` already uses); an
+undeclared source is refused, launch never even attempted; a version
+mismatch is refused, launch never attempted; an empty version (`Ship`'s
+own `pool.Get(ctx, providerSource, "")` for `drift_revert`) resolves
+against the currently-pinned version; a launch failure propagates; `Close`
+closes every client actually launched and no others (a declared-but-
+never-used provider is never even opened, let alone closed). New
+`cli/config_test.go` cases: `[providers]`/`[provider_configs]` decode
+correctly; their absence decodes to a genuinely nil map, not just an
+empty one (the exact signal `cli/resolve.go`/`cli/ship.go` branch on);
+`warnIfLegacyProviderFlagsGiven` stays silent when nothing legacy was
+given, warns and names the flag when something was. Full repo `go build
+./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1` clean,
+no regressions.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -1098,14 +1202,19 @@ clean, no regressions.
 - Parallel execution — across resources within one proposal, or across
   proposals/stacks. Serial, delta/dependency order, full stop.
 - ~~Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
-  client pool) — executor code.~~ — **fixed, UBI-43 session 3** (see the
-  "Session 3" addendum above): `ApplierPool`, `SingleApplierPool`, and
-  per-node pool dispatch in `shipChange`, hermetic. Still open, named
-  explicitly rather than assumed solved: per-provider *configuration*
-  (`providerConfig` stays one global value across every node, regardless
-  of provider) — real work for the same `.ubx/config` `providers`-table-
-  wiring session already queued, along with CLI deprecation staging and
-  the live finale.
+  client pool; `providerConfig` one global value regardless of provider;
+  no `.ubx/config` wiring) — executor + CLI code.~~ — **fixed, UBI-43
+  sessions 3-4** (see the "Session 3"/"Session 4" addenda above):
+  `ApplierPool`, `SingleApplierPool`, per-node pool dispatch in
+  `shipChange`, `ApplierPool.Get` returning each provider's own config,
+  `.ubx/config`'s `[providers]`/`[provider_configs]` tables live-wired
+  into `ubx resolve`/`ubx ship`, `--source`/`--provider-version`
+  deprecation staging — all hermetic, and live-verified against the real
+  binary with two genuinely separate provider subprocesses. Still open,
+  named explicitly rather than assumed solved: `ubx scan`/`ubx status
+  --drift`'s own multi-provider fleet-grouping (docs/architecture.md's
+  own "Not yet built" note), and the live finale against real cloud
+  infrastructure (two real providers, not fixtures).
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is

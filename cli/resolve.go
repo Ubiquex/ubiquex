@@ -77,7 +77,6 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
-			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
 
 			data, err := os.ReadFile(args[0])
 			if err != nil {
@@ -91,30 +90,56 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
-			path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+			// docs/resolver.md's own "Amendment (UBI-43): multi-provider
+			// stacks" -- a stack with a real [providers] table in
+			// .ubx/config gets a genuine multi-provider set, one declared
+			// provider per entry, each launched to fetch its own schema
+			// (type→provider inference needs to ask every declared
+			// provider, not just the ones a specific intent file happens
+			// to touch); a single-provider stack (no table) keeps working
+			// exactly as it always has, one provider launched, wrapped as
+			// the one-element case.
+			var providers []resolver.DeclaredProvider
+			if len(cfg.Providers) > 0 {
+				warnIfLegacyProviderFlagsGiven(cmd)
+				for _, src := range sortedProviderSources(cfg.Providers) {
+					version := cfg.Providers[src]
+					parsed, err := provider.ParseSource(src)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+					}
+					result, err := provider.Acquire(ctx, parsed, version)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: acquire provider %s@%s: %w", src, version, err)}
+					}
+					client, err := provider.Launch(ctx, result.Path)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: launch provider %s@%s: %w", src, version, err)}
+					}
+					defer client.Close()
+					schemas, err := client.Provider.Schema(ctx)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch schema for %s@%s: %w", src, version, err)}
+					}
+					providers = append(providers, resolver.DeclaredProvider{Source: src, Version: version, Schema: newSchemaInspector(schemas)})
+				}
+			} else {
+				applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
+				path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+				}
+				client, err := provider.Launch(ctx, path)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+				}
+				defer client.Close()
+				schemas, err := client.Provider.Schema(ctx)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch provider schema: %w", err)}
+				}
+				providers = []resolver.DeclaredProvider{{Source: source, Version: providerVersion, Schema: newSchemaInspector(schemas)}}
 			}
-			client, err := provider.Launch(ctx, path)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-			}
-			defer client.Close()
-
-			schemas, err := client.Provider.Schema(ctx)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch provider schema: %w", err)}
-			}
-
-			// A single declared provider -- exactly today's --provider/
-			// --source behavior, now expressed as the one-element case of
-			// core/resolver's own multi-provider set (docs/resolver.md's
-			// own "Amendment (UBI-43): multi-provider stacks" -- the
-			// providers config map's own CLI wiring is later session work,
-			// not this one's; --provider/--source stay fully functional
-			// for a single-provider stack, per that amendment's own staged
-			// retirement plan).
-			providers := []resolver.DeclaredProvider{{Source: source, Version: providerVersion, Schema: newSchemaInspector(schemas)}}
 
 			ledger := core.Open(ledgerDir)
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)

@@ -52,19 +52,19 @@ func (p *fakeApplierPool) failLaunch(source, version string, err error) {
 	p.fail[poolKey(source, version)] = err
 }
 
-func (p *fakeApplierPool) Get(ctx context.Context, source, version string) (Applier, error) {
+func (p *fakeApplierPool) Get(ctx context.Context, source, version string) (Applier, json.RawMessage, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := poolKey(source, version)
 	p.getCalls[key]++
 	if err, ok := p.fail[key]; ok {
-		return nil, err
+		return nil, nil, err
 	}
 	app, ok := p.entries[key]
 	if !ok {
-		return nil, fmt.Errorf("fakeApplierPool: no provider registered for %s", key)
+		return nil, nil, fmt.Errorf("fakeApplierPool: no provider registered for %s", key)
 	}
-	return app, nil
+	return app, nil, nil
 }
 
 // calls reports how many times Get was actually invoked for source@version
@@ -125,7 +125,7 @@ func TestShip_ProviderLaunchFailureMidWalk_PerNodeTerminal_OtherProviderProceeds
 	pool.register(awsSource, awsVersion, newFakeApplier())
 	pool.failLaunch(helmSource, helmVersion, fmt.Errorf("dial tcp: connection refused"))
 
-	sealed, err := Ship(context.Background(), l, pool, "", nil, p)
+	sealed, err := Ship(context.Background(), l, pool, "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestShip_ProviderLaunchFailureMidWalk_PerNodeTerminal_OtherProviderProceeds
 	pool2 := newFakeApplierPool()
 	pool2.register(awsSource, awsVersion, newFakeApplier()) // a fresh instance -- must never be asked to do anything for "main"
 	pool2.register(helmSource, helmVersion, newFakeApplier())
-	sealed2, err := Ship(context.Background(), l, pool2, "", nil, p)
+	sealed2, err := Ship(context.Background(), l, pool2, "", p)
 	if err != nil {
 		t.Fatalf("re-ship: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestShip_KillBetweenProviders_RerunLaunchesSecondProviderFresh(t *testing.T
 	poolAttempt1.register(awsSource, awsVersion, awsFake)
 	poolAttempt1.failLaunch(helmSource, helmVersion, fmt.Errorf("killed before launch"))
 
-	sealed1, err := Ship(context.Background(), l, poolAttempt1, "", nil, p)
+	sealed1, err := Ship(context.Background(), l, poolAttempt1, "", p)
 	if err != nil {
 		t.Fatalf("ship attempt 1: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestShip_KillBetweenProviders_RerunLaunchesSecondProviderFresh(t *testing.T
 	helmFake := newFakeApplier()
 	poolAttempt2.register(helmSource, helmVersion, helmFake)
 
-	sealed2, err := Ship(context.Background(), l, poolAttempt2, "", nil, p)
+	sealed2, err := Ship(context.Background(), l, poolAttempt2, "", p)
 	if err != nil {
 		t.Fatalf("ship attempt 2: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestShip_PerProviderFreshness_OneProviderDriftsOtherDoesNot(t *testing.T) {
 	pool.register(awsSource, awsVersion, awsFake)
 	pool.register(helmSource, helmVersion, helmFake)
 
-	sealed, err := Ship(context.Background(), l, pool, "", nil, p)
+	sealed, err := Ship(context.Background(), l, pool, "", p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}

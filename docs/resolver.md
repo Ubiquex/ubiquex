@@ -664,14 +664,15 @@ stack, and the singular flags stop being meaningful for it (multiple
 providers now genuinely need launching, not one) — but retirement is
 staged, not a breaking cutover in one session:
 
-1. **Now (this amendment)**: both mechanisms coexist. `providers` config,
+1. **Built, session 4**: both mechanisms coexist. `providers` config,
    when present, is used; the singular flags remain fully functional as
    the single-provider path for every stack that hasn't adopted the
    config map yet.
-2. **Later (a future session, not committed to a number here)**: using
-   the singular flags against a stack that also declares `providers`
-   config emits a deprecation warning rather than silently picking one
-   source over the other.
+2. **Built, session 4**: using the singular flags against a stack that
+   also declares `providers` config emits a deprecation warning
+   (`warnIfLegacyProviderFlagsGiven`, `cli/config.go`) rather than
+   silently picking one source over the other — config still wins either
+   way, the flags are simply ignored, loudly.
 3. **Eventually (a major-version-shaped change, explicitly not scheduled
    by this amendment)**: the singular flags retire for good, `providers`
    config becomes required for every stack.
@@ -730,6 +731,40 @@ change this session, since there's no way yet to declare more than one
 provider from the CLI (that's `.ubx/config`'s own `providers` table
 wiring, still queued). Full repo `go build`/`go vet`/`gofmt -l .`/`go test
 ./... -race -count=1` clean, no regressions.
+
+### Session 4 (2026-07-18): `.ubx/config`'s `[providers]` table, live-wired into `ubx resolve`
+
+`cli/resolve.go` now branches on `cfg.Providers` (`.ubx/config`'s own new
+`[providers]` table, `cli/config.go`): non-empty means a real
+multi-provider stack — every declared source is launched *eagerly*
+(unlike the executor's own lazy pool, resolve needs every declared
+provider's own schema to correctly perform ambiguity/ownership checks,
+not just whichever ones a specific intent file happens to touch), in
+sorted-source order (`sortedProviderSources`, `cli/providerpool.go` —
+determinism is a feature; a Go map's own iteration order is not), each
+one's schema wrapped into a `resolver.DeclaredProvider`. Empty falls back
+to today's exact `--provider`/`--source`+`--provider-version` single-launch
+flow, byte-for-byte unchanged. `--source`/`--provider-version` retirement
+stage 2 is built: `warnIfLegacyProviderFlagsGiven` (`cli/config.go`)
+warns to stderr, naming exactly which flags were ignored, whenever a
+stack with a real `[providers]` table also receives them — config always
+wins, the flags are never silently overridden nor honored instead.
+
+**Live-verified, not just hermetic**: a real multi-provider `ubx resolve`
+→ `ubx accept` → `ubx ship` chain against two genuinely separate
+provider subprocesses (via `UBX_PROVIDER_MIRROR`, no network), each
+advertising a disjoint type (`provider/internal/fakeprovider`'s own
+`conformance-v6` mode, one copy per `FAKEPROVIDER_RESOURCE_TYPE`) —
+confirmed the resolved proposal records the correct `provider` field on
+each node (`acme/widget`→`widget_a`, `acme/gadget`→`widget_b`, never
+crossed), the deprecation warning fires and names the right flags when
+both a table and `--source` are given, and a version bump in
+`.ubx/config` after a proposal was already signed against the old pin is
+refused at ship time (docs/executor.md's own session-4 half of this
+finding) rather than silently launching a different version than what was
+reviewed. See docs/executor.md's own session-4 addendum for the
+executor-side half (`cli/providerpool.go`, `ApplierPool.Get`'s own
+config-returning signature) this CLI wiring drives.
 
 ## Out of scope for v1, named so it isn't assumed covered
 
