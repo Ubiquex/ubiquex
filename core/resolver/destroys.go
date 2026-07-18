@@ -226,6 +226,25 @@ func resolveDestroys(
 // depends_on specifically, walking the chain in order so a later
 // proposal's own depends_on (including an empty one) overwrites an
 // earlier one for the same address.
+//
+// "Later," here, means a later kind:"change" proposal specifically --
+// found live, not assumed, during UBI-30's own live AWS finale: a
+// drift_adopt proposal recording an unrelated out-of-band correction
+// (e.g. a tag change) to the SAME address was being folded into this map
+// too, its own Modification.DependsOn (always empty -- that field is a
+// resolver-produced, change-proposal-only concept; drift_adopt's own
+// GenerateProposal never populates it, docs/schema.md's own amendment)
+// silently overwriting and erasing a REAL depends_on relationship a
+// change proposal had recorded earlier for the same address. The live
+// symptom: destroying a queue alone (its dependent policy never touched
+// since its own original create) resolved successfully instead of being
+// refused, because the policy's intervening drift_adopt correction had
+// wiped its own recorded dependency on the queue from this map entirely.
+// Fixed by only folding Delta.Modifies from KindChange proposals -- the
+// only kind whose own Modification entries ever legitimately carry
+// depends_on at all; every other kind's own modifies are simply skipped
+// here; not overwriting the map, not misread as "no longer depends on
+// anything."
 func historicalReverseDependents(l *core.Ledger) (map[string][]string, error) {
 	chain, err := l.Chain()
 	if err != nil {
@@ -259,6 +278,9 @@ func historicalReverseDependents(l *core.Ledger) (map[string][]string, error) {
 				}
 				latestDependsOn[addr] = deps
 			}
+		}
+		if p.Kind != core.KindChange {
+			continue
 		}
 		for _, m := range p.Delta.Modifies {
 			latestDependsOn[m.Target.String()] = append([]string(nil), m.DependsOn...)

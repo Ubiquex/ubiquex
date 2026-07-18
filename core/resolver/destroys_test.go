@@ -376,6 +376,84 @@ func TestResolve_RefToDestroyTarget_Rejected(t *testing.T) {
 	}
 }
 
+// recordUnrelatedDriftAdopt hand-builds and accepts a minimal
+// kind:"drift_adopt" proposal recording an out-of-band correction for
+// addr -- unrelated to any dependency relationship, and (like every
+// drift_adopt) never carrying a DependsOn value at all, since that field
+// is a resolver-produced, change-proposal-only concept
+// (docs/schema.md's own amendment). Used to reproduce a real bug found
+// live (UBI-30's own AWS finale): historicalReverseDependents originally
+// folded ALL proposal kinds' own Delta.Modifies into its
+// most-recently-touched map, so this drift_adopt's own empty DependsOn
+// silently overwrote and erased a real dependency a PRIOR change
+// proposal had recorded for the exact same address.
+func recordUnrelatedDriftAdopt(t *testing.T, l *core.Ledger, addr core.Address) {
+	t.Helper()
+	current, found, err := l.FoldState(addr)
+	if err != nil || !found {
+		t.Fatalf("recordUnrelatedDriftAdopt: %s must already be seeded: found=%v err=%v", addr, found, err)
+	}
+	hash, err := core.ObservedHash(current)
+	if err != nil {
+		t.Fatalf("recordUnrelatedDriftAdopt: %v", err)
+	}
+	head, err := l.Head()
+	if err != nil {
+		t.Fatalf("recordUnrelatedDriftAdopt: head: %v", err)
+	}
+	p := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         addr.Stack,
+		Parent:        head,
+		Kind:          core.KindDriftAdopt,
+		Intent:        core.Intent{Summary: "unrelated out-of-band correction for " + addr.String()},
+		Delta: core.Delta{
+			Modifies: []core.Modification{{Target: addr}},
+		},
+		Resolution: core.Resolution{
+			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
+			Inputs: []core.ResolutionInput{
+				{Kind: "live_state", Resource: addr.String(), ObservedHash: hash},
+			},
+		},
+		CostDelta: core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},
+		Status:    core.StatusDraft,
+	}
+	if _, err := core.Accept(l, p); err != nil {
+		t.Fatalf("recordUnrelatedDriftAdopt: accept: %v", err)
+	}
+}
+
+// TestResolve_DestroyOrphaned_SurvivesInterveningDriftAdopt reproduces the
+// exact bug found live during UBI-30's own AWS finale: destroying a queue
+// alone, after its dependent policy had a totally unrelated drift_adopt
+// correction recorded against it (e.g. an out-of-band tag change) since
+// its own original create, was wrongly ALLOWED -- the drift_adopt's own
+// empty DependsOn overwrote the real dependency the original change
+// proposal had recorded. Orphan protection must survive an intervening
+// proposal of a kind that was never in a position to say anything
+// meaningful about depends_on in the first place.
+func TestResolve_DestroyOrphaned_SurvivesInterveningDriftAdopt(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+
+	mainAddr := core.Address{Stack: "payments", Type: "aws_vpc", Name: "main"}
+	dbAddr := core.Address{Stack: "payments", Type: "aws_db_instance", Name: "db"}
+	seedLedgerWithLookup(t, l, mainAddr, `{"id":"vpc-123"}`, `{"id":"vpc-123"}`)
+	seedLedger(t, l, dbAddr, `{"id":"db-1","vpc_ref":"vpc-123"}`)
+	recordHistoricalDependsOn(t, l, dbAddr, mainAddr)
+
+	// An unrelated out-of-band correction to db, recorded well after the
+	// real dependency above -- must not erase it.
+	recordUnrelatedDriftAdopt(t, l, dbAddr)
+
+	intent := intentFile("payments")
+	intent.Destroys = []string{"payments.aws_vpc.main"}
+	if _, err := Resolve(l, schema, intent, nil); !errors.Is(err, ErrDestroyOrphaned) {
+		t.Fatalf("got %v, want ErrDestroyOrphaned -- db's real dependency on main must survive the intervening drift_adopt", err)
+	}
+}
+
 func TestResolve_DestroyOrphaned_Rejected(t *testing.T) {
 	l := core.Open(t.TempDir())
 	schema := newFakeSchema()
