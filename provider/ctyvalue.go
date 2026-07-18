@@ -135,6 +135,20 @@ func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	// A literal top-level JSON null -- core/executor's own destroy signal
+	// (docs/executor.md's UBI-30 amendment: PlannedState/Config "null"
+	// means destroy this) -- must reach the wire as a genuine
+	// cty.NullVal(ty), not as an object whose individual attributes happen
+	// to be null/unknown. Found empirically (UBI-30's own live AWS
+	// finale): the per-attribute path below has no way to produce a real
+	// top-level null (it always builds an ObjectVal, even from a nil
+	// generic), which both breaks a genuine Plan/Apply round trip for a
+	// destroy (decodeDynamicValue's ctyjson.Marshal rejects an object
+	// carrying Unknown attributes) and sends a real provider something
+	// other than the actual destroy signal it expects.
+	if bytes.Equal(bytes.TrimSpace(in), []byte("null")) {
+		return ctymsgpack.Marshal(cty.NullVal(ty), ty)
+	}
 	var generic interface{}
 	if len(in) > 0 {
 		dec := json.NewDecoder(bytes.NewReader(in))

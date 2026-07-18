@@ -40,12 +40,34 @@ type Applier interface {
 	// amendment); this package never inspects or redacts it itself, the
 	// same core/provider zero-import boundary UBI-23 established.
 	//
+	// plannedPrivate is nil for every kind this codebase shipped before
+	// UBI-30's own correction (create/modify's "no separate plan phase"
+	// shortcut needs none, verified empirically, UBI-26/27) -- a destroy
+	// is the one exception: shipDestroyNode always threads through the
+	// real bytes a matching PlanResourceChange call produced. Found
+	// empirically, not assumed (UBI-30's own live AWS finale): calling
+	// ApplyResourceChange for a destroy with plannedPrivate left nil
+	// silently no-ops against a real, complex SDKv2 provider -- it returns
+	// success without actually invoking the resource's own Delete function
+	// at all, since the provider's internal shim uses PlannedPrivate,
+	// not just "PlannedState is null," to recognize a genuine destroy.
+	//
 	// An error satisfying errors.As(err, *TerminalError) is never retried
 	// within one ship invocation (docs/executor.md's "terminal"
 	// classification: the provider gave a real, structured answer). Any
 	// other error is treated as "retryable" and triggers reconcile-by-query
 	// rather than an immediate failure.
-	ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage) (result json.RawMessage, err error)
+	ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (result json.RawMessage, err error)
+
+	// PlanResourceChange asks the provider to compute a real plan moving
+	// resourceType's state from priorState toward proposedNewState,
+	// returning the provider's own planned state and the opaque
+	// plannedPrivate bytes a matching ApplyResourceChange call must carry
+	// (UBI-30's own correction to docs/executor.md's original design --
+	// see ApplyResourceChange's own doc comment above for why this call is
+	// unconditionally required before a destroy's own Apply, not an
+	// optional refinement).
+	PlanResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, proposedNewState json.RawMessage) (plannedState json.RawMessage, plannedPrivate []byte, err error)
 }
 
 // TerminalError wraps a provider error that must not be retried within a
@@ -343,7 +365,7 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 			time.Sleep(debugDelayAfterInFlight)
 		}
 
-		result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned)
+		result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
 
 		if applyErr == nil {
 			if debugDelayAfterApplySuccess > 0 {
@@ -1148,7 +1170,7 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
-	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned)
+	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned, nil)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
@@ -1289,7 +1311,7 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
-	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned)
+	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
@@ -1417,6 +1439,30 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		return persist()
 	}
 
+	// A real PlanResourceChange call, unconditionally, before the risky
+	// Apply -- UBI-30's own correction to this section's original design.
+	// Verified empirically (docs/executor.md's own amendment), not assumed
+	// safe: skipping this (PlannedState="null", PlannedPrivate left empty)
+	// silently no-ops against a real, complex SDKv2 provider -- it reports
+	// success without actually deleting anything, because the provider's
+	// internal shim needs the real PlannedPrivate bytes only a genuine
+	// Plan call produces to recognize this as a destroy at all. Plan
+	// itself is read-only by protocol contract (a real `terraform plan`
+	// never mutates infrastructure), so this runs BEFORE the in_flight
+	// transition below -- a Plan failure means the risky call never
+	// happens at all, and the resource correctly never leaves `pending`.
+	_, plannedPrivate, planErr := app.PlanResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"))
+	if planErr != nil {
+		var terminal *TerminalError
+		if errors.As(planErr, &terminal) {
+			recordError(ra, terminal.Error(), core.ErrorTerminal)
+		} else {
+			recordError(ra, planErr.Error(), core.ErrorRetryable)
+		}
+		*resourcesFailed++
+		return persist()
+	}
+
 	// THE invariant (docs/executor.md): in_flight is durably persisted
 	// before the risky ApplyResourceChange call, never after.
 	recordTransition(ra, core.ResourceInFlight, "")
@@ -1430,9 +1476,9 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 	// PlannedState (and, per cli/stateadapter.go's own Config==PlannedState
 	// convention, Config too) is the literal JSON "null" -- the real
 	// tfplugin signal for "destroy this," PriorState non-null (docs/executor.md's
-	// own amendment). No separate PlanResourceChange call, the same
-	// v1-wide shortcut every other kind already takes.
-	_, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"))
+	// own amendment). plannedPrivate is threaded straight from the
+	// PlanResourceChange call above, opaque, never inspected here.
+	_, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"), plannedPrivate)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {

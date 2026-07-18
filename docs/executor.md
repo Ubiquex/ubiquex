@@ -816,6 +816,94 @@ within a single `ubx ship` invocation, exactly what
 (session 3) already proves). Full repo `go build ./...`/`go vet
 ./...`/`gofmt -l .`/`go test ./... -race -count=1` clean, no regressions.
 
+### Session 5: a real `PlanResourceChange` call before destroy's own `Apply` — the no-plan-phase shortcut does NOT extend to destroy
+
+Session 3's own "Constructing `PlannedState` without planning" section (and
+the `time_static` finding folded into it) established that `change`'s
+create/modify paths can skip a real `PlanResourceChange` call safely,
+confirmed against one genuinely SDKv2-vintage provider. This session found,
+empirically, against a real, complex provider (`terraform-provider-aws`
+6.54.0) that **destroy is the exception**: calling `ApplyResourceChange`
+directly for a destroy, with no prior `PlanResourceChange` call, does not
+error — it returns success — but the resource is never actually deleted.
+Confirmed via direct debug output: `ApplyResourceChange`'s own response
+`NewState` came back as the full, unchanged prior resource, not an absence.
+The proximate cause: a genuine destroy `Apply` call, against an SDKv2-shimmed
+provider, requires the opaque `PlannedPrivate` bytes only a real `Plan` call
+produces — without them, the shim has no diff to act on and silently no-ops
+rather than deleting. This is a real, load-bearing correction to session 3's
+"no separate plan phase" design, not a quiet patch: **destroy's own path now
+requires a genuine `PlanResourceChange` call, unconditionally, immediately
+before its own `Apply`** — create/modify's existing no-plan-phase shortcut is
+otherwise unaffected.
+
+**`provider.Provider` gained a real `PlanResourceChange` method** (both
+`v6Provider` and `v5Provider`), alongside `ApplyResourceChange`'s signature
+extended with a `plannedPrivate []byte` parameter it now threads straight to
+the wire (`tfplugin6.ApplyResourceChange_Request.PlannedPrivate`, its v5
+mirror). `core/executor`'s own `Applier` interface (`ship.go`) mirrors both
+changes; every existing create/modify call site passes `nil` for
+`plannedPrivate` (`ApplyResourceChange` for a non-destroy has never used it
+and still doesn't). `shipDestroyNode` (`core/executor/ship.go`) now calls
+`app.PlanResourceChange` unconditionally right after fetching the resource's
+schema and *before* recording its own `in_flight` transition — Plan is
+read-only, so a Plan failure means the risky `Apply` never runs at all and
+the resource correctly never leaves `pending`; a `PlanResourceChange`
+diagnostic error classifies exactly like an `Apply` one (`TerminalError` vs.
+retryable, the same taxonomy this document's error-classification section
+already establishes). `cli/stateadapter.go`'s adapter wires both changes
+straight through.
+
+**A second, independent bug surfaced while wiring this up, in
+`provider/ctyvalue.go`'s own `encodeUnknownAwareDynamicValue`** (session 3's
+UBI-27 addition): given a literal top-level JSON `null` — exactly what
+`shipDestroyNode` sends as `PlannedState`/`Config` for a destroy — it never
+produced a genuine top-level `cty.NullVal(ty)`. Instead, decoding `null` into
+a Go `interface{}` yields a bare `nil`, and the existing per-attribute walk
+(`encodeBlockValue`) always builds an *object* from that: each `Computed`
+attribute becomes `cty.UnknownVal`, everything else `cty.NullVal` — never a
+true top-level null. Two independent problems followed from this, both found
+via this session's own hermetic re-verification (the fakeprovider fixture's
+new `PlanResourceChange` handler, echoing its request's `ProposedNewState`
+straight back, is what exposed it — `decodeDynamicValue`'s `ctyjson.Marshal`
+rejects any value carrying an `Unknown` attribute, since JSON has no way to
+represent "unknown"): first, a destroy's own `PlannedState`/`Config` never
+actually reached the wire as the real destroy signal a provider expects;
+second, `provider/internal/fakeprovider`'s own `destroyRequestID` — which
+detects a destroy by checking `plannedVal.IsNull()` — could never observe a
+true top-level null either, for the identical reason. Fixed by special-casing
+a literal top-level JSON `null` input at the top of
+`encodeUnknownAwareDynamicValue`, encoding it directly as `cty.NullVal(ty)`
+rather than falling through to the per-attribute walk — everything else
+about that function (the `$computed`-marker and absent-and-`Computed`
+handling for a genuine object) is unchanged. Whether this same
+never-a-real-null gap contributed to the original live-AWS no-op (alongside
+the missing `PlannedPrivate`) was not separately isolated — both were fixed
+together before the live finale was redone — but it is a real, independently
+confirmed defect in its own right, not a hypothesis.
+
+**`provider/internal/fakeprovider`'s own fixture gained a matching
+`PlanResourceChange` handler** (both `fakeProviderServerV6`/`V5`), returning
+a fixed, non-empty `PlannedPrivate` and echoing `ProposedNewState` back as
+`PlannedState`. Its existing destroy branch inside `ApplyResourceChange` now
+*requires* `PlannedPrivate` non-empty, returning a clear diagnostic instead
+of silently no-oping if it's missing — deliberately stricter than the real
+provider's own silent-no-op behavior this session found, so a future
+regression (`ubx` skipping `PlanResourceChange` again) fails loudly as a
+test rather than passing while quietly reproducing the exact bug this
+session fixed. `core/executor/ship_test.go`'s own in-process `fakeApplier`
+gained the identical strictness on its `PlanResourceChange`/
+`ApplyResourceChange` fakes, for the same reason.
+
+**Hermetic coverage**: no new test files — this session's fix is exercised
+by the full existing suite (`core/executor`'s eleven adversarial-row tests,
+`cli/why_destroy_test.go`'s two destroy-rendering tests, `provider`'s own
+`ApplyResourceChange`/`PlanResourceChange` round-trip tests), all of which
+now exercise the real `PlanResourceChange` → `ApplyResourceChange` sequence
+for every destroy path rather than skipping straight to `Apply`. Full repo
+`go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -837,10 +925,12 @@ within a single `ubx ship` invocation, exactly what
 - ~~`delta.destroys`, for a `change` proposal or any other kind — no kind
   this codebase produces today carries a real destroy, and shipping one
   needs its own adversarial thinking (docs/resolver.md's own Scope
-  section).~~ — **fixed, UBI-30 sessions 3-4**: `shipDestroyNode`/
+  section).~~ — **fixed, UBI-30 sessions 3-5**: `shipDestroyNode`/
   `reconcileDestroyLoop` (see "Amendment (2026-07-17, UBI-30): shipping
   destroys," above), all eleven docs/destroys-adversarial.md rows green
   hermetically (session 3); `core.Ledger.FoldState`'s own tombstone-folding
   and `ubx why`'s `destroyed`/`already_absent` rendering (session 4, its
-  own addendum below); a live full-lifecycle finale on real AWS (session 4,
-  see docs/reliability-report.md's own UBI-30 section).
+  own addendum above); a real `PlanResourceChange` call before destroy's own
+  `Apply`, and a `PlannedState`/`Config` top-level-null encoding fix found
+  alongside it (session 5, its own addendum above); a live full-lifecycle
+  finale on real AWS (see docs/reliability-report.md's own UBI-30 section).

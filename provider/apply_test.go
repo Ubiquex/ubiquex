@@ -35,7 +35,7 @@ func TestApplyResourceChange_HappyPath_V6V5(t *testing.T) {
 			prior := json.RawMessage(`{"id":"computed-id","name":"a-widget","tags":{}}`)
 			planned := json.RawMessage(`{"id":"computed-id","name":"a-widget-renamed","tags":{}}`)
 
-			result, err := client.Provider.ApplyResourceChange(ctx, widget, "fake_widget", prior, planned, planned)
+			result, err := client.Provider.ApplyResourceChange(ctx, widget, "fake_widget", prior, planned, planned, nil)
 			if err != nil {
 				t.Fatalf("ApplyResourceChange: %v", err)
 			}
@@ -68,7 +68,7 @@ func TestApplyResourceChange_DiagnosticError_V6V5(t *testing.T) {
 			widget := schemas.Resources["fake_widget"]
 
 			planned := json.RawMessage(`{"id":"computed-id","name":"a-widget","tags":{}}`)
-			_, err = client.Provider.ApplyResourceChange(ctx, widget, "fake_widget", planned, planned, planned)
+			_, err = client.Provider.ApplyResourceChange(ctx, widget, "fake_widget", planned, planned, planned, nil)
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -104,7 +104,7 @@ func TestApplyResourceChange_Timeout_V6V5(t *testing.T) {
 			applyCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
 			planned := json.RawMessage(`{"id":"computed-id","name":"a-widget","tags":{}}`)
-			_, err = client.Provider.ApplyResourceChange(applyCtx, widget, "fake_widget", planned, planned, planned)
+			_, err = client.Provider.ApplyResourceChange(applyCtx, widget, "fake_widget", planned, planned, planned, nil)
 			if err == nil {
 				t.Fatal("expected a timeout error")
 			}

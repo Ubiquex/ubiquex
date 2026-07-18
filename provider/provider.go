@@ -54,13 +54,41 @@ type Provider interface {
 	// ReadResource's currentState uses. config is sent identically to
 	// plannedState (see docs/executor.md — "Constructing PlannedState
 	// without planning": v1 has no separate desired-config distinct from
-	// the value being restored to). Returns the provider's post-apply
-	// state. An error satisfying errors.As(err, *DiagnosticError) means the
-	// provider itself returned a real, structured ERROR diagnostic — never
-	// a transport/RPC-level failure — which core/executor's caller (see
+	// the value being restored to). plannedPrivate is empty for every kind
+	// this codebase shipped before UBI-30's own correction (create/modify's
+	// "no separate plan phase" shortcut needs none) — a destroy is the one
+	// exception: it MUST carry the real bytes a matching PlanResourceChange
+	// call returned, verified empirically (UBI-30, docs/executor.md's own
+	// correction) against a real, complex SDKv2 AWS provider: without them,
+	// the provider's own internal shim doesn't recognize this as a genuine
+	// destroy at all and silently no-ops, returning success without
+	// deleting anything. Returns the provider's post-apply state. An error
+	// satisfying errors.As(err, *DiagnosticError) means the provider itself
+	// returned a real, structured ERROR diagnostic — never a transport/
+	// RPC-level failure — which core/executor's caller (see
 	// cli/stateadapter.go) uses to classify "terminal" (docs/executor.md's
 	// error taxonomy) rather than blindly retrying.
-	ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error)
+	ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage, plannedPrivate []byte) (json.RawMessage, error)
+
+	// PlanResourceChange asks the provider to compute a real plan moving a
+	// resource from priorState toward proposedNewState -- UBI-30's own
+	// correction to docs/executor.md's original "no separate plan phase"
+	// design: found empirically that a real destroy against a real,
+	// complex SDKv2 provider needs the PlannedPrivate bytes only a genuine
+	// PlanResourceChange call produces (a directly-constructed
+	// ApplyResourceChange call, PlannedPrivate left empty, silently
+	// no-ops -- the provider's own shim never invokes the resource's real
+	// Delete function at all). config is sent identically to
+	// proposedNewState, the same convention ApplyResourceChange's own
+	// config parameter already uses. priorPrivate is always empty here --
+	// this codebase never tracks a resource's own private bytes across
+	// separate `ubx` invocations, so every PlanResourceChange call is, from
+	// the provider's perspective, the first plan it has ever seen for this
+	// resource. plannedState is returned so a caller can sanity-check it
+	// against what it expected (null, for a destroy); plannedPrivate must
+	// be threaded, opaque and unmodified, into the matching
+	// ApplyResourceChange call.
+	PlanResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, proposedNewState json.RawMessage) (plannedState json.RawMessage, plannedPrivate []byte, err error)
 }
 
 // newProvider builds the protocol-appropriate Provider for a negotiated
@@ -162,7 +190,7 @@ func (p *v6Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
 }
 
-func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
 	// priorState keeps the plain encoder: it either represents an
 	// already-observed, fully concrete resource (drift_revert; every
 	// attribute present) or a genuine from-scratch create, encoded as
@@ -186,10 +214,11 @@ func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Sc
 		return nil, fmt.Errorf("encode config: %w", err)
 	}
 	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin6.ApplyResourceChange_Request{
-		TypeName:     typeName,
-		PriorState:   &tfplugin6.DynamicValue{Msgpack: priorPayload},
-		PlannedState: &tfplugin6.DynamicValue{Msgpack: plannedPayload},
-		Config:       &tfplugin6.DynamicValue{Msgpack: configPayload},
+		TypeName:       typeName,
+		PriorState:     &tfplugin6.DynamicValue{Msgpack: priorPayload},
+		PlannedState:   &tfplugin6.DynamicValue{Msgpack: plannedPayload},
+		Config:         &tfplugin6.DynamicValue{Msgpack: configPayload},
+		PlannedPrivate: plannedPrivate,
 	})
 	if err != nil {
 		return nil, err
@@ -198,6 +227,39 @@ func (p *v6Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Sc
 		return nil, err
 	}
 	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
+}
+
+func (p *v6Provider) PlanResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, proposedNewState json.RawMessage) (json.RawMessage, []byte, error) {
+	// Same encoder split as ApplyResourceChange: priorState plain,
+	// proposedNewState/config unknown-aware (a destroy's own null is a
+	// present, concrete null either way -- the unknown-aware encoder
+	// already treats a present null as null, unchanged from the plain
+	// encoder's own behavior for that case).
+	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode prior state: %w", err)
+	}
+	proposedPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, proposedNewState)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode proposed new state: %w", err)
+	}
+	resp, err := p.client.PlanResourceChange(ctx, &tfplugin6.PlanResourceChange_Request{
+		TypeName:         typeName,
+		PriorState:       &tfplugin6.DynamicValue{Msgpack: priorPayload},
+		ProposedNewState: &tfplugin6.DynamicValue{Msgpack: proposedPayload},
+		Config:           &tfplugin6.DynamicValue{Msgpack: proposedPayload},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := diagnosticErrorV6(resp.Diagnostics); err != nil {
+		return nil, nil, err
+	}
+	plannedState, err := decodeDynamicValue(resourceSchema.Block, resp.PlannedState.GetMsgpack(), resp.PlannedState.GetJson())
+	if err != nil {
+		return nil, nil, err
+	}
+	return plannedState, resp.PlannedPrivate, nil
 }
 
 func diagnosticErrorV6(diags []*tfplugin6.Diagnostic) error {
@@ -262,7 +324,7 @@ func (p *v5Provider) ReadResource(ctx context.Context, resourceSchema *Schema, t
 	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
 }
 
-func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage) (json.RawMessage, error) {
+func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, plannedState, config json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
 	// See v6Provider.ApplyResourceChange's own comment: priorState stays
 	// on the plain encoder, plannedState/config use the unknown-aware one.
 	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
@@ -278,10 +340,11 @@ func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Sc
 		return nil, fmt.Errorf("encode config: %w", err)
 	}
 	resp, err := p.client.ApplyResourceChange(ctx, &tfplugin5.ApplyResourceChange_Request{
-		TypeName:     typeName,
-		PriorState:   &tfplugin5.DynamicValue{Msgpack: priorPayload},
-		PlannedState: &tfplugin5.DynamicValue{Msgpack: plannedPayload},
-		Config:       &tfplugin5.DynamicValue{Msgpack: configPayload},
+		TypeName:       typeName,
+		PriorState:     &tfplugin5.DynamicValue{Msgpack: priorPayload},
+		PlannedState:   &tfplugin5.DynamicValue{Msgpack: plannedPayload},
+		Config:         &tfplugin5.DynamicValue{Msgpack: configPayload},
+		PlannedPrivate: plannedPrivate,
 	})
 	if err != nil {
 		return nil, err
@@ -290,6 +353,34 @@ func (p *v5Provider) ApplyResourceChange(ctx context.Context, resourceSchema *Sc
 		return nil, err
 	}
 	return decodeDynamicValue(resourceSchema.Block, resp.NewState.GetMsgpack(), resp.NewState.GetJson())
+}
+
+func (p *v5Provider) PlanResourceChange(ctx context.Context, resourceSchema *Schema, typeName string, priorState, proposedNewState json.RawMessage) (json.RawMessage, []byte, error) {
+	priorPayload, err := encodeDynamicValue(resourceSchema.Block, priorState)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode prior state: %w", err)
+	}
+	proposedPayload, err := encodeUnknownAwareDynamicValue(resourceSchema.Block, proposedNewState)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode proposed new state: %w", err)
+	}
+	resp, err := p.client.PlanResourceChange(ctx, &tfplugin5.PlanResourceChange_Request{
+		TypeName:         typeName,
+		PriorState:       &tfplugin5.DynamicValue{Msgpack: priorPayload},
+		ProposedNewState: &tfplugin5.DynamicValue{Msgpack: proposedPayload},
+		Config:           &tfplugin5.DynamicValue{Msgpack: proposedPayload},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := diagnosticErrorV5(resp.Diagnostics); err != nil {
+		return nil, nil, err
+	}
+	plannedState, err := decodeDynamicValue(resourceSchema.Block, resp.PlannedState.GetMsgpack(), resp.PlannedState.GetJson())
+	if err != nil {
+		return nil, nil, err
+	}
+	return plannedState, resp.PlannedPrivate, nil
 }
 
 func diagnosticErrorV5(diags []*tfplugin5.Diagnostic) error {

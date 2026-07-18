@@ -689,6 +689,35 @@
   transcripts against the actual built binary (`mint validate`/`mint
   broken-links` clean). See §Destroys v1 (UBI-30) above and STATE.md for
   the full session writeup.
+- 2026-07-18 — UBI-30 sessions 4-5: `FoldState`'s tombstone-fold, `ubx
+  why`'s destroyed/already_absent rendering, a critical live-AWS
+  `PlanResourceChange` bug found and fixed, UBI-30 closed. Session 3's two
+  deferred gaps closed hermetically first (`core.shippedDestroyFold`
+  folding a shipped destroy's address back to absent in both
+  `FoldState`/`Fleet`; `ubx why`'s new `renderDestroys`/`destroyOutcome`).
+  Then the live full-lifecycle finale hit a real bug no hermetic test had
+  caught: `ApplyResourceChange` for a destroy, with no prior
+  `PlanResourceChange` call, silently no-ops against a real, complex
+  SDKv2 provider (`terraform-provider-aws` 6.54.0) instead of deleting
+  anything — the "no separate plan phase" shortcut session 3 confirmed
+  safe for create/modify does not extend to destroy. Fixed properly:
+  `provider.Provider` gained a real `PlanResourceChange` method (both
+  protocol versions), `shipDestroyNode` calls it unconditionally before
+  every destroy `Apply` and threads the real `PlannedPrivate` through. A
+  second, independent bug surfaced fixing the first:
+  `encodeUnknownAwareDynamicValue` never produced a genuine top-level
+  `cty.NullVal` for destroy's own literal-`null` signal — very likely the
+  actual cause of a live `aws_sqs_queue_policy` destroy failure this same
+  session had already hit and left unexplained. Both fixed; full repo
+  build/vet/fmt/test clean. Live finale re-verified for real against the
+  exact resources the bug had touched (a per-resource retry-budget
+  exhaustion — 3 attempts — on the original failing proposal required a
+  fresh one, a real hard limit, not a bug), plus a genuine `kill -9`
+  mid-destroy (after the real AWS call had landed), reconciled correctly.
+  Account left genuinely clean, verified via direct `aws sqs list-queues`,
+  not just ubx's own status. docs/executor.md gained a session-5 addendum;
+  docs/reliability-report.md gained a full UBI-30 section (real
+  transcripts). See STATE.md for the full session writeup.
 
 ## Strategy
 
@@ -1391,15 +1420,9 @@ mechanism, extend its use" instinct this project has applied at every
 prior amendment.
 
 Filed as its own ticket, **UBI-30**, team `ubiquex` (referenced throughout
-per the handoff's own instruction — no other ID inferred). Session 1 was
-docs-only; session 2 built resolver destroy support. Still queued: a live
-finale on real AWS (create a chain, drift it, resolve the drift, destroy
-it through the signed flow with `--confirm-destroys`, `kill -9`
-mid-destroy, reconcile, verify absence via the `aws` CLI independently,
-`ubx why` reading the complete biography from genesis to tombstone) —
-along with `core.Ledger.FoldState`'s own tombstone-folding and `ubx why`'s
-destroyed/already_absent rendering, both real, named, deferred gaps (see
-session 3, below).
+per the handoff's own instruction — no other ID inferred). **Closed,
+sessions 1-5** (see session 4-5 write-up below for the close-out,
+including a critical live-AWS bug found and fixed).
 
 **Session 2 (2026-07-17): `core/resolver` destroy support, hermetic —
 orphan protection real and tested.** `Delta.Destroys`' element shape
@@ -1496,6 +1519,85 @@ destroy" section (a real end-to-end transcript: adopt → resolve a destroy
 the `present_matches`/`destroyed` reconciliation pair), and
 `cli/exit-codes.mdx` gained the new exit-1 cause (`mint validate`/`mint
 broken-links` both pass). See STATE.md for the full session writeup.
+
+**Sessions 4-5 (2026-07-18): both deferred gaps closed, hermetically —
+then a critical live-AWS bug found and fixed, UBI-30 closed.** Session 4:
+`core.shippedDestroyFold(proposalID, addr)` (`core/apply.go`) mirrors
+`shippedCreateFold`'s per-resource gating exactly, folding the last
+`Reconciliation` entry's outcome instead of `ProviderResult`; `FoldState`
+gained a third loop over `Delta.Destroys` that resets `current`/`found` to
+absent on a shipped destroy; `Fleet` gained a matching `tombstoned` map,
+filtering tombstoned addresses out of its returned slice entirely — `ubx
+status`/`ubx scan` needed zero changes, the exact repeat of UBI-29's own
+finding. `ubx why` gained `renderDestroys` (prints `Delta.Destroys`,
+previously never rendered at all) and `destroyOutcome` (annotates a
+destroy's terminal `applied` line `(destroyed)`/`(already_absent)`,
+previously buried in a `reconcile:` line a reader had to already know to
+look for). Hermetic: `core/destroy_tombstone_test.go`,
+`cli/why_destroy_test.go` (new), full repo build/vet/fmt/test clean.
+
+Session 5: the live full-lifecycle finale (create a chain, drift it,
+resolve, destroy through `--confirm-destroys`, `kill -9` mid-destroy,
+reconcile, verify via the `aws` CLI, `ubx why` reading the complete
+biography) hit a real bug no hermetic test had caught — `ApplyResourceChange`
+for a destroy, called with no prior `PlanResourceChange`, silently no-ops
+against a real, complex SDKv2 provider (`terraform-provider-aws` 6.54.0)
+instead of deleting anything; the "no separate plan phase" shortcut
+session 3's own design carried forward from create/modify (confirmed safe
+there against a simpler provider, docs/executor.md's own session-3
+addendum) does not extend to destroy. Fixed properly, per explicit
+direction, not patched around: `provider.Provider` gained a real
+`PlanResourceChange` method (both protocol versions); `core/executor`'s
+`Applier` interface mirrors it; `shipDestroyNode` calls it unconditionally
+right after fetching the resource's schema and before recording
+`in_flight` (Plan is read-only, so a Plan failure means the risky Apply
+never runs), threading the real `PlannedPrivate` through to
+`ApplyResourceChange`; `cli/stateadapter.go` wires both through. A second,
+independent bug surfaced fixing the first: `provider/ctyvalue.go`'s
+`encodeUnknownAwareDynamicValue` never produced a genuine top-level
+`cty.NullVal` for a literal JSON `null` input (destroy's own signal),
+instead building a per-attribute object (`Unknown` for `Computed` fields,
+`Null` for the rest) — very likely the actual cause of a live
+`aws_sqs_queue_policy` destroy failure (`NonExistentQueue` against an
+empty queue reference) this same session had already hit and left
+unexplained; fixed by special-casing a literal top-level `null` into a
+genuine `cty.NullVal` before the existing per-attribute walk.
+`provider/internal/fakeprovider` gained a matching `PlanResourceChange`
+handler (both protocol versions) and now strictly requires non-empty
+`PlannedPrivate` on its own destroy branch — deliberately stricter than
+the real provider's silent no-op, so a regression fails loudly as a test.
+Full repo build/vet/fmt/test clean.
+
+The live finale then re-ran for real, against the exact resources the bug
+had touched, not fresh ones: the original `aws_sqs_queue_policy`'s destroy
+(three failed pre-fix attempts had exhausted that proposal's own
+per-resource retry budget — a real, hard limit requiring a fresh proposal,
+not a bug) now actually deletes, verified via a direct `aws sqs
+get-queue-attributes` call; a dedicated single-resource chain got a real
+`kill -9` mid-destroy (after the real AWS call had already landed,
+confirmed by wall-clock timestamps and a direct `aws sqs get-queue-url`
+call), reconciling correctly on the next `ubx ship` via
+`reconcileDestroyLoop`'s not-found-read-implies-destroyed path — live-
+verified for the first time this session. Three other resources this
+session's own pre-fix investigation had left falsely "destroyed" in their
+ledgers (real queues still alive in AWS, sealed with a false `applied`
+outcome — `FoldState`'s own tombstone-fold correctly excludes a
+sealed-destroyed address from `ubx status` regardless of whether the
+underlying delete was real) were re-discovered via a fresh `ubx scan`
+(each correctly reports `new`), re-adopted, and destroyed for real through
+fresh signed proposals — every queue this session ever touched ended up
+deleted *through* `ubx`, not a raw `aws sqs delete-queue` fallback. `ubx
+why` against the kill-9 target shows the complete, honest biography —
+including the pre-fix false tombstone exactly as it was actually recorded,
+not rewritten. Account left genuinely clean: `ubx status` across all four
+scratch ledgers and a direct `aws sqs list-queues --queue-name-prefix
+ubx-ubi30` both confirm it. A real, separate gap named, not fixed: SQS's
+own real deletion-visibility lag exposed that `reconcileDestroyLoop`'s
+retry budget (5 attempts, 20ms apart) is too short for genuine eventual
+consistency in a real account — left for a future session's own
+retry-budget tuning. docs/executor.md gained a session-5 addendum;
+docs/reliability-report.md gained a full "UBI-30" section, real
+transcripts throughout. See STATE.md for the full session writeup.
 
 ## Deferred (explicitly not now)
 

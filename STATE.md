@@ -4,6 +4,75 @@
 
 ## Current phase
 
+**UBI-30 is closed (this session, sessions 4-5 combined, Linear-verified):
+`FoldState`'s tombstone-fold, `ubx why`'s destroyed/already_absent
+rendering, a critical live-AWS `PlanResourceChange` bug found and fixed,
+and the full live finale, real, against real AWS.** Session 3's own two
+deliberately-deferred gaps (tombstone-folding, rendering) are closed
+first, hermetically (`core/destroy_tombstone_test.go`,
+`cli/why_destroy_test.go`, new). Then the live full-lifecycle finale:
+create a real dependent chain, drift it by hand, resolve and sign a
+destroy, ship it — and hit a real bug no hermetic test had caught: calling
+`ApplyResourceChange` for a destroy with no prior `PlanResourceChange`
+call silently no-ops against a real, complex SDKv2 provider
+(`terraform-provider-aws` 6.54.0) instead of deleting anything. Fixed
+properly, not patched around, per explicit direction: `provider.Provider`
+gained a real `PlanResourceChange` method (both protocol versions),
+`core/executor`'s `Applier` interface mirrors it, `shipDestroyNode` calls
+it unconditionally before every destroy `Apply` and threads the real
+`PlannedPrivate` through. A second, independent bug surfaced fixing the
+first: `provider/ctyvalue.go`'s `encodeUnknownAwareDynamicValue` never
+produced a genuine top-level `cty.NullVal` for destroy's own literal-`null`
+signal, instead building a per-attribute object (`Unknown`/`Null` per
+field) — very likely the actual cause of a live `aws_sqs_queue_policy`
+destroy failure (`NonExistentQueue` against an empty queue reference) this
+same session had already hit and left unexplained. Both fixed; full repo
+`go build`/`go vet`/`gofmt -l .`/`go test ./... -race -count=1` clean. The
+live finale then re-ran for real against the exact resources the bug had
+touched: the original `ubi30-chain`/`ubi30-chain-policy` pair (the
+policy's own destroy had failed three times pre-fix, exhausting that
+proposal's per-resource retry budget — a real, hard limit requiring a
+fresh proposal, not infinite retries) now actually deletes, verified via
+direct `aws sqs get-queue-attributes`/`get-queue-url` calls, not just a
+clean exit code; a dedicated `killtest` single-resource chain got a real
+`kill -9` mid-destroy (`UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS`, after
+the real AWS call had already landed, confirmed by wall-clock timestamps
+and a direct AWS read), reconciled correctly on the next `ubx ship` via
+`reconcileDestroyLoop`'s not-found-read-implies-destroyed path — live-
+verified for the first time this session. Three other resources this
+session's own pre-fix investigation had left falsely "destroyed" in their
+ledgers (real queues still alive in AWS, sealed with a false `applied`
+outcome — `core.Ledger.FoldState`'s own tombstone-fold correctly excludes
+a sealed-destroyed address from `ubx status` regardless of whether the
+underlying delete was real) were re-discovered via a fresh `ubx scan`
+(each correctly reports `new` — the "tear down, rebuild under the same
+address" lifecycle FoldState's own doc comment names, here triggered by a
+false tombstone), re-adopted, and destroyed for real through fresh signed
+proposals — every queue this session ever touched ended up deleted
+*through* `ubx`, not via a raw `aws sqs delete-queue` fallback. `ubx why`
+against the kill-9 target shows the complete, honest biography — genesis,
+the pre-fix false tombstone included as it was actually recorded, the
+re-adoption, and the real fixed-binary destroy — and `ubx status` across
+all four scratch ledgers, plus a direct `aws sqs list-queues
+--queue-name-prefix ubx-ubi30`, both confirm the account is genuinely
+clean. Full write-up: docs/reliability-report.md's own new "UBI-30"
+section (real transcripts throughout); docs/executor.md's own new
+"Session 5" addendum records both bugs and the fix in detail.
+
+**A real, separate gap named, not fixed, this session**: SQS's own real
+deletion-visibility lag (`DeleteQueue` succeeds immediately;
+`GetQueueUrl`/`ListQueues` can keep reporting a queue for well beyond the
+~60 seconds AWS's own docs suggest) means `reconcileDestroyLoop`'s retry
+budget (5 attempts, 20ms apart) is too short for genuine eventual
+consistency in a real account — this produced a false `failed`
+reconciliation earlier in this session's own live investigation, before
+the `PlanResourceChange` fix made destroys land at all (so its practical
+impact post-fix was never fully isolated). Left for a future session's
+own retry-budget tuning — not a destroys-specific defect, and not silently
+skipped.
+
+## Current phase (previous)
+
 **UBI-30 session 3 is done (this session): `core/executor` destroy
 support — real code, hermetic, all eleven docs/destroys-adversarial.md
 rows green.** Session 1 was docs-only; session 2 (previous) built resolver

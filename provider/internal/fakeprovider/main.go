@@ -246,6 +246,25 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState
 		// is the literal null ubx's own executor sends for "destroy this."
+		// PlannedPrivate is REQUIRED here, not optional -- found empirically
+		// against a real, complex SDKv2 AWS provider (UBI-30's own live AWS
+		// finale): skipping PlanResourceChange (leaving PlannedPrivate
+		// empty) makes a real provider's own shim silently no-op instead of
+		// actually deleting anything. This fixture is deliberately STRICTER
+		// than that real behavior -- returning a clear diagnostic instead
+		// of a silent no-op -- so a regression here (ubx skipping
+		// PlanResourceChange again) fails loudly as a test, rather than
+		// passing while quietly reproducing the exact bug this session
+		// found and fixed.
+		if len(req.PlannedPrivate) == 0 {
+			return &tfplugin6.ApplyResourceChange_Response{
+				Diagnostics: []*tfplugin6.Diagnostic{{
+					Severity: tfplugin6.Diagnostic_ERROR,
+					Summary:  "destroy called without PlannedPrivate",
+					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call (UBI-30) -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
+				}},
+			}, nil
+		}
 		// Marked here, not deleted from any persistent map (this fixture
 		// never had one to begin with -- ubx supplies the same lookup on
 		// every read, never re-derives it) -- ReadResource above is what
@@ -261,6 +280,31 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 		return nil, err
 	}
 	return &tfplugin6.ApplyResourceChange_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
+}
+
+// PlanResourceChange stands in for a real provider's own planning RPC
+// (UBI-30): the only thing ubx's own executor actually needs back from it
+// before a destroy Apply is a non-empty PlannedPrivate, so that's what this
+// fixture supplies -- ProposedNewState is echoed through unchanged since
+// this fixture never varies plan output from proposed input.
+func (s *fakeProviderServerV6) PlanResourceChange(ctx context.Context, req *tfplugin6.PlanResourceChange_Request) (*tfplugin6.PlanResourceChange_Response, error) {
+	switch os.Getenv("FAKEPROVIDER_APPLY_MODE") {
+	case "diagnostic-error":
+		return &tfplugin6.PlanResourceChange_Response{
+			Diagnostics: []*tfplugin6.Diagnostic{{
+				Severity: tfplugin6.Diagnostic_ERROR,
+				Summary:  "invalid attribute value",
+				Detail:   "fakeprovider: simulated terminal diagnostic",
+			}},
+		}, nil
+	case "hang":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &tfplugin6.PlanResourceChange_Response{
+		PlannedState:   req.ProposedNewState,
+		PlannedPrivate: []byte("fakeprovider-planned-private"),
+	}, nil
 }
 
 type fakeProviderServerV5 struct {
@@ -321,6 +365,19 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 		return nil, ctx.Err()
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
+		// See fakeProviderServerV6.ApplyResourceChange's matching comment
+		// (UBI-30): PlannedPrivate is required, not optional, mirroring the
+		// empirically-found real-provider requirement -- this fixture
+		// refuses to silently no-op a destroy the way that real bug did.
+		if len(req.PlannedPrivate) == 0 {
+			return &tfplugin5.ApplyResourceChange_Response{
+				Diagnostics: []*tfplugin5.Diagnostic{{
+					Severity: tfplugin5.Diagnostic_ERROR,
+					Summary:  "destroy called without PlannedPrivate",
+					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call (UBI-30) -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
+				}},
+			}, nil
+		}
 		if ok {
 			markDestroyed(id)
 		}
@@ -331,6 +388,28 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 		return nil, err
 	}
 	return &tfplugin5.ApplyResourceChange_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
+}
+
+// PlanResourceChange mirrors fakeProviderServerV6.PlanResourceChange (UBI-30)
+// over the tfplugin5 wire protocol.
+func (s *fakeProviderServerV5) PlanResourceChange(ctx context.Context, req *tfplugin5.PlanResourceChange_Request) (*tfplugin5.PlanResourceChange_Response, error) {
+	switch os.Getenv("FAKEPROVIDER_APPLY_MODE") {
+	case "diagnostic-error":
+		return &tfplugin5.PlanResourceChange_Response{
+			Diagnostics: []*tfplugin5.Diagnostic{{
+				Severity: tfplugin5.Diagnostic_ERROR,
+				Summary:  "invalid attribute value",
+				Detail:   "fakeprovider: simulated terminal diagnostic",
+			}},
+		}, nil
+	case "hang":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &tfplugin5.PlanResourceChange_Response{
+		PlannedState:   req.ProposedNewState,
+		PlannedPrivate: []byte("fakeprovider-planned-private"),
+	}, nil
 }
 
 // fakeWidgetType mirrors the fake_widget schema advertised above (id/name

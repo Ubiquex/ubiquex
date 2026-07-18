@@ -848,3 +848,251 @@ unreadable: ubi29demo.aws_sqs_queue_policy.ubi29-queue-policy: drift_adopt 70783
 2 resource(s), 0 drifted, 2 unreadable
 ```
 forward silently.
+
+# UBI-30: destroys — a real `PlanResourceChange` bug found live, fixed, then re-verified against the same resources
+
+> Same discipline as the sections above: real command output, not
+> reconstructed. Real AWS account `839333509514`, region `us-east-1`,
+> provider `hashicorp/aws` 6.54.0, four scratch ledgers created over the
+> course of this session (`ubi30-live` and its `chain2`/`debugtest`/
+> `killtest` subdirectories). No adjectives.
+
+## Scope
+
+UBI-30 sessions 1-2 built `core/resolver`'s destroy support (docs-only,
+then resolver); session 3 built `core/executor`'s destroy support,
+hermetically, all eleven docs/destroys-adversarial.md rows green; session
+4 closed `core.Ledger.FoldState`'s own tombstone-folding and `ubx why`'s
+`destroyed`/`already_absent` rendering, hermetically. This section is the
+live full-lifecycle finale sessions 3-4 both deferred: create a real
+dependent chain, drift it, resolve and sign a destroy, ship it through
+`--confirm-destroys`, kill `-9` mid-destroy, reconcile, and verify
+absence against real AWS — plus a critical bug this exact exercise found,
+live, that no hermetic test had caught.
+
+## The chain, shipped, then drifted and destroy-resolved
+
+The same `aws_sqs_queue` + `aws_sqs_queue_policy` dependent pattern UBI-27/
+UBI-29 already used, `ubx resolve` → `ubx accept` → `ubx ship`, then a
+hand-edited out-of-band drift (`aws sqs tag-queue`/`set-queue-attributes`),
+`ubx scan` → `ubx accept`, then a destroy intent naming both addresses,
+`ubx resolve` → `ubx accept --confirm-destroys`:
+
+```text
+$ ubx resolve destroy-intent.json --ledger-dir . --out destroy-resolved.json --source hashicorp/aws --provider-version 6.54.0
+resolved: payments: 0 create(s), 0 modify(ies), 2 destroy(s)
+$ ubx accept destroy-resolved.json --ledger-dir . --confirm-destroys
+accepted a99ae22cf7e7… (stack payments)
+```
+
+## A real bug found live that no hermetic test caught: destroy silently no-ops without a genuine `PlanResourceChange` call
+
+Shipping the signed destroy against real `terraform-provider-aws` 6.54.0
+returned success — `ApplyResourceChange`'s own response carried no error —
+but the target queue's policy was never actually removed. Confirmed by
+direct debug output: the response's `NewState` was the full, unchanged
+prior resource, not an absence. The proximate cause: an SDKv2-shimmed
+provider's destroy `Apply` needs the opaque `PlannedPrivate` bytes a real
+`PlanResourceChange` call produces to know there's a diff to act on at
+all; skipping straight to `Apply` (the "no separate plan phase" shortcut
+docs/executor.md's own session-3 addendum had confirmed safe for
+create/modify, against one different, simpler provider) silently no-ops
+instead of deleting. A second, independent bug surfaced fixing the first:
+`provider/ctyvalue.go`'s `encodeUnknownAwareDynamicValue` never produced a
+genuine top-level `cty.NullVal` for a literal JSON `null` input — the
+actual destroy signal `shipDestroyNode` sends — building a per-attribute
+object (`Unknown` for `Computed` fields, `Null` for the rest) instead. This
+is very likely why the `aws_sqs_queue_policy` destroy specifically failed
+with `AWS.SimpleQueueService.NonExistentQueue: The specified queue does
+not exist` against an empty-string queue reference — the SDKv2 shim's own
+delete logic reading a `Null` where it needed the real prior `queue_url`.
+Both are fixed: `provider.Provider` gained a real `PlanResourceChange`
+method (both protocol versions), `shipDestroyNode` calls it unconditionally
+before `Apply` and threads the real `PlannedPrivate` through, and
+`encodeUnknownAwareDynamicValue` special-cases a literal top-level `null`
+into a genuine `cty.NullVal` before falling through to its existing
+per-attribute walk. Full detail: docs/executor.md's own "Session 5"
+addendum.
+
+**Proof, against the exact resource that failed before the fix**, not a
+fresh one: re-resolving a brand-new destroy proposal for the same
+`aws_sqs_queue_policy`/`aws_sqs_queue` pair (the original proposal's own
+per-resource retry budget — three attempts — was already exhausted by the
+pre-fix failures, a real, hard limit requiring a fresh proposal, not
+infinite retries against the same one) and shipping it with the fixed
+binary:
+
+```text
+$ ubx ship 2d99dfff2934… --ledger-dir . --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+applied: payments.aws_sqs_queue_policy.ubi30-chain-policy
+pending: payments.aws_sqs_queue.ubi30-chain
+  terminal: destroy target drifted since it was signed away -- refusing to destroy state that was never reviewed
+2 resource(s), 1 applied, 1 failed, 0 still unknown -- outcome: partially_applied
+$ aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-ubi30-chain --attribute-names Policy
+(empty -- the policy is genuinely gone)
+```
+
+The policy actually deleted this time — real, verified via a direct
+`aws sqs get-queue-attributes` call, not just a clean exit code. The
+queue's own destroy correctly refused (its recorded `policy` attribute no
+longer matched live reality, now that the policy was really gone —
+freshness re-verified immediately before every attempt, exactly as
+designed, not a regression). A fresh `ubx scan` → `ubx accept` re-adopted
+the drift, a fresh destroy-only intent resolved and shipped it:
+
+```text
+$ ubx ship 2dfcefe58ea6… --ledger-dir . --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+applied: payments.aws_sqs_queue.ubi30-chain
+1 resource(s), 1 applied, 0 failed, 0 still unknown -- outcome: applied
+$ aws sqs get-queue-url --queue-name ubx-ubi30-chain
+An error occurred (AWS.SimpleQueueService.NonExistentQueue) ...
+```
+
+## The kill: a real `kill -9` mid-destroy, against a queue the pre-fix bug had already falsely marked "destroyed"
+
+A separate single-resource chain (`killtest`) had, pre-fix, gone through
+exactly this bug's own failure mode: a genuine `kill -9` between the
+`in_flight` write and the (never-landed) real call, a false `failed`
+reconciliation from SQS's own real eventual-consistency lag on a
+subsequent retry, and finally a sealed `applied`/`destroyed` outcome that
+was **itself false** — the queue was never actually deleted, just like
+`ubi30-chain-policy` above. `ubx status` folds a sealed destroy's address
+out of its ground truth regardless of whether the underlying delete
+really happened (`core.Ledger.FoldState`'s own tombstone-fold, session 4)
+— so re-discovering this queue for real cleanup required a fresh
+`ubx scan`, which correctly reports it `new` (the exact "tear down,
+rebuild under the same address" lifecycle FoldState's own doc comment
+names, here triggered by a false tombstone rather than a real rebuild):
+
+```text
+$ ubx scan --type aws_sqs_queue --name ubi30-killtarget --stack payments --lookup '{"id":"..."}' --ledger-dir . --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' --out redisc-kill.json
+new: payments.aws_sqs_queue.ubi30-killtarget (04111df18273…) -- generated a "adoption" proposal
+```
+
+Re-adopted, a fresh destroy resolved and signed, then shipped with
+`UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS=15s` (the same test seam
+`core/executor`'s own hermetic suite uses, reused here to create a
+reliable real kill window) and killed for real, mid-window, confirmed by
+wall-clock timestamps:
+
+```text
+$ UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS=15s ubx ship 1a916b015bc9… --ledger-dir . --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}' &
+[1] 31891
+$ date +%s
+1784341817
+$ kill -9 31891
+$ date +%s
+1784341837
+```
+
+The real `ApplyResourceChange` call had already landed before the kill —
+confirmed directly against AWS, not inferred from the ledger:
+
+```text
+$ aws sqs get-queue-url --queue-name ubx-ubi30-killtarget
+An error occurred (AWS.SimpleQueueService.NonExistentQueue) ...
+```
+
+— while the ledger's own record, killed mid-sleep, shows only `in_flight`,
+no terminal transition at all:
+
+```json
+"transitions": [
+  {"state": "pending", "at": "2026-07-18T02:30:18Z"},
+  {"state": "in_flight", "at": "2026-07-18T02:30:20Z"}
+]
+```
+
+A plain re-run of `ubx ship` against the same proposal ID reconciles it
+correctly — `reconcileDestroyLoop`'s not-found-read-implies-destroyed path,
+live-verified for the first time this session (its hermetic sibling,
+`TestShipDestroy_KillAfterCall_AlreadyLanded_ResolvesDestroyed`, has
+existed since session 3):
+
+```text
+$ ubx ship 1a916b015bc9… --ledger-dir . --source hashicorp/aws --provider-version 6.54.0 --provider-config '{"region":"us-east-1"}'
+applied: payments.aws_sqs_queue.ubi30-killtarget
+1 resource(s), 1 applied, 0 failed, 0 still unknown -- outcome: applied
+```
+
+## `ubx why` reads the complete biography, including the false tombstone
+
+```text
+$ ubx why payments.aws_sqs_queue.ubi30-killtarget --ledger-dir .
+payments.aws_sqs_queue.ubi30-killtarget: 6 proposal(s), newest first
+- change 1a916b015bc9… (2026-07-18T02:29:51Z): UBI-30 live finale: destroy the kill-9 target, for real this time, with the PlanResourceChange fix in place
+    destroy: payments.aws_sqs_queue.ubi30-killtarget
+apply history:
+  attempt 1: unsealed (interrupted or still in progress)
+    payments.aws_sqs_queue.ubi30-killtarget:
+      pending at 2026-07-18T02:30:18Z
+      in_flight at 2026-07-18T02:30:20Z
+      reconcile: present_matches at 2026-07-18T02:30:19Z
+  attempt 2: outcome=applied
+    payments.aws_sqs_queue.ubi30-killtarget:
+      pending at 2026-07-18T02:30:54Z
+      applied at 2026-07-18T02:31:32Z -- confirmed by reconciliation (destroyed)
+      reconcile: destroyed at 2026-07-18T02:31:32Z
+- adoption 765405df1179… (2026-07-18T02:29:21Z): adopt existing payments.aws_sqs_queue.ubi30-killtarget into the ledger (discovered by scan)
+- change a481d3845b52… (2026-07-18T01:51:33Z): ubi30 live finale: destroy the kill-9 target
+apply history:
+  attempt 1: unsealed (interrupted or still in progress)
+  attempt 2: outcome=failed
+    ... failed at 2026-07-18T01:52:49Z -- confirmed by reconciliation: destroy never landed
+  attempt 3: outcome=applied
+    payments.aws_sqs_queue.ubi30-killtarget:
+      applied at 2026-07-18T01:56:00Z (destroyed)
+- drift_adopt d70712815545… (2026-07-18T01:51:23Z): record drift on payments.aws_sqs_queue.ubi30-killtarget observed outside the ledger
+- change 9eed04ad7709… (2026-07-18T01:50:32Z): ubi30 live finale: destroy the kill-9 target
+    error (terminal): destroy target drifted since it was signed away -- refusing to destroy state that was never reviewed
+- change d8e21ce53603… (2026-07-18T01:49:47Z): ubi30 live finale: kill -9 mid-destroy target
+apply history:
+  attempt 1: outcome=applied
+```
+
+Genesis to tombstone, in one read: the original create, the first
+kill-9-during-attempt (pre-fix, retried into a drift refusal, then a
+*pre-fix* attempt 3 recorded `applied (destroyed)` that was — per this
+report's own finding above — never actually true, a real out-of-band
+`aws sqs list-queues` at the time would have shown the queue still alive.
+`ubx why` shows this exactly as it happened, false tombstone included; it
+is not this tool's job to retroactively rewrite a sealed historical
+record, only to fold *current truth* through it (`FoldState`, session 4)
+and render what was actually recorded (this section). The re-adoption,
+the real fixed-binary destroy, the real `kill -9`, and the correct
+reconciliation are the last four entries, exactly as they happened.
+
+## Cleanup and account state
+
+The three other resources this session's pre-fix investigation left
+falsely "destroyed" in their own ledgers (`ubi30-base`/`ubi30-dependent`
+in `chain2`, `ubi30-debug` in `debugtest`) were cleaned up the same way as
+`ubi30-killtarget` above — re-discovered via a fresh `ubx scan` (each
+correctly reported `new`), re-adopted, destroyed for real through a fresh
+signed proposal — rather than reached for directly with `aws sqs
+delete-queue`, so that every real queue this session ever touched was
+actually deleted *through* `ubx`, proving the fix six times over (two
+queues, one policy, three single-resource chains), not once:
+
+```text
+$ ubx status --ledger-dir . && ubx status --ledger-dir chain2 && ubx status --ledger-dir debugtest && ubx status --ledger-dir killtest
+0 resource(s) (ledger-only, no live comparison)
+0 resource(s) (ledger-only, no live comparison)
+0 resource(s) (ledger-only, no live comparison)
+0 resource(s) (ledger-only, no live comparison)
+$ aws sqs list-queues --queue-name-prefix ubx-ubi30
+(empty -- zero matching queues in the account)
+```
+
+## What this section doesn't cover
+
+SQS's own real deletion-visibility lag (`DeleteQueue` succeeds immediately;
+`GetQueueUrl`/`ListQueues` can keep reporting the queue for well beyond the
+~60 seconds AWS's own docs suggest) exposed that `reconcileDestroyLoop`'s
+retry budget (5 attempts, 20ms apart — well under a second total) is far
+too short for genuine eventual consistency, producing a false `failed`
+reconciliation earlier in this session's own investigation (before the
+`PlanResourceChange` fix made destroys land at all, so its practical
+impact was never fully isolated). Not fixed this session — a real,
+separate, named gap for `core/executor`'s own retry-budget tuning, not a
+destroys-specific defect.

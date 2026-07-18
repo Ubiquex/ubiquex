@@ -103,7 +103,7 @@ func TestApplyResourceChange_RealProvider_TimeStatic(t *testing.T) {
 		t.Fatalf("ApplyAfter: %v", err)
 	}
 
-	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned)
+	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned, nil)
 	if err != nil {
 		t.Fatalf("ApplyResourceChange: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestApplyResourceChange_RealProvider_TimeStatic_Create(t *testing.T) {
 	prior := json.RawMessage(`null`)
 	planned := json.RawMessage(`{"triggers":{"key":"first"}}`)
 
-	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned)
+	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned, nil)
 	if err != nil {
 		t.Fatalf("ApplyResourceChange: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestApplyResourceChange_RealProvider_TimeStatic_ComputedMarker(t *testing.T
 	// the Create test above exercises).
 	planned := json.RawMessage(`{"triggers":{"key":"second"},"rfc3339":{"$computed":{"from":"payments.time_static.other.rfc3339"}}}`)
 
-	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned)
+	updated, err := client.Provider.ApplyResourceChange(ctx, resourceSchema, "time_static", prior, planned, planned, nil)
 	if err != nil {
 		t.Fatalf("ApplyResourceChange: %v", err)
 	}

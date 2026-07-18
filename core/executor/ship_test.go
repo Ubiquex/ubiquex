@@ -63,7 +63,20 @@ func (f *fakeApplier) ReadResource(ctx context.Context, resourceSchema any, type
 	return cp, nil
 }
 
-func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage) (json.RawMessage, error) {
+// PlanResourceChange satisfies executor.Applier (UBI-30, docs/executor.md's
+// own correction). The fake never needs real diff-tracking -- it has no
+// internal SDKv2 shim to fool the way a real provider's own Delete
+// function needs a genuine Plan to recognize a destroy -- but returns a
+// fixed, non-empty plannedPrivate marker so ApplyResourceChange's own
+// destroy branch below can assert it was actually threaded through,
+// proving shipDestroyNode really calls this first rather than skipping
+// straight to Apply (the exact regression UBI-30's own live AWS finale
+// found: skipping Plan silently no-ops a real destroy).
+func (f *fakeApplier) PlanResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, proposedNewState json.RawMessage) (json.RawMessage, []byte, error) {
+	return proposedNewState, []byte("fake-planned-private"), nil
+}
+
+func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -74,6 +87,9 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 	// Checked before the create/modify id-extraction path below, since a
 	// destroy's PlannedState has no "id" to extract at all.
 	if string(plannedState) == "null" {
+		if len(plannedPrivate) == 0 {
+			return nil, fmt.Errorf("fake: destroy called without plannedPrivate -- shipDestroyNode must call PlanResourceChange first (UBI-30)")
+		}
 		id, ok := extractID(priorState)
 		if !ok {
 			return nil, fmt.Errorf("fake: destroy priorState has no id: %s", priorState)

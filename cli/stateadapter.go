@@ -85,7 +85,7 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 // error (a dropped connection, a context deadline, ...) is returned as-is,
 // since core/executor already treats "anything that isn't a TerminalError"
 // as retryable.
-func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage) (json.RawMessage, error) {
+func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
 	rs, ok := resourceSchema.(*provider.Schema)
 	if !ok {
 		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
@@ -93,7 +93,9 @@ func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSch
 	// docs/executor.md -- "Constructing PlannedState without planning":
 	// config is set identically to plannedState, since a revert has no
 	// separate "desired config" distinct from the value being restored to.
-	result, err := a.p.ApplyResourceChange(ctx, rs, typeName, priorState, plannedState, plannedState)
+	// plannedPrivate is threaded through unmodified -- required for a
+	// destroy (UBI-30), always nil for every other kind.
+	result, err := a.p.ApplyResourceChange(ctx, rs, typeName, priorState, plannedState, plannedState, plannedPrivate)
 	if err != nil {
 		var diag *provider.DiagnosticError
 		if errors.As(err, &diag) {
@@ -105,6 +107,29 @@ func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSch
 		return result, nil
 	}
 	return provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+}
+
+// PlanResourceChange satisfies executor.Applier (UBI-30, docs/executor.md's
+// own correction) -- a real plan call is unconditionally required before a
+// destroy's own ApplyResourceChange (see that method's own doc comment for
+// why). Diagnostic classification mirrors ApplyResourceChange's own
+// exactly: a real, structured ERROR-severity diagnostic becomes an
+// executor.TerminalError; anything else (a dropped connection, a context
+// deadline) is returned as-is and treated as retryable.
+func (a stateReaderAdapter) PlanResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, proposedNewState json.RawMessage) (json.RawMessage, []byte, error) {
+	rs, ok := resourceSchema.(*provider.Schema)
+	if !ok {
+		return nil, nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+	}
+	plannedState, plannedPrivate, err := a.p.PlanResourceChange(ctx, rs, typeName, priorState, proposedNewState)
+	if err != nil {
+		var diag *provider.DiagnosticError
+		if errors.As(err, &diag) {
+			return nil, nil, &executor.TerminalError{Err: err}
+		}
+		return nil, nil, err
+	}
+	return plannedState, plannedPrivate, nil
 }
 
 // newStateReader wraps a provider.Provider as a core.StateReader. salt is
