@@ -1001,6 +1001,90 @@ retirement-staging section for the deprecation plan (deprecated, staged,
 never a breaking cutover in one session) — `ubx status --drift`/`ubx scan
 --all` follow the identical staging, not a separate one.
 
+### Session 3 (2026-07-18): the client pool, real code, hermetic
+
+New `ApplierPool` interface (`ship.go`): `Get(ctx, source, version)
+(Applier, error)`, lazily launching and reusing exactly as the amendment
+above describes. `core/executor` never launches a provider itself, the
+same provider-import-free boundary `Applier` already establishes — a
+concrete implementation belongs in `cli/`, the one place that already
+bridges both packages. `SingleApplierPool(app Applier) ApplierPool` wraps
+one already-launched Applier into the trivial, always-succeeds pool a
+single-provider stack needs (today's `--provider`/`--source` CLI flow,
+unchanged behavior) — `Get` ignores its own source/version arguments
+entirely, since there's only one provider to route to regardless of what
+was asked.
+
+`Ship`'s own signature changed from `app Applier` to `pool ApplierPool`.
+`shipDriftRevert` did **not** change — a drift_revert is single-provider
+by construction (docs/resolver.md's own reasoning: it predates this whole
+concept, and `core/scan.go` never records a provider on its own
+`Modification` entries) — `Ship`'s own dispatcher resolves its one
+Applier from the pool once (`pool.Get(ctx, providerSource, "")`) before
+calling `shipDriftRevert` unchanged. `shipChange`'s own signature changed
+the same way; its own per-node loop now resolves each node's `Applier`
+via `pool.Get(ctx, provSource, provVersion)` — reading the winning values
+off the new `changeNode.provider` field (copied from whichever of
+create/modify/destroy is set; nil for a proposal resolved before this
+amendment falls back to the invocation's own `providerSource`, version
+`""`, exactly what `SingleApplierPool`'s one entry already answers
+regardless of the pair asked for) — immediately before dispatching to
+`shipCreate`/`shipModifyNode`/`shipDestroyNode`, which are themselves
+**completely unchanged**: they still take one plain `Applier` directly,
+now simply the correct per-node one the loop already resolved. `createNode`
+gained the matching `Provider *core.ProviderRef` JSON field (`core/resolver`
+already emits it; `core/executor` previously just never read it back).
+
+A pool-lookup failure is recorded exactly like the loop's existing
+"blocked: dependency ... has not applied" case — `recordTransition`
+pending, `recordError` naming the launch failure as terminal,
+`resourcesFailed++`, persist, `continue` — never `return`, so every other
+node in the same walk, including ones against a different,
+already-launched-fine provider, proceeds in its own turn unaffected
+(docs/multi-provider-adversarial.md row 4).
+
+**A real, named gap found while implementing, not silently assumed
+covered**: `providerConfig` itself stays a single value threaded through
+every node's own `Configure`/freshness calls, regardless of which
+provider a node actually routes to — correct for today's single-provider
+CLI flow (the only config that exists), but not yet correct for a
+genuinely multi-provider stack, where AWS's own region config and a
+Helm/Kubernetes provider's own config are never going to be the same
+JSON blob. This amendment's own scope was the client pool specifically
+(docs/multi-provider-adversarial.md rows 4/6/7); per-provider
+*configuration* is real, remaining work for the same `.ubx/config`
+`providers`-table-wiring session already queued — named here so it isn't
+mistaken for solved.
+
+**Hermetic coverage** (`core/executor/multiprovider_test.go`, new): row 4
+(a provider launch failure mid-walk fails only that provider's own
+nodes, `partially_applied`, a re-run resumes correctly and never
+re-launches the already-fine provider); row 6 (`kill -9` between
+providers — simulated by a first `Ship` call whose second provider never
+launches at all, indistinguishable in the ledger from a genuine launch
+failure, followed by a second `Ship` call with a completely fresh pool:
+the already-applied node's own provider is never asked for again, zero
+`Get` calls; the never-attempted node's provider launches for the first
+time, exactly one `Get` call, and proceeds through an ordinary fresh
+pending→in_flight→applied cycle); row 7 (two already-signed modifies
+against two different providers, one drifts out-of-band before `ubx
+ship` reaches it — refused at its own freshness check, live state left
+untouched — the other, against a completely different, undrifted
+provider, lands normally, unaffected). A new `fakeApplierPool` (real,
+multi-entry, keyed by `source@version`, with per-key launch-failure
+scripting and call counters) stands in for `SingleApplierPool` in these
+tests specifically, since a single-entry pool can't express "provider B
+fails while provider A succeeds" at all. All 35 pre-existing hermetic
+`Ship(...)` call sites (`ship_test.go`/`destroys_test.go`) updated
+**mechanically** via a scripted `sed` transform (every one already passed
+the identical `fake` variable, wrapped now in `SingleApplierPool(fake)`),
+verified to preserve existing behavior unchanged — all still pass.
+`cli/ship.go`'s own one call site does the identical one-entry wrap — no
+CLI-visible behavior change this session, same reasoning
+docs/resolver.md's own session 2 already established. Full repo `go
+build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -1013,10 +1097,15 @@ never a breaking cutover in one session) — `ubx status --drift`/`ubx scan
   "Amendment (2026-07-17, UBI-29)" section above.
 - Parallel execution — across resources within one proposal, or across
   proposals/stacks. Serial, delta/dependency order, full stop.
-- Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
-  client pool) — **designed, UBI-43** (see the Amendment above); the
-  client pool and per-node provider dispatch are later-session code, not
-  this document's own session.
+- ~~Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
+  client pool) — executor code.~~ — **fixed, UBI-43 session 3** (see the
+  "Session 3" addendum above): `ApplierPool`, `SingleApplierPool`, and
+  per-node pool dispatch in `shipChange`, hermetic. Still open, named
+  explicitly rather than assumed solved: per-provider *configuration*
+  (`providerConfig` stays one global value across every node, regardless
+  of provider) — real work for the same `.ubx/config` `providers`-table-
+  wiring session already queued, along with CLI deprecation staging and
+  the live finale.
 - A `--dry-run`/preview mode for `ship` itself — `ubx revert-plan` already
   fills that role, pre-acceptance; once accepted, `ship` executes.
 - Automatic rollback on partial failure. A `partially_applied` outcome is

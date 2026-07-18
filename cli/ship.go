@@ -112,7 +112,17 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 
 			out := cmd.OutOrStdout()
 
-			sealed, err := executor.Ship(ctx, ledger, applier, source, json.RawMessage(providerConfig), p)
+			// A single declared provider -- exactly today's --provider/
+			// --source behavior, now expressed as the trivial one-entry
+			// case of core/executor's own multi-provider client pool
+			// (docs/executor.md's own "Amendment (UBI-43): multi-provider
+			// stacks" -- the providers config map's own CLI wiring is
+			// later session work, not this one's; --provider/--source stay
+			// fully functional for a single-provider stack, per
+			// docs/resolver.md's own staged retirement plan).
+			pool := executor.SingleApplierPool(applier)
+
+			sealed, err := executor.Ship(ctx, ledger, pool, source, json.RawMessage(providerConfig), p)
 			if errors.Is(err, executor.ErrAlreadyApplied) {
 				return reportAlreadyApplied(out, ledger, p, jsonOut)
 			}

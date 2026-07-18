@@ -779,6 +779,45 @@
   build/vet/fmt/test clean, no regressions. See STATE.md for the full
   session writeup.
 
+- 2026-07-18 — UBI-43 session 3: `core/executor`'s own client pool, real
+  code, hermetic. New `ApplierPool` interface (`Get(ctx, source, version)
+  (Applier, error)`, lazily launching, core/executor still never launches
+  a provider itself) and `SingleApplierPool` (the trivial always-succeeds
+  wrapper a single-provider stack needs -- today's CLI flow, unchanged).
+  `Ship`'s own signature changed from `app Applier` to `pool ApplierPool`;
+  `shipDriftRevert` untouched (single-provider by construction, resolves
+  its one Applier from the pool once at the top); `shipChange`'s own
+  per-node loop resolves each node's `Applier` via the pool, reading a
+  new `changeNode.provider` field (nil falls back to the invocation's own
+  `providerSource`, matching `SingleApplierPool`'s own single-entry
+  answer) -- `shipCreate`/`shipModifyNode`/`shipDestroyNode` themselves
+  completely unchanged, still just taking one plain `Applier` directly. A
+  pool-lookup failure is a per-node terminal error (`continue`, never
+  `return`) mirroring the loop's existing "blocked" case exactly. A real,
+  named gap found implementing, not silently assumed covered:
+  `providerConfig` stays one global value across every node regardless of
+  provider -- correct for today's single-provider flow, real remaining
+  work for the same config-wiring session already queued. New
+  `core/executor/multiprovider_test.go` covers docs/multi-provider-
+  adversarial.md's rows 4 (launch failure mid-walk, per-node terminal,
+  `partially_applied`, a clean re-run), 6 (`kill -9` between providers --
+  simulated via a first `Ship` call whose second provider never launches
+  at all, then a second call with a fresh pool proving zero re-launch
+  calls for the already-applied provider and exactly one fresh launch for
+  the untouched one), and 7 (per-provider freshness independence -- one
+  provider's own out-of-band drift refuses only its own node, a sibling
+  against a different, undrifted provider lands normally). A new
+  `fakeApplierPool` (real, multi-entry, per-key launch-failure scripting
+  and call counters) stands in for `SingleApplierPool` in these tests,
+  since a single-entry pool can't express "provider B fails while
+  provider A succeeds" at all. All 35 pre-existing hermetic `Ship(...)`
+  call sites updated mechanically via a scripted `sed` transform,
+  unchanged behavior, all still pass. `cli/ship.go`'s own call site does
+  the identical one-entry wrap -- no CLI-visible behavior change this
+  session. docs/executor.md gained a session-3 addendum; its own "Out of
+  scope" bullet updated from designed to fixed. Full repo build/vet/fmt/
+  test clean, no regressions. See STATE.md for the full session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1756,14 +1795,43 @@ finding and the hermetic coverage; its own "Out of scope" bullet updated
 from designed to fixed. Full repo build/vet/fmt/test clean, no
 regressions.
 
-Still queued: `core/executor`'s own client pool and per-node dispatch
-(hermetic against a fake `Applier` pool scripting docs/multi-provider-
-adversarial.md's remaining rows — 4, 6, 7), `.ubx/config`'s own
-`providers` table wiring (rides UBI-19's existing loader, doesn't block
-on UBI-32), CLI surface changes (`--source`/`--provider-version`
-deprecation staging, never a breaking cutover in one session), and the
-live finale: a real payments-shaped stack (`hashicorp/aws` + a second
-real provider) shipped as ONE signed proposal on real infrastructure.
+**Session 3 (2026-07-18): `core/executor`'s own client pool, real code,
+hermetic.** New `ApplierPool` interface (`Get(ctx, source, version)
+(Applier, error)`, lazily launching, core/executor still never launches a
+provider itself — the concrete implementation belongs in `cli/`) and
+`SingleApplierPool` (the trivial always-succeeds wrapper a single-
+provider stack needs, today's CLI flow unchanged). `Ship`'s signature
+changed from `app Applier` to `pool ApplierPool`; `shipDriftRevert`
+untouched (single-provider by construction); `shipChange`'s own per-node
+loop resolves each node's `Applier` via a new `changeNode.provider` field
+(nil falls back to the invocation's own `providerSource`) immediately
+before dispatching to `shipCreate`/`shipModifyNode`/`shipDestroyNode`,
+which stay completely unchanged — still just taking one plain `Applier`
+directly, the pool routing entirely the loop's own concern. A pool-lookup
+failure is a per-node terminal error, `continue` not `return`, mirroring
+the existing "blocked" case exactly. A real, named gap found
+implementing, not silently assumed covered: `providerConfig` stays one
+global value across every node regardless of provider — correct for
+today's single-provider flow, real remaining work for the config-wiring
+session below. New `core/executor/multiprovider_test.go` covers
+docs/multi-provider-adversarial.md's rows 4 (launch failure mid-walk),
+6 (`kill -9` between providers — a new `fakeApplierPool` with per-key
+launch-failure scripting and call counters proves the already-applied
+provider is never re-launched and the untouched one launches exactly
+once, fresh), and 7 (per-provider freshness independence). All 35
+pre-existing hermetic `Ship(...)` call sites updated mechanically; all
+still pass. `cli/ship.go`'s own call site does the identical one-entry
+wrap — no CLI-visible behavior change this session. docs/executor.md
+gained a session-3 addendum; its own "Out of scope" bullet updated from
+designed to fixed. Full repo build/vet/fmt/test clean, no regressions.
+
+Still queued: per-provider *configuration* (named above, not yet built),
+`.ubx/config`'s own `providers` table wiring (rides UBI-19's existing
+loader, doesn't block on UBI-32), CLI surface changes
+(`--source`/`--provider-version` deprecation staging, never a breaking
+cutover in one session), and the live finale: a real payments-shaped
+stack (`hashicorp/aws` + a second real provider) shipped as ONE signed
+proposal on real infrastructure.
 
 ## Deferred (explicitly not now)
 

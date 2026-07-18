@@ -4,7 +4,114 @@
 
 ## Current phase
 
-**UBI-43 session 2 is done (this session): `core/resolver`'s own
+**UBI-43 session 3 is done (this session): `core/executor`'s own client
+pool — real code, hermetic, adversarial rows 4/6/7 green.** Session 1 was
+docs-only; session 2 (previous) built resolver inference. This session
+builds the executor half, per docs/plan.md's own sessioning (resolver →
+executor → config/CLI wiring → live AWS finale, mirroring UBI-30's own
+destroys arc).
+
+**What landed, precisely.** New `ApplierPool` interface
+(`core/executor/ship.go`): `Get(ctx, source, version) (Applier, error)`,
+lazily launching and reusing exactly per docs/executor.md's own amendment.
+`core/executor` never launches a provider itself — the same provider-
+import-free boundary `Applier` already established, unchanged — a
+concrete implementation belongs in `cli/`. New `SingleApplierPool(app
+Applier) ApplierPool` wraps one already-launched Applier into the
+trivial, always-succeeds pool a single-provider stack needs: `Get`
+ignores its own source/version args entirely, since there's only one
+provider to route to. `Ship`'s own signature changed from `app Applier`
+to `pool ApplierPool`. `shipDriftRevert` did **not** change at all — a
+drift_revert is single-provider by construction (predates this whole
+concept; `core/scan.go` never records a provider on its own
+`Modification` entries) — `Ship`'s own dispatcher just resolves one
+Applier from the pool (`pool.Get(ctx, providerSource, "")`) before
+calling it, unchanged internally. `shipChange`'s own signature changed
+the same way; its per-node loop now resolves each node's `Applier` via
+`pool.Get(ctx, provSource, provVersion)`, reading a new
+`changeNode.provider` field (populated in `changeNodesOf` from whichever
+of create/modify/destroy is set; nil — a proposal resolved before this
+amendment — falls back to the invocation's own `providerSource`, version
+`""`, exactly what `SingleApplierPool`'s one entry already answers
+regardless of the pair asked for) immediately before dispatching to
+`shipCreate`/`shipModifyNode`/`shipDestroyNode`, which are themselves
+**completely unchanged** — still take one plain `Applier` directly, now
+simply the correct per-node one the loop already resolved; the pool
+routing is entirely the loop's own concern, not threaded any deeper.
+`createNode` gained the matching `Provider *core.ProviderRef` JSON field
+(`core/resolver` already emits it; `core/executor` previously just never
+read it back). A pool-lookup failure is recorded exactly like the loop's
+existing "blocked: dependency ... has not applied" case —
+`recordTransition` pending, `recordError` naming the launch failure
+terminal, `resourcesFailed++`, persist, `continue` (never `return`) — so
+every other node in the same walk, including ones against a different,
+already-launched-fine provider, proceeds in its own turn unaffected
+(docs/multi-provider-adversarial.md row 4).
+
+**A real, named gap found while implementing, not silently assumed
+covered**: `providerConfig` itself stays one global value threaded
+through every node's own `Configure`/freshness calls regardless of which
+provider it actually routes to — correct for today's single-provider CLI
+flow (the only config that exists), but not yet correct for a genuinely
+multi-provider stack, where AWS's own region config and a Helm/
+Kubernetes provider's own config are never going to be the same JSON
+blob. This session's own scope was the client pool specifically
+(adversarial rows 4/6/7); per-provider *configuration* is real,
+remaining work for the same `.ubx/config` `providers`-table-wiring
+session already queued — named explicitly so it isn't mistaken for
+solved.
+
+**Hermetic coverage** (`core/executor/multiprovider_test.go`, new): row 4
+— a provider launch failure mid-walk fails only that provider's own
+nodes (`errors[]` naming the launch failure, never reaching `in_flight`),
+every node against the successfully-launched provider proceeds and
+reaches its own correct terminal state, `partially_applied` overall, and
+a clean re-run (once the failed provider is fixed) resumes correctly
+without ever re-launching the already-fine provider (asserted via a call
+counter, not just the final state). Row 6 (`kill -9` between providers)
+— simulated by a first `Ship` call whose second provider's own `Get`
+returns an error (indistinguishable in the ledger from a genuine launch
+failure — neither leaves any trace the provider was ever attempted),
+followed by a second `Ship` call against a completely fresh pool:
+asserted the already-applied node's own provider is asked for **zero**
+times (no needless re-launch) while the never-attempted node's provider
+is asked for **exactly once**, launched fresh, and proceeds through an
+ordinary pending→in_flight→applied cycle exactly as if this were its
+first attempt. Row 7 (per-provider freshness independence) — two
+already-signed modifies against two different providers; one drifts
+out-of-band before `ubx ship` reaches it (refused at its own freshness
+check, live state left genuinely untouched — verified by reading it back
+through that provider's own fake, not just checking the apply record);
+the other, against a completely different, undrifted provider, lands
+normally, `partially_applied` overall, with no cross-contamination either
+direction. A new `fakeApplierPool` (real, multi-entry, keyed by
+`source@version`, with per-key launch-failure scripting and call
+counters) stands in for `SingleApplierPool` in these three tests
+specifically, since a single-entry pool structurally cannot express
+"provider B fails while provider A succeeds" at all — this is a genuinely
+new test fixture, not a variant of an existing one. All 35 pre-existing
+hermetic `Ship(...)` call sites (`ship_test.go`/`destroys_test.go`)
+updated **mechanically** via a scripted `sed` transform (every one
+already passed the identical `fake` variable as the second argument,
+wrapped now in `SingleApplierPool(fake)`) — verified to preserve every
+test's own existing behavior unchanged, all still pass. `cli/ship.go`'s
+own one call site does the identical one-entry wrap around today's
+already-launched single `applier` — **no CLI-visible behavior change
+this session**, same reasoning docs/resolver.md's own session 2 already
+established. Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean, no regressions.
+
+docs/executor.md gained a session-3 addendum recording the
+`providerConfig` gap and the hermetic coverage above; its own "Out of
+scope" bullet for multi-provider stacks updated from "designed" to
+"fixed, session 3." docs/plan.md gained a session-3 changelog entry and
+its own §Multi-provider stacks arc section updated with what landed and
+what's still queued (per-provider configuration, `.ubx/config` wiring,
+CLI deprecation staging, the live finale).
+
+## Current phase (previous)
+
+**UBI-43 session 2 is done: `core/resolver`'s own
 type→provider inference — real code, hermetic.** Session 1 (previous)
 was docs-only. This session builds the resolver half of the design it
 landed, per docs/plan.md's own sessioning (resolver → executor → config/

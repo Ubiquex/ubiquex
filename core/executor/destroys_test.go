@@ -14,7 +14,7 @@ import (
 func TestShipDestroy_CleanApply(t *testing.T) {
 	l, fake, addr, p := singleResourceDestroy(t)
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestShipDestroy_CleanApply(t *testing.T) {
 	}
 
 	// Idempotency: re-running ship must be a genuine no-op.
-	if _, err := Ship(context.Background(), l, fake, "", nil, p); !errors.Is(err, ErrAlreadyApplied) {
+	if _, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p); !errors.Is(err, ErrAlreadyApplied) {
 		t.Fatalf("re-run: got %v, want ErrAlreadyApplied", err)
 	}
 }
@@ -52,7 +52,7 @@ func TestShipDestroy_TargetDriftedSinceAcceptance_Refused(t *testing.T) {
 	// A real, independent change since the destroy was signed away.
 	fake.setState(addr.String(), fakeState(addr, "v2-drifted"))
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestShipDestroy_KillBeforeCall_NeverLanded_RetriedNormally(t *testing.T) {
 	// Attempt 1 is left unsealed forever. Live state is unchanged -- the
 	// call genuinely never happened.
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestShipDestroy_KillAfterCall_AlreadyLanded_ResolvesDestroyed(t *testing.T)
 	// died -- the resource is genuinely already gone.
 	fake.deleteState(addr.String())
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestShipDestroy_TimeoutWhereLanded_ResolvesDestroyed(t *testing.T) {
 	l, fake, addr, p := singleResourceDestroy(t)
 	fake.scriptDestroyOutcome(addr.String(), context.DeadlineExceeded, true /* destroyLanded */)
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestShipDestroy_TimeoutWhereNotLanded_ResolvesFailed(t *testing.T) {
 	l, fake, addr, p := singleResourceDestroy(t)
 	fake.scriptDestroyOutcome(addr.String(), context.DeadlineExceeded, false /* destroyLanded */)
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestShipDestroy_TimeoutWhereNotLanded_ResolvesFailed(t *testing.T) {
 	}
 
 	// Retried normally on the next ubx ship invocation.
-	sealed2, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed2, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("retry ship: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestShipDestroy_AlreadyAbsent_ResolvesWithoutInFlight(t *testing.T) {
 	// Removed out-of-band before ubx ever attempted anything.
 	fake.deleteState(addr.String())
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestShipDestroy_MixedProposal_ReversedOrder(t *testing.T) {
 		t.Fatalf("accept: %v", err)
 	}
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, accepted)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, accepted)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
@@ -398,7 +398,7 @@ func TestShipDestroy_ReShipAfterPartialDestroy(t *testing.T) {
 	}
 	fake.deleteState(firstAddr.String()) // first's own destroy really landed
 
-	sealed, err := Ship(context.Background(), l, fake, "", nil, p)
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake), "", nil, p)
 	if err != nil {
 		t.Fatalf("re-run ship: %v", err)
 	}

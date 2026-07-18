@@ -70,6 +70,44 @@ type Applier interface {
 	PlanResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, proposedNewState json.RawMessage) (plannedState json.RawMessage, plannedPrivate []byte, err error)
 }
 
+// ApplierPool supplies an Applier for a given provider (source, version)
+// pair, launching it lazily on first request and reusing it for every
+// subsequent request with the identical pair, for the lifetime of one
+// `ubx ship` invocation -- docs/executor.md's own "Amendment (2026-07-18,
+// UBI-43): multi-provider stacks" client pool. This is the one thing
+// shipChange's own combined topo-walk needed to become multi-provider
+// capable (docs/executor.md's own finding, confirmed by reading the
+// actual code: the walk itself never changes shape or order, only which
+// client answers each step). core/executor never launches a provider
+// itself -- the existing provider-import-free boundary Applier already
+// establishes, unchanged -- a concrete implementation backed by
+// provider.Acquire/provider.Launch lives in cli/, the one place that
+// already bridges both packages for Applier itself.
+type ApplierPool interface {
+	// Get returns the Applier for source@version. An error here means the
+	// provider could not be launched at all (bad credentials, an
+	// unreachable registry, a crashed handshake) -- shipChange classifies
+	// this as a per-node terminal failure for every node needing that
+	// specific provider, never a whole-walk abort (docs/executor.md's own
+	// "Provider launch failure mid-walk" section, docs/multi-provider-
+	// adversarial.md row 4).
+	Get(ctx context.Context, source, version string) (Applier, error)
+}
+
+// SingleApplierPool wraps one already-launched Applier into the trivial,
+// always-succeeds ApplierPool a single-provider stack needs -- exactly
+// today's `--provider`/`--source` CLI flow (docs/resolver.md's own staged
+// retirement plan: single-provider stays fully functional, unchanged,
+// until real `providers` config wiring lands in a later session). Get
+// ignores its own source/version arguments entirely and always returns
+// app -- there is only one provider in this pool, so there is nothing to
+// route between.
+func SingleApplierPool(app Applier) ApplierPool { return singleApplierPool{app} }
+
+type singleApplierPool struct{ app Applier }
+
+func (p singleApplierPool) Get(context.Context, string, string) (Applier, error) { return p.app, nil }
+
 // TerminalError wraps a provider error that must not be retried within a
 // single ship invocation -- docs/executor.md's "terminal" classification: a
 // real, structured diagnostic (e.g. Severity ERROR) from
@@ -176,12 +214,25 @@ func parseDebugDelay(envVar string) time.Duration {
 // delta.modifies, and delta.destroys together -- dispatching to the
 // shape-appropriate implementation. See docs/executor.md for the full
 // state machine both share.
-func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
+//
+// pool is docs/executor.md's own "Amendment (2026-07-18, UBI-43):
+// multi-provider stacks" client pool -- a change proposal's own combined
+// walk (shipChange) routes each node to its own recorded provider via
+// pool.Get; a drift_revert is single-provider by construction (it
+// predates this whole concept, and core/scan.go never records a
+// provider on its own Modification entries), so shipDriftRevert keeps
+// taking one plain Applier, resolved from pool here, once, exactly as
+// SingleApplierPool's own callers already expect.
+func Ship(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
 	switch p.Kind {
 	case core.KindDriftRevert:
+		app, err := pool.Get(ctx, providerSource, "")
+		if err != nil {
+			return nil, fmt.Errorf("ship: %w", err)
+		}
 		return shipDriftRevert(ctx, l, app, providerSource, providerConfig, p)
 	case core.KindChange:
-		return shipChange(ctx, l, app, providerSource, providerConfig, p)
+		return shipChange(ctx, l, pool, providerSource, providerConfig, p)
 	default:
 		return nil, fmt.Errorf("%w: got %s", ErrUnsupportedKind, p.Kind)
 	}
@@ -706,20 +757,33 @@ func sortedModifies(mods []core.Modification) []core.Modification {
 // state-keyed shape sharing the same []json.RawMessage slot. Only ever
 // unmarshaled when p.Kind == core.KindChange.
 type createNode struct {
-	Stack     string          `json:"stack"`
-	Type      string          `json:"type"`
-	Name      string          `json:"name"`
-	Config    json.RawMessage `json:"config"`
-	DependsOn []string        `json:"depends_on,omitempty"`
+	Stack     string            `json:"stack"`
+	Type      string            `json:"type"`
+	Name      string            `json:"name"`
+	Provider  *core.ProviderRef `json:"provider,omitempty"`
+	Config    json.RawMessage   `json:"config"`
+	DependsOn []string          `json:"depends_on,omitempty"`
 }
 
 // changeNode is one delta.creates, delta.modifies, or (UBI-30)
 // delta.destroys entry of a kind:"change" proposal, prepared for
 // shipChange's own combined, dependency-ordered walk. Exactly one of
 // create/modify/destroy is non-nil.
+//
+// provider is docs/executor.md's own "Amendment (2026-07-18, UBI-43):
+// multi-provider stacks" input -- which pool entry this node's own Apply/
+// PlanResourceChange calls route through, copied from whichever of
+// create/modify/destroy is set. Nil for a proposal resolved before this
+// amendment (core/resolver always populates it going forward) -- nil is
+// never treated as an error, only as "this node's own provider is
+// whatever the invocation's own providerSource/providerConfig already
+// name" (docs/schema.md's own "no schema_version bump" reasoning,
+// applied here identically), resolved by shipChange's own loop, not
+// assumed by the caller.
 type changeNode struct {
 	addr      core.Address
 	dependsOn []string
+	provider  *core.ProviderRef
 	create    *createNode
 	modify    *core.Modification
 	destroy   *core.DestroyEntry
@@ -757,19 +821,19 @@ func changeNodesOf(p *core.Proposal) ([]*changeNode, error) {
 		}
 		addr := core.Address{Stack: cn.Stack, Type: cn.Type, Name: cn.Name}
 		key := addr.String()
-		byAddr[key] = &changeNode{addr: addr, dependsOn: cn.DependsOn, create: &cn}
+		byAddr[key] = &changeNode{addr: addr, dependsOn: cn.DependsOn, provider: cn.Provider, create: &cn}
 		keys = append(keys, key)
 	}
 	for i := range p.Delta.Modifies {
 		m := &p.Delta.Modifies[i]
 		key := m.Target.String()
-		byAddr[key] = &changeNode{addr: m.Target, dependsOn: m.DependsOn, modify: m}
+		byAddr[key] = &changeNode{addr: m.Target, dependsOn: m.DependsOn, provider: m.Provider, modify: m}
 		keys = append(keys, key)
 	}
 	for i := range p.Delta.Destroys {
 		d := &p.Delta.Destroys[i]
 		key := d.Address.String()
-		byAddr[key] = &changeNode{addr: d.Address, dependsOn: d.DependsOn, destroy: d}
+		byAddr[key] = &changeNode{addr: d.Address, dependsOn: d.DependsOn, provider: d.Provider, destroy: d}
 		keys = append(keys, key)
 	}
 
@@ -978,7 +1042,7 @@ func splitComputedFrom(s string) (addr, path string, err error) {
 // in the same proposal still proceeds. sealOutcome is always called with
 // halted=false for this reason; "partially_applied" still correctly
 // surfaces via resourcesFailed/resourcesStillUnknown alone.
-func shipChange(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
+func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
 	if p.Acceptance == nil {
 		return nil, ErrNotAccepted
 	}
@@ -1063,6 +1127,32 @@ func shipChange(ctx context.Context, l *core.Ledger, app Applier, providerSource
 		if missingDep != "" {
 			recordTransition(ra, core.ResourcePending, "")
 			recordError(ra, fmt.Sprintf("blocked: dependency %s has not applied -- refusing to ship a resource ahead of what it depends on", missingDep), core.ErrorTerminal)
+			resourcesFailed++
+			if err := persist(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// Route this node to its own recorded provider's pool entry
+		// (docs/executor.md's own "Amendment (UBI-43): multi-provider
+		// stacks" client pool) -- nil (a proposal resolved before this
+		// amendment) falls back to the invocation's own providerSource,
+		// version "", exactly what SingleApplierPool's single entry
+		// already answers regardless of the pair asked for. A launch
+		// failure here is a per-node terminal error, never a whole-walk
+		// abort (docs/multi-provider-adversarial.md row 4): this node
+		// fails, `continue` lets every other node -- including ones
+		// against a different, already-launched-fine provider -- proceed
+		// in its own turn, unaffected.
+		provSource, provVersion := providerSource, ""
+		if n.provider != nil {
+			provSource, provVersion = n.provider.Source, n.provider.Version
+		}
+		app, err := pool.Get(ctx, provSource, provVersion)
+		if err != nil {
+			recordTransition(ra, core.ResourcePending, "")
+			recordError(ra, fmt.Sprintf("provider unavailable: %v", err), core.ErrorTerminal)
 			resourcesFailed++
 			if err := persist(); err != nil {
 				return nil, err
