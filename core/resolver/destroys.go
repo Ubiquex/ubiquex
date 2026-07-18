@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -321,7 +322,11 @@ func historicalReverseDependents(l *core.Ledger) (map[string][]string, error) {
 // evidence entry to record either way -- "not_performed" (knownDependents
 // empty: an honest, expected gap, never silently indistinguishable from a
 // real check) or "checked_clear" (every named dir was walked, none
-// pinned addr).
+// pinned addr). Each entry in knownDependents is an operator-supplied
+// address exactly like $cross's own "ledger_dir" -- a git-directory path
+// or a store URI, either fine, via core.OpenRef -- the same "explicit
+// path over a fancy registry" instinct this whole mechanism already
+// used, extended rather than reinvented.
 func crossStackOrphanCheck(addr core.Address, knownDependents []string) (core.ResolutionInput, error) {
 	target := addr.String()
 	if len(knownDependents) == 0 {
@@ -332,11 +337,16 @@ func crossStackOrphanCheck(addr core.Address, knownDependents []string) (core.Re
 		}, nil
 	}
 	for _, dir := range knownDependents {
-		neighbor := core.Open(dir)
+		neighbor, closeNeighbor, err := core.OpenRef(context.Background(), dir)
+		if err != nil {
+			return core.ResolutionInput{}, fmt.Errorf("resolve destroy %s: known_dependents %s: %w", addr, dir, err)
+		}
 		if !neighbor.Exists() {
+			closeNeighbor()
 			return core.ResolutionInput{}, fmt.Errorf("%w: %s", ErrDependentLedgerMissing, dir)
 		}
 		chain, err := neighbor.Chain()
+		closeNeighbor()
 		if err != nil {
 			return core.ResolutionInput{}, fmt.Errorf("resolve destroy %s: known_dependents %s: %w", addr, dir, err)
 		}

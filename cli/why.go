@@ -21,6 +21,7 @@ var proposalIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func newWhyCmd() *cobra.Command {
 	var (
 		ledgerDir        string
+		stack            string
 		verifyAcceptance bool
 		repoDir          string
 		githubRepo       string
@@ -44,11 +45,22 @@ func newWhyCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
+			applyStackDefault(cmd, &stack, cfg)
 
-			ledger := core.Open(ledgerDir)
 			out := cmd.OutOrStdout()
 
 			if proposalIDPattern.MatchString(args[0]) {
+				// A bare proposal ID carries no stack of its own -- unlike
+				// the address branch below, which derives one directly
+				// from the argument -- so --stack (or its config default)
+				// is what a remote store needs to know which chain to
+				// open at all (docs/architecture.md -- Addressing).
+				ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
+				}
+				defer closeLedger()
+
 				p, err := ledger.Read(args[0])
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
@@ -91,6 +103,15 @@ func newWhyCmd() *cobra.Command {
 			if !ok {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a valid proposal ID (64-char hex) or resource address (<stack>.<type>.<name>)", args[0])}
 			}
+			// The address itself already names its own stack -- used
+			// directly, regardless of --stack/config's own default, since
+			// it's unambiguous by construction.
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, addr.Stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
+			}
+			defer closeLedger()
+
 			proposals, err := ledger.ProposalsForAddress(addr)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
@@ -124,6 +145,7 @@ func newWhyCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open, for a bare proposal-id argument -- required only when .ubx/config's [ledger] store is a remote store (a resource-address argument already names its own stack); unused for the default git store")
 	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out (UBI-11)")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")

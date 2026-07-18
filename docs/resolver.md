@@ -241,6 +241,24 @@ contrast, treated *every* cross-stack ref as `Pending` — always
 unapplied sibling source, not an already-applied ledger; this is a real
 and precise difference, not accidental phrasing).
 
+### Amendment (UBI-32 Arc B): `"stack"` alongside `"ledger_dir"`
+
+`$cross`'s own inner object now accepts `{"stack": "<name>", "to": "..."}`
+as a mutually-exclusive alternative to `{"ledger_dir": "...", "to": "..."}`
+— never both at once (a hard error naming the contradiction). `ledger_dir`
+is unchanged, permanent, git-local's own explicit-path shape; `stack`
+resolves by NAME against the CURRENT stack's own `.ubx/config` `[ledger]`
+store (or its `[ledger.external]` override for that name, if one is
+configured) — docs/architecture.md's own "Addressing" section has the
+full mechanism (`core.OpenRef`'s registry-based dispatch, so
+core/resolver never has to import anything ledgerstore-shaped).
+`"stack"` against a git-local current stack (no configured base store,
+and no matching `[ledger.external]` entry) is refused, naming the gap
+and suggesting `ledger_dir` directly — never silently treated as if it
+resolved to nothing. Every other part of this section (pinned-head
+staleness, the `$computed`-propagates-forward edge case) applies
+identically regardless of which shape named the neighbor.
+
 ## `$computed`: never guessed, never silently concretized
 
 Exactly docs/schema.md's own existing (drafted at founding, never

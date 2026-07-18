@@ -1990,7 +1990,7 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
-## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A session 1; LedgerStore interface + git reference impl + s3 store + addressing built UBI-32 Arc B session 1, live-verified against real S3 -- gs/azblob designed, not wired; PR-acceptance ceremony designed, not built; see STATE.md for exactly which CLI commands are wired)
+## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A; LedgerStore interface + git reference impl + s3 store + addressing (including `$cross` by stack name + `[ledger.external]`) built UBI-32 Arc B, live-verified against real S3 including a real two-stack cross-stack pin and neighbor-advance staleness catch -- gs/azblob designed, not wired; PR-acceptance ceremony designed, not built, its own future slice; see STATE.md for exactly which CLI commands are wired)
 
 Two storage questions, decided separately:
 
@@ -2197,7 +2197,7 @@ place, so `WriteSaltIfAbsent` itself stays a pure store operation; the
 implementation, called only there, never promoted into the shared
 interface as if every store needed an equivalent.
 
-#### PR-acceptance ceremony: designed this session, not yet built
+#### PR-acceptance ceremony: designed (UBI-32 Arc B session 1), still not built
 
 `ubx accept --from-merge`'s own verification (docs/schema.md's `pr_merge`
 amendment; [`ubx accept`](https://github.com/Ubiquex/ubiquex-docs)'s own
@@ -2226,11 +2226,24 @@ today, entirely independent of which store holds the accepted record —
 the ceremony's own evidence trail was never the store's concern to begin
 with.
 
-Not built this session — a real design pass, per this arc's own scope,
-ahead of `cli/accept.go` ever being touched for it. See
-docs/ledgerstore-adversarial.md's own "what this table doesn't yet cover"
-for the concrete gap this leaves (a `--from-merge` acceptance against a
-remote-store stack is not yet exercised end-to-end).
+Still not built, deliberately, across two sessions now — a real design
+pass, ahead of `cli/accept.go`'s own `acceptFromMerge` ever being touched
+for it, matching this arc's own explicit sequencing (`ubx resolve`/local
+`ubx accept`/`ubx ship`/`ubx why`/`ubx status`/`ubx scan` all wired onto
+`LedgerStore` since, session by session — see STATE.md for exactly
+which) rather than quietly folding PR-merge acceptance's own remote-store
+support into whichever session happened to be touching `cli/accept.go`
+anyway. `acceptFromMerge` still opens `core.Open(ledgerDir)`
+unconditionally, confirmed by reading the code, not assumed — it is now
+the *one* remaining git-local-only acceptance path, everything else
+named above already reads `.ubx/config`'s own `[ledger]` table. Its own
+future session's scope is exactly the mechanism above: mirror the
+git/GitHub-verified proposal into the configured `LedgerStore` via
+`WriteProposalIfAbsent`+`AdvanceHead`, nothing about the verification
+itself changing. See docs/ledgerstore-adversarial.md's own "what this
+table doesn't yet cover" for the concrete gap this leaves (a
+`--from-merge` acceptance against a remote-store stack is not yet
+exercised end-to-end).
 
 ### Addressing: derived by rule, never mapped per stack
 
@@ -2262,12 +2275,63 @@ The one thing ever declared: a cross-stack ref to a stack living in a
 information, undeducible by rule:
 
 ```hcl
-ledger {
-  external {
-    network = "s3://other-team-bucket/net/prod/"
+ledger = {
+  external = {
+    network = "s3://other-team-bucket/net/prod"
   }
 }
 ```
+
+(corrected from this section's own earlier sketch, which showed `ledger
+{ external { network = ... } }` as nested HCL blocks — never actually
+parsed against `hclsyntax` until this session, when it turned out
+unnecessary to use blocks here at all: `network` happens to be a bare
+identifier so a block *would* parse, but attribute-object syntax is
+what every other `.ubx/config` table already uses (`provider = { ... }`,
+`providers = { ... }`), and `[ledger.external]`'s own keys are stack
+names — arbitrary strings, not always bare identifiers — so the
+attribute form is what's actually implemented, kept consistent with
+the rest of config rather than introducing the one exception.)
+
+#### `$cross` by stack name, built (UBI-32 Arc B): `"stack"` alongside `"ledger_dir"`
+
+`$cross`'s own inner object gained a second, mutually exclusive way to
+name its neighbor — `{"stack": "network", "to": "..."}` — resolved
+against the CURRENT stack's own configured `[ledger]` store (or
+`[ledger.external]`'s own override for that stack name, if one exists),
+via `deriveStackAddress(base, stack)` (`core/resolver/refs.go`, plain
+string concatenation — deliberately not URL-aware, since the query-param
+translation only matters once the resulting address string is actually
+*opened*, one layer down). `{"ledger_dir": "..."}` is unchanged and
+permanent — git-local's own explicit-path shape, forever supported,
+never deduced.
+
+Opening either shape uses the same new `core.OpenRef(ctx, ref)`: a plain
+directory path (no `://`) opens git-local exactly as `core.Open` always
+has; anything else is handed to whichever opener
+`core.RegisterRemoteLedgerOpener` installed — a small registry
+(`core/openref.go`), the identical "core stays dependency-free" inversion
+`StateReader`/`EventLookup` already establish, since `core/resolver`
+itself imports nothing beyond `core` (confirmed by reading its own
+existing package doc comment, not assumed) and must never import
+`ledgerstore`/`gocloud.dev/blob` directly. The concrete opener is
+registered once, by the `cli` package's own `init()`, wrapping
+`ledgerstore.Open`. `core.Ledger` itself carries the addressing metadata
+`resolveCross` needs (`BaseStore()`/`ExternalStack()`), set only via a
+new `OpenStoreForStack(store, base, external)` constructor —
+`cli.openLedgerForStack` uses it for a remote-store-backed ledger;
+`Open`/`OpenStore` (git-local, or a remote ledger opened with no
+addressing context) leave it empty, `$cross`'s own `"stack"` field
+refused with a clear error naming the gap rather than silently resolving
+against nothing.
+
+`VerifyPins` and a destroy's own `known_dependents` cross-stack orphan
+check both moved to `core.OpenRef` too, uniformly — a recorded
+`resolution.inputs` pin's `LedgerDir` is already a fully-resolved address
+by the time either ever reads it (whichever shape `$cross` used at
+resolve time), so neither needs any addressing metadata of its own to
+verify a pin or check for orphans, regardless of which store backs the
+neighbor.
 
 #### URI prefix, built (UBI-32 Arc B session 1): path-style, translated internally
 

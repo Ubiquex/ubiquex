@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -176,7 +177,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 			return resolveRef(inner, batch, destroyAddrs, l)
 		}
 		if inner, ok := asMarker(t, markerCross); ok {
-			return resolveCross(inner)
+			return resolveCross(inner, l)
 		}
 		if inner, ok := asMarker(t, markerSecret); ok {
 			if !schema.IsSensitive(typeName, path) {
@@ -299,16 +300,25 @@ func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, dest
 	return decoded, nil, nil
 }
 
-// resolveCross resolves one $cross marker's inner {"ledger_dir": "...",
-// "to": "<stack>.<type>.<name>.<path>"} -- the neighbor's own
-// already-applied, already-concrete FoldState (docs/resolver.md's own
-// "Cross-stack refs" section), recording pinned_head as a new
-// resolution.inputs entry (docs/schema.md's amendment).
-func resolveCross(inner map[string]interface{}) (interface{}, []core.ResolutionInput, error) {
+// resolveCross resolves one $cross marker's inner
+// {"ledger_dir": "...", "to": "..."} (the legacy, forever-supported,
+// explicit-path shape) or {"stack": "...", "to": "..."} (UBI-32 Arc B's
+// own "resolve by NAME against the base," docs/architecture.md --
+// Addressing) into the neighbor's own already-applied, already-concrete
+// FoldState (docs/resolver.md's own "Cross-stack refs" section),
+// recording pinned_head as a new resolution.inputs entry (docs/schema.md's
+// amendment). l is the CURRENT stack's own ledger -- consulted only for
+// its own BaseStore()/ExternalStack() addressing metadata (set via
+// core.OpenStoreForStack), never read or written to otherwise.
+func resolveCross(inner map[string]interface{}, l *core.Ledger) (interface{}, []core.ResolutionInput, error) {
 	ledgerDir, _ := inner["ledger_dir"].(string)
+	stackName, _ := inner["stack"].(string)
 	to, _ := inner["to"].(string)
-	if ledgerDir == "" || to == "" {
-		return nil, nil, fmt.Errorf("%w: $cross requires \"ledger_dir\" and \"to\"", ErrRefNotFound)
+	if ledgerDir != "" && stackName != "" {
+		return nil, nil, fmt.Errorf("%w: $cross takes exactly one of \"ledger_dir\" or \"stack\", not both", ErrRefNotFound)
+	}
+	if to == "" || (ledgerDir == "" && stackName == "") {
+		return nil, nil, fmt.Errorf("%w: $cross requires \"to\" and either \"ledger_dir\" (an explicit path) or \"stack\" (a name resolved against this stack's own base store)", ErrRefNotFound)
 	}
 	addrStr, attrPath, err := splitRefTarget(to)
 	if err != nil {
@@ -319,9 +329,25 @@ func resolveCross(inner map[string]interface{}) (interface{}, []core.ResolutionI
 		return nil, nil, fmt.Errorf("%w: %q is not a valid address", ErrRefNotFound, addrStr)
 	}
 
-	neighbor := core.Open(ledgerDir)
+	ref := ledgerDir
+	if stackName != "" {
+		base := l.BaseStore()
+		if override, ok := l.ExternalStack(stackName); ok {
+			base = override
+		}
+		if base == "" {
+			return nil, nil, fmt.Errorf("%w: $cross \"stack\": %q has no base store to resolve against -- this stack's own [ledger] store is git-local (use \"ledger_dir\" directly instead), and no [ledger.external] entry names %q", ErrRefNotFound, stackName, stackName)
+		}
+		ref = deriveStackAddress(base, stackName)
+	}
+
+	neighbor, closeNeighbor, err := core.OpenRef(context.Background(), ref)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve cross-stack ref %s: %w", to, err)
+	}
+	defer closeNeighbor()
 	if !neighbor.Exists() {
-		return nil, nil, fmt.Errorf("%w: %s", ErrNeighborLedgerMissing, ledgerDir)
+		return nil, nil, fmt.Errorf("%w: %s", ErrNeighborLedgerMissing, ref)
 	}
 	head, err := neighbor.Head()
 	if err != nil {
@@ -332,7 +358,7 @@ func resolveCross(inner map[string]interface{}) (interface{}, []core.ResolutionI
 		return nil, nil, fmt.Errorf("resolve cross-stack ref %s: %w", to, err)
 	}
 	if !found {
-		return nil, nil, fmt.Errorf("%w: %s not recorded in neighbor ledger %s", ErrCrossStackAddressNotFound, addr, ledgerDir)
+		return nil, nil, fmt.Errorf("%w: %s not recorded in neighbor ledger %s", ErrCrossStackAddressNotFound, addr, ref)
 	}
 	observedHash, err := core.ObservedHash(state)
 	if err != nil {
@@ -360,6 +386,18 @@ func resolveCross(inner map[string]interface{}) (interface{}, []core.ResolutionI
 		Resource:     addr.String(),
 		ObservedHash: observedHash,
 		PinnedHead:   head,
-		LedgerDir:    ledgerDir,
+		LedgerDir:    ref,
 	}}, nil
+}
+
+// deriveStackAddress joins base and stack into <base>/<stack>/
+// (docs/architecture.md's own addressing rule) -- pure string
+// manipulation, deliberately not reusing ledgerstore.WithStack's own
+// URL-aware join: core/resolver stays free of anything ledgerstore-
+// shaped, the same discipline core itself holds to, and this join never
+// needs to be URL-aware in the first place -- the query-param
+// translation only matters once core.OpenRef's own registered opener
+// actually opens the resulting string, not before.
+func deriveStackAddress(base, stack string) string {
+	return strings.TrimSuffix(base, "/") + "/" + stack + "/"
 }

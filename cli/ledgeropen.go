@@ -41,5 +41,17 @@ func openLedgerForStack(ctx context.Context, ledgerDir, stack string, cfg *Confi
 	if err != nil {
 		return nil, nil, fmt.Errorf("ledger store: open %s: %w", storeURI, err)
 	}
-	return core.OpenStore(store), closeFn, nil
+	return core.OpenStoreForStack(store, cfg.Ledger.Store, cfg.Ledger.External), closeFn, nil
+}
+
+func init() {
+	// Registers the concrete gocloud.dev/blob-backed opener core.OpenRef
+	// uses for a store-URI-shaped ref (core/resolver's own $cross "stack"
+	// resolution, and a destroy's own known_dependents check) -- core
+	// itself never imports ledgerstore, matching the "core stays
+	// dependency-free" inversion every other heavy-SDK integration in
+	// this codebase already uses.
+	core.RegisterRemoteLedgerOpener(func(ctx context.Context, storeURI string) (core.LedgerStore, func() error, error) {
+		return ledgerstore.Open(ctx, storeURI)
+	})
 }

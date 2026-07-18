@@ -9,6 +9,7 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -298,16 +299,22 @@ var (
 // "resolved-time truth vs. accept-time reality" shape core.VerifyFreshness
 // already enforces for live cloud state, one level up. Returns
 // ErrCrossStackPinStale (wrapping which pin and its two head values) on
-// the first mismatch found. Wiring this into `ubx accept` is a later
-// session's CLI work (docs/plan.md's own "Resolver v1" wedge); this is the
-// mechanism itself, tested hermetically.
+// the first mismatch found. in.LedgerDir is already a fully-resolved
+// address by the time it's recorded here (resolveCross's own job, at
+// resolve time) -- a git-directory path or a store URI alike, so
+// core.OpenRef handles both uniformly, no addressing metadata needed at
+// verify time. Wired into `ubx accept` (both acceptance tiers).
 func VerifyPins(p *core.Proposal) error {
 	for _, in := range p.Resolution.Inputs {
 		if in.Kind != "cross_stack_pin" {
 			continue
 		}
-		neighbor := core.Open(in.LedgerDir)
+		neighbor, closeNeighbor, err := core.OpenRef(context.Background(), in.LedgerDir)
+		if err != nil {
+			return fmt.Errorf("verify pin for %s: %w", in.Resource, err)
+		}
 		head, err := neighbor.Head()
+		closeNeighbor()
 		if err != nil {
 			return fmt.Errorf("verify pin for %s: %w", in.Resource, err)
 		}

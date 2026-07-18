@@ -359,7 +359,7 @@ var knownTopLevelKeys = map[string]bool{
 }
 var knownProviderKeys = map[string]bool{"path": true, "source": true, "version": true}
 var knownK8sAuditKeys = map[string]bool{"cluster": true, "region": true, "log_group": true}
-var knownLedgerKeys = map[string]bool{"store": true}
+var knownLedgerKeys = map[string]bool{"store": true, "external": true}
 
 // warnUnknownKeys checks one already-parsed layer against config's known
 // shape, warning (never failing) for anything it doesn't recognize --

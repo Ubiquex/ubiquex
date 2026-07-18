@@ -37,6 +37,7 @@ type scanAllOptions struct {
 	Propose         string
 	OutDir          string
 	LedgerDir       string
+	Config          *Config
 	ProviderPath    string
 	Source          string
 	ProviderVersion string
@@ -79,7 +80,12 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		}
 	}
 
-	ledger := core.Open(opts.LedgerDir)
+	ledger, closeLedger, err := openLedgerForStack(ctx, opts.LedgerDir, stack, opts.Config)
+	if err != nil {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
+	}
+	defer closeLedger()
+
 	salt, err := ledger.Salt()
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}

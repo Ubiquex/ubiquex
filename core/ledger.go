@@ -22,6 +22,16 @@ import (
 type Ledger struct {
 	dir   string // "" unless backed by the git-directory store; see Dir/Exists
 	store LedgerStore
+
+	// baseStore/externalStacks are UBI-32 Arc B's own addressing metadata
+	// (docs/architecture.md — Addressing): set only via OpenStoreForStack,
+	// "" and nil for the ordinary Open/OpenStore cases. They exist purely
+	// so core/resolver's own $cross "stack" resolution (refs.go's
+	// resolveCross) can derive a SIBLING stack's address from the ledger
+	// it already has in hand, without core/resolver ever needing its own
+	// copy of .ubx/config or importing anything ledgerstore-shaped.
+	baseStore      string
+	externalStacks map[string]string
 }
 
 // Open returns a Ledger backed by the git-directory reference
@@ -33,9 +43,35 @@ func Open(dir string) *Ledger {
 
 // OpenStore returns a Ledger backed by an arbitrary LedgerStore -- the
 // entry point a remote store's own opener uses (see docs/architecture.md
-// — Addressing).
+// — Addressing). Carries no addressing metadata of its own; use
+// OpenStoreForStack when $cross's own "stack" resolution needs to work
+// against this ledger.
 func OpenStore(store LedgerStore) *Ledger {
 	return &Ledger{store: store}
+}
+
+// OpenStoreForStack is OpenStore's richer sibling: base is this ledger's
+// own configured [ledger] store address (the same string .ubx/config's
+// store key names), external is .ubx/config's own [ledger.external]
+// table (stack name -> a genuinely different base) -- both needed so a
+// $cross "stack" reference resolved against this ledger can derive its
+// neighbor's own address (docs/architecture.md's own <base store>/
+// <stack>/ rule) or honor an explicit external override, without
+// core/resolver needing to read .ubx/config itself.
+func OpenStoreForStack(store LedgerStore, base string, external map[string]string) *Ledger {
+	return &Ledger{store: store, baseStore: base, externalStacks: external}
+}
+
+// BaseStore returns the store address l was opened against (via
+// OpenStoreForStack), or "" if none was given -- including for the
+// ordinary git-directory Open/OpenStore cases.
+func (l *Ledger) BaseStore() string { return l.baseStore }
+
+// ExternalStack looks up stack in l's own [ledger.external] table (set
+// via OpenStoreForStack), if any.
+func (l *Ledger) ExternalStack(stack string) (string, bool) {
+	v, ok := l.externalStacks[stack]
+	return v, ok
 }
 
 // Dir returns the root directory l was opened with, or "" for a Ledger

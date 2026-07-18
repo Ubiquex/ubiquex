@@ -61,26 +61,37 @@ applies to it).
 
 Not covered by a row above, and therefore not yet a claim `ubx` makes
 about itself: the PR-acceptance ceremony's own remote-store mirroring
-(docs/architecture.md's own "PR-acceptance ceremony: designed this
-session, not yet built") — designed, not built, so there is no code path
-yet for a row to exercise; live conformance against GCS (`gs://`) and
-Azure Blob Storage (`azblob://`) specifically — the *same* code is
-exercised hermetically against `memblob` standing in for all three, and
-(if built out this session) live against real S3, but a real-service run
+(docs/architecture.md's own "PR-acceptance ceremony" section) —
+designed, still not built (`cli/accept.go`'s own `acceptFromMerge` still
+opens git-local unconditionally, confirmed by reading the code), so
+there is no code path yet for a row to exercise; live conformance
+against GCS (`gs://`) and Azure Blob Storage (`azblob://`) specifically
+— the *same* code is exercised hermetically against `memblob` standing
+in for all three, and live against real S3, but a real-service run
 against GCS/Azure themselves is real, credentialed cloud infrastructure
-this session may not reach, named as a follow-up rather than silently
-assumed to work identically just because the driver is portable;
+not yet reached, named as a follow-up rather than silently assumed to
+work identically just because the driver is portable (their own driver
+packages were also found to pull in dozens of new transitive
+dependencies apiece, real evidence against wiring them casually);
 garbage-collection or pruning of orphaned proposal objects (a proposal
 written via `WriteProposalIfAbsent` whose `AdvanceHead` step never
 completes and is never retried — e.g. the client crashes for good, not
 just the momentary interruption row 4 covers — leaves a permanently
 orphaned, harmless-but-never-cleaned-up object; row 4 covers the *retry*
-path, not an abandoned one that never gets retried at all); very deep
-chains' own resolution cost (the `head-hint` cache bounds the common
-case, but no row measures actual latency/cost at a chain length beyond
-this project's own stated "foundational-slice scale" assumption); and
-the CLI-level consequence docs/architecture.md's own Addressing section
-names — `--stack` becoming required to open a remote ledger for a
-bare-proposal-ID lookup — which is a real API consequence of the design,
-not yet exercised end-to-end against a wired CLI command in this table
-(see STATE.md for exactly how far CLI wiring reached this session).
+path, not an abandoned one that never gets retried at all); and very
+deep chains' own resolution cost (the `head-hint` cache bounds the
+common case, but no row measures actual latency/cost at a chain length
+beyond this project's own stated "foundational-slice scale"
+assumption).
+
+The CLI-level `--stack`-required-for-a-bare-proposal-ID consequence
+named in an earlier version of this section is no longer an open gap:
+`ubx why`/`ubx status`/`ubx scan`/`ubx scan --all`/`ubx resolve`/
+`ubx ship`/`ubx accept` (local acceptance) all now read `.ubx/config`'s
+own `[ledger]` table and enforce it, live-verified against real S3
+(a real two-stack `$cross`-by-name cross-stack pin, `VerifyPins`
+catching a real neighbor advancement) — see STATE.md for the session
+this landed in and exactly which CLI surface, if any, still doesn't
+(`acceptFromMerge`, the MCP surface, `ubx revert-plan`/`ubx writeback`/
+`ubx propose` remain git-local-only, named there rather than silently
+left unstated).

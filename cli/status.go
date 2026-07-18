@@ -43,7 +43,10 @@ unreadable; a failure on one resource is recorded and the walk continues, never 
 
 Exit code is a CI contract: 0 if clean (or ledger-only, which has nothing to report drift on), 1 if
 anything drifted, 2 if anything was unreadable or the command failed outright. Whichever is worse
-always wins if more than one applies.`,
+always wins if more than one applies.
+
+"All stacks by default" is a git-local-only capability: a remote .ubx/config [ledger] store addresses
+one chain per stack, so there is no "every stack" to enumerate there -- --stack becomes required.`,
 		// A drifted/unreadable outcome is a normal, working-as-designed
 		// report, not a misuse of the command -- dumping the full flag
 		// usage block for it (cobra's default on any RunE error) would be
@@ -70,7 +73,18 @@ always wins if more than one applies.`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 			}
 
-			ledger := core.Open(ledgerDir)
+			// A remote store has no "every stack" to show at all -- its own
+			// addressing is one chain per stack (docs/architecture.md --
+			// Addressing), so openLedgerForStack requires --stack there
+			// exactly like ubx ship/why's own bare-id lookup does; the
+			// git-local default above (empty stack = every stack) is
+			// completely unaffected, since it never reaches that check.
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+			}
+			defer closeLedger()
+
 			fleet, err := ledger.Fleet(stack)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}

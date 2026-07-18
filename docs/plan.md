@@ -2515,6 +2515,86 @@ a real `root = true` file mid-tree, and a real `HOME=...`-overridden
 user-global refusal and `init_format` application. Full repo build/vet/
 fmt/test clean throughout.
 
+**Session 2 (2026-07-19): the rest of the primary CLI surface wired,
+`$cross` addressing by stack name built, a real two-stack cross-stack
+pin live-verified against real S3, the PR-acceptance ceremony reconfirmed
+design-only.** `ubx why` (a bare proposal id gains a new `--stack` flag,
+required only for a remote store, since unlike a resource address it
+carries no stack of its own; the address branch derives it directly),
+`ubx status` (its own existing `--stack` now genuinely required for a
+remote store — "every stack" has no meaning once addressing is one chain
+per stack, a real, honest, documented consequence, not glossed over),
+`ubx scan` and `ubx scan --all` (already resolved `--stack` before
+opening the ledger in both cases; `scanAllOptions` gained a `Config`
+field so the filename-derived stack fallback still picks the right
+store) all now read `.ubx/config`'s own `[ledger]` table exactly like
+`ubx resolve`/`ubx accept` (local)/`ubx ship` already did. `ubx config`
+gained a derived-address line (`ledger address (stack "payments"):
+s3://...`) — the fully-resolved `<store>/<stack>/` address, not just the
+raw configured `store` string, using the identical `--stack`/config
+fallback every other command now shares.
+
+**`$cross` by stack name, the addressing design's own last untested
+piece, built.** `$cross`'s inner object gained `{"stack": "...", "to":
+"..."}` as a mutually-exclusive alternative to `{"ledger_dir": "...",
+"to": "..."}` (unchanged, permanent) — resolved against the current
+stack's own configured `[ledger]` store, or a new `[ledger.external]`
+table's override for that stack name. Built via dependency inversion,
+not a parameter thread through `Resolve`'s own signature (avoiding a
+40-call-site mechanical update this time): new `core.OpenRef` +
+`core.RegisterRemoteLedgerOpener` (a small registry, `gocloud.dev/blob`'s
+own `URLMux` the direct precedent), registered once by `cli`'s own
+`init()`; `core.Ledger` gained `BaseStore()`/`ExternalStack()` accessors
+and a new `OpenStoreForStack` constructor carrying that metadata, so
+`core/resolver`'s own `resolveCross` (which already received the current
+ledger as a parameter) needed no new parameter of its own, no signature
+change to `Resolve`, and zero updates to any pre-existing test —
+confirmed by running the full suite unchanged before writing a single
+new test. `VerifyPins` and a destroy's own `known_dependents` orphan
+check both moved to `core.OpenRef` too, uniformly. A real, corrected
+design-doc sketch along the way: `ledger { external { network = ... } }`
+(nested HCL blocks, from the original design room text) was never
+actually parsed against `hclsyntax` until this session — corrected to
+`ledger = { external = { network = "..." } }`, matching every other
+config table's own attribute-object convention, since a stack name isn't
+always a bare identifier the way `network` happens to be.
+
+**Live finale, real S3, both required claims proven.** Two stacks
+(`payments`, `networking`) under one real S3 base
+(`s3://ubx-states/<prefix>/`): `networking` resolved/accepted/shipped a
+real fake-provider resource; `payments` resolved a `$cross` by
+`"stack": "networking"` (no `ledger_dir` anywhere in the intent file),
+correctly recording `pinned_head` and the fully-derived real address
+(`s3://ubx-states/<prefix>/networking/`) — verified independently by
+listing the real bucket's own objects afterward, not just trusting
+`ubx`'s own report. Accepted cleanly while `networking` hadn't moved;
+a second `payments` proposal, resolved against the same pin, was then
+correctly refused (`ErrCrossStackPinStale`, exit 1) once `networking`'s
+real head genuinely advanced via a real accepted change — the exact
+"neighbor advance staleness" claim docs/resolver-adversarial.md's row 5
+already made for git-local, now proven for a real remote neighbor too.
+Account left clean afterward (real S3 objects only — no real cloud
+infrastructure was involved, the resources themselves were
+fake-provider).
+
+**PR-acceptance ceremony: reconfirmed design-only, its own future
+slice.** No implementation this session, matching its own explicit
+scope — `cli/accept.go`'s `acceptFromMerge` still opens git-local
+unconditionally, confirmed by reading the code. docs/architecture.md's
+own section reworded to name it precisely as the *one* remaining
+git-local-only acceptance path, now that every other primary command is
+wired.
+
+New hermetic tests: `core/resolver/crossstack_addressing_test.go` (5
+tests, using a shared in-memory bucket + a test-only fake remote opener
+so two stacks genuinely share one base — `mem://`'s own URL opener hands
+back a fresh, unshared bucket per call, confirmed before relying on
+anything else); 3 new rows in docs/resolver-adversarial.md (11-13);
+`cli/configcmd_test.go` (4 tests) for the derived-address line. Full
+repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout. ubiquex-docs updated
+the same session. Both repos committed and pushed.
+
 ## Deferred (explicitly not now)
 
 SDK + codegen, chat/intent provider, diagrams, markdown intents, a real

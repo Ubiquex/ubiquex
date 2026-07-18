@@ -58,8 +58,18 @@ type Config struct {
 // A stack name is always appended to Store as a further path segment
 // (docs/architecture.md's own addressing rule, <base store>/<stack>/),
 // never configured separately here.
+//
+// External is docs/architecture.md's own "the one thing ever declared":
+// a $cross "stack" reference to a stack living in a genuinely different
+// base (another team's bucket, another repo) -- keyed by stack name,
+// each value a full store address exactly like Store's own shape.
+// Absent for the overwhelmingly common case (every cross-stack ref stays
+// within this stack's own base); a stack named here is resolved against
+// its own override instead of Store when $cross's own "stack" field
+// names it.
 type LedgerConfig struct {
-	Store string `toml:"store" json:"store"`
+	Store    string            `toml:"store" json:"store"`
+	External map[string]string `toml:"external" json:"external"`
 }
 
 // Providers/ProviderConfigs are .ubx/config's own [providers]/

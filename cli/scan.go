@@ -93,6 +93,7 @@ func newScanCmd() *cobra.Command {
 					Propose:         propose,
 					OutDir:          outDir,
 					LedgerDir:       ledgerDir,
+					Config:          cfg,
 					ProviderPath:    providerPath,
 					Source:          source,
 					ProviderVersion: providerVersion,
@@ -126,7 +127,12 @@ func newScanCmd() *cobra.Command {
 			}
 			defer client.Close()
 
-			ledger := core.Open(ledgerDir)
+			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+			}
+			defer closeLedger()
+
 			salt, err := ledger.Salt()
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
