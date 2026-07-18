@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -160,6 +162,7 @@ func renderProposal(out io.Writer, p *core.Proposal) {
 	}
 	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
 	renderModifies(out, p.Delta.Modifies, "")
+	renderDestroys(out, p.Delta.Destroys, "", true)
 }
 
 // renderApplies is UBI-26's own addition to `ubx why`'s single-proposal
@@ -182,10 +185,20 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 		fmt.Fprintf(out, "  attempt %d: %s\n", a.Attempt, status)
 		for _, ra := range a.Resources {
 			fmt.Fprintf(out, "    %s:\n", ra.Address)
-			for _, t := range ra.Transitions {
+			// UBI-30: a destroy's own terminal "applied" transition means
+			// either "destroyed" or "already_absent" -- neither of which
+			// reads as a create/modify's own plain "applied" at all, so
+			// this is called out explicitly on that exact line rather than
+			// leaving a reader to notice and interpret the reconcile:
+			// lines below on their own.
+			outcome := destroyOutcome(ra.Reconciliation)
+			for i, t := range ra.Transitions {
 				fmt.Fprintf(out, "      %s at %s", t.State, t.At)
 				if t.Detail != "" {
 					fmt.Fprintf(out, " -- %s", t.Detail)
+				}
+				if t.State == core.ResourceApplied && i == len(ra.Transitions)-1 && outcome != "" {
+					fmt.Fprintf(out, " (%s)", outcome)
 				}
 				fmt.Fprintln(out)
 			}
@@ -219,6 +232,60 @@ func renderModifies(out io.Writer, modifies []core.Modification, indent string) 
 	}
 }
 
+// renderDestroys prints each Delta.Destroys entry (UBI-30, docs/resolver.md's
+// "Amendment: destroys") -- the resolve-time content of what's being
+// removed, the same "make the content visible, not just the decision"
+// role renderModifies already plays for delta.modifies. Before this,
+// nothing rendered delta.destroys at all: a destroy proposal's own
+// address, and the full state it carries inline specifically so a human
+// signing it away can see what's being lost (docs/resolver.md's own
+// reasoning for why it's the whole state, not just changed attributes),
+// were both invisible in `ubx why`'s output. showState controls whether
+// each attribute is printed too (the full single-proposal view) or just
+// the address (the terser per-entry chain view, matching
+// renderProposalCompact's own existing terseness elsewhere).
+func renderDestroys(out io.Writer, destroys []core.DestroyEntry, indent string, showState bool) {
+	for _, d := range destroys {
+		fmt.Fprintf(out, "%sdestroy: %s\n", indent, d.Address)
+		if !showState {
+			continue
+		}
+		var state map[string]json.RawMessage
+		if err := json.Unmarshal(d.State, &state); err != nil {
+			continue
+		}
+		keys := make([]string, 0, len(state))
+		for k := range state {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(out, "%s  %s: %s\n", indent, k, rawOrAbsent(state[k]))
+		}
+	}
+}
+
+// destroyOutcome returns reconciliation's own last entry's Outcome if it's
+// one of the two destroy-terminal values (UBI-30, docs/executor.md's
+// "shipping destroys" amendment: destroyed | already_absent) -- "" for a
+// create/modify (whose own Reconciliation outcomes, if ever recorded at
+// all, are always applied/failed/inconclusive) or for a destroy resource
+// with no reconciliation recorded (shouldn't happen once a destroy
+// reaches ResourceApplied, core/executor's own shipDestroyNode always
+// records at least one entry first, but never misrepresented as one of
+// the two if it somehow did).
+func destroyOutcome(reconciliation []core.ReconciliationAttempt) string {
+	if len(reconciliation) == 0 {
+		return ""
+	}
+	switch last := reconciliation[len(reconciliation)-1].Outcome; last {
+	case "destroyed", "already_absent":
+		return last
+	default:
+		return ""
+	}
+}
+
 // renderProposalCompact is why's per-entry rendering for a resource
 // address's full proposal chain — terser than renderProposal (a short id,
 // one summary line) since a chain view shows several entries at once, but
@@ -236,6 +303,7 @@ func renderProposalCompact(out io.Writer, ledger *core.Ledger, p *core.Proposal)
 		renderIntentSource(out, s, "    ")
 	}
 	renderModifies(out, p.Delta.Modifies, "    ")
+	renderDestroys(out, p.Delta.Destroys, "    ", false)
 	if p.Kind == core.KindDriftRevert || p.Kind == core.KindChange {
 		attempts, err := ledger.ApplyAttempts(p.ID)
 		if err != nil {

@@ -192,6 +192,47 @@ func (l *Ledger) shippedCreateFold(proposalID string, addr Address) (result, loo
 	return result, lookup, appliedAt, true, nil
 }
 
+// shippedDestroyFold is shippedCreateFold's own destroy-side counterpart
+// (docs/schema.md — "Amendment: destroys", UBI-30; docs/executor.md's own
+// "shipping destroys" amendment): folds proposalID's own apply records for
+// a Delta.Destroys entry at addr. found is true only if this resource's
+// own MOST RECENT transition is ResourceApplied -- the same per-resource,
+// not per-attempt, gating shippedCreateFold already established. For a
+// destroy specifically, reaching ResourceApplied at all only ever happens
+// via core/executor's own shipDestroyNode determining "destroyed" or
+// "already_absent" (never any other path produces it for a Delta.Destroys
+// entry), so found alone is sufficient to know addr is tombstoned --
+// outcome (the last Reconciliation entry's own Outcome) is returned
+// alongside purely so a caller that wants to render WHICH of the two
+// actually happened (`ubx why`) doesn't need its own separate fold.
+func (l *Ledger) shippedDestroyFold(proposalID string, addr Address) (outcome string, found bool, err error) {
+	attempts, err := l.ApplyAttempts(proposalID)
+	if err != nil {
+		return "", false, fmt.Errorf("shipped destroy fold: %w", err)
+	}
+	target := addr.String()
+	var lastState ResourceState
+	var hasState bool
+	for _, a := range attempts {
+		for _, ra := range a.Resources {
+			if ra.Address.String() != target {
+				continue
+			}
+			if st, ok := ra.LastState(); ok {
+				lastState = st
+				hasState = true
+			}
+			if len(ra.Reconciliation) > 0 {
+				outcome = ra.Reconciliation[len(ra.Reconciliation)-1].Outcome
+			}
+		}
+	}
+	if !hasState || lastState != ResourceApplied {
+		return "", false, nil
+	}
+	return outcome, true, nil
+}
+
 // ApplySummary is ApplyRecord.Summary -- populated only once an attempt is
 // sealed (docs/schema.md's "sealed vs. live" note). Reflects the full,
 // cumulative per-resource accounting for the proposal as of the end of

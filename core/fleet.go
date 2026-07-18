@@ -21,17 +21,17 @@ type FleetEntry struct {
 }
 
 // Fleet returns one FleetEntry per distinct resource address the ledger has
-// ever recorded — discovered via resolution.inputs[].resource, the same
-// field Ledger.LastObservedHash/LastObservationTime/ProposalsForAddress
-// already key off (docs/architecture.md — Fleet status), plus (UBI-29,
-// docs/schema.md's "Amendment: apply-record lookup key + Fleet discovery")
-// a change proposal's own shipped create, which never gets a
-// resolution.inputs entry for its own address at all — sorted by
-// canonical address string for stable, readable output. If stack is
-// non-empty, only addresses in that stack are returned; addresses from
-// every stack the ledger holds are returned otherwise (a single ledger
-// directory can legitimately hold an interleaved chain spanning multiple
-// stacks — see docs/architecture.md).
+// ever recorded and NOT since tombstoned — discovered via
+// resolution.inputs[].resource, the same field Ledger.LastObservedHash/
+// LastObservationTime/ProposalsForAddress already key off
+// (docs/architecture.md — Fleet status), plus (UBI-29, docs/schema.md's
+// "Amendment: apply-record lookup key + Fleet discovery") a change
+// proposal's own shipped create, which never gets a resolution.inputs
+// entry for its own address at all — sorted by canonical address string
+// for stable, readable output. If stack is non-empty, only addresses in
+// that stack are returned; addresses from every stack the ledger holds
+// are returned otherwise (a single ledger directory can legitimately hold
+// an interleaved chain spanning multiple stacks — see docs/architecture.md).
 //
 // The walk is a single pass over Chain(): later proposals overwrite
 // earlier ones for the same address, so the result reflects each
@@ -47,6 +47,16 @@ type FleetEntry struct {
 // establishes elsewhere (e.g. `ubx why`). A create that hasn't shipped
 // (successfully) yet is not discoverable at all -- exactly like a resource
 // nothing has ever adopted.
+//
+// A shipped Delta.Destroys entry (UBI-30) excludes its address from the
+// returned entries entirely — Fleet is "what does the ledger think is
+// currently out there to watch," and a tombstoned address is exactly as
+// absent from that as one never recorded at all, the same posture
+// FoldState's own tombstone-fold takes one level down. Tracked in the same
+// single pass, chronologically: a later create/modify/live_state touch
+// after a destroy (a real, legitimate recreate-under-the-same-address
+// lifecycle) un-tombstones it again, keeping this in lockstep with
+// FoldState's own re-seed-from-scratch behavior for the identical case.
 func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 	chain, err := l.Chain()
 	if err != nil {
@@ -56,6 +66,7 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 	latest := map[string]*Proposal{}
 	latestInput := map[string]ResolutionInput{}
 	latestShippedLookup := map[string]json.RawMessage{}
+	tombstoned := map[string]bool{}
 	for _, p := range chain {
 		for _, in := range p.Resolution.Inputs {
 			if in.Resource == "" {
@@ -63,6 +74,9 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 			}
 			latest[in.Resource] = p
 			latestInput[in.Resource] = in
+			if in.Kind != "destroy_target" {
+				tombstoned[in.Resource] = false
+			}
 		}
 		if p.Kind != KindChange {
 			continue
@@ -85,11 +99,26 @@ func (l *Ledger) Fleet(stack string) ([]FleetEntry, error) {
 			addrStr := addr.String()
 			latest[addrStr] = p
 			latestShippedLookup[addrStr] = lookup
+			tombstoned[addrStr] = false
+		}
+		for i := range p.Delta.Destroys {
+			d := &p.Delta.Destroys[i]
+			addrStr := d.Address.String()
+			_, shipped, ferr := l.shippedDestroyFold(p.ID, d.Address)
+			if ferr != nil {
+				return nil, fmt.Errorf("fleet: %w", ferr)
+			}
+			if shipped {
+				tombstoned[addrStr] = true
+			}
 		}
 	}
 
 	entries := make([]FleetEntry, 0, len(latest))
 	for addrStr, p := range latest {
+		if tombstoned[addrStr] {
+			continue
+		}
 		addr, ok := ParseAddress(addrStr)
 		if !ok {
 			continue

@@ -227,6 +227,22 @@ func (l *Ledger) ProposalsForAddress(addr Address) ([]*Proposal, error) {
 // applied values entirely). found is false if addr was never adopted, or
 // was created via a change proposal that hasn't shipped (successfully) yet.
 //
+// A shipped Delta.Destroys entry (UBI-30, docs/schema.md's "Amendment:
+// destroys" -- the tombstone posture) folds addr back to !found, the
+// mirror image of a shipped create seeding it: current is reset to nil
+// the moment shippedDestroyFold confirms the destroy actually landed
+// (destroyed or already_absent, gated the same per-resource way as a
+// create), continuing the SAME chain walk rather than stopping there --
+// a later proposal creating a new resource under the identical address
+// (a real, legitimate lifecycle: tear down, rebuild under the same name)
+// correctly re-seeds current/found from scratch, exactly as if addr had
+// never been recorded before that later create at all. The ledger's own
+// chain is never rewritten to make this true -- only FoldState's own
+// derived, current-truth view folds through the tombstone; `ubx why`'s
+// full biography (docs/schema.md's own "permanent history" posture) keeps
+// showing the destroy proposal, and everything before and after it,
+// unchanged.
+//
 // Accepted limit (UBI-7 follow-up, decided rather than left open): this is
 // an O(chain length) linear walk via Chain(), with no index by address.
 // That's a deliberate choice for the current scale — one stack, resources
@@ -289,6 +305,24 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 				dotSet(current, path, v)
 			}
 			found = true
+		}
+		for i := range p.Delta.Destroys {
+			d := &p.Delta.Destroys[i]
+			if d.Address != addr {
+				continue
+			}
+			_, shipped, ferr := l.shippedDestroyFold(p.ID, addr)
+			if ferr != nil {
+				return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+			}
+			if shipped {
+				current = nil
+				found = false
+			}
+			// Not yet shipped: leave current/found exactly as they were --
+			// an accepted-but-unshipped destroy removes nothing yet,
+			// mirroring a change proposal's own accepted-but-unshipped
+			// create (above).
 		}
 	}
 	if !found {

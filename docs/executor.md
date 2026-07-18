@@ -728,6 +728,94 @@ UBI-30 session 3), not assumed correct from the design above alone:**
   (`destroyedIDs`), never previously needed since every other fixture
   behavior here is stateless by design.
 
+### Session 4: `FoldState`'s tombstone-fold and `ubx why`'s destroyed/already_absent rendering
+
+Both gaps session 3 named and deliberately left open are closed this
+session — the two real, remaining pieces of docs/schema.md's own
+tombstone posture.
+
+**`core.Ledger.FoldState` folds a fully-destroyed address back to
+absent.** A new `core.shippedDestroyFold(proposalID, addr)`
+(`core/apply.go`) mirrors `shippedCreateFold`'s own per-resource, not
+per-attempt, gating exactly: found is true only if this resource's own
+most recent transition is `ResourceApplied` — for a `Delta.Destroys`
+entry specifically, reaching `ResourceApplied` at all only ever happens
+via `shipDestroyNode`'s own `destroyed`/`already_absent` determination, so
+that alone is sufficient to know the address is tombstoned (no need to
+additionally inspect *which* of the two — that distinction only matters
+for rendering, below). `FoldState`'s own per-proposal walk gained a third
+loop, alongside its existing Creates/Modifies ones: for a `Delta.Destroys`
+entry matching `addr`, a shipped destroy resets `current = nil; found =
+false` right there in the walk, *continuing* rather than stopping — a
+later proposal's own create for the identical address (a real, legitimate
+"tear down, rebuild under the same name" lifecycle) re-seeds `current`/
+`found` from scratch, exactly as if the address had never been recorded
+before that later create. The ledger's own chain is never rewritten to
+make this true; only `FoldState`'s derived, current-truth view folds
+through the tombstone — `ubx why`'s full biography (below) is unaffected
+and keeps showing the destroy proposal, and everything before and after
+it, unchanged.
+
+**`core.Ledger.Fleet` (what `ubx status`/`ubx scan`'s own ground truth,
+via `cli/status.go`/`core/scan.go`, already exclusively consumes) excludes
+a tombstoned address from "what to actively watch."** The same single
+chronological pass Fleet already walks gained a `tombstoned` map,
+updated in lockstep with `latest`: a shipped `Delta.Destroys` entry marks
+an address tombstoned; any *later* resolution-input touch or shipped
+create un-marks it (the identical recreate-under-the-same-address case
+`FoldState` now handles, kept consistent one level up). Entries whose
+address is tombstoned are filtered out of Fleet's returned slice
+entirely. **`cli/status.go` and `core/scan.go` needed zero changes** —
+confirmed, not assumed — the exact repeat of UBI-29's own finding: both
+already consume `Fleet`/`FoldState` as their only path to "what does the
+ledger know," so fixing those two functions made the whole read path
+correct for free, a second time.
+
+**`ubx why`'s own rendering gained two real additions, both purely
+presentation-layer — no new ledger mechanism, exactly as this document's
+own session-3 addendum anticipated.** First, `Delta.Destroys` itself was
+never rendered at all before this session — neither the single-proposal
+view (`renderProposal`) nor the resource-chain view
+(`renderProposalCompact`) printed anything for it, unlike `Delta.Modifies`
+(`renderModifies`, unchanged). New `renderDestroys` prints each entry's
+address always, and (single-proposal view only) every attribute of its
+carried-inline full state (docs/resolver.md's own reasoning for why that
+state is carried at all — a human reviewing a destroy needs to see what's
+being lost, and `ubx why` re-reviewing it afterward needs the same). Second,
+a destroy's own terminal `applied` transition read identically to a
+create's or modify's — "applied at `<time>`" — with the actual
+`destroyed`/`already_absent` distinction buried in a separate
+`reconcile:` line a reader had to already know to look for and interpret.
+New `destroyOutcome` inspects a resource's own last `Reconciliation` entry
+(`""` for anything but the two destroy-terminal values, which no
+create/modify path ever produces) and annotates the transition line
+itself: `applied at <time> (destroyed)` or `applied at <time>
+(already_absent)`, so the distinction this whole amendment exists to make
+observable is actually visible at a glance, not just present in the raw
+data.
+
+**Hermetic coverage**: `core/destroy_tombstone_test.go` (new) —
+`TestFoldState_ShippedDestroy_TombstonesAddress`,
+`TestFoldState_ShippedDestroy_AlreadyAbsentOutcome_AlsoTombstones` (both
+outcomes tombstone identically), `TestFoldState_UnshippedDestroy_DoesNotTombstone`,
+`TestFoldState_DestroyKilledMidAttempt_NeverTombstones` (an unresolved,
+unsealed destroy attempt must never tombstone — the per-resource gating's
+own adversarial edge), `TestFoldState_RecreateAfterDestroy_ReSeedsFresh`,
+`TestFleet_ExcludesTombstonedAddress`,
+`TestFleet_RecreatedAddress_ReappearsAfterDestroy`. `cli/why_destroy_test.go`
+(new) — `TestWhy_RendersDestroyedResource` (a full, real `ubx scan` →
+`accept` → `resolve` → `accept --confirm-destroys` → `ship` → `why` chain
+against the actual fakeprovider subprocess, both view forms) and
+`TestWhy_RendersAlreadyAbsentDestroy` (hand-built directly via `core`,
+since no two separate CLI invocations can share one subprocess's
+in-memory destroyed-state — confirmed as a real constraint, not assumed:
+each `ubx` invocation launches its own fresh provider subprocess, so
+"already absent before ubx even tried" can only be demonstrated for real
+within a single `ubx ship` invocation, exactly what
+`core/executor`'s own hermetic `TestShipDestroy_AlreadyAbsent_ResolvesWithoutInFlight`
+(session 3) already proves). Full repo `go build ./...`/`go vet
+./...`/`gofmt -l .`/`go test ./... -race -count=1` clean, no regressions.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -749,14 +837,10 @@ UBI-30 session 3), not assumed correct from the design above alone:**
 - ~~`delta.destroys`, for a `change` proposal or any other kind — no kind
   this codebase produces today carries a real destroy, and shipping one
   needs its own adversarial thinking (docs/resolver.md's own Scope
-  section).~~ — **fixed, UBI-30 session 3**: `shipDestroyNode`/
+  section).~~ — **fixed, UBI-30 sessions 3-4**: `shipDestroyNode`/
   `reconcileDestroyLoop` (see "Amendment (2026-07-17, UBI-30): shipping
   destroys," above), all eleven docs/destroys-adversarial.md rows green
-  hermetically. Real remaining gaps, named rather than silently closed:
-  `core.Ledger.FoldState`'s own tombstone-folding (docs/schema.md's
-  amendment) is not yet built, so a destroyed address still reads as
-  "present" via `FoldState` until that separate `core` change lands; `ubx
-  why`'s own rendering of `destroyed` vs. `already_absent` is presentation-layer
-  work for a future session (the ledger already records the distinction
-  correctly, `--json` shows it today); the live full-lifecycle finale on
-  real AWS is unstarted.
+  hermetically (session 3); `core.Ledger.FoldState`'s own tombstone-folding
+  and `ubx why`'s `destroyed`/`already_absent` rendering (session 4, its
+  own addendum below); a live full-lifecycle finale on real AWS (session 4,
+  see docs/reliability-report.md's own UBI-30 section).
