@@ -2378,6 +2378,107 @@ warning still names the exact file the typo came from — checked per
 layer before the merge, not after, so provenance of the warning itself
 never blurs across files the way a post-merge check would.
 
+### Cascade ceiling: where the upward walk stops (design-room decision, 2026-07-19; built, UBI-32 Arc B addendum)
+
+An unbounded upward walk is exactly the kind of powerful-and-invisibly-
+wrong thing the provenance surface above already exists to mitigate —
+but provenance only explains a cascade *after* it ran; the walk itself
+still needs an explicit stop rule, or a config value can silently arrive
+from a directory nobody realized was still being read (a parent
+monorepo, a stray `.ubx/config` in `$HOME`, an unrelated ancestor
+directory on a shared machine). Three rules, checked in this order, at
+every directory the walk visits, on top of `.ubx/config*`'s own
+per-directory discovery already documented above:
+
+1. **`root = true`** — a new, ordinary top-level config key
+   (`Config.Root`, boolean, cascade-merged and provenance-tracked like
+   any other key). The editorconfig precedent this borrows directly:
+   the directory declaring it is still fully included — its own other
+   keys apply exactly as they would anywhere else in the cascade — but
+   the walk stops immediately afterward, never reading anything farther
+   up. Checked as each layer is parsed, during the walk itself, not
+   deferred to the merge step afterward — the merge doesn't decide how
+   far the walk went, the walk decides what the merge ever sees. A
+   `root` key present but not a literal boolean (`root = "true"`, a
+   string) is a hard error naming the file — the same "ambiguity
+   rejected loudly, never guessed" standard YAML strict mode already
+   holds itself to elsewhere on this exact surface.
+2. **No `root` marker anywhere → the git repo boundary is the implicit
+   ceiling.** The directory containing `.git` (a directory for an
+   ordinary checkout, a file for a worktree or submodule — either one is
+   sufficient signal; its content is never read, only its presence) is
+   still included, then the walk stops. This is a good default because
+   it matches what "one project" already means structurally in this
+   codebase's own world (one repo, one or more stacks) without asking an
+   operator to remember to write `root = true` themselves for the common
+   case.
+3. **Outside any repo, `$HOME` or `/` is the ceiling** — reached
+   naturally by the same walk, not a special-cased lookahead: if neither
+   a `root` marker nor a `.git` boundary was ever found, the walk simply
+   keeps going, and eventually arrives at `$HOME` or the filesystem root
+   either of which it also treats as an inclusive stop, for exactly the
+   reason rule 2 doesn't fire outside a checkout at all — there's no
+   repo boundary to find. This is what keeps a `ubx` invocation from
+   directories outside any git checkout (a scratch directory, a `/tmp`
+   experiment) from walking all the way to `/` reading unrelated
+   ancestor directories' config by accident forever, the same concern
+   rule 2 addresses for the common inside-a-repo case.
+
+`ubx config` (the provenance view) reports which of the three rules
+actually stopped the walk, and where — `root marker (<file>)`, `repo
+boundary (<dir>)`, `$HOME (<dir>)`, or `filesystem root (<dir>)` — since
+"where did this stop and why" is exactly the kind of question a
+provenance surface exists to answer honestly, not just "here are the
+values."
+
+### User-global `~/.ubx/config`: personal preference only, never project truth (design-room decision, 2026-07-19; built, UBI-32 Arc B addendum)
+
+`~/.ubx/config*` (the same three-format discovery order, rooted at
+`$HOME` specifically) is consulted, but **outside** the cascade proper —
+never a layer the upward walk itself passes through or stops at, always
+folded in as the single lowest-priority source underneath whatever the
+project cascade supplies. The reason it's kept structurally separate,
+not just prioritized last: **a checkout must resolve identically on
+every machine.** A project-truth key — `stack`, `providers`,
+`provider_configs`, `ledger` (its `store`), and `intent` (reserved for
+UBI-41's own intent-provider config, not yet implemented) — read from a
+per-user file would mean the same commit resolves two different ways for
+two different people, or for the same person on two different laptops,
+which is precisely the failure mode this project's own "files, not a
+database, independently verifiable" posture exists to prevent one level
+down. So user-global config is **allowlist-only**: every top-level key
+found there is checked against a fixed, currently-tiny allowlist of
+genuinely personal-preference settings (today: `init_format`, `ubx
+init`'s own default write format, since which format an *operator*
+prefers to hand-edit is exactly the kind of thing that can differ
+person-to-person without the project itself meaning anything different)
+— anything else, whether it's a real project-truth key or simply a typo,
+is a **hard error**, not a warning, naming the file and the key: the
+normal cascade's "unknown keys warn, they don't fail" leniency doesn't
+apply here on purpose, because a project-truth key silently leaking in
+from `$HOME` is a correctness problem, not a forward-compatibility
+convenience.
+
+`ubx init --format` falls back to `~/.ubx/config`'s own `init_format`
+(if present) before falling back to `hcl`, when `--format` itself isn't
+given — the one concrete instance, today, of a personal-preference key
+actually changing `ubx`'s own behavior.
+
+**A real subtlety found while testing this, not assumed away:** if
+`$HOME` itself turns out to be the cascade's own ceiling (rule 3 above
+— a `ubx` invocation with no repo structure above it at all, run
+directly from or under `$HOME`), `$HOME`'s own config was *already*
+read and folded in as an ordinary, unrestricted cascade layer by the
+time the separate user-global consultation would run. Consulting the
+identical file a second time, this time under the personal-preference
+allowlist, would wrongly reject a legitimate project-truth key that was
+never really a "user-global" concern in the first place — caught by a
+hermetic test before shipping, not discovered later. Fixed by having the
+user-global loader compare its own resolved file path against the
+cascade walk's already-consumed layers and skip entirely if they match:
+whichever one runs first, a file is only ever a cascade layer or a
+user-global one, never both at once.
+
 ### Config formats: HCL canonical, TOML supported, YAML supported (strict) (built, UBI-32 Arc A session 1)
 
 Three formats, one internal config struct — the cascade/merge/provenance

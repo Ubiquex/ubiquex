@@ -1021,6 +1021,20 @@
   follow-up. See §Ledger stores below for the full session and STATE.md
   for the empirical findings (gocloud.dev/blob's own `IfNotExist`
   semantics, the live-only lock-timeout tuning).
+- 2026-07-19 — UBI-32 addendum: the config cascade (Arc A) gained an
+  explicit stop rule it never had — `root = true` (editorconfig's own
+  precedent), else the git repo boundary, else `$HOME`/filesystem root,
+  checked in that order at every directory the upward walk visits.
+  `~/.ubx/config` landed the same day, structurally outside the cascade:
+  allowlist-only (`init_format` today), every other key a hard error,
+  since a project-truth key leaking in from a per-user file would break
+  "the same checkout resolves identically on every machine." A real
+  subtlety found by a hermetic test before shipping: `$HOME` coinciding
+  with the cascade's own ceiling could have double-read and wrongly
+  rejected a legitimate project key; fixed by having the user-global
+  loader skip any file the cascade walk already consumed. `ubx config`
+  now reports which ceiling rule fired and where. See §Ledger stores'
+  own addendum entry below for the full session.
 
 ## Strategy
 
@@ -2447,6 +2461,59 @@ Queued for a later session: Arc B's own remaining CLI wiring (the
 commands named above), gs/azblob (if a lighter-weight path into their
 own SDKs is ever found, or the dependency cost is judged acceptable
 later), and the PR-acceptance ceremony's real implementation.
+
+**Addendum (2026-07-19, filed under Arc B, substance is Arc A's own
+config cascade): the cascade ceiling.** A design-room gap named directly:
+the upward-walking cascade (Arc A, above) had no explicit stop rule at
+all before this — it would walk every ancestor directory all the way to
+the filesystem root, silently reading whatever `.ubx/config*` happened
+to exist anywhere above a project, a real invisible-wrongness risk
+exactly the provenance surface exists to mitigate but can't prevent by
+itself. Three rules, checked in this order at every directory the walk
+visits: `root = true` (a new, ordinary, cascade-merged, provenance-
+tracked `Config.Root` key — editorconfig's own precedent, inclusive
+stop, a non-boolean value is a hard error); no marker anywhere → the git
+repo boundary (`.git`, directory or file, presence only, never read); no
+repo either → `$HOME` or the filesystem root, reached naturally by the
+same walk rather than a separate lookahead. `ubx config` now reports
+which rule fired and where.
+
+**User-global `~/.ubx/config` landed the same addendum**, structurally
+outside the cascade walk entirely: allowlist-only (today, exactly one
+entry, `init_format` — `ubx init`'s own default write format), every
+other top-level key a **hard error**, never the normal cascade's own
+"unknown keys warn" leniency, because a project-truth key (`stack`,
+`providers`, `provider_configs`, `ledger`, the reserved future `intent`)
+leaking in from a per-user file would mean the same commit resolves
+differently on different machines — the exact correctness property this
+whole design exists to hold. `ubx init --format`'s own default now falls
+back to `~/.ubx/config`'s `init_format` before `hcl`, the first real
+personal-preference key actually changing behavior.
+
+**A real subtlety found by a hermetic test before it ever shipped:** if
+`$HOME` itself turns out to be the cascade's own ceiling (no repo
+structure above the invocation at all), `$HOME`'s config is already read
+once as an ordinary cascade layer — consulting the identical file a
+*second* time under the restrictive user-global allowlist would wrongly
+reject a legitimate project-truth key that was never really a
+"user-global" concern. Fixed by having the user-global loader compare
+its own resolved file path against the cascade walk's already-consumed
+layers and skip entirely on a match — a file is only ever one or the
+other, never both.
+
+New hermetic tests (`cli/configceiling_test.go`, 15 tests: root-marker
+mid-tree stop with sibling-key survival, a non-boolean `root` hard
+error, repo-boundary stop via both a `.git` directory and a `.git` file
+(worktree/submodule pointer), the `$HOME` fallback, the filesystem-root
+fallback, both user-global refusal shapes, the `init_format` positive
+case plus `--format` still overriding it, and provenance rendering all
+four ceiling reasons) plus a new `userHomeDir` package var (mirroring
+`configSearchStartDir`'s own existing test seam, defaulted safely in
+this package's shared `TestMain`). Live-verified against the real built
+binary: a real nested directory tree with an actual `.git` directory,
+a real `root = true` file mid-tree, and a real `HOME=...`-overridden
+user-global refusal and `init_format` application. Full repo build/vet/
+fmt/test clean throughout.
 
 ## Deferred (explicitly not now)
 

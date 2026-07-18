@@ -41,9 +41,35 @@ type ResolvedConfig struct {
 	// this path" by parsing the path back apart.
 	Values map[string]any
 	// Files lists every file that contributed to the merge, nearest
-	// first -- the same order discoverCascadeFiles returns.
+	// first -- the same order the cascade walk visited them in. Does NOT
+	// include UserGlobalFile, which sits outside the cascade proper.
 	Files []string
+	// CeilingReason/CeilingPath explain where and why the upward walk
+	// stopped (UBI-32 Arc B addendum, docs/architecture.md -- "Cascade
+	// ceiling"): one of ceilingRootMarker/ceilingRepoBoundary/
+	// ceilingHome/ceilingFilesystemRoot, and the file (root marker) or
+	// directory (every other reason) responsible.
+	CeilingReason ceilingReason
+	CeilingPath   string
+	// UserGlobalFile is the ~/.ubx/config* file consulted for
+	// personal-preference keys, if any was found -- "" if none. Never
+	// part of Files: user-global config sits outside the cascade walk
+	// entirely (docs/architecture.md -- "User-global ~/.ubx/config").
+	UserGlobalFile string
 }
+
+// ceilingReason names why the cascade's upward walk stopped where it
+// did (UBI-32 Arc B addendum). Checked in this priority order at every
+// directory the walk visits, on top of that directory's own
+// configFileCandidates discovery.
+type ceilingReason string
+
+const (
+	ceilingRootMarker     ceilingReason = "root marker"
+	ceilingRepoBoundary   ceilingReason = "repo boundary"
+	ceilingHome           ceilingReason = "$HOME"
+	ceilingFilesystemRoot ceilingReason = "filesystem root"
+)
 
 // configFileCandidates is the per-directory discovery order (UBI-32 Arc
 // A): first found wins for that directory; formats never merge within
@@ -52,11 +78,14 @@ type ResolvedConfig struct {
 var configFileCandidates = []string{"config.hcl", "config.toml", "config", "config.yaml"}
 
 // LoadConfigResolved discovers the full .ubx/config cascade -- every
-// `.ubx/config*` from configSearchStartDir() up to the filesystem root,
-// one file per directory chosen by configFileCandidates' own discovery
-// order -- parses each into a genericTree, folds them root-to-nearest
-// (so a nearer directory's own value for any given key always wins,
-// recorded in Provenance), and decodes the single merged tree into
+// `.ubx/config*` from configSearchStartDir() upward, stopping at
+// whichever cascade ceiling fires first (docs/architecture.md --
+// "Cascade ceiling": a `root = true` file, else the git repo boundary,
+// else $HOME or the filesystem root) -- parses each into a genericTree,
+// folds them root-to-nearest (so a nearer directory's own value for any
+// given key always wins, recorded in Provenance), folds in
+// ~/.ubx/config's own allowlisted personal-preference keys as the
+// lowest-priority layer of all, and decodes the single merged tree into
 // *Config. Returns a zero Config (not an error) if no config file exists
 // anywhere in the walk.
 func LoadConfigResolved(warnOut io.Writer) (*ResolvedConfig, error) {
@@ -64,50 +93,154 @@ func LoadConfigResolved(warnOut io.Writer) (*ResolvedConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	files := discoverCascadeFiles(dir)
-	if len(files) == 0 {
-		return &ResolvedConfig{Config: &Config{}, Provenance: Provenance{}, Values: map[string]any{}}, nil
+	walk, err := walkCascade(dir, warnOut)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	userGlobalTree, userGlobalFile, err := loadUserGlobalLayer(walk.layers)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 
 	merged := genericTree{}
 	prov := Provenance{}
 	values := map[string]any{}
-	// Fold root-to-nearest (files is nearest-first) so a nearer
-	// directory's own value always overwrites a farther one's, per key.
-	for i := len(files) - 1; i >= 0; i-- {
-		file := files[i]
-		layer, err := parseGenericFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("load config: parse %s: %w", file, err)
-		}
-		warnUnknownKeys(layer, file, warnOut)
-		merged = mergeGeneric(merged, layer, "", file, prov, values)
+	if userGlobalTree != nil {
+		merged = mergeGeneric(merged, userGlobalTree, "", userGlobalFile, prov, values)
+	}
+	// Fold root-to-nearest (walk.layers is nearest-first) so a nearer
+	// directory's own value always overwrites a farther one's, per key --
+	// and always overwrites whatever user-global just supplied, too.
+	for i := len(walk.layers) - 1; i >= 0; i-- {
+		layer := walk.layers[i]
+		merged = mergeGeneric(merged, layer.tree, "", layer.file, prov, values)
 	}
 
 	cfg, err := decodeGenericIntoConfig(merged)
 	if err != nil {
 		return nil, fmt.Errorf("load config: decode merged config: %w", err)
 	}
-	return &ResolvedConfig{Config: cfg, Provenance: prov, Values: values, Files: files}, nil
+	files := make([]string, len(walk.layers))
+	for i, l := range walk.layers {
+		files[i] = l.file
+	}
+	return &ResolvedConfig{
+		Config: cfg, Provenance: prov, Values: values, Files: files,
+		CeilingReason: walk.ceilingReason, CeilingPath: walk.ceilingPath,
+		UserGlobalFile: userGlobalFile,
+	}, nil
 }
 
-// discoverCascadeFiles walks from startDir upward through every parent
-// directory to the filesystem root, returning one file per directory
-// that has one at all (configFileCandidates' own discovery order),
-// nearest directory first.
-func discoverCascadeFiles(startDir string) []string {
-	var files []string
+// cascadeLayer is one directory's own contribution to the walk: the file
+// discovered there (via configFileCandidates) and its already-parsed
+// generic tree -- parsed inline, during the walk, rather than in a
+// second pass, because deciding whether to keep walking upward at all
+// (the `root = true` check) depends on this layer's own parsed content.
+type cascadeLayer struct {
+	file string
+	tree genericTree
+}
+
+// cascadeWalk is walkCascade's own result: every layer found, nearest
+// first, plus which rule stopped the walk and where.
+type cascadeWalk struct {
+	layers        []cascadeLayer
+	ceilingReason ceilingReason
+	ceilingPath   string
+}
+
+// userHomeDir resolves the current user's home directory -- a package
+// var, not a bare os.UserHomeDir() call, so tests can point it at an
+// isolated scratch directory instead (same convention as cli's own
+// configSearchStartDir): without this seam, every test in this package
+// would depend on whatever the real host machine's $HOME happens to
+// contain, exactly the ambient-state leak `go test ./...` staying
+// hermetic is supposed to rule out. Defaulted to a safe, nonexistent
+// scratch path by this package's own TestMain; individual tests that
+// specifically exercise $HOME-ceiling or user-global-config behavior
+// override it further, per test.
+var userHomeDir = os.UserHomeDir
+
+// walkCascade walks from startDir upward, parsing one file per directory
+// (configFileCandidates' own discovery order) until a cascade ceiling
+// rule fires (docs/architecture.md -- "Cascade ceiling"), checked in
+// this order at every directory visited:
+//
+//  1. root = true in that directory's own config -- an inclusive stop,
+//     that layer's own other keys still apply.
+//  2. That directory itself contains .git (a directory or a file --
+//     either is sufficient signal; contents are never read) -- the
+//     implicit repo boundary, also inclusive.
+//  3. That directory IS $HOME, or is the filesystem root (parent == dir)
+//     -- the fallback ceiling for a walk that never finds rules 1 or 2,
+//     also inclusive.
+func walkCascade(startDir string, warnOut io.Writer) (cascadeWalk, error) {
+	var layers []cascadeLayer
+	home, homeErr := userHomeDir()
 	dir := startDir
 	for {
-		if f := pickConfigFile(dir); f != "" {
-			files = append(files, f)
+		if file := pickConfigFile(dir); file != "" {
+			tree, err := parseGenericFile(file)
+			if err != nil {
+				return cascadeWalk{}, fmt.Errorf("parse %s: %w", file, err)
+			}
+			warnUnknownKeys(tree, file, warnOut)
+			layers = append(layers, cascadeLayer{file: file, tree: tree})
+
+			isRoot, err := treeDeclaresRoot(tree)
+			if err != nil {
+				return cascadeWalk{}, fmt.Errorf("%s: %w", file, err)
+			}
+			if isRoot {
+				return cascadeWalk{layers: layers, ceilingReason: ceilingRootMarker, ceilingPath: file}, nil
+			}
+		}
+
+		if hasGitBoundary(dir) {
+			return cascadeWalk{layers: layers, ceilingReason: ceilingRepoBoundary, ceilingPath: dir}, nil
+		}
+		if homeErr == nil && home != "" && samePath(dir, home) {
+			return cascadeWalk{layers: layers, ceilingReason: ceilingHome, ceilingPath: dir}, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return files
+			return cascadeWalk{layers: layers, ceilingReason: ceilingFilesystemRoot, ceilingPath: dir}, nil
 		}
 		dir = parent
 	}
+}
+
+// treeDeclaresRoot reports whether tree's own top-level "root" key is
+// the literal boolean true. A "root" key present but not a bool at all
+// is a hard error -- the same "ambiguity rejected loudly, never guessed"
+// standard this surface already holds YAML strict mode to.
+func treeDeclaresRoot(tree genericTree) (bool, error) {
+	v, ok := tree["root"]
+	if !ok {
+		return false, nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("root must be a literal boolean (true/false), got %T", v)
+	}
+	return b, nil
+}
+
+// hasGitBoundary reports whether dir itself contains a `.git` entry --
+// a directory for an ordinary checkout, a file for a worktree or
+// submodule (a "gitdir: ..." pointer). Either is sufficient signal;
+// contents are never read.
+func hasGitBoundary(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// samePath reports whether a and b name the same directory, after
+// cleaning both -- no symlink resolution, matching the level of rigor
+// the rest of this cascade already applies to path comparisons.
+func samePath(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // pickConfigFile returns the one config file dir's own `.ubx/` holds,
@@ -222,7 +355,7 @@ var knownTopLevelKeys = map[string]bool{
 	"stack": true, "github_repo": true, "tf_dir": true,
 	"provider": true, "provider_config": true,
 	"providers": true, "provider_configs": true,
-	"k8s_audit": true, "ledger": true,
+	"k8s_audit": true, "ledger": true, "root": true,
 }
 var knownProviderKeys = map[string]bool{"path": true, "source": true, "version": true}
 var knownK8sAuditKeys = map[string]bool{"cluster": true, "region": true, "log_group": true}
@@ -291,6 +424,12 @@ func renderProvenance(rc *ResolvedConfig) string {
 	var b strings.Builder
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s = %v\t<- %s\n", k, rc.Values[k], rc.Provenance[k])
+	}
+	if rc.CeilingReason != "" {
+		fmt.Fprintf(&b, "cascade stopped at: %s (%s)\n", rc.CeilingReason, rc.CeilingPath)
+	}
+	if rc.UserGlobalFile != "" {
+		fmt.Fprintf(&b, "user-global config consulted: %s\n", rc.UserGlobalFile)
 	}
 	return b.String()
 }

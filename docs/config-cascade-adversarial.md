@@ -45,6 +45,25 @@ required outcome is a bug, not an acceptable gap — this table has no
 | 10 | Unknown-key warning, identical typo, three formats | The same typo key (`stcak = "payments"`, a misspelling of `stack`) is written once each in a TOML file, an HCL file, and a YAML file, each loaded in isolation (single-directory, no cascade). | All three emit a warning naming the exact key (`stcak`) and the exact file it came from, and all three otherwise load every OTHER, correctly-spelled key in that same file normally — proving unknown-key detection is implemented once, generically, against the parsed tree's shape, not three times against three different libraries' own differing "undecoded keys" APIs (`BurntSushi/toml`'s `MetaData.Undecoded()` is structurally unavailable once parsing targets a generic map rather than the `Config` struct directly — confirmed empirically, not assumed, before this row was written). |
 | 11 | Freeform tables never spuriously warn | A config file sets `[provider_config]` with an entirely invented key (`totally_custom_flag = true`) and a `[provider_configs."some/vendor"]` table with an equally invented key. | No warning for either — `provider_config`/`providers`/`provider_configs` are freeform by design (arbitrary provider-defined keys), and the unknown-key check never descends into them past their own top-level table name. Only a truly unrecognized *top-level* key, or an unrecognized key inside `[provider]`/`[k8s_audit]` specifically (the two tables with a fixed, known shape), ever warns. |
 
+## The cascade ceiling program (UBI-32 Arc B addendum, 2026-07-19)
+
+The rows below cover docs/architecture.md's own "Cascade ceiling" and
+"User-global `~/.ubx/config`" sections (both amended the same day) —
+where the upward walk stops, and the separate, allowlist-only
+`$HOME`-rooted layer outside it entirely.
+
+| # | Scenario | Injection | Required observable outcome |
+| --- | --- | --- | --- |
+| 12 | `root = true` stops collection mid-tree | A three-level directory chain: grandparent sets `github_repo = "acme/infra"`; parent sets `root = true` AND `tf_dir = "./terraform"`; child (invocation directory) sets `stack = "payments"`. | The merged config has `Stack == "payments"` and `TFDir == "./terraform"` (the `root = true` directory's own other keys still apply — inclusive stop, not "ignore this file too") but `GithubRepo == ""` — the grandparent's own file is never read at all, not merged, not warned about, not present in `Files`. Provenance has no entry naming the grandparent for any key. |
+| 13 | `root` present but not a literal boolean | A config file sets `root = "true"` (a quoted string, in whichever format still lets that type-check as *something* other than a bool — TOML/HCL/YAML all distinguish a quoted string from a bare boolean). | A hard error naming the file and explaining `root` must be a literal boolean — never silently treated as truthy, never silently treated as absent; the whole file contributes nothing to the cascade, same "malformed file, no partial salvage" posture as every other hard-error row in this program. |
+| 14 | No `root` marker anywhere → the git repo boundary is the ceiling | A directory tree with a `.git` directory at some ancestor (a real, if empty, git repository) and a config file exactly at that same directory setting `stack = "payments"`; a further ancestor, *outside* the repo, sets `github_repo = "should-never-be-read"`. No `root` key anywhere. | The repo-root directory's own `stack = "payments"` is read and applied (inclusive stop — the boundary directory's own config still counts); the further-out ancestor's `github_repo` is never read, never merged, never contributes to `Files` or provenance — proving `.git`'s mere presence (a directory is sufficient; contents are never inspected) is enough to stop the walk with no explicit `root` marker needed. |
+| 15 | Outside any repo, `$HOME` is the ceiling | The invocation directory (and every ancestor up to a fake `$HOME`, via the test-only `userHomeDir` override) contains no `.git` anywhere and no `root` marker; `$HOME` itself has a config setting `stack = "home-fallback"`; `$HOME`'s own parent has a config setting `github_repo = "should-never-be-read"`. | `$HOME`'s own `stack = "home-fallback"` is read (inclusive stop, same as the `.git` case); `$HOME`'s parent is never read — proving the fallback ceiling activates correctly once neither of the first two rules ever fired, not just when explicitly asked for. |
+| 16 | Outside any repo, no `$HOME` match either → filesystem root is the ceiling | The walk starts and continues through directories that are neither inside a git repo, nor ever reach the (test-overridden, deliberately unrelated) fake `$HOME` path at all, all the way to the real filesystem root. | The walk terminates at the filesystem root without error (`parent == dir`, the same loop-termination condition the original nearest-file-wins walk already used) — proving the ceiling logic degrades gracefully to exactly today's original top-level behavior when none of the first three rules ever apply, never an infinite loop or a crash. |
+| 17 | User-global config: a project-truth key attempt is refused loudly | `~/.ubx/config` (via the test-only `userHomeDir` override) sets `stack = "should-never-apply"` — a real project-truth key, not a typo. | `LoadConfigResolved` returns a hard error naming the file and the key, explaining it's a project-truth key not allowed in user-global config — never a warning, never silently dropped, and never merged into the resolved config (a caller checking `err != nil` sees this before ever looking at `Config.Stack`). |
+| 18 | User-global config: an unrecognized key is *also* refused loudly, not just warned | `~/.ubx/config` sets `totally_made_up_key = "x"` — not a project-truth key by name, but also not on the personal-preference allowlist (which has exactly one entry, `init_format`, today). | Also a hard error, identically to row 17 — user-global config's own allowlist enforcement doesn't distinguish "a real project key snuck in" from "a plain unrecognized key snuck in": both are outside what's allowed there, and the normal cascade's own separate "unknown keys warn, they don't fail" leniency does not apply to this file at all. |
+| 19 | User-global config: the one real personal-preference key works, and only from `$HOME` | `~/.ubx/config` sets `init_format = "yaml"`. `ubx init` is run with no `--format` flag, from a project directory whose own cascade never mentions `init_format` at all (it isn't a project-cascade key). | `ubx init` writes `.ubx/config.yaml` (not the hardcoded `hcl` default) — proving `init_format` actually changes behavior, and does so from the user-global file specifically, never by being placed in a project's own `.ubx/config` (which would just warn as an unrecognized key there, since `init_format` is not on *that* surface's known-key list at all). |
+| 20 | Provenance renders the ceiling, all four reasons | Four separate scenarios, one per ceiling reason (root marker, repo boundary, `$HOME`, filesystem root), each run through `ubx config`. | Each invocation's output names which rule stopped the walk and where — `root marker (<file>)`, `repo boundary (<dir>)`, `$HOME (<dir>)`, or `filesystem root (<dir>)` respectively — never a generic "cascade complete" with no explanation of why it stopped where it did. |
+
 ## A real gap found live, fixed the same session
 
 Row 4 (above) established what discovery does when a directory already
@@ -93,3 +112,18 @@ default (UBI-18) — docs/architecture.md's own precedence chain places
 that filename fallback strictly *after* config in the resolution order,
 but this table's own rows are all plain `LoadConfig` scenarios, not
 `ubx scan --all`'s specific three-way precedence.
+
+Added by the UBI-32 Arc B addendum, also not yet covered: a `.git`
+*file* (a real worktree/submodule pointer, not a directory) as the
+detected repo boundary — the detection code accepts either, but no row
+yet injects the file-shaped case specifically, only a plain directory;
+nested repos (a git checkout inside another git checkout, e.g. a
+vendored submodule) — which `.git` the walk finds first going upward is
+whichever is nearest, presumed correct by the same "nearest wins"
+logic everything else in this cascade already follows, but not exercised
+as its own deliberate row; and `root = true` written inside
+`~/.ubx/config` itself — user-global config sits outside the cascade
+walk entirely, so a `root` key there has no walk to stop and is simply
+rejected by the same allowlist enforcement every other non-`init_format`
+key there is (row 18's own shape), but no row names this specific case
+explicitly.

@@ -46,6 +46,7 @@ type Config struct {
 	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
 	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 	Ledger          LedgerConfig              `toml:"ledger" json:"ledger"`
+	Root            bool                      `toml:"root" json:"root"`
 }
 
 // LedgerConfig is .ubx/config's [ledger] table (UBI-32 Arc B,

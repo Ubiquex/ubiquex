@@ -18,10 +18,11 @@ func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Show the resolved .ubx/config cascade -- every effective value and which file supplied it",
-		Long: `Walk the .ubx/config cascade from the current directory up to the filesystem root (docs/architecture.md
-— Config: cascading, per-key, child overrides parent), merge every file found per key, and print each key's
-effective value alongside the exact file that supplied it. Prints nothing (exit 0) if no config file exists
-anywhere in the walk.`,
+		Long: `Walk the .ubx/config cascade from the current directory upward until a cascade ceiling stops it
+(docs/architecture.md — Cascade ceiling: a root = true file, else the git repo boundary, else $HOME or the
+filesystem root), merge every file found per key, and print each key's effective value alongside the exact
+file that supplied it, plus ~/.ubx/config's own allowlisted personal-preference keys (User-global ~/.ubx/config)
+and where the walk stopped and why.`,
 		// Same UBI-20 exit-code contract as `ubx init`: no "finding"
 		// concept here, just a load that either succeeds or hard-fails.
 		SilenceUsage:  true,
@@ -31,9 +32,8 @@ anywhere in the walk.`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("config: %w", err)}
 			}
-			if len(rc.Files) == 0 {
+			if len(rc.Files) == 0 && rc.UserGlobalFile == "" {
 				fmt.Fprintln(cmd.OutOrStdout(), "no .ubx/config found (checked every directory from here up to the filesystem root)")
-				return nil
 			}
 			fmt.Fprint(cmd.OutOrStdout(), renderProvenance(rc))
 			return nil

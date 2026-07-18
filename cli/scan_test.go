@@ -47,6 +47,16 @@ func TestMain(m *testing.M) {
 	}
 	configSearchStartDir = func() (string, error) { return emptyConfigDir, nil }
 
+	// Same reasoning, for the cascade's own $HOME ceiling check (UBI-32
+	// Arc B addendum): left at the real os.UserHomeDir, every test's own
+	// upward walk would compare against whatever the real host machine's
+	// $HOME actually is -- harmless today only because no test's temp
+	// directory happens to collide with it, not because it's actually
+	// pinned. A deliberately nonexistent path removes that coincidence;
+	// configcascade_test.go's own ceiling tests override this per-test.
+	noHomeDir := filepath.Join(dir, "no-home-here")
+	userHomeDir = func() (string, error) { return noHomeDir, nil }
+
 	os.Exit(m.Run())
 }
 

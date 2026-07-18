@@ -46,7 +46,8 @@ func newInitCmd() *cobra.Command {
 		Long: `Write .ubx/config.<format>, the defaults file every ubx command reads (docs/architecture.md — Config defaults
 and Config formats): provider identity, provider configuration, default stack, GitHub repository, and .tf directory.
 Any flag you give here is written as a real, active value; anything you don't is written as a commented-out example
-showing the correct syntax. --format selects hcl (default, canonical), toml, or yaml (strict, fully-quoted output).
+showing the correct syntax. --format selects hcl (canonical), toml, or yaml (strict, fully-quoted output); if not
+given, falls back to ~/.ubx/config's own init_format (a personal preference, never project config), then hcl.
 Refuses to overwrite an existing config unless --force is given.`,
 		// init has no "finding" concept -- it either writes the file or it
 		// doesn't (UBI-20 exit-code contract): 0 or 2 only.
@@ -58,6 +59,15 @@ Refuses to overwrite an existing config unless --force is given.`,
 			}
 			if source != "" && providerVersion == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --source requires --provider-version (explicit version pins only)")}
+			}
+			if !cmd.Flags().Changed("format") {
+				userFormat, err := userGlobalInitFormat()
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
+				}
+				if userFormat != "" {
+					format = userFormat
+				}
 			}
 			var render func(configTemplateValues) string
 			switch format {
@@ -126,7 +136,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory to write .ubx/config.<format> into")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing .ubx/config.<format>")
-	cmd.Flags().StringVar(&format, "format", "hcl", "config format to write: hcl (canonical, default), toml, or yaml (strict)")
+	cmd.Flags().StringVar(&format, "format", "hcl", "config format to write: hcl (canonical), toml, or yaml (strict); falls back to ~/.ubx/config's own init_format, then hcl, if not given")
 	cmd.Flags().StringVar(&stack, "stack", "", "default stack name to write into the config")
 	cmd.Flags().StringVar(&source, "source", "", "default provider source, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "default provider version, e.g. 6.54.0 (used with --source)")
