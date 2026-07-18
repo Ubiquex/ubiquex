@@ -30,8 +30,9 @@ type fakeApplier struct {
 }
 
 type applyStep struct {
-	err     error           // if set, ApplyResourceChange returns this error
-	landsAs json.RawMessage // if set, the resource's live state is mutated to this value as a side effect, even though err is also returned -- simulates a provider that committed the change server-side despite the RPC itself failing/timing out
+	err           error           // if set, ApplyResourceChange returns this error
+	landsAs       json.RawMessage // modify/create: if set, the resource's live state is mutated to this value as a side effect, even though err is also returned -- simulates a provider that committed the change server-side despite the RPC itself failing/timing out
+	destroyLanded bool            // destroy (UBI-30): if true, the resource is actually deleted server-side as a side effect, even though err is also returned -- the destroy-specific counterpart to landsAs (a destroy has no "value" to land as, only gone-or-not)
 }
 
 func newFakeApplier() *fakeApplier {
@@ -65,6 +66,32 @@ func (f *fakeApplier) ReadResource(ctx context.Context, resourceSchema any, type
 func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState is
+	// the literal JSON "null" ship.go's shipDestroyNode constructs,
+	// PriorState the real, non-null, freshly re-read state -- the mirror
+	// image of a genuine create's PriorState=="null" convention above.
+	// Checked before the create/modify id-extraction path below, since a
+	// destroy's PlannedState has no "id" to extract at all.
+	if string(plannedState) == "null" {
+		id, ok := extractID(priorState)
+		if !ok {
+			return nil, fmt.Errorf("fake: destroy priorState has no id: %s", priorState)
+		}
+		if steps, ok := f.scripts[id]; ok && len(steps) > 0 {
+			step := steps[0]
+			f.scripts[id] = steps[1:]
+			if step.destroyLanded {
+				delete(f.resources, id)
+			}
+			if step.err != nil {
+				return nil, step.err
+			}
+		}
+		delete(f.resources, id)
+		return json.RawMessage("null"), nil
+	}
+
 	id, ok := extractID(plannedState)
 	if !ok {
 		// A genuine from-scratch create (UBI-27, docs/executor.md's own
@@ -119,6 +146,28 @@ func (f *fakeApplier) setState(id string, state json.RawMessage) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resources[id] = state
+}
+
+// deleteState removes id's live state, as if it had already been destroyed
+// out-of-band before ubx ever attempted anything -- UBI-30's "destroy of an
+// already-absent resource" row, and the "landed before ubx got to check"
+// half of the crash rows below.
+func (f *fakeApplier) deleteState(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.resources, id)
+}
+
+// scriptDestroyOutcome schedules the next ApplyResourceChange call for a
+// destroy of id to return err while EITHER actually deleting the resource
+// server-side (destroyLanded=true, simulating a timeout where the destroy
+// actually landed) OR leaving it untouched (destroyLanded=false, simulating
+// one where it didn't) -- docs/destroys-adversarial.md's own two timeout
+// rows, the destroy-specific counterpart to scriptApplyTimeoutButLanded.
+func (f *fakeApplier) scriptDestroyOutcome(id string, err error, destroyLanded bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts[id] = append(f.scripts[id], applyStep{err: err, destroyLanded: destroyLanded})
 }
 
 func (f *fakeApplier) scriptApplyError(id string, err error) {
@@ -298,6 +347,70 @@ func acceptChange(t *testing.T, l *core.Ledger, stack string, creates []json.Raw
 		t.Fatalf("accept change: %v", err)
 	}
 	return accepted
+}
+
+// destroyTargetInput builds the resolution.inputs["destroy_target"] entry
+// core.Validate requires for every delta.destroys entry (docs/schema.md's
+// "Amendment: destroys") -- observed_hash of state, and the same lookup
+// convention lookupJSON/fakeState already establish for every other
+// fixture in this file.
+func destroyTargetInput(t *testing.T, addr core.Address, state json.RawMessage) core.ResolutionInput {
+	t.Helper()
+	hash, err := core.ObservedHash(state)
+	if err != nil {
+		t.Fatalf("destroy target input: %v", err)
+	}
+	return core.ResolutionInput{Kind: "destroy_target", Resource: addr.String(), ObservedHash: hash, Lookup: lookupJSON(addr)}
+}
+
+// acceptDestroy builds and accepts a kind:"change" proposal directly from
+// already-built delta.destroys entries and their own resolution.inputs
+// evidence -- the destroy-specific counterpart to acceptChange, hand-built
+// rather than actually resolved (core/executor stays independently
+// testable from core/resolver, the same posture acceptRevert/acceptChange
+// already take).
+func acceptDestroy(t *testing.T, l *core.Ledger, stack string, destroys []core.DestroyEntry, inputs []core.ResolutionInput) *core.Proposal {
+	t.Helper()
+	head, err := l.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	p := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         stack,
+		Parent:        head,
+		Kind:          core.KindChange,
+		Intent:        core.Intent{Summary: "test destroy"},
+		Delta:         core.Delta{Destroys: destroys},
+		Resolution:    core.Resolution{ResolvedAt: time.Now().UTC().Format(time.RFC3339), Inputs: inputs},
+		CostDelta:     core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},
+		BlastRadius:   core.BlastRadius{Destroys: int64(len(destroys))},
+		Status:        core.StatusDraft,
+	}
+	accepted, err := core.Accept(l, p)
+	if err != nil {
+		t.Fatalf("accept destroy: %v", err)
+	}
+	return accepted
+}
+
+// singleResourceDestroy is the common one-resource destroy fixture:
+// adopted at "v1" (real state, via the real scan/accept pipeline like
+// every other fixture here), then a kind:"change" proposal destroying it
+// accepted on top.
+func singleResourceDestroy(t *testing.T) (l *core.Ledger, fake *fakeApplier, addr core.Address, p *core.Proposal) {
+	t.Helper()
+	l = core.Open(t.TempDir())
+	fake = newFakeApplier()
+	addr = core.Address{Stack: "payments", Type: "fake_widget", Name: "old-widget"}
+	adoptFake(t, l, fake, addr, "v1")
+	state, _, err := l.FoldState(addr)
+	if err != nil {
+		t.Fatalf("fold state: %v", err)
+	}
+	entry := core.DestroyEntry{Address: addr, State: state}
+	p = acceptDestroy(t, l, "payments", []core.DestroyEntry{entry}, []core.ResolutionInput{destroyTargetInput(t, addr, state)})
+	return l, fake, addr, p
 }
 
 // singleResourceRevert is the common one-resource fixture: adopted at

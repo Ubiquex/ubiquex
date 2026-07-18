@@ -31,6 +31,7 @@ func newAcceptCmd() *cobra.Command {
 		repoDir                 string
 		proposalFile            string
 		githubRepo              string
+		confirmDestroys         bool
 	)
 
 	cmd := &cobra.Command{
@@ -67,7 +68,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo)
+				return acceptFromMerge(cmd, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -81,6 +82,16 @@ func newAcceptCmd() *cobra.Command {
 			var p core.Proposal
 			if err := json.Unmarshal(data, &p); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("parse proposal: %w", err)}
+			}
+
+			// docs/schema.md's "Amendment: destroys" -- this project's first
+			// hardcoded acceptance-time friction invariant, checked as early
+			// as possible (before any reverify round trip or pin
+			// re-verification work): a human must explicitly acknowledge a
+			// destructive proposal by name, every time, not just once
+			// implicitly by running `ubx accept` at all.
+			if err := checkDestroysConfirmed(&p, confirmDestroys); err != nil {
+				return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 			}
 
 			ledger := core.Open(ledgerDir)
@@ -147,7 +158,32 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --from-merge's commit history against")
 	cmd.Flags().StringVar(&proposalFile, "proposal-file", "", "path, within the repo, to the proposal file the merge commit carries (required with --from-merge)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (required with --from-merge)")
+	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required to accept any proposal with blast_radius.destroys > 0 -- this project's first hardcoded acceptance-time friction invariant (docs/schema.md)")
 	return cmd
+}
+
+// ErrDestroysNotConfirmed means a proposal with blast_radius.destroys > 0
+// was accepted without --confirm-destroys -- docs/schema.md's "Amendment:
+// destroys," this project's first hardcoded acceptance-time friction
+// invariant, distinct in kind from every other check accept makes (which
+// are all either structural validation or freshness/staleness detection
+// the system verifies for itself, not something asking a human to
+// affirmatively acknowledge). The proposal is already fully valid,
+// orphan-checked, and fresh by the time this gate is reached -- its only
+// job is making sure a human actually meant to accept something with
+// teeth, not catching a mistake in the proposal itself.
+var ErrDestroysNotConfirmed = errors.New("this proposal has blast_radius.destroys > 0 -- pass --confirm-destroys to accept it")
+
+// checkDestroysConfirmed enforces ErrDestroysNotConfirmed for both accept
+// paths (local file and --from-merge) -- checked as early as possible in
+// each, before any reverify round trip or cross-stack pin re-verification
+// work, since there is no point spending that effort on a proposal this
+// gate will refuse regardless of what it finds.
+func checkDestroysConfirmed(p *core.Proposal, confirmed bool) error {
+	if p.BlastRadius.Destroys > 0 && !confirmed {
+		return ErrDestroysNotConfirmed
+	}
+	return nil
 }
 
 // acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier: derive
@@ -155,7 +191,7 @@ func newAcceptCmd() *cobra.Command {
 // file or the caller's own say-so (see docs/architecture.md's Decision
 // loop section, and core.AcceptFromMerge's doc comment for what's
 // actually enforced).
-func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string) error {
+func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string, confirmDestroys bool) error {
 	if proposalFile == "" || githubRepo == "" {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file and --github-repo")}
 	}
@@ -182,6 +218,13 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 	var p core.Proposal
 	if err := json.Unmarshal(derived.ProposalFileContent, &p); err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: parse proposal at %s:%s: %w", mergeSHA, proposalFile, err)}
+	}
+
+	// Same friction as the local-file path (see its own comment) -- a
+	// PR-merge-derived acceptance is no less real an acceptance than a
+	// local one, so it needs the same explicit human acknowledgment.
+	if err := checkDestroysConfirmed(&p, confirmDestroys); err != nil {
+		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
 	// Same unconditional re-verification as the local-file path (see its
@@ -214,10 +257,15 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 // moved, or the claimed acceptance doesn't check out since this proposal
 // was resolved" -- an actionable finding (exit 1), matching the "stale
 // block"/"proposal rejected" examples in docs/architecture.md's Hardening
-// pass section. Anything else (a malformed proposal, a double-accept
-// attempt, ledger I/O) is a genuine error (exit 2).
+// pass section. ErrDestroysNotConfirmed (UBI-30) joins the same tier for a
+// different reason -- not staleness, but a human needing to explicitly
+// acknowledge a destructive proposal before it's accepted -- still exactly
+// as actionable (add --confirm-destroys and re-run) as any of the above.
+// Anything else (a malformed proposal, a double-accept attempt, ledger
+// I/O) is a genuine error (exit 2).
 func acceptErrorCode(err error) int {
-	if errors.Is(err, core.ErrStaleObservation) || errors.Is(err, core.ErrParentMismatch) || errors.Is(err, core.ErrTrailerHashMismatch) || errors.Is(err, resolver.ErrCrossStackPinStale) {
+	if errors.Is(err, core.ErrStaleObservation) || errors.Is(err, core.ErrParentMismatch) || errors.Is(err, core.ErrTrailerHashMismatch) ||
+		errors.Is(err, resolver.ErrCrossStackPinStale) || errors.Is(err, ErrDestroysNotConfirmed) {
 		return 1
 	}
 	return 2

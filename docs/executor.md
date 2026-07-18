@@ -685,7 +685,48 @@ apply record's own transitions are the only thing that changes and a scan
 never reads mid-write apply-record content (`.apply.json` files mid-attempt
 have no sealed `id` yet, docs/schema.md's own "Sealed vs. live" section — a
 reader either sees the last *sealed* apply record or none, never a
-half-written one).
+half-written one). One honest caveat on this section's own "post-tombstone
+`FoldState` fold" phrase, found while actually implementing (session 3):
+`FoldState`'s own tombstone-folding (docs/schema.md's "Amendment:
+destroys" — a fully-destroyed address folds back to absent) is **not yet
+built** — this session shipped `core/executor`'s own destroy execution,
+not that follow-on `core` change. A concurrent scan racing a real destroy
+today still observes the resource "present" via `FoldState` even after a
+successful destroy ships, until that separate change lands; the apply
+record's own transitions (what this section's own "no torn read" claim
+actually rests on) are unaffected by this gap and remain correct regardless.
+
+**Two things found while actually implementing this (`core/executor`,
+UBI-30 session 3), not assumed correct from the design above alone:**
+
+- **The combined topo-walk's own dependency-satisfied check
+  (`shipChange`'s `resultsByAddr` map) originally required a non-empty
+  `ProviderResult` to consider a dependency "done" — which a destroy can
+  never have** (there is nothing left to store once a resource is gone,
+  by design). This silently left anything `depends_on`-ing a destroyed
+  resource wrongly blocked forever on every subsequent `ubx ship` re-run
+  (found by this session's own "re-ship after partial destroy" hermetic
+  test, not assumed safe). Fixed to gate purely on the resource's own
+  terminal `applied` state, the same signal the rest of the state machine
+  already treats as authoritative — `ProviderResult` being empty is now
+  simply carried through as-is (nil for a destroy, real bytes for a
+  create/modify), never used as a proxy for "did this complete."
+- **`fakeApplier` (`core/executor/ship_test.go`) and the real subprocess
+  fixture (`provider/internal/fakeprovider`) both needed genuine new
+  mechanics, not just a new script value**: a destroy is identified by
+  `PlannedState` decoding to a real null value (never an "id" to key
+  scripted behavior off, the way every other apply step already does),
+  and — unlike every other apply step this fixture models — correctly
+  answering "is this resource still there" *after* a destroy requires the
+  fixture to remember what it did across the precheck → apply →
+  (maybe) reconcile sequence, something no other scripted behavior here
+  ever needed (every other case is a pure function of whatever the caller
+  supplies on each call). `fakeApplier` already had a natural home for
+  this (its own in-memory `resources` map, keyed by id, already mutated on
+  apply); the real subprocess fixture gained its first piece of
+  cross-call, process-lifetime state for the same reason
+  (`destroyedIDs`), never previously needed since every other fixture
+  behavior here is stateless by design.
 
 ## Out of scope for v1, named so it isn't assumed covered
 
@@ -708,6 +749,14 @@ half-written one).
 - ~~`delta.destroys`, for a `change` proposal or any other kind — no kind
   this codebase produces today carries a real destroy, and shipping one
   needs its own adversarial thinking (docs/resolver.md's own Scope
-  section).~~ — **designed, UBI-30** (see "Amendment (2026-07-17, UBI-30):
-  shipping destroys," above); execution code is still session 2+ work of
-  that ticket, not built in the session that wrote the design.
+  section).~~ — **fixed, UBI-30 session 3**: `shipDestroyNode`/
+  `reconcileDestroyLoop` (see "Amendment (2026-07-17, UBI-30): shipping
+  destroys," above), all eleven docs/destroys-adversarial.md rows green
+  hermetically. Real remaining gaps, named rather than silently closed:
+  `core.Ledger.FoldState`'s own tombstone-folding (docs/schema.md's
+  amendment) is not yet built, so a destroyed address still reads as
+  "present" via `FoldState` until that separate `core` change lands; `ubx
+  why`'s own rendering of `destroyed` vs. `already_absent` is presentation-layer
+  work for a future session (the ledger already records the distinction
+  correctly, `--json` shows it today); the live full-lifecycle finale on
+  real AWS is unstarted.

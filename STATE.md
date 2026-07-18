@@ -4,7 +4,167 @@
 
 ## Current phase
 
-**UBI-30 session 2 is done (this session): `core/resolver` destroy
+**UBI-30 session 3 is done (this session): `core/executor` destroy
+support — real code, hermetic, all eleven docs/destroys-adversarial.md
+rows green.** Session 1 was docs-only; session 2 (previous) built resolver
+destroy support. This session builds the executor half — the reversed
+combined topo-walk, the destroy branch of the state machine, fakeprovider
+fault injection, and `--confirm-destroys` accept-time friction — per
+docs/executor.md's own "Amendment (UBI-30): shipping destroys" and
+docs/destroys-adversarial.md's required-outcome table. Still queued: a
+live full-lifecycle finale on real AWS, `core.Ledger.FoldState`'s own
+tombstone-folding, and `ubx why`'s destroyed/already_absent rendering (two
+real, named, deliberately-deferred gaps — see below).
+
+**What landed, precisely.** `core/executor/ship.go`: `changeNode` gained a
+`destroy *core.DestroyEntry` field; `changeNodesOf` now decodes
+`Delta.Destroys` into the exact same `byAddr` map creates/modifies already
+share, keyed by the same `depends_on` field, walked by the same single
+`topoSortAddresses` call — "creates forward, destroys reversed,
+interleaved with modifies" is what one combined topo-sort over one graph
+produces for free, since a destroy's own `depends_on` (docs/resolver.md's
+own orphan-protection walk, session 2) carries the *reverse* edge set
+rather than the forward one. No second walk, no new graph mechanism.
+
+New `shipDestroyNode` (dispatched from `shipChange`'s main loop alongside
+`shipCreate`/`shipModifyNode`): a three-way freshness precheck before
+every attempt — present-and-matching (`ObservedHash` re-verified against
+the destroy target's own recorded hash) proceeds to `in_flight`;
+present-but-drifted refuses with a terminal error, never reaching
+`in_flight` (destroying state the operator never reviewed defeats the
+whole reason `delta.destroys[].state` is carried inline); already-absent
+(`core.ErrResourceUnreadable` from the freshness read) short-circuits
+straight to a terminal `applied` success, `Reconciliation: [{"already_absent"}]`,
+never calling `ApplyResourceChange` at all. Wire mechanics: `PriorState`
+the freshly re-read live state, `PlannedState` the literal JSON `"null"` —
+checked directly, not assumed: this needed **zero changes** to `provider`
+or `cli/stateadapter.go` at all, since `PlannedState`'s literal-null
+convention was already established for a genuine create's `PriorState`
+(UBI-27), `encodeUnknownAwareDynamicValue` already treats a present null
+as null (not unknown), and `stateReaderAdapter`'s own `Config==PlannedState`
+convention already carries the null through to `Config` too, matching the
+real tfplugin destroy signal exactly.
+
+New `reconcileDestroyLoop`: after an ambiguous `ApplyResourceChange`
+result, reconciles by re-reading the target, distinguishing `destroyed`
+from `already_absent`/`failed`/`still_unknown` per docs/executor.md's own
+amendment — a not-found read resolves `destroyed` *only* when the
+immediately preceding observation confirmed `present_matches`; a
+successful read (still there) resolves `failed` (presence itself, not a
+specific attribute's old value, is what proves the call never landed).
+"Immediately preceding" spans attempts: `resourceHistory` gained
+`lastReconciliationOutcome`, folded by `foldResourceHistory` across every
+prior attempt's own `Reconciliation` entries in chronological order — so a
+`kill -9` between a destroy landing and its result being recorded still
+resolves `destroyed` correctly on the very next attempt, never falling
+back to `already_absent` just because that specific attempt never ran its
+own precheck.
+
+**A real, load-bearing bug found by this session's own hermetic tests, not
+assumed safe from the design alone**: `shipChange`'s `resultsByAddr`
+map — what the "has this dependency been satisfied yet" gate consults
+before attempting a resource — originally required a non-empty
+`ProviderResult` to consider a dependency "done." A destroy legitimately
+has **no** `ProviderResult` at all (nothing left to store once a resource
+is gone) — so anything `depends_on`-ing a destroyed resource was silently,
+permanently re-blocked on every subsequent `ubx ship` re-run, forever.
+Caught by `TestShipDestroy_ReShipAfterPartialDestroy` (a mixed
+multi-resource destroy proposal, one resource destroyed, the process
+"killed" before the second's turn), not assumed correct from the design
+doc. Fixed to gate purely on the resource's own terminal `applied` state,
+the same signal the rest of the state machine already treats as
+authoritative — `ProviderResult` being empty is now just carried through
+as-is (nil for a destroy, real bytes for a create/modify), never used as a
+proxy for "did this complete."
+
+**Hermetic coverage** (`core/executor/destroys_test.go`, new; all eleven
+docs/destroys-adversarial.md rows accounted for): `TestShipDestroy_CleanApply`
+(the happy path, `Reconciliation: [present_matches, destroyed]`);
+`TestShipDestroy_TargetDriftedSinceAcceptance_Refused` (row 1);
+`TestShipDestroy_KillBeforeCall_NeverLanded_RetriedNormally` (row 2, a
+hand-built partial apply record, the same "simulate a crash by writing
+exactly what one leaves behind" convention `TestShip_CrashBetweenInFlightWriteAndCall...`
+already established);
+`TestShipDestroy_KillAfterCall_AlreadyLanded_ResolvesDestroyed` (row 3);
+`TestShipDestroy_TimeoutWhereLanded_ResolvesDestroyed`/
+`TestShipDestroy_TimeoutWhereNotLanded_ResolvesFailed` (rows 4-5, via a
+new `fakeApplier.scriptDestroyOutcome`); `TestShipDestroy_AlreadyAbsent_ResolvesWithoutInFlight`
+(row 6); row 7 (orphan-protection refusal) already covered at the resolver
+layer (session 2) — nothing new to test at ship time, since an orphaned
+destroy is refused before a proposal even exists;
+`TestShipDestroy_MixedProposal_ReversedOrder` (row 8, proving the combined
+topo-walk directly: `create(new) → modify(dependent) → destroy(original)`,
+never three separate phases); row 9 (destroy racing a concurrent scan)
+needs no new mechanism per docs/executor.md's own reasoning (scan/status
+never take the ledger lock; apply records are never read mid-write) — not
+given its own dedicated test; `TestShipDestroy_ReShipAfterPartialDestroy`
+(row 10, and the bug-find above); row 11 (`ubx why` rendering) is
+presentation-layer work, deliberately deferred (see below). Full repo `go
+build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions anywhere.
+
+**Fixtures needed genuine new mechanics, not just new script values**:
+`core/executor/ship_test.go`'s `fakeApplier.ApplyResourceChange` now
+detects a destroy by `PlannedState` decoding to literal `"null"` (no `id`
+to key scripted behavior off, unlike every other apply step), extracting
+the target's `id` from `PriorState` instead; new `deleteState`/
+`scriptDestroyOutcome` helpers. `provider/internal/fakeprovider` (the real
+subprocess, used for CLI-level transcripts) gained the same destroy
+detection plus its **first piece of cross-call, process-lifetime state**
+(`destroyedIDs`, package-level, mutex-guarded) — every other behavior this
+fixture models is a pure function of whatever the caller supplies per
+call, but confirming absence *after* a destroy genuinely requires the
+fixture to remember what it did across the precheck → apply → (maybe)
+reconcile sequence within one `ubx ship` invocation.
+
+**CLI surface**: `ubx accept` gained `--confirm-destroys` (both
+acceptance tiers, local file and `--from-merge`) — a new
+`ErrDestroysNotConfirmed` sentinel, checked as early as possible (before
+any reverify round trip or cross-stack pin work), classified exit `1` in
+`acceptErrorCode` — the same tier as a blocked reverify or a stale
+cross-stack pin. `ubx ship` itself needed no changes at all — already
+fully generic over proposal kind and node type.
+
+**Verified against the real subprocess fakeprovider too, not just the
+in-process hermetic `fakeApplier`**: a real `ubx scan`→`accept`(adoption)→
+`ubx resolve`(destroy)→`ubx accept --confirm-destroys`→`ubx ship` chain,
+end to end, against the actual built binary — clean `applied` outcome,
+`--json` showing exactly `[present_matches, destroyed]`, confirmed
+idempotent on re-run (`already fully applied`). This is separate from (and
+came after) the hermetic suite catching the `resultsByAddr` bug above; the
+real-binary run confirmed the fix holds end to end too, and produced every
+transcript now in ubiquex-docs.
+
+**Two real, named gaps deliberately not closed this session, not silently
+skipped**: `core.Ledger.FoldState`'s own tombstone-folding
+(docs/schema.md's "Amendment: destroys" — a fully-destroyed address should
+fold back to absent) is **not yet built** — a destroyed address still
+reads "present" via `FoldState` until that separate `core` change lands,
+meaning re-creating a resource under the same address, or a concurrent
+scan's own "is this gone" classification, doesn't yet reflect a real
+destroy. `ubx why`'s own rendering of `destroyed` vs. `already_absent` is
+presentation-layer work for a future session — the ledger already records
+the distinction correctly (confirmed via `--json` above), only the
+human-output rendering doesn't surface it yet. Both named explicitly in
+docs/executor.md's own session-3 addendum, not left as an implicit todo.
+
+docs/executor.md gained a session-3 addendum recording the `resultsByAddr`
+bug/fix, the fixture-mechanics finding, and both deferred gaps above; its
+"Out of scope" bullet for destroys is now struck through and marked fixed.
+docs/plan.md gained a session-3 paragraph under §Destroys v1 (UBI-30) and
+a changelog entry. ubiquex-docs gained: `cli/accept.mdx`'s new "Confirming
+a destroy" section (real refused/accepted transcripts); `cli/ship.mdx`'s
+new "Shipping a destroy" section (the real end-to-end chain above, plus
+the `--json` reconciliation pair); `cli/exit-codes.mdx`'s `ubx accept`
+row gained the new exit-1 cause (and, while touched, a stale `ubx ship`
+row was corrected to include `change` alongside `drift_revert` — a
+lingering UBI-27 docs-debt item, not this session's own gap, fixed
+opportunistically since the file was already open). `mint validate`/`mint
+broken-links` both pass. Committed and pushed to `ubiquex-docs`.
+
+## Current phase (previous)
+
+**UBI-30 session 2 is done: `core/resolver` destroy
 support — real code, hermetic, orphan protection tested.** Session 1
 (previous) was docs-only; this session builds the resolver half of the
 design it landed, per docs/plan.md's own sessioning

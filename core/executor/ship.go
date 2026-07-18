@@ -150,9 +150,10 @@ func parseDebugDelay(envVar string) time.Duration {
 }
 
 // Ship executes an accepted proposal -- drift_revert's delta.modifies, or
-// (UBI-27) a change proposal's delta.creates + delta.modifies together --
-// dispatching to the shape-appropriate implementation. See docs/executor.md
-// for the full state machine both share.
+// (UBI-27, extended UBI-30) a change proposal's delta.creates,
+// delta.modifies, and delta.destroys together -- dispatching to the
+// shape-appropriate implementation. See docs/executor.md for the full
+// state machine both share.
 func Ship(ctx context.Context, l *core.Ledger, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal) (*core.ApplyRecord, error) {
 	switch p.Kind {
 	case core.KindDriftRevert:
@@ -567,6 +568,20 @@ type resourceHistory struct {
 	hasState           bool
 	attemptsInFlight   int             // number of historical attempts that actually issued an ApplyResourceChange call for this address
 	lastProviderResult json.RawMessage // most recent non-empty ProviderResult ever recorded for this address, across all attempts (UBI-27: a killed-and-restarted ship recovers a dependency's real output from here, not just from what the current invocation itself computed)
+
+	// lastReconciliationOutcome is the most recent Reconciliation[].Outcome
+	// ever recorded for this address, across all attempts (UBI-30,
+	// docs/executor.md's "shipping destroys" amendment) -- a destroy's own
+	// disambiguator: a post-timeout not-found read resolves "destroyed"
+	// only when this was "present_matches" immediately beforehand, folded
+	// across the parent attempt chain so a kill -9 between the destroy
+	// landing and its result being recorded still resolves correctly on
+	// the next attempt, never falling back to treating a bare not-found as
+	// fresh "already_absent" just because THIS attempt never ran its own
+	// pre-check. Meaningless for a create/modify address (its own
+	// Reconciliation Outcomes are "applied"/"failed"/"inconclusive"); only
+	// shipDestroyNode ever reads this field.
+	lastReconciliationOutcome string
 }
 
 // foldResourceHistory folds addr's own ProviderResult forward as
@@ -591,6 +606,9 @@ func foldResourceHistory(attempts []*core.ApplyRecord, addr core.Address) resour
 			}
 			if len(ra.ProviderResult) > 0 {
 				h.lastProviderResult = ra.ProviderResult
+			}
+			for _, rec := range ra.Reconciliation {
+				h.lastReconciliationOutcome = rec.Outcome // last one wins -- attempts and each one's own Reconciliation slice are both walked in chronological order
 			}
 			for _, t := range ra.Transitions {
 				if t.State == core.ResourceInFlight {
@@ -673,30 +691,42 @@ type createNode struct {
 	DependsOn []string        `json:"depends_on,omitempty"`
 }
 
-// changeNode is one delta.creates or delta.modifies entry of a
-// kind:"change" proposal, prepared for shipChange's own combined,
-// dependency-ordered walk. Exactly one of create/modify is non-nil.
+// changeNode is one delta.creates, delta.modifies, or (UBI-30)
+// delta.destroys entry of a kind:"change" proposal, prepared for
+// shipChange's own combined, dependency-ordered walk. Exactly one of
+// create/modify/destroy is non-nil.
 type changeNode struct {
 	addr      core.Address
 	dependsOn []string
 	create    *createNode
 	modify    *core.Modification
+	destroy   *core.DestroyEntry
 }
 
-// changeNodesOf decodes p's own delta.creates/.modifies into one combined,
-// dependency-ordered walk list -- re-deriving the execution order from
-// each entry's own depends_on field (Address.String() form) rather than
-// trusting stored array order, generalizing "ubx ship independently
-// applies its own sort" (docs/executor.md's "Serial execution in delta
-// order," written for drift_revert's fixed canonical sort) to a real
-// dependency graph, since a change proposal's resources can genuinely
-// depend on each other. Root-visit order among resources with no
-// dependency relation to each other is their own addresses' alphabetical
-// order -- deterministic and reproducible across runs, the same tie-break
-// convention sortedModifies already uses.
+// changeNodesOf decodes p's own delta.creates/.modifies/.destroys into one
+// combined, dependency-ordered walk list -- re-deriving the execution
+// order from each entry's own depends_on field (Address.String() form)
+// rather than trusting stored array order, generalizing "ubx ship
+// independently applies its own sort" (docs/executor.md's "Serial
+// execution in delta order," written for drift_revert's fixed canonical
+// sort) to a real dependency graph, since a change proposal's resources
+// can genuinely depend on each other. Root-visit order among resources
+// with no dependency relation to each other is their own addresses'
+// alphabetical order -- deterministic and reproducible across runs, the
+// same tie-break convention sortedModifies already uses.
+//
+// "Creates forward, destroys reversed" (docs/executor.md's "Amendment
+// (UBI-30): shipping destroys") is not a second walk -- delta.destroys
+// entries extend this exact same byAddr map, keyed by their own
+// depends_on, which docs/resolver.md's own orphan-protection walk
+// populates with the REVERSE edge set (which surviving/same-batch
+// resources this destroy must wait for) rather than the forward set a
+// create/modify's own depends_on carries. One topoSortAddresses call over
+// the combined graph is what makes the interleaving correct.
 func changeNodesOf(p *core.Proposal) ([]*changeNode, error) {
-	byAddr := make(map[string]*changeNode, len(p.Delta.Creates)+len(p.Delta.Modifies))
-	keys := make([]string, 0, len(p.Delta.Creates)+len(p.Delta.Modifies))
+	total := len(p.Delta.Creates) + len(p.Delta.Modifies) + len(p.Delta.Destroys)
+	byAddr := make(map[string]*changeNode, total)
+	keys := make([]string, 0, total)
 
 	for _, raw := range p.Delta.Creates {
 		var cn createNode
@@ -712,6 +742,12 @@ func changeNodesOf(p *core.Proposal) ([]*changeNode, error) {
 		m := &p.Delta.Modifies[i]
 		key := m.Target.String()
 		byAddr[key] = &changeNode{addr: m.Target, dependsOn: m.DependsOn, modify: m}
+		keys = append(keys, key)
+	}
+	for i := range p.Delta.Destroys {
+		d := &p.Delta.Destroys[i]
+		key := d.Address.String()
+		byAddr[key] = &changeNode{addr: d.Address, dependsOn: d.DependsOn, destroy: d}
 		keys = append(keys, key)
 	}
 
@@ -898,16 +934,21 @@ func splitComputedFrom(s string) (addr, path string, err error) {
 	return strings.Join(parts[:3], "."), parts[3], nil
 }
 
-// shipChange executes an accepted kind:"change" proposal's delta.creates
-// and delta.modifies together, in real dependency order (changeNodesOf's
-// own topo-sort) -- docs/executor.md's UBI-27 amendment. A resource whose
-// own depends_on names another resource in this same proposal is never
-// attempted until that dependency has reached applied -- checked against
-// both this invocation's own progress and every prior attempt's durably
-// recorded result, so a `ubx ship` killed between one resource applying
-// and the next starting recovers the completed one's REAL output on
-// re-run (foldResourceHistory's own lastProviderResult), rather than
-// re-creating it or losing the value a dependent needs.
+// shipChange executes an accepted kind:"change" proposal's delta.creates,
+// delta.modifies, and (UBI-30) delta.destroys together, in real dependency
+// order (changeNodesOf's own topo-sort) -- docs/executor.md's UBI-27
+// amendment, extended by its own "Amendment (UBI-30): shipping destroys."
+// A resource whose own depends_on names another resource in this same
+// proposal is never attempted until that dependency has reached applied
+// -- checked against both this invocation's own progress and every prior
+// attempt's durably recorded result, so a `ubx ship` killed between one
+// resource applying and the next starting recovers the completed one's
+// REAL output on re-run (foldResourceHistory's own lastProviderResult),
+// rather than re-creating it or losing the value a dependent needs. This
+// is what makes "creates forward, destroys reversed" one interleaved walk
+// rather than two: a destroy's own depends_on (docs/resolver.md's
+// orphan-protection walk, the reverse edge set) is followed by exactly
+// the same precondition check as a create's or modify's forward one.
 //
 // Unlike shipDriftRevert's single "halted" flag (one stale resource blocks
 // every resource after it in a fixed canonical order), a blocked resource
@@ -956,11 +997,19 @@ func shipChange(ctx context.Context, l *core.Ledger, app Applier, providerSource
 	// attempt's own pass-through confirmation never re-records
 	// ProviderResult (see foldResourceHistory's own comment), so this must
 	// come from history, not from this invocation's own (so far empty)
-	// progress.
+	// progress. Gated on hist.lastState alone, not on lastProviderResult
+	// being non-empty (UBI-30 fix): a destroy has no ProviderResult at
+	// all, by design (nothing to store once a resource is gone), but its
+	// completion must still satisfy anything depends_on-ing it (a same-batch
+	// mutual destroy, or a destroy of a destroy's own dependent's dependent)
+	// the exact same way a create/modify's completion does. Missing this
+	// case wrongly re-blocked a fully-destroyed dependency forever on
+	// every subsequent `ubx ship` re-run -- found by this session's own
+	// hermetic "re-ship after partial destroy" test, not assumed correct.
 	resultsByAddr := make(map[string]json.RawMessage, len(nodes))
 	for _, n := range nodes {
 		hist := foldResourceHistory(attempts, n.addr)
-		if hist.hasState && hist.lastState == core.ResourceApplied && len(hist.lastProviderResult) > 0 {
+		if hist.hasState && hist.lastState == core.ResourceApplied {
 			resultsByAddr[n.addr.String()] = hist.lastProviderResult
 		}
 	}
@@ -1000,9 +1049,12 @@ func shipChange(ctx context.Context, l *core.Ledger, app Applier, providerSource
 		}
 
 		var stepErr error
-		if n.create != nil {
+		switch {
+		case n.create != nil:
 			stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
-		} else {
+		case n.destroy != nil:
+			stepErr = shipDestroyNode(ctx, app, providerSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+		default:
 			stepErr = shipModifyNode(ctx, app, providerSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		}
 		if stepErr != nil {
@@ -1265,6 +1317,215 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 	outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, ra)
 	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
 	return persist()
+}
+
+// shipDestroyNode ships one delta.destroys entry within a change proposal
+// -- docs/executor.md's "Amendment (UBI-30): shipping destroys." Three
+// things distinguish this from shipCreate/shipModifyNode, all reused
+// mechanisms extended rather than new ones invented:
+//
+//  1. A three-way freshness precheck, not binary: present-and-matching
+//     (proceed), present-but-drifted (refuse -- the operator never
+//     reviewed this exact state), or already-absent (short-circuit
+//     straight to a terminal success, never reaching in_flight, never
+//     calling ApplyResourceChange at all). Recorded as a Reconciliation
+//     entry (docs/schema.md's "Reconciliation, reused" section) one step
+//     earlier than Reconciliation's only prior use (post-timeout).
+//  2. Wire mechanics: PriorState is the freshly re-read live state (never
+//     the resolve-time delta.destroys[].state snapshot directly, which
+//     may be stale by ship time); PlannedState is the literal JSON "null"
+//     -- the real tfplugin convention for "destroy this," which
+//     cli/stateadapter.go's own Config==PlannedState convention already
+//     carries through with zero changes needed there.
+//  3. A post-timeout reconcile-by-query must distinguish "destroyed" from
+//     "already_absent" -- a bare not-found read is ambiguous in isolation,
+//     disambiguated by whether the immediately preceding observation
+//     (this attempt's own precheck, or a prior attempt's, folded via
+//     hist.lastReconciliationOutcome) confirmed the target was present and
+//     matching. See reconcileDestroyLoop.
+func shipDestroyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, entry core.DestroyEntry, ra *core.ResourceApply, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
+	lookup, expectedHash, haveTarget := destroyTargetFor(p, entry.Address)
+
+	// Reconcile first if the last thing we know about this resource is
+	// unresolved (in_flight/unknown_post_timeout/still_unknown from a
+	// prior, possibly-crashed attempt) -- the same idempotency contract
+	// creates/modifies already use: never a blind re-attempt on top of an
+	// unresolved unknown. A destroy that reached in_flight in a prior
+	// attempt skips straight here, never re-running its own precheck --
+	// hist.lastReconciliationOutcome (folded across that prior attempt)
+	// is what still lets reconcileDestroyLoop disambiguate correctly.
+	if hist.hasState && needsReconciliation(hist.lastState) {
+		recordTransition(ra, core.ResourcePending, "")
+		if !haveTarget {
+			recordError(ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
+			*resourcesFailed++
+			return persist()
+		}
+		priorPresentMatches := hist.lastReconciliationOutcome == "present_matches"
+		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, priorPresentMatches, ra)
+		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
+		return persist()
+	}
+
+	recordTransition(ra, core.ResourcePending, "")
+
+	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
+		recordError(ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	if !haveTarget {
+		recordError(ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+
+	observed, hash, readErr := core.ReadAndFingerprint(ctx, app, entry.Address, providerSource, providerConfig, lookup)
+	at := nowRFC3339()
+	switch {
+	case readErr != nil && errors.Is(readErr, core.ErrResourceUnreadable):
+		// Already absent -- a legitimate, low-friction terminal success,
+		// never a refusal: there is nothing left to lose that the operator
+		// didn't already implicitly ask to lose. Never reaches in_flight,
+		// never calls ApplyResourceChange.
+		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "already_absent"})
+		recordTransition(ra, core.ResourceApplied, "already absent before this attempt")
+		*resourcesApplied++
+		return persist()
+	case readErr != nil:
+		recordError(ra, fmt.Sprintf("freshness recheck: %v", readErr), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	case hash != expectedHash:
+		// Present, but drifted from what was signed away -- refused,
+		// exactly like "Stale detected mid-partial-apply," generalized:
+		// destroying state the operator never actually reviewed defeats
+		// the whole reason delta.destroys[].state is carried inline in the
+		// proposal at all.
+		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_drifted"})
+		recordError(ra, "destroy target drifted since it was signed away -- refusing to destroy state that was never reviewed", core.ErrorTerminal)
+		*resourcesFailed++
+		return persist()
+	}
+	ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_matches"})
+
+	_, resourceSchemas, err := app.Schema(ctx)
+	if err != nil {
+		recordError(ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		*resourcesFailed++
+		return persist()
+	}
+
+	// THE invariant (docs/executor.md): in_flight is durably persisted
+	// before the risky ApplyResourceChange call, never after.
+	recordTransition(ra, core.ResourceInFlight, "")
+	if err := persist(); err != nil {
+		return fmt.Errorf("ship: persist in_flight: %w", err)
+	}
+	if debugDelayAfterInFlight > 0 {
+		time.Sleep(debugDelayAfterInFlight)
+	}
+
+	// PlannedState (and, per cli/stateadapter.go's own Config==PlannedState
+	// convention, Config too) is the literal JSON "null" -- the real
+	// tfplugin signal for "destroy this," PriorState non-null (docs/executor.md's
+	// own amendment). No separate PlanResourceChange call, the same
+	// v1-wide shortcut every other kind already takes.
+	_, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"))
+
+	if applyErr == nil {
+		if debugDelayAfterApplySuccess > 0 {
+			time.Sleep(debugDelayAfterApplySuccess)
+		}
+		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "destroyed"})
+		recordTransition(ra, core.ResourceApplied, "")
+		*resourcesApplied++
+		return persist()
+	}
+
+	var terminal *TerminalError
+	if errors.As(applyErr, &terminal) {
+		recordError(ra, terminal.Error(), core.ErrorTerminal)
+		recordTransition(ra, core.ResourceFailed, "")
+		*resourcesFailed++
+		return persist()
+	}
+
+	// Retryable/ambiguous: the RPC didn't resolve into a clear answer.
+	recordError(ra, applyErr.Error(), core.ErrorRetryable)
+	recordTransition(ra, core.ResourceUnknownPostTimeout, "")
+	if err := persist(); err != nil {
+		return err
+	}
+	outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, ra)
+	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
+	return persist()
+}
+
+// reconcileDestroyLoop repeatedly reads addr's live state (reconcile-by-query)
+// after a destroy attempt's own result was ambiguous, up to
+// maxReconcileAttempts times, distinguishing "destroyed" from
+// "already_absent"/"failed" per docs/executor.md's own amendment:
+//
+//   - A not-found read (core.ErrResourceUnreadable) resolves "destroyed"
+//     -- but ONLY when priorPresentMatches is true, i.e. the immediately
+//     preceding observation (this attempt's own precheck, or a prior
+//     attempt's, via hist.lastReconciliationOutcome) confirmed the target
+//     was present and matching before any attempt touched it. A bare
+//     not-found read is otherwise inconclusive, not "already_absent" --
+//     this package has no way to know whether the absence predates this
+//     destroy attempt entirely.
+//   - A successful read (the target is still reachable) resolves "failed"
+//     -- presence itself, not a specific attribute's old value, is what
+//     proves the call never landed (unlike a modify's reconciliation,
+//     which compares specific before/after dot-paths).
+//   - Any other read failure is inconclusive, retried after
+//     reconcileRetryInterval.
+//
+// Exhausting the budget without a conclusive answer resolves
+// still_unknown. Every attempt is appended to ra.Reconciliation; the final
+// transition is always recorded before returning.
+func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches bool, ra *core.ResourceApply) core.ResourceState {
+	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
+		_, _, err := core.ReadAndFingerprint(ctx, app, addr, providerSource, providerConfig, lookup)
+		at := nowRFC3339()
+		switch {
+		case err != nil && errors.Is(err, core.ErrResourceUnreadable):
+			if priorPresentMatches {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "destroyed"})
+				recordTransition(ra, core.ResourceApplied, "confirmed by reconciliation")
+				return core.ResourceApplied
+			}
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+				At: at, Outcome: "inconclusive",
+				Detail: "target unreadable, but no prior confirmed-present observation to attribute it to this attempt",
+			})
+		case err != nil:
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+		default:
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "failed"})
+			recordTransition(ra, core.ResourceFailed, "confirmed by reconciliation: destroy never landed")
+			return core.ResourceFailed
+		}
+		time.Sleep(reconcileRetryInterval)
+	}
+	recordTransition(ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
+	return core.ResourceStillUnknown
+}
+
+// destroyTargetFor looks up entry's own resolution.inputs["destroy_target"]
+// -- the lookup key and observed_hash core.Validate already requires be
+// present for every delta.destroys entry (docs/schema.md's "Amendment:
+// destroys"), never derived at need-time.
+func destroyTargetFor(p *core.Proposal, addr core.Address) (lookup json.RawMessage, observedHash string, ok bool) {
+	target := addr.String()
+	for _, in := range p.Resolution.Inputs {
+		if in.Kind == "destroy_target" && in.Resource == target {
+			return in.Lookup, in.ObservedHash, len(in.Lookup) > 0
+		}
+	}
+	return nil, "", false
 }
 
 func lookupFor(p *core.Proposal, addr core.Address) (json.RawMessage, bool) {

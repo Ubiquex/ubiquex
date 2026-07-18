@@ -30,7 +30,17 @@
 // ApplyResourceChange's behavior:
 //
 //	""/"ok"           echoes planned_state back (same computed-id fill-in as
-//	                  ReadResource), simulating a clean apply
+//	                  ReadResource), simulating a clean apply -- UNLESS
+//	                  planned_state is a genuine null (UBI-30: ubx's own
+//	                  destroy convention), in which case it's a destroy: the
+//	                  id named in prior_state is remembered as destroyed for
+//	                  the rest of this process's lifetime, and a subsequent
+//	                  ReadResource for that same id genuinely reports
+//	                  not-found (no DynamicValue at all), the same shape a
+//	                  real provider returns for a resource that's actually
+//	                  gone. This fixture has no other persistent state at
+//	                  all -- see destroyedIDs' own doc comment for why a
+//	                  destroy specifically needs one.
 //	"diagnostic-error" returns one ERROR-severity Diagnostic and no new_state --
 //	                  the "terminal" half of docs/executor.md's error taxonomy
 //	"hang"            never responds -- the caller's own context deadline is
@@ -65,6 +75,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -204,6 +215,13 @@ func (s *fakeProviderServerV6) ConfigureProvider(context.Context, *tfplugin6.Con
 }
 
 func (s *fakeProviderServerV6) ReadResource(_ context.Context, req *tfplugin6.ReadResource_Request) (*tfplugin6.ReadResource_Response, error) {
+	if id, ok := currentStateID(req.CurrentState.GetMsgpack()); ok && isDestroyed(id) {
+		// A destroy (UBI-30) landed against this id in a prior
+		// ApplyResourceChange call, this same process lifetime -- report
+		// genuinely not-found (no DynamicValue at all), the same shape a
+		// real provider returns for a resource that's actually gone.
+		return &tfplugin6.ReadResource_Response{}, nil
+	}
 	out, err := echoWidgetState(req.CurrentState.GetMsgpack())
 	if err != nil {
 		return nil, err
@@ -224,6 +242,19 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 	case "hang":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
+		// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState
+		// is the literal null ubx's own executor sends for "destroy this."
+		// Marked here, not deleted from any persistent map (this fixture
+		// never had one to begin with -- ubx supplies the same lookup on
+		// every read, never re-derives it) -- ReadResource above is what
+		// actually honors this mark on a subsequent read within the same
+		// process lifetime.
+		if ok {
+			markDestroyed(id)
+		}
+		return &tfplugin6.ApplyResourceChange_Response{}, nil
 	}
 	out, err := echoAppliedState(req.PlannedState.GetMsgpack())
 	if err != nil {
@@ -265,6 +296,9 @@ func (s *fakeProviderServerV5) Configure(context.Context, *tfplugin5.Configure_R
 }
 
 func (s *fakeProviderServerV5) ReadResource(_ context.Context, req *tfplugin5.ReadResource_Request) (*tfplugin5.ReadResource_Response, error) {
+	if id, ok := currentStateID(req.CurrentState.GetMsgpack()); ok && isDestroyed(id) {
+		return &tfplugin5.ReadResource_Response{}, nil
+	}
 	out, err := echoWidgetState(req.CurrentState.GetMsgpack())
 	if err != nil {
 		return nil, err
@@ -285,6 +319,12 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 	case "hang":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
+		if ok {
+			markDestroyed(id)
+		}
+		return &tfplugin5.ApplyResourceChange_Response{}, nil
 	}
 	out, err := echoAppliedState(req.PlannedState.GetMsgpack())
 	if err != nil {
@@ -379,6 +419,64 @@ func decodeWidgetState(msgpackBytes []byte) (map[string]cty.Value, error) {
 		vals["tags"] = cty.MapValEmpty(cty.String)
 	}
 	return vals, nil
+}
+
+// destroyedIDs tracks fake_widget ids ApplyResourceChange has destroyed
+// (UBI-30), this process's own lifetime only -- this fixture is otherwise
+// fully stateless (every ReadResource call is a pure function of whatever
+// current_state ubx itself supplies), but a destroy specifically needs the
+// fixture to remember what it did: ubx's own precheck-then-apply-then-
+// maybe-reconcile sequence, all within one `ubx ship` invocation, sends
+// the exact same lookup on every read and expects a DIFFERENT answer after
+// the destroy lands.
+var (
+	destroyedMu  sync.Mutex
+	destroyedIDs = map[string]bool{}
+)
+
+func markDestroyed(id string) {
+	destroyedMu.Lock()
+	defer destroyedMu.Unlock()
+	destroyedIDs[id] = true
+}
+
+func isDestroyed(id string) bool {
+	destroyedMu.Lock()
+	defer destroyedMu.Unlock()
+	return destroyedIDs[id]
+}
+
+// currentStateID extracts "id" from a ReadResource request's current_state
+// -- best-effort: ok is false for anything that doesn't decode as a
+// fake_widget-shaped value with a known, non-null id (never an error, this
+// is purely an optional destroyed-check, not a real read).
+func currentStateID(msgpackBytes []byte) (id string, ok bool) {
+	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
+	if err != nil || val.IsNull() {
+		return "", false
+	}
+	idVal := val.GetAttr("id")
+	if idVal.IsNull() || !idVal.IsKnown() {
+		return "", false
+	}
+	return idVal.AsString(), true
+}
+
+// destroyRequestID reports whether an ApplyResourceChange request is a
+// destroy (UBI-30: planned_state decodes to a genuine null value, ubx's
+// own shipDestroyNode-constructed PlannedState) and, if so, prior_state's
+// own "id" -- what markDestroyed should remember. isDestroy is true
+// whenever planned_state is null, even if prior_state's own id couldn't be
+// read (ok=false then) -- the caller still must not fall through to
+// echoAppliedState, which requires a non-null planned_state to decode at
+// all.
+func destroyRequestID(priorMsgpackBytes, plannedMsgpackBytes []byte) (id string, ok bool, isDestroy bool) {
+	plannedVal, err := ctymsgpack.Unmarshal(plannedMsgpackBytes, fakeWidgetType)
+	if err != nil || !plannedVal.IsNull() {
+		return "", false, false
+	}
+	id, ok = currentStateID(priorMsgpackBytes)
+	return id, ok, true
 }
 
 // --- conformance mode: a generic, env-var-shaped resource, one per UBI-9

@@ -659,6 +659,37 @@
   broken-links` clean). See §Destroys v1 (UBI-30) above and STATE.md for
   the full session writeup.
 
+- 2026-07-18 — UBI-30 session 3: `core/executor` destroy support, real
+  code, hermetic — all eleven docs/destroys-adversarial.md rows green.
+  `changeNodesOf` extended with a `destroy` node type sharing the exact
+  same combined `topoSortAddresses` walk creates/modifies already use
+  ("reversed ordering" is not a second mechanism); new `shipDestroyNode`
+  (three-way freshness precheck, `ApplyResourceChange` wire mechanics
+  needing zero `provider`/`cli/stateadapter.go` changes at all) and
+  `reconcileDestroyLoop` (the `destroyed`-vs-`already_absent`
+  disambiguation, folded across the `parent` attempt chain via a new
+  `resourceHistory.lastReconciliationOutcome`). A real, load-bearing bug
+  found by this session's own hermetic "re-ship after partial destroy"
+  test: `shipChange`'s `resultsByAddr` dependency-satisfied gate required
+  a non-empty `ProviderResult`, which a destroy can never have — silently
+  re-blocking anything depending on a destroyed resource forever; fixed to
+  gate on terminal `applied` state alone. `fakeApplier` and the real
+  subprocess `provider/internal/fakeprovider` fixture both gained genuine
+  destroy mechanics — the subprocess fixture's first piece of cross-call,
+  process-lifetime state (`destroyedIDs`), since confirming absence after
+  a destroy is the one behavior here that isn't a pure function of what
+  the caller supplies per call. `cli/accept.go` gained `--confirm-destroys`
+  (exit 1, both acceptance tiers). Full repo build/vet/fmt/test clean.
+  Two real, named gaps deliberately not closed this session:
+  `core.Ledger.FoldState`'s own tombstone-folding, and `ubx why`'s
+  destroyed/already_absent rendering (the ledger already records it
+  correctly; only the human-output rendering is deferred).
+  docs/executor.md gained a session-3 addendum; ubiquex-docs'
+  `cli/accept.mdx`/`cli/ship.mdx`/`cli/exit-codes.mdx` updated with real
+  transcripts against the actual built binary (`mint validate`/`mint
+  broken-links` clean). See §Destroys v1 (UBI-30) above and STATE.md for
+  the full session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1361,13 +1392,14 @@ prior amendment.
 
 Filed as its own ticket, **UBI-30**, team `ubiquex` (referenced throughout
 per the handoff's own instruction — no other ID inferred). Session 1 was
-docs-only. Still queued: executor reversed-walk + destroy state machine
-(fakeprovider fault injection per docs/destroys-adversarial.md's own
-table) → accept friction + CLI surface → a live finale on real AWS (create
-a chain, drift it, resolve the drift, destroy it through the signed flow
-with `--confirm-destroys`, `kill -9` mid-destroy, reconcile, verify
-absence via the `aws` CLI independently, `ubx why` reading the complete
-biography from genesis to tombstone).
+docs-only; session 2 built resolver destroy support. Still queued: a live
+finale on real AWS (create a chain, drift it, resolve the drift, destroy
+it through the signed flow with `--confirm-destroys`, `kill -9`
+mid-destroy, reconcile, verify absence via the `aws` CLI independently,
+`ubx why` reading the complete biography from genesis to tombstone) —
+along with `core.Ledger.FoldState`'s own tombstone-folding and `ubx why`'s
+destroyed/already_absent rendering, both real, named, deferred gaps (see
+session 3, below).
 
 **Session 2 (2026-07-17): `core/resolver` destroy support, hermetic —
 orphan protection real and tested.** `Delta.Destroys`' element shape
@@ -1407,8 +1439,63 @@ to find); docs/destroys-adversarial.md's own "what this table doesn't yet
 cover" section gained the matching entry. ubiquex-docs' `cli/resolve.mdx`
 updated with the new flag and a full "Destroying a resource" section,
 every transcript real against the actual built binary (`mint
-validate`/`mint broken-links` both pass). See STATE.md for the full
-session writeup.
+validate`/`mint broken-links` both pass).
+
+**Session 3 (2026-07-18): `core/executor` destroy support — all eleven
+docs/destroys-adversarial.md rows green, hermetically.** `changeNodesOf`
+extended with a `destroy *core.DestroyEntry` field on `changeNode`,
+sharing the exact same `byAddr` map and single `topoSortAddresses` call
+creates/modifies already use — "creates forward, destroys reversed" is
+what falls out of that one combined walk, not a second mechanism. New
+`shipDestroyNode`: a three-way freshness precheck (present-matching
+proceeds; present-but-drifted refuses, recorded `errors[]`, never reaches
+`in_flight`; already-absent short-circuits straight to a terminal success)
+and `ApplyResourceChange` wire mechanics needing zero changes to
+`provider`/`cli/stateadapter.go` at all — `PlannedState` the literal JSON
+`"null"` already correctly encodes to a real `cty.NullVal` through the
+exact same path UBI-27's own create-`PriorState` convention established,
+and `Config==PlannedState` already follows through unchanged. New
+`reconcileDestroyLoop` disambiguates `destroyed` from `already_absent`
+after an ambiguous timeout by folding `ResourceApply.Reconciliation`
+history across the `parent` attempt chain (`resourceHistory` gained
+`lastReconciliationOutcome`) — a `kill -9` between a destroy landing and
+its result being recorded still resolves correctly on the very next
+attempt.
+
+A real, load-bearing bug found by this session's own hermetic "re-ship
+after partial destroy" test, not assumed safe from the design alone:
+`shipChange`'s `resultsByAddr` dependency-satisfied gate required a
+non-empty `ProviderResult` to consider a dependency done — which a destroy
+can never have (nothing left to store once a resource is gone) — silently
+re-blocking anything `depends_on`-ing a destroyed resource forever on
+every re-run. Fixed to gate on the resource's own terminal `applied` state
+alone. `core/executor/ship_test.go`'s `fakeApplier` gained real destroy
+mechanics (a null-`PlannedState` branch, `scriptDestroyOutcome` for the
+two timeout rows); `provider/internal/fakeprovider` (the real subprocess,
+used for CLI-level transcripts) gained its own destroy support and its
+first piece of cross-call process-lifetime state (`destroyedIDs`) — every
+other fixture behavior there is stateless by design, but confirming
+absence *after* a destroy genuinely needs the fixture to remember what it
+did. `cli/accept.go` gained `--confirm-destroys` (`ErrDestroysNotConfirmed`,
+exit 1, the same tier as a stale reverify or cross-stack pin) for both
+acceptance tiers (local file and `--from-merge`). Full repo `go build`/`go
+vet`/`gofmt -l .`/`go test ./... -race -count=1` clean, no regressions.
+
+Two real, named gaps deliberately not closed this session, not silently
+skipped: `core.Ledger.FoldState`'s own tombstone-folding (docs/schema.md's
+amendment) isn't built yet, so a destroyed address still reads "present"
+via `FoldState` until that separate `core` change lands; `ubx why`'s own
+rendering of `destroyed`/`already_absent` is presentation-layer work for a
+future session (the ledger already records the distinction correctly —
+confirmed via `--json`, just not surfaced in `ubx why`'s human output
+yet). docs/executor.md gained a session-3 addendum recording both findings
+above plus these two gaps. ubiquex-docs' `cli/accept.mdx` gained a
+"Confirming a destroy" section, `cli/ship.mdx` gained a "Shipping a
+destroy" section (a real end-to-end transcript: adopt → resolve a destroy
+→ accept `--confirm-destroys` → ship → clean `applied`, `--json` showing
+the `present_matches`/`destroyed` reconciliation pair), and
+`cli/exit-codes.mdx` gained the new exit-1 cause (`mint validate`/`mint
+broken-links` both pass). See STATE.md for the full session writeup.
 
 ## Deferred (explicitly not now)
 
