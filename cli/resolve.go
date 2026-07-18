@@ -106,8 +106,18 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch provider schema: %w", err)}
 			}
 
+			// A single declared provider -- exactly today's --provider/
+			// --source behavior, now expressed as the one-element case of
+			// core/resolver's own multi-provider set (docs/resolver.md's
+			// own "Amendment (UBI-43): multi-provider stacks" -- the
+			// providers config map's own CLI wiring is later session work,
+			// not this one's; --provider/--source stay fully functional
+			// for a single-provider stack, per that amendment's own staged
+			// retirement plan).
+			providers := []resolver.DeclaredProvider{{Source: source, Version: providerVersion, Schema: newSchemaInspector(schemas)}}
+
 			ledger := core.Open(ledgerDir)
-			p, err := resolver.Resolve(ledger, newSchemaInspector(schemas), &intent, knownDependents)
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}

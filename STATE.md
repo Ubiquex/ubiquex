@@ -4,6 +4,101 @@
 
 ## Current phase
 
+**UBI-43 session 2 is done (this session): `core/resolver`'s own
+type→provider inference — real code, hermetic.** Session 1 (previous)
+was docs-only. This session builds the resolver half of the design it
+landed, per docs/plan.md's own sessioning (resolver → executor → config/
+CLI wiring → live AWS finale, mirroring UBI-30's own destroys arc).
+
+**What landed, precisely.** `core/resolver.Resolve`'s own signature
+changed from a single `SchemaInspector` to `[]DeclaredProvider` — a
+stack's whole declared provider set, each entry `{Source, Version,
+Schema}`. There is no separate single-provider code path left anymore,
+only a provider set of size one (today's `--provider`/`--source` CLI
+flow, unchanged in behavior). New `inferProvider` (`resolver.go`): asks
+every declared provider's own `Schema.HasType(typeName)`; exactly one
+match wins outright; zero matches is `ErrUnknownType` — **reused, not
+duplicated**, from the existing single-provider sentinel, since "no
+declared provider owns this type" and "the one provider doesn't recognize
+it" collapse into the identical claim once every resolve goes through a
+set of at least one — naming every provider checked; more than one match
+is `ErrAmbiguousType` unless a new `ResourceIntent.Provider
+*ProviderHint` (`{"provider": {"source": "..."}}`) names one of the real
+owners (`ErrProviderHintUnknown` if the hint's source isn't declared at
+all, `ErrProviderHintDoesNotOwnType` if it's declared but genuinely
+doesn't own the type — a hint can only select among real owners, never
+manufacture ownership). The winner is recorded into every create/modify/
+destroy node's own new `provider` field: `core.ProviderRef{Source,
+Version}`, reinstated on `core.Modification`/`core.DestroyEntry` per
+docs/schema.md's own UBI-43 amendment (pointer, `omitempty`, additive, no
+`schema_version` bump — nil for `drift_revert`'s own single-provider
+`core/scan.go` path, which never populates it). Destroys infer their
+provider fresh against the *currently* declared set (`resolveDestroys` in
+`destroys.go` gained a `providers []DeclaredProvider` param) — never
+inherited from whichever provider originally created the resource, and
+no per-entry hint support for `destroys[]` (docs/schema.md scoped that
+escape hatch to `resources[]` only).
+
+**A real bug found while actually implementing this, not assumed correct
+from the design alone**: `refs.go`'s `resolveRef` used to consult a
+single globally-passed `SchemaInspector` for its own `IsComputed` check
+on a `$ref` target's attribute — invisible as a bug for every session
+before this one, since there was only ever one schema in scope regardless
+of who asked. Once a `$ref` can cross a provider boundary (an
+`aws_db_instance` node referenced from a `helm_release` node's own
+config, docs/multi-provider-adversarial.md's own row 5), using the
+*referencing* entry's own schema to answer a question about the
+*referenced* entry's attribute would silently consult the wrong
+provider — for two providers with genuinely disjoint type sets (the
+ordinary case), that schema wouldn't even recognize the target's type
+name at all. Fixed by recording each batch entry's own resolved provider
+in a preliminary pass, before any value resolution begins, and having
+`resolveRef` read `target.provider.Schema` directly off the sibling batch
+entry it already has in hand, never a parameter passed down from the
+caller's own context. `TestResolve_CrossProviderRef_ComputedSubstitution`
+(new) deliberately uses two providers with disjoint type sets specifically
+so a naive implementation would fail loudly, not silently pass with a
+wrong answer.
+
+**Hermetic coverage** (`core/resolver/multiprovider_test.go`, new): type
+inference recording the correct winner across creates/modifies/destroys;
+docs/multi-provider-adversarial.md's rows 1 (ambiguous type, no hint,
+refused), 2 (ambiguous type, resolved via hint — both ways a hint itself
+can be wrong: naming an undeclared source, and naming a real declared
+provider that doesn't actually own the type), 3 (unowned type, both for a
+fresh create and for a destroy target whose original provider has since
+been quietly dropped from the declared set — a deliberate friction point,
+not a bug), and 5 (a real cross-provider `$ref` chain: `$computed`
+substitution, correct `depends_on`). Rows 4/6/7 (provider launch failure
+mid-walk, `kill -9` between providers, per-provider freshness
+independence) are executor-session rows, not resolver's — still queued.
+Every pre-existing hermetic test (40 call sites across
+`resolver_test.go`/`destroys_test.go`) updated **mechanically** via a new
+`singleProvider(s)` test helper (wraps a lone `SchemaInspector` into a
+one-element `[]DeclaredProvider`) — a scripted `sed` transform, not
+hand-edited one by one, verified to preserve every test's own
+single-provider behavior unchanged (all still pass). `cli/resolve.go`'s
+own one call site does the identical one-element wrap around today's
+`--provider`/`--source` flow — **no CLI-visible behavior change this
+session**: there's still no way to declare more than one provider from
+the CLI (that's `.ubx/config`'s own `providers` table wiring, still
+queued), so the new `ResourceIntent.Provider` hint field and the new
+`provider` output field are real, live, hermetically-tested code with no
+way for a real user to exercise ambiguity yet. ubiquex-docs left
+untouched this session, deliberately — nothing user-visible shipped to
+document (same reasoning session 1 already established). Full repo `go
+build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./... -race -count=1`
+clean, no regressions.
+
+docs/resolver.md gained a session-2 addendum recording the `resolveRef`
+finding and the hermetic coverage above; its own "Out of scope" bullet
+for multi-provider stacks updated from "designed" to "fixed, session 2."
+docs/plan.md gained a session-2 changelog entry and its own §Multi-
+provider stacks arc section updated with what landed and what's still
+queued.
+
+## Current phase (previous)
+
 **UBI-43 session 1 is done (this session, docs-only, Linear filed and
 tracked): multi-provider stacks — the design lands in
 docs/resolver.md/docs/executor.md/docs/schema.md, no code.** New arc,

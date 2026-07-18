@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ubiquex/ubiquex-cli/core"
@@ -31,6 +32,89 @@ type SchemaInspector interface {
 	HasType(typeName string) bool
 	IsComputed(typeName, attrPath string) bool
 	IsSensitive(typeName, attrPath string) bool
+}
+
+// DeclaredProvider is one provider a stack declares (docs/architecture.md
+// §Multi-provider stacks: the `providers` config map, source → pinned
+// version) paired with its own SchemaInspector -- docs/resolver.md's own
+// "Amendment: multi-provider stacks — type→provider inference". Resolve
+// asks every DeclaredProvider's own Schema.HasType, never guessing a
+// type's owner from its name. A single-provider stack (today's
+// --provider/--source path, docs/resolver.md's own staged retirement
+// plan) is simply a one-element slice -- there is no separate
+// single-provider code path in this package anymore, only a set of size
+// one.
+type DeclaredProvider struct {
+	Source  string
+	Version string
+	Schema  SchemaInspector
+}
+
+// ProviderHint is ResourceIntent's own narrow escape hatch (docs/schema.md's
+// "Amendment: the provider field returns", UBI-43): consulted ONLY to
+// break a genuine type-ownership ambiguity between two or more declared
+// providers that both claim the same type. Absent in every ordinary case.
+// Source must name one of the stack's own declared providers, AND that
+// provider's own schema must genuinely claim the type (HasType true) --
+// the hint selects WHICH declared owner to use among real owners, it
+// never routes a type to a provider that doesn't actually own it.
+type ProviderHint struct {
+	Source string `json:"source"`
+}
+
+// inferProvider implements docs/resolver.md's own type→provider inference:
+// ask every declared provider's own schema whether it owns typeName.
+// Exactly one match wins outright, no friction. Zero matches is
+// ErrUnknownType, naming every provider checked -- the same sentinel a
+// single-provider resolve has always used for "this type doesn't exist,"
+// since "no declared provider owns it" and "the one provider doesn't
+// recognize it" are the identical claim once every resolve goes through a
+// provider set of at least one. More than one match is ErrAmbiguousType
+// unless hint names one of the actual owners (ErrProviderHintUnknown if
+// hint's source isn't declared at all; ErrProviderHintDoesNotOwnType if
+// it's declared but doesn't genuinely own typeName -- the hint can only
+// select among real owners, never manufacture ownership).
+func inferProvider(providers []DeclaredProvider, typeName string, hint *ProviderHint) (DeclaredProvider, error) {
+	var owners []DeclaredProvider
+	for _, p := range providers {
+		if p.Schema.HasType(typeName) {
+			owners = append(owners, p)
+		}
+	}
+	switch len(owners) {
+	case 0:
+		checked := make([]string, 0, len(providers))
+		for _, p := range providers {
+			checked = append(checked, p.Source)
+		}
+		return DeclaredProvider{}, fmt.Errorf("%w: %q -- checked: %s", ErrUnknownType, typeName, strings.Join(checked, ", "))
+	case 1:
+		return owners[0], nil
+	default:
+		if hint == nil {
+			names := make([]string, 0, len(owners))
+			for _, o := range owners {
+				names = append(names, o.Source)
+			}
+			return DeclaredProvider{}, fmt.Errorf("%w: %q -- owned by: %s", ErrAmbiguousType, typeName, strings.Join(names, ", "))
+		}
+		declared := false
+		for _, p := range providers {
+			if p.Source == hint.Source {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			return DeclaredProvider{}, fmt.Errorf("%w: %q", ErrProviderHintUnknown, hint.Source)
+		}
+		for _, o := range owners {
+			if o.Source == hint.Source {
+				return o, nil
+			}
+		}
+		return DeclaredProvider{}, fmt.Errorf("%w: %q does not own type %q", ErrProviderHintDoesNotOwnType, hint.Source, typeName)
+	}
 }
 
 // IntentFile is the ubx:intent/v1 wire format (docs/schema.md's
@@ -61,10 +145,11 @@ type IntentFile struct {
 // before/after diff), whose values may be plain JSON or one of $ref/
 // $cross/$secret/$ephemeral (docs/schema.md's amendment).
 type ResourceIntent struct {
-	Type   string          `json:"type"`
-	Name   string          `json:"name"`
-	Op     string          `json:"op"`
-	Config json.RawMessage `json:"config"`
+	Type     string          `json:"type"`
+	Name     string          `json:"name"`
+	Op       string          `json:"op"`
+	Config   json.RawMessage `json:"config"`
+	Provider *ProviderHint   `json:"provider,omitempty"`
 }
 
 const (
@@ -83,9 +168,26 @@ var (
 	// name the same (stack, type, name) address.
 	ErrDuplicateResource = errors.New("resolve: duplicate resource address in intent file")
 
-	// ErrUnknownType means the provider schema has no such resource type
-	// at all (docs/resolver-adversarial.md row 8).
+	// ErrUnknownType means no declared provider's schema has such a
+	// resource type at all (docs/resolver-adversarial.md row 8; extended
+	// 2026-07-18, UBI-43, to a set of one or more declared providers --
+	// see inferProvider).
 	ErrUnknownType = errors.New("resolve: provider schema has no such type")
+
+	// ErrAmbiguousType means more than one declared provider's schema
+	// claims the same type, and no "provider" hint was given to break the
+	// tie (docs/multi-provider-adversarial.md row 1).
+	ErrAmbiguousType = errors.New("resolve: type is ambiguous across declared providers")
+
+	// ErrProviderHintUnknown means a ResourceIntent's own "provider" hint
+	// names a source that isn't one of the stack's own declared providers.
+	ErrProviderHintUnknown = errors.New("resolve: provider hint names a source this stack does not declare")
+
+	// ErrProviderHintDoesNotOwnType means a ResourceIntent's own
+	// "provider" hint names a declared provider whose schema does NOT
+	// actually claim the type -- the hint selects among real owners, it
+	// never manufactures ownership.
+	ErrProviderHintDoesNotOwnType = errors.New("resolve: provider hint names a provider that does not own this type")
 
 	// ErrCreateTargetExists means op "create" names an address the ledger
 	// already has (docs/resolver.md's "op: explicit, not inferred").
@@ -215,7 +317,8 @@ func VerifyPins(p *core.Proposal) error {
 type batchEntry struct {
 	ri             ResourceIntent
 	addr           core.Address
-	rawEdges       []string // canonical addresses this entry's raw $ref targets, restricted to this batch
+	provider       DeclaredProvider // which declared provider owns ri.Type, set before any value resolution (docs/resolver.md's own amendment)
+	rawEdges       []string         // canonical addresses this entry's raw $ref targets, restricted to this batch
 	resolvedConfig map[string]interface{}
 }
 
@@ -247,11 +350,16 @@ type batchEntry struct {
 // caller running `ubx resolve` for real. Fixed at the one place that
 // actually varies between the two calls, not by weakening DoubleRun's own
 // comparison.
-func Resolve(l *core.Ledger, schema SchemaInspector, intent *IntentFile, knownDependents []string) (*core.Proposal, error) {
+//
+// providers is docs/resolver.md's own "Amendment (2026-07-18, UBI-43):
+// multi-provider stacks" input: every provider a stack declares, each
+// paired with its own SchemaInspector. A single-provider stack is simply
+// a one-element slice -- there is no separate code path for it anymore.
+func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string) (*core.Proposal, error) {
 	resolvedAt := time.Now().UTC().Format(time.RFC3339)
 	var resolved *core.Proposal
 	_, err := core.DoubleRun(func() ([]byte, error) {
-		p, err := resolveOnce(l, schema, intent, knownDependents, resolvedAt)
+		p, err := resolveOnce(l, providers, intent, knownDependents, resolvedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -268,7 +376,7 @@ func Resolve(l *core.Ledger, schema SchemaInspector, intent *IntentFile, knownDe
 	return resolved, nil
 }
 
-func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, knownDependents []string, resolvedAt string) (*core.Proposal, error) {
+func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string) (*core.Proposal, error) {
 	if intent.Kind != IntentFileKind {
 		return nil, fmt.Errorf("%w: got %q", ErrUnknownIntentKind, intent.Kind)
 	}
@@ -277,8 +385,9 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 	order := make([]string, 0, len(intent.Resources))
 
 	for _, ri := range intent.Resources {
-		if !schema.HasType(ri.Type) {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownType, ri.Type)
+		prov, err := inferProvider(providers, ri.Type, ri.Provider)
+		if err != nil {
+			return nil, err
 		}
 		if ri.Op != OpCreate && ri.Op != OpModify {
 			return nil, fmt.Errorf("%w: %q (resource %s.%s)", ErrInvalidOp, ri.Op, ri.Type, ri.Name)
@@ -304,7 +413,7 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 			}
 		}
 
-		batch[key] = &batchEntry{ri: ri, addr: addr}
+		batch[key] = &batchEntry{ri: ri, addr: addr, provider: prov}
 		order = append(order, key)
 	}
 
@@ -344,7 +453,7 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 		if err := json.Unmarshal(e.ri.Config, &raw); err != nil {
 			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
 		}
-		resolvedVal, inputs, err := resolveValue(raw, "", e.ri.Type, l, schema, batch, destroySet)
+		resolvedVal, inputs, err := resolveValue(raw, "", e.ri.Type, l, e.provider.Schema, batch, destroySet)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}
@@ -366,10 +475,11 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 		switch e.ri.Op {
 		case OpCreate:
 			node := map[string]interface{}{
-				"stack":  e.addr.Stack,
-				"type":   e.addr.Type,
-				"name":   e.addr.Name,
-				"config": e.resolvedConfig,
+				"stack":    e.addr.Stack,
+				"type":     e.addr.Type,
+				"name":     e.addr.Name,
+				"provider": core.ProviderRef{Source: e.provider.Source, Version: e.provider.Version},
+				"config":   e.resolvedConfig,
 			}
 			if len(dependsOn) > 0 {
 				node["depends_on"] = dependsOn
@@ -402,6 +512,7 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 				Before:    before,
 				After:     after,
 				DependsOn: dependsOn,
+				Provider:  &core.ProviderRef{Source: e.provider.Source, Version: e.provider.Version},
 			})
 			resolutionInputs = append(resolutionInputs, core.ResolutionInput{
 				Kind:         "live_state",
@@ -411,7 +522,7 @@ func resolveOnce(l *core.Ledger, schema SchemaInspector, intent *IntentFile, kno
 		}
 	}
 
-	destroys, destroyInputs, err := resolveDestroys(l, destroyByKey, destroyOrder, batch, knownDependents)
+	destroys, destroyInputs, err := resolveDestroys(l, destroyByKey, destroyOrder, batch, knownDependents, providers)
 	if err != nil {
 		return nil, err
 	}

@@ -78,12 +78,25 @@ func destroyAddrSet(byKey map[string]core.Address) map[string]bool {
 // needs to know a same-batch modify exists at all, not what it resolved to
 // (resolveRef's own ErrRefToDestroyTarget check already guarantees it no
 // longer references a destroy target by this point).
+//
+// providers is docs/resolver.md's own "Amendment (2026-07-18, UBI-43):
+// multi-provider stacks" input, threaded through from resolveOnce: each
+// destroy target's own provider is inferred fresh against the currently
+// declared set (by its own Address.Type), never inherited from whichever
+// provider originally created it -- no proposal recorded that historically
+// before this amendment, and trusting stale history over the stack's own
+// current declaration would be exactly the silent-drift risk this project
+// exists to catch. destroys[] entries carry no per-entry provider hint
+// (docs/schema.md's own amendment scopes that escape hatch to
+// resources[]) -- a genuinely ambiguous destroy target's type is a hard
+// error, full stop.
 func resolveDestroys(
 	l *core.Ledger,
 	byKey map[string]core.Address,
 	order []string,
 	resourceBatch map[string]*batchEntry,
 	knownDependents []string,
+	providers []DeclaredProvider,
 ) ([]core.DestroyEntry, []core.ResolutionInput, error) {
 	if len(order) == 0 {
 		return nil, nil, nil
@@ -167,10 +180,15 @@ func resolveDestroys(
 		if ferr != nil {
 			return nil, nil, fmt.Errorf("resolve destroy %s: %w", addr, ferr)
 		}
+		prov, perr := inferProvider(providers, addr.Type, nil) // no per-entry hint for destroys -- docs/schema.md's own amendment
+		if perr != nil {
+			return nil, nil, perr
+		}
 		entries = append(entries, core.DestroyEntry{
 			Address:   addr,
 			State:     state,
 			DependsOn: dependsOn[key],
+			Provider:  &core.ProviderRef{Source: prov.Source, Version: prov.Version},
 		})
 
 		observedHash, herr := core.ObservedHash(state)

@@ -176,11 +176,37 @@ func ParseAddress(s string) (addr Address, ok bool) {
 // themselves before emitting them, but a future executor session
 // consulting cross-array order should read this field, not infer from
 // position).
+// Provider was added 2026-07-18 (docs/schema.md — "Amendment: the
+// provider field returns", UBI-43): which provider binary owns this
+// resource. Nil for a drift_revert's own Modification entries (single-
+// provider by construction, core/scan.go never populates it) and for any
+// change proposal resolved before this amendment (schema_version 1/2) --
+// an absent field there is never ambiguous, since every proposal predating
+// this amendment was resolved against exactly one provider per invocation.
+// core/resolver populates it for every Modification a change proposal's
+// own resolveOnce produces, going forward, single-provider stacks
+// included -- see docs/resolver.md's own amendment.
 type Modification struct {
 	Target    Address                    `json:"target"`
 	Before    map[string]json.RawMessage `json:"before,omitempty"`
 	After     map[string]json.RawMessage `json:"after,omitempty"`
 	DependsOn []string                   `json:"depends_on,omitempty"`
+	Provider  *ProviderRef               `json:"provider,omitempty"`
+}
+
+// ProviderRef names which provider binary owns a resource node -- {source,
+// version}, exactly the founding IR draft's own shape (docs/schema.md's
+// "IR — resource node" section, top of that document) and the stack's own
+// providers config map's own value shape (docs/architecture.md §Multi-
+// provider stacks). Reinstated 2026-07-18 (UBI-43) after UBI-27's own
+// pinning had dropped it as "redundant with information the outer
+// Proposal already carries" -- true only under the single-provider-per-
+// invocation invariant that amendment predates. Resolver-populated, never
+// hand-authored except IntentFile's own narrow ambiguity-breaking hint
+// (source only, no version -- see core/resolver.ProviderHint).
+type ProviderRef struct {
+	Source  string `json:"source"`
+	Version string `json:"version"`
 }
 
 // DestroyEntry is one element of Delta.Destroys (docs/schema.md —
@@ -212,10 +238,18 @@ type Modification struct {
 // execute in reversed order" fall out of one combined topological walk
 // (docs/executor.md's own amendment) instead of needing a second
 // mechanism.
+// Provider was added 2026-07-18 (docs/schema.md — "Amendment: the
+// provider field returns", UBI-43) -- see Modification.Provider's own
+// doc comment; the same reasoning applies here unchanged. A destroy needs
+// to know which provider to call exactly as much as a create does, and
+// core/resolver infers it fresh against the stack's currently-declared
+// providers, never inherited from whichever provider originally created
+// the resource (docs/resolver.md's own amendment).
 type DestroyEntry struct {
 	Address   Address         `json:"address"`
 	State     json.RawMessage `json:"state"`
 	DependsOn []string        `json:"depends_on,omitempty"`
+	Provider  *ProviderRef    `json:"provider,omitempty"`
 }
 
 // Delta is Proposal.Delta. Creates stays opaque JSON — typed IR resource

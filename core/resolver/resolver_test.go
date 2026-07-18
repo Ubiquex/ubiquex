@@ -66,6 +66,15 @@ func (f *flakySchema) IsComputed(t, path string) bool {
 	return f.fakeSchema.IsComputed(t, path)
 }
 
+// singleProvider wraps a lone SchemaInspector into the one-element
+// DeclaredProvider slice Resolve now always takes (docs/resolver.md's own
+// "Amendment (UBI-43): multi-provider stacks") -- every hermetic test
+// predating that amendment declared exactly one schema, so this preserves
+// their own single-provider behavior unchanged.
+func singleProvider(s SchemaInspector) []DeclaredProvider {
+	return []DeclaredProvider{{Source: "acme/test", Version: "1.0.0", Schema: s}}
+}
+
 func intentFile(stack string, resources ...ResourceIntent) *IntentFile {
 	return &IntentFile{
 		SchemaVersion: 1,
@@ -131,7 +140,7 @@ func TestResolve_SingleCreate_NoRefs(t *testing.T) {
 		ri("aws_vpc", "main", OpCreate, `{"cidr_block":"10.0.0.0/16"}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -163,7 +172,7 @@ func TestResolve_RefToComputedSibling_MarksComputed_AndOrdersAfter(t *testing.T)
 		ri("aws_db_instance", "primary", OpCreate, `{"instance_class":"db.t3.medium"}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -199,7 +208,7 @@ func TestResolve_RefToNonComputedSibling_SubstitutesLiteral(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_cidr":{"$ref":{"to":"payments.aws_vpc.main.cidr_block"}}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -226,7 +235,7 @@ func TestResolve_RefToExistingLedgeredResource_AlwaysConcrete(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$ref":{"to":"payments.aws_vpc.main.id"}}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -248,7 +257,7 @@ func TestResolve_Modify_DiffsAgainstFoldState(t *testing.T) {
 		ri("aws_db_instance", "db", OpModify, `{"id":"db-1","instance_class":"db.t3.large","tags":{"env":"prod"}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -277,7 +286,7 @@ func TestResolve_DoubleRunDivergence_HardFails(t *testing.T) {
 		ri("aws_db_instance", "replica", OpCreate, `{"replicate_source_db":{"$ref":{"to":"payments.aws_db_instance.primary.identifier"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, core.ErrDoubleRunMismatch) {
 		t.Fatalf("err = %v, want ErrDoubleRunMismatch", err)
 	}
@@ -293,7 +302,7 @@ func TestResolve_CircularRefs_Rejected(t *testing.T) {
 		ri("aws_db_instance", "b", OpCreate, `{"peer":{"$ref":{"to":"payments.aws_db_instance.a.id"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrCycleDetected) {
 		t.Fatalf("err = %v, want ErrCycleDetected", err)
 	}
@@ -308,7 +317,7 @@ func TestResolve_RefToNonexistentResource_Rejected(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$ref":{"to":"payments.aws_vpc.ghost.id"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrRefNotFound) {
 		t.Fatalf("err = %v, want ErrRefNotFound", err)
 	}
@@ -324,7 +333,7 @@ func TestResolve_CrossStack_NeighborLedgerNeverInitialized_Rejected(t *testing.T
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$cross":{"ledger_dir":"`+neighborDir+`","to":"networking.aws_vpc.main.id"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrNeighborLedgerMissing) {
 		t.Fatalf("err = %v, want ErrNeighborLedgerMissing", err)
 	}
@@ -342,7 +351,7 @@ func TestResolve_CrossStack_AddressNeverRecordedInRealNeighborLedger_Rejected(t 
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$cross":{"ledger_dir":"`+neighborDir+`","to":"networking.aws_vpc.main.id"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrCrossStackAddressNotFound) {
 		t.Fatalf("err = %v, want ErrCrossStackAddressNotFound", err)
 	}
@@ -364,7 +373,7 @@ func TestResolve_CrossStack_Concrete_RecordsPinnedHead(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$cross":{"ledger_dir":"`+neighborDir+`","to":"networking.aws_vpc.main.id"}}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -417,7 +426,7 @@ func TestResolve_ComputedPropagated_UsedWhereConcreteRequired_Rejected(t *testin
 		ri("aws_db_instance", "c", OpCreate, `{"peer":{"$ref":{"to":"payments.aws_db_instance.b.peer"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrComputedWhereConcreteRequired) {
 		t.Fatalf("err = %v, want ErrComputedWhereConcreteRequired", err)
 	}
@@ -432,7 +441,7 @@ func TestResolve_SecretInNonSensitiveField_Rejected(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"instance_class":{"$secret":{"backend":"aws_secrets_manager","path":"x"}}}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrSecretNotSensitive) {
 		t.Fatalf("err = %v, want ErrSecretNotSensitive", err)
 	}
@@ -445,7 +454,7 @@ func TestResolve_SecretInSensitiveField_Accepted(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"master_password":{"$secret":{"backend":"aws_secrets_manager","path":"payments/db-password"}}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -467,7 +476,7 @@ func TestResolve_UnknownType_Rejected(t *testing.T) {
 		ri("aws_nonexistent_type", "x", OpCreate, `{}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrUnknownType) {
 		t.Fatalf("err = %v, want ErrUnknownType", err)
 	}
@@ -482,7 +491,7 @@ func TestResolve_ModifyTargetMissing_Rejected(t *testing.T) {
 		ri("aws_db_instance", "ghost", OpModify, `{"instance_class":"db.t3.large"}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrModifyTargetMissing) {
 		t.Fatalf("err = %v, want ErrModifyTargetMissing", err)
 	}
@@ -498,7 +507,7 @@ func TestResolve_CreateTargetAlreadyExists_Rejected(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"instance_class":"db.t3.large"}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrCreateTargetExists) {
 		t.Fatalf("err = %v, want ErrCreateTargetExists", err)
 	}
@@ -512,7 +521,7 @@ func TestResolve_UnknownIntentKind_Rejected(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Kind = "something-else/v1"
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrUnknownIntentKind) {
 		t.Fatalf("err = %v, want ErrUnknownIntentKind", err)
 	}
@@ -525,7 +534,7 @@ func TestResolve_InvalidOp_Rejected(t *testing.T) {
 		ri("aws_vpc", "main", "destroy", `{}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrInvalidOp) {
 		t.Fatalf("err = %v, want ErrInvalidOp", err)
 	}
@@ -539,7 +548,7 @@ func TestResolve_DuplicateResource_Rejected(t *testing.T) {
 		ri("aws_vpc", "main", OpCreate, `{}`),
 	)
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrDuplicateResource) {
 		t.Fatalf("err = %v, want ErrDuplicateResource", err)
 	}
@@ -554,7 +563,7 @@ func TestResolve_EphemeralMarker_PassesThroughAtomically(t *testing.T) {
 		ri("aws_db_instance", "db", OpCreate, `{"session_token":{"$ephemeral":true}}`),
 	)
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

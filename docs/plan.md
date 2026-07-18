@@ -751,6 +751,34 @@
   ticket, **UBI-43**, team `ubiquex`. No code this session — see §Multi-
   provider stacks below and STATE.md for the full session writeup.
 
+- 2026-07-18 — UBI-43 session 2: `core/resolver`'s own type→provider
+  inference, real code, hermetic. `Resolve`'s signature changed from a
+  single `SchemaInspector` to `[]DeclaredProvider` -- no separate
+  single-provider code path left, just a provider set of size one. New
+  `inferProvider`: exactly one owner wins; zero owners is `ErrUnknownType`
+  (reused from the existing single-provider sentinel, not duplicated),
+  naming every provider checked; more than one owner is `ErrAmbiguousType`
+  unless an explicit `"provider"` hint names a real owner
+  (`ErrProviderHintUnknown`/`ErrProviderHintDoesNotOwnType` for the two
+  ways a hint can itself be wrong). The winner lands in every create/
+  modify/destroy node's own `provider` field; destroys infer fresh
+  against the currently-declared set, never inherited from history. A
+  real bug found implementing, not assumed correct from the design alone:
+  `resolveRef`'s own `IsComputed` check on a `$ref` target's attribute was
+  reading a single globally-passed schema -- invisible until a `$ref`
+  could cross a provider boundary for the first time; fixed to read the
+  *referenced* sibling's own resolved provider schema, never the
+  *referencing* entry's. New `core/resolver/multiprovider_test.go` covers
+  docs/multi-provider-adversarial.md's rows 1, 2, 3, and 5; all 40
+  pre-existing hermetic call sites updated mechanically via a new
+  `singleProvider(s)` test helper, unchanged behavior, all still pass.
+  `cli/resolve.go`'s own call site wraps today's single `--provider`/
+  `--source` flow into the same one-element case -- no CLI-visible
+  behavior change this session. docs/resolver.md gained a session-2
+  addendum; docs/plan.md's own §Multi-provider stacks updated. Full repo
+  build/vet/fmt/test clean, no regressions. See STATE.md for the full
+  session writeup.
+
 ## Strategy
 
 **Wedge:** drift attribution on existing Terraform/OpenTofu repos.
@@ -1676,17 +1704,66 @@ either. Multi-provider changes *which client* the executor's own walk
 calls at each step (a pool lookup instead of one closed-over `Applier`),
 never the walk's own shape, order, or the graph's own construction.
 
-Filed as its own ticket, **UBI-43**, team `ubiquex`. Session 1 (this
-session) is docs-only. Still queued: `core/resolver`'s own type→provider
-inference code (hermetic against fake multi-provider `SchemaInspector`
-sets), `core/executor`'s own client pool and per-node dispatch (hermetic
-against a fake `Applier` pool scripting docs/multi-provider-adversarial.md's
-seven rows), `.ubx/config`'s own `providers` table wiring (rides UBI-19's
-existing loader, doesn't block on UBI-32), CLI surface changes
-(`--source`/`--provider-version` deprecation staging, never a breaking
-cutover in one session), and the live finale: a real payments-shaped
-stack (`hashicorp/aws` + a second real provider) shipped as ONE signed
-proposal on real infrastructure.
+Filed as its own ticket, **UBI-43**, team `ubiquex`. Session 1 was
+docs-only.
+
+**Session 2 (2026-07-18): `core/resolver`'s own type→provider inference,
+real code, hermetic.** `Resolve`'s own signature changed from a single
+`SchemaInspector` to `[]DeclaredProvider` — a stack's whole declared
+provider set, each paired with its own schema — with no separate
+single-provider code path left; today's single-provider CLI flow is
+simply the one-element case. New `inferProvider` implements the
+three-way rule design landed: exactly one owner wins outright; zero
+owners is `ErrUnknownType` (reused, not duplicated, from the existing
+single-provider sentinel — the two claims collapse into the same one once
+every resolve goes through a provider set of at least one), naming every
+provider checked; more than one owner is `ErrAmbiguousType` unless an
+intent-file entry's own narrow `"provider"` hint names one of the real
+owners (`ErrProviderHintUnknown`/`ErrProviderHintDoesNotOwnType` for the
+two ways a hint itself can be wrong). The winner is recorded into every
+create/modify/destroy node's own `provider` field
+(`core.ProviderRef{Source, Version}`, reinstated on `Modification`/
+`DestroyEntry` per docs/schema.md's own amendment). Destroys infer fresh
+against the currently-declared set, exactly as designed — no per-entry
+hint support for `destroys[]` (docs/schema.md scoped that escape hatch to
+`resources[]` only).
+
+A real thing found while actually implementing this, not assumed correct
+from the design alone: `resolveRef`'s own `IsComputed` check on a `$ref`
+target's attribute was reading a single globally-passed schema, invisible
+as a bug until a `$ref` could cross a provider boundary for the first
+time — fixed to read the *referenced* sibling's own resolved provider
+schema (`target.provider.Schema`, set on every batch entry before any
+value resolution begins), never the *referencing* entry's. A dedicated
+regression test (`TestResolve_CrossProviderRef_ComputedSubstitution`)
+uses two providers with genuinely disjoint type sets specifically so a
+naive implementation using the wrong schema would have failed loudly, not
+passed silently with a wrong answer. New
+`core/resolver/multiprovider_test.go`: type inference recording the
+correct winner across creates/modifies/destroys, docs/multi-provider-
+adversarial.md's rows 1 (ambiguous, no hint), 2 (ambiguous, resolved via
+hint, both ways a hint can itself be wrong), 3 (unowned type, both fresh
+and for a destroy whose original provider has since been dropped from
+config), and 5 (a real cross-provider `$ref` chain, `$computed`
+substitution, correct `depends_on`). Every pre-existing hermetic test (40
+call sites) updated mechanically via a new `singleProvider(s)` test
+helper, preserving each one's own single-provider behavior unchanged; all
+still pass. `cli/resolve.go`'s own call site does the identical
+one-element wrap — no CLI-visible behavior change this session, since
+there's still no way to declare more than one provider from the CLI.
+docs/resolver.md gained a session-2 addendum recording the `resolveRef`
+finding and the hermetic coverage; its own "Out of scope" bullet updated
+from designed to fixed. Full repo build/vet/fmt/test clean, no
+regressions.
+
+Still queued: `core/executor`'s own client pool and per-node dispatch
+(hermetic against a fake `Applier` pool scripting docs/multi-provider-
+adversarial.md's remaining rows — 4, 6, 7), `.ubx/config`'s own
+`providers` table wiring (rides UBI-19's existing loader, doesn't block
+on UBI-32), CLI surface changes (`--source`/`--provider-version`
+deprecation staging, never a breaking cutover in one session), and the
+live finale: a real payments-shaped stack (`hashicorp/aws` + a second
+real provider) shipped as ONE signed proposal on real infrastructure.
 
 ## Deferred (explicitly not now)
 

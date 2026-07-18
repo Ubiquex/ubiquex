@@ -115,7 +115,7 @@ func TestResolve_Destroy_Basic(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestResolve_DestroyMutualBatch_ReversedOrder(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_db_instance.db", "payments.aws_vpc.main"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve destroy: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestResolve_DestroyHandledBySameBatchModify_NotOrphaned(t *testing.T) {
 	)
 	intent.Destroys = []string{"payments.aws_vpc.main"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestResolve_DestroyNoLongerOrphaned_AfterDependentRepointed(t *testing.T) {
 	// Confirmed refused first, matching TestResolve_DestroyOrphaned_Rejected.
 	destroyIntent := intentFile("payments")
 	destroyIntent.Destroys = []string{"payments.aws_vpc.main"}
-	if _, err := Resolve(l, schema, destroyIntent, nil); !errors.Is(err, ErrDestroyOrphaned) {
+	if _, err := Resolve(l, singleProvider(schema), destroyIntent, nil); !errors.Is(err, ErrDestroyOrphaned) {
 		t.Fatalf("got %v, want ErrDestroyOrphaned before repointing", err)
 	}
 
@@ -269,7 +269,7 @@ func TestResolve_DestroyNoLongerOrphaned_AfterDependentRepointed(t *testing.T) {
 	repoint := intentFile("payments",
 		ri("aws_db_instance", "db", OpModify, `{"vpc_ref":"vpc-999-elsewhere"}`),
 	)
-	repointResolved, err := Resolve(l, schema, repoint, nil)
+	repointResolved, err := Resolve(l, singleProvider(schema), repoint, nil)
 	if err != nil {
 		t.Fatalf("resolve repoint: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestResolve_DestroyNoLongerOrphaned_AfterDependentRepointed(t *testing.T) {
 	// Now the destroy must succeed -- db's own MOST RECENT depends_on (from
 	// the repoint proposal) no longer names main, even though an OLDER
 	// proposal once recorded that it did.
-	if _, err := Resolve(l, schema, destroyIntent, nil); err != nil {
+	if _, err := Resolve(l, singleProvider(schema), destroyIntent, nil); err != nil {
 		t.Fatalf("resolve destroy after repoint: %v, want success", err)
 	}
 }
@@ -299,7 +299,7 @@ func TestResolve_CrossStackOrphanCheck_CheckedClear(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	p, err := Resolve(l, newFakeSchema(), intent, []string{neighbor.Dir()})
+	p, err := Resolve(l, singleProvider(newFakeSchema()), intent, []string{neighbor.Dir()})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestResolve_DestroyTargetMissing_Rejected(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.ghost"}
 
-	_, err := Resolve(l, newFakeSchema(), intent, nil)
+	_, err := Resolve(l, singleProvider(newFakeSchema()), intent, nil)
 	if !errors.Is(err, ErrDestroyTargetMissing) {
 		t.Fatalf("got %v, want ErrDestroyTargetMissing", err)
 	}
@@ -338,7 +338,7 @@ func TestResolve_DuplicateDestroy_Rejected(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old", "payments.aws_vpc.old"}
 
-	_, err := Resolve(l, newFakeSchema(), intent, nil)
+	_, err := Resolve(l, singleProvider(newFakeSchema()), intent, nil)
 	if !errors.Is(err, ErrDuplicateDestroy) {
 		t.Fatalf("got %v, want ErrDuplicateDestroy", err)
 	}
@@ -354,7 +354,7 @@ func TestResolve_DestroyResourceConflict_Rejected(t *testing.T) {
 	)
 	intent.Destroys = []string{"payments.aws_vpc.main"}
 
-	_, err := Resolve(l, newFakeSchema(), intent, nil)
+	_, err := Resolve(l, singleProvider(newFakeSchema()), intent, nil)
 	if !errors.Is(err, ErrDestroyResourceConflict) {
 		t.Fatalf("got %v, want ErrDestroyResourceConflict", err)
 	}
@@ -370,7 +370,7 @@ func TestResolve_RefToDestroyTarget_Rejected(t *testing.T) {
 	)
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	_, err := Resolve(l, newFakeSchema(), intent, nil)
+	_, err := Resolve(l, singleProvider(newFakeSchema()), intent, nil)
 	if !errors.Is(err, ErrRefToDestroyTarget) {
 		t.Fatalf("got %v, want ErrRefToDestroyTarget", err)
 	}
@@ -449,7 +449,7 @@ func TestResolve_DestroyOrphaned_SurvivesInterveningDriftAdopt(t *testing.T) {
 
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.main"}
-	if _, err := Resolve(l, schema, intent, nil); !errors.Is(err, ErrDestroyOrphaned) {
+	if _, err := Resolve(l, singleProvider(schema), intent, nil); !errors.Is(err, ErrDestroyOrphaned) {
 		t.Fatalf("got %v, want ErrDestroyOrphaned -- db's real dependency on main must survive the intervening drift_adopt", err)
 	}
 }
@@ -471,7 +471,7 @@ func TestResolve_DestroyOrphaned_Rejected(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.main"}
 
-	_, err := Resolve(l, schema, intent, nil)
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
 	if !errors.Is(err, ErrDestroyOrphaned) {
 		t.Fatalf("got %v, want ErrDestroyOrphaned", err)
 	}
@@ -488,7 +488,7 @@ func TestResolve_CrossStackOrphanCheck_Refused(t *testing.T) {
 	crossIntent := intentFile("networking",
 		ri("aws_db_instance", "consumer", OpCreate, `{"vpc_cidr":{"$cross":{"ledger_dir":"`+l.Dir()+`","to":"payments.aws_vpc.main.id"}}}`),
 	)
-	crossResolved, err := Resolve(neighbor, schema, crossIntent, nil)
+	crossResolved, err := Resolve(neighbor, singleProvider(schema), crossIntent, nil)
 	if err != nil {
 		t.Fatalf("resolve cross-stack consumer: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestResolve_CrossStackOrphanCheck_Refused(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.main"}
 
-	_, err = Resolve(l, schema, intent, []string{neighbor.Dir()})
+	_, err = Resolve(l, singleProvider(schema), intent, []string{neighbor.Dir()})
 	if !errors.Is(err, ErrDestroyOrphaned) {
 		t.Fatalf("got %v, want ErrDestroyOrphaned (a real cross-stack pin exists)", err)
 	}
@@ -513,7 +513,7 @@ func TestResolve_CrossStackOrphanCheck_DependentLedgerMissing_Rejected(t *testin
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	_, err := Resolve(l, newFakeSchema(), intent, []string{t.TempDir() + "/never-initialized"})
+	_, err := Resolve(l, singleProvider(newFakeSchema()), intent, []string{t.TempDir() + "/never-initialized"})
 	if !errors.Is(err, ErrDependentLedgerMissing) {
 		t.Fatalf("got %v, want ErrDependentLedgerMissing", err)
 	}
@@ -530,7 +530,7 @@ func TestValidate_ChangeProposalWithDestroys_Accepted(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestValidate_ChangeProposalDestroysBlastRadiusMismatch_Rejected(t *testing.
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestValidate_DestroyMissingResolutionInput_Rejected(t *testing.T) {
 	intent := intentFile("payments")
 	intent.Destroys = []string{"payments.aws_vpc.old"}
 
-	p, err := Resolve(l, schema, intent, nil)
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

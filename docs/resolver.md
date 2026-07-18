@@ -680,16 +680,69 @@ Scan/status/fleet's own equivalent generalization — grouping by each
 resource's own recorded provider instead of a single `--source` — is
 docs/executor.md's own half of this amendment, not resolver's.
 
+**One real thing found while actually implementing this (`core/resolver`,
+UBI-43 session 2), not assumed correct from the design above alone:**
+`resolveRef`'s own `IsComputed` check on a `$ref` target's attribute must
+consult the *target's own* resolved provider schema, never the schema of
+whichever entry happens to be resolving right now. Before this session,
+`resolveValue`/`resolveRef` shared one globally-passed `SchemaInspector`
+parameter, so this distinction was invisible — there was only ever one
+schema to consult, whoever asked. Once a `$ref` can cross a provider
+boundary (an `aws_db_instance` node referenced from a `helm_release`
+node's own config, docs/multi-provider-adversarial.md's own row 5), using
+the *referencing* entry's schema to answer "is the *referenced* entry's
+attribute Computed" would silently query the wrong provider's schema
+entirely — for two providers with genuinely disjoint type sets (the
+common case), that schema wouldn't even recognize the target's own type
+name, which is either a hard crash or a wrong answer depending on how
+defensively the caller happens to be written, neither of which is
+"resolve correctly." Fixed by recording each batch entry's own resolved
+provider *before* any value resolution begins (the same preliminary pass
+that infers and records `provider` for the JSON output), and having
+`resolveRef` read `target.provider.Schema` directly off the sibling batch
+entry it already has in hand, rather than trusting a parameter passed down
+from the caller's own context. `TestResolve_CrossProviderRef_ComputedSubstitution`
+(`core/resolver/multiprovider_test.go`) reproduces this exactly — the
+referencing entry's own provider (`helmSchema`) doesn't even declare
+`aws_db_instance` as a known type at all, so a naive implementation using
+the wrong schema there would have failed this test immediately, not
+silently passed with a wrong answer.
+
+**Hermetic coverage** (`core/resolver/multiprovider_test.go`, new):
+type→provider inference recording the correct winner on creates/modifies/
+destroys (docs/multi-provider-adversarial.md rows implicitly covered by
+every row below succeeding at all); row 1 (ambiguous type, no hint,
+refused); row 2 (ambiguous type, resolved via an explicit hint, including
+both ways a hint itself can be wrong — naming an undeclared source, and
+naming a real declared provider that doesn't actually own the type); row
+3 (unowned type, both for a fresh create and for a destroy target whose
+original provider has since been dropped from the declared set); row 5
+(a cross-provider `$ref` chain, `$computed` substitution, correct
+`depends_on`). `Resolve`'s own signature changed from a single
+`SchemaInspector` to `[]DeclaredProvider` — every existing hermetic test
+predating this session (40 call sites across `resolver_test.go`/
+`destroys_test.go`) updated mechanically via a new `singleProvider(s)`
+test helper wrapping a lone schema into a one-element slice, preserving
+each test's own single-provider behavior unchanged; all still pass.
+`cli/resolve.go`'s own call site does the identical one-element wrap
+around today's `--provider`/`--source` flow — no CLI-visible behavior
+change this session, since there's no way yet to declare more than one
+provider from the CLI (that's `.ubx/config`'s own `providers` table
+wiring, still queued). Full repo `go build`/`go vet`/`gofmt -l .`/`go test
+./... -race -count=1` clean, no regressions.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - ~~`delta.destroys` (see Scope, above).~~ — **designed, UBI-30** (see the
   Amendment below); resolver *code* producing a populated `delta.destroys`
   is still session 2+ of that ticket, not this document's own session.
-- Multi-provider stacks (a single `change` proposal spanning more than one
-  provider binary) — **designed, UBI-43** (see the Amendment above);
-  resolver *code* performing type→provider inference and populating each
-  node's `provider` field is a later session of that ticket, not this
-  document's own session.
+- ~~Multi-provider stacks (a single `change` proposal spanning more than
+  one provider binary) — resolver code.~~ — **fixed, UBI-43 session 2**
+  (see the Amendment above): `core/resolver` performs real type→provider
+  inference and populates each node's `provider` field, hermetic. Still
+  queued, other sessions of the same ticket: `core/executor`'s own client
+  pool, `.ubx/config`'s `providers` table wiring, CLI deprecation staging,
+  and the live finale.
 - A real policy engine — the hook exists, always returns empty for now.
 - Diagram/markdown/SDK/LLM-authored intent frontends — the intent-file
   format is deliberately machine-shaped for exactly this reason (a pretty

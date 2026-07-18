@@ -173,7 +173,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 	switch t := v.(type) {
 	case map[string]interface{}:
 		if inner, ok := asMarker(t, markerRef); ok {
-			return resolveRef(inner, batch, destroyAddrs, l, schema)
+			return resolveRef(inner, batch, destroyAddrs, l)
 		}
 		if inner, ok := asMarker(t, markerCross); ok {
 			return resolveCross(inner)
@@ -234,7 +234,17 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 // is what guarantees a same-batch modify that depends on a destroy target
 // (the "handled" case in resolveDestroys) provably no longer references it
 // by the time that modify's own config is resolved.
-func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, destroyAddrs map[string]bool, l *core.Ledger, schema SchemaInspector) (interface{}, []core.ResolutionInput, error) {
+//
+// A same-batch target's own IsComputed check reads target's own resolved
+// provider (target.provider.Schema), not the caller's -- docs/resolver.md's
+// own "Amendment (2026-07-18, UBI-43): multi-provider stacks" -- since a
+// $ref can cross a provider boundary (an aws_db_instance node referenced
+// by a helm_release node's own config), the schema that answers "is this
+// attribute Computed" must be the REFERENCED resource's own provider, set
+// on every batch entry before any value resolution begins (resolveOnce's
+// own resources[] loop), never the schema of whichever entry happens to
+// be resolving right now.
+func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, destroyAddrs map[string]bool, l *core.Ledger) (interface{}, []core.ResolutionInput, error) {
 	to, _ := inner["to"].(string)
 	addrStr, attrPath, err := splitRefTarget(to)
 	if err != nil {
@@ -248,7 +258,7 @@ func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, dest
 		if target.resolvedConfig == nil {
 			return nil, nil, fmt.Errorf("resolve: internal: %s referenced before it was resolved (topo order bug)", addrStr)
 		}
-		if schema.IsComputed(target.ri.Type, attrPath) {
+		if target.provider.Schema.IsComputed(target.ri.Type, attrPath) {
 			return map[string]interface{}{
 				markerComputed: map[string]interface{}{"from": to},
 			}, nil, nil
