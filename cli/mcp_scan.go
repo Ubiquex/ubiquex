@@ -18,6 +18,7 @@ import (
 // --tf-dir (writeback preview, part of the same non-exposed surface) --
 // "boundary by omission."
 type scanJSONOptions struct {
+	Config          *Config
 	Stack           string
 	ResourceType    string
 	ResourceName    string
@@ -34,15 +35,20 @@ type scanJSONOptions struct {
 	K8sAudit        K8sAuditConfig
 }
 
-// computeScanJSON is the shared "read live state, compare, propose"
-// logic behind both `ubx scan --json` and the `ubx_scan` MCP tool --
-// returns the exact same *scanJSON shape. Read-only: it never calls
-// core.Accept. err is non-nil only for a genuine failure (bad --propose,
-// provider acquisition/launch failed, the read itself failed); a
-// classification of "new"/"drifted"/"unchanged" is always a successful
-// result, never an error, matching how a CLI --json caller already sees
-// scan outcomes (the exit-code-1-for-a-finding convention has no
-// equivalent concept here).
+// computeScanJSON is the `ubx_scan` MCP tool's own "read live state,
+// compare, propose" logic. It produces the exact same *scanJSON shape
+// `ubx scan --json` does, but is no longer literally shared code with
+// it -- `cli/scan.go`'s own RunE grew its own [ledger]-aware open
+// (openLedgerForStack, UBI-32) independently, and this function is the
+// one place left that still needed the identical fix; a stale version of
+// this comment claimed the two were still one shared implementation,
+// which stopped being true the moment that happened and was never
+// corrected until now. Read-only: it never calls core.Accept. err is
+// non-nil only for a genuine failure (bad --propose, provider
+// acquisition/launch failed, the read itself failed); a classification
+// of "new"/"drifted"/"unchanged" is always a successful result, never an
+// error, matching how a CLI --json caller already sees scan outcomes (the
+// exit-code-1-for-a-finding convention has no equivalent concept here).
 func computeScanJSON(ctx context.Context, opts scanJSONOptions) (*scanJSON, error) {
 	propose := opts.Propose
 	if propose == "" {
@@ -73,7 +79,12 @@ func computeScanJSON(ctx context.Context, opts scanJSONOptions) (*scanJSON, erro
 	}
 	defer client.Close()
 
-	ledger := core.Open(opts.LedgerDir)
+	ledger, closeLedger, err := openLedgerForStack(ctx, opts.LedgerDir, opts.Stack, opts.Config)
+	if err != nil {
+		return nil, fmt.Errorf("scan %s: %w", addr, err)
+	}
+	defer closeLedger()
+
 	salt, err := ledger.Salt()
 	if err != nil {
 		return nil, fmt.Errorf("scan %s: %w", addr, err)

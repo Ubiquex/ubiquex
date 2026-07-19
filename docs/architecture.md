@@ -1990,7 +1990,7 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
-## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A; LedgerStore interface + git reference impl + s3 store + addressing (including `$cross` by stack name + `[ledger.external]`) built UBI-32 Arc B, live-verified against real S3 including a real two-stack cross-stack pin and neighbor-advance staleness catch -- gs/azblob designed, not wired; PR-acceptance ceremony designed, not built, its own future slice; see STATE.md for exactly which CLI commands are wired)
+## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A; LedgerStore interface + git reference impl + s3 store + addressing (including `$cross` by stack name + `[ledger.external]`) built UBI-32 Arc B, live-verified against real S3 including a real two-stack cross-stack pin and neighbor-advance staleness catch; the full primary CLI surface -- resolve/accept (local and --from-merge)/ship/why/status/scan/revert-plan/writeback/the MCP surface -- all wired onto `.ubx/config`'s own `[ledger]` table; PR-acceptance ceremony built and live-verified against a real GitHub PR + real S3 -- gs/azblob still designed, not wired, its own follow-up; see STATE.md for the full session-by-session history)
 
 Two storage questions, decided separately:
 
@@ -2197,7 +2197,7 @@ place, so `WriteSaltIfAbsent` itself stays a pure store operation; the
 implementation, called only there, never promoted into the shared
 interface as if every store needed an equivalent.
 
-#### PR-acceptance ceremony: designed (UBI-32 Arc B session 1), still not built
+#### PR-acceptance ceremony: designed (UBI-32 Arc B session 1), built (session 3)
 
 `ubx accept --from-merge`'s own verification (docs/schema.md's `pr_merge`
 amendment; [`ubx accept`](https://github.com/Ubiquex/ubiquex-docs)'s own
@@ -2209,41 +2209,38 @@ The proposal file the ceremony verifies against still has to exist as a
 real, committed file in the merged PR; a remote store changes *where the
 accepted record ends up living*, never *what's being verified* or *how*.
 
-The designed shape: **git stays the signing surface, the remote store
-becomes the system of record, mirrored on accept.** Concretely, once
-`AcceptFromMerge`'s existing git/GitHub verification succeeds exactly as
-it does today, the resulting accepted proposal is written through the
-stack's configured `LedgerStore` (`WriteProposalIfAbsent` +
-`AdvanceHead`) rather than assumed to already be "in the ledger" just
-because it's a file in a merged commit. The git-committed proposal file
-is never deleted or treated as disposable afterward — git history is
-permanent regardless — but it stops being where `ubx why`/`ubx status`/
-a subsequent accept's own `Head()` check actually read from, for a
-remote-store stack, the moment this ships: those all read the mirrored,
-authoritative copy in the configured store instead. `ubx why
+The designed shape, now built exactly as designed: **git stays the
+signing surface, the remote store becomes the system of record, mirrored
+on accept.** `AcceptFromMerge`'s own git/GitHub verification runs
+completely unchanged; only *afterward* does `cli/accept.go`'s
+`acceptFromMerge` open the stack's configured `LedgerStore` (via the same
+`openLedgerForStack` local `ubx accept` already used) and write through
+it — `Ledger.Append`'s own `WriteProposalIfAbsent`+`AdvanceHead` CAS
+mechanism was already store-agnostic since Arc B session 1's own
+extraction, so this needed no new mirroring mechanism at all, only
+opening the right store at the right point (after verification, before
+the write). The git-committed proposal file is never deleted or treated
+as disposable afterward — git history is permanent regardless — but for
+a remote-store stack, `ubx why`/`ubx status`/a subsequent accept's own
+`Head()` check all read the mirrored, authoritative copy in the
+configured store instead, never the git-committed file directly. `ubx why
 --verify-acceptance` keeps re-deriving its git/GitHub checks exactly as
-today, entirely independent of which store holds the accepted record —
+before, entirely independent of which store holds the accepted record —
 the ceremony's own evidence trail was never the store's concern to begin
 with.
 
-Still not built, deliberately, across two sessions now — a real design
-pass, ahead of `cli/accept.go`'s own `acceptFromMerge` ever being touched
-for it, matching this arc's own explicit sequencing (`ubx resolve`/local
-`ubx accept`/`ubx ship`/`ubx why`/`ubx status`/`ubx scan` all wired onto
-`LedgerStore` since, session by session — see STATE.md for exactly
-which) rather than quietly folding PR-merge acceptance's own remote-store
-support into whichever session happened to be touching `cli/accept.go`
-anyway. `acceptFromMerge` still opens `core.Open(ledgerDir)`
-unconditionally, confirmed by reading the code, not assumed — it is now
-the *one* remaining git-local-only acceptance path, everything else
-named above already reads `.ubx/config`'s own `[ledger]` table. Its own
-future session's scope is exactly the mechanism above: mirror the
-git/GitHub-verified proposal into the configured `LedgerStore` via
-`WriteProposalIfAbsent`+`AdvanceHead`, nothing about the verification
-itself changing. See docs/ledgerstore-adversarial.md's own "what this
-table doesn't yet cover" for the concrete gap this leaves (a
-`--from-merge` acceptance against a remote-store stack is not yet
-exercised end-to-end).
+Hermetic adversarial rows (docs/ledgerstore-adversarial.md rows 13-16):
+a merge without the proposal file never even opens the store; a tampered
+trailer's hash mismatch is caught before `Ledger.Append` ever touches the
+store (validated proposal or nothing — no partial write); a CAS conflict
+between two merge-derived proposals resolves exactly like local accept's
+own `ErrParentMismatch`; the identical merge commit accepted twice
+resolves exactly like local accept's own `ErrDuplicateProposal`. Live:
+a real PR opened and merged against `Ubiquex/ubiquex-cli` itself,
+`accept --from-merge` genuinely mirroring the accepted record into a
+real S3 bucket (confirmed via a direct `aws s3api get-object`, not just
+trusting `ubx`'s own report), then the merge commit reverted and the
+scratch branch deleted, leaving the repo and the bucket both clean.
 
 ### Addressing: derived by rule, never mapped per stack
 

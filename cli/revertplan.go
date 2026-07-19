@@ -23,6 +23,7 @@ import (
 func newRevertPlanCmd() *cobra.Command {
 	var (
 		ledgerDir string
+		stack     string
 		tfDir     string
 	)
 
@@ -50,8 +51,18 @@ plan"; executor trust comes later).`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: %w", err)}
 			}
 			applyTFDirDefault(cmd, &tfDir, cfg)
+			applyStackDefault(cmd, &stack, cfg)
 
-			ledger := core.Open(ledgerDir)
+			// A bare proposal ID carries no stack of its own (docs/architecture.md
+			// -- Addressing) -- --stack (or its config default) is what a
+			// remote store needs to know which chain to open at all, exactly
+			// like `ubx why`/`ubx ship`.
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: %w", err)}
+			}
+			defer closeLedger()
+
 			p, err := ledger.Read(args[0])
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
@@ -86,6 +97,7 @@ plan"; executor trust comes later).`,
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open -- required only when .ubx/config's [ledger] store is a remote store; unused for the default git store")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory containing .tf files to compute a corrective diff against (optional) -- never written to, ubx never applies anything")
 	return cmd
 }

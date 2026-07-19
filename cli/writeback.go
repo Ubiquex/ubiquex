@@ -25,6 +25,7 @@ import (
 func newWritebackCmd() *cobra.Command {
 	var (
 		ledgerDir string
+		stack     string
 		tfDir     string
 		write     bool
 	)
@@ -47,8 +48,18 @@ func newWritebackCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: %w", err)}
 			}
 			applyTFDirDefault(cmd, &tfDir, cfg)
+			applyStackDefault(cmd, &stack, cfg)
 
-			ledger := core.Open(ledgerDir)
+			// A bare proposal ID carries no stack of its own (docs/architecture.md
+			// -- Addressing) -- --stack (or its config default) is what a
+			// remote store needs to know which chain to open at all, exactly
+			// like `ubx why`/`ubx ship`.
+			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: %w", err)}
+			}
+			defer closeLedger()
+
 			p, err := ledger.Read(args[0])
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
@@ -116,6 +127,7 @@ func newWritebackCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
+	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open -- required only when .ubx/config's [ledger] store is a remote store; unused for the default git store")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", ".", "directory containing the .tf files to write back into")
 	cmd.Flags().BoolVar(&write, "write", false, "actually write the modified file to disk instead of printing a diff (never commits or pushes)")
 	return cmd

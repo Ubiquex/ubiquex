@@ -14,6 +14,7 @@ import (
 // server), since an MCP client has no `.ubx/config`/shell environment of
 // its own to fall back on the way a human's session might.
 type statusJSONOptions struct {
+	Config          *Config
 	LedgerDir       string
 	Stack           string
 	Drift           bool
@@ -24,16 +25,27 @@ type statusJSONOptions struct {
 	Timeout         time.Duration
 }
 
-// computeStatusJSON is the shared "walk the fleet, build the payload"
-// logic behind both `ubx status --json` and the `ubx_status` MCP tool --
-// returns the exact same *statusJSON shape, never a different one. err
-// is non-nil only for a genuine failure (ledger unreadable, provider
-// acquisition/launch failed); a per-resource read failure during --drift
-// is recorded as that resource's own "unreadable" status in the payload,
-// never a function-level error -- the walk always completes, matching
-// `ubx status`'s own "never abort the report" behavior.
+// computeStatusJSON is the `ubx_status` MCP tool's own "walk the fleet,
+// build the payload" logic. It produces the exact same *statusJSON shape
+// `ubx status --json` does, but is no longer literally shared code with
+// it -- `cli/status.go`'s own RunE grew its own [ledger]-aware open
+// (openLedgerForStack, UBI-32) independently, and this function is the
+// one place left that still needed the identical fix; a stale version of
+// this comment claimed the two were still one shared implementation,
+// which stopped being true the moment that happened and was never
+// corrected until now. err is non-nil only for a genuine failure (ledger
+// unreadable, provider acquisition/launch failed); a per-resource read
+// failure during --drift is recorded as that resource's own "unreadable"
+// status in the payload, never a function-level error -- the walk always
+// completes, matching `ubx status`'s own "never abort the report"
+// behavior.
 func computeStatusJSON(ctx context.Context, opts statusJSONOptions) (*statusJSON, error) {
-	ledger := core.Open(opts.LedgerDir)
+	ledger, closeLedger, err := openLedgerForStack(ctx, opts.LedgerDir, opts.Stack, opts.Config)
+	if err != nil {
+		return nil, err
+	}
+	defer closeLedger()
+
 	fleet, err := ledger.Fleet(opts.Stack)
 	if err != nil {
 		return nil, err

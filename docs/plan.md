@@ -1049,6 +1049,25 @@
   into a false failure. Live re-run against real GCP confirms the exact
   scenario that lied now honestly reports `failed` instead. See §A
   destroy that lied below for the full session.
+- 2026-07-19 — UBI-32 Arc B session 3: the PR-acceptance ceremony built
+  exactly as designed, and the rest of the CLI surface (`revert-plan`/
+  `writeback`/the MCP surface) wired onto `.ubx/config`'s own `[ledger]`
+  table — this arc's own remainder list, closed. `acceptFromMerge` opens
+  the stack's configured `LedgerStore` after (never before) its
+  unchanged git/GitHub verification succeeds; no new mirroring mechanism
+  needed, since `Ledger.Append`'s own CAS write was already
+  store-agnostic. Live-verified against a real merged GitHub PR and real
+  S3, then fully reverted/cleaned up. A real, if narrow, divergence
+  found and fixed along the way: the MCP surface's own
+  `computeWhyJSON`/`computeStatusJSON`/`computeScanJSON` had quietly
+  stopped being literally shared code with `ubx why`/`status`/`scan`'s
+  own CLI RunE the moment those grew their own `[ledger]`-aware open in
+  an earlier session — the three MCP-only functions were the actual
+  last unwired readers, not what the prior session's own remainder list
+  named. `ubx propose` was also named in that list but never touches a
+  ledger at all — removed from the remainder as a correction, not
+  wired. See §PR-acceptance ceremony (docs/architecture.md) for the full
+  design-to-build story and STATE.md for the full session.
 
 ## Strategy
 
@@ -2686,6 +2705,88 @@ anything else); 3 new rows in docs/resolver-adversarial.md (11-13);
 repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
 `go test ./... -race -count=1` clean throughout. ubiquex-docs updated
 the same session. Both repos committed and pushed.
+
+**Session 3 (2026-07-19): the PR-acceptance ceremony built exactly as
+designed, and the arc's own remainder list closed.** Session 2's own
+"reconfirmed design-only" scope line is exactly what this session
+picked up. `cli/accept.go`'s `acceptFromMerge` gained a `cfg *Config`
+parameter and now opens the stack's configured `LedgerStore` via
+`openLedgerForStack` — the identical call local `ubx accept` already
+made — right after `AcceptFromMerge`'s own git/GitHub verification
+succeeds, never before it. No new mirroring mechanism exists: `Ledger.
+Append`'s own `WriteProposalIfAbsent`+`AdvanceHead` CAS write was
+already store-agnostic (Arc B session 1's own extraction), so opening
+the right store at the right point is the *entire* change — confirmed
+by reading the code before writing anything, not assumed.
+
+**Hermetic adversarial rows (docs/ledgerstore-adversarial.md 13-16),
+plus a genuine tooling detour finding its own root cause.** New CAS-race/
+idempotency/tamper tests needed a store backend that genuinely shares
+state across separate opens within one test, unlike `mem://` (confirmed
+again, unshared per call) — `file://` was tried next and found broken
+for a different reason: `ledgerstore.Open`'s own bucket+prefix transform
+(designed for s3/gs/azblob's "host=bucket, path=prefix" shape) strips
+`file://`'s own path into an unusable `?prefix=` param, silently
+defaulting to relative-to-cwd writes instead of the intended directory —
+confirmed directly by tracing where objects actually landed, not
+assumed from the transform's own doc comment. Solved properly: a new
+`openRemoteLedgerStore` package-level seam in `cli/ledgeropen.go` (same
+convention as `configSearchStartDir`), letting tests inject one real,
+held-onto `*blob.Bucket` (`memblob.OpenBucket`, not a URL) that every
+`openLedgerForStack` call in a test resolves to. A second real
+`gocloud.dev/blob` behavior confirmed directly along the way, not
+assumed: `blob.PrefixedBucket` *consumes* its own `*Bucket` argument
+(marks it closed as a side effect) and returns a new wrapper — a bucket
+held directly and prefixed more than once becomes unusable for anything
+but a fresh `PrefixedBucket` call; sidestepped by never prefixing at all
+in a single-stack fixture.
+
+**Live finale: a real GitHub PR, merged, mirrored into real S3, fully
+reverted.** A real PR opened against `Ubiquex/ubiquex-cli` itself (via
+`git worktree`, so this session's own uncommitted work-in-progress
+changes were never disturbed), merged via `gh pr merge`, then `ubx
+accept --from-merge` against a stack configured with a real S3 store —
+confirmed genuinely mirrored via a direct `aws s3api get-object`, not
+just `ubx`'s own report, at exactly the address the design predicts.
+Cleaned up completely afterward: the merge commit reverted on `main`
+(pushed directly, not through another PR — matching the prior UBI-11
+live-verification session's own precedent), the scratch branch deleted
+locally and on the remote, the S3 prefix emptied.
+
+**The rest of the arc's own remainder list, resolved — with one real
+correction to what that list actually was.** `ubx revert-plan`/`ubx
+writeback` both gained the identical `--stack` flag `ubx why`/`ubx ship`
+already have (a bare proposal ID carries no stack of its own). The MCP
+surface's own `computeWhyJSON`/`computeStatusJSON`/`computeScanJSON`
+(`cli/mcp_why.go`/`mcp_status.go`/`mcp_scan.go`) all gained the same
+`openLedgerForStack` wiring — but a real, if narrow, divergence was
+found first: these three functions' own doc comments claimed they were
+still literally shared code with `ubx why`/`status`/`scan`'s own CLI
+`RunE`, which stopped being true the moment those commands grew their
+own `[ledger]`-aware lookups in an earlier session — the doc comments
+were never corrected, so this session's own read of the code (not the
+prior remainder list) is what found the MCP surface as the real last
+gap, not just confirmed a known one. `ubx_why` gained a new optional
+`stack` MCP input field to match. `ubx propose`, also named in the
+prior session's own remainder list, was checked directly and found to
+never touch a ledger at all (it only computes a hash from a file) —
+removed from the remainder as a correction, not wired, since there was
+never anything to wire.
+
+New hermetic tests: `cli/accept_frommerge_remote_test.go` (5 tests),
+`cli/mcp_remote_test.go` (4 tests), `cli/revertplan_writeback_remote_
+test.go` (4 tests) — all against the shared-bucket seam above. Full
+repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout. docs/architecture.md's
+own PR-ceremony section updated from "designed, still not built" to
+built; docs/ledgerstore-adversarial.md gained rows 13-16 and its own
+"what this table doesn't yet cover" trimmed accordingly. ubiquex-docs
+updated the same session. Both repos committed and pushed. **UBI-32
+closed** — the three remaining named gaps from session 2's own list
+(gs/azblob live conformance, orphaned-proposal GC, a cross-stack pin
+chain longer than one hop) were never part of this arc's own core scope
+and remain open, named honestly in the closing Linear comment rather
+than silently folded in or silently dropped.
 
 ## Deferred (explicitly not now)
 

@@ -8,11 +8,16 @@
 // cobra subcommand like every other verb, just one that blocks serving
 // requests instead of running once and exiting.
 //
-// Three tools, each a thin wrapper over the exact same computeWhyJSON/
-// computeStatusJSON/computeScanJSON functions the CLI's own --json code
-// paths call (cli/mcp_why.go, cli/mcp_status.go, cli/mcp_scan.go) --
-// never a parallel API, never a different JSON shape than UBI-20's
-// format:1 contract already defines.
+// Three tools (cli/mcp_why.go, cli/mcp_status.go, cli/mcp_scan.go), each
+// producing the exact same JSON shape the CLI's own --json output does --
+// never a parallel API, never a different shape than UBI-20's format:1
+// contract already defines. Not literally shared code with the CLI's own
+// --json path, though: `cli/why.go`/`cli/status.go`/`cli/scan.go` each
+// grew their own [ledger]-aware lookup (openLedgerForStack, UBI-32)
+// independently of these compute*JSON functions, which needed the
+// identical fix applied here separately (a real, if narrow, divergence
+// this session found and closed -- see each compute*JSON function's own
+// doc comment).
 //
 // Boundary by omission, stated here and in --help, not left to be
 // inferred: `ubx accept`/`ship`/`writeback`/`revert-plan` (and
@@ -128,6 +133,7 @@ func providerConfigJSON(m map[string]any) (string, error) {
 
 type whyToolInput struct {
 	Query            string `json:"query" jsonschema:"a resource address (<stack>.<type>.<name>) or a 64-character-hex proposal ID. A resource address returns its FULL history (every adoption and drift, newest first); a proposal ID returns one specific decision in detail, including attribution (who/when/from where) and every changed attribute."`
+	Stack            string `json:"stack,omitempty" jsonschema:"which stack's ledger to open, for a bare proposal-id query -- required only when .ubx/config's [ledger] store is a remote store (a resource-address query already names its own stack); unused for the default git store"`
 	LedgerDir        string `json:"ledger_dir,omitempty" jsonschema:"root directory containing ledger/ and .ubx/ (default: the server's own current directory)"`
 	VerifyAcceptance bool   `json:"verify_acceptance,omitempty" jsonschema:"only meaningful with a proposal ID: re-derive a pr_merge acceptance against current git history and (if github_repo is set) the GitHub API, and report whether it still checks out"`
 	RepoDir          string `json:"repo_dir,omitempty" jsonschema:"local git working tree to verify verify_acceptance's merge commit against (default: the server's own current directory)"`
@@ -146,7 +152,15 @@ func registerWhyTool(server *mcp.Server) {
 			"a salted fingerprint (see the \"$redacted\" shape), so you can report that it changed without ever " +
 			"seeing what it changed to.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in whyToolInput) (*mcp.CallToolResult, any, error) {
-		payload, err := computeWhyJSON(ctx, orDot(in.LedgerDir), in.Query, in.VerifyAcceptance, orDot(in.RepoDir), in.GithubRepo)
+		cfg, err := LoadConfig(os.Stderr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ubx_why: %w", err)
+		}
+		stack := in.Stack
+		if stack == "" {
+			stack = cfg.Stack
+		}
+		payload, err := computeWhyJSON(ctx, cfg, orDot(in.LedgerDir), stack, in.Query, in.VerifyAcceptance, orDot(in.RepoDir), in.GithubRepo)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -203,6 +217,7 @@ func registerStatusTool(server *mcp.Server) {
 		}
 
 		payload, err := computeStatusJSON(ctx, statusJSONOptions{
+			Config:          cfg,
 			LedgerDir:       orDot(in.LedgerDir),
 			Stack:           in.Stack,
 			Drift:           in.Drift,
@@ -288,6 +303,7 @@ func registerScanTool(server *mcp.Server) {
 		}
 
 		payload, err := computeScanJSON(ctx, scanJSONOptions{
+			Config:          cfg,
 			Stack:           stack,
 			ResourceType:    in.Type,
 			ResourceName:    in.Name,

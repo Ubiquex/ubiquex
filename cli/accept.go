@@ -68,7 +68,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, confirmDestroys)
+				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -195,7 +195,7 @@ func checkDestroysConfirmed(p *core.Proposal, confirmed bool) error {
 // file or the caller's own say-so (see docs/architecture.md's Decision
 // loop section, and core.AcceptFromMerge's doc comment for what's
 // actually enforced).
-func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string, confirmDestroys bool) error {
+func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string, confirmDestroys bool) error {
 	if proposalFile == "" || githubRepo == "" {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file and --github-repo")}
 	}
@@ -238,7 +238,26 @@ func acceptFromMerge(cmd *cobra.Command, ledgerDir, mergeSHA, repoDir, proposalF
 		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
-	ledger := core.Open(ledgerDir)
+	// UBI-32: git stays the signing surface -- everything above this line
+	// (commit history, the trailer hash, reviewer state) is unchanged,
+	// still entirely about git/GitHub, regardless of what store the stack
+	// configures. Only now, once that verification has already succeeded,
+	// does the accepted record get written -- through the stack's own
+	// configured LedgerStore, exactly like the local-accept path a few
+	// lines above in this same file. core.AcceptFromMerge/Ledger.Append
+	// were already store-agnostic (Arc B session 1's own LedgerStore
+	// extraction) -- CAS-guarded WriteProposalIfAbsent+AdvanceHead under
+	// l.store regardless of git or remote -- so no new mirroring mechanism
+	// exists here; opening the right store is the entire change. The
+	// git-committed proposal file itself is never touched or treated as
+	// disposable -- git history stays permanent regardless of where the
+	// authoritative accepted record ends up living.
+	ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, p.Stack, cfg)
+	if err != nil {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
+	}
+	defer closeLedger()
+
 	accepted, err := core.AcceptFromMerge(ledger, &p, derived.ClaimedHash, core.MergeAcceptance{
 		MergeSHA:     derived.MergeSHA,
 		PRNumber:     derived.PRNumber,
