@@ -78,6 +78,8 @@ func New(cfg Config) *Adapter {
 
 func (a *Adapter) Name() string { return "claude" }
 
+func (a *Adapter) Model() string { return a.model }
+
 // Draft issues one structured-output request per docs/intent-provider.md's
 // own "The Claude adapter" section: output_config.format constrains the
 // response to schema.go's own IntentDraftJSONSchema (the API-level half
@@ -199,24 +201,57 @@ a cloud provider. Everything you produce is reviewed by a human before
 anything happens.
 
 The single most important rule: ambiguity is visible content, never a
-silent choice. Where the document is genuinely ambiguous ("like staging
-but smaller"), record your interpretation explicitly in
-intent.assumptions -- never just pick a value and say nothing. Where the
-document says nothing about something at all, record what you filled in
-and why in intent.defaults. Where two stated requirements conflict, pick
-the single interpretation you judge most likely correct, and record the
-conflict in intent.questions with blocking: true, naming both sides
-explicitly. You must always produce one complete, valid draft -- never
-refuse, never leave a field blank because you're unsure, and never
-produce two competing drafts.
+silent choice. Decide every concrete resource value FIRST -- reason
+through the document fully before you start writing the JSON output.
+Then, for each place your reasoning had to interpret something
+ambiguous ("like staging but smaller"), record that real interpretation
+in intent.assumptions -- what you chose and the specific reasoning that
+led there, referencing the actual concrete value you picked (e.g.
+"chose db.t3.micro, one tier below staging's own db.t3.medium, since
+the document said smaller but named no size"). Where the document says
+nothing about something at all, record what you filled in and why, with
+the same specificity, in intent.defaults. Where two stated requirements
+conflict, pick the single interpretation you judge most likely correct,
+and record the conflict in intent.questions with blocking: true, naming
+both sides explicitly. You must always produce one complete, valid
+draft -- never refuse, never leave a field blank because you're unsure,
+and never produce two competing drafts.
+
+The "resources" array is the actual change -- every resource you reason
+about in assumptions/defaults/questions MUST also appear as a real
+entry in "resources", with a real "config". Before you finish, check:
+does every address you named in an "affects" list correspond to an
+entry that actually exists in "resources"? A draft whose reasoning
+describes a resource but whose "resources" array is empty or missing
+that resource is wrong, even if every other field looks complete.
+
+Every entry you write in assumptions, defaults, or questions must
+describe a real, specific interpretation tied to an actual value in
+your own resources -- never generic filler text ("TBD", "n/a", or any
+placeholder-shaped string that isn't a real description). If a document
+genuinely has nothing ambiguous, nothing unaddressed, and nothing
+contradictory, leave that array empty -- an empty array is always
+correct when there is truly nothing to report; a low-content entry
+never is.
+
+How confident you feel in an interpretation is NOT the test for whether
+it belongs in assumptions -- whether the SOURCE document was specific
+is the test. A comparative or qualitative phrase in the document
+("smaller", "cost-effective", "similar to") is ALWAYS a real ambiguity
+that requires an assumptions entry once you turn it into a concrete
+value, no matter how obviously correct your chosen value feels to you.
+Before you finish, re-read the document sentence by sentence and check:
+did I turn any comparative, qualitative, or vague phrase into a
+specific number, size, or name? If yes, that conversion belongs in
+assumptions even if you're sure you got it right.
 
 An inline "@<address>" mention (e.g. "@payments.aws_vpc.main") names an
 existing resource by its canonical <stack>.<type>.<name> address --
-transcribe it as a reference in the relevant config value using the
-exact string "$ref:<address>.<path>" as a placeholder (a human-reviewed
-deterministic resolver replaces this later; you never resolve it
-yourself). If an @-mention doesn't look like a real, resolvable address,
-record that as a question rather than guessing.
+transcribe it into the relevant config value as the literal string
+"$ref:<address>.<path>" (a human-reviewed deterministic resolver
+substitutes the real value later; you never resolve it yourself). If an
+@-mention doesn't look like a real, resolvable address, record that as
+a question rather than guessing.
 
 Never invent a resource type name you are not reasonably confident is
 real. If you are uncertain a type exists, still provide your best answer

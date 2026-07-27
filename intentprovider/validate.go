@@ -100,6 +100,20 @@ func parseAndValidate(raw json.RawMessage, stack string) (*resolver.IntentFile, 
 	if wire.Intent.Summary == "" {
 		errs = append(errs, "intent.summary: must not be empty")
 	}
+	// A real bug found live, not assumed away: a draft with a
+	// substantive summary/assumptions describing a resource, but an
+	// EMPTY resources[] -- the model reasoned about a change and then
+	// never actually recorded it. Confirmed against the real Claude API
+	// (see STATE.md's own account of this session): a real response
+	// carried a fully-reasoned intent.assumptions entry naming
+	// aws_db_instance.payments.instance_class while resources[] was
+	// simply []. Nothing else in this function catches "described but
+	// never declared" -- a totally empty draft that changes nothing is
+	// never a valid change proposal, so this is a hard, real requirement,
+	// not a stylistic nicety.
+	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 {
+		errs = append(errs, "draft has no resources and no destroys -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[]")
+	}
 
 	seen := map[string]bool{}
 	resources := make([]resolver.ResourceIntent, 0, len(wire.Resources))

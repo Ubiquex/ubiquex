@@ -30,6 +30,8 @@ type scriptedResponse struct {
 
 func (a *scriptedAdapter) Name() string { return "scripted" }
 
+func (a *scriptedAdapter) Model() string { return "scripted-model" }
+
 func (a *scriptedAdapter) Draft(_ context.Context, req DraftRequest) (json.RawMessage, error) {
 	a.calls = append(a.calls, req)
 	if len(a.calls) > len(a.responses) {

@@ -1133,6 +1133,50 @@
   wedge subsection above for the full account, and STATE.md for the
   complete session narrative. Full repo build/vet/gofmt/test clean
   throughout. Session 3 (the md pipeline) is next.
+- 2026-07-27 — UBI-41 session 3: live-validated session 2's own unverified
+  structured-output design decision FIRST (a real credential obtained;
+  confirmed correct on the first live call — `resources[].config` really
+  does round-trip as a JSON-encoded string), then built the md pipeline:
+  `[intent]` config wiring (`cli/config.go`'s `IntentConfig`,
+  `cli/configcascade.go`'s known-keys extension,
+  `cli/intentadapter.go`'s `buildIntentAdapter`), `ubx propose
+  --from-doc` (a new mode on the existing `propose` verb, disambiguated
+  from its pre-existing hash-a-resolved-proposal mode),
+  redaction-at-capture (`intentprovider/redact.go`, pattern-based, run
+  before any network call), and ambiguity-content rendering
+  (`cli/intentrender.go`). Three real findings, all from actually running
+  against the real API, none assumed: (1) the model's own first live
+  response put the literal word "placeholder" in an assumption's text —
+  root-caused to the system prompt's own wording (describing the `$ref`
+  marker "as a placeholder") priming that exact word; fixed by rewording
+  the prompt and adding an explicit no-generic-filler instruction; (2) a
+  more serious bug — a real draft's `intent.assumptions`/`.defaults`
+  described concrete resource decisions in full detail while
+  `resources[]` was completely empty, because nothing required the two
+  to agree; fixed with a new hard validation rule
+  (`len(resources)==0 && len(destroys)==0` is now a rejection) plus a
+  stronger system-prompt check-before-you-finish instruction, re-verified
+  live twice after the fix; (3) a genuinely surprising, non-bug finding —
+  one live run returned a real safety-classifier refusal (category
+  "bio") on an entirely innocuous database-provisioning doc; the
+  adapter's own existing refusal handling worked exactly as designed
+  (a clear, named, non-retried error), named honestly as a real reliability
+  data point rather than smoothed over. Full live finale, twice: the real
+  payments fixture doc through the real `ubx propose --from-doc` binary
+  with a real `.ubx/config` `[intent]` table (`key_ref.env` naming a
+  deliberately non-default env var, proving the config-cascade
+  dereferencing path itself, not just the SDK's own ambient fallback),
+  producing a complete, correctly-provenanced draft; a second run with a
+  real-shaped (AWS's own public example) secret injected into the doc
+  confirmed redaction-at-capture survives a genuine round trip (a direct
+  `grep` of the written draft found zero occurrences of the secret, not
+  assumed from the warning alone). Hermetic tests throughout (fake
+  adapters via a package-level DI seam, `buildIntentAdapter`, mirroring
+  `configSearchStartDir`'s own precedent); full repo
+  build/vet/gofmt/`test -race` clean. See docs/intent-provider.md's own
+  "Session 3" subsection and STATE.md for the complete narrative. No
+  ubiquex-docs update this session (deferred to slice 3, "docs +
+  polish," per docs/intent-provider.md's own Implementation slices).
 
 ## Strategy
 
@@ -2876,8 +2920,8 @@ docs/schema.md's amendment (`Proposal.Intent`'s new
 `schema_version` bump); docs/architecture.md's new headline section and
 corrected `[intent]` config note. Sessions 2-4 (interface+Claude
 adapter+conformance harness; the md pipeline live-verified against the
-real Claude API; docs+polish) are still queued — next candidate work for
-whoever picks up UBI-41.
+real Claude API; docs+polish) were still queued as of this session —
+sessions 2 and 3 are now built (below); docs+polish remains.
 
 **Session 2 (2026-07-27): interface + Claude adapter + conformance
 harness — real code, hermetic, one deliberate scope deferral, two real
@@ -2927,6 +2971,85 @@ actually read by any command yet). Both repos: code committed and
 pushed. Session 3 (the md pipeline: `[intent]` config wiring, `ubx
 propose --from-doc`, redaction-at-capture, live-verified end to end) is
 next.
+
+**Session 3 (2026-07-27): live-validated first, then the md pipeline
+built — three real findings, full live finale twice.** Per this
+session's own explicit instruction, session 2's own unverified
+structured-output shape decision (`resources[].config` as a JSON-encoded
+string) was confirmed correct against the real API before anything else
+was built — a real credential was obtained, and the very first live call
+round-tripped the config string cleanly. That same first call surfaced a
+real bug: the model's own assumption text was the literal word
+"placeholder," root-caused to the system prompt's own wording (which
+described the `$ref` marker "as a placeholder") priming the model to
+echo it — fixed by rewording the prompt.
+
+`[intent]` config wiring (`cli/config.go`'s `IntentConfig`/`KeyRefConfig`/
+`VertexConfig`, `cli/configcascade.go`'s known-keys extension,
+`cli/intentadapter.go`'s `buildIntentAdapter` — a package-level DI seam
+for hermetic tests, the same pattern `configSearchStartDir` already
+establishes); `ubx propose --from-doc <file>.md --stack <stack>
+[--out ...]`, a new mode on the existing `propose` verb (disambiguated
+from its own pre-existing "hash a resolved proposal for a PR trailer"
+mode — `--from-doc` and a positional argument are mutually exclusive,
+checked); `intentprovider/redact.go` (pattern-based redaction-at-capture
+— AWS/Anthropic/OpenAI-style key patterns, PEM blocks, Bearer tokens, a
+generic labeled-credential heuristic — run before any network call
+leaves this machine); `cli/intentrender.go` (the human-facing render of
+`assumptions`/`defaults`/`questions`, printed before the raw JSON draft).
+
+**A second, more serious bug found live**: a real draft's own
+`intent.assumptions`/`.defaults` described concrete decisions about
+`aws_db_instance.payments.instance_class` and related attributes in
+full detail, while the draft's own `resources` array was completely
+empty — nothing in `parseAndValidate` required the two to agree. Fixed
+with a new hard validation rule (`len(resources) == 0 &&
+len(destroys) == 0` is a rejection, forcing a retry) and a
+strengthened system-prompt "every address you name must correspond to
+a real resources[] entry" instruction; re-verified live twice more,
+confirmed fixed both times.
+
+**A third, genuinely surprising but non-bug finding**: one live run
+returned a real safety-classifier refusal (`category: "bio"`) on a
+completely innocuous database-provisioning smoke-test doc — the
+adapter's own existing refusal-handling code worked exactly as
+designed (a clear, distinct, non-retried error), so nothing needed
+fixing; named honestly as a real reliability data point (this project's
+own "publish real numbers" culture) rather than smoothed over. A
+production deployment would reduce this via Claude's own server-side
+`fallbacks` parameter — named as a real, concrete, explicitly
+out-of-scope follow-up.
+
+**Full live finale, twice, through the real built `ubx` binary**: the
+payments fixture doc, a real `.ubx/config` `[intent]` table whose
+`key_ref.env` named a deliberately non-default environment variable
+(proving the config-cascade's own dereferencing path, not just the
+SDK's own ambient-credential fallback), producing a complete,
+correctly-provenanced draft (`document`/`intent_provider` sources, a
+populated `resources` array matching every `affects` path named in the
+assumptions/defaults). A second run — the identical doc with a
+real-shaped (AWS's own public example) access key injected into the
+prose — confirmed redaction-at-capture survives a genuine round trip:
+the CLI's own warning fired, and a direct `grep` of the written draft
+file found zero occurrences of the secret, not assumed from the
+warning alone.
+
+Hermetic tests throughout, no network in the default suite:
+`intentprovider/redact_test.go` (every pattern, never leaks the
+original text, always returns a fresh copy), `cli/intentadapter_test.go`
+(`resolveKeyRef`'s three cases, `buildIntentAdapter`'s defaulting and
+error propagation), `cli/propose_from_doc_test.go` (a fake
+`intentprovider.Adapter` injected via `buildIntentAdapter`'s own DI
+seam — draft-writing, ambiguity rendering, `--out`, `--stack` required,
+`--from-doc`+positional-arg mutual exclusivity, redaction firing before
+the adapter ever sees the raw content, adapter-error propagation).
+`intentprovider/validate_test.go` gained the empty-resources regression
+case. Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout. No ubiquex-docs update
+this session — deferred to slice 3 ("docs + polish," docs/intent-provider.md's
+own Implementation slices), per protocol's docs-debt exception. Both
+repos: code committed and pushed. **UBI-41 left open, not closed** —
+slice 3 (ubiquex-docs, the per-adapter conformance report) is next.
 
 ## Deferred (explicitly not now)
 

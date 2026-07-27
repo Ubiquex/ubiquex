@@ -37,6 +37,13 @@ type Adapter interface {
 	// results, and error messages -- "claude", "openai", "gemini", "ollama".
 	Name() string
 
+	// Model identifies which model this adapter instance is configured
+	// to use -- needed uniformly by PopulateSources's own "<adapter>:<model>"
+	// intent_provider source Ref, so provenance never depends on a
+	// caller separately tracking what it passed to a specific adapter's
+	// own constructor.
+	Model() string
+
 	// Draft transcribes one authoring document into a single intent/v1
 	// draft attempt, returning the adapter's raw structured-output JSON
 	// UNVALIDATED against intent/v1 -- validation is DraftWithRetry's own

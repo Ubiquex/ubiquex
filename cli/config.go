@@ -46,7 +46,55 @@ type Config struct {
 	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
 	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 	Ledger          LedgerConfig              `toml:"ledger" json:"ledger"`
+	Intent          IntentConfig              `toml:"intent" json:"intent"`
 	Root            bool                      `toml:"root" json:"root"`
+}
+
+// IntentConfig is .ubx/config's [intent] table (UBI-41,
+// docs/intent-provider.md's own "Component 2" section): which intent-
+// provider adapter transcribes an authoring document into an intent/v1
+// draft, and how it authenticates. Cascade content like every other
+// table here, resolved via cli/intentadapter.go's buildIntentAdapter.
+//
+// KeyRef is never material -- the secrets rule extended one layer up
+// from the ledger to ubx's own config (docs/intent-provider.md: "a
+// literal API key sitting in a git-tracked cascade file is exactly the
+// 'compromised the moment anyone else ever clones the repo' failure...
+// transplanted one layer up"). Env names an environment variable read
+// only at the moment of the API call, never persisted, logged, or
+// hashed into anything.
+//
+// Auth/Vertex settle Gemini's own API-key-vs-Vertex-AI auth split
+// (design-room comment on the ticket) at the config-shape level, ahead
+// of a Gemini adapter actually existing -- "auth" empty/"api_key" means
+// KeyRef applies; "auth": "vertex" means ambient GCP Application
+// Default Credentials apply instead (matching the GCP provider binary's
+// own existing credential posture) and KeyRef is refused if also set.
+// No adapter reads Vertex yet (only "claude" is built, UBI-41 session
+// 2) -- the shape is settled so a future Gemini session's own config
+// wiring is additive, never a reshape.
+type IntentConfig struct {
+	Adapter string       `toml:"adapter" json:"adapter"`
+	Model   string       `toml:"model" json:"model"`
+	KeyRef  KeyRefConfig `toml:"key_ref" json:"key_ref"`
+	Auth    string       `toml:"auth" json:"auth"`
+	Vertex  VertexConfig `toml:"vertex" json:"vertex"`
+}
+
+// KeyRefConfig is IntentConfig.KeyRef -- a reference to where a real key
+// lives, never the key itself. Env is an environment variable name; the
+// same shape $secret's own {"ref": "..."} marker already establishes
+// elsewhere in this codebase, reused as a naming convention here.
+type KeyRefConfig struct {
+	Env string `toml:"env" json:"env"`
+}
+
+// VertexConfig is IntentConfig.Vertex -- Google Cloud project/location
+// for Vertex AI access, consulted only when IntentConfig.Auth ==
+// "vertex". See IntentConfig's own doc comment.
+type VertexConfig struct {
+	Project  string `toml:"project" json:"project"`
+	Location string `toml:"location" json:"location"`
 }
 
 // LedgerConfig is .ubx/config's [ledger] table (UBI-32 Arc B,

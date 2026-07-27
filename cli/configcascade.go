@@ -356,10 +356,22 @@ var knownTopLevelKeys = map[string]bool{
 	"provider": true, "provider_config": true,
 	"providers": true, "provider_configs": true,
 	"k8s_audit": true, "ledger": true, "root": true,
+	"intent": true,
 }
 var knownProviderKeys = map[string]bool{"path": true, "source": true, "version": true}
 var knownK8sAuditKeys = map[string]bool{"cluster": true, "region": true, "log_group": true}
 var knownLedgerKeys = map[string]bool{"store": true, "external": true}
+
+// knownIntentKeys is IntentConfig's own known shape (UBI-41,
+// docs/intent-provider.md's own "Unknown-key checking, extended" note --
+// this is that extension, built). key_ref/vertex are themselves nested
+// objects (env; project/location) but, matching every other table here,
+// only checked one level deep -- no existing table's own unknown-key
+// check recurses further than its own immediate sub-keys either.
+var knownIntentKeys = map[string]bool{
+	"adapter": true, "model": true, "key_ref": true,
+	"auth": true, "vertex": true,
+}
 
 // warnUnknownKeys checks one already-parsed layer against config's known
 // shape, warning (never failing) for anything it doesn't recognize --
@@ -386,6 +398,8 @@ func warnUnknownKeys(tree genericTree, file string, warnOut io.Writer) {
 			warnUnknownSubKeys(tree[k], file, "k8s_audit", knownK8sAuditKeys, warnOut)
 		case "ledger":
 			warnUnknownSubKeys(tree[k], file, "ledger", knownLedgerKeys, warnOut)
+		case "intent":
+			warnUnknownSubKeys(tree[k], file, "intent", knownIntentKeys, warnOut)
 		}
 	}
 }

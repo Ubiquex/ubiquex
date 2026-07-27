@@ -313,6 +313,86 @@ constraint resolved concretely and one real bug found live:
   since the full underlying message still reaches the caller either way,
   while a looser substring match risks mis-firing on an unrelated error).
 
+### Session 3 (2026-07-27): the config-as-string finding live-confirmed FIRST, then the md pipeline built, two more real bugs found live
+
+Per this session's own explicit instruction — confirm or correct
+session 2's own unverified structured-output shape decision before
+building anything on top of it — a real credential was obtained and
+the config-as-string design (validate.go's own `wireIntentFile`) was
+checked directly against the real API before any further code was
+written. **Confirmed correct on the first live call**: Claude accepted
+the schema and returned `resources[].config` as a properly
+JSON-escaped string, decoding cleanly into a real `json.RawMessage`.
+
+**A real bug found in that same first live call, not the schema
+itself**: the model's own `intent.assumptions[0].text` was the literal
+string `"placeholder"`. Root-caused directly (not guessed): the system
+prompt's own wording, describing the `$ref:<address>.<path>` marker
+"as a placeholder," had primed the model to echo that exact word as
+filler content once. Fixed by removing the word "placeholder" from the
+system prompt entirely and adding an explicit instruction that a
+low-content or generic entry is never acceptable — re-ran live and
+confirmed substantive, specific assumption text tied to the real
+concrete value chosen. A further live sample (multiple real calls)
+showed the design center working as intended most of the time but not
+deterministically (an inherent property of LLM output, not a bug) — a
+second prompt-strengthening pass ("confidence isn't the test, ambiguity
+in the source is") measurably improved the hit rate further; exact
+numbers in STATE.md's own account rather than overclaimed here.
+
+**`[intent]` config wiring, `ubx propose --from-doc`, redaction-at-
+capture, and ambiguity-content rendering all built** per this session's
+own remaining task list — see docs/plan.md's own session-3 changelog
+entry for the itemized account (`cli/config.go`'s `IntentConfig`,
+`cli/intentadapter.go`'s `buildIntentAdapter`, `cli/propose.go`'s
+`--from-doc` mode, `intentprovider/redact.go`, `cli/intentrender.go`).
+
+**A second real bug found live, more serious than the first**: a real
+draft's own `intent.assumptions`/`intent.defaults` described concrete
+decisions about `aws_db_instance.payments.instance_class` and related
+attributes in full, specific detail — but the draft's own top-level
+`resources` array was completely empty. Nothing in `parseAndValidate`
+required a non-empty `resources`/`destroys` pair; a draft that reasons
+about a change without ever recording it as a real resource entry
+passed validation cleanly. Fixed the same session: `parseAndValidate`
+now hard-rejects `len(resources) == 0 && len(destroys) == 0` (a draft
+that changes nothing is never a valid change), and the system prompt
+gained an explicit "every address you name in an affects list must
+correspond to a real resources[] entry" check-before-you-finish
+instruction. Re-ran live twice more, unprompted, and confirmed a fully
+populated `resources` array both times, matching every address named
+in the accompanying assumptions/defaults.
+
+**A third, genuinely surprising live-only finding, not a bug**: a
+later live run returned `stop_reason: "refusal"`, category `"bio"`, for
+the plain payments-database smoke-test doc — a real, if rare, safety-
+classifier false positive on entirely innocuous content (documented as
+a real, known possibility by Anthropic's own docs, not something this
+project can prevent). The adapter's own existing refusal handling
+(`resp.StopReason == anthropic.StopReasonRefusal`) fired exactly as
+designed — a clear, named, non-retried error — so nothing needed
+fixing; named here as an honest, real data point (this codebase's own
+"publish real, honest reliability numbers" culture,
+docs/reliability-report.md's own precedent) rather than smoothed over.
+A production deployment would reduce this via Claude's own server-side
+`fallbacks` parameter (a different model retries automatically on a
+refusal) — explicitly out of scope for this session, named as a real,
+concrete follow-up rather than built speculatively.
+
+**Full live finale, twice**: the real payments fixture doc, through the
+real Claude API, through the real `ubx propose --from-doc` binary,
+using a real `.ubx/config` `[intent]` table whose `key_ref.env` named a
+deliberately non-default environment variable (proving the config-
+cascade dereferencing path actually runs, not just the SDK's own
+ambient-credential fallback) — produced a real, complete, well-formed
+intent/v1 draft file with populated `document`/`intent_provider`
+sources and a fully populated `resources` array. A second live finale
+run, the identical doc with a real-shaped (AWS's own public example)
+access key injected into the prose, confirmed redaction-at-capture
+survives a genuine round trip: the warning fired, and the secret
+verified absent from the written draft with a direct `grep` (zero
+occurrences), not assumed from the warning alone.
+
 ## Component 2 — the `[intent]` config table
 
 Rides the identical config-cascade machinery every other table already
@@ -696,18 +776,30 @@ future session picks this up without re-deriving the shape:
    `ubx propose --from-doc` exists to read it (`claude.Config.APIKey` is
    this session's own stand-in, resolved by whatever calls
    `claude.New` directly).
-2. **The md pipeline + ambiguity UX.** `[intent]` config wiring
-   (`cli/configcascade.go`'s known-keys extension, deferred from slice 1
-   above); new `ubx propose --from-doc <file>.md [--stack ...]` verb:
-   reads the doc, runs redaction-at-capture, resolves `key_ref` into a
-   real API key and constructs `claude.New`, calls `DraftWithRetry`,
-   writes the resulting draft file, and stops (never auto-chains into
-   `resolve`). `ubx why`/a review-facing render
-   of `assumptions`/`defaults`/`questions` (today's plain-JSON draft is
-   already reviewable; a nicer human-facing rendering is this slice's
-   own polish, not a schema change). Live-verified end to end against
-   the real Claude API and a real stack, matching every other arc's own
-   "hermetic, then live" discipline.
+2. **The md pipeline + ambiguity UX — built, session 3 (2026-07-27).**
+   `[intent]` config wiring (`cli/config.go`'s `IntentConfig`,
+   `cli/configcascade.go`'s known-keys extension, `cli/intentadapter.go`'s
+   `buildIntentAdapter`); `ubx propose --from-doc <file>.md --stack
+   <stack> [--out ...]` (a new mode on the existing `ubx propose` verb,
+   disambiguated from its own pre-existing hash-a-resolved-proposal
+   mode): reads the doc, runs redaction-at-capture
+   (`intentprovider/redact.go`), resolves `key_ref` into a real API key
+   and constructs the configured adapter, calls `DraftWithRetry`,
+   populates provenance, renders the ambiguity content
+   (`cli/intentrender.go`), writes the resulting draft file, and stops
+   (never auto-chains into `resolve` -- unchanged from the design).
+   Live-verified end to end against the real Claude API and a real
+   `.ubx/config`-configured stack, twice (the plain payments doc, and a
+   version with a real-shaped secret injected to confirm redaction
+   survives a genuine round trip) -- see this document's own new
+   "Session 3" subsection above and STATE.md for the full account,
+   including two more real bugs found live and fixed the same session.
+   `ubx why`'s own rendering of ambiguity content on an already-shipped
+   proposal is NOT built this session (out of this slice's own scope --
+   `ubx propose --from-doc`'s own terminal rendering, built this
+   session, is the reviewable surface for a fresh draft; `ubx why`
+   rendering it for a proposal already in the ledger is a small, real,
+   named follow-up for whoever picks this up next).
 3. **Docs + polish.** ubiquex-docs gets a new guide (the real `ubx
    propose --from-doc` transcript, per this project's own "user-visible
    changes update ubiquex-docs in the same session" rule); the

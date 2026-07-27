@@ -17,6 +17,8 @@ type fakeAdapter struct{ draft string }
 
 func (f *fakeAdapter) Name() string { return "fake" }
 
+func (f *fakeAdapter) Model() string { return "fake-model" }
+
 func (f *fakeAdapter) Draft(context.Context, intentprovider.DraftRequest) (json.RawMessage, error) {
 	return json.RawMessage(f.draft), nil
 }

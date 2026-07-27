@@ -85,6 +85,15 @@ func TestParseAndValidate_RejectsCases(t *testing.T) {
 			raw:     `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"sources":[{"kind":"document"}]}`,
 			wantErr: "invalid JSON",
 		},
+		{
+			// A real bug found live against the real Claude API (see
+			// STATE.md): a substantive summary/assumptions describing a
+			// resource, but an empty resources[] -- the model reasoned
+			// about a change and never actually recorded it.
+			name:    "empty resources and empty destroys",
+			raw:     `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"provision a database like staging but smaller","assumptions":[{"text":"chose db.t3.small","affects":["aws_db_instance.payments.instance_class"]}],"defaults":[],"questions":[]},"resources":[],"destroys":[]}`,
+			wantErr: "no resources and no destroys",
+		},
 	}
 
 	for _, tt := range tests {
