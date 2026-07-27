@@ -744,13 +744,15 @@ precisely because its own ambiguity-handling requirement is the design
 center this whole arc exists to prove out, not an incidental example
 chosen for convenience.
 
-**Per-adapter published results.** Each adapter that passes the full
-fixture suite gets a "supported" line and a real, published pass/fail
-record — the same posture docs/reliability-report.md already established
-for the provider layer (real transcripts, not hand-waved claims). This
-document does not draft that report; it exists once real adapters exist
-to run it against, in a later session, matching this project's own
-"don't scaffold an empty doc" discipline.
+**Per-adapter published results — docs/intent-provider-conformance-report.md
+(built, session 4).** Each adapter that passes the full fixture suite
+gets a "supported" line and a real, published pass/fail record — the
+same posture docs/reliability-report.md already established for the
+provider layer (real transcripts, not hand-waved claims). Claude's own
+first real numbers: 5 of 6 fixture runs passed, the one real failure
+named and explained, not discarded from the count — see that report for
+the full account, including three real findings from this arc's own live
+verification work.
 
 ## Implementation slices, toward `ubx propose --from-doc payments.md`
 
@@ -800,11 +802,17 @@ future session picks this up without re-deriving the shape:
    session, is the reviewable surface for a fresh draft; `ubx why`
    rendering it for a proposal already in the ledger is a small, real,
    named follow-up for whoever picks this up next).
-3. **Docs + polish.** ubiquex-docs gets a new guide (the real `ubx
-   propose --from-doc` transcript, per this project's own "user-visible
-   changes update ubiquex-docs in the same session" rule); the
-   per-adapter conformance report; any adapter-specific rough edges found
-   only by hitting the real API repeatedly.
+3. **Docs + polish — built, session 4 (2026-07-28).** ubiquex-docs gained
+   two new guides (`guides/md-medium.mdx`, the full walkthrough with real
+   transcripts including ambiguity rendering and a redaction
+   demonstration; `guides/md-authoring-conventions.mdx`), a new `[intent]`
+   config reference section (`cli/config.mdx`), and `--from-doc`'s own
+   documentation on the existing `cli/propose.mdx` reference page — all
+   real, captured against the actual built binary, per this project's own
+   "user-visible changes update ubiquex-docs in the same session" rule.
+   `docs/intent-provider-conformance-report.md` (this repo): Claude's own
+   real, published numbers. `mint validate`/`mint broken-links` both
+   clean. **UBI-41 closed** — see STATE.md for the closing account.
 
 Chat (docs/plan.md's own medium-order decision) rides the identical
 `Adapter`/`DraftWithRetry` machinery afterward — `DraftRequest.Content`

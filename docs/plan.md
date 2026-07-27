@@ -1177,6 +1177,19 @@
   "Session 3" subsection and STATE.md for the complete narrative. No
   ubiquex-docs update this session (deferred to slice 3, "docs +
   polish," per docs/intent-provider.md's own Implementation slices).
+- 2026-07-28 — UBI-41 session 4: ubiquex-docs (two new guides —
+  `guides/md-medium.mdx`, `guides/md-authoring-conventions.mdx`, a new
+  "AI-Assisted Authoring" nav group — plus `cli/config.mdx`'s new
+  `intent` section and `cli/propose.mdx`'s `--from-doc` documentation,
+  every transcript real), `docs/intent-provider-conformance-report.md`
+  (Claude's own real published numbers: 5 of 6 fixture-suite runs
+  passed, the one failure named and explained, three real live findings
+  written up honestly), `mint validate`/`mint broken-links` both clean.
+  **UBI-41 closed in Linear** — chat (rides this arc's own `Adapter`
+  interface, its own session) and OpenAI/Gemini/local (parked on the
+  roster) both named explicitly as what stays open. See
+  docs/intent-provider.md's own "Implementation slices" (slice 3 marked
+  built) and STATE.md for the full session account.
 
 ## Strategy
 
@@ -2921,7 +2934,7 @@ docs/schema.md's amendment (`Proposal.Intent`'s new
 corrected `[intent]` config note. Sessions 2-4 (interface+Claude
 adapter+conformance harness; the md pipeline live-verified against the
 real Claude API; docs+polish) were still queued as of this session —
-sessions 2 and 3 are now built (below); docs+polish remains.
+all three sessions are now built (below) and the arc is closed.
 
 **Session 2 (2026-07-27): interface + Claude adapter + conformance
 harness — real code, hermetic, one deliberate scope deferral, two real
@@ -3050,6 +3063,38 @@ this session — deferred to slice 3 ("docs + polish," docs/intent-provider.md's
 own Implementation slices), per protocol's docs-debt exception. Both
 repos: code committed and pushed. **UBI-41 left open, not closed** —
 slice 3 (ubiquex-docs, the per-adapter conformance report) is next.
+
+**Session 4 (2026-07-28): ubiquex-docs, the per-adapter conformance
+report, UBI-41 closed.** New `guides/md-medium.mdx` (the full walkthrough
+— setup, a real transcript with all three ambiguity sections populated,
+the redaction-at-capture demonstration with a direct `grep`-confirmed
+zero-leak claim, "what happens next") and `guides/md-authoring-conventions.mdx`
+(`@refs`, requirement phrasing, cost ceilings — guidance, not grammar,
+matching docs/intent-provider.md's own posture), both in a new "AI-Assisted
+Authoring" nav group. `cli/config.mdx` gained an `### intent` section;
+`cli/propose.mdx` gained the `--from-doc` mode throughout (synopsis,
+flags, a real transcript, the three real error cases — `--stack`
+required, mutual exclusivity, an unresolvable `key_ref`). `concepts/proposal.mdx`
+cross-links the new `assumptions`/`defaults`/`questions` fields. Every
+transcript real, captured against the actual built binary through a real
+Claude API call — none hand-written. `mint validate`/`mint broken-links`
+both clean.
+
+`docs/intent-provider-conformance-report.md` (this repo, matching
+docs/reliability-report.md's own "internal engineering artifact, not
+end-user docs" precedent): Claude's own real, published numbers — 5 of 6
+fixture-suite runs passed; the one real failure named and explained, not
+discarded from the count; all three real findings from this arc's own
+live verification work (the system-prompt self-priming bug, the
+"confidence isn't the test" gap, the empty-`resources[]` bug, and a real,
+non-bug safety-classifier refusal) written up in one place. OpenAI/
+Gemini/local rows named "not built," the report format ready for them.
+
+**UBI-41 closed in Linear** — the closing comment names what stays open
+honestly: chat rides this arc's own `Adapter`/`DraftWithRetry` interface
+next, its own session, not started; OpenAI/Gemini/local adapters remain
+on the roster, parked, no code. See STATE.md for the full session
+account and the exact closing comment text.
 
 ## Deferred (explicitly not now)
 
