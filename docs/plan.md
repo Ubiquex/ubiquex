@@ -1109,6 +1109,30 @@
   Claude adapter + conformance harness; the md pipeline (`ubx propose
   --from-doc`) + ambiguity UX, live-verified against the real Claude
   API; docs + polish. See STATE.md for the full session account.
+- 2026-07-27 — UBI-41 session 2: interface + Claude adapter + conformance
+  harness, real code, hermetic. New `intentprovider` package (`Adapter`,
+  `DraftWithRetry`'s own retry-with-errors/hard-fail contract,
+  `IntentDraftJSONSchema`, `PopulateSources`); `core.Intent` gained the
+  three additive ambiguity fields session 1's own schema.md amendment
+  pinned; `intentprovider/claude` (the real adapter, new dependency
+  `anthropic-sdk-go`); `intentprovider/conformance` (the fixture-runner
+  harness, fixture #1 embedded via `go:embed`). Hermetic tests throughout
+  (a scripted fake `Adapter`, no network); a `UBX_TEST_SLOW=1`-gated live
+  test wires the real adapter through both a direct smoke test and the
+  full conformance suite. One deliberate scope deferral, named rather
+  than silently made: `[intent]` config-cascade wiring was NOT built this
+  session (no consumer yet — deferred to the md-pipeline session). Two
+  real findings: Claude's own structured-output constraint forces a
+  resource's `config` to be a JSON-encoded string rather than a nested
+  object (not live-verified this session — no credentials in the build
+  environment, flagged explicitly to confirm on the first real live run);
+  and a real bug found BY running the live test with no credentials
+  present — `classifyError` originally lumped "no credentials resolvable
+  at all" under a generic network-error bucket, fixed the same session.
+  See docs/intent-provider.md's own "Session 2" subsection and its own
+  wedge subsection above for the full account, and STATE.md for the
+  complete session narrative. Full repo build/vet/gofmt/test clean
+  throughout. Session 3 (the md pipeline) is next.
 
 ## Strategy
 
@@ -2854,6 +2878,55 @@ corrected `[intent]` config note. Sessions 2-4 (interface+Claude
 adapter+conformance harness; the md pipeline live-verified against the
 real Claude API; docs+polish) are still queued — next candidate work for
 whoever picks up UBI-41.
+
+**Session 2 (2026-07-27): interface + Claude adapter + conformance
+harness — real code, hermetic, one deliberate scope deferral, two real
+findings.** New `intentprovider` package (`Adapter`, `DraftWithRetry`,
+`IntentDraftJSONSchema`, `PopulateSources`); `core.Intent` gained the
+three additive `Assumptions`/`Defaults`/`Questions` fields
+docs/schema.md's own session-1 amendment pinned; `intentprovider/claude`
+(the real adapter, new dependency `github.com/anthropics/anthropic-sdk-go`);
+`intentprovider/conformance` (the fixture-runner harness, fixture #1 —
+the payments doc — embedded via `go:embed`). Hermetic tests throughout
+(a fully scripted fake `Adapter`, no network) prove `DraftWithRetry`'s
+own retry-with-errors/hard-fail contract end to end, including recovery
+on a second attempt and the exact prior-output/prior-errors feedback
+loop; a `UBX_TEST_SLOW=1`-gated live test (`intentprovider/claude`)
+wires the real adapter through both a direct `Draft` smoke test and the
+full conformance suite.
+
+One deliberate deviation from session 1's own slice-1 description, named
+rather than silently made: `[intent]` config-cascade wiring
+(`cli/configcascade.go`'s known-keys extension) was NOT built this
+session — deferred to the md-pipeline session, since it would have no
+consumer until `ubx propose --from-doc` exists to read it.
+
+Two real findings, both documented in docs/intent-provider.md's own new
+"Session 2" subsection: (1) Claude's own structured-output constraint
+(every JSON Schema object node needs `"additionalProperties": false`,
+even ones with no declared properties) makes a genuinely open-shaped
+value like a resource's own `config` inexpressible as a nested object —
+resolved by encoding it as a JSON string in the wire shape handed to the
+model, decoded back into a real value by `validate.go`; flagged as
+**not live-verified this session** (no Anthropic credentials in the
+build environment), to be confirmed on the first real live run. (2) A
+real bug found BY running the live test with no credentials present
+(not assumed from reading the SDK's source): with zero credentials
+resolvable, the SDK never reaches the server at all, so there's no
+`*anthropic.Error` to branch a status code on, and `classifyError`'s
+first cut silently lumped this under a generic "network/connection"
+bucket — exactly the undifferentiated failure
+docs/intent-provider-adversarial.md row 6 forbids. Fixed the same
+session with a string-prefix check (the SDK's own typed sentinel for
+this lives under an `internal/` package this module cannot import).
+
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/
+`go test ./... -race -count=1` clean throughout. No ubiquex-docs update
+this session (still nothing user-visible — no CLI verb, no config key
+actually read by any command yet). Both repos: code committed and
+pushed. Session 3 (the md pipeline: `[intent]` config wiring, `ubx
+propose --from-doc`, redaction-at-capture, live-verified end to end) is
+next.
 
 ## Deferred (explicitly not now)
 

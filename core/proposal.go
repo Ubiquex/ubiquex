@@ -65,9 +65,54 @@ const (
 )
 
 // Intent is Proposal.Intent.
+//
+// Assumptions, Defaults, and Questions were added 2026-07-27 (UBI-41,
+// docs/schema.md's own "Amendment: intent-provider drafts" amendment): an
+// intent-provider draft's ambiguity content, ridden unchanged through
+// resolve/accept into the final hashed, signed proposal -- the same
+// struct a hand-written intent file's own Intent already occupies, so
+// this content is reviewable and signed by construction, never a
+// separate unsigned side-channel (docs/intent-provider.md's own
+// "ambiguity as visible content" design center). Purely additive/
+// optional; a proposal recorded before this amendment simply has all
+// three empty/absent, same reasoning as every other additive amendment
+// to this struct.
 type Intent struct {
-	Summary string         `json:"summary"`
-	Sources []IntentSource `json:"sources,omitempty"`
+	Summary     string          `json:"summary"`
+	Sources     []IntentSource  `json:"sources,omitempty"`
+	Assumptions []AmbiguityNote `json:"assumptions,omitempty"`
+	Defaults    []AmbiguityNote `json:"defaults,omitempty"`
+	Questions   []Question      `json:"questions,omitempty"`
+}
+
+// AmbiguityNote is one entry of Intent.Assumptions (a real interpretive
+// choice made where a source document was genuinely ambiguous) or
+// Intent.Defaults (a gap the document left unaddressed entirely, filled
+// from context) -- docs/schema.md's UBI-41 amendment. Affects is a list
+// of canonical address+path strings ("<stack>.<type>.<name>.<path>", the
+// same dot-path convention Modification.Before/.After and $ref's own
+// "to" field already use), never a free-text pointer, so a review
+// surface can highlight the exact config value in question.
+type AmbiguityNote struct {
+	Text    string   `json:"text"`
+	Affects []string `json:"affects,omitempty"`
+}
+
+// Question is one entry of Intent.Questions -- an unresolved tension (a
+// genuine contradiction, or an ambiguity too open-ended to responsibly
+// guess at) a draft still had to produce some concrete resolution for
+// (docs/schema.md's UBI-41 amendment). Blocking is a review-affordance
+// signal only -- it carries zero resolver-side enforcement; core.Validate
+// and core/resolver never inspect it, never refuse a proposal because of
+// it. docs/intent-provider.md's own "Component 3" section names the
+// considered-and-rejected alternative (auto-refusing resolve on a
+// blocking question) explicitly: it would hand an LLM veto power over
+// what a human is allowed to review and sign, inverting the trust chain
+// this whole field exists to preserve.
+type Question struct {
+	Text     string   `json:"text"`
+	Affects  []string `json:"affects,omitempty"`
+	Blocking bool     `json:"blocking,omitempty"`
 }
 
 // IntentSource is one entry of Intent.Sources. ContentHash is a
@@ -91,8 +136,19 @@ type Intent struct {
 // emitting it unchanged, not "audit_unattributed" -- only the newer GCP
 // backend uses the generalized kind, since there's no existing AWS output
 // to preserve compatibility with there.
+//
+// UBI-41 (docs/schema.md's own "Amendment: intent-provider drafts") adds
+// two more kinds, both provenance for an intent-provider-authored draft:
+// "document" (the authoring markdown file itself -- ContentHash covers the
+// RAW, unredacted file exactly as committed, never the redacted copy an
+// adapter actually saw) and "intent_provider" (which adapter/model
+// produced the draft, Ref shaped "<adapter>:<model>", ContentHash pinning
+// the adapter's own raw structured-output response as tamper-evident
+// audit content -- evidence of provenance, never an enforced binding: a
+// human editing the draft file before resolve is legitimate and
+// unaffected). See intentprovider.PopulateSources.
 type IntentSource struct {
-	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed
+	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed | document | intent_provider
 	Ref         string `json:"ref,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
 

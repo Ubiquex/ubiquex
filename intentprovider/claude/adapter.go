@@ -1,0 +1,239 @@
+// Package claude is intentprovider's first Adapter (UBI-41 session 2,
+// docs/intent-provider.md's own "The Claude adapter" section) -- kept out
+// of intentprovider itself so a future OpenAI/Gemini/local adapter each
+// gets its own sibling package, never a shared vendor-SDK import forced
+// on the interface's own package. The same isolation
+// cloudtrail/gcpaudit/k8saudit already establish for platform-specific
+// I/O, and the same reasoning ledgerstore's own s3-only wiring gave for
+// keeping gs/azblob out until they earn their own dependency cost.
+package claude
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/ubiquex/ubiquex-cli/intentprovider"
+)
+
+// DefaultModel is this adapter's own hardcoded fallback default when
+// Config.Model is unset -- this codebase's standing default for anything
+// not explicitly pinned by the user (docs/architecture.md's own
+// "provider_configs" freeform-but-defaulted convention, applied here).
+const DefaultModel = "claude-opus-4-8"
+
+// defaultEffort is the request-level reasoning effort this adapter
+// always sends -- not user-configurable in v1. docs/intent-provider.md's
+// own reasoning: this is a reasoning-shaped task, surfacing genuine
+// ambiguity rather than performing bare classification/extraction, so a
+// lower effort risks under-thinking exactly the cases this arc's own
+// design center cares most about getting right.
+const defaultEffort = anthropic.OutputConfigEffortHigh
+
+// maxTokens bounds a single draft attempt's own response -- generous for
+// a structured JSON document describing a handful of resources plus
+// ambiguity content, well under any current model's own output ceiling.
+const maxTokens = 16000
+
+// Config configures New. APIKey is resolved by the caller -- this
+// package never reads an environment variable or a ubx config file
+// itself; the [intent] config table's own key_ref resolution
+// (docs/intent-provider.md's own "Component 2") is the md-pipeline
+// session's own job, session 3. A zero-value APIKey falls through to the
+// Anthropic SDK's own default credential chain (ANTHROPIC_API_KEY and
+// beyond) -- useful for this session's own live test, which supplies no
+// explicit key.
+type Config struct {
+	Model  string
+	APIKey string
+}
+
+// Adapter implements intentprovider.Adapter against the real Claude API.
+type Adapter struct {
+	client anthropic.Client
+	model  string
+}
+
+var _ intentprovider.Adapter = (*Adapter)(nil)
+
+// New constructs a real Claude adapter. Never touches the network itself
+// -- SDK client construction is a pure local operation; the first real
+// request happens inside Draft.
+func New(cfg Config) *Adapter {
+	model := cfg.Model
+	if model == "" {
+		model = DefaultModel
+	}
+	var opts []option.RequestOption
+	if cfg.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
+	}
+	return &Adapter{client: anthropic.NewClient(opts...), model: model}
+}
+
+func (a *Adapter) Name() string { return "claude" }
+
+// Draft issues one structured-output request per docs/intent-provider.md's
+// own "The Claude adapter" section: output_config.format constrains the
+// response to schema.go's own IntentDraftJSONSchema (the API-level half
+// of DraftWithRetry's two-layer validation -- never trusted alone; see
+// intentprovider/driver.go).
+//
+// On req.Attempt > 1, the prior attempt's own rejected output and
+// validation errors are appended as further turns in the SAME
+// conversation (never a fresh request) -- this is what makes prompt
+// caching pay off across a three-attempt draft (docs/intent-provider.md's
+// own "Retry-round prompt caching" note): the system prompt (schema +
+// doc-authoring guidance) and the original document turn are byte-
+// identical across attempts, so only the new turn is ever priced at full
+// rate after the first.
+func (a *Adapter) Draft(ctx context.Context, req intentprovider.DraftRequest) (json.RawMessage, error) {
+	system := []anthropic.TextBlockParam{{
+		Text:         systemPromptText,
+		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+	}}
+
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock(fmt.Sprintf(
+			"Stack: %s\n\nDocument:\n\n%s", req.Stack, string(req.Content),
+		))),
+	}
+	if req.Attempt > 1 {
+		messages = append(messages,
+			anthropic.NewAssistantMessage(anthropic.NewTextBlock(string(req.PriorOutput))),
+			anthropic.NewUserMessage(anthropic.NewTextBlock(retryPrompt(req.PriorErrors))),
+		)
+	}
+
+	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     a.model,
+		MaxTokens: maxTokens,
+		System:    system,
+		Messages:  messages,
+		OutputConfig: anthropic.OutputConfigParam{
+			Effort: defaultEffort,
+			Format: anthropic.JSONOutputFormatParam{Schema: intentprovider.IntentDraftJSONSchema()},
+		},
+	})
+	if err != nil {
+		return nil, classifyError(err)
+	}
+	if resp.StopReason == anthropic.StopReasonRefusal {
+		return nil, fmt.Errorf("claude adapter: refused (%s): %s", resp.StopDetails.Category, resp.StopDetails.Explanation)
+	}
+
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			return json.RawMessage(block.Text), nil
+		}
+	}
+	return nil, errors.New("claude adapter: response had no text content block")
+}
+
+// classifyError names WHICH failure occurred, distinctly, per
+// docs/intent-provider-adversarial.md row 6's own required outcome: a
+// bad/missing key must never be reported identically to a network
+// timeout. Transient failures (429/5xx/connection) are already retried
+// by the SDK's own default retry policy (max_retries=2) before an error
+// ever reaches this function -- classifyError only ever sees what
+// survived that budget.
+//
+// A real gap found live, not assumed away: with no credential resolvable
+// at all (no ANTHROPIC_API_KEY, no ant profile), the SDK never reaches
+// the server -- there is no HTTP response, so no *anthropic.Error to
+// branch on. Confirmed directly (running this adapter's own live test
+// with UBX_TEST_SLOW=1 and no credentials in this environment) before
+// writing the check below, not assumed from reading the SDK's source:
+// the resulting error's message is prefixed "no Anthropic credentials
+// found". The SDK's own typed sentinel for this (auth.ErrNoCredentials)
+// lives under an internal/ package this module cannot import at all --
+// so this is a string-prefix check, not a type check, and it is
+// deliberately anchored on the SDK's own exact wording rather than a
+// looser substring, to fail safely (mis-bucketing under "network/
+// connection" is harmless -- the full underlying message, remediation
+// steps included, still reaches the caller via %w either way) rather
+// than mis-firing on an unrelated error that happens to share a word.
+func classifyError(err error) error {
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case 401, 403:
+			return fmt.Errorf("claude adapter: authentication failed (%d) -- check the configured API key: %w", apiErr.StatusCode, err)
+		case 429:
+			return fmt.Errorf("claude adapter: rate limited, exhausted the SDK's own retry budget: %w", err)
+		default:
+			return fmt.Errorf("claude adapter: API error (%d): %w", apiErr.StatusCode, err)
+		}
+	}
+	if strings.HasPrefix(err.Error(), "no Anthropic credentials found") {
+		return fmt.Errorf("claude adapter: no credentials resolvable -- set ANTHROPIC_API_KEY or run `ant auth login`: %w", err)
+	}
+	return fmt.Errorf("claude adapter: request failed (network/connection): %w", err)
+}
+
+func retryPrompt(errs []string) string {
+	s := "The previous draft failed validation:\n"
+	for _, e := range errs {
+		s += "- " + e + "\n"
+	}
+	s += "\nProduce a corrected, complete intent/v1 draft fixing every issue above. Never repeat the same mistake."
+	return s
+}
+
+// systemPromptText is the transcription-only role, the ambiguity-as-
+// visible-content design center, and the doc-authoring guidance
+// (docs/intent-provider.md's own "Doc authoring conventions" section --
+// guidance, not grammar), stated directly to the model. Kept as a single
+// constant (not built from docs/intent-provider.md's own prose) so the
+// exact bytes sent to Claude are reviewable in code, not assembled at
+// runtime from a doc file this package doesn't read.
+const systemPromptText = `You transcribe a markdown infrastructure-change document into a single
+ubx:intent/v1 draft. You are a transcription layer only: you never
+compute a real value, never resolve a reference, never touch a ledger or
+a cloud provider. Everything you produce is reviewed by a human before
+anything happens.
+
+The single most important rule: ambiguity is visible content, never a
+silent choice. Where the document is genuinely ambiguous ("like staging
+but smaller"), record your interpretation explicitly in
+intent.assumptions -- never just pick a value and say nothing. Where the
+document says nothing about something at all, record what you filled in
+and why in intent.defaults. Where two stated requirements conflict, pick
+the single interpretation you judge most likely correct, and record the
+conflict in intent.questions with blocking: true, naming both sides
+explicitly. You must always produce one complete, valid draft -- never
+refuse, never leave a field blank because you're unsure, and never
+produce two competing drafts.
+
+An inline "@<address>" mention (e.g. "@payments.aws_vpc.main") names an
+existing resource by its canonical <stack>.<type>.<name> address --
+transcribe it as a reference in the relevant config value using the
+exact string "$ref:<address>.<path>" as a placeholder (a human-reviewed
+deterministic resolver replaces this later; you never resolve it
+yourself). If an @-mention doesn't look like a real, resolvable address,
+record that as a question rather than guessing.
+
+Never invent a resource type name you are not reasonably confident is
+real. If you are uncertain a type exists, still provide your best answer
+in "type", but record the uncertainty as a question.
+
+A stated cost ceiling is context for your own reasoning, never something
+you enforce or verify -- you cannot compute real infrastructure cost. If
+a requirement plausibly conflicts with a stated ceiling, say so in
+intent.questions; never silently ignore the ceiling and never silently
+downsize without saying so.
+
+Each resource's own "config" field is a JSON-encoded STRING (a string
+containing valid JSON text for that resource's full desired
+configuration), not a nested JSON object -- escape it exactly as JSON
+string encoding requires.
+
+Never repeat, echo, or reconstruct anything that looks like a real secret
+(an API key, a password, a private key) even if something secret-shaped
+appears in the document -- if you notice something that looks like
+credential material, do not include it anywhere in your response.`

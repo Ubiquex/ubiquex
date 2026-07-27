@@ -275,6 +275,44 @@ itself to everywhere else):
   deliberately... the same inversion cloudtrail/gcpaudit/k8saudit already
   establish").
 
+### Session 2 (2026-07-27): built, two real findings
+
+`intentprovider`/`intentprovider/claude`/`intentprovider/conformance`
+landed largely as designed above, with one real, checked design
+constraint resolved concretely and one real bug found live:
+
+- **`resources[].config` is a JSON-encoded string in the wire shape
+  handed to Claude's own `output_config.format`, never a nested object.**
+  Checked against the documented structured-output constraint before
+  writing `schema.go` (every JSON Schema object node must carry
+  `"additionalProperties": false`, including one with no declared
+  `"properties"`) — a resource's config is fundamentally open-shaped, so
+  there is no way to express "any object shape at all" under a schema
+  that must close every object node. `validate.go`'s own `wireIntentFile`
+  decodes the string back into a real `json.RawMessage` before handing a
+  caller a real `resolver.IntentFile`; a malformed config string is
+  itself a step-2 validation failure, feeding the retry loop like any
+  other. **Not live-verified this session** (no Anthropic credentials in
+  the build environment) — flagged explicitly in `validate.go`'s own doc
+  comment, to be confirmed the first time a real live run actually
+  happens, not assumed correct from documentation alone.
+- **A real gap found live, fixed the same session**: with zero Anthropic
+  credentials resolvable at all, the SDK never reaches the server — there
+  is no HTTP response, so no `*anthropic.Error` to branch a status code
+  on, and the adapter's first cut of `classifyError` silently lumped this
+  under the generic "network/connection" bucket, exactly the
+  undifferentiated failure docs/intent-provider-adversarial.md row 6
+  exists to forbid. Found by actually running the live test
+  (`UBX_TEST_SLOW=1`, no credentials in this environment) rather than
+  assumed correct from reading the SDK's source — the real error message
+  is prefixed `"no Anthropic credentials found"`; the SDK's own typed
+  sentinel for it (`auth.ErrNoCredentials`) lives under an `internal/`
+  package this module cannot import, so `classifyError` detects it via an
+  exact string-prefix check instead (documented in code as a deliberate,
+  fail-safe choice: mis-bucketing under "network/connection" is harmless,
+  since the full underlying message still reaches the caller either way,
+  while a looser substring match risks mis-firing on an unrelated error).
+
 ## Component 2 — the `[intent]` config table
 
 Rides the identical config-cascade machinery every other table already
@@ -639,20 +677,32 @@ to run it against, in a later session, matching this project's own
 Sized per the ticket's own "~3-4 sessions" estimate. Named here so a
 future session picks this up without re-deriving the shape:
 
-1. **Interface + Claude adapter + conformance harness** (this session's
-   own next step). `intentprovider` package (`Adapter`, `DraftWithRetry`,
+1. **Interface + Claude adapter + conformance harness — built, session 2
+   (2026-07-27).** `intentprovider` package (`Adapter`, `DraftWithRetry`,
    the hand-maintained intent/v1 JSON Schema), `intentprovider/claude`
-   (the real adapter, `anthropic-sdk-go`), `[intent]` config wiring
-   (`cli/configcascade.go`'s known-keys extension), the fixture-runner
-   harness and fixture #1 (the payments doc). Hermetic tests against a
-   fake adapter implementing `Adapter` directly (no network); a
-   `UBX_TEST_SLOW=1`-gated live test against the real Claude API,
-   matching `cli/ship_lying_destroy_test.go`'s own precedent for a
-   real-but-slow/costly path that shouldn't run by default.
-2. **The md pipeline + ambiguity UX.** New `ubx propose --from-doc
-   <file>.md [--stack ...]` verb: reads the doc, runs redaction-at-capture,
-   calls `DraftWithRetry`, writes the resulting draft file, and stops
-   (never auto-chains into `resolve`). `ubx why`/a review-facing render
+   (the real adapter, `anthropic-sdk-go`), `intentprovider/conformance`
+   (the fixture-runner harness and fixture #1, the payments doc).
+   Hermetic tests against a fake adapter implementing `Adapter` directly
+   (no network); a `UBX_TEST_SLOW=1`-gated live test against the real
+   Claude API, matching `cli/ship_lying_destroy_test.go`'s own precedent
+   for a real-but-slow/costly path that shouldn't run by default. See
+   STATE.md for the full session account, including two real findings
+   (the structured-output config-as-string constraint, and a live-only
+   credential-resolution error-classification gap found and fixed the
+   same session) and one deliberate, named deviation from this slice's
+   own original scope: `[intent]` config wiring
+   (`cli/configcascade.go`'s known-keys extension) was NOT built this
+   session — deferred to slice 2, since it would have no consumer until
+   `ubx propose --from-doc` exists to read it (`claude.Config.APIKey` is
+   this session's own stand-in, resolved by whatever calls
+   `claude.New` directly).
+2. **The md pipeline + ambiguity UX.** `[intent]` config wiring
+   (`cli/configcascade.go`'s known-keys extension, deferred from slice 1
+   above); new `ubx propose --from-doc <file>.md [--stack ...]` verb:
+   reads the doc, runs redaction-at-capture, resolves `key_ref` into a
+   real API key and constructs `claude.New`, calls `DraftWithRetry`,
+   writes the resulting draft file, and stops (never auto-chains into
+   `resolve`). `ubx why`/a review-facing render
    of `assumptions`/`defaults`/`questions` (today's plain-JSON draft is
    already reviewable; a nicer human-facing rendering is this slice's
    own polish, not a schema change). Live-verified end to end against

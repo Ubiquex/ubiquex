@@ -1,0 +1,180 @@
+package intentprovider
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
+	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
+)
+
+// wireIntentFile is the exact shape an Adapter's own structured output is
+// constrained to (schema.go's own IntentDraftJSONSchema) -- identical to
+// resolver.IntentFile/core.Intent in every field except one: Config is a
+// JSON-ENCODED STRING, not a nested JSON value.
+//
+// This is not a stylistic choice, checked directly against the
+// documented structured-output constraint before writing it this way
+// (Claude's own structured-outputs support requires "additionalProperties:
+// false" on every object schema node, including ones with no declared
+// "properties"): a resource's own config is fundamentally open-shaped --
+// whatever attributes that resource type's schema needs, unknowable to
+// this package -- and there is no way to express "any object shape at
+// all" under a schema that must close every object node. Not
+// live-verified against the real API this session (no credentials in
+// this environment) -- flagged here explicitly, to be confirmed on the
+// first real live run, not assumed correct from documentation alone. If
+// it turns out wrong, only schema.go's own IntentDraftJSONSchema and this
+// file's own toIntentFile need to change -- the API-level schema is an
+// optimization DraftWithRetry never trusts alone (see driver.go); a
+// config-as-object schema, once confirmed workable, would simply make
+// step-2 (this file's own validation) reject fewer attempts, not change
+// what "valid" means.
+//
+// Sources is deliberately absent from this shape (and from the schema
+// handed to an Adapter): document/intent_provider provenance is ubx's
+// own authority, never the model's -- it has no way to correctly compute
+// a content_hash or reliably know its own adapter/model identity string.
+// sources.go's PopulateSources fills this in after a draft validates.
+type wireIntentFile struct {
+	SchemaVersion int64                `json:"schema_version"`
+	Kind          string               `json:"kind"`
+	Stack         string               `json:"stack"`
+	Intent        wireIntent           `json:"intent"`
+	Resources     []wireResourceIntent `json:"resources"`
+	Destroys      []string             `json:"destroys"`
+}
+
+type wireIntent struct {
+	Summary     string               `json:"summary"`
+	Assumptions []core.AmbiguityNote `json:"assumptions"`
+	Defaults    []core.AmbiguityNote `json:"defaults"`
+	Questions   []core.Question      `json:"questions"`
+}
+
+type wireResourceIntent struct {
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	Op     string `json:"op"`
+	Config string `json:"config"` // JSON-encoded object string, see wireIntentFile's own doc comment
+}
+
+// parseAndValidate decodes raw against wireIntentFile, translates it into
+// a real resolver.IntentFile (decoding each resource's own config string
+// into json.RawMessage), and runs every structural check that doesn't
+// require ledger/provider access -- mirroring (never literally sharing
+// code with, since resolve's own checks are inline and ledger-coupled,
+// and an Adapter must never gain ledger/provider access even indirectly
+// through a shared validator) the same "well-formed addresses, op in
+// {create, modify}, no duplicate resource address" rules ubx resolve
+// itself enforces before it will touch a proposal. Ledger/provider-
+// dependent checks (does this address already exist, does a declared
+// provider own this type) remain exclusively ubx resolve's own job, run
+// later, unchanged.
+//
+// Returns a non-nil *resolver.IntentFile only when the returned error
+// slice is empty. Every message is field-path-prefixed (e.g.
+// "resources[1].op: ...") so DraftWithRetry can feed it back to an
+// Adapter verbatim as PriorErrors, and a human reading a hard-fail's own
+// error can find exactly what was wrong.
+func parseAndValidate(raw json.RawMessage, stack string) (*resolver.IntentFile, []string) {
+	var wire wireIntentFile
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&wire); err != nil {
+		return nil, []string{fmt.Sprintf("invalid JSON: %v", err)}
+	}
+
+	var errs []string
+
+	if wire.SchemaVersion != 1 {
+		errs = append(errs, fmt.Sprintf("schema_version: want 1, got %d", wire.SchemaVersion))
+	}
+	if wire.Kind != "ubx:intent/v1" {
+		errs = append(errs, fmt.Sprintf("kind: want \"ubx:intent/v1\", got %q", wire.Kind))
+	}
+	if wire.Stack != stack {
+		errs = append(errs, fmt.Sprintf("stack: want %q, got %q", stack, wire.Stack))
+	}
+	if wire.Intent.Summary == "" {
+		errs = append(errs, "intent.summary: must not be empty")
+	}
+
+	seen := map[string]bool{}
+	resources := make([]resolver.ResourceIntent, 0, len(wire.Resources))
+	for i, r := range wire.Resources {
+		path := fmt.Sprintf("resources[%d]", i)
+		if r.Type == "" {
+			errs = append(errs, path+".type: must not be empty")
+		}
+		if r.Name == "" {
+			errs = append(errs, path+".name: must not be empty")
+		}
+		if r.Op != resolver.OpCreate && r.Op != resolver.OpModify {
+			errs = append(errs, fmt.Sprintf("%s.op: must be %q or %q, got %q", path, resolver.OpCreate, resolver.OpModify, r.Op))
+		}
+		addr := r.Type + "." + r.Name
+		if seen[addr] {
+			errs = append(errs, fmt.Sprintf("%s: duplicate resource address %q within this draft", path, addr))
+		}
+		seen[addr] = true
+
+		var config json.RawMessage
+		switch {
+		case r.Config == "":
+			errs = append(errs, path+".config: must not be empty")
+		default:
+			if err := json.Unmarshal([]byte(r.Config), &config); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.config: not valid JSON: %v", path, err))
+			}
+		}
+
+		resources = append(resources, resolver.ResourceIntent{
+			Type:   r.Type,
+			Name:   r.Name,
+			Op:     r.Op,
+			Config: config,
+		})
+	}
+
+	for i, d := range wire.Destroys {
+		if _, ok := core.ParseAddress(d); !ok {
+			errs = append(errs, fmt.Sprintf("destroys[%d]: %q is not a well-formed <stack>.<type>.<name> address", i, d))
+		}
+	}
+
+	for i, a := range wire.Intent.Assumptions {
+		if a.Text == "" {
+			errs = append(errs, fmt.Sprintf("intent.assumptions[%d].text: must not be empty", i))
+		}
+	}
+	for i, d := range wire.Intent.Defaults {
+		if d.Text == "" {
+			errs = append(errs, fmt.Sprintf("intent.defaults[%d].text: must not be empty", i))
+		}
+	}
+	for i, q := range wire.Intent.Questions {
+		if q.Text == "" {
+			errs = append(errs, fmt.Sprintf("intent.questions[%d].text: must not be empty", i))
+		}
+	}
+
+	if len(errs) > 0 {
+		return nil, errs
+	}
+
+	return &resolver.IntentFile{
+		SchemaVersion: wire.SchemaVersion,
+		Kind:          wire.Kind,
+		Stack:         wire.Stack,
+		Intent: core.Intent{
+			Summary:     wire.Intent.Summary,
+			Assumptions: wire.Intent.Assumptions,
+			Defaults:    wire.Intent.Defaults,
+			Questions:   wire.Intent.Questions,
+		},
+		Resources: resources,
+		Destroys:  wire.Destroys,
+	}, nil
+}
