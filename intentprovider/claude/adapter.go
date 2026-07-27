@@ -100,9 +100,15 @@ func (a *Adapter) Draft(ctx context.Context, req intentprovider.DraftRequest) (j
 		CacheControl: anthropic.NewCacheControlEphemeralParam(),
 	}}
 
+	// "Document or conversation transcript" deliberately covers both
+	// callers this package has today: `ubx propose --from-doc` hands a
+	// whole file's own bytes; `ubx chat` (UBI-46, intentprovider.Dialogue.
+	// Transcript) hands a growing, numbered "[Turn N]: ..." sequence.
+	// Draft itself never needed to change to support the second caller --
+	// Content is already just bytes, whichever caller built them.
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock(fmt.Sprintf(
-			"Stack: %s\n\nDocument:\n\n%s", req.Stack, string(req.Content),
+			"Stack: %s\n\nDocument or conversation transcript:\n\n%s", req.Stack, string(req.Content),
 		))),
 	}
 	if req.Attempt > 1 {
@@ -267,6 +273,17 @@ Each resource's own "config" field is a JSON-encoded STRING (a string
 containing valid JSON text for that resource's full desired
 configuration), not a nested JSON object -- escape it exactly as JSON
 string encoding requires.
+
+If the input is a numbered sequence of turns ("[Turn 1]: ...", "[Turn 2]:
+..."), it is a growing conversation, not a single static document: read
+every turn as context for the one whole draft you produce. When a later
+turn changes or contradicts an earlier one (e.g. turn 1 asks for a small
+instance, turn 3 says "make it bigger"), the LATER turn always wins for
+the resulting config -- but record the override explicitly in
+intent.assumptions, naming both the earlier and later statements and
+which one you followed. This is the same "never a silent choice" rule
+applied to a change over time instead of an ambiguity within one
+document.
 
 Never repeat, echo, or reconstruct anything that looks like a real secret
 (an API key, a password, a private key) even if something secret-shaped

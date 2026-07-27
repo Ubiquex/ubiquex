@@ -128,7 +128,7 @@ func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout t
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
 	}
 
-	intentprovider.PopulateSources(draft, docPath, intentprovider.HashDocument(raw), adapter.Name(), adapter.Model(), rawOutput)
+	intentprovider.PopulateSources(draft, intentprovider.SourceKindDocument, docPath, intentprovider.HashDocument(raw), adapter.Name(), adapter.Model(), rawOutput)
 
 	outWriter := cmd.OutOrStdout()
 	renderAmbiguity(outWriter, draft)

@@ -11,7 +11,7 @@ func TestPopulateSources(t *testing.T) {
 	draft := &resolver.IntentFile{Stack: "payments"}
 	docHash := HashDocument([]byte("# Payments database\n\nProvision it."))
 
-	PopulateSources(draft, "payments.md", docHash, "claude", "claude-opus-4-8", []byte(validPaymentsDraft))
+	PopulateSources(draft, SourceKindDocument, "payments.md", docHash, "claude", "claude-opus-4-8", []byte(validPaymentsDraft))
 
 	if len(draft.Intent.Sources) != 2 {
 		t.Fatalf("Sources = %+v, want exactly 2 entries", draft.Intent.Sources)

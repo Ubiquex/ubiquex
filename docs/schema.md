@@ -1398,6 +1398,105 @@ prior additive amendment in this document (`lookup`, `provider_checksum`,
 proposal recorded before this amendment simply has none of these fields,
 never ambiguously.
 
+### Amendment: the chat medium — dialogue capture (2026-07-28, UBI-46)
+
+Real code, live-verified the same session (see docs/intent-provider.md's
+own "Amendment: the chat medium" for the full design account and
+docs/plan.md for the session narrative). Pins the wire format this
+document's own founding session (2026-07-10) left as an open question
+("Dialogue format & privacy tiering") and gives `IntentSource.Kind ==
+"dialogue"` — a legal enum value in this schema since its very first
+draft, never actually produced by anything until now — its first real
+producer.
+
+#### `dialogues/<hash>.dlg.json`
+
+Content-addressed, matching this schema's own proposal-ID convention:
+the filename is the hex digest of the file's own full JSON content
+(hashed once, at the moment of writing — a dialogue is captured entirely
+in memory during an `ubx chat` session and written to disk exactly once,
+atomically, only at explicit finalization; see docs/intent-provider.md
+for why this is what makes "no orphan file from an abandoned session"
+true by construction).
+
+```json
+{
+  "schema_version": 1,
+  "stack": "payments",
+  "adapter": "claude",
+  "model": "claude-opus-4-8",
+  "started_at": "2026-07-28T00:00:00Z",
+  "turns": [
+    { "text": "We need a Postgres database for payments, like staging but smaller.", "at": "2026-07-28T00:00:01Z" },
+    { "text": "Make it multi-az.", "at": "2026-07-28T00:01:00Z" }
+  ],
+  "draft": { "...": "the final ubx:intent/v1 draft this dialogue produced -- see below" }
+}
+```
+
+- **`turns[].text` is always the REDACTED text**, per turn, at the moment
+  of capture — never post-hoc, and there is no separate "raw" copy kept
+  anywhere on disk for a chat turn to have its own tamper-evidence hash
+  against (a real, deliberate divergence from `ubx propose --from-doc`'s
+  own document/redacted-copy split, where the raw file already exists on
+  disk independently before `ubx` ever touches it — a typed turn has no
+  such independent original). The redacted text IS the authoritative
+  captured record.
+- **`draft`** embeds the final `ubx:intent/v1` draft this dialogue
+  produced — but deliberately the PRE-provenance version, with an empty
+  `intent.sources`. This is not an oversight: the draft `ubx chat` hands
+  back to the caller (stdout or `--out`) is a *separate* copy whose own
+  `intent.sources` names THIS file's own content hash — embedding that
+  same provenance-bearing copy inside the file being hashed would be
+  circular (the file's hash would depend on its own hash). Two distinct
+  objects for two distinct purposes, never conflated.
+
+#### `dialogues/` lives at the top level, a sibling of `ledger/` — never nested inside it
+
+See this document's own "Ledger layout" section, above, for the full
+correction: the founding draft nested dialogues under `ledger/`; the
+real, later-ratified "authoring mediums always live in git as repo
+assets, only the ledger's own JSON gets a configurable store" split
+(docs/architecture.md, 2026-07-17) means a dialogue can never sit inside
+the one directory that gets swapped to a remote `LedgerStore`. Built
+exactly this way: `ubx chat --ledger-dir <dir>` writes to
+`<dir>/dialogues/`, a plain sibling of `<dir>/ledger/`, regardless of
+whether `.ubx/config`'s own `[ledger].store` points at git or a remote
+store for that same stack.
+
+#### The `intent.sources` entry — the existing `dialogue` kind, no schema change needed
+
+```json
+{ "kind": "dialogue", "ref": "dialogues/bcb5b373....dlg.json", "content_hash": "sha256:bcb5b373..." }
+```
+
+Exactly the shape this document's own founding draft already sketched
+for a `dialogue` source (`{"kind": "dialogue", "ref": "d-99f2",
+"content_hash": "sha256:9f2a..."}`) — `ref` is now a real relative path
+instead of a placeholder short ID, `content_hash` is now a real hash
+instead of a placeholder value, and this is the first proposal kind that
+ever actually populates it. No new `IntentSource` field, no
+`schema_version` bump. A `change` proposal drafted via `ubx chat` also
+gets an `intent_provider` source alongside it, identical in shape to
+`ubx propose --from-doc`'s own (UBI-41) — the same two-source pattern,
+generalized over which authoring-medium kind (`document` or `dialogue`)
+names the first entry.
+
+#### Contradictory turns: later wins, recorded as an assumption, not silently resolved
+
+Not a new schema construct — the existing `intent.assumptions[]` (UBI-41)
+is exactly where this lives. When a later turn in a captured dialogue
+changes or contradicts an earlier one, the resolved draft's own
+`instance_class`/whichever attribute reflects the LATER turn's value,
+and an `assumptions[]` entry names both turns and states which one won.
+Live-verified, not assumed: a real two-turn conversation ("instance
+class db.t3.large", then "actually, use db.t3.micro instead, not large")
+produced a resolved `config.instance_class` of `db.t3.micro` and an
+assumption reading "Turn 1 requested instance class db.t3.large; Turn 2
+overrode it with db.t3.micro... Following the later turn." See
+docs/intent-provider-adversarial.md's own "contradictory turns" row for
+the required-outcome program this is checked against.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
@@ -1473,20 +1572,46 @@ entries — not an in-place edit of this section.
 ## Ledger layout (draft)
 
 ```
-<stack>/
+<ledger-dir>/
   ledger/
     proposals/<id>.prop.json
-    dialogues/<id>.dlg.json        (intent evidence; tierable to object store later)
+    applies/<id>.attempt-<n>.apply.json
+  dialogues/<hash>.dlg.json        (intent evidence -- UBI-46, see the amendment below
+                                     for why this moved out from under ledger/)
   rendered/                        (projections; regenerated, byte-checked in CI)
   .ubx/ledger.lock                 (current head hash)
 ```
 
 - `rendered/` is never read by the executor. Humans and diffs only.
 - `render --check`: ledger → render → byte-compare; CI-blocking and pre-commit.
+- **A real correction, caught while implementing UBI-46, not left as a stale
+  sketch**: this section's own original draft (2026-07-10, this project's
+  founding session) nested `dialogues/<id>.dlg.json` *inside* `ledger/`,
+  alongside `proposals/`. That was never carried into the real
+  implementation (`core/gitledgerstore.go`'s own doc comment: `ledger/`
+  holds exactly `proposals/` and `applies/`, nothing else) — and, more
+  importantly, it contradicts a later, more authoritative decision this
+  document's own founding sketch simply predates: docs/architecture.md's
+  "Ledger stores" section (2026-07-17, UBI-32 Arc B) ratifies "Authoring
+  mediums (md intents, diagrams, SDK code, dialogues) always live in git
+  as repo assets... proposals pin them by content_hash... The ledger's
+  own JSON (proposals/, applies/) gets a configurable store." A dialogue
+  is explicitly named as an authoring medium in that sentence — meaning
+  it must never sit *inside* `ledger/`, the one directory that gets
+  swapped to a remote `LedgerStore` (S3/GCS/Azure) per stack. `dialogues/`
+  is promoted to a sibling of `ledger/` instead (UBI-46, "Amendment: the
+  chat medium," below) — not a new decision, the correct application of
+  one already made.
 
 ## Open questions (tracked, not blocking Slice 1)
 
-- Dialogue format & privacy tiering.
+- Dialogue format: **resolved, UBI-46** (see "Amendment: the chat
+  medium," below). Privacy tiering (moving dialogue content to a
+  different retention/access tier, the founding sketch's own "tierable
+  to object store later" note) stays open — `dialogues/` is git-local
+  only in UBI-46's own build, unlike `ledger/`'s own real `LedgerStore`
+  abstraction; a remote-tierable dialogues store is a real, named,
+  unbuilt follow-up, not assumed covered by this resolution.
 - Cross-stack workspace index format.
 - Environment/promotion model (same proposal re-resolved per env) — design before
   the wedge grows environments.

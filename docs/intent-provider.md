@@ -814,17 +814,164 @@ future session picks this up without re-deriving the shape:
    real, published numbers. `mint validate`/`mint broken-links` both
    clean. **UBI-41 closed** — see STATE.md for the closing account.
 
-Chat (docs/plan.md's own medium-order decision) rides the identical
-`Adapter`/`DraftWithRetry` machinery afterward — `DraftRequest.Content`
-already being "just bytes" rather than "a file path" is what makes that
-true; a dialogue transcript is another byte sequence to hand the same
-interface, with its own new `intent.sources[].kind: "dialogue"` evidence
-entry (already a legal kind, docs/schema.md's founding draft) replacing
-`document`'s.
+**Chat (docs/plan.md's own medium-order decision) — built, UBI-46
+(2026-07-28), see "Amendment: the chat medium" below.** The claim above
+was written before chat existed; it's now a confirmed result, not a
+prediction: `DraftRequest.Content` already being "just bytes" rather
+than "a file path" is exactly what made `ubx chat` possible with zero
+changes to `Adapter`, `DraftRequest`, or `DraftWithRetry` — a dialogue
+transcript is just a different way of producing `Content` bytes than
+reading a file whole. The new `intent.sources[].kind: "dialogue"`
+evidence entry (already a legal kind, docs/schema.md's founding draft)
+now has its own real producer, alongside `document`'s.
+
+## Amendment: the chat medium (UBI-46)
+
+Built 2026-07-28, riding UBI-41's `Adapter`/`DraftWithRetry` machinery
+without a single change to that interface. This section is the
+design-first record for `ubx chat`; treat it as an amendment to
+"Scope" and "Implementation slices" above, not a replacement.
+
+### Verb shape
+
+`ubx chat --stack <stack> [--ledger-dir .] [--out <path>] [--timeout 3m]`.
+An interactive REPL: each line typed is a turn. Every turn re-drafts
+from scratch against the FULL accumulated transcript so far (not an
+incremental patch) -- the same "one whole draft, never a diff" rule
+`--from-doc` already follows. `/save` finalizes the session (writes the
+dialogue file and the draft); `/quit` or EOF abandons it. There is no
+third outcome.
+
+### Why re-drafting needed zero interface changes
+
+`DraftRequest.Content` was already "just bytes," not "a file path" --
+that was the load-bearing decision from the original `--from-doc` slice.
+`Dialogue.Transcript()` (`intentprovider/dialogue.go`) formats the turns
+so far as a numbered sequence (`"[Turn 1]: ...\n\n[Turn 2]: ...\n\n"`)
+and hands that directly as `Content` to the exact same
+`intentprovider.DraftWithRetry`. The Claude adapter's own framing text
+only needed a one-line generalization (`"Document:\n\n%s"` ->
+`"Document or conversation transcript:\n\n%s"`), plus one new system
+prompt paragraph teaching the model to read a numbered-turn input as a
+growing conversation rather than a static document. `Adapter`,
+`DraftRequest`, and `DraftWithRetry` themselves are byte-for-byte
+unchanged.
+
+### Dialogue capture
+
+On `/save`, the whole session is written exactly once to
+`dialogues/<hash>.dlg.json`, where `<hash>` is the SHA-256 of the file's
+own full JSON content (content-addressed, mirroring `HashDocument`'s
+existing scheme -- `HashDocument` is reused unchanged for this, despite
+the name; its doc comment now says so). The file records: every turn
+verbatim (`Turn{Text, At}`), the adapter name and model pinned
+(`claude`, `claude-opus-4-8`, etc.), a session start timestamp, and the
+final `intent/v1` draft the session produced -- but that embedded draft
+is a PRE-provenance copy (`intent.sources` empty). This avoids a
+circular hash: the dialogue file can't reference its own hash inside
+itself. The draft actually emitted to the caller (stdout or `--out`) is
+a SEPARATE object, built from the same in-memory draft, with
+`PopulateSources` applied afterward to add the real
+`{kind: "dialogue", ref: "dialogues/<hash>.dlg.json", content_hash:
+"sha256:<hash>"}` entry plus the usual `intent_provider` entry. Two
+objects, one shared origin, never one shared pointer -- this is what
+makes "the dialogue file embeds the draft it produced" and "the draft
+references the dialogue file's hash" both true without either one
+depending on the other's final bytes.
+
+Redaction (`intentprovider.Redact`) runs on each turn's raw text BEFORE
+it is appended to `dlg.Turns` or sent to the adapter -- never
+post-hoc, never on the whole transcript after the fact. A secret pasted
+mid-conversation never reaches the network and never reaches the
+captured file; only the redacted form does, at the moment of capture.
+
+### Directory location: top-level, not under `ledger/`
+
+`dialogues/` lives at `<ledger-dir>/dialogues/`, a sibling of `ledger/`,
+never nested inside it. The founding schema.md draft originally sketched
+it nested (`ledger/dialogues/<id>.dlg.json`); the real
+`core/gitledgerstore.go` implementation never carried that forward
+(it only ever created `ledger/proposals/`, `ledger/applies/`, and
+`.ubx/{lock,salt,ledger.lock}`). The decision was settled for real,
+not guessed, by docs/architecture.md's own "Ledger stores" section,
+written before this session: "Authoring mediums (md intents, diagrams,
+SDK code, dialogues) always live in git as repo assets... The ledger's
+own JSON (proposals/, applies/) gets a configurable store." Dialogues
+are named explicitly in that sentence as an authoring medium, alongside
+md intents -- the same category `dialogues/*.dlg.json` and a future
+`docs/*.md` both belong to, and the category that never moves when the
+ledger itself gets pointed at a remote `LedgerStore` backend. Nesting
+`dialogues/` under `ledger/` would have coupled an authoring medium's
+location to a storage backend decision it has nothing to do with.
+
+### No orphan capture
+
+There is no cleanup mechanism, because there is nothing to clean up:
+`runChat` holds the entire session in memory (`dlg.Turns`,
+`lastDraft`, `lastRaw`) and writes to disk exactly once, atomically,
+only inside `finalizeChat`, which only runs on `/save`. `/quit` returns
+before any write. EOF without `/save` (a closed terminal, a killed
+process, Ctrl-D) hits the same early return. This isn't a policy
+enforced by checking after the fact -- an abandoned session structurally
+cannot produce a file, because the only code path that calls
+`os.WriteFile` is the one `/save` reaches.
+
+### Contradictory turns: later wins, visible in `assumptions`
+
+The new system-prompt paragraph tells the model: when a later turn
+changes or contradicts an earlier one, the later turn always wins for
+the resulting config, but the override must be recorded explicitly in
+`intent.assumptions`, naming both the earlier and later statements and
+which one was followed. This is the same "never a silent choice" rule
+the rest of this document already applies to in-document ambiguity,
+extended to ambiguity that unfolds over turns instead of within one
+static document. Live-verified (not just unit-tested) with a real
+two-turn exchange against the real API: turn 1 asked for
+`db.t3.large`, turn 2 said "actually, use db.t3.micro instead, not
+large." The resulting draft's `resources[0].config.instance_class` was
+confirmed `"db.t3.micro"` by direct inspection of the written JSON, and
+`intent.assumptions` contained an entry naming both turns and stating
+the later one was followed.
+
+### `ubx why --dialogue`
+
+`ubx why <id> --dialogue` walks change proposal -> the draft it came
+from -> the real conversation behind it. It reads the proposal's
+`intent.sources` for a `{kind: "dialogue"}` entry, loads that dialogue
+file from `<ledger-dir>/<ref>`, and renders every turn verbatim with
+its timestamp. Without `--dialogue`, nothing changes -- the flag is
+purely additive, matching every other `ubx why` flag's opt-in shape.
+If the proposal has no dialogue source (it wasn't drafted via
+`ubx chat`, or the file can't be read), `--dialogue` prints an explicit
+note saying so rather than silently rendering nothing -- the same
+"never a silent gap" instinct as the rest of `ubx why`.
+
+### Live finale (2026-07-28)
+
+A real multi-turn conversation through the real Claude API, refining
+the payments stack:
+
+- Turn 1: "We need a Postgres database for the payments service, like
+  our staging database but smaller."
+- Turn 2: "Make it multi-az."
+
+`/save` produced `dialogues/bcb5b373f239719331b717d06f5ce6e07470c97bd54145488103d7c7196237dc.dlg.json`
+and an emitted draft (`resources[0].config.multi_az: true`, plus real
+assumptions naming the "smaller" ambiguity and its resolution) whose
+`intent.sources` named that exact dialogue file and hash. A real
+`change` proposal was hand-assembled referencing that draft and
+accepted for real via `ubx accept`
+(id `2467ee0b6bd83c664cb1e228d2a4adf42b262d9557c56b0223ece9ca3f64f13f`).
+`ubx why 2467ee0b6bd83c664cb1e228d2a4adf42b262d9557c56b0223ece9ca3f64f13f --dialogue --ledger-dir .`
+rendered both turns verbatim, in order, with their timestamps --
+confirming the full chain, real end to end: conversation -> capture ->
+draft -> proposal -> acceptance -> `why` walking it back to the actual
+words typed.
 
 ## Out of scope for v1, named so it isn't assumed covered
 
-- Chat, diagrams, SDK — see "Scope," above.
+- Diagrams, SDK — see "Scope," above (chat is no longer out of scope,
+  see "Amendment: the chat medium," below).
 - A real cost/policy engine — the intent provider's own cost reasoning is
   transcription-shaped, never authoritative; see "ambiguity as visible
   content."

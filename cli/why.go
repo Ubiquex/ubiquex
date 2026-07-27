@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/intentprovider"
 )
 
 // proposalIDPattern matches a full 64-hex-char content hash — the only
@@ -26,6 +29,7 @@ func newWhyCmd() *cobra.Command {
 		repoDir          string
 		githubRepo       string
 		jsonOut          bool
+		dialogue         bool
 	)
 
 	cmd := &cobra.Command{
@@ -77,13 +81,21 @@ func newWhyCmd() *cobra.Command {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
 					}
 				}
+				var dlg *intentprovider.Dialogue
+				if dialogue {
+					dlg = loadDialogueSource(ledgerDir, p)
+				}
+
 				if !jsonOut {
 					renderProposal(out, p)
 					renderApplies(out, attempts)
+					if dialogue {
+						renderDialogue(out, p, dlg)
+					}
 				}
 				if !verifyAcceptance {
 					if jsonOut {
-						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts}); err != nil {
+						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, Dialogue: dlg}); err != nil {
 							return &ExitCodeError{Code: 2, Err: err}
 						}
 					}
@@ -91,7 +103,7 @@ func newWhyCmd() *cobra.Command {
 				}
 				verifyResult, verifyErr := runVerifyAcceptance(cmd.Context(), out, p, repoDir, githubRepo, jsonOut)
 				if jsonOut {
-					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, VerifyAcceptance: verifyResult}
+					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, VerifyAcceptance: verifyResult, Dialogue: dlg}
 					if err := writeJSON(out, payload); err != nil {
 						return &ExitCodeError{Code: 2, Err: err}
 					}
@@ -150,6 +162,7 @@ func newWhyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20); the chain view emits a JSON array under \"chain\"")
+	cmd.Flags().BoolVar(&dialogue, "dialogue", false, "if this proposal's intent.sources names a captured dialogue (UBI-46, ubx chat), read and render the actual conversation behind it -- change proposal -> the draft it came from -> the real conversation")
 	return cmd
 }
 
@@ -159,11 +172,12 @@ func newWhyCmd() *cobra.Command {
 // forms are genuinely different views, not one view with an optional
 // extra field.
 type whyJSON struct {
-	Format           int                   `json:"format"`
-	Proposal         *core.Proposal        `json:"proposal,omitempty"`
-	Chain            []*core.Proposal      `json:"chain,omitempty"`
-	Applies          []*core.ApplyRecord   `json:"applies,omitempty"`
-	VerifyAcceptance *verifyAcceptanceJSON `json:"verify_acceptance,omitempty"`
+	Format           int                      `json:"format"`
+	Proposal         *core.Proposal           `json:"proposal,omitempty"`
+	Chain            []*core.Proposal         `json:"chain,omitempty"`
+	Applies          []*core.ApplyRecord      `json:"applies,omitempty"`
+	VerifyAcceptance *verifyAcceptanceJSON    `json:"verify_acceptance,omitempty"`
+	Dialogue         *intentprovider.Dialogue `json:"dialogue,omitempty"`
 }
 
 // renderProposal is the full single-proposal view, unchanged from before
@@ -366,6 +380,47 @@ func renderIntentSource(out io.Writer, s core.IntentSource, indent string) {
 		fmt.Fprintf(out, "%ssource: cloudtrail_unattributed -- %s\n", indent, unattributedReason(s.Reason))
 	default:
 		fmt.Fprintf(out, "%ssource: %s %s (content_hash=%s)\n", indent, s.Kind, s.Ref, s.ContentHash)
+	}
+}
+
+// loadDialogueSource is `ubx why --dialogue`'s own "change proposal -> the
+// draft it came from -> the actual conversation" walk (UBI-46,
+// docs/intent-provider.md's own "Amendment: the chat medium"): finds p's
+// own dialogue-kind intent.sources entry, if any, and reads the real
+// captured file it names. A proposal with no dialogue source (every
+// proposal that didn't come from `ubx chat`) returns nil -- an ordinary,
+// expected case, not an error; renderDialogue says so plainly rather
+// than printing nothing with no explanation.
+func loadDialogueSource(ledgerDir string, p *core.Proposal) *intentprovider.Dialogue {
+	for _, s := range p.Intent.Sources {
+		if s.Kind != intentprovider.SourceKindDialogue {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(ledgerDir, s.Ref))
+		if err != nil {
+			return nil
+		}
+		var dlg intentprovider.Dialogue
+		if err := json.Unmarshal(data, &dlg); err != nil {
+			return nil
+		}
+		return &dlg
+	}
+	return nil
+}
+
+// renderDialogue prints the real conversation behind p, if --dialogue
+// found one -- the actual turns, not just the source line's own
+// kind/ref/hash (renderIntentSource's own job, unchanged, still printed
+// first as part of renderProposal).
+func renderDialogue(out io.Writer, p *core.Proposal, dlg *intentprovider.Dialogue) {
+	if dlg == nil {
+		fmt.Fprintln(out, "\n--dialogue: this proposal has no captured dialogue source (it wasn't drafted via `ubx chat`, or the file couldn't be read)")
+		return
+	}
+	fmt.Fprintf(out, "\nconversation (%s / %s, started %s):\n", dlg.Adapter, dlg.Model, dlg.StartedAt)
+	for i, t := range dlg.Turns {
+		fmt.Fprintf(out, "  [Turn %d, %s]: %s\n", i+1, t.At, t.Text)
 	}
 }
 

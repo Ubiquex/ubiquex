@@ -1190,6 +1190,24 @@
   roster) both named explicitly as what stays open. See
   docs/intent-provider.md's own "Implementation slices" (slice 3 marked
   built) and STATE.md for the full session account.
+- 2026-07-28 — UBI-46: chat medium — `ubx chat`, dialogue capture
+  (`dialogues/<hash>.dlg.json`, top-level, sibling of `ledger/` per
+  docs/architecture.md's own "Ledger stores" authoring-mediums split),
+  and `ubx why --dialogue`, riding UBI-41's `Adapter`/`DraftWithRetry`
+  interface unchanged. Four new adversarial rows (secret mid-conversation,
+  contradictory turns/later-wins, abandoned session/no orphan capture,
+  dialogue tampering post-pin — docs/intent-provider-adversarial.md rows
+  9-12). Live-verified against the real Claude API: a real two-turn
+  payments-stack refinement ("like staging but smaller" then "make it
+  multi-az") produced a draft whose provenance chained to the real
+  captured dialogue file, accepted as a real proposal, and walked back
+  end to end with `ubx why --dialogue` rendering the actual conversation
+  verbatim. A separate real contradiction probe (`db.t3.large` then
+  "actually, use db.t3.micro instead") confirmed later-turn-wins with the
+  override named in `intent.assumptions`. Both repos updated same
+  session; **UBI-46 closed in Linear**. See docs/intent-provider.md's
+  new "Amendment: the chat medium" section and STATE.md for the full
+  account.
 
 ## Strategy
 
@@ -3096,12 +3114,43 @@ next, its own session, not started; OpenAI/Gemini/local adapters remain
 on the roster, parked, no code. See STATE.md for the full session
 account and the exact closing comment text.
 
+### Chat medium (UBI-46)
+
+Built 2026-07-28, one session, riding UBI-41's `Adapter`/`DraftWithRetry`
+interface with zero changes to that interface — `DraftRequest.Content`
+already being "just bytes" rather than "a file path" (UBI-41's own load-
+bearing decision) is what made this true, not a new abstraction. `ubx
+chat --stack <stack>`: an interactive loop, each turn re-drafts from the
+full accumulated transcript via the same adapter; `/save` finalizes
+(writes `dialogues/<hash>.dlg.json` and the draft), `/quit`/EOF abandons
+(writes nothing — structural, not policy: the only write path is inside
+`/save`'s own handler). Redaction runs per-turn at capture, never post-
+hoc. `dialogues/` lands top-level, a sibling of `ledger/` — settled by
+docs/architecture.md's own pre-existing "Ledger stores" decision naming
+dialogues explicitly as an authoring medium that "always lives in git as
+a repo asset," never coupled to the ledger's own swappable remote-store
+backend. New `intent.sources[].kind: "dialogue"` entries pin the
+captured file's hash; `ubx why --dialogue` walks change proposal → draft
+→ the real conversation behind it. Four new adversarial rows built and
+passing (docs/intent-provider-adversarial.md rows 9-12): secret pasted
+mid-conversation (redacted, never reaches the adapter or the file),
+contradictory turns (later turn wins, named in `intent.assumptions`),
+abandoned session (zero orphan files, by construction), dialogue
+tampering post-pin (existing content-hash mechanism catches it
+unchanged, no new verification command). Live-verified against the real
+Claude API twice: a real two-turn payments-stack conversation ("like our
+staging database but smaller," then "make it multi-az") produced a real
+captured dialogue, a real draft with real provenance, a real accepted
+`change` proposal, and a real `ubx why --dialogue` render of the actual
+turns; a separate real contradiction probe confirmed later-turn-wins
+end to end. Both repos updated; **UBI-46 closed in Linear.** See
+docs/intent-provider.md's own new "Amendment: the chat medium" section
+and STATE.md for the full session account.
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, chat (rides UBI-41's own `Adapter` interface once built,
-its own ~1-session follow-up, not deferred as a design question any
-longer), diagrams, a real policy engine (UBI-27's resolver carries a
-policy-stub hook, always empty for now), environments/promotion, Nexus
+SDK + codegen, diagrams, a real policy engine (UBI-27's resolver carries
+a policy-stub hook, always empty for now), environments/promotion, Nexus
 SaaS, naming of proposal ledger format for external publication.
 
 ~~Intent provider, markdown intents (an LLM-authored `intent/v1` draft,
