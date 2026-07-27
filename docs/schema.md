@@ -1304,6 +1304,100 @@ means altering a signed proposal's own provider assignment after the fact
 (without a fresh resolve/accept) is caught exactly like altering any other
 field would be.
 
+### Amendment: intent-provider drafts — ambiguity content + two new `intent.sources[].kind` values (2026-07-27, UBI-41)
+
+Design only, session 1 of UBI-41 — no code lands with this amendment (see
+docs/intent-provider.md, docs/plan.md's own wedge subsection for the
+session breakdown). Pins the wire-format half of docs/intent-provider.md's
+own "ambiguity as visible content" design center — the intent provider's
+LLM-authored draft is exactly `ubx:intent/v1` (docs/schema.md's UBI-27
+amendment, above) plus the additive fields below, riding the identical
+`Proposal.Intent` struct a hand-written intent file's own `intent` object
+already occupies, so this content survives unchanged through
+`resolve`/`accept` into the final hashed, signed proposal — never a
+separate, unsigned side-channel.
+
+#### `Proposal.Intent` gains three new, optional, array fields
+
+```json
+{
+  "intent": {
+    "summary": "...",
+    "sources": [ "...": "unchanged shape, plus two new kind values below" ],
+    "assumptions": [
+      { "text": "...", "affects": ["<address>.<path>", "..."] }
+    ],
+    "defaults": [
+      { "text": "...", "affects": ["<address>.<path>", "..."] }
+    ],
+    "questions": [
+      { "text": "...", "affects": ["<address>.<path>", "..."], "blocking": true }
+    ]
+  }
+}
+```
+
+- **`assumptions[]`** — an explicit interpretive choice the intent
+  provider made where the source document was genuinely ambiguous.
+- **`defaults[]`** — a gap the source document left unaddressed
+  entirely, filled from context rather than invented from nothing. A
+  distinct field from `assumptions[]`, not a synonym — docs/intent-provider.md's
+  own "The mechanism" section states the review-posture difference this
+  split exists to preserve.
+- **`questions[]`** — an unresolved tension (a genuine contradiction, or
+  an ambiguity too open-ended to responsibly guess at) the draft still
+  had to produce *some* concrete resolution for. `blocking` is a
+  **review-affordance field only** — it carries zero resolver-side
+  enforcement; `core.Validate`/`core/resolver` never inspect it, never
+  refuse a proposal because of it. See docs/intent-provider.md's own
+  "Component 3" section for why an auto-refusing design was considered
+  and rejected.
+- **`affects`** on all three is a list of canonical address+path strings
+  (`<stack>.<type>.<name>.<path>` — the identical dot-path convention
+  `Modification.Before`/`.After` and `$ref`'s own `to` field already use),
+  never a free-text pointer — so a review surface can highlight the
+  exact config value an assumption/default/question is about.
+- **Origin-agnostic by construction.** Nothing about this shape is
+  specific to an LLM — a hand-written intent file MAY populate these
+  fields too (an author noting their own assumption explicitly), and a
+  resolved proposal produced by any resolver session before this
+  amendment simply has all three fields empty/absent, exactly the same
+  "absent means it was never applicable, not that something is missing"
+  posture the `provider` field amendment (UBI-43, above) already
+  established for the identical reason.
+
+#### Two new `intent.sources[].kind` values
+
+Alongside the existing `dialogue`/`manual_edit`/`issue`/`cloudtrail`/
+`gcp_audit` kinds (docs/schema.md's own founding draft and UBI-10/UBI-21
+amendments):
+
+- **`document`** — `{ "kind": "document", "ref": "<repo-relative path>",
+  "content_hash": "sha256:<hex>" }`. The authoring markdown file itself —
+  docs/architecture.md's own "Authoring mediums... always live in git as
+  repo assets... proposals pin them by content_hash" rule, made concrete
+  for md for the first time. `content_hash` is computed over the **raw,
+  unredacted** file exactly as committed — never the redacted copy
+  actually transmitted to the intent provider (docs/intent-provider.md's
+  own "Secret material in a doc" section states why these are two
+  deliberately distinct byte sequences, never conflated).
+- **`intent_provider`** — `{ "kind": "intent_provider", "ref":
+  "<adapter>:<model>", "content_hash": "sha256:<hex>" }`. Records which
+  adapter and model produced the draft, and pins the adapter's own raw
+  structured-output response as tamper-evident audit content — evidence
+  of provenance, exactly like `dialogue`/`manual_edit` already are, never
+  an enforced binding (a human editing the draft file before `ubx
+  resolve` is legitimate and expected; this source's own `content_hash`
+  simply continues to name what the AI actually said, unchanged by a
+  later human edit, the same way a `manual_edit` source's `content_hash`
+  doesn't move if the underlying PR is later amended).
+
+No `schema_version` bump — purely additive, the same reasoning as every
+prior additive amendment in this document (`lookup`, `provider_checksum`,
+`Modification.depends_on`, the `provider` field's own return above): a
+proposal recorded before this amendment simply has none of these fields,
+never ambiguously.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

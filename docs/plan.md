@@ -1068,6 +1068,47 @@
   ledger at all — removed from the remainder as a correction, not
   wired. See §PR-acceptance ceremony (docs/architecture.md) for the full
   design-to-build story and STATE.md for the full session.
+- 2026-07-27 — UBI-41 session 1: intent provider + md medium, design
+  only, no code. docs/intent-provider.md (new): the transcription-only
+  boundary applied for real for the first time (LLM emits an `intent/v1`
+  draft, never resolves/computes/touches a ledger or provider); the
+  `Adapter` interface (Claude first — real, current API surface checked
+  before writing the design down, not assumed; OpenAI/Gemini/local
+  follow, each earning "supported" via the conformance suite); the
+  `[intent]` config table (`adapter`/`model`/`key_ref` — never material,
+  cascade content like `[providers]`; Gemini's own API-key-vs-Vertex
+  auth split settled explicitly, per the design-room comment on the
+  ticket); the ambiguity-as-visible-content design center
+  (`assumptions`/`defaults`/`questions`, reviewable and signed as part
+  of the proposal, never a silent choice — and never a resolver-side
+  enforcement gate either, a considered-and-rejected alternative named
+  explicitly); redaction-at-capture for secret material pasted into a
+  doc (a genuinely different, pattern-based mechanism from UBI-23's
+  schema-driven redaction, since prose has no schema to consult); the
+  conformance-suite design (golden md→intent fixtures with per-fixture
+  assertion functions, not a byte-exact golden diff — LLM output isn't
+  deterministic the way a tfplugin provider's is, a real and checked
+  divergence from the existing `conformance/` harness's own discipline;
+  fixture #1 is the payments doc from this arc's own design transcript).
+  docs/schema.md gained the matching amendment: `Proposal.Intent`'s new
+  additive `assumptions`/`defaults`/`questions` fields, and two new
+  `intent.sources[].kind` values (`document`, `intent_provider`) — no
+  `schema_version` bump. docs/intent-provider-adversarial.md (new): the
+  required-outcome program named in the ticket's own handoff (ambiguous
+  sizing, contradictory requirements, secret material pasted into a
+  doc, unknown resource types, cost ceiling exceeded, adapter
+  unavailable/timeout, invalid JSON thrice) plus an eighth row this
+  session added — prompt injection embedded in doc content, whose
+  required outcome is deliberately structural (the trust chain bounds
+  the blast radius) rather than a claimed detection capability.
+  docs/architecture.md gained a new headline section cross-linking the
+  design doc, and its own stale "`intent` (reserved... not yet
+  implemented)" config note corrected to point at the real design.
+  Implementation sized at 2-3 further sessions (named in
+  docs/intent-provider.md's own "Implementation slices"): interface +
+  Claude adapter + conformance harness; the md pipeline (`ubx propose
+  --from-doc`) + ambiguity UX, live-verified against the real Claude
+  API; docs + polish. See STATE.md for the full session account.
 
 ## Strategy
 
@@ -2788,12 +2829,45 @@ chain longer than one hop) were never part of this arc's own core scope
 and remain open, named honestly in the closing Linear comment rather
 than silently folded in or silently dropped.
 
+### Intent provider + md medium (UBI-41)
+
+Phase 3's opener — AI enters the product. Sequenced after destroys
+(UBI-30) and multi-provider stacks (UBI-43), per the design-room decision
+recorded above ("Phase 3 medium order reversed — markdown before SDK"):
+both prior arcs remove the "one provider per stack" wall a markdown-
+authored proposal would otherwise hit immediately. Sized ~3-4 sessions
+(interface+adapter+conformance, md pipeline+ambiguity UX, docs+polish);
+chat rides the same interface afterward for ~1 more session.
+
+**Session 1 (2026-07-27): design only, no code — see the changelog entry
+above for the full account.** docs/intent-provider.md (new, the full
+design: the transcription-only boundary, the `Adapter` interface, the
+`[intent]` config table, the ambiguity-as-visible-content design center,
+redaction-at-capture, the conformance suite); docs/intent-provider-adversarial.md
+(new, 8 required rows — the 7 named in the ticket's own handoff plus one
+this session added, prompt injection embedded in doc content);
+docs/schema.md's amendment (`Proposal.Intent`'s new
+`assumptions`/`defaults`/`questions` fields, two new
+`intent.sources[].kind` values — `document`, `intent_provider` — no
+`schema_version` bump); docs/architecture.md's new headline section and
+corrected `[intent]` config note. Sessions 2-4 (interface+Claude
+adapter+conformance harness; the md pipeline live-verified against the
+real Claude API; docs+polish) are still queued — next candidate work for
+whoever picks up UBI-41.
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, chat/intent provider, diagrams, markdown intents, a real
-policy engine (UBI-27's resolver carries a policy-stub hook, always empty
-for now), environments/promotion, Nexus SaaS, naming of proposal ledger
-format for external publication.
+SDK + codegen, chat (rides UBI-41's own `Adapter` interface once built,
+its own ~1-session follow-up, not deferred as a design question any
+longer), diagrams, a real policy engine (UBI-27's resolver carries a
+policy-stub hook, always empty for now), environments/promotion, Nexus
+SaaS, naming of proposal ledger format for external publication.
+
+~~Intent provider, markdown intents (an LLM-authored `intent/v1` draft,
+never resolves/computes/touches a ledger or provider)~~ — **designed,
+UBI-41 session 1** (see its own wedge subsection above); interface,
+adapter, and CLI *code* are still session 2+ work of that ticket, not
+deferred any longer as a design question.
 
 ~~`delta.destroys` for any proposal kind (needs its own adversarial
 thinking — a create can be retried safely, a destroy usually can't;

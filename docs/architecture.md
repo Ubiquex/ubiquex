@@ -2501,8 +2501,9 @@ folded in as the single lowest-priority source underneath whatever the
 project cascade supplies. The reason it's kept structurally separate,
 not just prioritized last: **a checkout must resolve identically on
 every machine.** A project-truth key — `stack`, `providers`,
-`provider_configs`, `ledger` (its `store`), and `intent` (reserved for
-UBI-41's own intent-provider config, not yet implemented) — read from a
+`provider_configs`, `ledger` (its `store`), and `intent` (the
+intent-provider config — `adapter`/`model`/`key_ref`, designed UBI-41
+session 1, docs/intent-provider.md; not yet implemented) — read from a
 per-user file would mean the same commit resolves two different ways for
 two different people, or for the same person on two different laptops,
 which is precisely the failure mode this project's own "files, not a
@@ -2684,6 +2685,55 @@ all (every attribute but `id` comes back null from a minimal lookup) —
 see docs/executor.md's own session-6 addendum for the full finding and
 two further, real, GCP-specific gaps found along the way (filed as
 UBI-44 for the more serious one, a destroy that silently doesn't destroy).
+
+## Intent provider + md medium (designed, UBI-41 session 1 — docs/intent-provider.md; not yet implemented)
+
+Phase 3's opener: the first session where an LLM enters the product.
+Full design in docs/intent-provider.md (the transcription-only boundary,
+the adapter interface, config, the conformance suite) and
+docs/intent-provider-adversarial.md (the required-outcome program);
+docs/schema.md's own amendment pins the wire-format half. Summarized here
+at the system-model level, matching how every other headline section in
+this document cross-links its own detail doc rather than duplicating it.
+
+**The boundary, restated at the level of this document's own founding
+invariants**: trust-chain invariant #3 (*"The LLM operates in intent-space
+only; the deterministic resolver computes all values; nothing the LLM
+emits reaches apply without resolution + human signature"*) was stated at
+this project's very first session and has held, untested, until now. This
+arc is where it gets tested for real: `ubx propose --from-doc payments.md`
+runs a markdown document through an LLM adapter (Claude first; OpenAI,
+Gemini, and eventually a local/ollama-class adapter follow, each earning
+"supported" via the same conformance suite the ledger-store backends and
+provider types already earn it through) to produce an `intent/v1`
+**draft** — never a proposal, never anything that touches a ledger or a
+provider directly. Everything from `ubx resolve` onward is the existing,
+unmodified pipeline.
+
+**The design center**: where a document is genuinely ambiguous ("like
+staging but smaller"), the interpretive choice the intent provider makes
+becomes explicit, listed, reviewable content inside the draft itself —
+new `assumptions`/`defaults`/`questions` fields on `Proposal.Intent`
+(docs/schema.md's amendment), carried unchanged through `resolve`/`accept`
+into the final hashed, signed proposal. A human reviewing and accepting a
+draft reviews and signs its own stated assumptions along with everything
+else — never a silent guess baked into an otherwise-ordinary-looking
+resource config with no trace anywhere.
+
+**Config**: a new `[intent]` table (`adapter`, `model`, `key_ref`),
+cascade content like `[providers]`/`[provider_configs]` — `key_ref` is
+never material, the same "config stores references only" extension of
+this project's own secrets rule (see "Business frame," below). Gemini's
+own Vertex AI access mode (ambient GCP Application Default Credentials,
+no key at all) is settled explicitly, matching the GCP provider binary's
+own existing credential posture rather than inventing a second one.
+
+**Sequencing**: after destroys (UBI-30) and multi-provider stacks
+(UBI-43) — both would otherwise hit the "one provider per stack" wall
+markdown-authored proposals immediately run into. Chat rides the
+identical adapter interface afterward (docs/plan.md's own medium-order
+decision), nearly free — same transcription job, a dialogue transcript
+instead of a file as input.
 
 ## Component map (build order)
 
