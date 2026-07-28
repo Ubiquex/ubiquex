@@ -1373,6 +1373,30 @@
   new tests in `core/resolver`, 16 new in `diagram`). See docs/diagram-
   medium.md's own "Slices 1-2: built" section and STATE.md for the full
   account.
+- 2026-07-28 -- UBI-47 session 3: slice 3 built -- `ubx propose
+  --from-diagram <file>.d2 --stack <stack>` CLI wiring (`cli/
+  propose.go`), matching `--from-doc`'s own shape exactly: read, parse,
+  populate a single `"document"`-kind sources entry (`intentprovider.
+  HashDocument`, reused unchanged), render ambiguity content
+  (`cli/intentrender.go`'s existing `renderAmbiguity`, zero new rendering
+  code -- it already operates on the same `*resolver.IntentFile` type
+  `diagram.Parse` returns), write the draft. No corrections to session
+  2's own design -- the parser, `DependsOn`, and the `$cross`
+  structural-limitation note all wired through unchanged. Two-step, not
+  one-step: stops at a written draft like `--from-doc`, never
+  auto-resolves, since a diagram parse can produce real ambiguity needing
+  a human-review checkpoint first, unlike `--from-code`'s own one-step
+  shape. No legacy single-provider fallback (matching `ubx sdk gen`'s own
+  precedent -- both post-UBI-43 features); a new standalone
+  `loadDiagramProviders` helper rather than a `cli/resolve.go` refactor,
+  closing each provider client immediately after fetching its schema
+  (confirmed safe via `newSchemaInspector`'s own no-live-client
+  implementation). Five hermetic CLI tests (`cli/
+  propose_from_diagram_test.go`), including a real end-to-end run via the
+  `UBX_PROVIDER_MIRROR` seam; also live-verified by hand against a real
+  built binary. `go build/vet/test`, `gofmt -l .` clean. See docs/
+  diagram-medium.md's own "Slice 3: built" section and STATE.md for the
+  full account.
 
 ## Strategy
 
@@ -3657,6 +3681,40 @@ proven, not just asserted. `go build/vet/test`, `gofmt -l .` clean (8 new
 tests in `core/resolver`, 16 new in `diagram`). See docs/diagram-
 medium.md's own "Slices 1-2: built" section and STATE.md for the full
 account.
+
+**Session 3 (2026-07-28): slice 3 built -- `ubx propose --from-diagram
+<file>.d2 --stack <stack>` CLI wiring (`cli/propose.go`), matching
+`--from-doc`'s own shape and flag conventions exactly.** Read the .d2
+file, parse it via the real, unmodified `diagram.Parse`, populate a
+single `"document"`-kind `intent.sources` entry (`intentprovider.
+HashDocument`, reused unchanged -- the same single-entry precedent the
+SDK arc's own `stampDocumentSource` established), render whatever
+ambiguity content the parse produced (`cli/intentrender.go`'s existing
+`renderAmbiguity`, zero new rendering code needed since it already
+operates on the same `*resolver.IntentFile` type `diagram.Parse`
+returns -- the `$cross` structural-limitation note found in session 2
+surfaces here exactly as designed, an ordinary `defaults[]` entry),
+write the draft. No corrections to session 2's own design -- pure CLI
+glue. Two-step, not one-step: stops at a written draft the same way
+`--from-doc` does, never auto-resolving, since a diagram parse can
+produce real, visible ambiguity needing a human-review checkpoint first
+-- deliberately not `--from-code`'s own one-step shape. No legacy
+single-provider fallback, matching `ubx sdk gen`'s own precedent (both
+are post-UBI-43, multi-provider-only features); a new, standalone
+`loadDiagramProviders` helper rather than a `cli/resolve.go` refactor --
+out of scope for a CLI-wiring slice to touch that existing, tested code
+-- closing each provider client immediately after fetching its schema
+(confirmed safe via `newSchemaInspector`'s own no-live-client-dependency
+implementation, a deliberate improvement over `resolve.go`'s own
+hold-open-until-exit pattern). Five hermetic CLI tests (`cli/
+propose_from_diagram_test.go`): missing `[providers]`, missing
+`--stack`, three-way mutual exclusivity, a real end-to-end run via the
+`UBX_PROVIDER_MIRROR` seam (`cli/sdk_test.go`'s own mechanism) proving
+sources/ambiguity/`--neighbor-ledger` all wire correctly, and an
+unambiguous-diagram/`--summary`-override case. Also live-verified by
+hand against a real built binary. `go build/vet/test`, `gofmt -l .`
+clean. See docs/diagram-medium.md's own "Slice 3: built" section and
+STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 

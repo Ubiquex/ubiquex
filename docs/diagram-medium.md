@@ -530,6 +530,69 @@ below, not left implicit.
 `go build/vet/test`, `gofmt -l .` clean across the whole repo (8 new
 tests in `core/resolver`, 16 new in the new `diagram` package).
 
+### Slice 3: built (2026-07-28, session 3)
+
+`ubx propose --from-diagram <file>.d2 --stack <stack> [--summary <text>]
+[--neighbor-ledger <stack>=<path>] [--out <path>]` (`cli/propose.go`),
+matching `--from-doc`'s own shape exactly: read the file, produce an
+`intent/v1` draft, render its ambiguity content, write the draft. No
+corrections needed — session 2's own design (the parser, `DependsOn`,
+the `$cross` structural-limitation note) wired through unchanged, only
+new CLI-layer glue.
+
+Three real decisions made this session, none contradicting prior design:
+
+- **Two-step, not one-step.** `--from-diagram` stops at a written draft,
+  the *same* shape as `--from-doc` (never auto-resolves), not `ubx
+  resolve --from-code`'s own one-step shape — because a diagram parse
+  can produce real, visible ambiguity (an uninferable/ambiguous node
+  type, or the `$cross` limitation itself), so it needs the same
+  human-review checkpoint the md medium's own ambiguity does before
+  anything reaches a ledger.
+- **No legacy single-provider fallback.** Requires a real `[providers]`
+  table, matching `ubx sdk gen`'s own precedent (`cli/sdk.go`) — both are
+  post-UBI-43 features with no pre-multi-provider shape to fall back to.
+- **A standalone `loadDiagramProviders` helper, not a `cli/resolve.go`
+  refactor.** `resolve.go`'s own inline provider-loading block holds
+  every client open until command exit; `--from-diagram` only needs each
+  provider's already-fetched static schema (confirmed via
+  `newSchemaInspector`'s own implementation — it wraps `*provider.
+  Schemas`, no live client dependency), so its own helper closes each
+  client immediately after fetching schema instead. Matches `cli/sdk.go`'s
+  own precedent of a command owning its own provider-loading logic rather
+  than sharing `resolve.go`'s; touching that existing, tested code was
+  out of scope for a "CLI wiring" slice.
+
+Sources provenance: a single `"document"`-kind `intent.sources` entry
+naming the diagram file and its content hash (`intentprovider.
+HashDocument`, reused unchanged) — the same single-entry precedent
+`sdkeval`'s own `stampDocumentSource` established for the SDK arc,
+appropriate here too since there's no LLM adapter round trip to add a
+second entry for, unlike `--from-doc`'s own two-entry shape.
+
+Ambiguity rendering: `cli/intentrender.go`'s existing `renderAmbiguity`
+reused completely unchanged — it already operates on `*resolver.
+IntentFile`, exactly what `diagram.Parse` returns, so the `$cross`
+structural-limitation note (a `defaults[]` entry) and any blocking
+type-inference questions render to the terminal identically to how
+`--from-doc`'s own ambiguity content already does, with zero new
+rendering code.
+
+Five hermetic CLI tests (`cli/propose_from_diagram_test.go`): missing
+`[providers]` table rejected naming it; missing `--stack` rejected;
+three-way mutual exclusivity (`proposal.json` arg, `--from-doc`,
+`--from-diagram`) enforced; a real end-to-end run via the
+`UBX_PROVIDER_MIRROR` seam (matching `cli/sdk_test.go`'s own mechanism)
+proving the `$cross` note renders, the draft's own resources/sources are
+correct, and `--neighbor-ledger` resolves a real cross-stack reference;
+an unambiguous diagram renders the plain "no assumptions, defaults, or
+open questions" message with a `--summary` override honored verbatim.
+Also live-verified by hand outside the test suite, via a real built
+binary against the `fakeprovider` mirror — the same `Defaults (1):` note
+and draft shape the tests assert.
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo.
+
 1. **The topology model + parser** — **built.** `resolver.IntentFile`
    translation (label → name, `class:` → type via `InferProvider`, edges
    → `DependsOn` for resource-to-resource edges, `@`/`external` nodes
@@ -543,9 +606,9 @@ tests in `core/resolver`, 16 new in the new `diagram` package).
    dependency graph, verified against the cycle-detection adversarial
    row directly, end to end, not just at the unit level.
 3. **`ubx propose --from-diagram <file>.d2 --stack <stack>
-   [--neighbor-ledger <stack>=<path>]`**: CLI wiring, matching `--from-
-   doc`'s own shape and flag conventions exactly; writes a draft file,
-   same as every other `propose` mode.
+   [--neighbor-ledger <stack>=<path>]`** — **built.** CLI wiring, matching
+   `--from-doc`'s own shape and flag conventions exactly; writes a draft
+   file, same as every other `propose` mode. See "Slice 3: built," above.
 4. **The emitter + `ubx render --check`**: `FoldState` walk → D2 AST
    construction (sorted, deterministic) → `d2format.Format`; `--check`'s
    own byte-compare exit-code contract, matching `docs/architecture.md`'s
