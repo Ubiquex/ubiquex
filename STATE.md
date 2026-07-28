@@ -4,6 +4,174 @@
 
 ## Current phase
 
+**UBI-47 (2026-07-28), session 1, docs-first, no code: the diagram
+medium — D2 only.** New arc, filed and referenced per this session's own
+instruction (Linear ticket read in full, no comments). `docs/diagram-
+medium.md` (new) is the full design; `docs/architecture.md` gained a
+matching cross-linking headline section; `docs/schema.md` gained a real,
+load-bearing amendment (`ResourceIntent.DependsOn`, below); `docs/
+plan.md` gained a changelog entry, a new "Diagram medium" wedge
+subsection, and its own "Deferred" list's "diagrams" line struck. No
+ubiquex-docs work this session — nothing user-visible shipped yet
+(same precedent every design-only session 1 in this project's history
+has followed).
+
+**`oss.terrastruct.com/d2` checked empirically before any design claim
+was made about it, not assumed from the module's own name.** Fetched
+into a scratch module and actually compiled/round-tripped real diagrams
+through its real API. Confirmed: the module's own top-level packages
+(`d2renderers`/`d2layouts`/`d2plugin`/`d2exporter`) pull in heavy
+rendering machinery (`playwright-go`, image/PDF libraries) — but
+`d2parser`/`d2compiler`/`d2format`/`d2graph`/`d2ast` are separately
+importable and give exactly the narrow parse/compile/format surface ubx
+needs, none of the rendering weight.
+
+**A real design trap found and rejected before it shipped, the same
+"verify before implementing" discipline this project has caught real
+bugs with before (UBI-11's `hclwrite.SetAttributeValue`, UBI-33/34's own
+nested-block settability bug).** The first, natural-seeming design for
+annotating a node's resource type — an arbitrary custom key, `db: primary
+-db { ubx_type: aws_db_instance }` — was tested directly. **It's wrong**:
+D2 has no free-form custom-key channel at all; any key that isn't one of
+D2's own small reserved-attribute set (`shape`, `style`, `icon`, `label`,
+`tooltip`, `link`, `near`, ...) is parsed as declaring a **nested child
+shape**, not an attribute — `ubx_type: aws_db_instance` compiles
+successfully but silently creates a phantom child object `db.ubx_type`
+labeled `"aws_db_instance"`, corrupting the topology with no error at
+all. Confirmed directly, then rejected, before it could ship as an
+unexamined assumption.
+
+**The real, working mechanism: D2's own `class:`/`classes: {}` keyword**
+— D2's native CSS-like styling-class system, repurposed by ubx's own
+convention: a class named after a real provider type string
+(`aws_db_instance`), with an **empty** body (zero actual styling),
+carries the type and nothing else. Confirmed working directly, including
+the harder case — a cross-stack reference node
+(`staging_ref: "@payments.aws_db_instance.staging" { class: external }`)
+compiled cleanly, with the address string preserved **verbatim** in the
+node's own label (`@`, every `.`, byte-for-byte) — critical, since a
+`.`-containing string used as a D2 **key** (not a label) would hit the
+identical nested-shape trap the custom-key finding already caught (D2
+uses `.` as its own container-nesting separator in key paths). This is
+why the cross-stack grammar is pinned as "label, never key" — checked,
+not assumed by analogy.
+
+**`d2format.Format` confirmed genuinely idempotent — format → re-parse →
+format again produced byte-identical output**, the exact property `render
+--check`'s own byte-compare contract needs. This means ubx reuses D2's
+own canonical formatter directly rather than hand-rolling one — the same
+"don't reinvent what a real library already gives for free" instinct
+already applied to `ctyjson.UnmarshalType` in the SDK arc.
+
+**A genuinely new, additive wire capability found by trying to design
+around a real gap, not invented for convenience: `ResourceIntent.
+DependsOn`.** The lossy-medium rule (diagrams author topology only, never
+attributes) collides with a real, existing limitation: `core/resolver`'s
+own dependency-graph construction has only ever derived a create's
+`depends_on` by scanning its resolved `config` for `$ref`/`$cross`
+markers (confirmed by reading the real code) — a diagram edge names no
+config attribute at all, so there was genuinely no way to express "A
+depends on B" from pure topology without inventing a fake attribute,
+exactly the "two mediums claiming the same attribute" failure the
+lossy-medium rule exists to prevent. Fixed with a new, optional, additive
+input field on `ResourceIntent` — canonical addresses, unioned into the
+SAME dependency graph `$ref`/`$cross` scanning already builds (not a
+second graph), so cycle detection needs zero new code as a direct
+consequence. `docs/schema.md` amended this session (no `schema_version`
+bump — `ResourceIntent` has never been part of the ratified hashed
+Proposal shape); real Go code is slice 2 of a later session, not this
+one.
+
+**A conflation caught and separated before it became load-bearing
+anywhere: `content_hash` vs. the topology hash.** `intent.sources[].
+content_hash` (a single `"document"` entry, no diagram-specific kind —
+the same reasoning UBI-33/34 session 4 already established for the SDK
+medium: no LLM adapter in this path either, so nothing analogous to a
+second `intent_provider`-shaped entry) hashes the **raw** `.d2` file,
+styling included — tamper-evidence, matching every other `document`
+producer's own established rule. A second, genuinely different concept
+— **the topology hash** — answers a different question ("did the
+*meaning* change") via `core.CanonicalJSON` (reused from the SDK arc,
+unchanged) over the resolved `resources[]`+`depends_on` only, styling
+excluded entirely. This is what makes "styling-only change, topology
+hash unchanged" (the ticket's own required adversarial row) a real,
+checkable test rather than a definitional dodge — the two hashes serve
+genuinely different purposes and were almost conflated into one before
+this session caught it.
+
+**Node naming, containment, and type inference, all decided with real
+reasoning, not by default:** a resource's ubx name comes from the node's
+D2 **label** (human-readable, matching this project's own existing
+naming convention throughout), never its D2 key. Containers are **pure
+visual grouping** with zero effect on a resource's own name or address —
+a deliberate choice against folding container nesting into the name,
+since ubx addresses already use `.` as their own field separator and a
+second, diagram-specific `.`-joined path embedded in the `name` segment
+would create a real, self-inflicted address-parsing ambiguity. One stack
+per diagram, matching `ubx propose --from-doc`'s own existing `--stack`
+flag shape exactly — never inferred from which top-level container looks
+biggest. Type inference for a node's own `class:` value reuses `resolver.
+InferProvider` (UBI-43) **completely unchanged** — the identical schema-
+ownership mechanism a hand-written intent file's own untyped
+`resources[].type` already gets; a class-less node is not a type-
+inference problem at all (there's no schema-ownership question to ask
+without a candidate type name), it's excluded from `resources[]` with a
+`blocking: true` question, reusing UBI-41's own `assumptions`/`defaults`/
+`questions` wire fields for a deterministic parser's own structural
+ambiguity — the first time those fields have been proven to generalize
+beyond an LLM's interpretive ambiguity specifically.
+
+**Two of the ticket's own seven required adversarial rows turned out to
+need zero new detection code at all, once routed through the right
+existing mechanism** — "containment ambiguity" (a naming collision once
+containers are folded away) is `core/resolver`'s own existing,
+unmodified `ErrDuplicateResource`; "cycle in edges" is the existing,
+unmodified cycle detection, now fed via the new `DependsOn` input field.
+"Type ambiguous"/"no inferable type" reuse `InferProvider`'s own
+existing `ErrAmbiguousType`/`ErrUnknownType`. "Tampered post-pin" reuses
+the existing content-hash tamper-detection mechanism unchanged. Only
+"styling-only change" (the new topology-hash concept) and "D2 parse
+errors" (D2's own real, structured error type, surfaced verbatim) are
+genuinely new.
+
+**`ubx propose --from-diagram`, not `resolve --from-diagram` — a real,
+deliberate divergence from the SDK arc's own CLI shape, reasoned through
+explicitly, not copied by default.** The SDK chose one-step `resolve
+--from-code` specifically because typed code has no ambiguity at all.
+Diagrams CAN produce real, visible ambiguity (an uninferable/ambiguous
+node type) — deterministic, not LLM-interpretive, but still needing
+human review before the draft is trusted, the same reason the md medium
+needs its own two-step `propose`-then-`resolve` flow. The CLI shape
+tracks whether a medium can produce visible ambiguity, not whether an
+LLM happens to be involved — stated explicitly in the doc so this isn't
+left to be inferred from the worked examples alone.
+
+**Cross-stack `ledger_dir` resolution**: a new `--neighbor-ledger
+<stack>=<path>` flag (repeatable), matching the destroy path's own
+existing `--known-dependent` shape rather than inventing a new pattern,
+with a sensible convention default (`../<stack>`, already the implicit
+norm every cross-stack worked example elsewhere in this project's docs
+already uses) — an unresolvable reference (neither the convention
+directory nor an override) is the ticket's own "external-node without
+resolvable stack" row, a clear, named failure.
+
+Implementation sized at 7 slices (docs/diagram-medium.md's own
+"Implementation slices"): the topology model + parser; the
+`ResourceIntent.DependsOn` real code; `ubx propose --from-diagram` CLI
+wiring; the emitter + `ubx render --check`; conformance fixtures; a live
+finale converging a real `.d2` payments stack with the SAME golden
+values the md medium and the SDK arc's own TypeScript program already
+converged on (UBI-33/34 session 4) — four independent producers on one
+shared resolved shape; ubiquex-docs.
+
+docs/diagram-medium.md, docs/architecture.md, docs/schema.md, docs/plan.md
+committed and pushed to `ubiquex-cli` this session. No ubiquex-docs
+changes (nothing user-visible shipped). **UBI-47 stays open in Linear**
+— this was session 1 of an explicitly multi-session ticket, not a
+closing session.
+
+## Current phase (previous)
+
 **UBI-33/34 (2026-07-28), session 4: slices 5–7 built — `ubx resolve
 --from-code`, real conformance, a real live convergence finale.
 UBI-34 closed in Linear; UBI-33 stays open.** Continuing sessions 1-3's
