@@ -2789,6 +2789,52 @@ transparent, so it carries no `assumptions`/`defaults`/`questions` at
 all, by construction, a real and named divergence from the md medium's
 own design center rather than an oversight.
 
+## Diagram medium (designed, UBI-47 session 1 — docs/diagram-medium.md; not yet implemented)
+
+Component map #7's fourth authoring frontend, and the first that is
+bidirectional by construction. Full design in docs/diagram-medium.md
+(the canonical D2 subset, the lossy-medium rule applied concretely, the
+cross-stack grammar, a new additive `ResourceIntent.DependsOn` wire
+field, the render direction's own `render --check` contract).
+Summarized here at the system-model level, matching how every other
+headline section in this document cross-links its own detail doc rather
+than duplicating it.
+
+**Text or it isn't a medium**: D2 is parseable text, parsed and emitted
+via `oss.terrastruct.com/d2`'s own narrow parser/compiler/formatter
+packages (confirmed this session to pull in none of that library's own
+heavy rendering machinery) — PNG/SVG stay render *products*, regenerated
+on demand, never read back. **The lossy-medium rule, generalized**: a
+diagram authors topology only (nodes → resources, containers → pure
+visual grouping, edges → dependencies) — never attributes; this is the
+same boundary the intent provider's own "transcription, never
+computation" rule already drew for prose, restated here for a structural
+medium instead of a prose one, and it's what the founding "every medium
+is a projection, never a second source of truth" thesis actually means
+in practice: two mediums can never claim the same attribute.
+
+**No LLM in this medium's own path at all — a real, load-bearing
+distinction from the md medium, despite reusing its own wire fields.**
+A diagram node's type comes from a `class:` attribute, resolved via
+`resolver.InferProvider` (UBI-43, reused completely unchanged) exactly
+the way a hand-written intent file's own untyped-by-provider `resources[].
+type` already is. What's reused from UBI-41 is narrower than the whole
+adapter machinery: `core.Intent`'s own `assumptions`/`defaults`/
+`questions` wire fields, proven this session to generalize to a second,
+entirely different kind of interpretive gap (a deterministic parser's
+own structural ambiguity — an uninferable or ambiguous node type) rather
+than only an LLM's.
+
+**Sequencing**: filed during the SDK arc, slotted in after UBI-34 closed.
+Smaller than the SDK arc (no sandbox, no codegen) — the design work this
+session found one genuinely new, additive wire-format need
+(`ResourceIntent.DependsOn`, a topology-only dependency signal the
+existing `$ref`/`$cross`-scanning mechanism has no way to express
+otherwise) and confirmed empirically that D2's own `class:` mechanism
+(not a tempting but wrong custom-key approach, found and rejected before
+it shipped) is the right vehicle for both parse-side type annotation and
+render-side icon classing — one shared vocabulary, not two.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

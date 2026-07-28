@@ -1317,6 +1317,42 @@
   released" placeholder -- every example real; `mint validate`/`mint
   broken-links` clean. See docs/sdk.md's own "Slices 5-7: built" section
   and STATE.md for the full account, including the real transcripts.
+- 2026-07-28 -- UBI-47 session 1: diagram medium design, docs-first, no
+  code. docs/diagram-medium.md (new): the canonical D2 subset (verified
+  empirically against the real `oss.terrastruct.com/d2` library -- a
+  tempting custom-key type-annotation design found and rejected before
+  shipping, since D2 silently treats any unrecognized key as a nested
+  child shape rather than erroring; D2's own `class:`/`classes: {}`
+  keyword is the real, working mechanism, and `d2format.Format` is
+  confirmed genuinely idempotent, the property `render --check`'s own
+  byte-compare needs); the lossy-medium rule generalized from prose to
+  structure (topology authors in, attributes render out, never in); the
+  cross-stack grammar (`@stack.type.name` as a D2 label, never a key --
+  the same nesting trap the custom-key finding already caught, applied
+  again); type inference via `resolver.InferProvider` (UBI-43) reused
+  completely unchanged; ambiguity-as-content reusing UBI-41's own wire
+  fields (`assumptions`/`defaults`/`questions`) for a deterministic
+  parser's own structural ambiguity, with no LLM anywhere in this
+  medium's path at all. docs/schema.md gained a real, additive amendment
+  this design found necessary, not invented for convenience:
+  `ResourceIntent.DependsOn`, a topology-only dependency signal routed
+  into the resolver's existing dependency graph (cycle detection needs
+  no new code as a direct result). A second, genuinely different hash
+  from `content_hash` is named explicitly: the topology hash
+  (`core.CanonicalJSON` over resolved `resources[]`+`depends_on`,
+  styling excluded) for "did the meaning change," vs. `content_hash`
+  (raw bytes, styling included) for tamper-evidence -- conflating the
+  two was a real wrong shortcut caught before it became load-bearing.
+  docs/architecture.md gained a matching cross-linking headline section;
+  the "Deferred" list's "diagrams" line struck (designed now, code is
+  session 2+ work). A seven-row adversarial table lives in docs/diagram-
+  medium.md itself, most rows reusing an existing resolver-side
+  mechanism unchanged. Implementation sized at 7 slices toward a real
+  `.d2` payments stack converging with the same golden values the md
+  medium and the SDK arc's own TypeScript program already converged on
+  -- see docs/diagram-medium.md's own "Implementation slices" and
+  STATE.md for the full account including the real D2-library probe
+  output.
 
 ## Strategy
 
@@ -3498,11 +3534,92 @@ Both repos committed and pushed. See STATE.md and docs/sdk.md's own
 "Slices 5–7: built" section for the full account, including the real
 transcripts and the real byte-comparison.
 
+### Diagram medium: D2 only (UBI-47)
+
+Designed 2026-07-28, session 1, docs-first, no code — docs/diagram-
+medium.md (new) is the full design; docs/architecture.md gained a
+matching cross-linking headline section. v1 scope is **D2 only** —
+Mermaid and other formats deferred, each earning entry later via the
+same conformance-fixture discipline every other pluggable surface
+already uses. Go-native: `oss.terrastruct.com/d2` as a library —
+confirmed this session, empirically, to offer a narrow parser/compiler/
+formatter surface with none of the module's own heavy rendering
+machinery pulled in when only those subpackages are imported.
+
+**The lossy-medium rule, generalized from prose to structure**: a
+diagram authors topology only (nodes → resources, containers → pure
+visual grouping, edges → dependencies) — never attributes; annotations
+render from ledger truth, never author into it. **No LLM anywhere in
+this medium's path** — a node's type comes from a `class:` attribute,
+resolved via `resolver.InferProvider` (UBI-43) completely unchanged,
+the exact same schema-ownership inference a hand-written intent file's
+own untyped `resources[].type` already gets. What's reused from UBI-41
+is narrower than its adapter machinery: `core.Intent`'s own
+`assumptions`/`defaults`/`questions` wire fields, now proven (design-
+level, real code next session) to generalize to a deterministic parser's
+own structural ambiguity, not only an LLM's interpretive one.
+
+**A real trap found and avoided before it shipped**: the first, tempting
+type-annotation design (an arbitrary custom key on a D2 shape) was
+tested directly against the real `oss.terrastruct.com/d2` library before
+committing to it — D2 has no free-form custom-key channel at all; any
+unrecognized `key: value` inside a shape's body silently creates a
+*nested child shape* instead, corrupting the topology rather than
+erroring. The real, working mechanism is D2's own `class:`/`classes: {}`
+keyword (its CSS-like styling-class system, repurposed by convention: a
+class named after a real provider type string, with an empty body,
+carries zero styling and IS the type) — confirmed by actually compiling
+and round-tripping a real diagram, including a cross-stack reference
+node (`@stack.type.name` as a **label**, never a D2 **key** — the same
+kind of trap, `.` is D2's own container-nesting separator in a key path)
+through the real library.
+
+**`d2format.Format` is genuinely idempotent — confirmed directly, not
+assumed**: format → re-parse → format again produced byte-identical
+output. This is exactly the property `render --check`'s own byte-compare
+contract needs, and it means ubx reuses D2's own canonical formatter
+rather than hand-rolling one.
+
+**A genuinely new, additive wire capability found by design, not
+invented for convenience**: `ResourceIntent.DependsOn` (docs/schema.md's
+own new amendment this session) — a topology-only dependency signal the
+existing `$ref`/`$cross`-config-attribute-scanning mechanism has no way
+to express, since a diagram edge names no attribute at all. Routes into
+the *same* dependency graph the resolver already builds, so cycle
+detection needs zero new code. A second, genuinely different hash from
+`content_hash` is also named explicitly: the **topology hash**
+(`core.CanonicalJSON` over resolved `resources[]`+`depends_on`,
+excluding summary/sources/ambiguity content) answers "did the meaning
+change," while `content_hash` (the raw file, styling included) answers
+"were these the exact bytes parsed" — conflating the two was a real
+wrong shortcut a first pass took, corrected before it became load-
+bearing anywhere.
+
+A seven-row required-outcome adversarial table is in docs/diagram-
+medium.md itself, most rows citing an *existing* resolver-side
+mechanism reused unchanged (cycle detection, `ErrAmbiguousType`,
+`ErrDuplicateResource`, the existing content-hash tamper-detection) —
+only styling-only-change and D2-parse-error handling are genuinely new.
+Implementation sized at 7 slices toward a real `.d2` payments stack that
+converges with the SAME golden values the md medium and the SDK arc's
+own TypeScript program already converged on (UBI-33/34 session 4) —
+four independent producers on one shared resolved shape, the complete
+set this project's own "every medium is a projection" thesis promised.
+See docs/diagram-medium.md's own "Implementation slices" and STATE.md
+for the full session account including the real D2-library probe
+output.
+
 ## Deferred (explicitly not now)
 
-diagrams, a real policy engine (UBI-27's resolver carries a policy-stub
-hook, always empty for now), environments/promotion, Nexus SaaS, naming
-of proposal ledger format for external publication.
+a real policy engine (UBI-27's resolver carries a policy-stub hook,
+always empty for now), environments/promotion, Nexus SaaS, naming of
+proposal ledger format for external publication.
+
+~~diagrams~~ — **designed, UBI-47 session 1** (see its own wedge
+subsection below and docs/diagram-medium.md); parser/emitter/CLI *code*
+is still session 2+ work of that ticket, not deferred any longer as a
+design question. Mermaid/other formats and the Studio-style live canvas
+stay deferred (docs/diagram-medium.md's own "Out of scope").
 
 ~~SDK + codegen~~ — **designed, UBI-33/34 session 1** (see its own wedge
 subsection above and docs/sdk.md); Go/Python's own evaluators (UBI-35/36)

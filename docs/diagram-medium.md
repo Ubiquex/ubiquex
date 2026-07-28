@@ -1,0 +1,502 @@
+# Diagram medium — D2 only (UBI-47)
+
+> Session 1, design only, no code. The fourth authoring medium, and the
+> first that is bidirectional by construction: **parse** (a `.d2` file →
+> an `intent/v1` draft, via `ubx propose --from-diagram`) and **render**
+> (a ledger's own `FoldState` → canonical `.d2`, via a new `render`
+> command with `--check`). v1 scope is **D2 only** — a founder decision,
+> not revisited here; Mermaid and other formats are deferred, each
+> earning entry later via the identical conformance-fixture discipline
+> every other pluggable surface in this project already uses (adapters,
+> providers, ledger stores).
+>
+> Two hard constraints came pre-decided from the ticket's own design
+> room and are not relitigated here: **text or it isn't a medium** (D2 is
+> parseable text; PNG/SVG are render *products*, regenerated on demand,
+> never read back — no image interpretation anywhere in this medium's
+> own path) and the **lossy-medium rule** (diagrams author topology only
+> — nodes, containers, edges — never attributes; annotations render from
+> ledger truth, never author into it). Go-native: `oss.terrastruct.com/d2`
+> as a library, no subprocess — verified this session to actually offer
+> exactly the narrow surface needed (parser/compiler/formatter, zero
+> rendering dependencies pulled in), not assumed from the module's own
+> name.
+
+## Scope: what this session designs, and what it doesn't
+
+Designed here: the canonical D2 subset (what ubx parses and emits, and
+why `full D2` isn't safe for `render --check`); the lossy-medium rule
+applied concretely (which D2 constructs map to topology, which are
+excluded from the topology hash); the cross-stack grammar (`@stack.type.
+name` labels, `class: external`, how a bare reference resolves to a real
+`ledger_dir`); a genuinely new, additive wire-format capability this
+medium's own "topology only, no attribute guessing" principle requires
+(`ResourceIntent.DependsOn`, docs/schema.md's own amendment, below); type
+inference for a node's own `class:` value (reusing `resolver.
+InferProvider`, UBI-43, unchanged); the render direction's own design
+(no synthetic containers, per-provider classes, `render --check`'s
+byte-compare contract); the adversarial program; implementation slices
+toward a real `.d2` payments stack.
+
+Not designed here, named so it isn't assumed covered: Mermaid or any
+second diagram format (the frontend-interface shape is named, not
+built); the Studio-style live canvas / drag-to-propose authoring (Nexus-
+era, explicitly named in the ticket as sitting *behind* this arc, needing
+this arc's parse+emit as its own enabling layer — not started); the
+actual `render` command's full flag surface beyond `--check` (e.g. output
+targeting, watch mode); PNG/SVG rendering itself (out of scope
+permanently, not just this session — see "Text or it isn't a medium,"
+above).
+
+## The canonical D2 subset — verified empirically, not assumed
+
+`oss.terrastruct.com/d2` is a real, large module (`d2renderers`,
+`d2layouts`, `d2plugin`, `d2exporter` — the actual rendering/layout
+engine, pulling in `playwright-go`, image/PDF libraries, the works), but
+it also ships the narrow layer this project actually needs as
+**separately importable packages with none of that pulled in**:
+`d2parser` (text → AST), `d2compiler` (AST → a compiled `d2graph.Graph`:
+objects, edges, containment, resolved classes), `d2format` (AST →
+canonical text). Confirmed this session, not assumed from the package
+names alone, by actually compiling and round-tripping a real diagram
+through exactly these three packages and nothing else.
+
+**`d2format.Format` is genuinely idempotent — confirmed directly, the
+load-bearing property `render --check`'s whole byte-compare contract
+depends on.** A real diagram (containers, typed nodes via `class:`, a
+cross-stack reference node, edges with and without labels) was parsed,
+formatted, **re-parsed from its own formatted output, and formatted
+again** — the second pass's bytes were identical to the first,
+byte-for-byte. This means ubx doesn't need to hand-roll a canonical D2
+serializer at all: `d2format.Format` already **is** the canonical form,
+reused directly, the same "don't reinvent what a real library already
+gives you for free" instinct this project applied to `ctyjson.
+UnmarshalType` (UBI-33/34) and `hclsyntax`/`d2format`'s own upstream
+precedent, not a fresh claim invented for this arc.
+
+**A real trap found and avoided: D2 has no free-form "custom key"
+channel on a shape.** The first, tempting design — annotate a node's
+resource type with an arbitrary key, e.g. `db: primary-db { ubx_type:
+aws_db_instance }` — was tested directly before committing to it.
+**It's wrong**: D2's own grammar treats *any* `key: value` pair inside a
+shape's body as declaring a **nested child shape** unless the key is one
+of D2's own small set of reserved attribute names (`shape`, `style`,
+`icon`, `label`, `tooltip`, `link`, `near`, ...). `ubx_type: aws_db_
+instance` compiles successfully, but produces a spurious child object
+`db.ubx_type` labeled `"aws_db_instance"` — silently corrupting the
+topology with a phantom resource, not an error. This would have shipped
+a real, silent data-corruption bug if the first idea had gone
+unverified.
+
+**The real mechanism, confirmed working: D2's own `class:` keyword.**
+D2 supports a top-level `classes: { <name>: { <style attrs> } }` block
+and a `class: <name>` attribute on any shape, referencing one — D2's own
+CSS-like mechanism for shared styling, per its own doc comment
+(`d2graph.Attributes.Classes`: "attached to the rendered elements in SVG
+so that users can target them however they like"). Nothing stops a class
+definition's own body from being **empty** — `classes: { aws_db_
+instance: {} }` — carrying zero actual styling, purely a name. **ubx's
+own convention: a node's `class:` value, when it matches a real provider
+type string, IS that resource's type** — reusing D2's own idiomatic
+mechanism exactly as designed, not repurposing something D2 didn't
+intend it for. This is also, not coincidentally, exactly what the
+ticket's own render-direction language already named
+("per-provider icon classes, `aws_*`/`google_*`/`helm_*`") — parse and
+render share one convention, not two.
+
+**This is also why "styling-only change, topology hash unchanged" is a
+real, checkable requirement, not a hope**: a class's own *assignment* to
+a node (`Classes: []string`, which class NAME a node has) is
+topology-relevant — it's how type inference works — but a class's own
+*definition body* (its style attributes) is pure presentation. The
+topology hash (defined precisely below) is computed over the parsed,
+resolved topology model — type/name/depends_on/cross-refs — never over
+a class's own style block, so editing `classes.aws_db_instance.style.
+fill` changes the `.d2` file's own bytes (and therefore its raw
+`content_hash`, see below) without changing the topology hash at all.
+
+## Node naming: the D2 **label**, not the D2 key
+
+A D2 shape's own identifier (`db` in `db: primary-db { ... }`) and its
+label (`primary-db`, the string value) are two different things — D2
+resolves edges/containment against the identifier, but a diagram author
+thinks and writes in labels. **ubx resource names come from the label**
+(falling back to the identifier when no distinct label is given — D2's
+own default), matching this project's own existing naming convention
+throughout (`payments-db-replica`, `payments-db`, `widget1` — human-
+readable strings, not short internal handles) and matching what a
+diagram author would naturally write. A label that starts with `@` is
+never treated as a resource name at all — see "Cross-stack grammar,"
+below, where that prefix means something else entirely, checked first.
+
+## Containers: pure grouping, zero effect on resource identity
+
+`containers → grouping` (the ticket's own framing) is taken literally
+and narrowly: **D2 containment contributes nothing to a resource's own
+name or address.** A node's ubx resource name is its own label, full
+stop, regardless of how deeply nested it is in the diagram — container
+nesting is organizational/visual only, folded away entirely once parsing
+reaches the intent/v1 draft. This is a real, deliberate design choice
+against the tempting alternative (fold a node's ancestor container path
+into its own name, e.g. `primary.db`) for a concrete reason: ubx
+addresses are already `<stack>.<type>.<name>` with `.` as the field
+separator; embedding a second, diagram-specific `.`-joined path *inside*
+the `name` segment would make the canonical address string genuinely
+ambiguous to read back apart, a self-inflicted parsing problem this
+design avoids by construction rather than working around later.
+
+**The one stack per diagram rule, matching every prior medium's own
+precedent exactly**: `ubx propose --from-diagram <file>.d2 --stack
+<stack>` takes the target stack as an **explicit flag**, the identical
+shape `ubx propose --from-doc <file>.md --stack <stack>` already has —
+never inferred from the diagram's own top-level container structure.
+This sidesteps a real, otherwise-open question (which top-level
+container, if a diagram has several, would "be" the stack?) by not
+asking the diagram to answer it at all. Multiple top-level containers in
+one `.d2` file are legal and meaningful only as visual grouping within
+the one stack the invocation names — never as a signal of a second
+stack; the ticket's own "diagrams author their own stack ... never the
+neighbor" rule is enforced structurally this way, not by a check that
+could be gotten wrong.
+
+**Containment ambiguity (the ticket's own named adversarial case) is a
+real thing, and it's a naming collision — reused, not reinvented.**
+Two nodes in different containers sharing the same label (`payments.
+primary.db` and `payments.replica.db`, both labeled `"db"`) would
+resolve to the identical ubx address (`<stack>.<type>.db`) once
+container nesting is folded away. This is caught by `core/resolver`'s
+own existing, unmodified `ErrDuplicateResource` check — the same check
+a hand-written intent file naming the same `(type, name)` twice already
+hits today. No new duplicate-detection code for diagrams; the parser
+just needs to let this existing check actually fire (never silently
+disambiguate by appending a container-path suffix on the diagram's own
+behalf, which would be exactly the kind of silent guess this project's
+whole design center refuses).
+
+## Type inference: `resolver.InferProvider`, reused completely unchanged
+
+A node's `class:` value is a **type name**, never a provider — exactly
+the same shape a hand-written intent file's own `resources[].type`
+already has (docs/architecture.md's own Multi-provider stacks section:
+"Intent files name only types... resolved by asking each declared
+provider's schema which types it owns"). This is why "type inference for
+unlabeled nodes" needs no new inference machinery at all: a node's own
+`class:` string is handed to `resolver.InferProvider(providers, class,
+nil)` (UBI-43, unchanged) exactly the way a resolved intent file's own
+type string already is. The two failure modes this already produces are
+reused verbatim, not reimplemented:
+
+- **`ErrUnknownType`** — no declared provider's schema owns this class
+  name at all. This is the ticket's own "node with no inferable type"
+  row.
+- **`ErrAmbiguousType`** — more than one declared provider's schema
+  claims it, and the node names no `provider:`-hint the way a hand-
+  written intent file's own `ResourceIntent.Provider` field already
+  supports.
+
+**A node with no `class:` at all is not a type-inference problem — it's
+not a resource.** Given the trap found above (D2 has no safe custom-key
+channel), a class-less node has genuinely no ubx-legible type signal;
+rather than guess from a free-text label ("database", "cache" — fuzzy
+matching that isn't schema-ownership inference at all, and isn't
+proposed here), a class-less node is **excluded from `resources[]`
+entirely**, with a `blocking: true` question entry (the exact mechanism
+below) naming the node and asking the author to add a `class:`. This is
+the honest, lossy-medium-consistent answer: a diagram that doesn't say
+what something is doesn't get to have ubx guess.
+
+## Ambiguity as visible content — reusing UBI-41's wire fields, not its adapter
+
+**The diagram parser is fully deterministic — there is no LLM in this
+medium's own path at all.** This matters for what "reuses UBI-41's
+validation/ambiguity machinery" actually means: it is **not** the
+`intentprovider.Adapter`/`DraftWithRetry`/Claude-API machinery (there is
+nothing here for an LLM to interpret — a `class:` string either resolves
+via schema-ownership inference or it doesn't, mechanically). What's
+reused is narrower and already generic: `core.Intent`'s own
+`Assumptions`/`Defaults`/`Questions` fields (`core/proposal.go`,
+`AmbiguityNote{Text, Affects}`, `Question{Text, Affects, Blocking}`) —
+wire-format content UBI-41 introduced for LLM interpretive gaps, proven
+here to generalize to a second, entirely different KIND of gap: a
+deterministic parser's own structural ambiguity (an uninferable or
+ambiguous type). A `blocking: true` question is added whenever a node
+can't be resolved to a single type, naming the node and the reason
+(`ErrUnknownType`/`ErrAmbiguousType`'s own message); the draft is still
+produced, complete and valid, with that one node's own resource simply
+absent from `resources[]` — never a whole-diagram refusal for one bad
+node, the identical "never an empty draft, never a refusal" posture
+`docs/intent-provider.md` already established, now demonstrated to be a
+property of the *ambiguity-as-content design*, not of having an LLM in
+the loop specifically.
+
+**`intent.sources` gets a single `"document"` entry — not a new
+diagram-specific kind.** Same reasoning UBI-33/34 session 4 already
+established for the SDK medium, extended here rather than re-derived: a
+deterministic producer with no adapter in the loop has nothing analogous
+to `intent_provider`'s own "which model drafted this" fact worth a
+second entry. `{"kind": "document", "ref": "payments.d2", "content_
+hash": "sha256:<hex of the RAW .d2 file's own bytes>"}` — computed over
+the **raw** file, unmodified, matching every other `document` producer's
+own established rule (`docs/intent-provider.md`: "computed over the RAW,
+unredacted file") — this is a tamper-evidence hash, not a topology
+comparison, and deliberately does NOT exclude styling (see "The topology
+hash," below, for the genuinely different, second hash that does).
+Three real medium producers (prose, code, diagram) now converge on one
+shared provenance vocabulary — not a coincidence, the same unification
+decided once and reused.
+
+### `propose --from-diagram`, not `resolve --from-diagram` — a real, deliberate divergence from the SDK's own CLI shape
+
+UBI-33/34 chose `ubx resolve --from-code` — one step, no draft-review
+gate — specifically because a typed program has no ambiguity at all
+("it says what it says," session 4's own framing). A diagram is
+different in exactly the respect that decision hinged on: **a diagram
+parse CAN produce real, visible ambiguity** (an uninferable or ambiguous
+node type, above) — deterministic, not LLM-interpretive, but genuinely
+requiring human review before the draft should be trusted, the same
+reason the md medium needs a two-step `propose` (draft, reviewed) then
+`resolve` (accepted as input) rather than one. **`ubx propose --from-
+diagram <file>.d2 --stack <stack>` is the right shape, matching the md
+medium's own two-step flow, not the SDK's one-step one** — the CLI
+surface tracks whether a medium can produce visible ambiguity, not
+whether an LLM is involved.
+
+## Cross-stack grammar: `@stack.type.name` labels, never `@stack.type.name` keys
+
+**A reference is a labeled node, never a keyed one — checked
+empirically, not assumed, because D2's own key-path syntax would make
+the obvious-looking alternative silently wrong.** D2 keys use `.` as its
+own container-nesting separator; a node keyed literally
+`@payments.aws_db_instance.staging` would not create one node with that
+identifier at all — D2 would parse it as **three nested containers**
+(`@payments` → `aws_db_instance` → `staging`), corrupting the topology
+exactly the way the custom-key trap above did. The **label** is D2's own
+opaque-string channel — confirmed directly this session: `staging_ref:
+"@payments.aws_db_instance.staging" { class: external }` round-trips the
+address string byte-for-byte, with `@`, every `.`, all preserved
+verbatim, because a quoted label is just a string to D2, never parsed as
+a path.
+
+**Grammar, pinned:** a node is a cross-stack reference, never a create,
+when **either** its label starts with `@` (the address it names) **or**
+its `class` is exactly `external` (readable without needing to parse the
+label at all, matching the render direction's own annotation
+convention, below) — both together, as in the worked example, is the
+canonical/emitted form; either alone is accepted on parse (tolerant
+parse, normalized emit, the same "parse a superset, emit the one true
+form" rule the canonical subset itself already follows). A reference
+node's own D2 key/identifier is never significant beyond letting edges
+in the SAME diagram point at it.
+
+**Resolving a bare `@stack.type.name` to a real `ledger_dir` needs new,
+explicit input this design provides two ways, matching the destroy
+path's own existing `--known-dependent` shape rather than inventing a
+new pattern:**
+
+1. **Convention default**: `../<stack>` — a sibling directory named
+   after the referenced stack. This is not a guess invented for this
+   document; it's already the convention every cross-stack worked
+   example elsewhere in this project's own docs uses (`docs/resolver.md`'s
+   own `$cross` examples: `"ledger_dir": "../networking"` for a stack
+   literally named `networking`).
+2. **Explicit override**: a new, repeatable `--neighbor-ledger
+   <stack>=<path>` flag on `ubx propose --from-diagram`, for the real
+   case where the convention doesn't hold.
+
+A referenced stack matching neither the convention directory nor an
+explicit override is the ticket's own "external-node without resolvable
+stack" row: a clear, named parse-time failure (which node, which stack
+name, which directory was checked and wasn't there) — never a silent
+skip, never a guessed path.
+
+Once resolved, a reference node becomes exactly the existing `$cross`
+marker (`docs/schema.md`'s UBI-27 amendment) wherever the diagram's own
+edges point at it — see `depends_on`, next, for how a topology-only
+edge reaches a marker at all without guessing which config attribute it
+belongs in.
+
+## A genuinely new, additive wire capability: `ResourceIntent.DependsOn`
+
+**The lossy-medium rule creates a real gap the existing intent/v1 format
+doesn't close, found by trying to design around it rather than assumed
+away.** An edge `A -> B` in a diagram is pure topology — "A depends on
+B" — but today's `$ref`/`$cross` markers live **inside a specific
+config attribute path** (`docs/schema.md`: `"replicate_source_db":
+{"$ref": {...}}`), and the resolver only ever derives a create's own
+`depends_on` by scanning config for exactly those markers
+(`core/resolver.go`, confirmed by reading the real dependency-graph-
+building code, not assumed). A diagram edge names no attribute at all —
+authoring one would mean guessing a schema-specific attribute name from
+a topology-only signal, exactly the "two mediums claiming the same
+attribute" failure the lossy-medium rule exists to prevent.
+
+**The honest fix is a new, additive input field, not a workaround**:
+`ResourceIntent` (`core/resolver/resolver.go`) gains `DependsOn
+[]string` — canonical addresses, the same convention `Modification.
+DependsOn`/`Delta.Creates`'s own output-side `depends_on` already use —
+an **input-side** sibling naming dependencies with no config-attribute
+opinion at all. The resolver honors it directly: added to the same
+dependency graph `$ref`/`$cross` scanning already builds (union, not a
+second graph), included verbatim in the resolved output's own
+`depends_on` (already a real field, already handles multiple
+contributing reasons for one edge — see `docs/schema.md`'s own doc
+comment: "the authoritative, explicit, position-independent record of
+why"). Purely additive, optional (`omitempty`), on an input struct that
+has never been part of the ratified hashed-content shape — **no
+`schema_version` bump**, the same reasoning every prior additive
+amendment in this project's history already established.
+
+```json
+{
+  "type": "aws_ecs_service", "name": "api", "op": "create",
+  "config": {},
+  "depends_on": ["payments.aws_db_instance.primary-db"]
+}
+```
+
+**"Cycle in edges" needs no new detection code at all** — this is
+exactly why the fix above routes through the *same* dependency graph
+`$ref`/`$cross` scanning already builds, not a parallel one: `core/
+resolver`'s own existing cycle detection (`docs/resolver.md`) already
+covers every edge in that graph, diagram-sourced or not, unconditionally.
+
+## The topology hash: a second, different hash from `content_hash`
+
+Two genuinely different questions, two genuinely different hashes —
+conflating them was the wrong shortcut a first pass at this design took,
+corrected here before it became load-bearing anywhere:
+
+- **`intent.sources[].content_hash`** answers "were these the exact
+  bytes parsed" — tamper-evidence, computed over the raw `.d2` file,
+  styling included, matching every other `document` producer.
+- **The topology hash** answers "did the *meaning* change" — computed
+  via `core.CanonicalJSON` (UBI-33/34, reused unchanged) over the parsed
+  `resources[]` + input-side `depends_on`, **excluding** `intent.
+  summary`/`sources`/ambiguity content entirely, the identical "compare
+  the resolved shape after canonicalizing, not the whole document"
+  technique the SDK arc's own live finale already proved out (session 4:
+  `delta.creates[]`, canonicalized, byte-compared across two independent
+  producers). Never stored anywhere on the wire; a derived value the
+  conformance suite and `render --check` both compute on demand.
+
+This is what makes "styling-only change, topology hash unchanged" a real
+adversarial test rather than a definitional dodge: parse the same
+diagram before and after a pure `classes.*.style.*` edit, topology-hash
+both, require equality, while `content_hash` is allowed (expected) to
+differ.
+
+## The render direction: `FoldState` → canonical D2
+
+Walks a stack's own `core.Ledger.FoldState` (already-shipped, unchanged
+— the same read `ubx status`'s own fleet walk already performs) and
+emits one flat, top-level D2 node per live resource — **no synthetic
+containers.** A real, considered decision, not an oversight: there is no
+canonical grouping basis to invent (by type? by dependency cluster? by
+original diagram structure, which render has no access to and
+shouldn't need) that wouldn't be an unreviewable guess baked into every
+emitted diagram; a human editing the emitted file by hand can add their
+own grouping afterward, same as they can with any other generated,
+reviewable artifact this project already produces (`ubx sdk gen`'s own
+bindings, committed and human-editable-adjacent even though generated).
+
+Per-resource emission, deterministic (resources sorted by `(type, name)`
+before AST construction — `d2format` itself preserves input order
+verbatim, confirmed this session; determinism is this project's own
+responsibility to supply, not something to assume a formatter grants for
+free):
+
+- **`class: <type>`** — the exact type string, the identical convention
+  parse already reads, giving render/parse one shared vocabulary instead
+  of two.
+- **Attribute annotations** — real, current ledger values (this is the
+  lossy-medium rule's *other* half: annotations render from truth, they
+  just never author into it) via D2's own `tooltip:`/label-suffix
+  mechanisms — exact rendering convention left to the implementation
+  session (a real, small UI decision, not a wire-format one).
+- **Cost**, where a resource's own recorded cost data exists — same
+  annotation channel.
+- **`$cross` edges** — a reference node (`class: external`, `@stack.
+  type.name` label) annotated with the pinned neighbor head
+  (`resolution.inputs[].pinned_head`, already real, unchanged) so a
+  rendered diagram shows staleness risk at a glance, not just topology.
+
+**`render --check`**: re-emit, byte-compare against a target file
+(matching the exact "regenerate and diff" shape `ubx sdk gen`'s own
+generated-file discipline already established, and `d2format`'s
+confirmed idempotency above is exactly what makes a stable byte-compare
+possible at all). Exit non-zero on any difference — the founding
+projection invariant (`docs/architecture.md`), enforced for a fourth
+projection surface with the identical mechanism, not a bespoke one.
+
+## Adversarial program
+
+Matching every prior arc's own discipline: each row is a required
+observable outcome, reused-mechanism citations included so a future
+implementer isn't left re-deriving why a row needs no new code.
+
+| # | Scenario | Injection | Required observable outcome |
+| --- | --- | --- | --- |
+| 1 | Cycle in edges | Diagram edges `A -> B -> C -> A`, translated to `depends_on` on each create. | Caught by `core/resolver`'s own existing, unmodified cycle detection (the new `ResourceIntent.DependsOn` field feeds the identical dependency graph `$ref`/`$cross` scanning already builds) — a clear cycle error naming the addresses involved, never a resolved-but-unorderable proposal. |
+| 2 | No inferable type | A node with no `class:` attribute at all. | Excluded from `resources[]`; a `blocking: true` question names the node and asks for a `class:`. The rest of the diagram still resolves into a complete, valid draft — never a whole-file refusal for one under-specified node. |
+| 2b | Type ambiguous across providers | A node's `class:` names a type two declared providers both own, no `provider:` hint given. | `resolver.InferProvider`'s own existing `ErrAmbiguousType` fires, reused unchanged — same outcome a hand-written intent file naming the same ambiguous type already gets today. |
+| 3 | Containment ambiguity | Two nodes in different containers share the same label, folding to the identical `(type, name)` address once containment is discarded. | `core/resolver`'s own existing, unmodified `ErrDuplicateResource` fires — never a silent disambiguation (e.g. appending a container-path suffix on the parser's own initiative). |
+| 4 | Styling-only change | Two versions of the same diagram differ only in `classes.*.style.*` attributes — identical topology otherwise. | The two versions' own `content_hash` values differ (real bytes changed); their topology hashes (`core.CanonicalJSON` over `resources[]`+`depends_on`) are byte-identical. `render --check` against either version's own re-emitted form succeeds. |
+| 5 | Tampered diagram post-pin | A `.d2` file referenced by an already-accepted proposal's `intent.sources` is edited after the fact. | The existing content-hash tamper-detection mechanism (already built, already reused unchanged by every prior `document`-kind producer — chat's dialogues, the md medium) catches it; no new verification code for diagrams specifically. |
+| 6 | D2 parse errors | Malformed `.d2` syntax (unclosed brace, invalid key path, ...). | `d2parser`/`d2compiler`'s own real, structured parse error surfaces verbatim (file, line, column — D2's own error type already carries this) — never swallowed, never a partial/best-effort topology. |
+| 7 | External node without a resolvable stack | A node labeled `@nonexistent-stack.aws_vpc.main`, no `../nonexistent-stack` directory, no `--neighbor-ledger` override given. | A clear, named parse-time failure: which node, which stack name, which directory (the convention default) was checked and wasn't there — never a silent skip of that one edge, never a guessed path. |
+
+## Implementation slices, toward a real `.d2` payments stack
+
+1. **The topology model + parser**: `d2/topology` (or similar — exact
+   package layout a real, later decision) wrapping `d2parser`/
+   `d2compiler`, producing an internal node/container/edge model;
+   translation into `resolver.IntentFile` (label → name, `class:` →
+   type via `InferProvider`, edges → `DependsOn`, `@`/`external` nodes →
+   `$cross`); the ambiguity-as-content path (uninferable/ambiguous
+   nodes → `questions[]`, never a hard refusal). Hermetic unit tests
+   against hand-written `.d2` fixtures, no ledger needed.
+2. **`ResourceIntent.DependsOn`**: the schema.md amendment above, real
+   code in `core/resolver` — union into the existing dependency graph,
+   verified against the cycle-detection adversarial row directly.
+3. **`ubx propose --from-diagram <file>.d2 --stack <stack>
+   [--neighbor-ledger <stack>=<path>]`**: CLI wiring, matching `--from-
+   doc`'s own shape and flag conventions exactly; writes a draft file,
+   same as every other `propose` mode.
+4. **The emitter + `ubx render --check`**: `FoldState` walk → D2 AST
+   construction (sorted, deterministic) → `d2format.Format`; `--check`'s
+   own byte-compare exit-code contract, matching `docs/architecture.md`'s
+   founding projection invariant.
+5. **Conformance fixtures**: golden `.d2` ↔ topology-JSON pairs, `payments`
+   as fixture #1, both directions — reusing the SAME golden-shape
+   discipline `sdk/conformance`'s own runner already established
+   (canonicalize, byte-compare, a real ongoing regression test).
+6. **Live finale**: the real `payments` stack authored as `.d2`,
+   resolved, and — this arc's own strongest possible convergence claim —
+   its resolved shape compared against the SAME golden values the md
+   medium and the SDK arc's own TypeScript program already converged on
+   (UBI-33/34 session 4's own real, live comparison), **and** rendered
+   back from the ledger as an annotated `.d2` file, `render --check`
+   passing against it. Four independent producers (hand-written JSON, an
+   LLM-transcribed document, a typed program, and now a diagram) on one
+   shared resolved shape — the complete set this project's own "every
+   medium is a projection, never a second source of truth" thesis
+   promised from the start.
+7. **`ubiquex-docs`**: an authoring guide (the real worked diagram, both
+   directions) and the projection story (how `render --check` fits
+   alongside every other CI-shaped guarantee this project already
+   documents).
+
+## Out of scope for v1, named so it isn't assumed covered
+
+Mermaid or any second diagram format (the ticket's own explicit v1
+scope line); the Studio-style live canvas (Nexus-era, needs this arc's
+own parse+emit first); PNG/SVG rendering (permanently out of scope for
+the *medium* — a render *product*, not something ubx reads back, ever);
+`render`'s own full flag surface beyond `--check` (output targeting,
+watch mode — real CLI details, deliberately left to the session that
+builds slice 4 rather than guessed at here); a diagram-specific
+attribute-annotation *format* decision (tooltip vs. label-suffix vs.
+something else — a real, small UI choice, not a wire-format one, left to
+implementation); fuzzy/free-text label-based type guessing (a class-less
+node stays a visible question, never a best-effort NLP guess — a
+permanent design boundary, not a v1 limitation to revisit).

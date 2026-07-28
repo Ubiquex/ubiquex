@@ -1521,6 +1521,66 @@ overrode it with db.t3.micro... Following the later turn." See
 docs/intent-provider-adversarial.md's own "contradictory turns" row for
 the required-outcome program this is checked against.
 
+### Amendment: `ResourceIntent.DependsOn` — a topology-only dependency signal (2026-07-28, UBI-47)
+
+Design only this session (docs/diagram-medium.md has the full account);
+no code yet. A real, additive gap found while designing the diagram
+medium, not a diagram-specific hack: the intent file format
+(`resolver.IntentFile`'s own `resources[]`) has had no way, until now,
+for a producer to say "this resource depends on that one" **without**
+also inventing a concrete config attribute to hold a `$ref`/`$cross`
+marker — `core/resolver`'s own dependency-graph construction has only
+ever derived `depends_on` by scanning a create's resolved `config` for
+those markers (confirmed by reading the real code, not assumed). A
+diagram's own edges are pure topology, naming no attribute at all; the
+lossy-medium rule (docs/diagram-medium.md) forbids inventing one just to
+carry a reference the diagram never actually specified.
+
+**New, optional, additive field**: `ResourceIntent.DependsOn []string`
+— canonical addresses (`Address.String()` form, identical convention
+`Modification.DependsOn`/a resolved create's own output-side
+`depends_on` already use). At resolve time, every address named here is
+unioned into the same dependency graph `$ref`/`$cross` scanning already
+builds for that resource — not a second, parallel graph — and appears
+in the resolved output's own `depends_on` alongside whatever config-
+attribute-derived dependencies were also found, indistinguishable once
+resolved (the existing field's own doc comment already frames
+`depends_on` as "the authoritative, explicit, position-independent
+record of why," agnostic to which mechanism contributed an edge — this
+amendment adds a second contributing mechanism, not a second field).
+
+```json
+{
+  "type": "aws_ecs_service", "name": "api", "op": "create",
+  "config": {},
+  "depends_on": ["payments.aws_db_instance.primary-db"]
+}
+```
+
+Cycle detection needs no new code as a direct consequence of routing
+through the existing graph: `core/resolver`'s own cycle detection
+already covers every edge in that graph regardless of which mechanism
+added it.
+
+#### No `schema_version` bump
+
+`ResourceIntent` has never been part of the ratified, hashed-content
+Proposal shape — it's resolver *input*, the same status `ubx:intent/v1`'s
+whole document already has (see this document's own UBI-27 amendment:
+"never itself hashed or stored in the ledger — it's the resolver's
+input"). A new, optional (`omitempty`), additive field on an
+already-unhashed input struct changes nothing about `Proposal`'s own
+canonical hashing rules, domain prefix, or excluded-field list — the
+identical reasoning every prior additive input-side amendment in this
+document already relied on.
+
+**Real code lands in a later UBI-47 session** (docs/diagram-medium.md's
+own "Implementation slices," slice 2) — pinned here now because it's
+load-bearing to the diagram medium's whole design center working at
+all, the same "a design session amends this document when a wire-format
+decision is genuinely load-bearing" precedent UBI-41 session 1 already
+set.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
