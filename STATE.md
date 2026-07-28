@@ -4,6 +4,182 @@
 
 ## Current phase
 
+**UBI-33/34 (2026-07-28), session 2: slices 1–3 built — `sdk/codegen/ir`,
+`ubx sdk gen`, `@ubx/sdk`'s own runtime.** Real code this time, not
+design — continuing session 1's own docs/sdk.md, per its own
+"Implementation slices" order (shared IR model → `ubx sdk gen` →
+runtime). UBI-33/UBI-34 stay open in Linear — more slices remain (the
+evaluator harness, `ubx resolve --from-code`, conformance, the live
+finale).
+
+**`sdk/codegen/ir` (new package): `FromSchema(wireType, *provider.
+Schema) (*ResourceType, error)`.** Translates a real, already-shipped
+`provider.Schema`/`Block`/`Attribute`/`NestedBlock` into the shared,
+language-neutral IR docs/sdk.md pinned (`ResourceType`/`Field`/
+`TypeRef`/`TypeKind`/`ScalarKind`) — reuses `ctyjson.UnmarshalType`
+(already a `provider` package dependency, already how `provider/
+ctyvalue.go` parses the identical raw type spec) rather than
+hand-reimplementing ctyjson type parsing. `Field.WireName` is the only
+name this package ever carries, exactly as designed. Hermetic unit tests
+(`ir_test.go`) cover flat scalars, list/set/map of scalar, all five
+nesting modes, four-level-deep recursion (mirroring UBI-23's own
+empirically-confirmed real nesting depth), the "object-typed attribute"
+defensive path (never seen in a real schema, matching `provider/
+ctyvalue.go`'s own defensiveness posture), a malformed-type error path,
+and an explicit determinism check (five repeated calls, byte-identical
+output) — no real provider binary needed for any of it.
+
+**`sdk/codegen/templates/ts` (new package): `GeneratedFile(source,
+version, []*ir.ResourceType) (string, error)`.** Renders idiomatic
+TypeScript per resource type: nested interfaces (named by full field
+path from the resource, collision-free by construction), a `Config`
+interface (settable fields), an `Attrs` interface (every field, plain
+value types — `Computed<T>` wrapping happens once, generically, in the
+runtime's own type, not per-field here), and a runtime `ResourceBinding`
+descriptor. **A real bug, found by a test that actually asserted on the
+rendered `Config` interface's own content, not just `Attrs`:** the first
+`fieldIsSettable` was `f.Required || f.Optional`, which silently
+excluded every nested block from `Config` entirely — a `NestedBlock`-
+derived field carries all three flags false in the real schema model
+(`ir.go`'s own doc comment already said so), a fact the settability rule
+just hadn't accounted for. Fixed to `f.Required || f.Optional ||
+!f.Computed` (settable unless Computed-only). `pascalCase`/`camelCase`
+convert real snake_case wire names, refusing (never silently mangling)
+any character outside lowercase-ascii/digit/underscore — every real
+provider attribute name this codebase has ever seen fits that. Ten
+hermetic tests, plus an explicit determinism check and an
+input-order-independence check (sorted by wire type regardless of
+caller-supplied slice order).
+
+**`ubx sdk gen` (new `cli/sdk.go`, registered as a new `sdk` parent
+command).** Reads `.ubx/config`'s `[providers]` table (hard-required —
+no legacy single-`--provider` fallback, a deliberate scope decision:
+codegen is a post-UBI-43 feature with no legacy shape to stay compatible
+with), reuses `provider.Acquire`/`Launch`/`Schema` completely unchanged
+per source, runs the real schema through `ir.FromSchema` + `ts.
+GeneratedFile`, writes one file per declared source to `--out`
+(default `sdk/generated/`) as `<source-sanitized>.ts` (e.g.
+`hashicorp-aws.ts`) — both real CLI details docs/sdk.md's own "Out of
+scope" list had explicitly left to this session, decided for real now.
+Each provider gets its own fresh `--timeout` budget (a real fix from the
+first draft, which shared one context across every declared provider in
+a loop — a slow first provider could have starved a fast second one's
+own allowance). Hermetically tested (`cli/sdk_test.go`) via
+`UBX_PROVIDER_MIRROR` pointed at the existing `provider/internal/
+fakeprovider` binary (already built once by the `cli` package's shared
+`TestMain`) — no network, no real provider binary download, reusing the
+exact mechanism UBI-8 built for this specific purpose. **Live-verified
+against the real, already-cached `hashicorp/aws@6.54.0`: 1,682 real
+resource types, generated cleanly, zero errors, deterministic across
+repeated runs** (a real `AwsDbInstance` binding inspected by hand:
+correct required/optional split, correct wire-name mapping). A second
+live run against the small, real `hashicorp/time@0.9.2` schema (4 types)
+produced the fixture used for the runtime's own live verification,
+below.
+
+**`sdk/ts/runtime/src/index.ts` (new `@ubx/sdk` package): `stack`/
+`resource`/`secret`/`cross`/`intent`, a `Computed<T>` Proxy, a
+declarative wire-name-mapping serializer.** `Computed<T>` is a branded
+(WeakSet-identity-checked, never structural) recursive Proxy — accessing
+any property drills into a new, deeper address (`primary.settings.
+enabled` → `payments.fake_widget.primary.settings.enabled`); attempting
+to coerce one to a real value (template interpolation, `String()`,
+`JSON.stringify`, `valueOf`) throws `ComputedCoercionError` immediately,
+naming the address and the attempted operation, exactly as designed.
+`secret()`/`cross()` build the exact `$secret`/`$cross` marker shapes
+(see the schema.md correction, below). `resource()` always emits
+`op: "create"` — a real, load-bearing decision made this session, not
+in the original design: a hermetic, describe-only program has no fs/net
+access and therefore no way to know an address already exists, so it
+has no basis to ever choose `"modify"`; named explicitly in docs/sdk.md
+now, not silently unsupported. **Refined from the original design's own
+sketch:** rather than a generated `toConfig()` *method* per resource
+type, codegen emits a declarative `fields: FieldMap` *data* structure
+(a wire-name string leaf, or a recursive `{wireName, kind, fields}` for
+nested objects/collections-of-objects), and the runtime carries exactly
+ONE shared, recursive serializer (`serializeConfig`/`serializeOpaque`)
+that walks any resource's own FieldMap the same way — simpler for
+codegen to emit, and the one function that's actually hermetically
+tested, not N generated ones.
+
+**A second real bug, again found by a test asserting on real output, not
+by inspection:** the scalar-leaf serialization path originally called
+the SAME field-map-translating serializer recursively with an empty `{}`
+map — so a `tags: {env: "prod"}`-shaped value tried to look up `"env"`
+in an empty FieldMap and threw "unrecognized config field," even though
+a scalar-map field's own keys are arbitrary and user-chosen, never
+config-field names needing translation at all. Caught by a test
+(`a function in config throws`) whose function value happened to be
+nested inside a `tags` map — it failed, but with the WRONG error message
+("unrecognized config field" instead of a function-representability
+error), which is what surfaced the real bug. Fixed by splitting the
+serializer into `serializeConfig` (field-map-translated) and
+`serializeOpaque` (no translation at all, used for scalars and anything
+nested inside one) — a dedicated regression test
+(`a scalar-map field's own keys pass through untranslated`) uses a key
+(`"Owner-Team"`) that would never coincidentally round-trip through any
+wire-name conversion, to prove the fix isn't narrowly correct.
+
+**A third, unrelated finding, fixed in passing:** `docs/schema.md`'s own
+founding `$secret` inner shape (`{"ref": "..."}`) never actually matched
+any real worked example since UBI-27 (`{"backend", "path"}`, used in
+that very document's own intent-file amendment) — found while
+implementing `secret()` against the doc rather than against the real
+`core/resolver` code, which was, and still is, fully opaque to the inner
+shape either way (only the outer envelope and the attribute's own
+`Sensitive` flag are checked). Corrected in `docs/schema.md` directly,
+with the prior false "no shape change" claim also corrected.
+
+**20 hermetic `deno test` cases** (`sdk/ts/runtime/src/index_test.ts`,
+run via a new, hand-written, dependency-free `testing.ts` — deliberately
+NOT `jsr:@std/assert`, confirmed this session to need real network
+access on first resolution even under `--no-remote`, which would have
+made every future `deno test` invocation, including CI, silently
+network-dependent): basic document shape, `Computed<T>` → `$ref` for a
+same-stack reference (including one nested inside a list-of-object
+element), nested-object and list-of-nested-object serialization,
+`secret()`/`cross()` marker passthrough, identity-based `isComputed`
+(a hand-rolled lookalike object is correctly NOT recognized),
+`ComputedCoercionError` on every coercion attempt, `addressOf`,
+duplicate-resource-name/double-`intent()`/missing-`intent()`/
+resource()-outside-stack() failures, an unrecognized-config-field error,
+a function-in-config error, the scalar-map regression test above, and a
+"thrown exception mid-evaluation produces no partial resources" check.
+`deno check --no-remote src/index.ts` clean.
+
+**Live end-to-end verification, real generated bindings + real runtime,
+not simulated:** the real `hashicorp/time@0.9.2` output from `ubx sdk
+gen` (above) was imported by a hand-written TypeScript program
+(`time_offset`/`time_rotating`, one same-stack `Computed<T>` reference
+wired between them via an import map resolving the bare `@ubx/sdk`
+specifier to the real local runtime source — no npm install, no
+network) — `deno check --no-remote` type-checked it cleanly, and `deno
+run` (under the EXACT locked-down flag set docs/sdk.md's own evaluator
+section commits to: `--no-remote --deny-net --deny-read --deny-write
+--deny-env --deny-run --deny-ffi --deny-sys`) evaluated it into a
+correct `ubx:intent/v1` document — `rotation_days`/`offset_days` wire
+names correctly mapped from `rotationDays`/`offsetDays`, and a real
+`{"$ref": {"to": "scratch.time_offset.expiry.rfc3339"}}` produced from a
+plain `offset.rfc3339` property access. This is also the first
+confirmation that the locked-down flag set doesn't accidentally break
+the program it's meant to merely sandbox, not just that it blocks what
+it's supposed to block.
+
+`go build ./... && go vet ./... && gofmt -l . && go test ./...` clean
+across the whole repo throughout (`sdk/codegen/ir`, `sdk/codegen/
+templates/ts`, and `cli`'s new `TestSDKGen_*` cases alongside every
+pre-existing test).
+
+docs/sdk.md gained a new "Slices 1–3: built" subsection (the two bugs,
+the three real decisions made this session, the live-verification
+account) and a correction to its own earlier "Codegen design" section
+(the `toConfig()` → `FieldMap` refinement). docs/schema.md's `$secret`
+founding-draft passage and its own later false "no shape change" claim
+both corrected. docs/plan.md gained a changelog entry and a session-2
+addendum to the SDK program wedge subsection. Committed and pushed.
+
+## Current phase (previous)
+
 **UBI-33/34 (2026-07-28), session 1, docs-first, no code: the SDK program
 — multi-language contract (UBI-33) + TypeScript design (UBI-34).** New
 arc, filed and referenced per this session's own instruction. `docs/
