@@ -4,6 +4,151 @@
 
 ## Current phase
 
+**UBI-33/34 (2026-07-28), session 4: slices 5–7 built — `ubx resolve
+--from-code`, real conformance, a real live convergence finale.
+UBI-34 closed in Linear; UBI-33 stays open.** Continuing sessions 1-3's
+own docs/sdk.md, finishing the plan's own "Implementation slices" order.
+
+**`sdkeval/provenance.go` (new): a real, deliberate simplification from
+the original design.** Session 1's own sketch (docs/sdk.md's original
+slice 6 text) planned a new `intent.sources` kind PAIR for SDK
+provenance — `"sdk"` (naming the entry file) plus `"sdk_evaluator"`
+(naming which runtime produced it), mirroring `document`/`intent_
+provider`'s existing pairing. Building it this session found a simpler,
+better answer: a single `"document"` entry — the exact same kind the md
+medium already uses — since code has no analog to "which LLM adapter
+drafted this" worth a second entry at all; there's no adapter, no
+interpretation step, nothing to name. `stampDocumentSource` computes the
+entry file's own real SHA-256 Go-side (the sandboxed evaluator has no fs
+access to hash its own file, by design) and appends `{"kind":
+"document", "ref": "<basename>", "content_hash": "sha256:..."}` to
+whatever `intent.sources` a program's own `intent()` call may already
+carry — never overwrites. No `docs/schema.md` amendment needed at all,
+since no new wire-format kind was introduced. Wired into `sdkeval.
+Evaluate` as a real, deliberate step OUTSIDE the `core.DoubleRun`
+closure (hashing a static file is already fully deterministic Go work,
+nothing for double-run to catch there — the same "only what must vary
+identically lives inside the closure" discipline this project learned
+once already, docs/reliability-report.md's own `resolvedAt` bug).
+Four new hermetic tests (`sdkeval/provenance_test.go`).
+
+**`cli/resolve.go` gained `--from-code <entry>.ts`**, mutually exclusive
+with the existing positional intent-file argument (`cobra.MaximumNArgs(1)`,
+was `ExactArgs(1)`) — exactly the "CLI wiring only" slice 5's own text
+predicted, no `core/resolver` changes needed at all. `sdkeval.Evaluate`'s
+output parses straight into the same `resolver.IntentFile` a hand-written
+file already does; everything downstream (multi-provider inference,
+ledger opening, `resolver.Resolve`) is completely untouched. `--timeout`'s
+default doubled (60s→120s) since it now shares its one budget across
+evaluation AND provider-schema-fetching, an extension of the SAME sharing
+the multi-provider loop already does across several providers' own
+fetches, not a new pattern. Hermetically tested end to end
+(`cli/resolve_from_code_test.go`, real deno, real `UBX_PROVIDER_MIRROR`
+fake provider): evaluate → resolve → accept → why, confirming the real
+provenance stamp lands correctly in the real accepted proposal's own `ubx
+why` rendering.
+
+**`sdk/conformance/` built for real** — `programs/ts/payments.ts` (the
+first golden case), `programs/ts/generated/hashicorp-aws.ts` (real
+codegen output, `sdk/codegen/ir` + `sdk/codegen/templates/ts`, against
+the real, cached `hashicorp/aws@6.54.0` schema — filtered to
+`aws_db_instance` alone; committing this session's own earlier full,
+unfiltered `ubx sdk gen` output for the same provider would mean
+committing 1,682 types for a one-resource fixture), `golden/payments.json`
+(the canonical target), and `runner/runner_test.go`'s
+`TestPaymentsGoldenCase_TS` — evaluates the real, committed program
+through the real Deno harness and byte-compares against the golden file
+after canonicalizing BOTH sides (the committed fixture is pretty-printed
+for reviewability, never assumed to already be in canonical form) — a
+real, ongoing regression test, not a one-time manual check.
+
+**The live finale — genuinely live, not approximated, and it needed a
+real decision first.** Checking before assuming (this project's own
+standing discipline) found no committed "golden" transcript existed
+anywhere from the md medium's own prior real sessions — drafts are
+ephemeral by design, reviewed then either accepted or discarded, never
+persisted past that. Rather than approximate a comparison target, this
+session asked directly: fresh live re-run, or a hand-written-JSON
+substitute? The user chose a fresh live run, provided a real
+`ANTHROPIC_API_KEY` mid-session (passed inline to single command
+invocations only, per this project's own standing convention — never
+written to a file, commit, or log). What actually happened, in order:
+
+1. `ubx propose --from-doc payments.md` against the **real Claude API**,
+   fresh. Real output: a standalone `aws_db_instance` named `"payments"`
+   (op: create) — **no `$ref` to staging at all.** The doc's own
+   `@payments.aws_db_instance.staging` mention is read purely as
+   *context* for the model's own reasoning (a real, confirmed finding,
+   not assumed from the design docs' own earlier, hypothetical
+   illustration, which sketched a different, replica-shaped example that
+   was never itself a real transcript) — the intent provider has no
+   ledger access to query staging's actual values, so it can't and
+   doesn't leave a live reference. Real values, in the model's own
+   words: `engine: "postgres"`, `instance_class: "db.t3.small"`,
+   `allocated_storage: 20`, `db_name: "payments"`, `username:
+   "payments_admin"`, with three real `assumptions`/`defaults` entries
+   and one real `questions` entry explaining each choice.
+2. Resolved for real (`ubx resolve draft.json`, real `hashicorp/
+   aws@6.54.0` schema, no ledger fixture needed since there's no `$ref`
+   to anything) — `delta.creates[0].config` matches the drafted values
+   exactly, zero schema rejections.
+3. `sdk/conformance/programs/ts/payments.ts` authored with the
+   **identical concrete values, copied verbatim from step 1's own real
+   output** — written *after* seeing what the real LLM said, so this is
+   a genuine convergence check, not a value invented independently and
+   coincidentally matching.
+4. Evaluated for real (`ubx resolve --from-code payments.ts`, the same
+   real provider schema) — `delta.creates[0]` matches step 2's shape,
+   field for field.
+5. **Checked rigorously with a real throwaway comparison tool, not
+   eyeballed**: both resolved proposals' `delta.creates` arrays, run
+   through `core.CanonicalJSON` (this arc's own slice-4 work), compared
+   byte-for-byte. **Identical.** `intent.summary` matched too (copied
+   verbatim). The one honest, structural, fully-expected difference:
+   `intent.sources`/`assumptions`/`defaults`/`questions` — the
+   md-drafted proposal carries `document`+`intent_provider` sources and
+   three real ambiguity notes; the TS-authored one carries one
+   `document` source and none at all, because there was no ambiguity
+   for a typed program to resolve. Exactly what slice 6's own original
+   design predicted, now confirmed against real output.
+
+**`ubx sdk gen` re-confirmed at real scale in passing**: the same real,
+cached `hashicorp/aws@6.54.0` schema generated 1,682 resource types
+again this session, zero errors — the exact same number session 2's own
+live verification found, confirming determinism holds across sessions
+too, not just within one.
+
+**UBI-34 closed in Linear.** All seven of docs/sdk.md's own
+implementation slices are built, hermetically tested, and live-verified
+— "the SDK is a producer of `intent/v1`, nothing more" (UBI-33's own
+founding framing) is now a demonstrated fact, not an aspiration.
+**UBI-33 stays open** — Go (UBI-35) and Python (UBI-36) are entirely
+unstarted; this arc's own `sdk/codegen/ir` (language-neutral, no TS-isms
+by construction) and the new `core.CanonicalJSON` discipline are exactly
+the shared foundation those languages will build against.
+
+**ubiquex-docs updated in the same session, per protocol** — real,
+user-visible CLI surface shipped this session (`ubx sdk gen`, `ubx
+resolve --from-code`), so this wasn't deferrable. New `cli/sdk-gen.mdx`
+(full reference, the real `1682 resource type(s)` transcript). `cli/
+resolve.mdx` gained a new "Authoring in TypeScript" section — flags
+table entry, a full worked example using the exact real `payments.ts`/
+resolved-JSON values from this session's own live finale, `Computed<T>`
+wiring, and the real "creates only, no modify yet" limitation named
+honestly. `sdk/index.mdx` fully rewritten from its old "not yet
+released" placeholder to the real, shipped state (runtime surface,
+hermetic evaluator guarantees, an honest "what a program can't do yet"
+section). `docs.json` gained `cli/sdk-gen` in the `Setup` group.
+`mint validate`/`mint broken-links` both clean. `ubiquex-docs/STATE.md`
+gained its own matching session entry.
+
+`go build ./... && go vet ./... && gofmt -l . && go test ./...` clean
+across the whole repo (4 new tests in `sdkeval`, 3 new in `cli`, 1 new in
+`sdk/conformance/runner`, alongside every pre-existing test). Both repos
+committed and pushed.
+
+## Current phase (previous)
+
 **UBI-33/34 (2026-07-28), session 3: slice 4 built — the evaluator
 harness, real `deno` subprocesses, all five in-scope adversarial rows
 confirmed.** Continuing sessions 1-2's own docs/sdk.md, per its own
