@@ -16,6 +16,9 @@ When done: tests green, update STATE.md (done/next/surprises), commit and push.
 - Git identity: Roozbeh's, signed, no AI attribution anywhere.
 - STATE.md update is the mandatory last act.
 - Doc conflicts: stop and flag in STATE.md, don't silently diverge.
+- Never `ubx ship` against a real cloud provider for verification —
+  `fakeprovider` + `UBX_PROVIDER_MIRROR` only (see CLAUDE.md's own Code
+  conventions; UBI-47 session 4 is why this line exists).
 
 ## Design-session outputs (project chats)
 

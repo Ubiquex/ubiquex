@@ -719,6 +719,88 @@ instead — the same safe mechanism session 3's own `propose
 (or any real provider) stays safe for `resolve`/`propose`/`sdk gen`
 (schema-fetch or draft-only); never for anything reaching `ship`.
 
+### Slice 5: built (2026-07-28, session 5)
+
+`diagram.Topology(intent *resolver.IntentFile) ([]byte, error)`
+(`diagram/topology.go`, new) — the "topology hash" concept's own first
+real code, previously only described in prose (above): `core.
+CanonicalJSON` over `resources[]` (type, name, op, depends_on) + stack,
+sorted by `(type, name)` internally so the function's own determinism
+never depends on its caller happening to hand it resources in a stable
+order, excluding `intent.summary`/`sources`/ambiguity content and
+`config` entirely — a general "did the meaning change" primitive, not
+diagram-specific, even though this is the arc that motivated it.
+
+**Conformance fixtures**, `payments` as fixture #1 (matching every other
+medium's own fixture name), both directions, split across two packages
+deliberately — not an oversight, see below:
+
+- **Parse direction** (`diagram/conformance/golden/payments.d2` ↔
+  `diagram/conformance/golden/payments-topology.json`, tested in new
+  `diagram/conformance/runner/`, package `runner`, mirroring `sdk/
+  conformance/runner`'s own shape exactly): the real, unmodified `Parse`
+  → `Topology`, canonicalized, byte-compared against the committed
+  topology fixture (itself pretty-printed for reviewability, canonicalized
+  at test time on both sides — the same posture `sdk/conformance`'s own
+  golden fixture already holds). Self-contained: no subprocess, no real
+  provider binary — `diagram.Parse`'s own type inference only ever calls
+  `SchemaInspector.HasType` (never `IsComputed`/`IsSensitive`, which only
+  matter once a resource's own config VALUES get resolved, and a diagram
+  never authors any), so a tiny hermetic fake schema suffices.
+- **Render direction** (the identical topology, shipped for real through
+  the hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR`, emitted,
+  byte-compared against `diagram/conformance/golden/payments-rendered.d2`)
+  lives in `cli/render_conformance_test.go` instead, a deliberate package
+  split: `Emit` needs a real, shipped `Fleet` entry (`FoldState` only
+  reports "live" after a real apply), which needs the full `core/
+  executor.Applier` adapter (`Schema`/`Configure`/`ReadResource`/
+  `PlanResourceChange`/`ApplyResourceChange`, with real redaction and
+  diagnostic-to-`TerminalError` classification) that already exists,
+  correct and tested, in `cli/stateadapter.go` — reimplementing an
+  independent copy purely to keep both directions under one roof would
+  risk a real, silent divergence from the one implementation every other
+  ship path already relies on, for no benefit over importing the SAME
+  `diagram/conformance/golden/` fixtures by relative path instead.
+
+**A real, deliberate, documented departure from every other medium's own
+"payments" fixture**: both golden `.d2` files use `fake_widget`
+throughout, never `aws_vpc`/`aws_db_instance` the way the md medium's
+and SDK arc's own `payments` fixtures do. This session's own explicit
+instruction was "hermetic only — no real cloud this slice" — a direct,
+standing consequence of session 4's own real AWS incident (the new
+CLAUDE.md/docs/prompts.md rule, below). A real `hashicorp/aws` schema
+fetch is read-only and safe in isolation (exactly what session 4's own
+`resolve`/`propose` calls against it were), but conformance fixtures are
+exactly the kind of "just checking it still works" context where a
+verification session's own scope tends to creep toward `ship` without
+that being the actual intent — using `fake_widget` throughout removes
+the temptation structurally rather than relying on discipline alone.
+Reconciling this fixture's own values with the `aws_*` golden values
+every other medium already converged on is explicitly named as slice 6's
+own job (the "live finale"), not this one's.
+
+Eight new tests total: `diagram/topology_test.go` (five unit tests —
+excludes summary/sources/ambiguity, sorted independent of input order,
+includes `depends_on`, excludes `config`, deterministic across repeated
+calls), `diagram/conformance/runner`'s own two conformance cases (the
+golden parse + its own determinism guard), plus
+`cli/render_conformance_test.go`'s one golden render case. `go build/
+vet/test`, `gofmt -l .` clean across the whole repo.
+
+**The standing ship-verification rule from session 4's own incident,
+now codified where every future session actually reads it**: CLAUDE.md's
+own "Code conventions" section and docs/prompts.md's own "Rules embedded
+in every session" section both gained a line — `ubx ship` (or anything
+else reaching a provider's own `ApplyResourceChange`) is never run
+against a real cloud provider for verification, demos, or doc
+transcripts, only the hermetic `fakeprovider` binary via
+`UBX_PROVIDER_MIRROR`; `resolve`/`propose`/`sdk gen` remain safe against
+a real provider. Previously only a standing memory outside this repo
+(session 4's own feedback memory) — now load-bearing project doctrine a
+future session (or a different agent entirely) reads automatically via
+CLAUDE.md, not something that depended on the same memory carrying
+forward.
+
 1. **The topology model + parser** — **built.** `resolver.IntentFile`
    translation (label → name, `class:` → type via `InferProvider`, edges
    → `DependsOn` for resource-to-resource edges, `@`/`external` nodes
@@ -741,10 +823,12 @@ instead — the same safe mechanism session 3's own `propose
    founding projection invariant. See "Slice 4: built," above, including
    the real `ResolutionInput.From` fix this slice's own `$cross`-
    annotation feature needed.
-5. **Conformance fixtures**: golden `.d2` ↔ topology-JSON pairs, `payments`
-   as fixture #1, both directions — reusing the SAME golden-shape
-   discipline `sdk/conformance`'s own runner already established
-   (canonicalize, byte-compare, a real ongoing regression test).
+5. **Conformance fixtures** — **built.** Golden `.d2` ↔ topology-JSON
+   pairs, `payments` as fixture #1, both directions — reusing the SAME
+   golden-shape discipline `sdk/conformance`'s own runner already
+   established (canonicalize, byte-compare, a real ongoing regression
+   test). See "Slice 5: built," above, including why `fake_widget`
+   throughout rather than `aws_*` this session.
 6. **Live finale**: the real `payments` stack authored as `.d2`,
    resolved, and — this arc's own strongest possible convergence claim —
    its resolved shape compared against the SAME golden values the md

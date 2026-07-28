@@ -50,6 +50,15 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 - Tests accompany every slice; adversarial/failure-path tests are first-class
   (provider timeout, partial state, interrupted operations). Live tests are
   gated behind env vars; `go test ./...` stays hermetic.
+- Never run `ubx ship` (or anything else that reaches a provider's own
+  `ApplyResourceChange` — a real apply) against a real cloud provider for
+  live verification, demos, or doc transcripts, even one already
+  credentialed on the machine. Use the hermetic `fakeprovider` binary via
+  `UBX_PROVIDER_MIRROR` instead — always, no exceptions. `resolve`/
+  `propose`/`sdk gen` (schema-fetch or draft-only, never applying) remain
+  safe against a real provider. (UBI-47 session 4: a by-hand `ship`
+  against real `hashicorp/aws` credentials created real AWS resources
+  during what was meant to be routine verification.)
 
 ## Key docs
 

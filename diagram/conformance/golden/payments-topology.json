@@ -1,0 +1,16 @@
+{
+  "stack": "payments",
+  "resources": [
+    {
+      "type": "fake_widget",
+      "name": "main-vpc",
+      "op": "create"
+    },
+    {
+      "type": "fake_widget",
+      "name": "payments-db",
+      "op": "create",
+      "depends_on": ["payments.fake_widget.main-vpc"]
+    }
+  ]
+}

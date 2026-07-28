@@ -1436,6 +1436,40 @@
   provider for verification purposes." See docs/diagram-medium.md's own
   "Slice 4: built" section and STATE.md for the full account, including
   the incident.
+- 2026-07-28 -- UBI-47 session 5: slice 5 built -- `diagram.Topology`
+  (`diagram/topology.go`, new), the "topology hash" concept's own first
+  real code: `core.CanonicalJSON` over `resources[]` (type, name, op,
+  depends_on) + stack, sorted by `(type, name)` internally, excluding
+  `intent.summary`/`sources`/ambiguity/`config` entirely. Conformance
+  fixtures, `payments` as fixture #1, both directions, deliberately split
+  across two packages: the parse direction (new `diagram/conformance/
+  golden/payments.d2` <-> `payments-topology.json`, tested in new
+  `diagram/conformance/runner/`) is fully self-contained -- no
+  subprocess, no real provider binary, since `diagram.Parse`'s own type
+  inference only ever calls `SchemaInspector.HasType`; the render
+  direction (the identical topology shipped for real through the
+  hermetic `fakeprovider` binary, emitted, compared against new
+  `diagram/conformance/golden/payments-rendered.d2`) lives in
+  `cli/render_conformance_test.go` instead, since `Emit` needs a real,
+  shipped `Fleet` entry, which needs the full `core/executor.Applier`
+  adapter `cli/stateadapter.go` already owns correctly -- reimplementing
+  a second copy elsewhere would risk a real divergence for no benefit.
+  **A real, deliberate departure from every other medium's own
+  "payments" fixture**: both golden `.d2` files use `fake_widget`
+  throughout, never `aws_vpc`/`aws_db_instance`, per this session's own
+  explicit "hermetic only" instruction -- a direct, standing consequence
+  of session 4's own real AWS incident; reconciling this fixture's own
+  values with the `aws_*` golden values every other medium already
+  converged on is explicitly named as slice 6's own job, not this one's.
+  **The standing ship-verification rule from session 4's own incident,
+  now codified in CLAUDE.md and docs/prompts.md** -- both gained a line
+  naming the rule directly, so a future session (or a different agent
+  entirely) reads it automatically rather than depending on a memory
+  file carrying forward. Eight new tests
+  (`diagram/topology_test.go` x5, `diagram/conformance/runner` x2,
+  `cli/render_conformance_test.go` x1). `go build/vet/test`, `gofmt -l .`
+  clean. See docs/diagram-medium.md's own "Slice 5: built" section and
+  STATE.md for the full account.
 
 ## Strategy
 
@@ -3827,6 +3861,59 @@ A standing feedback memory now records: never run `ubx ship` against a
 real provider for verification purposes, only `fakeprovider` +
 `UBX_PROVIDER_MIRROR`. See docs/diagram-medium.md's own "Slice 4: built"
 section and STATE.md for the full account, including the incident.
+
+**Session 5 (2026-07-28): slice 5 built — `diagram.Topology`
+(`diagram/topology.go`, new) and conformance fixtures, `payments` as
+fixture #1, both directions, hermetic throughout.** `Topology` is the
+"topology hash" concept's own first real code (previously only prose):
+`core.CanonicalJSON` over `resources[]` (type, name, op, depends_on) +
+stack, sorted by `(type, name)` internally so its own determinism never
+depends on caller ordering, excluding `intent.summary`/`sources`/
+ambiguity/`config` entirely. Conformance fixtures deliberately split
+across two packages, not an oversight: the parse direction
+(`diagram/conformance/golden/payments.d2` ↔ `payments-topology.json`,
+tested in new `diagram/conformance/runner/`, mirroring `sdk/
+conformance/runner`'s own shape) is fully self-contained — `diagram.
+Parse`'s own type inference only ever calls `SchemaInspector.HasType`,
+never needing a real provider subprocess at all; the render direction
+(the identical topology shipped for real through the hermetic
+`fakeprovider` binary, emitted, compared against new
+`diagram/conformance/golden/payments-rendered.d2`) lives in
+`cli/render_conformance_test.go` instead, since `Emit` needs a real,
+shipped `Fleet` entry — which needs the full `core/executor.Applier`
+adapter `cli/stateadapter.go` already owns correctly, and reimplementing
+a second copy elsewhere would risk a real, silent divergence for no
+benefit over importing the same golden fixtures by relative path.
+
+**A real, deliberate, documented departure from every other medium's own
+"payments" fixture**: both golden `.d2` files use `fake_widget`
+throughout, never `aws_vpc`/`aws_db_instance` — this session's own
+explicit "hermetic only, no real cloud" instruction, a direct, standing
+consequence of session 4's own real AWS incident. Conformance fixtures
+are exactly the kind of "just checking it still works" context where a
+verification session's own scope tends to creep toward `ship` without
+that being the actual intent; using `fake_widget` throughout removes the
+temptation structurally rather than relying on discipline alone.
+Reconciling this fixture's own values with the `aws_*` golden values
+every other medium already converged on is explicitly named as slice 6's
+own job, not this one's.
+
+**The standing ship-verification rule from session 4's own incident, now
+codified where every future session actually reads it**: CLAUDE.md's own
+"Code conventions" and docs/prompts.md's own "Rules embedded in every
+session" both gained a line naming the rule directly — `ubx ship` (or
+anything else reaching a provider's own `ApplyResourceChange`) is never
+run against a real cloud provider for verification, only the hermetic
+`fakeprovider` binary via `UBX_PROVIDER_MIRROR`; `resolve`/`propose`/
+`sdk gen` remain safe against a real provider. Previously only a standing
+memory outside this repo — now project doctrine a future session (or a
+different agent entirely) reads automatically.
+
+Eight new tests (`diagram/topology_test.go` ×5, `diagram/conformance/
+runner` ×2, `cli/render_conformance_test.go` ×1, plus the existing suite
+unchanged). `go build/vet/test`, `gofmt -l .` clean across the whole
+repo. See docs/diagram-medium.md's own "Slice 5: built" section and
+STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 
