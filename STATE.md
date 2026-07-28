@@ -4,6 +4,140 @@
 
 ## Current phase
 
+**UBI-48 (2026-07-29), session 4 (final) of the read-only projection
+quartet: `ubx addresses` built and closed in Linear. The quartet is
+complete — all four of UBI-38/39/40/48 are closed.**
+
+The active-address inventory born from a real UX gap: authoring a
+`$cross` reference (`{"stack": "networking", "to":
+"@networking.aws_vpc.main.id"}`) requires knowing a neighbor's exact
+address ahead of time, and until this session that meant manual
+archaeology through `ubx status`/`ubx why` output. `ubx addresses
+[--stack <s>] [--all] [--json]` is a flat, copy-pasteable inventory of
+every active resource in a stack, each with a copy-paste-ready `$cross`
+form per attribute drawn from the real provider schema.
+
+**Two halves, split along the same core/cli boundary every other
+provider-touching command already draws.** `core.Ledger.Addresses(stack,
+includeTombstoned)` (new `core/addresses.go`) is the ledger-level fold —
+which addresses exist, each with its own recorded `*ProviderRef`
+(UBI-43's "provider field returns" amendment). Deliberately NOT a
+`Fleet` extension, decided after re-reading `Fleet`'s own real code
+rather than assuming it could be reused: `Fleet`'s single pass over
+`Chain()` drops a tombstoned address the moment it sees the shipped
+destroy, with no toggle to keep it around, so `--all`'s own "tombstoned,
+addresses annotated" requirement needed the identical discovery walk
+(`resolution.inputs` plus a change proposal's own shipped create/
+destroy) with that one behavior inverted — re-built in `core/
+addresses.go` rather than bolting an extension point onto `Fleet` an
+unrelated caller (`ubx status`) could misuse.
+
+The second half — which attributes are referenceable on each address,
+and whether each is computed-only — lives in `cli/addresses.go`, which
+fetches the real provider schema at the address's own **recorded**
+`(source, version)` pair, never whatever `[providers]` happens to pin
+today. This ruled out `providerPool` (`cli/providerpool.go`) as a
+building block, a real decision made by reading `providerPool.Get`'s
+own code, not assumed safe by name: it explicitly *refuses* to launch
+any version other than the currently-pinned one ("re-resolve against
+the current config") — exactly backwards for an inventory whose entire
+point is showing what a resource was actually built against, which may
+be an older version, or from a source no longer declared at all. Built
+instead on the same `provider.ParseSource`/`Acquire`/`Launch`/`.Schema()`
+sequence `loadDiagramProviders`/`ubx sdk gen` already use, cached once
+per distinct `source@version` pair actually present across the
+inventory (never once per resource). An address with no recorded
+provider (adopted or drift-only, never a real shipped create) or one
+whose provider fails to launch degrades to an explained "attributes
+unknown" annotation on that one entry, never a failed command.
+
+**The one genuinely new mechanism this ticket needed: cross-stack
+`--stack` resolution, mirroring `$cross`'s own base-store/
+`[ledger.external]` logic — not reusable off the shelf, confirmed by
+research before writing any code.** A dedicated research pass (before
+any design decision) read `core.Ledger`'s own constructors directly:
+`Open(dir)` (git-local) and `OpenStore(store)` both leave `baseStore`/
+`externalStacks` at their zero values; only `OpenStoreForStack(store,
+base, external)` populates them, called in exactly one production place
+(`openLedgerForStack`'s remote-store branch, `cli/ledgeropen.go`) with
+`base`/`external` being nothing but a direct pass-through of
+`cfg.Ledger.Store`/`cfg.Ledger.External` — no other derivation
+anywhere. And `openLedgerForStack` itself, for a git-local store,
+structurally can't reach an arbitrary neighbor by name at all — it
+ignores its own `stack` argument entirely in that branch, always
+opening `ledgerDir` regardless. So `--stack <neighbor>` needed genuinely
+new CLI-layer resolution logic, not a reuse of any existing opener.
+`resolveAddressesLedger` (`cli/addresses.go`) resolves it exactly the
+way `core/resolver/refs.go`'s own `resolveCross` does for `$cross`'s
+`"stack"` form: an omitted or this-workspace's-own (`cfg.Stack`) name is
+local, opened straight from `--ledger-dir`; a remote `[ledger]` store is
+always routed through `openLedgerForStack`'s own existing addressing
+regardless of name (already correct for any stack there); any other
+git-local name is resolved via `cfg.Ledger.External[name]` alone — the
+identical plain `<base>/<stack>/` join `deriveStackAddress` uses, then
+`core.OpenRef` — refused with a teaching error naming every stack this
+workspace's own config actually knows (its own declared stack, plus
+every `[ledger.external]` key) when no override exists, mirroring
+`resolveCross`'s own proven git-local refusal exactly
+(`TestResolve_CrossStack_ByStackName_NoBaseIsGitLocal_Refused`).
+
+Six hermetic `core` tests (`core/addresses_test.go`): empty ledger,
+active-only matching `Fleet`'s own shape plus provider plumbing, a
+tombstoned address excluded by default and included+annotated with
+`--all`, a re-create-after-destroy address active again, stack
+filtering, an adopted resource's nil provider. Nine hermetic `cli` tests
+(`cli/addresses_test.go`): the full attribute list with computed
+marking and `$cross` forms against a real `UBX_PROVIDER_MIRROR`-launched
+fake provider, `--all`'s `DESTROYED by` annotation, an adopted
+resource's schema-missing degrade (not a command failure), `--json`
+shape, an unknown-stack teaching error both with and without any config
+at all, a real cross-stack resolution via a genuine `[ledger.external]`
+override opening a second, physically separate ledger directory, and
+the reflexive own-stack case. All passed on the first run. `go
+build/vet/test`, `gofmt -l .` clean across the whole repo.
+
+**Live-verified by hand against the real built binary**, not just the
+hermetic test suite: a real `payments` stack and a real `networking`
+stack, each its own git-local ledger directory, connected only via
+`payments/.ubx/config`'s own `[ledger.external]` table — a real
+`ubx resolve` → `ubx accept` → `ubx ship` flow against
+`UBX_PROVIDER_MIRROR`-mirrored `fakeprovider` (source `fake/widget`,
+never a raw `--provider <path>`, so the shipped create really recorded
+a `(source, version)` pair) produced `payments.fake_widget.payments-db`
+and `networking.fake_widget.vpc-main`; `ubx addresses --ledger-dir
+payments --stack networking`, run from inside `payments`'s own
+directory, correctly opened and listed `networking`'s own ledger with
+no `cd` and no `--ledger-dir` pointed at it directly. `ubx addresses
+--stack billing` from the same directory produced the real teaching
+error naming both known stacks. A destroy shipped against a third
+resource (`payments-cache`) proved `--all`'s own `DESTROYED by`
+annotation against a real apply record. An empty ledger rendered "no
+addresses recorded" cleanly, exit 0.
+
+**ubiquex-docs updated in the same session, per protocol**: new
+`cli/addresses.mdx` (usage, flags, the real active-inventory transcript
+above, `--json` shape, the real `--all`/destroyed-address transcript,
+the real cross-stack `--stack` transcript with its own `[ledger.external]`
+config shown, the real unknown-stack teaching-error transcript, the real
+empty-stack transcript). `docs.json` slotted `cli/addresses` into the
+existing "Observe" group, after `cli/stats`. `mint validate`/`mint
+broken-links` both clean.
+
+**Internal docs**: `docs/architecture.md` gained a new
+"Referenceable-address inventory" headline section. `docs/plan.md`
+gained a changelog entry, UBI-48's own close documented under "The
+read-only projection quartet" wedge subsection, and a new "Quartet
+complete" closing note now that all four tickets (UBI-38/39/40/48) are
+closed.
+
+**UBI-48 closed in Linear. The read-only projection quartet arc is
+complete** — `ubx verify`/`ubx blame`/`ubx stats`/`ubx addresses`, all
+four built, hermetically tested, documented in both repos, closed in
+Linear, landed exactly as scoped when the arc was filed. No open thread
+from this arc carries into the next session.
+
+## Current phase (previous)
+
 **UBI-40 (2026-07-29), session 3 of the read-only projection quartet:
 `ubx stats` built and closed in Linear.**
 
