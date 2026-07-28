@@ -1586,6 +1586,60 @@ dependency graph — not merely asserted at the unit level. See
 docs/diagram-medium.md's own "Slices 1–2: built" section for the full
 account.
 
+### Amendment: `ResolutionInput.From` — cross-stack pin attribution (2026-07-28, UBI-47 session 4)
+
+A real, load-bearing gap found while building `ubx render`'s own
+`$cross`-annotation feature (docs/diagram-medium.md's "render
+direction": a reference node "annotated with the pinned neighbor head"),
+not assumed correct from the original UBI-27 amendment's own text —
+verified by reading the real `resolveCross`/`resolveOnce` code first.
+A `cross_stack_pin` entry's own `resource` field has always named the
+**neighbor's** address (what got pinned), never the **local** resource
+whose config actually held the `$cross` marker; `resolveOnce` flattens
+every resource's own `resolveValue` output into one `resolution.inputs`
+slice with no back-reference at all. The practical consequence: given a
+resolved proposal, there was no way to answer "which of my own resources
+references this neighbor pin" — exactly the question a diagram renderer
+needs answered to draw a `$cross` edge from the right node.
+
+**New, optional, additive field**: `ResolutionInput.From string` —
+populated only for `kind: "cross_stack_pin"` entries, the referencing
+resource's own canonical address (`Address.String()` form, same
+convention every other address-shaped field in this struct already
+uses):
+
+```json
+{
+  "kind": "cross_stack_pin",
+  "resource": "networking.aws_vpc.main",
+  "from": "payments.aws_db_instance.payments-db",
+  "observed_hash": "sha256:<hex>",
+  "pinned_head": "<the neighbor ledger's Head() at resolve time>",
+  "ledger_dir": "<the neighbor's own ledger directory>"
+}
+```
+
+Purely additive — same "no `schema_version` bump" reasoning as every
+prior amendment to this struct (`lookup`, `provider_checksum`,
+`pinned_head`, `ledger_dir`, `status`, `checked_ledger_dirs`): a new,
+optional (`omitempty`) field changes nothing about `Proposal`'s own
+canonical hashing rules, domain prefix, or excluded-field list.
+
+**Real code landed 2026-07-28, UBI-47 session 4** (`core/proposal.go`'s
+own new field; `core/resolver/refs.go`'s `resolveValue`/`resolveCross`
+both gained a `from string` parameter, threaded from `resolveOnce`'s own
+per-resource loop, where it's always the containing resource's own
+`e.addr.String()` — constant across that resource's whole config walk,
+never re-derived per sub-value). One hermetic regression test
+(`core/resolver/resolver_test.go`'s
+`TestResolve_CrossStack_ResolutionInputRecordsReferencingResource`):
+two resources in the same batch, only one of which cross-references,
+proves the attribution is genuinely per-resource, not merely "a
+cross-stack pin happened somewhere in this proposal." See
+docs/diagram-medium.md's own "Slice 4: built" section for how `ubx
+render` actually uses this to draw a `$cross` edge from the correct
+node.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

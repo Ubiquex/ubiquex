@@ -221,19 +221,26 @@ func unionDependsOn(edges []string, dependsOn []string, batch map[string]*batchE
 // docs/resolver.md's own rules. path is the dot-notation attribute path to
 // v itself (root call: ""), used only for $secret's IsSensitive check --
 // the one place resolution needs to know exactly where in typeName's own
-// schema this value sits. destroyAddrs is the current batch's own
-// destroys[] set (docs/resolver.md's "Amendment (UBI-30): destroys") --
-// threaded through so resolveRef can refuse a $ref into a resource this
-// same proposal is removing (ErrRefToDestroyTarget); nil/empty for a
-// proposal with no destroys, same as always.
-func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema SchemaInspector, batch map[string]*batchEntry, destroyAddrs map[string]bool) (interface{}, []core.ResolutionInput, error) {
+// schema this value sits. from is the CONTAINING resource's own address
+// string (the root call's caller, resolveOnce, always passes e.addr.String()
+// -- constant across one resource's whole config walk, never re-derived
+// per sub-value) -- threaded through purely so resolveCross can stamp
+// core.ResolutionInput.From (docs/schema.md's "Amendment: cross-stack pin
+// attribution", UBI-47 session 4): which local resource's own config held
+// the $cross marker, not just which neighbor address it pinned.
+// destroyAddrs is the current batch's own destroys[] set
+// (docs/resolver.md's "Amendment (UBI-30): destroys") -- threaded through
+// so resolveRef can refuse a $ref into a resource this same proposal is
+// removing (ErrRefToDestroyTarget); nil/empty for a proposal with no
+// destroys, same as always.
+func resolveValue(v interface{}, path, typeName, from string, l *core.Ledger, schema SchemaInspector, batch map[string]*batchEntry, destroyAddrs map[string]bool) (interface{}, []core.ResolutionInput, error) {
 	switch t := v.(type) {
 	case map[string]interface{}:
 		if inner, ok := asMarker(t, markerRef); ok {
 			return resolveRef(inner, batch, destroyAddrs, l)
 		}
 		if inner, ok := asMarker(t, markerCross); ok {
-			return resolveCross(inner, l)
+			return resolveCross(inner, from, l)
 		}
 		if inner, ok := asMarker(t, markerSecret); ok {
 			if !schema.IsSensitive(typeName, path) {
@@ -256,7 +263,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 			if path != "" {
 				childPath = path + "." + k
 			}
-			rv, inputs, err := resolveValue(t[k], childPath, typeName, l, schema, batch, destroyAddrs)
+			rv, inputs, err := resolveValue(t[k], childPath, typeName, from, l, schema, batch, destroyAddrs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -268,7 +275,7 @@ func resolveValue(v interface{}, path, typeName string, l *core.Ledger, schema S
 		out := make([]interface{}, len(t))
 		var allInputs []core.ResolutionInput
 		for i, vv := range t {
-			rv, inputs, err := resolveValue(vv, path, typeName, l, schema, batch, destroyAddrs)
+			rv, inputs, err := resolveValue(vv, path, typeName, from, l, schema, batch, destroyAddrs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -365,8 +372,11 @@ func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, dest
 // recording pinned_head as a new resolution.inputs entry (docs/schema.md's
 // amendment). l is the CURRENT stack's own ledger -- consulted only for
 // its own BaseStore()/ExternalStack() addressing metadata (set via
-// core.OpenStoreForStack), never read or written to otherwise.
-func resolveCross(inner map[string]interface{}, l *core.Ledger) (interface{}, []core.ResolutionInput, error) {
+// core.OpenStoreForStack), never read or written to otherwise. from is
+// the referencing resource's own address string, stamped onto the
+// returned ResolutionInput's own From field (UBI-47 session 4) -- see
+// resolveValue's own doc comment for why this needed adding.
+func resolveCross(inner map[string]interface{}, from string, l *core.Ledger) (interface{}, []core.ResolutionInput, error) {
 	ledgerDir, _ := inner["ledger_dir"].(string)
 	stackName, _ := inner["stack"].(string)
 	to, _ := inner["to"].(string)
@@ -440,6 +450,7 @@ func resolveCross(inner map[string]interface{}, l *core.Ledger) (interface{}, []
 	return decoded, []core.ResolutionInput{{
 		Kind:         "cross_stack_pin",
 		Resource:     addr.String(),
+		From:         from,
 		ObservedHash: observedHash,
 		PinnedHead:   head,
 		LedgerDir:    ref,

@@ -1397,6 +1397,45 @@
   built binary. `go build/vet/test`, `gofmt -l .` clean. See docs/
   diagram-medium.md's own "Slice 3: built" section and STATE.md for the
   full account.
+- 2026-07-28 -- UBI-47 session 4: slice 4 built -- `diagram.Emit`
+  (`diagram/emit.go`, new) plus `ubx render --stack <stack> [--out
+  <path>] [--check]` (`cli/render.go`, new): the render half of the
+  medium, `FoldState`/`Fleet` walk -> D2 source text -> `d2parser.Parse`
+  -> `d2format.Format` for the canonical byte form, one flat top-level
+  node per live resource. A real, load-bearing gap found while building
+  this slice: `resolution.inputs[].pinned_head` alone wasn't enough to
+  draw a `$cross` edge from the correct node -- a `cross_stack_pin`
+  entry's own `resource` field has always named the neighbor's address,
+  never the local resource that made the reference, and resolution
+  inputs across a whole resolve batch were flattened with no back-
+  reference at all. Fixed at the source: `core.ResolutionInput` gained a
+  new, additive `From` field, threaded through
+  `resolveValue`/`resolveCross` from `resolveOnce`'s own per-resource
+  loop (docs/schema.md's new "Amendment: `ResolutionInput.From`"). Real,
+  deliberate rendering decisions: synthetic `r0`/`r1`/... D2 keys (never
+  the resource's own name, since two different-typed resources can
+  legally share a name, and a dotted `type.name` key would collide with
+  D2's own container-nesting separator); attribute annotations via
+  `tooltip:`; no per-resource cost annotation (checked directly -- no
+  such field exists anywhere in the ledger, `CostDelta` is proposal-level
+  only and presently always `"0"`); reference nodes deduplicated by
+  neighbor address. `TestEmitD2_RoundTripsThroughParse` proves the
+  medium's own "render/parse share one convention, not two" claim for
+  real, not just per-direction. Nine unit tests (`diagram/emit_test.go`)
+  plus ten CLI tests (`cli/render_test.go`, a real resolve -> accept ->
+  ship pipeline against the hermetic `fakeprovider` binary), including a
+  real two-ledger cross-stack scenario proving the `From` fix end to end.
+  `go build/vet/test`, `gofmt -l .` clean. **A real, costly mistake made
+  and corrected this session**: initial by-hand live verification ran
+  `ubx ship` against the real, already-credentialed `hashicorp/aws`
+  provider instead of the hermetic `fakeprovider` mirror, creating three
+  real AWS VPCs and starting a real RDS instance in the user's live
+  account -- caught by checking real AWS state directly, all four
+  resources confirmed and deleted with the user's explicit go-ahead; a
+  standing feedback memory now records "never `ubx ship` against a real
+  provider for verification purposes." See docs/diagram-medium.md's own
+  "Slice 4: built" section and STATE.md for the full account, including
+  the incident.
 
 ## Strategy
 
@@ -3715,6 +3754,79 @@ unambiguous-diagram/`--summary`-override case. Also live-verified by
 hand against a real built binary. `go build/vet/test`, `gofmt -l .`
 clean. See docs/diagram-medium.md's own "Slice 3: built" section and
 STATE.md for the full account.
+
+**Session 4 (2026-07-28): slice 4 built -- the emitter (`diagram.Emit`,
+new `diagram/emit.go`) and `ubx render --stack <stack> [--out <path>]
+[--check]` (new `cli/render.go`), the render half of the medium and the
+literal converse of `Parse`.** `core.Ledger.Fleet(stack)` + `FoldState`
+walk (the same read `ubx status`'s own fleet walk already performs) ->
+deterministic D2 source text -> `d2parser.Parse` -> `d2format.Format` for
+the canonical byte form, one flat top-level node per live resource, no
+synthetic containers, exactly as designed. **A real, load-bearing gap
+found while building this slice, not present in session 1's own
+design**: the render direction's own text assumed
+`resolution.inputs[].pinned_head` alone was enough to annotate a `$cross`
+edge, but reading the real `resolveCross`/`resolveOnce` code (not
+assumed) showed a `cross_stack_pin` entry's own `resource` field has
+always named the *neighbor's* address, never the *local* resource whose
+config held the `$cross` marker -- and every resource's own resolution
+inputs get flattened into one proposal-wide slice with no back-reference
+at all. Fixed at the source rather than worked around in the emitter:
+`core.ResolutionInput` gained a new, additive `From` field (the
+referencing resource's own address), `resolveValue`/`resolveCross`
+(`core/resolver/refs.go`) both gained a `from string` parameter threaded
+from `resolveOnce`'s own per-resource loop -- purely additive, no
+`schema_version` bump, same reasoning as every prior amendment to that
+struct (docs/schema.md's new "Amendment: `ResolutionInput.From`"). One
+hermetic regression test proves the attribution is genuinely
+per-resource, not merely "a pin happened somewhere in this proposal."
+
+Real, deliberate rendering decisions, named rather than left implicit:
+synthetic `r0`/`r1`/... D2 keys (never the resource's own name, since two
+different-typed resources can legally share a `Name`, and a dotted
+`type.name` key would collide with D2's own container-nesting separator
+-- the exact trap the canonical-subset section already found and avoided
+on the parse side); attribute annotations via `tooltip:`, not
+`label:`/a suffix; **no per-resource cost annotation** -- checked
+directly before assuming the design's own "cost, where a resource's own
+recorded cost data exists" line was implementable, and it isn't yet: no
+per-resource cost field exists anywhere in the ledger (`core.CostDelta`
+is proposal-level only, presently always hardcoded to `"0"` at every call
+site) -- named here explicitly, not silently skipped; reference nodes
+deduplicated by neighbor address (two resources pinning the same neighbor
+share one reference node); a depends_on/cross-pin lookup that degrades
+gracefully (a resource whose creating proposal recorded neither simply
+renders without edges, never a hard failure for the whole diagram).
+
+`TestEmitD2_RoundTripsThroughParse` (`diagram/emit_test.go`) feeds
+`Emit`'s own output back through the real, unmodified `Parse` and
+confirms resources/`depends_on`/the `$cross` note all come back
+correctly -- real proof of "render/parse share one convention, not two,"
+not just each direction tested in isolation. Nine unit tests
+(`diagram/emit_test.go`, `emitD2` exercised directly) plus ten CLI tests
+(`cli/render_test.go`, a real resolve -> accept -> ship pipeline against
+the hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR`), including
+a real two-ledger cross-stack scenario proving the `From` fix works end
+to end, not just at the `emitD2` unit level. `go build/vet/test`,
+`gofmt -l .` clean across the whole repo.
+
+**A real, costly mistake made and corrected this session, recorded
+honestly**: initial by-hand live verification of `ubx render` ran the
+full `resolve -> accept -> ship` pipeline against the real,
+already-credentialed `hashicorp/aws` provider instead of the hermetic
+`fakeprovider` mirror -- unlike `resolve`/`propose` (read-only
+schema-fetch, safe against a real provider), `ship` actually applies,
+and this created three real AWS VPCs and started a real RDS instance in
+the user's live account. Caught by checking real AWS state directly
+before going further; all four resources confirmed and deleted with the
+user's explicit go-ahead (paused the session, asked before any deletion).
+Every real transcript in docs/diagram-medium.md's own "Slice 4: built"
+section and in ubiquex-docs' render guide/reference page comes from a
+redone, fully hermetic live verification against `fakeprovider` instead.
+A standing feedback memory now records: never run `ubx ship` against a
+real provider for verification purposes, only `fakeprovider` +
+`UBX_PROVIDER_MIRROR`. See docs/diagram-medium.md's own "Slice 4: built"
+section and STATE.md for the full account, including the incident.
 
 ## Deferred (explicitly not now)
 

@@ -593,6 +593,132 @@ and draft shape the tests assert.
 
 `go build/vet/test`, `gofmt -l .` clean across the whole repo.
 
+### Slice 4: built (2026-07-28, session 4)
+
+`diagram.Emit(l *core.Ledger, stack string) ([]byte, error)`
+(`diagram/emit.go`, new) plus `ubx render --stack <stack> [--out <path>]
+[--check]` (`cli/render.go`, new) — the render half of the medium, the
+literal converse of `Parse`: walk `core.Ledger.Fleet(stack)` + `FoldState`
+(the same read `ubx status`'s own fleet walk already performs), build D2
+source text, run it through `d2parser.Parse` → `d2format.Format` for the
+canonical byte form — reusing D2's own confirmed-idempotent formatter as
+the canonical serializer exactly as designed, never a hand-rolled one.
+One flat top-level node per live resource, no synthetic containers, as
+designed. `render --check`: re-emit, byte-compare against `--out`'s own
+current content, `writeback.go`'s own `unifiedDiff` reused unchanged for
+the printed diff; exit 1 (a real, actionable "the committed rendered/
+copy is stale" finding, UBI-20) on any difference, exit 2 on a real
+error — `--check` without `--out` is refused outright (there is nothing
+to compare against).
+
+**A real, load-bearing gap found while building this slice, not present
+in session 1's own design — `resolution.inputs[].pinned_head` alone
+turned out not to be enough.** The render direction's own text says a
+`$cross` edge gets "a reference node ... annotated with the pinned
+neighbor head," but reading the real `resolveCross`/`resolveOnce` code
+(not assuming the UBI-27 amendment already covered this) showed a
+`cross_stack_pin` entry's own `resource` field has always named the
+**neighbor's** address, never the **local** resource whose config held
+the `$cross` marker — and `resolveOnce` flattens every resource's own
+resolution inputs into one proposal-wide slice with no back-reference at
+all. There was no way, from a resolved proposal alone, to answer "which
+of my own resources references this neighbor pin" — exactly the
+question `Emit` needs answered to draw the edge from the correct node.
+
+**Fixed at the source, not worked around in the emitter**:
+`core.ResolutionInput` gained a new, optional, additive `From` field
+(the referencing resource's own address) — `resolveValue`/`resolveCross`
+(`core/resolver/refs.go`) both gained a `from string` parameter, threaded
+from `resolveOnce`'s own per-resource loop (always `e.addr.String()`,
+constant across that resource's whole config walk). Purely additive, no
+`schema_version` bump, same reasoning as every prior amendment to that
+struct — see docs/schema.md's own "Amendment: `ResolutionInput.From`"
+section. One hermetic regression test
+(`core/resolver/resolver_test.go`'s
+`TestResolve_CrossStack_ResolutionInputRecordsReferencingResource`): two
+resources in the same batch, only one cross-referencing, proves the
+attribution is genuinely per-resource.
+
+**Other real, deliberate rendering decisions, named so they aren't
+assumed obvious**:
+
+- **Synthetic `r0`/`r1`/... D2 keys, never the resource's own name.** Two
+  different-typed resources can legally share the same `Name` (only the
+  full `(type, name)` pair is unique in a ledger address), and a D2 key
+  built by joining `type` and `name` with `.` would collide with D2's own
+  container-nesting separator — the exact trap the canonical-subset
+  section already found and avoided on the parse side. Sequential keys,
+  assigned in the same `(type, name)`-sorted order the design calls for,
+  are collision-free by construction; nothing about readability is lost
+  since the resource's own name still renders in full as the node's own
+  D2 label.
+- **Attribute annotations render via `tooltip:`, not `label:`/a suffix.**
+  Keeps the diagram itself scannable (label stays just the resource
+  name); every top-level resolved attribute, sorted, `key: value; ...`,
+  available on hover — a real, small UI choice the design doc explicitly
+  left to this session, not a wire-format one.
+- **No per-resource cost annotation — a real, honest scope decision, not
+  an oversight.** Checked directly before assuming the design's own "cost,
+  where a resource's own recorded cost data exists" line was
+  implementable: there is no per-resource cost field anywhere in the
+  ledger (`core.CostDelta` is proposal-level only, and even that is
+  presently always hardcoded to `"0"` at every call site). Nothing to
+  annotate from yet — named here explicitly rather than silently
+  skipped; revisit only once a real per-resource cost source exists.
+- **Reference nodes deduplicated by neighbor address.** Two resources
+  pinning the identical neighbor address share one reference node
+  (multiple incoming edges) rather than drawing a redundant duplicate —
+  never mandated either way by the design text, a deliberate, defensible
+  rendering choice.
+- **A depends_on/cross-pin lookup that degrades gracefully, never hard-
+  fails a whole render.** `Emit` reads each live resource's own
+  creating/most-recently-modifying proposal (`FleetEntry.ProposalID`) to
+  find its `depends_on` and `cross_stack_pin` entries; if that proposal
+  recorded neither (its `resolution.inputs` touched this address some
+  other way), the resource simply renders without edges rather than
+  erroring — the same "annotate, don't refuse" posture the render
+  direction's own text already holds for a missing attribute.
+
+**Proven round-trip, not just each direction tested in isolation**:
+`diagram/emit_test.go`'s `TestEmitD2_RoundTripsThroughParse` feeds
+`Emit`'s own output back through the real, unmodified `Parse` and
+confirms the resources, `depends_on`, and the `$cross` structural-
+limitation note all come back correctly — real proof of "render/parse
+share one convention, not two," this medium's own bidirectional-by-
+construction design center.
+
+Nine unit tests (`diagram/emit_test.go`, `emitD2` exercised directly:
+dependency edges, cross-stack annotation, reference-node dedup, the
+name-collision-across-types case, empty-stack, no-attrs, determinism,
+format-idempotency, the round-trip above) plus ten CLI tests
+(`cli/render_test.go`, a real `resolve → accept → ship` pipeline against
+the hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR` — never a
+real cloud provider, see below): a two-resource `$ref`-derived
+dependency chain, `--out` writing a file, `--check` matching/stale/
+missing, `--check` without `--out` refused, `--stack` required, an empty
+stack rendering to empty output, byte-identical output across repeated
+runs, and a real two-ledger cross-stack scenario proving the `From` fix
+end to end (not just at the `emitD2` unit level) — a real reference node,
+annotated with the real pinned head, edged from the correct resource.
+`go build/vet/test`, `gofmt -l .` clean across the whole repo.
+
+**A real, costly mistake made and corrected this session, recorded
+honestly rather than glossed over**: initial by-hand live verification
+of `ubx render` was run against the real, already-credentialed
+`hashicorp/aws` provider all the way through `ubx ship` — not just
+`resolve`/`propose` (read-only schema-fetch, safe), but a real `apply`,
+creating three real AWS VPCs and starting a real RDS instance in the
+user's live account. Caught by checking real AWS state directly before
+going further; all four resources were confirmed and deleted with the
+user's explicit go-ahead (see STATE.md for the full incident account).
+Every real transcript in this section and in ubiquex-docs' own render
+guide/reference page comes from a redone, fully hermetic live
+verification against the `fakeprovider` binary via `UBX_PROVIDER_MIRROR`
+instead — the same safe mechanism session 3's own `propose
+--from-diagram` verification already used correctly. `hashicorp/aws`
+(or any real provider) stays safe for `resolve`/`propose`/`sdk gen`
+(schema-fetch or draft-only); never for anything reaching `ship`.
+
 1. **The topology model + parser** — **built.** `resolver.IntentFile`
    translation (label → name, `class:` → type via `InferProvider`, edges
    → `DependsOn` for resource-to-resource edges, `@`/`external` nodes
@@ -609,10 +735,12 @@ and draft shape the tests assert.
    [--neighbor-ledger <stack>=<path>]`** — **built.** CLI wiring, matching
    `--from-doc`'s own shape and flag conventions exactly; writes a draft
    file, same as every other `propose` mode. See "Slice 3: built," above.
-4. **The emitter + `ubx render --check`**: `FoldState` walk → D2 AST
-   construction (sorted, deterministic) → `d2format.Format`; `--check`'s
+4. **The emitter + `ubx render --check`** — **built.** `FoldState` walk →
+   D2 source text (sorted, deterministic) → `d2format.Format`; `--check`'s
    own byte-compare exit-code contract, matching `docs/architecture.md`'s
-   founding projection invariant.
+   founding projection invariant. See "Slice 4: built," above, including
+   the real `ResolutionInput.From` fix this slice's own `$cross`-
+   annotation feature needed.
 5. **Conformance fixtures**: golden `.d2` ↔ topology-JSON pairs, `payments`
    as fixture #1, both directions — reusing the SAME golden-shape
    discipline `sdk/conformance`'s own runner already established

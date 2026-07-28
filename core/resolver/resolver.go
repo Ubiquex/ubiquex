@@ -485,7 +485,7 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		if err := json.Unmarshal(e.ri.Config, &raw); err != nil {
 			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
 		}
-		resolvedVal, inputs, err := resolveValue(raw, "", e.ri.Type, l, e.provider.Schema, batch, destroySet)
+		resolvedVal, inputs, err := resolveValue(raw, "", e.ri.Type, e.addr.String(), l, e.provider.Schema, batch, destroySet)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}

@@ -411,6 +411,50 @@ func TestResolve_CrossStack_Concrete_RecordsPinnedHead(t *testing.T) {
 	}
 }
 
+// TestResolve_CrossStack_ResolutionInputRecordsReferencingResource proves
+// UBI-47 session 4's own real fix: a cross_stack_pin's own From field
+// names the LOCAL resource that held the $cross marker, not just the
+// neighbor address it pinned (Resource) -- found while building ubx
+// render's own $cross-annotation feature, since resolution.inputs used to
+// have no way at all to answer "which of my own resources made this
+// reference." Two resources in the same batch, only one of which
+// cross-references, proves the attribution is per-resource, not merely
+// "a cross-stack pin happened somewhere in this proposal."
+func TestResolve_CrossStack_ResolutionInputRecordsReferencingResource(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+
+	neighborDir := t.TempDir()
+	neighbor := core.Open(neighborDir)
+	seedLedger(t, neighbor, core.Address{Stack: "networking", Type: "aws_vpc", Name: "main"}, `{"id":"vpc-123"}`)
+
+	intent := intentFile("payments",
+		ri("aws_db_instance", "db", OpCreate, `{"vpc_id":{"$cross":{"ledger_dir":"`+neighborDir+`","to":"networking.aws_vpc.main.id"}}}`),
+		ri("aws_vpc", "unrelated", OpCreate, `{}`),
+	)
+
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	var pins []core.ResolutionInput
+	for _, in := range p.Resolution.Inputs {
+		if in.Kind == "cross_stack_pin" {
+			pins = append(pins, in)
+		}
+	}
+	if len(pins) != 1 {
+		t.Fatalf("cross_stack_pin entries = %+v, want exactly 1", pins)
+	}
+	if pins[0].From != "payments.aws_db_instance.db" {
+		t.Fatalf("From = %q, want the referencing resource's own address, not %q (the neighbor)", pins[0].From, pins[0].Resource)
+	}
+	if pins[0].Resource != "networking.aws_vpc.main" {
+		t.Fatalf("Resource = %q, want the neighbor's own address unchanged", pins[0].Resource)
+	}
+}
+
 // --- row 6: $computed value used where concrete required -----------------
 
 func TestResolve_ComputedPropagated_UsedWhereConcreteRequired_Rejected(t *testing.T) {

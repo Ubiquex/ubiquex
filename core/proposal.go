@@ -377,9 +377,25 @@ type Resolution struct {
 // evidence rather than leaving it silently indistinguishable from a real
 // check). Purely additive, same reasoning as every other amendment to
 // this struct.
+//
+// From was added 2026-07-28 (docs/schema.md — "Amendment: cross-stack
+// pin attribution", UBI-47 session 4), populated only for Kind ==
+// "cross_stack_pin" entries: the REFERENCING resource's own address —
+// i.e. the local resource whose config held the $cross marker that
+// resolveCross resolved. A real, load-bearing gap found while building
+// ubx render's own $cross-annotation feature, not present in the
+// original UBI-27 amendment: Resource, for a cross_stack_pin entry, has
+// always named the NEIGHBOR's address (what was pinned), never the
+// local resource that did the pinning, and resolutionInputs across a
+// whole resolve batch were flattened into one slice with no back-
+// reference at all — there was no way, from a resolved proposal alone,
+// to answer "which of my own resources references this neighbor pin."
+// From closes exactly that gap, purely additively (same "no
+// schema_version bump" reasoning as PinnedHead/LedgerDir before it).
 type ResolutionInput struct {
 	Kind              string          `json:"kind"`
 	Resource          string          `json:"resource"`
+	From              string          `json:"from,omitempty"`
 	ObservedHash      string          `json:"observed_hash"`
 	Lookup            json.RawMessage `json:"lookup,omitempty"`
 	ProviderChecksum  string          `json:"provider_checksum,omitempty"`
