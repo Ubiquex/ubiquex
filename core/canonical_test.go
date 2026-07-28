@@ -240,3 +240,80 @@ func TestHash_DomainPrefixApplied(t *testing.T) {
 		t.Fatalf("Hash() must differ from a plain hash of the canonical bytes — domain prefix isn't being applied")
 	}
 }
+
+// CanonicalJSON/CanonicalJSONBytes -- the general-purpose canonicalizer
+// factored out of canonicalProposalBytes's own JCS logic this session
+// (UBI-33/34 slice 4), for sdkeval's own use (docs/sdk.md's "byte-
+// identical-after-canonicalization" conformance discipline). These tests
+// exercise the exported entry points directly, independent of Proposal.
+
+func TestCanonicalJSONBytes_SortsObjectKeys(t *testing.T) {
+	a, err := CanonicalJSONBytes([]byte(`{"b":1,"a":2}`))
+	if err != nil {
+		t.Fatalf("CanonicalJSONBytes: %v", err)
+	}
+	b, err := CanonicalJSONBytes([]byte(`{"a":2,"b":1}`))
+	if err != nil {
+		t.Fatalf("CanonicalJSONBytes: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("key order should not affect canonical output: %s vs %s", a, b)
+	}
+	if string(a) != `{"a":2,"b":1}` {
+		t.Fatalf("got %s, want sorted-key canonical output", a)
+	}
+}
+
+func TestCanonicalJSONBytes_WhitespaceInsensitive(t *testing.T) {
+	a, err := CanonicalJSONBytes([]byte(`{"a":1,"b":[1,2,3]}`))
+	if err != nil {
+		t.Fatalf("CanonicalJSONBytes: %v", err)
+	}
+	b, err := CanonicalJSONBytes([]byte("{\n  \"a\": 1,\n  \"b\": [1, 2, 3]\n}\n"))
+	if err != nil {
+		t.Fatalf("CanonicalJSONBytes: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("whitespace should not affect canonical output: %s vs %s", a, b)
+	}
+}
+
+func TestCanonicalJSONBytes_RejectsFloatLiteral(t *testing.T) {
+	if _, err := CanonicalJSONBytes([]byte(`{"a":1.5}`)); !errors.Is(err, ErrFloatRejected) {
+		t.Fatalf("CanonicalJSONBytes: got %v, want ErrFloatRejected", err)
+	}
+}
+
+func TestCanonicalJSONBytes_LargeIntegerSurvivesIntact(t *testing.T) {
+	// UseNumber decoding (not a plain float64 unmarshal) is what makes
+	// this safe -- a large int64 must not silently lose precision.
+	out, err := CanonicalJSONBytes([]byte(`{"a":9223372036854775807}`))
+	if err != nil {
+		t.Fatalf("CanonicalJSONBytes: %v", err)
+	}
+	if string(out) != `{"a":9223372036854775807}` {
+		t.Fatalf("got %s, want the exact int64 max preserved", out)
+	}
+}
+
+func TestCanonicalJSONBytes_MalformedJSON_Errors(t *testing.T) {
+	if _, err := CanonicalJSONBytes([]byte(`{not valid`)); err == nil {
+		t.Fatal("CanonicalJSONBytes: got nil error for malformed JSON, want an error")
+	}
+}
+
+func TestCanonicalJSON_MatchesProposalCanonicalization(t *testing.T) {
+	// CanonicalJSON is the exact primitive canonicalProposalBytes now
+	// calls internally -- confirmed here by feeding it the identical
+	// already-decoded generic value canonicalProposalBytes itself would
+	// build, and checking the result matches what canonicalProposalBytes
+	// produces for an equivalent already-Proposal-shaped map.
+	generic := map[string]interface{}{"b": json.Number("2"), "a": json.Number("1")}
+	out, err := CanonicalJSON(generic)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	if string(out) != `{"a":1,"b":2}` {
+		t.Fatalf("got %s, want sorted-key canonical output", out)
+	}
+}

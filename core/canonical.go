@@ -43,7 +43,9 @@ func Hash(p *Proposal) (string, error) {
 }
 
 // canonicalProposalBytes produces the canonical JSON encoding of a
-// Proposal's hashed content.
+// Proposal's hashed content: Proposal-specific field exclusion and delta
+// sorting, then the same general-purpose canonicalization CanonicalJSON
+// (below) applies to any JSON document.
 func canonicalProposalBytes(p *Proposal) ([]byte, error) {
 	raw, err := json.Marshal(p)
 	if err != nil {
@@ -69,7 +71,28 @@ func canonicalProposalBytes(p *Proposal) ([]byte, error) {
 		}
 	}
 
-	canon, err := canonicalizeNumbers(generic)
+	return CanonicalJSON(generic)
+}
+
+// CanonicalJSON produces RFC 8785/JCS-style canonical JSON bytes for any
+// already-decoded JSON value v (typically produced by a json.Decoder
+// configured with UseNumber, so integers survive as json.Number rather
+// than losing precision through float64 first — see CanonicalJSONBytes,
+// below, for the common case of starting from raw JSON text instead):
+// sorted object keys, numbers restricted to int64/decimal-strings
+// (ErrFloatRejected otherwise, docs/schema.md's ratified rule), no HTML
+// escaping, no trailing newline.
+//
+// This is the exact canonicalization canonicalProposalBytes (above) uses
+// for a Proposal's hashed content, factored out here — docs/sdk.md's own
+// "Codegen design"/conformance-suite section names this explicitly as
+// needed for the SDK evaluator's own byte-identical-after-canonicalization
+// comparison, and as something that must be factored out of
+// canonicalProposalBytes's own JCS logic rather than reimplemented a
+// second time in a second place; sdkeval (docs/sdk.md slice 4) is that
+// caller.
+func CanonicalJSON(v interface{}) ([]byte, error) {
+	canon, err := canonicalizeNumbers(v)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +101,24 @@ func canonicalProposalBytes(p *Proposal) ([]byte, error) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(canon); err != nil {
-		return nil, fmt.Errorf("encode canonical proposal: %w", err)
+		return nil, fmt.Errorf("encode canonical json: %w", err)
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// CanonicalJSONBytes is CanonicalJSON's own convenience entry point for a
+// caller that starts from raw JSON text (e.g. sdkeval's own evaluator
+// subprocess stdout) rather than an already-decoded value -- decodes with
+// UseNumber (so a large integer survives intact rather than rounding
+// through float64) and then canonicalizes exactly as CanonicalJSON does.
+func CanonicalJSONBytes(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var generic interface{}
+	if err := dec.Decode(&generic); err != nil {
+		return nil, fmt.Errorf("decode json: %w", err)
+	}
+	return CanonicalJSON(generic)
 }
 
 // canonicalizeNumbers walks a generic JSON value (as decoded with
