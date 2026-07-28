@@ -4,6 +4,149 @@
 
 ## Current phase
 
+**UBI-47 (2026-07-28), session 6: slice 6 built — the live finale, real
+end to end. UBI-47 closed in Linear. Phase 3 (the authoring frontends)
+complete.**
+
+Two independent legs, per this session's own explicit doctrine: the
+convergence leg runs `resolve`/`propose` against the real, cached
+`hashicorp/aws@6.54.0` schema (never `ship`); the render leg stays fully
+hermetic (`fakeprovider` via `UBX_PROVIDER_MIRROR`) since it needs a real
+apply. This split is not a workaround — it's session 4's own real AWS
+incident and session 5's own codified rule (CLAUDE.md, docs/prompts.md),
+applied for real to the exact kind of session that produced the
+incident in the first place.
+
+**The convergence leg.** A one-resource diagram:
+
+```d2
+classes: {
+  aws_db_instance: {}
+}
+db: payments {
+  class: aws_db_instance
+}
+```
+
+`ubx propose --from-diagram payments.d2 --stack payments` against a real
+`.ubx/config` declaring `hashicorp/aws@6.54.0` — real type inference
+against the real schema, real output: `{"type":"aws_db_instance",
+"name":"payments","op":"create","config":{}}`. `ubx resolve draft.json`
+(same real schema, no `ship`) — real `delta.creates[0]`:
+
+```json
+{"config":{},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}
+```
+
+**Checked rigorously against the SDK arc's own committed golden value,
+not eyeballed** — both sides run through `core.CanonicalJSON`, compared
+against the exact golden `delta.creates[0]` docs/sdk.md's own live
+finale (UBI-33/34 session 4) established:
+
+```json
+{"config":{"allocated_storage":20,"db_name":"payments","engine":"postgres","instance_class":"db.t3.small","username":"payments_admin"},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}
+```
+
+`name`, `stack`, `type`, and `provider` (source **and** version) are
+byte-identical. **`config` is the one honest, structural, expected
+difference** — empty for the diagram, real values for the golden — and
+it is exactly the lossy-medium rule made concrete, not a shortfall: "two
+mediums can never claim the same attribute" (docs/architecture.md's own
+founding framing for this arc, session 1) means a diagram was never
+going to independently reproduce `engine`/`instance_class`/
+`allocated_storage`/`db_name`/`username` from nothing, by design, from
+the very first session. `diagram.Topology` (slice 5's own primitive,
+reused completely unchanged — zero new code needed to make this claim)
+confirms the identical thing at the layer the medium is actually scoped
+to: `{"resources":[{"name":"payments","op":"create","type":
+"aws_db_instance"}],"stack":"payments"}`, matching the golden's own
+topology-relevant fields exactly.
+
+**Verified directly afterward, not assumed**: `aws ec2 describe-vpcs`
+and `aws rds describe-db-instances` both returned empty — the
+convergence leg never shipped anything, exactly as doctrine requires.
+This is the first live-verification session since the incident, and the
+first real test of whether the codified rule actually holds under real
+use, not just in principle.
+
+**The render leg, fully hermetic, against a real (shipped) ledger.** The
+`payments` chain — `main-vpc`, `payments-db` depending on it — resolved,
+accepted, and shipped for real through the hermetic `fakeprovider`
+binary via `UBX_PROVIDER_MIRROR`, then rendered and checked:
+
+```d2
+classes: {
+  fake_widget
+}
+r0: "main-vpc" {
+  class: fake_widget
+  tooltip: "id: computed-id; name: main-vpc; tags: {}"
+}
+r1: "payments-db" {
+  class: fake_widget
+  tooltip: "id: computed-id; name: payments-db; tags: {}"
+}
+r1 -> r0
+```
+
+```text
+$ ubx render --stack payments --ledger-dir . --out rendered/payments.d2 --check
+render --check: rendered/payments.d2 matches the current resolved state
+```
+
+Real, unedited, green.
+
+**"The four-medium equality" precisely stated, not overclaimed.** Not a
+fourth independent producer of the same attribute values — structurally
+impossible for a topology-only medium, by design, from session 1 — but
+proof a diagram never contradicts what the other three producers (a
+hand-written intent file, the md medium's real LLM transcription, and
+the SDK arc's own typed TS program) already established, correctly
+identifying the same resource by type, name, stack, and provider. This
+is the only form of convergence honestly available to this medium, and
+it's exactly what "every medium is a projection, never a second source
+of truth" always meant — demonstrated four times over now, not just
+stated once at the project's very first session.
+
+**A real, small doc-staleness finding fixed while closing, not left for
+someone else to notice**: docs/architecture.md's own headline sections
+for the md medium, the SDK program, and the diagram medium each still
+carried their own session-1 "designed... not yet implemented" markers,
+unrevised across every session that actually built each one. Fixed in
+place this session for all three (headers + a short "Built" pointer on
+the diagram medium's own section) — a small instance of this project's
+own "never contradict docs silently" rule applying to a system-model
+summary, not just a design decision, caught only because closing an arc
+means actually re-reading its own system-model section rather than
+assuming it's current.
+
+**No new code this session** — a verification exercise, not an
+implementation one. `go build/vet/test`, `gofmt -l .` clean (unchanged
+from session 5; nothing to regress). docs/diagram-medium.md gained a
+"Slice 6: built — the live finale" section (items 6/7 of its own
+Implementation slices marked built); docs/architecture.md's three
+headline sections fixed; docs/plan.md gained a session-6 changelog
+entry, a closing addendum to the Diagram medium wedge subsection (now
+"— closed"), and a new "Phase 3 status" section — a scoreboard table
+naming every medium's own precise ticket status (a medium can be *live*
+while its own umbrella ticket, like UBI-33, stays open for later,
+demand-gated language expansion — the two are deliberately not
+conflated). ubiquex-docs' `guides/diagram-medium.mdx` gained a closing
+"One of four ways to author the same infrastructure" section, linking
+the four media together for a reader — the render half and a rendered
+diagram example were already real and current from session 4, confirmed
+rather than duplicated. `mint validate`/`mint broken-links` both clean.
+Both repos committed and pushed.
+
+**UBI-47 closed in Linear**, closing comment posted summarizing the full
+arc (sessions 1–6) and this session's own live finale. **Phase 3 is
+complete**: md (UBI-41), chat (UBI-46), SDK/TS (UBI-33/34 — UBI-34
+closed, UBI-33 stays open for Go/Python), and diagram (UBI-47) are all
+live. Four independent `intent/v1` producers, one shared resolved shape
+— proven, not just designed.
+
+## Current phase (previous)
+
 **UBI-47 (2026-07-28), session 5: slice 5 built — `diagram.Topology`
 (`diagram/topology.go`, new) and conformance fixtures (`payments` as
 fixture #1, both directions), plus the CLAUDE.md/docs/prompts.md line
