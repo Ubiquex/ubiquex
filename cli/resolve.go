@@ -11,6 +11,7 @@ import (
 
 	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex-cli/sdkeval"
 )
 
 // newResolveCmd is UBI-27's resolver CLI surface: a new verb, not a flag
@@ -41,17 +42,29 @@ func newResolveCmd() *cobra.Command {
 		out             string
 		timeout         time.Duration
 		knownDependents []string
+		fromCode        string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "resolve <intent-file>",
-		Short: "Resolve a typed ubx:intent/v1 file into a draft change proposal",
+		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript SDK program, --from-code) into a draft change proposal",
 		Long: `Resolves a hand-written, machine-shaped intent file (ubx:intent/v1) into a draft
 kind:"change" proposal -- creates, modifies, and destroys (docs/resolver.md).
 Intra-stack references are checked against the ledger's own dependency graph (with real cycle
 detection) and emitted in dependency order; cross-stack references are pinned against a neighbor
 ledger's current head, activating neighbor-advance staleness for real once the proposal is accepted
 (see "ubx accept"'s own pin re-verification).
+
+--from-code <entry>.ts, mutually exclusive with the positional intent-file argument, evaluates a
+TypeScript SDK program (@ubx/sdk, docs/sdk.md) through the real, hermetic Deno evaluator (sdkeval)
+instead of reading a file from disk -- the resulting intent/v1 document, provenance-stamped with the
+entry file's own content hash (intent.sources: {"kind":"document", "ref", "content_hash"}, the same
+"document" kind the md medium already uses), is handed to the exact same, completely unmodified
+pipeline below: an SDK program is just another intent/v1 producer, never a special case. Unlike the
+md medium, which needs a human-review gate between an LLM's own ambiguous draft and resolution
+(ubx propose --from-doc, then a separate ubx resolve), a typed SDK program has no ambiguity to
+review first -- it says what it says -- so --from-code resolves directly, one command, no separate
+draft step.
 
 A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
 never inferred from a resource's absence) and resolve-time orphan-protected: a destroy target
@@ -65,7 +78,7 @@ entry) rather than silently.
 
 The result is a draft: it has no id or acceptance yet. Pipe it into "ubx propose" for a PR-body
 trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generates.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		// resolve has no "finding" concept, the same audit outcome as
 		// propose/init/version (UBI-20 exit-code contract): it either
 		// resolves or it doesn't. 0 or 2 only.
@@ -77,17 +90,34 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
-			data, err := os.ReadFile(args[0])
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: err}
+			if fromCode != "" && len(args) > 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: --from-code and a positional intent-file argument are mutually exclusive")}
 			}
-			var intent resolver.IntentFile
-			if err := json.Unmarshal(data, &intent); err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse intent file: %w", err)}
+			if fromCode == "" && len(args) == 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts")}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
+
+			var intent resolver.IntentFile
+			if fromCode != "" {
+				canon, err := sdkeval.Evaluate(ctx, fromCode)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+				}
+				if err := json.Unmarshal(canon, &intent); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse evaluated intent: %w", err)}
+				}
+			} else {
+				data, err := os.ReadFile(args[0])
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: err}
+				}
+				if err := json.Unmarshal(data, &intent); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse intent file: %w", err)}
+				}
+			}
 
 			// docs/resolver.md's own "Amendment (UBI-43): multi-provider
 			// stacks" -- a stack with a real [providers] table in
@@ -175,9 +205,10 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "write the resolved proposal here instead of stdout")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching the provider and fetching its schema")
+	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and (--from-code) evaluating the SDK program -- one shared budget for the whole command, not per sub-operation")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript SDK program (@ubx/sdk) instead of reading an intent file (mutually exclusive with the positional argument)")
 
 	return cmd
 }

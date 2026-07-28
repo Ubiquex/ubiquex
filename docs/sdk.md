@@ -1,18 +1,30 @@
 # SDK program — the multi-language contract, and TypeScript first (UBI-33/34)
 
-> Session 1, design only, no code. This document is the contract half of
-> UBI-33 (the umbrella: multi-language contract + shared codegen) and the
-> TypeScript-specific design half of UBI-34 (`@ubx/sdk`, first language to
-> ship). Two hard constraints came pre-decided from the ticket's own design
-> room (Pulumi case-study comments) and are not relitigated here: the
-> **monorepo** (`sdk/` inside `ubiquex-cli`, all languages, one CI) and
-> **codegen'd bindings are generated locally, never published** (`ubx sdk
-> gen` runs against the config-pinned provider version on the user's own
-> machine; only the tiny `@ubx/sdk` runtime ships to npm). Language order
-> is also pre-decided: TypeScript, then Go, then Python
-> (`docs/architecture.md`'s own "What carries over from v1" already names
-> `Computed<T>`/`secret()`/typed refs as v1 design worth keeping — this is
-> where that design gets rebuilt, in code, for the first time in v2).
+> **UBI-34 (TypeScript) closed 2026-07-28, session 4 — all seven
+> implementation slices built, tested, and live-verified**; see "Slices
+> 1–3: built," "Slice 4: built," and "Slices 5–7: built," below, for the
+> full real account. **UBI-33 (the multi-language contract) stays open**
+> — Go (UBI-35) and Python (UBI-36) are unstarted; this document's own
+> language-neutral IR model and canonical-JSON discipline are the shared
+> foundation they'll build against. Session 1's own design intent below
+> is preserved as the historical record of what was decided before any
+> code existed; it is superseded wherever a later "built" section says
+> so, not silently.
+>
+> Session 1, design only, no code (historical). This document is the
+> contract half of UBI-33 (the umbrella: multi-language contract + shared
+> codegen) and the TypeScript-specific design half of UBI-34 (`@ubx/sdk`,
+> first language to ship). Two hard constraints came pre-decided from the
+> ticket's own design room (Pulumi case-study comments) and are not
+> relitigated here: the **monorepo** (`sdk/` inside `ubiquex-cli`, all
+> languages, one CI) and **codegen'd bindings are generated locally,
+> never published** (`ubx sdk gen` runs against the config-pinned
+> provider version on the user's own machine; only the tiny `@ubx/sdk`
+> runtime ships to npm). Language order is also pre-decided: TypeScript,
+> then Go, then Python (`docs/architecture.md`'s own "What carries over
+> from v1" already names `Computed<T>`/`secret()`/typed refs as v1 design
+> worth keeping — this is where that design gets rebuilt, in code, for
+> the first time in v2).
 
 ## Scope: what this session designs, and what it doesn't
 
@@ -879,10 +891,134 @@ real thrown message surfaced verbatim, and confirmed `Evaluate` returns
 `go build/vet/test`, `gofmt -l .` clean across the whole repo (20 new
 tests in `sdkeval`, 6 new in `core`); `deno test --no-remote
 guards_test.ts` (5 tests) and `deno check --no-remote guards.ts` clean
-for `sdk/ts/evaluator`. Next: slice 5, `ubx resolve --from-code` CLI
-wiring — `sdkeval.Evaluate` is already a complete, real, tested producer
-of canonical `intent/v1` bytes; slice 5 is wiring only, per this
-document's own framing, unless building it finds otherwise.
+for `sdk/ts/evaluator`.
+
+### Slices 5–7: built (2026-07-28, session 4) — CLI wiring, real convergence, closing UBI-34
+
+`ubx resolve --from-code` turned out to be exactly wiring, as slice 5's
+own text predicted — no resolver changes needed. One real, deliberate
+simplification was made along the way, and one real live comparison
+against the md medium closes the arc's own central claim for real, not
+as an aspiration.
+
+**`intent.sources` gets a single `"document"` entry, not the `"sdk"`/
+`"sdk_evaluator"` pair session 1 originally sketched.** `sdkeval/provenance.go`'s
+`stampDocumentSource` (new) computes the entry file's own real SHA-256,
+Go-side (the sandboxed evaluator has no fs access to hash its own file,
+by design) and appends `{"kind": "document", "ref": "<basename>",
+"content_hash": "sha256:..."}` — reusing the exact same `"document"` kind
+the md medium already uses for its own source file, rather than inventing
+a bespoke SDK-only vocabulary. The reasoning: code is self-describing and
+fully deterministic, with no analogous "which adapter drafted this" fact
+worth a second entry the way `intent_provider`'s own kind names which LLM
+transcribed a document — there is no LLM in this path at all. This is
+what makes "three independent producers converge" a checkable claim using
+one shared provenance vocabulary, not three bespoke ones. Appends to
+(never overwrites) whatever sources a program's own `intent()` call may
+already have set. Four new hermetic tests (`sdkeval/provenance_test.go`).
+
+**`cli/resolve.go` gained `--from-code`, mutually exclusive with the
+existing positional argument** (`cobra.MaximumNArgs(1)`, was
+`ExactArgs(1)`) — `sdkeval.Evaluate` produces the `resolver.IntentFile`
+the exact same, completely unmodified pipeline already consumes; nothing
+downstream of that point changed at all. `--timeout`'s default doubled
+(60s → 120s) and its help text now names both roles it covers (provider
+schema fetch AND, with `--from-code`, evaluation) — both share one
+budget, an existing pattern (the multi-provider loop already shares one
+timeout across several provider fetches) extended, not a new one.
+Hermetically tested end to end (`cli/resolve_from_code_test.go`): evaluate
+→ resolve → accept → why, through the real `UBX_PROVIDER_MIRROR` fake
+provider, confirming the real provenance stamp lands in the real accepted
+proposal's own `ubx why` rendering.
+
+**`sdk/conformance` built for real** (`programs/ts/`, `golden/`,
+`runner/`) — a first golden case, `payments`, matching this session's own
+live finale (below). `programs/ts/generated/hashicorp-aws.ts` is real
+codegen output (`sdk/codegen/ir` + `sdk/codegen/templates/ts`, the exact
+same machinery `ubx sdk gen` uses) against the real, cached
+`hashicorp/aws@6.54.0` schema — filtered to `aws_db_instance` alone
+(confirmed live this session: a real, unfiltered `ubx sdk gen` run
+against this exact provider produced 1,682 resource types; committing all
+of them for a one-resource fixture would dwarf what it supports).
+`runner/runner_test.go`'s `TestPaymentsGoldenCase_TS` evaluates the real,
+committed `payments.ts` through the real Deno harness and byte-compares
+against `golden/payments.json` after canonicalizing both sides (the
+committed fixture is pretty-printed for reviewability, never assumed to
+already be in canonical form) — a real, ongoing regression test, not a
+one-time manual check: if a future runtime/codegen change ever drifts
+from this golden shape, this test catches it immediately.
+
+**The live finale, real, live, end to end — the strongest form of the
+claim, not an approximation.** No committed "golden" transcript existed
+anywhere to compare against beforehand (drafts are ephemeral by design,
+never persisted past review — confirmed by checking, not assumed); rather
+than approximate one, this session ran the real thing:
+
+1. `ubx propose --from-doc payments.md` against the **real Claude API**,
+   fresh, this session. Real output: a standalone `aws_db_instance`
+   named `"payments"` (op: create, no `$ref` to staging at all — the
+   `@payments.aws_db_instance.staging` mention in the doc is read purely
+   as *context* for the model's own reasoning, never becoming a live
+   reference, since the intent provider has no ledger access to query
+   staging's real values in the first place, confirmed empirically, not
+   assumed from the design docs' own older, hypothetical illustration
+   sketch, which showed a different, replica-shaped example entirely
+   and was never itself a real transcript). Real, live-drafted values:
+   `engine: "postgres"`, `instance_class: "db.t3.small"`,
+   `allocated_storage: 20`, `db_name: "payments"`,
+   `username: "payments_admin"` — with real `assumptions`/`defaults`/
+   `questions` explaining each choice in the model's own words.
+2. Resolved for real (`ubx resolve draft.json`, real `hashicorp/aws@6.54.0`
+   schema) — `delta.creates[0].config` matches the drafted values exactly,
+   no schema rejections, no missing-required-field errors.
+3. A TypeScript program (`sdk/conformance/programs/ts/payments.ts`)
+   authored with the **identical concrete values**, copied verbatim from
+   step 1's own real output — the human author's own decision, made *after*
+   seeing what the real LLM said, so this is a genuine convergence check,
+   not a coincidence engineered backwards from a value nobody actually
+   produced independently.
+4. Evaluated for real (`ubx resolve --from-code payments.ts`, the same
+   real provider schema) — `delta.creates[0]` matches step 2's shape
+   field for field.
+5. **Checked rigorously, not eyeballed**: both resolved proposals'
+   `delta.creates` arrays, canonicalized via the same `core.CanonicalJSON`
+   this arc built in slice 4, compared byte-for-byte —
+
+   ```json
+   [{"config":{"allocated_storage":20,"db_name":"payments","engine":"postgres","instance_class":"db.t3.small","username":"payments_admin"},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}]
+   ```
+
+   **identical**, for both. `intent.summary` also matches exactly (copied
+   verbatim). The one honest, structural, expected difference: `intent.
+   sources`/`assumptions`/`defaults`/`questions` — the md-drafted proposal
+   carries `document`+`intent_provider` sources and three real ambiguity
+   notes explaining the model's own choices; the TS-authored one carries
+   one `document` source and no ambiguity notes at all, because there was
+   no ambiguity for a typed program to resolve — the human author simply
+   wrote `db.t3.small` directly, and the program's own source is the
+   reviewable artifact, ordinary code review, not a post-hoc
+   reviewable-assumption list. This is exactly the difference slice 6's
+   own original design predicted, now confirmed against real output
+   rather than only asserted.
+
+**UBI-34 closed in Linear — TypeScript is complete.** All seven of this
+document's own implementation slices are built, tested (hermetically and
+live), and documented, closing the loop this arc's own framing opened:
+"the SDK is a producer of `intent/v1`, nothing more" — now demonstrated,
+not just designed. **UBI-33 stays open** — the multi-language contract's
+own Go (UBI-35) and Python (UBI-36) futures are unstarted; this session's
+own `sdk/codegen/ir` and canonical-JSON discipline are exactly the shared
+foundation those languages will build against, per this document's own
+"language-neutral, no TS-isms" design.
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo (4 new
+`sdkeval` tests, 3 new `cli` tests, 1 new `sdk/conformance/runner` test).
+`ubiquex-docs` gained `cli/sdk-gen.mdx` (new), a new "Authoring in
+TypeScript" section on `cli/resolve.mdx`, and a full rewrite of
+`sdk/index.mdx` from its old "not yet released" placeholder — every
+example real, taken directly from this session's own live transcripts;
+`mint validate`/`mint broken-links` both clean. Both repos committed and
+pushed. See STATE.md for the full session account.
 
 1. **`sdk/codegen/ir`** — **built.** The shared IR types +
    `provider.Schema` → IR translation, hermetic unit tests against
@@ -914,51 +1050,48 @@ document's own framing, unless building it finds otherwise.
    adversarial table's five in-scope rows (1, 2, 2b, 4, 5) are each a
    real hermetic test against a real `deno` subprocess (row 5 at the Go
    level, for the reasons explained above), all passing.
-5. **`ubx resolve --from-code <entry>.ts`**: CLI wiring only — the SDK's
-   evaluator is just another `intent/v1` producer, handed to the
-   existing, completely unmodified `core/resolver` pipeline exactly as a
-   hand-written file or an intent-provider draft (after human review)
-   already is. No resolver changes expected; if one turns out to be
-   needed, that itself is a finding worth stopping and recording, not
-   silently absorbing.
-6. **`sdk/conformance`**: the golden-fixture harness for real — the new
-   canonical-JSON comparator, a first golden case. **This first case
-   deliberately reuses the existing md-medium payments example**
-   (`intentprovider/conformance/fixtures/payments.md` /
-   docs/intent-provider.md's own worked JSON) as its own target shape,
-   with one honest, structural difference named rather than papered
-   over: an SDK-authored program has no interpretation step, so its own
-   `intent.assumptions`/`defaults`/`questions` arrays are empty by
-   construction — there is no ambiguity for a typed program to resolve,
-   the human author simply writes `db.t3.small` directly, and the
-   program's own source is the reviewable artifact (ordinary code
-   review) rather than a post-hoc reviewable-assumption list. `intent.
-   sources` gains its own new kind pair for this, mirroring
-   `document`/`intent_provider`'s existing pairing exactly: `{"kind":
-   "sdk", "ref": "payments.ts", "content_hash": "sha256:..."}` (the entry
-   file only, in v1 — a multi-file program's non-entry imports are not
-   independently pinned yet, a named, accepted v1 scope limit, not a
-   silent gap) and `{"kind": "sdk_evaluator", "ref": "deno@2.9.4+@ubx/sdk@<version>"}`
-   (which runtime produced it — the same provenance role
-   `intent_provider`'s own `ref` field already plays for "which adapter
-   drafted this"). **Formal pinning of this new `intent.sources` kind
-   pair belongs in docs/schema.md, written in the session that actually
-   builds slice 6** (UBI-41 session 1's own precedent: a design-only
-   session amends docs/schema.md when a wire-format decision is made and
-   load-bearing, but this session stops short of that for the SDK kind
-   pair specifically, since nothing consumes it as real wire content
-   until slice 6 exists to produce it) — named here so it isn't
-   forgotten, not pinned prematurely.
-7. **Live finale**: a real TypeScript payments program, evaluated for
-   real through the real Deno harness, producing canonicalized
-   `intent/v1` bytes — resolved, accepted, and (where a live provider
-   session makes sense) shipped for real, closing UBI-34. Three
-   independent producers (a hand-written intent file, the md medium's LLM
-   transcription, and this arc's own typed TS program) converging on the
-   same resolved infrastructure is the strongest available proof that
-   "the SDK is a producer of `intent/v1`, nothing more" (UBI-33's own
-   framing) actually holds, not just an aspiration stated in this
-   document.
+5. **`ubx resolve --from-code <entry>.ts`** — **built.** CLI wiring only,
+   exactly as predicted — the SDK's evaluator is just another `intent/v1`
+   producer, handed to the existing, completely unmodified `core/resolver`
+   pipeline exactly as a hand-written file or an intent-provider draft
+   (after human review) already is. No resolver changes were needed.
+6. **`sdk/conformance`** — **built.** The golden-fixture harness for
+   real: the new canonical-JSON comparator (`core.CanonicalJSON`/
+   `CanonicalJSONBytes`, slice 4), a first golden case (`payments`).
+   **This first case deliberately reuses the existing md-medium payments
+   example** (`intentprovider/conformance/fixtures/payments.md`) as its
+   own target shape, with one honest, structural difference named rather
+   than papered over: an SDK-authored program has no interpretation
+   step, so its own `intent.assumptions`/`defaults`/`questions` are
+   absent entirely, by construction — there is no ambiguity for a typed
+   program to resolve, the human author simply writes `db.t3.small`
+   directly, and the program's own source is the reviewable artifact
+   (ordinary code review) rather than a post-hoc reviewable-assumption
+   list. **`intent.sources` gets a single `"document"` entry — not the
+   `"sdk"`/`"sdk_evaluator"` kind pair originally sketched here.** Real,
+   deliberate simplification, decided this session (see "Slices 5–7:
+   built," above, for the full reasoning): code is self-describing and
+   fully deterministic, with no analogous "which adapter drafted this"
+   fact worth a second entry the way `intent_provider`'s own kind names
+   which LLM transcribed a document. `sdkeval/provenance.go`'s
+   `stampDocumentSource` builds it: `{"kind": "document", "ref":
+   "payments.ts", "content_hash": "sha256:..."}`, the exact same kind the
+   md medium already uses — no `docs/schema.md` amendment needed at all,
+   since no new kind was introduced.
+7. **Live finale** — **built, real, live, end to end.** A real
+   TypeScript payments program, evaluated for real through the real Deno
+   harness, resolved into a draft whose canonicalized `delta.creates[]`
+   is byte-identical to a **real, freshly-run, live** `ubx propose
+   --from-doc payments.md` transcript's own resolved shape — the full
+   real transcript, the exact canonicalized bytes compared, and the
+   honest account of what does and doesn't match are all in "Slices
+   5–7: built," above. Three independent producers (a hand-written
+   intent file, the md medium's real LLM transcription, and this arc's
+   own typed TS program) converging on the same resolved infrastructure
+   is the strongest available proof that "the SDK is a producer of
+   `intent/v1`, nothing more" (UBI-33's own framing) actually holds —
+   demonstrated this session, not just an aspiration stated in this
+   document. **UBI-34 closed in Linear.**
 
 ## Out of scope for v1, named so it isn't assumed covered
 

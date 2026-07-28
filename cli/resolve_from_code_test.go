@@ -1,0 +1,125 @@
+package cli
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// requireDeno skips a test when the real deno binary isn't on PATH --
+// same reasoning as sdkeval's own requireDeno (a new, genuinely hard
+// dependency this arc introduces; skip loudly rather than hard-fail
+// `go test ./...` for a contributor who hasn't installed it yet).
+func requireDeno(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("deno"); err != nil {
+		t.Skip("deno not found in PATH -- skipping ubx resolve --from-code's own real-subprocess tests")
+	}
+}
+
+// TestResolveFromCode_SimpleCreate mirrors TestResolveAccept_SimpleCreate
+// (resolve_test.go) exactly, but authors the same logical intent in
+// TypeScript instead of hand-written JSON -- slice 5's own CLI wiring,
+// end to end, through the real evaluator, real resolve, real accept,
+// real why.
+func TestResolveFromCode_SimpleCreate(t *testing.T) {
+	requireDeno(t)
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	entryPath := filepath.Join("testdata", "sdk_resolve", "create_widget.ts")
+
+	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
+	resolveOut, err := runUbx(t, env, "resolve",
+		"--from-code", entryPath,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--out", resolvedPath,
+	)
+	if err != nil {
+		t.Fatalf("ubx resolve --from-code: %v\noutput: %s", err, resolveOut)
+	}
+	if !strings.Contains(resolveOut, "1 create(s), 0 modify(ies)") {
+		t.Fatalf("expected a 1-create summary, got: %s", resolveOut)
+	}
+
+	raw, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := string(raw)
+	if !strings.Contains(resolved, `"kind": "change"`) {
+		t.Fatalf("resolved proposal missing kind:change: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"fake_widget"`) || !strings.Contains(resolved, `"widget1"`) {
+		t.Fatalf("resolved proposal missing the TS-authored fake_widget/widget1 resource: %s", resolved)
+	}
+
+	// The provenance stamp: a real "document" source naming the real
+	// entry file and its own real content hash (docs/sdk.md's own
+	// slice-5 decision -- a single "document" entry, the same kind the
+	// md medium already uses, not a bespoke "sdk"/"sdk_evaluator" pair).
+	if !strings.Contains(resolved, `"kind": "document"`) {
+		t.Fatalf("resolved proposal missing a document intent.sources entry: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"ref": "create_widget.ts"`) {
+		t.Fatalf("resolved proposal's document source doesn't name the real entry file: %s", resolved)
+	}
+	entryBytes, err := os.ReadFile(entryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(entryBytes)
+	wantHash := "sha256:" + hex.EncodeToString(sum[:])
+	if !strings.Contains(resolved, wantHash) {
+		t.Fatalf("resolved proposal's document source content_hash doesn't match the real entry file's own bytes (want %s): %s", wantHash, resolved)
+	}
+
+	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx accept (from-code resolved): %v\noutput: %s", err, acceptOut)
+	}
+	changeID := mustExtractID(t, acceptOut)
+
+	whyOut, err := runUbx(t, env, "why", changeID, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx why (from-code change): %v\noutput: %s", err, whyOut)
+	}
+	if !strings.Contains(whyOut, "change") {
+		t.Fatalf("why output missing change kind: %s", whyOut)
+	}
+	if !strings.Contains(whyOut, "document create_widget.ts") {
+		t.Fatalf("why output missing the document provenance source: %s", whyOut)
+	}
+}
+
+func TestResolveFromCode_MutuallyExclusiveWithPositionalArg(t *testing.T) {
+	// No requireDeno -- the mutual-exclusivity check happens before
+	// sdkeval.Evaluate is ever called.
+	ledgerDir := t.TempDir()
+	entryPath := filepath.Join("testdata", "sdk_resolve", "create_widget.ts")
+	intentPath := filepath.Join(ledgerDir, "intent.json")
+	writeIntentFile(t, intentPath, map[string]interface{}{
+		"schema_version": 1, "kind": "ubx:intent/v1", "stack": "payments",
+		"intent": map[string]interface{}{"summary": "x"}, "resources": []map[string]interface{}{},
+	})
+
+	_, err := runUbx(t, nil, "resolve", intentPath, "--from-code", entryPath, "--ledger-dir", ledgerDir)
+	requireExitCode(t, err, 2, "")
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a mutually-exclusive error, got: %v", err)
+	}
+}
+
+func TestResolveFromCode_RequiresOneOrTheOther(t *testing.T) {
+	ledgerDir := t.TempDir()
+	_, err := runUbx(t, nil, "resolve", "--ledger-dir", ledgerDir)
+	requireExitCode(t, err, 2, "")
+	if !strings.Contains(err.Error(), "requires either") {
+		t.Fatalf("expected a \"requires either\" error, got: %v", err)
+	}
+}

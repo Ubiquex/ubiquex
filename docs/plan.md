@@ -1290,6 +1290,33 @@
   test`/`deno check` all clean (20 new Go tests in `sdkeval`, 6 in
   `core`, 5 new `deno test` cases). See docs/sdk.md's own "Slice 4:
   built" section and STATE.md for the full account.
+- 2026-07-28 — UBI-33/34 session 4: slices 5-7 built -- `ubx resolve
+  --from-code` (CLI wiring only, no resolver changes), `sdk/conformance`
+  (a real golden case + a real, ongoing Go regression test), and a real
+  live convergence finale. `intent.sources` gets a single `"document"`
+  entry (`sdkeval/provenance.go`'s new `stampDocumentSource`, hashing the
+  entry file Go-side since the sandboxed evaluator can't) -- a real
+  simplification from the original `"sdk"`/`"sdk_evaluator"` kind-pair
+  sketch, reusing the md medium's own existing kind since code has no
+  LLM-adapter analog worth a second entry. The live finale: no committed
+  "golden" transcript existed from the md medium's own prior sessions
+  (drafts are ephemeral, confirmed by checking), so this session ran `ubx
+  propose --from-doc payments.md` against the real Claude API fresh, got
+  a real drafted `aws_db_instance` (`db.t3.small`, 20 GiB,
+  `payments_admin`, no `$ref` to staging -- the intent provider has no
+  ledger access, confirmed empirically), resolved it for real, authored a
+  TypeScript program with the identical values (copied from the real
+  output, not invented), evaluated and resolved that too, and confirmed
+  both resolved `delta.creates[]` are byte-identical via
+  `core.CanonicalJSON` -- the strongest available proof "the SDK is a
+  producer of intent/v1, nothing more" actually holds. **UBI-34 closed in
+  Linear** (TypeScript complete, all 7 slices built/tested/live-verified);
+  **UBI-33 stays open** (Go/Python unstarted). `ubiquex-docs` gained
+  `cli/sdk-gen.mdx`, a new "Authoring in TypeScript" section on
+  `cli/resolve.mdx`, and a full `sdk/index.mdx` rewrite from its "not yet
+  released" placeholder -- every example real; `mint validate`/`mint
+  broken-links` clean. See docs/sdk.md's own "Slices 5-7: built" section
+  and STATE.md for the full account, including the real transcripts.
 
 ## Strategy
 
@@ -3424,6 +3451,52 @@ check` clean for `sdk/ts/evaluator`. Next: slice 5, `ubx resolve
 --from-code` CLI wiring — `sdkeval.Evaluate` is already a complete, real,
 tested `intent/v1` producer. See STATE.md and docs/sdk.md's own "Slice 4:
 built" section for the full account, including every probe's own output.
+
+**Session 4 (2026-07-28): slices 5–7 built — `ubx resolve --from-code`,
+real conformance golden case, a real live convergence finale. UBI-34
+closed.** `cli/resolve.go` gained `--from-code` (mutually exclusive with
+the positional intent-file argument) -- CLI wiring only, exactly as
+predicted, no resolver changes needed. `sdkeval/provenance.go` (new)
+stamps a single `intent.sources: {"kind": "document", "ref", "content_
+hash"}` entry, Go-side (the sandboxed evaluator can't hash its own
+file) -- a real, deliberate simplification from this document's own
+original "sdk"/"sdk_evaluator" kind-pair sketch: code has no LLM-adapter
+analog worth a second entry, so it reuses the exact kind the md medium
+already uses. `sdk/conformance/` built for real (`programs/ts/`,
+`golden/`, `runner/`) -- a first golden case, `payments`, with a real,
+ongoing Go regression test (`TestPaymentsGoldenCase_TS`) evaluating the
+committed program through the real Deno harness and byte-comparing
+against the committed golden fixture after canonicalizing both sides.
+
+**The live finale was run for real, not approximated**: no committed
+"golden" transcript existed anywhere from the md medium's own prior
+sessions (drafts are ephemeral, never persisted, confirmed by checking
+rather than assumed) -- so this session ran `ubx propose --from-doc
+payments.md` against the real Claude API, fresh, got a real drafted
+`aws_db_instance` (`db.t3.small`, 20 GiB, `payments_admin`, no `$ref` to
+staging at all -- the intent provider has no ledger access to query it,
+confirmed empirically), resolved it for real against the real
+`hashicorp/aws@6.54.0` schema, then authored a TypeScript program with
+the *identical* concrete values (copied from the real LLM output, not
+invented independently), evaluated and resolved it too, and compared
+both resolved `delta.creates[]` arrays through `core.CanonicalJSON` --
+**byte-identical**. `intent.summary` matched too (copied verbatim); the
+one honest, expected difference is `intent.sources`/assumptions/defaults/
+questions, exactly as slice 6's own original design predicted, now
+confirmed against real output rather than only asserted.
+
+**UBI-34 closed in Linear -- TypeScript is complete**, all seven slices
+built, tested, and live-verified. **UBI-33 stays open** -- Go (UBI-35)
+and Python (UBI-36) are unstarted; this arc's own IR model and
+canonical-JSON discipline are their shared foundation. `ubiquex-docs`
+gained `cli/sdk-gen.mdx` (new), a new "Authoring in TypeScript" section
+on `cli/resolve.mdx`, and a full rewrite of `sdk/index.mdx` from its old
+"not yet released" placeholder -- every example real, taken from this
+session's own live transcripts; `mint validate`/`mint broken-links` both
+clean. `go build/vet/test`/`gofmt -l .` clean across the whole repo.
+Both repos committed and pushed. See STATE.md and docs/sdk.md's own
+"Slices 5–7: built" section for the full account, including the real
+transcripts and the real byte-comparison.
 
 ## Deferred (explicitly not now)
 
