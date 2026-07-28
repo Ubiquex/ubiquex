@@ -801,6 +801,144 @@ future session (or a different agent entirely) reads automatically via
 CLAUDE.md, not something that depended on the same memory carrying
 forward.
 
+### Slice 6: built — the live finale (2026-07-28, session 6)
+
+**Real, live, end to end — the strongest form of the claim, not an
+approximation**, the same discipline the SDK arc's own live finale
+(docs/sdk.md) held to. Two independent legs, per this session's own
+explicit doctrine: the convergence leg runs `resolve`/`propose` against
+the real, cached `hashicorp/aws@6.54.0` schema (read-only, never
+touching a real cloud API); the render leg stays fully hermetic
+(`fakeprovider` via `UBX_PROVIDER_MIRROR`) since it needs a real
+`ship` — the exact split session 4's own incident and session 5's own
+codified rule (CLAUDE.md, docs/prompts.md) require.
+
+**The convergence leg**: a one-resource diagram —
+
+```d2
+classes: {
+  aws_db_instance: {}
+}
+db: payments {
+  class: aws_db_instance
+}
+```
+
+— `ubx propose --from-diagram payments.d2 --stack payments`, real output,
+real type inference against the real schema:
+
+```json
+{
+  "resources": [
+    { "type": "aws_db_instance", "name": "payments", "op": "create", "config": {} }
+  ]
+}
+```
+
+Resolved for real (`ubx resolve draft.json`, the same real
+`hashicorp/aws@6.54.0` schema, no `ship`) — `delta.creates[0]`, real
+output:
+
+```json
+{"config":{},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}
+```
+
+**Checked rigorously against the SDK arc's own committed golden value,
+not eyeballed** — both canonicalized via `core.CanonicalJSON`, the
+identical golden `delta.creates[0]` docs/sdk.md's own live finale
+established:
+
+```json
+{"config":{"allocated_storage":20,"db_name":"payments","engine":"postgres","instance_class":"db.t3.small","username":"payments_admin"},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}
+```
+
+`name`, `stack`, `type`, and `provider` (source **and** version) are
+byte-identical across both. **`config` is the one honest, structural,
+expected difference** — empty for the diagram, real attribute values for
+the golden — and it is *exactly* the lossy-medium rule made concrete,
+not a gap: "two mediums can never claim the same attribute"
+(docs/architecture.md's own founding framing for this arc) means a
+diagram was never going to independently reproduce `engine`/
+`instance_class`/`allocated_storage`/`db_name`/`username` from nothing,
+by design, on purpose, from session 1 onward. What a diagram *can* and
+does claim — the resource's own existence, identity, type, and
+provider — matches exactly.
+
+`diagram.Topology` (slice 5's own primitive, reused unchanged, no new
+code needed to make this claim) confirms the same thing at the
+topology-only layer the medium is actually scoped to:
+
+```json
+{"resources":[{"name":"payments","op":"create","type":"aws_db_instance"}],"stack":"payments"}
+```
+
+— agreeing with the golden's own topology-relevant fields exactly.
+**This is what "the four-medium equality" actually means for a
+topology-only producer**: not a fourth independent claim on the same
+attribute values (impossible by the medium's own design), but proof that
+a diagram never contradicts what the other three producers already
+established, and correctly identifies the same resource by type, name,
+stack, and provider. Verified directly afterward: no real AWS resources
+exist (`aws ec2 describe-vpcs`/`aws rds describe-db-instances`, both
+empty) — the convergence leg never shipped anything, exactly as
+doctrine requires.
+
+**The render leg, fully hermetic, against a real (shipped) ledger**: the
+`payments` chain — `main-vpc` and `payments-db`, `payments-db` depending
+on `main-vpc` — resolved, accepted, and shipped for real through the
+hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR`, then rendered:
+
+```d2
+classes: {
+  fake_widget
+}
+r0: "main-vpc" {
+  class: fake_widget
+  tooltip: "id: computed-id; name: main-vpc; tags: {}"
+}
+r1: "payments-db" {
+  class: fake_widget
+  tooltip: "id: computed-id; name: payments-db; tags: {}"
+}
+r1 -> r0
+```
+
+```text
+$ ubx render --stack payments --ledger-dir . --out rendered/payments.d2 --check
+render --check: rendered/payments.d2 matches the current resolved state
+```
+
+Real, unedited, `render --check` green — the projection invariant held
+for this fourth surface, matching every other CI-shaped guarantee this
+project already documents.
+
+**UBI-47 closed in Linear.** All seven of docs/diagram-medium.md's own
+implementation slices are built, tested (hermetically and live), and
+documented, closing the loop this arc's own framing opened: a diagram is
+a real, bidirectional-by-construction projection of the ledger's own
+truth — topology in, topology and annotated truth out, never a second
+source of truth for anything it can't itself author. **Phase 3 (the
+authoring frontends) is complete**: md (UBI-41), chat (UBI-46), SDK/TS
+(UBI-33/34), and now diagram (UBI-47) are all live — four independent
+producers of `intent/v1`, one shared resolved shape, exactly the
+founding thesis this whole phase set out to prove. See docs/plan.md's
+own new "Phase 3 status" section for the full scoreboard.
+
+**A real, small doc-staleness finding fixed while closing this arc, not
+left for someone else to notice**: docs/architecture.md's own headline
+sections for the md medium, the SDK program, and the diagram medium each
+still carried their own session-1 "designed... not yet implemented"
+markers, unrevised across every session that actually built them. Fixed
+in place this session for all three — a real, if minor, instance of this
+project's own "never contradict docs silently" rule applying to a
+system-model summary, not just a design decision.
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo — no new
+code this session (the live finale is a verification exercise, not an
+implementation one), so no new tests either; the existing suite (Parse,
+Emit, Topology, and both conformance directions) already covers
+everything this session's own live runs exercised.
+
 1. **The topology model + parser** — **built.** `resolver.IntentFile`
    translation (label → name, `class:` → type via `InferProvider`, edges
    → `DependsOn` for resource-to-resource edges, `@`/`external` nodes
@@ -829,21 +967,24 @@ forward.
    established (canonicalize, byte-compare, a real ongoing regression
    test). See "Slice 5: built," above, including why `fake_widget`
    throughout rather than `aws_*` this session.
-6. **Live finale**: the real `payments` stack authored as `.d2`,
-   resolved, and — this arc's own strongest possible convergence claim —
-   its resolved shape compared against the SAME golden values the md
-   medium and the SDK arc's own TypeScript program already converged on
-   (UBI-33/34 session 4's own real, live comparison), **and** rendered
+6. **Live finale** — **built.** The real `payments` stack authored as
+   `.d2`, resolved, and — this arc's own strongest possible convergence
+   claim — its resolved shape compared against the SAME golden values the
+   md medium and the SDK arc's own TypeScript program already converged
+   on (UBI-33/34 session 4's own real, live comparison), **and** rendered
    back from the ledger as an annotated `.d2` file, `render --check`
    passing against it. Four independent producers (hand-written JSON, an
    LLM-transcribed document, a typed program, and now a diagram) on one
    shared resolved shape — the complete set this project's own "every
    medium is a projection, never a second source of truth" thesis
-   promised from the start.
-7. **`ubiquex-docs`**: an authoring guide (the real worked diagram, both
-   directions) and the projection story (how `render --check` fits
-   alongside every other CI-shaped guarantee this project already
-   documents).
+   promised from the start. See "Slice 6: built — the live finale,"
+   above, for the real transcripts and the one honest, structural
+   difference (`config`) named rather than papered over.
+7. **`ubiquex-docs`** — **built.** An authoring guide (the real worked
+   diagram, both directions) and the projection story (how `render
+   --check` fits alongside every other CI-shaped guarantee this project
+   already documents) — `guides/diagram-medium.mdx` and `cli/render.mdx`,
+   session 4; both still accurate and current, confirmed this session.
 
 ## Out of scope for v1, named so it isn't assumed covered
 

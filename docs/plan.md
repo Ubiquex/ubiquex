@@ -1470,6 +1470,33 @@
   `cli/render_conformance_test.go` x1). `go build/vet/test`, `gofmt -l .`
   clean. See docs/diagram-medium.md's own "Slice 5: built" section and
   STATE.md for the full account.
+- 2026-07-28 -- UBI-47 session 6: slice 6 built -- the live finale, real
+  end to end, closing the arc. Convergence leg: a one-resource diagram
+  (`aws_db_instance` named "payments"), proposed and resolved for real
+  against the real, cached `hashicorp/aws@6.54.0` schema (never shipped,
+  per doctrine) -- `delta.creates[0]` canonicalized and checked, not
+  eyeballed, against the SDK arc's own committed golden value:
+  `name`/`stack`/`type`/`provider` byte-identical, `config` the one
+  honest, structural, expected difference (empty vs. real attribute
+  values) -- exactly the lossy-medium rule made concrete, not a gap.
+  `diagram.Topology` (slice 5, reused unchanged) confirms the same at
+  the topology-only layer the medium is actually scoped to. Render leg,
+  fully hermetic (`fakeprovider` + `UBX_PROVIDER_MIRROR`, since it needs
+  a real `ship`): the `payments` chain shipped and rendered for real,
+  `render --check` green. No real cloud resources exist afterward --
+  verified directly (`aws ec2 describe-vpcs`/`aws rds describe-db-
+  instances`, both empty), not assumed from following the rule.
+  **UBI-47 closed in Linear. Phase 3 (the authoring frontends) complete**
+  -- md (UBI-41), chat (UBI-46), SDK/TS (UBI-33/34), and diagram (UBI-47)
+  all live; see the new "Phase 3 status" section below for the full
+  scoreboard. A real, small doc-staleness finding fixed while closing:
+  docs/architecture.md's own md/SDK/diagram headline sections each still
+  said "not yet implemented" long after each medium was built -- fixed
+  in place this session. No new code this session (a verification
+  exercise, not an implementation one); existing test suite unchanged
+  and still green. See docs/diagram-medium.md's own "Slice 6: built --
+  the live finale" section and STATE.md for the full account, including
+  the real transcripts.
 
 ## Strategy
 
@@ -3651,7 +3678,7 @@ Both repos committed and pushed. See STATE.md and docs/sdk.md's own
 "Slices 5–7: built" section for the full account, including the real
 transcripts and the real byte-comparison.
 
-### Diagram medium: D2 only (UBI-47)
+### Diagram medium: D2 only (UBI-47) — closed
 
 Designed 2026-07-28, session 1, docs-first, no code — docs/diagram-
 medium.md (new) is the full design; docs/architecture.md gained a
@@ -3914,6 +3941,85 @@ runner` ×2, `cli/render_conformance_test.go` ×1, plus the existing suite
 unchanged). `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. See docs/diagram-medium.md's own "Slice 5: built" section and
 STATE.md for the full account.
+
+**Session 6 (2026-07-28): slice 6 built — the live finale, real end to
+end, closing the arc. UBI-47 closed in Linear.** Two independent legs,
+per this session's own doctrine: convergence against real schema
+(`resolve`/`propose` only, never `ship`), render fully hermetic (needs a
+real `ship`, so `fakeprovider` + `UBX_PROVIDER_MIRROR` only).
+
+**Convergence leg**: `db: payments { class: aws_db_instance }`,
+`ubx propose --from-diagram` + `ubx resolve`, real against the real,
+cached `hashicorp/aws@6.54.0` schema. Real `delta.creates[0]`:
+
+```json
+{"config":{},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}
+```
+
+Checked rigorously (`core.CanonicalJSON` on both sides, not eyeballed)
+against the SDK arc's own committed golden value
+(`{"config":{"allocated_storage":20,"db_name":"payments","engine":"postgres","instance_class":"db.t3.small","username":"payments_admin"},"name":"payments","provider":{"source":"hashicorp/aws","version":"6.54.0"},"stack":"payments","type":"aws_db_instance"}`):
+`name`/`stack`/`type`/`provider` byte-identical; `config` the one
+honest, structural, expected difference — a diagram was never going to
+independently reproduce real attribute values, by design, since
+session 1's own "two mediums can never claim the same attribute"
+framing. `diagram.Topology` (slice 5, reused unchanged, zero new code)
+confirms the same at the topology-only layer the medium is actually
+scoped to: `{"resources":[{"name":"payments","op":"create","type":"aws_db_instance"}],"stack":"payments"}`,
+matching the golden's own topology-relevant fields exactly. Verified
+directly afterward that no real AWS resources exist — the convergence
+leg never shipped anything.
+
+**Render leg, fully hermetic**: the `payments` chain (`main-vpc`,
+`payments-db` depending on it) shipped for real through `fakeprovider`,
+rendered, `render --check` green — real, unedited:
+`render --check: rendered/payments.d2 matches the current resolved
+state`.
+
+**"The four-medium equality" precisely stated, not overclaimed**: not a
+fourth independent producer of the same attribute values (structurally
+impossible for a topology-only medium, by design), but proof a diagram
+never contradicts what the other three producers established, correctly
+identifying the same resource by type, name, stack, and provider — the
+only form of convergence honestly available to this medium, and exactly
+what "every medium is a projection, never a second source of truth"
+always meant.
+
+A real, small doc-staleness finding fixed while closing, not left for a
+future session to notice: docs/architecture.md's own md-medium/SDK-
+program/diagram-medium headline sections each still carried their
+session-1 "designed... not yet implemented" markers, unrevised across
+every session that actually built them — fixed in place for all three.
+No new code this session (verification, not implementation); existing
+test suite unchanged, still green. See docs/diagram-medium.md's own
+"Slice 6: built — the live finale" section and STATE.md for the full
+account, including every real transcript.
+
+## Phase 3 status: all four authoring mediums live
+
+Phase 3 opened with UBI-41 (docs/plan.md's own 2026-07-17 design-room
+decision, above: "AI enters the product") and closes here, session 6 of
+UBI-47, with the fourth and final medium live. Each entry names its own
+ticket status precisely — a medium can be *live* (proven, real, usable
+today) while its own umbrella ticket stays open for later, demand-gated
+expansion; the two are not the same claim.
+
+| Medium | Ticket | Status | Entry point |
+| --- | --- | --- | --- |
+| Markdown (prose, LLM-transcribed) | UBI-41 | **Closed** | `ubx propose --from-doc` |
+| Chat (interactive dialogue) | UBI-46 | **Closed** | `ubx chat` |
+| SDK (typed code) | UBI-33/34 (TS) | **UBI-34 closed** — TypeScript live; UBI-33 (the multi-language umbrella) stays open for Go (UBI-35)/Python (UBI-36), demand-gated, unstarted | `ubx sdk gen` + `ubx resolve --from-code` |
+| Diagram (D2 topology) | UBI-47 | **Closed** | `ubx propose --from-diagram` + `ubx render` |
+
+Four independent `intent/v1` producers — a hand-written file, an
+LLM-transcribed document, a typed program, and a diagram — proven,
+session by session, to converge on one shared resolved shape (or, for
+the diagram medium's own topology-only scope, to never contradict it):
+the founding "every medium is a projection, never a second source of
+truth" thesis, demonstrated four times over, not just stated once at the
+start. Mermaid/other diagram formats, Go/Python SDK languages, and any
+future medium each earn their own entry the same way — the conformance-
+fixture discipline every medium above already used, never a shortcut.
 
 ## Deferred (explicitly not now)
 

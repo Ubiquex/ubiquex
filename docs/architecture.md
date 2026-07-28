@@ -2686,7 +2686,7 @@ see docs/executor.md's own session-6 addendum for the full finding and
 two further, real, GCP-specific gaps found along the way (filed as
 UBI-44 for the more serious one, a destroy that silently doesn't destroy).
 
-## Intent provider + md medium (designed, UBI-41 session 1 — docs/intent-provider.md; not yet implemented)
+## Intent provider + md medium (built, UBI-41 — docs/intent-provider.md; closed)
 
 Phase 3's opener: the first session where an LLM enters the product.
 Full design in docs/intent-provider.md (the transcription-only boundary,
@@ -2735,7 +2735,7 @@ identical adapter interface afterward (docs/plan.md's own medium-order
 decision), nearly free — same transcription job, a dialogue transcript
 instead of a file as input.
 
-## SDK program (designed, UBI-33/34 session 1 — docs/sdk.md; not yet implemented)
+## SDK program (built, UBI-33/34 — docs/sdk.md; TypeScript closed as UBI-34, Go/Python UBI-33 open)
 
 Component map #7's first real design: the first authoring frontend that
 is ordinary, typed, human-authored code rather than prose transcribed by
@@ -2789,7 +2789,7 @@ transparent, so it carries no `assumptions`/`defaults`/`questions` at
 all, by construction, a real and named divergence from the md medium's
 own design center rather than an oversight.
 
-## Diagram medium (designed, UBI-47 session 1 — docs/diagram-medium.md; not yet implemented)
+## Diagram medium (built, UBI-47 — docs/diagram-medium.md; closed)
 
 Component map #7's fourth authoring frontend, and the first that is
 bidirectional by construction. Full design in docs/diagram-medium.md
@@ -2798,7 +2798,12 @@ cross-stack grammar, a new additive `ResourceIntent.DependsOn` wire
 field, the render direction's own `render --check` contract).
 Summarized here at the system-model level, matching how every other
 headline section in this document cross-links its own detail doc rather
-than duplicating it.
+than duplicating it. **Built across sessions 1–6** (docs/diagram-
+medium.md's own "Slice N: built" sections have the full, session-by-
+session account); this header itself went stale for two sessions after
+implementation finished, then was fixed in place session 6 — a small,
+real instance of "never contradict docs silently" applying to a
+system-model summary, not just a design decision.
 
 **Text or it isn't a medium**: D2 is parseable text, parsed and emitted
 via `oss.terrastruct.com/d2`'s own narrow parser/compiler/formatter
