@@ -4,6 +4,147 @@
 
 ## Current phase
 
+**UBI-33/34 (2026-07-28), session 1, docs-first, no code: the SDK program
+— multi-language contract (UBI-33) + TypeScript design (UBI-34).** New
+arc, filed and referenced per this session's own instruction. `docs/
+sdk.md` (new) is the full design; `docs/architecture.md` gained a
+matching cross-linking headline section; `docs/plan.md` gained a
+changelog entry, a new "### SDK program" wedge subsection, and its own
+"Deferred" list's "SDK + codegen" line struck (designed now, code is
+session 2+ work). No ubiquex-docs work this session — nothing user-
+visible shipped yet (mirrors UBI-41 session 1's own precedent: pure
+design sessions don't touch the external docs site until real CLI
+surface exists to document).
+
+**Two hard constraints came pre-decided from the ticket's own design
+room and were correctly NOT relitigated**: the monorepo (`sdk/` inside
+`ubiquex-cli`, every language, one CI — golden conformance fixtures are
+the shared spec, syncing across repos would be misery) and codegen'd
+bindings generated locally by `ubx sdk gen`, never published (only the
+tiny `@ubx/sdk` runtime ever ships to npm — sidesteps Pulumi's own
+per-provider-package version-matrix pain structurally, named explicitly
+on the ticket itself).
+
+**The hermetic evaluator was decided empirically, exactly as UBI-34's own
+ticket instructed — not from documentation, from real probes run this
+session, in this environment (macOS, Node v24.18.0, a freshly `brew
+install`ed Deno 2.9.4, `isolated-vm@6.1.2` via npm).** Three candidates,
+each actually exercised against the real requirement (no net/fs/env/
+clock):
+
+- **Node's `--permission` model: disqualified, not a close call.** Zero
+  `--allow-*` flags blocks `fs`/`child_process` (confirmed: `Error:
+  Access to this API has been restricted...`) but **does not gate
+  network or environment access at all** — `process.env.HOME` read
+  cleanly, `http.get(...)`'s call site never threw, and `node --help`'s
+  own `--allow-*` flag list confirms this isn't a probe artifact: there
+  is no `--allow-net`/`--allow-env` flag in this Node version, at any
+  combination. Two of four hard requirements are structurally outside
+  what this permission model can ever enforce.
+- **Deno: chosen, with one real gap found and closed empirically.** Zero
+  `--allow-*` flags blocks `fs`/`env`/`net`(at connect/await time)/
+  subprocess by default (`NotCapable: Requires read/write/env/net/run
+  access...`, confirmed for each). **A genuine surprise, not assumed
+  away**: `await import("https://...")` (a dynamic remote import)
+  succeeded — even with `--deny-net` passed explicitly — because Deno
+  treats module resolution as a permission surface separate from
+  `fetch`/`Deno.connect`. `--no-remote` (confirmed via a second probe)
+  closes it completely. The evaluator design commits to `--no-remote`
+  plus explicit `--deny-net --deny-read --deny-write --deny-env
+  --deny-run --deny-ffi --deny-sys` unconditionally, every invocation.
+- **`isolated-vm`: the strongest structural isolation, real recorded
+  cost.** A bare V8 isolate has no `require`/`process`/`fetch` at all —
+  not gated, genuinely absent, since none of them are JS-engine
+  built-ins. But `npm install isolated-vm`'s own native build script
+  (`node-gyp-build || node-gyp rebuild`) never ran under this session's
+  own npm `allow-scripts` lockdown — a real, checked deployment-friction
+  finding (it happened to still load, likely a bundled prebuild, which
+  is exactly the "worked once by luck of the platform matrix" outcome
+  this project doesn't accept as verification) — plus no native
+  TypeScript support (needs an external transpile step) and no module
+  system (the entire host bridge has to be hand-built). Recorded as the
+  named, evaluated fallback if Deno's own OS-process isolation ever
+  proves insufficient — not re-litigated from zero later.
+- **`Date.now()`/`Math.random()` were unblocked by all three** — a
+  universal property of JS engines (built-ins, not host-mediated
+  resources), not a gap specific to whichever sandbox got picked. Closed
+  by a two-layer mechanism: an eager override inside the evaluator's own
+  injected global scope (throws `NondeterministicAPIError` immediately
+  on use, catching the common case before it ever reaches a hash
+  comparison) plus `core.DoubleRun` reused **completely unchanged** as
+  the backstop for anything the override can't foresee — run across two
+  entirely separate `deno` subprocesses (not two in-process calls),
+  which is a **stronger** guarantee than the resolver's own existing
+  `DoubleRun` use, since it also catches process-level nondeterminism an
+  in-process double-call structurally can't.
+
+**The contract: golden `intent/v1` fixtures ARE the spec, byte-identical-
+after-canonicalization is the operational test for semantic identity
+across languages.** A new, general-purpose canonical-JSON function is
+needed (factored out of `core.Hash`'s own `canonicalProposalBytes` JCS
+logic, which is Proposal-shaped and can't be reused as-is on a document
+with no `id`/`acceptance`/`status`/`delta` fields) — named as real,
+unstarted work in Implementation slices, not claimed done. The SDK
+conformance suite's own discipline is deliberately stricter than
+`intent-provider`'s own (assertion functions, not byte-diffs, because
+LLM output isn't deterministic) — a real, checked divergence: an SDK
+evaluator IS deterministic by construction (`core.DoubleRun` enforces
+it), so it gets to hold the stronger bar the original `conformance/`
+harness (UBI-9) already set for provider types.
+
+**The describe-only runtime surface and codegen design, both fully
+specified.** `@ubx/sdk`: `stack`/`resource`/`secret`/`cross`/`intent`,
+`Computed<T>` as a branded Proxy reference (never coercible to a real
+value — mirrors `$ref`'s own resolved-or-`$computed` split, and
+deliberately has no stronger runtime guarantee than `secret()`'s own
+existing, accepted gap, docs/resolver.md's Open decisions). Codegen: real
+`provider.Schema`/`Block`/`Attribute` (already-shipped, unchanged) →
+`sdk/codegen/ir`, a shared, language-neutral IR model whose one
+deliberate rule is carrying **only** the provider's real wire attribute
+name (snake_case, verbatim) — no per-language identifier convention
+baked in anywhere in the IR itself; a TS template generates the
+idiomatic camelCase binding **and** a generated `toConfig()` mapping back
+to the wire name, invisible to a program author. `ubx sdk gen` reuses
+`provider.Acquire` unchanged, writes generated bindings to disk,
+committed to git — generation is a separate, explicit, online step;
+evaluation afterward is fully offline, consistent with the hermetic
+requirement (bindings can't be network-fetched at evaluate time without
+contradicting the no-net guarantee).
+
+**A six-row adversarial table lives inside `docs/sdk.md` itself** (per
+this session's own explicit instruction, not a separate file like
+`intent-provider-adversarial.md`): nondeterminism; fs/env/net sandbox
+escape; the remote-import gap found this session, its own row rather
+than folded silently into the net row; codegen against an
+unknown/mismatched provider version (caught by `ubx resolve`'s own
+existing unowned-type checks, no bespoke second error path); a program
+throwing mid-evaluation (no partial intent ever emitted, matching the
+project's standing "one whole draft, never a partial one" rule); output
+exceeding the `intent/v1` schema (validated against the same JSON Schema
+`--from-doc` already uses, reused not duplicated).
+
+**Implementation slices (7, named, not built this session)**: shared IR +
+schema translation; `ubx sdk gen` live-verified against real
+`hashicorp/aws`; `@ubx/sdk` runtime; the evaluator harness (this
+session's own adversarial table becomes its required test program); `ubx
+resolve --from-code` CLI wiring (no resolver changes expected); the
+conformance harness's first golden case, deliberately reusing the
+existing md-medium payments fixture as its own target shape (with one
+honest, named difference: an SDK program has no interpretation step, so
+`intent.assumptions`/`defaults`/`questions` stay empty by construction —
+new `intent.sources` kind pair `sdk`/`sdk_evaluator` proposed, formal
+`docs/schema.md` pinning deliberately deferred to the slice that
+produces real content, not pinned prematurely); a live finale converging
+three independent producers (hand-written JSON, the md medium, this
+arc's own TS program) on identical resolved infrastructure.
+
+Both repos: docs/sdk.md, docs/architecture.md, docs/plan.md committed and
+pushed to `ubiquex-cli` this session. No ubiquex-docs changes (nothing
+user-visible shipped). **UBI-33/UBI-34 stay open in Linear** — this was
+session 1 of an explicitly multi-session ticket, not a closing session.
+
+## Current phase (previous)
+
 **UBI-46 (2026-07-28), one session, closed: the chat medium — `ubx chat`, dialogue capture, `ubx why --dialogue` — riding UBI-41's own `Adapter`/`DraftWithRetry` interface with zero changes to it, exactly as that arc's own closing comment predicted.** New arc, filed and referenced per this session's own instruction (Linear issue "Chat medium: dialogue capture + interactive drafting," team ubiquex). Design-first, as an amendment to the existing docs/intent-provider.md (not a new doc), per the session's own explicit instruction — see its new "Amendment: the chat medium (UBI-46)" section for the full design record; this entry covers what was actually built and verified.
 
 **The "rides nearly free" claim, confirmed empirically, not just asserted.** `DraftRequest.Content` already being "just bytes" rather than "a file path" — UBI-41's own load-bearing decision — turned out to be exactly sufficient: the entire chat medium was built with zero changes to `Adapter`, `DraftRequest`, or `DraftWithRetry`. The only new code that touches drafting at all is `intentprovider/dialogue.go`'s `Dialogue.Transcript()`, which formats accumulated turns as a numbered sequence (`"[Turn 1]: ...\n\n[Turn 2]: ...\n\n"`) and hands that as `Content` to the unmodified driver, plus a one-line generalization of the Claude adapter's own framing text (`"Document:\n\n%s"` → `"Document or conversation transcript:\n\n%s"`) and one new system-prompt paragraph teaching the model to read numbered turns as a growing conversation where a later turn overriding an earlier one always wins, recorded explicitly in `intent.assumptions` naming both.
