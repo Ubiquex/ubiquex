@@ -4,6 +4,152 @@
 
 ## Current phase
 
+**UBI-40 (2026-07-29), session 3 of the read-only projection quartet:
+`ubx stats` built and closed in Linear.**
+
+The thesis metrics, self-measured from any ledger — the product proving
+itself with the user's own data. `core.Stats` (new `core/stats.go`)
+folds proposals by kind, acceptance-method split, attribution coverage,
+mean time-to-decision, and the headline number, **signed-flow drift
+resolution %** — `docs/plan.md`'s own month-6 thesis metric (">60%
+validates proposals as the unit of change; <20% falsifies cheaply"),
+computed live.
+
+**An honest account of what this number can and can't measure, worked
+out by reading the real code before writing a single line of this
+command — not assumed, and a significant fraction of this session's own
+time deliberately spent here before touching the keyboard.** `core.
+Ledger.Append` requires an `id`, which only the accept path ever
+assigns — confirmed directly, not inferred — so the ledger, by
+construction, contains ONLY accepted proposals. There is no durable
+record anywhere in this system of a drift `ubx scan` detected but a
+human never accepted, and none of a drift the tool was simply never
+pointed at (`--surface-as`'s own GitHub issue/PR is the one real
+external-persistence mechanism that comes close, but nothing anywhere
+reads its open/closed state back — using it would mean building a new
+GitHub-read integration, which this quartet's own house rule ("read-only
+projections over data the ledger already has") rules out for this
+ticket). This means the TRUE month-6 thesis measurement — comparing
+against independently-known real-world drift counts — needs external
+ground truth this command structurally cannot supply on its own. Named
+explicitly, in the code's own doc comment, in the rendered human output
+itself, and in ubiquex-docs — never silently claimed as a number this
+function can't actually produce.
+
+**What IS honestly, meaningfully computable from ledger data alone, and
+what this function actually reports**: walk every address's own ordered
+sequence of drift-related touches (`drift_adopt`/`drift_revert`, in
+chain order). Each `drift_adopt` is one surfaced-drift event, classified
+by whatever (if anything) followed it for that same address — an
+immediately following `drift_revert` (an explicit, deliberate close-out,
+"resolved: reverted"), any other later drift-related touch (almost
+always the resource drifted again — never explicitly reverted, but no
+longer the address's own current state either, "resolved: adopted/
+superseded," a real resolution path, the team's own practical "just
+accept the new reality each time" behavior, not an oversight), or
+nothing later at all ("open").
+
+**A real gap found and fixed before it shipped, caught by re-reading
+the real generator code rather than assuming "adopt then later revert"
+was the only real-world shape a drift could take.** An early draft only
+ever counted `drift_adopt` proposals as "surfaced" events, silently
+undercounting every drift a team resolved by reverting OUTRIGHT.
+Confirmed by reading `core/scan.go`'s own `GenerateRevertProposal` and
+`docs/architecture.md`'s own "Revert path" section directly: `ubx scan
+--propose both` generates `drift_adopt` and `drift_revert` as
+ALTERNATIVE responses to the SAME freshly detected drift, sharing one
+parent — only one is ever accepted. A team that chooses to revert a
+drift from the very first scan never has an accepted `drift_adopt` for
+that instance at all; under the original design, such a drift would have
+contributed NOTHING to the metrics despite being fully, deliberately
+resolved. Fixed: a `drift_revert` that does not directly follow a
+`drift_adopt` for the same address is now its own independent
+surfaced-and-resolved event. Caught before any test even ran, during the
+design pass itself — but a real hermetic test
+(`TestStats_StandaloneRevert_CountsAsOwnResolvedEvent`) locks it in as a
+permanent regression guard regardless.
+
+Attribution coverage and resolution rate are deliberately independent
+metrics, confirmed by a real test rather than just asserted: an
+unattributed drift still fully counts toward (and can still resolve) the
+signed-flow number; it only lowers the separate attribution-coverage
+percentage. `--since`/`--until` (RFC3339) window by `Acceptance.
+AcceptedAt` (the ledger-entry timestamp); mean time-to-decision measures
+the separate gap from `Resolution.ResolvedAt` to that same acceptance
+moment, per proposal, meaned only over samples with both timestamps
+parseable — the real sample count always shown alongside it, never a
+silently-partial average. Never itself an exit-1 concept (a report is
+never a "finding" the way `ubx verify`/`ubx status --drift` produce
+one) — exit 0 on any successful report, including an empty ledger, exit
+2 on a genuine error (a malformed `--since`/`--until`, a ledger I/O
+failure).
+
+**A second real gap, caught during final review before anything was
+committed or pushed — the ticket's own "destroyed addresses count in
+history, excluded from 'open'" detail line, missed on the first pass and
+found by re-checking the ticket text against the actual implementation
+rather than assuming the first design was complete.** An open-ended
+`drift_adopt` (nothing drift-related ever touched that address again)
+whose address was LATER destroyed was still counting as "open," even
+though the resource itself no longer exists. Fixed: it now counts in
+history (`ByKind`/`TotalProposals` tally every proposal unconditionally,
+regardless of what happens to the address afterward) but is excluded
+from both "open" and "resolved" — genuinely moot, not either — gated on
+the resource's own real *shipped* destroy transition
+(`shippedDestroyFold`, the identical gate `FoldState`'s own tombstone
+fold already uses), never assumed from a `Delta.Destroys` entry's mere
+presence in an unshipped proposal.
+
+Fourteen hermetic `core` tests (`core/stats_test.go`): empty ledger,
+single-proposal edge, drift open, drift adopted/superseded (via a real
+second drift before any revert), drift reverted via a direct
+adopt-then-revert pair, the standalone-revert regression guard above,
+stale sibling proposals from `--propose both`-shaped generation counted
+exactly once (the other, unaccepted, never enters the ledger at all —
+confirmed structurally impossible to double count), a destroyed address
+excluded from open (the second gap above, its own dedicated regression
+test), unattributed drift lowering coverage but not resolution,
+attributed drift raising coverage, time-to-decision sampling,
+`--since`/`--until` windowing, per-stack filtering, and mixed schema
+versions in one chain. Six hermetic `cli` tests (`cli/stats_test.go`):
+empty ledger, a real end-to-end drift-open scenario built via `ubx
+scan`/`ubx accept` against the hermetic `fakeprovider` (not just direct
+`core` calls), `--json` shape, RFC3339 window filtering, an invalid
+`--since` exiting 2, and real attribution coverage rendering. `go
+build/vet/test`, `gofmt -l .` clean across the whole repo.
+
+Live-verified by hand against a real hermetic ledger too, deliberately
+constructed to exercise all three resolution states in one report: one
+resource drifted once and left open; a second drifted, then drifted
+AGAIN before any revert (superseded); a third drifted and was explicitly
+reverted. Real output: `Signed-flow drift resolution: 67% (2 of 3
+surfaced drift(s) resolved -- 1 adopted/superseded, 1 reverted, 1 still
+open)` — matching the hermetic tests' own assertions exactly, reproduced
+live against the real built binary.
+
+**ubiquex-docs updated in the same session, per protocol**: new
+`cli/stats.mdx` (usage, flags, the real 3-drift-state transcript above,
+`--json` shape, a dedicated "How 'resolved' is defined" section spelling
+out the classification rules precisely, an explicit callout on what the
+number can't measure, attribution-independence, and time-window
+semantics). `docs.json` slotted `cli/stats` into the existing "Observe"
+group, after `cli/blame`. `mint validate`/`mint broken-links` both
+clean.
+
+**Internal docs**: `docs/architecture.md` gained a new "Thesis metrics"
+headline section, including the honest scope account and the real gap
+found and fixed. `docs/plan.md` gained a changelog entry and UBI-40's
+own close documented under "The read-only projection quartet" wedge
+subsection (alongside UBI-38/39's).
+
+**UBI-40 closed in Linear.** Session 4 (UBI-48, `ubx addresses`) is
+next — the active-address inventory: referenceable attributes from
+schema inspection, copy-paste-ready `$cross` forms, cross-stack via the
+same resolution `$cross` itself already uses. The final ticket in this
+quartet; UBI-38/UBI-39/UBI-40 are already closed, UBI-48 closes it out.
+
+## Current phase (previous)
+
 **UBI-39 (2026-07-29), session 2 of the read-only projection quartet:
 `ubx blame <address>` built and closed in Linear.**
 
