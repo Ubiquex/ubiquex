@@ -152,12 +152,26 @@ type IntentFile struct {
 // Config is the resource's full desired end-state (never a hand-computed
 // before/after diff), whose values may be plain JSON or one of $ref/
 // $cross/$secret/$ephemeral (docs/schema.md's amendment).
+//
+// DependsOn was added 2026-07-28 (docs/schema.md -- "Amendment:
+// ResourceIntent.DependsOn", UBI-47): canonical addresses this resource
+// depends on, with no config-attribute opinion at all -- a topology-only
+// dependency signal the diagram medium's own lossy-medium rule needs
+// (a diagram edge names no attribute, so it can't be expressed as a
+// $ref/$cross the way every other dependency source is). Purely
+// additive and optional; every other producer of an intent file (a
+// hand-written JSON file, `ubx propose --from-doc`'s own draft, `ubx
+// resolve --from-code`'s own evaluated document) leaves it empty and is
+// completely unaffected -- see unionDependsOn (refs.go) for how it
+// merges into the identical dependency graph $ref/$cross scanning
+// already builds, not a second one.
 type ResourceIntent struct {
-	Type     string          `json:"type"`
-	Name     string          `json:"name"`
-	Op       string          `json:"op"`
-	Config   json.RawMessage `json:"config"`
-	Provider *ProviderHint   `json:"provider,omitempty"`
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	Op        string          `json:"op"`
+	Config    json.RawMessage `json:"config"`
+	Provider  *ProviderHint   `json:"provider,omitempty"`
+	DependsOn []string        `json:"depends_on,omitempty"`
 }
 
 const (
@@ -449,6 +463,10 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
 		}
 		edges, err := scanRefEdges(raw, batch)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		edges, err = unionDependsOn(edges, e.ri.DependsOn, batch, destroySet, l, e.addr)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}

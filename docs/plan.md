@@ -1353,6 +1353,26 @@
   -- see docs/diagram-medium.md's own "Implementation slices" and
   STATE.md for the full account including the real D2-library probe
   output.
+- 2026-07-28 -- UBI-47 session 2: slices 1-2 built -- the topology
+  parser (new `diagram/` package) and `ResourceIntent.DependsOn` (`core/
+  resolver`), both real code, hermetically and end-to-end tested.
+  `DependsOn` landed exactly as designed: unions into the same
+  dependency graph `$ref`/`$cross` scanning already builds, reusing
+  `ErrRefNotFound`/`ErrRefToDestroyTarget` verbatim. The parser
+  (`d2compiler.Compile` -> classify -> translate -> `resolver.
+  IntentFile`) landed with one real, honest correction found while
+  building it: a topology-only edge into a cross-stack reference node
+  cannot express a real `$cross` marker at all in v1 (no config
+  attribute to hold it, no ordering-based substitute the way DependsOn
+  provides intra-stack) -- a genuine structural limit, not a bug; it
+  becomes a visible, non-blocking note instead. Two end-to-end tests
+  confirm real `Parse` output resolved through the real, unmodified
+  `resolver.Resolve` actually triggers `ErrCycleDetected`/
+  `ErrDuplicateResource` -- the adversarial table's own row 1/3 claims
+  proven, not just asserted. `go build/vet/test`, `gofmt -l .` clean (8
+  new tests in `core/resolver`, 16 new in `diagram`). See docs/diagram-
+  medium.md's own "Slices 1-2: built" section and STATE.md for the full
+  account.
 
 ## Strategy
 
@@ -3608,6 +3628,35 @@ set this project's own "every medium is a projection" thesis promised.
 See docs/diagram-medium.md's own "Implementation slices" and STATE.md
 for the full session account including the real D2-library probe
 output.
+
+**Session 2 (2026-07-28): slices 1-2 built -- the topology parser
+(`diagram/`, new top-level package) and `ResourceIntent.DependsOn`
+(`core/resolver`), both real code, hermetically tested end to end.**
+`DependsOn` landed exactly as designed, no corrections -- merges into
+the *same* dependency graph `$ref`/`$cross` scanning already builds,
+reusing `ErrRefNotFound`/`ErrRefToDestroyTarget` verbatim for a dangling
+or destroy-conflicting dependency. The topology parser
+(`d2compiler.Compile` -> a two-pass classify-then-translate walk ->
+`resolver.IntentFile`) built exactly as designed too, with one real,
+honest correction found while building it: this document's own original
+text left "how a topology-only edge reaches a $cross marker" unresolved,
+and on inspection it doesn't resolve at all -- `$cross`'s own wire shape
+requires a specific config attribute, and a topology-only edge names
+none, with no ordering-based substitute the way `DependsOn` provides for
+intra-stack edges. **A cross-stack edge cannot express a real `$cross`
+marker in v1** -- a genuine structural limit, not a bug; the reference
+node is still fully recognized (type, `ledger_dir` resolved and
+existence-checked), and an edge into it becomes a visible, non-blocking
+note instead, matching this arc's own ambiguity-as-content design center
+applied to a structural limitation rather than an interpretive gap. Two
+end-to-end tests (`diagram/integration_test.go`) confirm real `Parse`
+output, resolved through the real, unmodified `resolver.Resolve`,
+actually triggers `ErrCycleDetected`/`ErrDuplicateResource` -- the
+adversarial table's own "reused, not reinvented" claims for rows 1 and 3
+proven, not just asserted. `go build/vet/test`, `gofmt -l .` clean (8 new
+tests in `core/resolver`, 16 new in `diagram`). See docs/diagram-
+medium.md's own "Slices 1-2: built" section and STATE.md for the full
+account.
 
 ## Deferred (explicitly not now)
 

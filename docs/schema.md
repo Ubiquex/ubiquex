@@ -1574,12 +1574,17 @@ canonical hashing rules, domain prefix, or excluded-field list — the
 identical reasoning every prior additive input-side amendment in this
 document already relied on.
 
-**Real code lands in a later UBI-47 session** (docs/diagram-medium.md's
-own "Implementation slices," slice 2) — pinned here now because it's
-load-bearing to the diagram medium's whole design center working at
-all, the same "a design session amends this document when a wire-format
-decision is genuinely load-bearing" precedent UBI-41 session 1 already
-set.
+**Real code landed 2026-07-28, UBI-47 session 2** (`core/resolver/
+resolver.go`'s own `ResourceIntent.DependsOn` field, `core/resolver/
+refs.go`'s new `unionDependsOn`) — exactly as designed above, no
+corrections needed. Eight hermetic tests
+(`core/resolver/dependson_test.go`) plus two end-to-end tests
+(`diagram/integration_test.go`) confirming real `diagram.Parse` output,
+resolved through the real, unmodified `resolver.Resolve`, actually
+triggers `ErrCycleDetected`/`ErrDuplicateResource` via this one shared
+dependency graph — not merely asserted at the unit level. See
+docs/diagram-medium.md's own "Slices 1–2: built" section for the full
+account.
 
 ## Canonical hashing — RATIFIED v1
 

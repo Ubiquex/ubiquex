@@ -160,6 +160,62 @@ func scanRefEdges(v interface{}, batch map[string]*batchEntry) ([]string, error)
 	return edges, nil
 }
 
+// unionDependsOn merges ri.DependsOn (docs/schema.md's own "Amendment:
+// ResourceIntent.DependsOn", UBI-47 -- a topology-only dependency signal
+// with no config-attribute opinion, the diagram medium's own real need)
+// into edges, the same set scanRefEdges already derived from $ref/$cross
+// markers found inside config -- one dependency graph, not two.
+//
+// Exactly the same two-case split scanRefEdges/resolveRef already
+// established for $ref: an address inside this batch becomes a real
+// dependency-graph edge (execution ordering, cycle detection, and the
+// resolved output's own depends_on); an address already recorded in the
+// ledger (not in this batch) is validated to exist -- via the identical
+// l.FoldState lookup resolveRef's own non-batch $ref case already uses --
+// but never added as an edge, since there's nothing to wait for, it
+// already exists. An address that resolves to neither is ErrRefNotFound,
+// the identical sentinel a dangling $ref already produces, not a new
+// diagram-specific one -- a broken reference is a broken reference
+// regardless of which mechanism named it. destroySet mirrors resolveRef's
+// own ErrRefToDestroyTarget check: depending on something this same
+// proposal is also destroying is never sound, whichever mechanism named
+// the dependency.
+func unionDependsOn(edges []string, dependsOn []string, batch map[string]*batchEntry, destroySet map[string]bool, l *core.Ledger, from core.Address) ([]string, error) {
+	if len(dependsOn) == 0 {
+		return edges, nil
+	}
+	seen := make(map[string]bool, len(edges))
+	for _, e := range edges {
+		seen[e] = true
+	}
+	out := append([]string(nil), edges...)
+	for _, to := range dependsOn {
+		if destroySet[to] {
+			return nil, fmt.Errorf("%w: %s (named in %s's own depends_on)", ErrRefToDestroyTarget, to, from)
+		}
+		if _, inBatch := batch[to]; inBatch {
+			if !seen[to] {
+				seen[to] = true
+				out = append(out, to)
+			}
+			continue
+		}
+		addr, ok := core.ParseAddress(to)
+		if !ok {
+			return nil, fmt.Errorf("%w: %q is not a valid address (named in %s's own depends_on)", ErrRefNotFound, to, from)
+		}
+		_, found, err := l.FoldState(addr)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: depends_on %s: %w", from, to, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("%w: %s (named in %s's own depends_on)", ErrRefNotFound, to, from)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // resolveValue walks a resource's raw config (or a sub-value of it) and
 // replaces every $ref/$cross/$secret/$ephemeral marker per
 // docs/resolver.md's own rules. path is the dot-notation attribute path to

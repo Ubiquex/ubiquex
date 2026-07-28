@@ -309,11 +309,18 @@ stack" row: a clear, named parse-time failure (which node, which stack
 name, which directory was checked and wasn't there) — never a silent
 skip, never a guessed path.
 
-Once resolved, a reference node becomes exactly the existing `$cross`
-marker (`docs/schema.md`'s UBI-27 amendment) wherever the diagram's own
-edges point at it — see `depends_on`, next, for how a topology-only
-edge reaches a marker at all without guessing which config attribute it
-belongs in.
+**Correction, found during implementation (session 2), not assumed
+correct from this paragraph's own original draft**: a reference node
+does NOT become a real `$cross` marker wherever a diagram's own edges
+point at it — `$cross`'s own wire shape lives inside a specific config
+attribute path by definition, and a topology-only edge names no
+attribute, the identical gap `DependsOn` exists to close for intra-stack
+edges but genuinely can't close here (there's no "wait for creation"
+ordering concern to substitute for the missing attribute the way an
+intra-stack dependency has). An edge into a reference node becomes a
+visible, non-blocking note instead — a real, named v1 limitation, not a
+silent drop. See "Slices 1–2: built," below, for the full account of
+finding this gap and the exact fix.
 
 ## A genuinely new, additive wire capability: `ResourceIntent.DependsOn`
 
@@ -447,17 +454,94 @@ implementer isn't left re-deriving why a row needs no new code.
 
 ## Implementation slices, toward a real `.d2` payments stack
 
-1. **The topology model + parser**: `d2/topology` (or similar — exact
-   package layout a real, later decision) wrapping `d2parser`/
-   `d2compiler`, producing an internal node/container/edge model;
-   translation into `resolver.IntentFile` (label → name, `class:` →
-   type via `InferProvider`, edges → `DependsOn`, `@`/`external` nodes →
-   `$cross`); the ambiguity-as-content path (uninferable/ambiguous
-   nodes → `questions[]`, never a hard refusal). Hermetic unit tests
-   against hand-written `.d2` fixtures, no ledger needed.
-2. **`ResourceIntent.DependsOn`**: the schema.md amendment above, real
-   code in `core/resolver` — union into the existing dependency graph,
-   verified against the cycle-detection adversarial row directly.
+### Slices 1–2: built (2026-07-28, session 2)
+
+Both real code, hermetically tested, including two real end-to-end
+tests confirming the adversarial table's own "reused, not reinvented"
+claims actually hold when `diagram.Parse`'s own output flows into the
+real, unmodified `resolver.Resolve` — not just asserted from design.
+
+**`ResourceIntent.DependsOn`** (`core/resolver/resolver.go`,
+`core/resolver/refs.go`'s new `unionDependsOn`): built exactly as
+designed, no corrections needed. Merges into the *same* dependency graph
+`scanRefEdges` already builds from `$ref`/`$cross` scanning — an address
+inside the current resolve batch becomes a real graph edge (execution
+ordering, cycle detection, the resolved output's own `depends_on`); an
+address already recorded in the ledger (not in the batch) is validated
+via `l.FoldState` — the identical lookup `resolveRef`'s own non-batch
+`$ref` case already uses — but never added as an edge, matching that
+exact case's own existing behavior (nothing to wait for). A dangling
+address (neither in the batch nor the ledger) reuses `ErrRefNotFound`
+verbatim, and a dependency naming something the same proposal also
+destroys reuses `ErrRefToDestroyTarget` verbatim — both the identical
+sentinels a `$ref`'s own equivalent failure already produces, confirming
+"one dependency graph, not two" is real, not just a claim. Eight
+hermetic tests (`core/resolver/dependson_test.go`).
+
+**The topology parser** (`diagram/parse.go`, new top-level package,
+matching this project's own established shape for a substantial,
+independently testable subsystem — `intentprovider/`, `sdkeval/`,
+`sdk/codegen/`). `d2compiler.Compile` → a two-pass walk (classify every
+leaf node first, translate edges second, since an edge's own
+translation needs both endpoints already classified) → `resolver.
+IntentFile`. Built exactly as designed: containers skipped entirely
+(`len(obj.ChildrenArray) == 0` gates every leaf), node names from
+`obj.Label.Value` falling back to `obj.ID`, type inference via
+`resolver.InferProvider` completely unchanged, uninferable/ambiguous
+nodes excluded from `Resources` with a `blocking: true` `core.Question`
+naming the node, cross-stack reference nodes (`@`-label or `class:
+external`) recognized and excluded from `Resources` too, `../<stack>`
+convention + `--neighbor-ledger`-shaped override map for `ledger_dir`
+resolution (a real `os.Stat` existence check — a deliberate, named scope
+boundary: confirming the *directory* exists, not the deeper "is this
+exact address recorded there" check `$cross`'s own resolve-time
+`cross_stack_pin` mechanism performs, since v1's own cross-stack edges
+never produce a real `$cross` marker at all — see the correction below).
+Thirteen hermetic unit tests (`diagram/parse_test.go`) plus three
+integration tests (`diagram/integration_test.go`) that feed real `Parse`
+output through the real, unmodified `resolver.Resolve` and confirm
+`ErrCycleDetected`/`ErrDuplicateResource` fire exactly as the
+adversarial table's own rows 1 and 3 claim — `Parse` itself deliberately
+never detects either case, proving the "one shared mechanism" claim
+rather than merely asserting it.
+
+**A real, honest correction found during implementation, not papered
+over**: this document's own original text for cross-stack edges ("see
+`depends_on`... for how a topology-only edge reaches a marker at all
+without guessing which config attribute it belongs in") turned out not
+to actually resolve on inspection — `$cross`'s own wire shape has no
+form reducible to a bare address the way an intra-stack dependency does
+(there is no "wait for creation" ordering concern to substitute for the
+missing attribute; a `$cross` marker's whole reason for existing is
+that it *lives in* a specific attribute, resolved to a concrete value
+immediately). Thought through properly rather than forced: **a
+topology-only edge into a reference node cannot express a real `$cross`
+marker in v1 at all** — a genuine, structural limit of what a
+diagram can say, not a bug to route around. The reference node is still
+fully recognized (type, `ledger_dir`, existence-checked), and an edge
+into it becomes a **visible, non-blocking `core.AmbiguityNote`** (a
+`defaults[]` entry) naming the relationship and stating plainly that it
+isn't wired into the wire-level output — reviewable content, not a
+silently dropped edge, matching this arc's own "ambiguity as visible
+content" design center exactly, just applied to a structural limitation
+instead of an interpretive gap. Named explicitly in "Out of scope,"
+below, not left implicit.
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo (8 new
+tests in `core/resolver`, 16 new in the new `diagram` package).
+
+1. **The topology model + parser** — **built.** `resolver.IntentFile`
+   translation (label → name, `class:` → type via `InferProvider`, edges
+   → `DependsOn` for resource-to-resource edges, `@`/`external` nodes
+   recognized and excluded from `Resources`); the ambiguity-as-content
+   path (uninferable/ambiguous nodes → `questions[]`, never a hard
+   refusal). See "Slices 1–2: built," above, for the real package
+   (`diagram/`, not `d2/topology`) and the one real correction found
+   while building it.
+2. **`ResourceIntent.DependsOn`** — **built.** The schema.md amendment
+   above, real code in `core/resolver` — union into the existing
+   dependency graph, verified against the cycle-detection adversarial
+   row directly, end to end, not just at the unit level.
 3. **`ubx propose --from-diagram <file>.d2 --stack <stack>
    [--neighbor-ledger <stack>=<path>]`**: CLI wiring, matching `--from-
    doc`'s own shape and flag conventions exactly; writes a draft file,
@@ -500,3 +584,18 @@ something else — a real, small UI choice, not a wire-format one, left to
 implementation); fuzzy/free-text label-based type guessing (a class-less
 node stays a visible question, never a best-effort NLP guess — a
 permanent design boundary, not a v1 limitation to revisit).
+
+**A real, load-bearing v1 limitation found while building slice 1
+(session 2), not a design gap left unaddressed**: an edge from a create
+into an external/reference node never produces a real `$cross` marker
+in the resolved output — `$cross`'s own wire shape requires a specific
+config attribute to live in, and a topology-only edge names none, with
+no ordering-based substitute the way `DependsOn` provides for
+intra-stack edges (a cross-stack reference resolves to a concrete
+pinned value immediately; there's nothing to "wait for" to redirect the
+missing-attribute problem toward). The relationship is still fully
+visible (a `defaults[]` note naming both ends), just not wired into
+`config`. A hand-written intent file, or a resource authored via the
+SDK/md medium, remains the way to express a real `$cross` reference
+today — revisit only if a real, concrete design for "which attribute"
+emerges, not by inventing a synthetic one.
