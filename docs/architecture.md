@@ -2953,6 +2953,78 @@ has never recorded at all, or a genuine error. `ubx blame` never itself
 signals exit 1 — there is no "wrong" answer a re-derived attribute
 history could surface the way `ubx verify` finds broken hashes.
 
+## Thesis metrics (built, UBI-40 — `ubx stats`)
+
+The product proving itself with the user's own data — folding the
+ledger into the decision-flow metrics the wedge itself is measured by:
+proposals by kind, acceptance-method split, attribution coverage, mean
+time-to-decision, and the headline number, **signed-flow drift
+resolution %** — this project's own `docs/plan.md` names it directly as
+the month-6 thesis metric ("`>60%` validates proposals as the unit of
+change; `<20%` falsifies cheaply").
+
+**An honest account of what this number can and can't measure, worked
+out by reading the real code before writing a single line of this
+command, not assumed.** `core.Ledger.Append` requires an `id`, which
+only the accept path ever assigns — the ledger, by construction,
+contains *only* accepted proposals. There is no durable record anywhere
+in this system of a drift that `ubx scan` detected but a human never
+accepted, and none of a drift the tool was simply never pointed at.
+`ubx stats` cannot see either, and says so plainly rather than
+pretending its own number is the full, true, real-world thesis
+percentage — that measurement, as originally framed, needs independent
+ground truth (comparing against what a team already knows happened) no
+offline ledger fold can supply on its own. What `ubx stats` *does*
+report, honestly: of every drift this ledger has any record of at all,
+what fraction reached an explicit close-out.
+
+**The resolution model itself, and a real gap found and fixed while
+building it.** Walk each address's own ordered sequence of drift-related
+touches. Every `drift_adopt` is one surfaced-drift event, classified by
+whatever (if anything) touched that same address next: an immediately
+following `drift_revert` is an explicit, deliberate close-out
+("resolved: reverted"); any other later drift-related touch (almost
+always the resource drifted again) means it was never explicitly
+reverted but is no longer the address's own current state either
+("resolved: adopted/superseded" — a real resolution path, the team's own
+practical "just accept the new reality each time," not an oversight);
+nothing later at all leaves it "open." The gap: an early draft only ever
+counted `drift_adopt` proposals as "surfaced" events, silently
+undercounting every drift a team resolved by reverting **outright** — a
+real, common shape confirmed by re-reading `core/scan.go`'s own
+`GenerateRevertProposal` and this document's own "Revert path" section:
+`ubx scan --propose both` generates `drift_adopt` and `drift_revert` as
+*alternative* responses to the same freshly detected drift, sharing one
+parent, and only one is ever accepted — a team that chooses revert from
+the very first scan never has an accepted `drift_adopt` for that
+instance at all. Fixed: a `drift_revert` that does not directly follow a
+`drift_adopt` for the same address is its own independent
+surfaced-and-resolved event, not silently dropped.
+
+**A second real gap, caught during final review before anything shipped
+or pushed**: a destroyed address's own open-ended `drift_adopt` (nothing
+drift-related ever touched it again) was still counting as "open," even
+though the resource itself no longer exists — there's nothing left to
+act on. Fixed: it counts in history (proposal totals/by-kind breakdowns
+tally every proposal unconditionally) but is excluded from both "open"
+and "resolved" — moot, not either — gated on the resource's own real
+*shipped* destroy transition, the identical gate `FoldState`'s own
+tombstone fold already uses, never assumed from a `Delta.Destroys`
+entry's mere presence.
+
+Attribution coverage and resolution rate are deliberately independent
+metrics, never conflated — an unattributed drift still fully counts
+toward (and can still resolve) the signed-flow number; it only lowers
+the separate attribution-coverage percentage. `--since`/`--until`
+(RFC3339) window by `Acceptance.AcceptedAt`, the ledger-entry timestamp;
+time-to-decision measures the gap from `Resolution.ResolvedAt` (when the
+proposal's own content was resolved) to that same acceptance moment, per
+proposal, meaned only over samples with both timestamps parseable — never
+silently averaged over a partial, unnamed subset. Never itself an exit-1
+concept (a report is never a "finding" the way `ubx verify`/`ubx status
+--drift` produce one) — 0 on any successful report, including an empty
+ledger, 2 on a genuine error.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

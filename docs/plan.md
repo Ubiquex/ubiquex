@@ -1556,6 +1556,51 @@
   guard) plus 7 `cli` tests (JSON shape, invalid/unknown address exit 2).
   Live-verified by hand against a real hermetic ledger too. `go build/
   vet/test`, `gofmt -l .` clean. See STATE.md for the full account.
+- 2026-07-29 -- UBI-40 (session 3 of the read-only projection quartet):
+  `ubx stats` built -- the thesis metrics, self-measured from any
+  ledger. `core.Stats` (new `core/stats.go`) folds proposals by kind,
+  acceptance-method split, attribution coverage, mean time-to-decision,
+  and the headline signed-flow drift-resolution % -- `docs/plan.md`'s
+  own month-6 thesis number, computed live. **An honest account, not a
+  hand-wave**: since `core.Ledger.Append` requires an id (only ever
+  assigned by the accept path), the ledger contains ONLY accepted
+  proposals -- there is no durable record of a drift detected but never
+  accepted, so the TRUE thesis percentage (needing independent
+  ground-truth comparison) can't be fully supplied by an offline fold
+  alone; named explicitly rather than silently claimed. What IS reported:
+  of every drift the ledger has any record of, walk each address's own
+  ordered drift-touch sequence and classify each `drift_adopt` event by
+  whatever followed it -- reverted, adopted/superseded, or still open.
+  **A real gap found and fixed while building it**: an early draft only
+  counted `drift_adopt` proposals as "surfaced" events, silently
+  undercounting every drift resolved by reverting OUTRIGHT -- confirmed
+  by re-reading `core/scan.go`'s own `GenerateRevertProposal` and
+  `docs/architecture.md`'s own "Revert path" section: `--propose both`
+  generates adopt/revert as ALTERNATIVES sharing one parent, only one
+  ever accepted, so a team choosing revert from the start never has an
+  accepted drift_adopt for that instance. Fixed: a standalone
+  drift_revert (not directly following a drift_adopt) is its own
+  independent surfaced-and-resolved event. Attribution coverage and
+  resolution rate are deliberately independent -- an unattributed drift
+  still fully resolves, only lowering the separate coverage %. A second
+  real gap, caught during final review before anything was pushed: a
+  destroyed address's own open-ended drift_adopt was still counting as
+  "open" -- fixed to count in history (ByKind/TotalProposals) but be
+  excluded from both open and resolved (moot once the resource itself is
+  gone), gated on the resource's own real shipped-destroy transition,
+  the same way `FoldState`'s own tombstone fold already is.
+  `--since`/`--until` (RFC3339) window by `Acceptance.AcceptedAt`. 14
+  hermetic `core` tests (every adversarial row: drift open, adopted/
+  superseded, reverted via a direct adopt-then-revert pair AND a
+  standalone revert, stale sibling proposals counted once, unattributed
+  drift lowering coverage but not resolution, a destroyed address
+  excluded from open, mixed schema versions, time windows, empty/
+  single-proposal edges) plus 6 `cli` tests (JSON shape, invalid
+  `--since`, real end-to-end via `ubx scan`/`ubx accept`).
+  Live-verified by hand against a real hermetic ledger showing all three
+  resolution states at once (1 open, 1 superseded, 1 reverted -- 67%).
+  `go build/vet/test`, `gofmt -l .` clean. See STATE.md for the full
+  account.
 
 ## Strategy
 
@@ -4117,6 +4162,26 @@ fold's own state as an empty non-nil map rather than `nil`, which would
 have silently defeated `FoldState`'s own "skip a Modification with no
 genesis create yet" guard; caught by a test written specifically to
 mirror that guard, not assumed safe because the shapes looked similar.
+
+**UBI-40 (`ubx stats`) — closed, session 3.** See docs/architecture.md's
+own "Thesis metrics" section for the full system-model account and
+STATE.md for the session-by-session detail. `core.Stats` folds the
+ledger into decision-flow metrics, headlined by signed-flow drift
+resolution % -- honestly scoped to what an offline ledger fold can
+actually see (only accepted proposals; a drift never accepted leaves no
+trace), named explicitly rather than silently claimed as the full,
+true, real-world thesis percentage. A real gap found and fixed while
+building it: an early draft only counted `drift_adopt` proposals as
+"surfaced" drift events, silently undercounting every drift a team
+resolved by reverting outright (`--propose both`'s own adopt/revert
+alternatives, sharing one parent, only one ever accepted) -- fixed by
+also counting a standalone `drift_revert` as its own independent
+surfaced-and-resolved event. A second gap, caught during final review
+before anything was pushed: a destroyed address's own open-ended
+drift_adopt was still counting as "open" -- fixed to count in history
+but be excluded from both open and resolved (moot once the resource
+itself is gone), gated on a real shipped-destroy transition, the same
+way `FoldState`'s own tombstone fold already is.
 
 ## Deferred (explicitly not now)
 
