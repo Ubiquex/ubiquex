@@ -2889,6 +2889,70 @@ code. Works against both git-local and remote `LedgerStore` backends
 identically (`Chain`/`Read`/`ApplyAttempts` are all implemented purely
 in terms of the store-agnostic `LedgerStore` interface already).
 
+## Per-attribute provenance (built, UBI-39 — `ubx blame`)
+
+Git blame for infrastructure, and structurally impossible for either
+category of tool it replaces: a state-file tool has no history at all
+(state is overwritten in place, every prior value already gone by the
+time you'd want to ask who set it); a log aggregator has plenty of
+history but no *signed decision* to point at — an event stream, not an
+accepted proposal. `ubx blame <address>` renders, per attribute of a
+resource's current folded state: the value, which proposal **most
+recently set that specific attribute** (never just "the resource's own
+latest touching proposal" — two different attributes on the same
+resource can legitimately have two different answers), and who's
+accountable for it.
+
+**Mechanically the same fold `core.Ledger.FoldState` already performs,
+except it never throws away which proposal contributed which leaf.**
+`FoldState` seeds a base state from a create (adoption's own snapshot,
+or — UBI-29's own discovery path — a shipped change-create's real
+post-apply provider result, never the create's own `config`, which may
+carry stale `$computed` markers or simply predate the applied values
+entirely), then applies each later `Modification.After` as a dot-path
+patch on top, in ledger order, discarding provenance as it merges.
+`core.Blame` runs the identical walk and, for every dot-path leaf,
+remembers which proposal (and, for a create, which precise timestamp —
+the real apply time for a shipped create, the observation time for an
+adoption) last touched it — a real, additive walk over existing
+machinery, no new storage, exactly as scoped.
+
+**A tampered-adjacent property, not a security one, but real
+nonetheless**: a `$redacted` marker survives the fold byte-for-byte
+(redaction happens at the provider boundary, long before a value ever
+reaches the ledger — `FoldState`'s own output can already contain
+`$redacted` markers directly, confirmed by reading the real fold code
+rather than assumed), so `ubx blame` never has anything of its own to
+redact. What it *does* add is showing that a redacted attribute still
+has a full, real provenance trail — who changed the secret and when,
+without ever seeing the material — exactly the ticket's own stated
+point.
+
+**A shipped destroy tombstones the address the same way `FoldState`'s
+own "current truth" view does — except blame keeps going.** `ubx blame`
+on a destroyed address renders a tombstone note naming which proposal
+destroyed it and when, then blames the **final pre-destroy state** —
+the last-known provenance for every attribute, not discarded just
+because the resource itself is gone. A later re-create under the
+identical address (a real, legitimate lifecycle) correctly resets both
+the folded state and its provenance fresh, the same re-seed `FoldState`
+itself already performs.
+
+**`drift_adopt`'s own attribution rides `core.AttributeDrift`'s existing
+`intent.sources` output unchanged** (`cloudtrail`/`gcp_audit` kinds) —
+`ubx blame` surfaces every matched actor an attributed drift proposal
+names, never collapsed to a single guessed cause, the same "never guess
+a single cause" posture `AttributeDrift` itself already holds. A `local`
+acceptance is reported as itself (no signer identity exists to show — a
+real, named limit of what this project's own local-accept tier records,
+not an oversight); `pr_merge` shows its real approvers.
+
+Exit codes: 0 whether the address is currently live or destroyed (both
+are complete, real answers, never a "finding"); 2 an address the ledger
+has never recorded at all, or a genuine error. `ubx blame` never itself
+signals exit 1 — there is no "wrong" answer a re-derived attribute
+history could surface the way `ubx verify` finds broken hashes.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

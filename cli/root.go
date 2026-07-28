@@ -29,6 +29,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newSDKCmd())
 	root.AddCommand(newRenderCmd())
 	root.AddCommand(newVerifyCmd())
+	root.AddCommand(newBlameCmd())
 
 	return root
 }

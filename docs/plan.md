@@ -1522,6 +1522,40 @@
   `pr_merge` integration -- derived, both inconclusive shapes, and a
   forged-acceptance row using a real second git commit). `go build/vet/
   test`, `gofmt -l .` clean. See STATE.md for the full account.
+- 2026-07-29 -- UBI-39 (session 2 of the read-only projection quartet):
+  `ubx blame <address>` built -- per-attribute provenance, git blame for
+  infrastructure. `core.Blame` (new `core/blame.go`) runs the identical
+  fold `core.Ledger.FoldState` already performs (create seeds a base
+  state -- UBI-29's own apply-record discovery path for a shipped
+  change-create, never `Delta.Creates`' own possibly-stale `config` --
+  each later `Modification.After` patches it in ledger order), except it
+  never discards which proposal contributed which leaf: every dot-path
+  attribute is independently attributed to whichever proposal most
+  recently touched IT specifically, not just the resource's own latest
+  touching proposal. A `$redacted` marker survives the fold byte-for-byte
+  (redaction happens at the provider boundary, long before the ledger
+  ever sees it) -- blame shows full provenance for a redacted attribute
+  without ever touching the material. A shipped destroy tombstones the
+  address the same way `FoldState`'s own current-truth view does, except
+  blame keeps going: it renders the tombstone note and blames the FINAL
+  pre-destroy state, not a cleared one. `drift_adopt` attribution surfaces
+  every matched `cloudtrail`/`gcp_audit` actor `core.AttributeDrift`'s
+  existing output already names, never collapsed to one guessed cause.
+  **A real bug found and fixed before it shipped, caught by a test that
+  mirrors `FoldState`'s own exact guard rather than assuming equivalence**:
+  an early draft initialized the running fold state as an empty non-nil
+  map instead of `nil`, which would have defeated `FoldState`'s own
+  "skip a Modification with no genesis create yet" guard entirely --
+  found by deliberately re-reading `FoldState`'s real code once more
+  before trusting the mirror, not assumed correct because the shapes
+  looked similar. 10 hermetic `core` tests (every adversarial row --
+  multi-touch latest-wins per attribute, CloudTrail actor, redacted
+  provenance, shipped-create UBI-29 genesis, an unshipped create
+  correctly NOT found, a destroyed address blaming its final pre-destroy
+  state, pr_merge approvers -- plus the modify-with-no-genesis regression
+  guard) plus 7 `cli` tests (JSON shape, invalid/unknown address exit 2).
+  Live-verified by hand against a real hermetic ledger too. `go build/
+  vet/test`, `gofmt -l .` clean. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4072,6 +4106,17 @@ read, across the whole codebase, until this session. Same gap for apply
 records (`core.ApplyHash`). `core.IsRedactedValue` had only ever checked
 a `$redacted` marker's own *outer* shape; nothing checked the inner
 `{"sha256": <64-hex>}` shape until now.
+
+**UBI-39 (`ubx blame`) — closed, session 2.** See docs/architecture.md's
+own "Per-attribute provenance" section for the full system-model account
+and STATE.md for the session-by-session detail. `core.Blame` mirrors
+`FoldState`'s own fold exactly, adding only per-leaf provenance tracking
+on top — no new storage, per the ticket's own scope. A real bug found
+and fixed before it shipped: an early draft initialized the running
+fold's own state as an empty non-nil map rather than `nil`, which would
+have silently defeated `FoldState`'s own "skip a Modification with no
+genesis create yet" guard; caught by a test written specifically to
+mirror that guard, not assumed safe because the shapes looked similar.
 
 ## Deferred (explicitly not now)
 
