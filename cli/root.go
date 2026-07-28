@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newVerifyCmd())
 	root.AddCommand(newBlameCmd())
 	root.AddCommand(newStatsCmd())
+	root.AddCommand(newAddressesCmd())
 
 	return root
 }

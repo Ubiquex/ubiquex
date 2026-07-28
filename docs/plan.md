@@ -1601,6 +1601,57 @@
   resolution states at once (1 open, 1 superseded, 1 reverted -- 67%).
   `go build/vet/test`, `gofmt -l .` clean. See STATE.md for the full
   account.
+- 2026-07-29 -- UBI-48 (session 4, final ticket of the read-only
+  projection quartet): `ubx addresses` built -- a flat,
+  copy-paste-ready `$cross` inventory. `core.Ledger.Addresses` (new
+  `core/addresses.go`) re-walks `Chain()` with `Fleet`'s own exact
+  discovery rules (`resolution.inputs` plus a shipped change-proposal
+  create/destroy), deliberately NOT a `Fleet` extension -- `Fleet`'s own
+  single-pass walk drops a tombstoned address the moment it sees the
+  shipped destroy, with no toggle to keep it, so `--all`'s own
+  "tombstoned, annotated" requirement needed the identical walk with that
+  one behavior inverted rather than a bolted-on extension point an
+  unrelated caller could misuse. `cli/addresses.go` fetches each active
+  address's real referenceable-attribute list from the provider schema at
+  its own RECORDED `(source, version)` -- never whatever `[providers]`
+  pins today -- via the same `ParseSource`/`Acquire`/`Launch`/`.Schema()`
+  sequence `loadDiagramProviders`/`ubx sdk gen` already use, cached once
+  per distinct pair; deliberately not `providerPool`, which refuses to
+  launch any version but the currently-pinned one ("re-resolve against
+  the current config") -- exactly backwards here. Computed-only
+  attributes marked from the schema's own `Computed` flag; an address
+  with no recorded provider (adopted/drift-only) or a provider that fails
+  to launch degrades to an explained "attributes unknown" annotation, not
+  a failed command.
+  **Cross-stack resolution -- the same base-store/`[ledger.external]`
+  mechanism `$cross`'s own "stack" form uses, reimplemented at the CLI
+  layer, not reused wholesale**: read directly from `core.Ledger`'s own
+  constructors, `BaseStore()`/`ExternalStack()` are proven to be nothing
+  but a pass-through of `cfg.Ledger.Store`/`cfg.Ledger.External` -- and
+  `openLedgerForStack` (every earlier quartet command's own opener)
+  structurally can't reach an arbitrary neighbor by name for a git-local
+  store, since it ignores its own `stack` argument in that branch
+  entirely. `resolveAddressesLedger` treats an omitted or
+  this-workspace's-own (`cfg.Stack`) name as local (opened straight from
+  `--ledger-dir`), a remote `[ledger]` store as always routed through
+  `openLedgerForStack`'s own existing addressing regardless of name
+  (already correct for any stack there), and any other git-local name as
+  resolved via `cfg.Ledger.External[name]` alone, mirroring
+  `resolveCross`'s exact `deriveStackAddress`-then-`core.OpenRef`
+  sequence -- refused with a teaching error naming every stack this
+  workspace's own config actually knows (its own declared stack, plus
+  every `[ledger.external]` key) when no override exists, the identical
+  refusal `resolveCross` itself already gives. 6 hermetic `core` tests
+  (active/tombstoned/re-create-after-destroy/stack-filter/provider
+  plumbing) plus 9 `cli` tests (attribute list + computed marking +
+  `$cross` forms via a real `UBX_PROVIDER_MIRROR`-launched fake provider,
+  `--all` annotation, adopted-resource schema-missing degrade, JSON
+  shape, unknown-stack teaching error with and without any config at
+  all, cross-stack resolution via a real `[ledger.external]` override
+  opening a second, physically separate ledger directory, and the
+  reflexive own-stack case). `go build/vet/test`, `gofmt -l .` clean. All
+  four quartet tickets (UBI-38/39/40/48) now closed -- see the wedge
+  section below for the scoreboard. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4182,6 +4233,40 @@ drift_adopt was still counting as "open" -- fixed to count in history
 but be excluded from both open and resolved (moot once the resource
 itself is gone), gated on a real shipped-destroy transition, the same
 way `FoldState`'s own tombstone fold already is.
+
+**UBI-48 (`ubx addresses`) — closed, session 4 (final).** See
+docs/architecture.md's own "Referenceable-address inventory" section for
+the full system-model account and STATE.md for the session-by-session
+detail. `core.Ledger.Addresses` re-walks `Chain()` with `Fleet`'s own
+exact discovery rules rather than extending `Fleet` itself, since
+`Fleet`'s single pass has no toggle to keep a tombstoned address around
+once seen — the one new behavior `--all` needed. The provider-schema half
+deliberately bypasses `providerPool` (which refuses to launch any version
+but the currently-pinned one) in favor of the same
+`ParseSource`/`Acquire`/`Launch`/`.Schema()` sequence `loadDiagramProviders`/
+`ubx sdk gen` already use, fetching each address's own RECORDED
+`(source, version)` rather than today's `[providers]` pin. The one
+genuinely new mechanism this ticket needed: `--stack <neighbor>`
+resolving via the identical base-store/`[ledger.external]` logic
+`$cross`'s own "stack" form uses (`core/resolver/refs.go`'s
+`resolveCross`) — proven, by reading `core.Ledger`'s own constructors,
+to be nothing but a pass-through of `cfg.Ledger.Store`/
+`cfg.Ledger.External`, and proven that `openLedgerForStack` (every
+earlier quartet command's own opener) structurally can't reach an
+arbitrary neighbor by name for a git-local store at all, so this
+required new CLI-layer resolution logic, not a reuse — refused with a
+teaching error naming every stack this workspace's own config actually
+knows when no `[ledger.external]` override exists, mirroring
+`resolveCross`'s own identical git-local refusal exactly.
+
+**Quartet complete.** All four read-only projections — `ubx verify`
+(chain integrity), `ubx blame` (per-attribute provenance), `ubx stats`
+(the thesis metrics), `ubx addresses` (the `$cross`-authoring inventory)
+— are built, hermetically tested, documented in both repos, and closed
+in Linear as of this session. Zero new wire formats, zero new provider
+interaction beyond schema reads already established elsewhere, zero
+`ubx ship` against anything but `fakeprovider` across all four sessions —
+the arc landed exactly as scoped when it was filed.
 
 ## Deferred (explicitly not now)
 

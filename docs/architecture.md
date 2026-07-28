@@ -3025,6 +3025,76 @@ concept (a report is never a "finding" the way `ubx verify`/`ubx status
 --drift` produce one) — 0 on any successful report, including an empty
 ledger, 2 on a genuine error.
 
+## Referenceable-address inventory (built, UBI-48 — `ubx addresses`)
+
+The fourth and final read-only projection quartet ticket, born from a
+real UX gap: authoring a `$cross` reference (`{"stack": "networking",
+"to": "@networking.aws_vpc.main.id"}`) requires knowing the neighbor's
+exact address ahead of time, and until this ticket that meant manual
+archaeology through `ubx status`/`ubx why` output. `ubx addresses [--stack
+<s>] [--all] [--json]` is a flat, copy-pasteable inventory of every
+active address in a stack, each rendered alongside a copy-paste-ready
+`$cross` form per attribute — `@payments.aws_db_instance.staging.endpoint`
+— drawn from the real provider schema.
+
+**Two halves, split along the same core/cli boundary every other
+provider-touching command already draws.** `core.Ledger.Addresses(stack,
+includeTombstoned)` is the pure ledger fold — which addresses exist, each
+with its own recorded `*ProviderRef` (UBI-43's "provider field returns"
+amendment, the same source `ubx status`'s own Fleet already reads).
+Deliberately not a `Fleet` extension: `Fleet`'s own single-pass walk
+discards a tombstoned address the moment it sees the shipped destroy, and
+has no toggle to keep it around — `--all`'s own "tombstoned, annotated"
+requirement needed the identical discovery walk (`resolution.inputs` plus
+a change proposal's own shipped create/destroy) with that one behavior
+inverted, so `core/addresses.go` re-walks `Chain()` itself rather than
+bolting an extension point onto `Fleet` an unrelated caller could
+misuse. The second half — which attributes are referenceable on each
+address, and whether each is computed-only — lives in `cli/addresses.go`,
+which fetches the real provider schema at the address's own **recorded**
+`(source, version)` pair, not whatever `[providers]` happens to pin
+today: `providerPool` was deliberately not reused here, since
+`providerPool.Get` *refuses* to launch a version other than the
+currently-pinned one ("re-resolve against the current config") — exactly
+backwards for an inventory whose whole point is showing what a resource
+was actually built against, which may be older, or from a source no
+longer declared at all. Fetched via the same
+`provider.ParseSource`/`Acquire`/`Launch`/`.Schema()` sequence
+`loadDiagramProviders`/`ubx sdk gen` already use, cached once per
+distinct `source@version` pair actually seen across the inventory. An
+address with no recorded provider (adopted or drift-only, never a real
+shipped create) or whose provider fails to launch degrades to an
+explained "attributes unknown" annotation, never a failed command — one
+resource's own gap doesn't block the rest of the inventory.
+
+**Cross-stack resolution — the same base-store/`[ledger.external]`
+mechanism `$cross`'s own "stack" form uses, reimplemented at the CLI
+layer.** `core/resolver/refs.go`'s own `resolveCross` reads a resource's
+neighbor purely through `l.BaseStore()`/`l.ExternalStack(name)` — proven,
+by reading `core.Ledger`'s own constructors, to be nothing but a
+pass-through of `cfg.Ledger.Store`/`cfg.Ledger.External`, no other
+derivation. `openLedgerForStack` (every earlier quartet command's own
+ledger opener) can't reach an arbitrary neighbor by name at all for a
+git-local store — it ignores its own `stack` argument entirely in that
+branch, always opening `ledgerDir` unconditionally — so `--stack
+<neighbor>` needed genuinely new resolution logic, not a reuse:
+`resolveAddressesLedger` (`cli/addresses.go`) treats a name that's either
+omitted or matches this workspace's own declared stack (`cfg.Stack`) as
+local (opened straight from `--ledger-dir`, exactly like every other
+quartet command), a remote `[ledger]` store as always routed through
+`openLedgerForStack`'s own existing `<store>/<stack>/` addressing
+regardless of name (already correct for any stack, including this one),
+and any other name — a git-local workspace naming a genuinely different
+stack — resolved via `cfg.Ledger.External[name]` alone, mirroring
+`resolveCross`'s own exact `deriveStackAddress`-then-`core.OpenRef`
+sequence. A git-local workspace with no matching `[ledger.external]`
+entry has no base to resolve against at all and is refused with a
+teaching error naming every stack this workspace's own config actually
+knows the name of (its own declared stack, plus every `[ledger.external]`
+key) — the identical refusal `resolveCross` itself already gives
+(`TestResolve_CrossStack_ByStackName_NoBaseIsGitLocal_Refused`), not a
+silent guess.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
