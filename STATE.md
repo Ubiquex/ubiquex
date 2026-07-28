@@ -4,6 +4,81 @@
 
 ## Current phase
 
+**UBI-47 (2026-07-28), session 3: slice 3 built — `ubx propose
+--from-diagram <file>.d2 --stack <stack>` CLI wiring (`cli/
+propose.go`), matching `--from-doc`'s own shape and flag conventions
+exactly.** Pure CLI glue over session 2's own `diagram.Parse`: no
+corrections to that design needed. `newProposeCmd` gained `--from-
+diagram`, `--summary`, `--neighbor-ledger`; the mutual-exclusivity
+check is now three-way (`proposal.json` arg / `--from-doc` /
+`--from-diagram`). `runProposeFromDiagram` reads the file, requires a
+real `[providers]` table (`loadDiagramProviders`, new standalone
+helper — deliberately NOT a refactor of `cli/resolve.go`'s own inline
+provider-loading block, matching `cli/sdk.go`'s own precedent of a
+command owning its provider-loading logic; closes each client
+immediately after fetching its schema, confirmed safe since
+`newSchemaInspector` only needs the already-fetched static `*provider.
+Schemas` value, not a live client), calls `diagram.Parse`, appends a
+single `"document"`-kind `intent.sources` entry
+(`intentprovider.HashDocument`, reused unchanged — the same
+single-entry precedent the SDK arc's `stampDocumentSource`
+established), renders ambiguity via `cli/intentrender.go`'s existing
+`renderAmbiguity` completely unchanged (it already operates on
+`*resolver.IntentFile`, exactly what `diagram.Parse` returns — zero new
+rendering code needed), and writes the draft. Two-step, not one-step:
+stops at the draft the same way `--from-doc` does, never
+auto-resolving — deliberately not `--from-code`'s own one-step shape,
+since a diagram parse can produce real, visible ambiguity (an
+uninferable node type, or the `$cross` structural-limitation note) that
+needs the same human-review checkpoint the md medium's own ambiguity
+gets.
+
+Five hermetic CLI tests (`cli/propose_from_diagram_test.go`): missing
+`[providers]` rejected naming it; missing `--stack` rejected; three-way
+mutual exclusivity enforced; a real end-to-end run via the
+`UBX_PROVIDER_MIRROR` seam (`cli/sdk_test.go`'s own mechanism, real
+`fakeprovider` binary) proving sources pinning, the `$cross` note
+rendering, and `--neighbor-ledger` resolving a real cross-stack
+reference all wire correctly; an unambiguous diagram renders the plain
+"no assumptions, defaults, or open questions" message with a
+`--summary` override honored verbatim. `go build/vet/test`,
+`gofmt -l .` clean across the whole repo.
+
+**Also live-verified by hand, twice, beyond the test suite**: once
+against the hermetic `fakeprovider` mirror (same shape as the tests),
+and once against the REAL, already-locally-cached `hashicorp/aws@6.54.0`
+provider binary (`~/.ubx/providers/...`) — a real `payments.d2` with
+`aws_vpc`/`aws_db_instance` nodes parsed into a real draft with a real
+`depends_on` entry, a cross-stack-edge `.d2` producing the real
+`Defaults (1):` `$cross`-limitation note verbatim, a class-less node
+producing the real blocking question text, and all three error paths
+(`--stack` missing, `[providers]` missing, mutual exclusivity) checked
+against the real built binary. Every transcript embedded in this
+session's ubiquex-docs updates below is this real output, not invented.
+
+**ubiquex-docs updated in the same session, per protocol** (`/Users/
+roozbeh/Ubiquex/ubiquex-docs`): `cli/propose.mdx` gained the third
+`--from-diagram` mode throughout (usage block, flags table, a new
+"Example: transcribing a diagram" section with the real payments.d2
+transcript above, a "Cross-stack references and the `$cross` note"
+subsection, and diagram-specific entries in "When resolution fails").
+New `guides/diagram-medium.mdx` (the md-medium guide's own shape,
+mirrored deliberately): setup, writing a diagram, parsing it, the
+ambiguity-as-content section (class-less-node question, cross-stack
+`$cross`-limitation note, both with real transcripts), "What happens
+next" using the current `[providers]`-config `ubx resolve` invocation
+shape (not the older `--source`/`--provider-version` flags), and a
+Related section. `docs.json` gained a new "Diagram-Driven Authoring" nav
+group (deliberately separate from "AI-Assisted Authoring" — this medium
+has no LLM in its path at all) holding the new guide page. `mint
+validate` and `mint broken-links` both clean. Committed and pushed in
+ubiquex-docs (separately from ubiquex-cli, its own repo).
+
+UBI-47 stays open in Linear — slice 4 (the emitter + `ubx render
+--check`) is next.
+
+## Current phase (previous)
+
 **UBI-47 (2026-07-28), session 2: slices 1–2 built — the topology
 parser (new `diagram/` package) and `ResourceIntent.DependsOn` (`core/
 resolver`), both real code, hermetically and end-to-end tested.**
