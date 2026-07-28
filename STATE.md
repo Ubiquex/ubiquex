@@ -4,6 +4,109 @@
 
 ## Current phase
 
+**UBI-47 (2026-07-28), session 5: slice 5 built — `diagram.Topology`
+(`diagram/topology.go`, new) and conformance fixtures (`payments` as
+fixture #1, both directions), plus the CLAUDE.md/docs/prompts.md line
+codifying session 4's own ship-verification rule. Fully hermetic
+throughout, per this session's own explicit instruction.**
+
+`Topology` is the "topology hash" concept's own first real code —
+previously only described in prose (docs/diagram-medium.md): `core.
+CanonicalJSON` over `resources[]` (type, name, op, depends_on) + stack,
+sorted by `(type, name)` internally (never relying on the caller having
+handed resources in a stable order, even though `Parse`'s own output
+already is one — a general "did the meaning change" primitive
+shouldn't assume that), excluding `intent.summary`/`sources`/ambiguity
+content and `config` entirely. Five unit tests
+(`diagram/topology_test.go`).
+
+**Conformance fixtures, `payments` as fixture #1, both directions,
+deliberately split across two packages — not an oversight**:
+
+- **Parse direction** (`diagram/conformance/golden/payments.d2` ↔
+  `payments-topology.json`, tested in new `diagram/conformance/runner/`,
+  package `runner`, mirroring `sdk/conformance/runner`'s own shape
+  exactly): the real, unmodified `Parse` → `Topology`, canonicalized,
+  byte-compared against the committed topology fixture. Fully self-
+  contained — no subprocess, no real provider binary at all:
+  `diagram.Parse`'s own type inference only ever calls `SchemaInspector.
+  HasType` (never `IsComputed`/`IsSensitive`, which only matter once a
+  resource's own config VALUES get resolved, and a diagram never authors
+  any), so a tiny hermetic fake schema (declaring only `fake_widget`)
+  suffices. Two tests: the golden case itself, and a determinism guard
+  (parsing the identical golden diagram three times must produce byte-
+  identical topology).
+- **Render direction** (the identical topology, shipped for real through
+  the hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR`, emitted,
+  byte-compared against new `diagram/conformance/golden/payments-
+  rendered.d2`) lives in `cli/render_conformance_test.go` instead, a
+  deliberate package split, reasoned through explicitly rather than
+  defaulted into: `Emit` needs a real, shipped `Fleet` entry (`FoldState`
+  only reports "live" after a real apply — confirmed by reading the real
+  code, not assumed), which needs the full `core/executor.Applier`
+  adapter (`Schema`/`Configure`/`ReadResource`/`PlanResourceChange`/
+  `ApplyResourceChange`, with real redaction and diagnostic-to-
+  `TerminalError` classification) that already exists, correct and
+  tested, in `cli/stateadapter.go`. Reimplementing an independent copy of
+  that adapter purely to keep both conformance directions physically
+  under one roof would risk a real, silent divergence from the one
+  implementation every other ship path already relies on, for no benefit
+  over importing the SAME `diagram/conformance/golden/` fixtures by
+  relative path instead (which is exactly what `cli/
+  render_conformance_test.go` does). One test: the golden render case,
+  built via the identical `resolve → accept → ship → render` shape
+  `cli/render_test.go` already established, then byte-compared.
+
+**A real, deliberate, documented departure from every other medium's own
+"payments" fixture — worth naming explicitly, not silently done**: both
+golden `.d2` files use `fake_widget` throughout, never `aws_vpc`/
+`aws_db_instance` the way the md medium's and SDK arc's own `payments`
+fixtures do. This session's own explicit instruction was "hermetic only
+— no real cloud this slice," a direct, standing consequence of session
+4's own real AWS incident. A real `hashicorp/aws` schema fetch alone is
+read-only and safe in isolation (exactly what session 4's own
+`resolve`/`propose` calls against it correctly were) — but conformance
+fixtures are exactly the kind of "just checking it still works" context
+where a verification session's own scope tends to creep toward `ship`
+without that being the actual intent, as session 4 itself proved.
+Building both golden fixtures against `fake_widget` throughout removes
+that temptation structurally rather than relying on discipline alone.
+Reconciling this fixture's own values with the `aws_*` golden values
+every other medium already converged on is explicitly named as slice 6's
+own job (the "live finale"), not this one's — named here so it isn't
+mistaken for an already-closed convergence claim.
+
+**The standing ship-verification rule from session 4's own incident, now
+codified where every future session actually reads it, not just in an
+external memory file**: CLAUDE.md's own "Code conventions" section
+gained a new bullet, and docs/prompts.md's own "Rules embedded in every
+session" section gained a matching line — `ubx ship` (or anything else
+reaching a provider's own `ApplyResourceChange`, a real apply) is never
+run against a real cloud provider for live verification, demos, or doc
+transcripts, even one already credentialed on the machine; only the
+hermetic `fakeprovider` binary via `UBX_PROVIDER_MIRROR`.
+`resolve`/`propose`/`sdk gen` (schema-fetch or draft-only, never
+applying) remain safe against a real provider. This was previously only
+a standing memory outside this repo (session 4's own feedback memory,
+still in place) — now load-bearing project doctrine any future session,
+or a different agent entirely working from this repo alone, reads
+automatically via CLAUDE.md rather than depending on that memory
+carrying forward.
+
+Eight new tests total (`diagram/topology_test.go` ×5,
+`diagram/conformance/runner` ×2, `cli/render_conformance_test.go` ×1).
+`go build/vet/test`, `gofmt -l .` clean across the whole repo. No real
+cloud touched anywhere this session — verified directly before
+finishing, not just assumed from following the new rule.
+
+UBI-47 stays open in Linear — slice 6 (the live finale: a real `payments`
+stack authored as `.d2`, resolved, compared against the same golden
+values the md medium and SDK arc already converged on, and rendered back
+with `render --check` passing — the point where this session's own
+`fake_widget`-vs-`aws_*` fixture departure gets reconciled) is next.
+
+## Current phase (previous)
+
 **UBI-47 (2026-07-28), session 4: slice 4 built — the emitter
 (`diagram.Emit`, new `diagram/emit.go`) and `ubx render --stack <stack>
 [--out <path>] [--check]` (new `cli/render.go`), the render half of the
