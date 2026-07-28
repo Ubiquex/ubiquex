@@ -1237,6 +1237,27 @@
   fixture's own resolved shape — see docs/sdk.md's own "Implementation
   slices" and STATE.md for the full session account including the actual
   probe output.
+- 2026-07-28 — UBI-33/34 session 2: slices 1–3 built — `sdk/codegen/ir`
+  (real `provider.Schema` → IR translation, reusing `ctyjson.
+  UnmarshalType`), `sdk/codegen/templates/ts` (idiomatic TS `Config`/
+  `Attrs` interfaces + a runtime `ResourceBinding` descriptor), `ubx sdk
+  gen` (new `cli/sdk.go`; `[providers]`-driven, `sdk/generated/` default
+  output, one file per source), and `@ubx/sdk`'s own runtime
+  (`stack`/`resource`/`secret`/`cross`/`intent`, a `Computed<T>` Proxy, a
+  declarative `FieldMap` serializer -- refined from the original
+  per-binding `toConfig()` sketch after actually building it). Two real
+  bugs found by tests asserting on real output (nested blocks silently
+  excluded from `Config`; a scalar-map field's own keys wrongly run
+  through wire-name translation), both fixed with regression tests;
+  docs/schema.md's own stale `$secret` inner-shape example corrected in
+  passing. Live-verified against the real, already-cached
+  `hashicorp/aws@6.54.0` (1,682 types, zero errors) and
+  `hashicorp/time@0.9.2` (a hand-written program against the real
+  generated output, `deno check`/`deno run` clean, under the exact
+  locked-down flag set docs/sdk.md's evaluator section commits to).
+  `go build/vet/test`, `gofmt -l .`, `deno test`/`deno check` all clean.
+  See docs/sdk.md's own "Implementation slices" section and STATE.md for
+  the full account.
 
 ## Strategy
 
@@ -3254,6 +3275,55 @@ deferred to the slice that actually produces that content, not pinned
 prematurely this session — named explicitly in docs/sdk.md so it isn't
 forgotten. See STATE.md for the full session account, including this
 session's own probe output.
+
+**Session 2 (2026-07-28): slices 1–3 built — `sdk/codegen/ir`, `ubx sdk
+gen`, `@ubx/sdk`'s own runtime.** Real code, real tests, real live
+verification, not a design pass. `sdk/codegen/ir.FromSchema` translates
+a real `provider.Schema` into the shared IR model, reusing `ctyjson.
+UnmarshalType` (already a `provider` package dependency) rather than
+hand-parsing raw ctyjson type specs; `sdk/codegen/templates/ts.
+GeneratedFile` renders idiomatic TypeScript `Config`/`Attrs` interfaces
+plus a runtime `ResourceBinding` descriptor per resource type. `ubx sdk
+gen` (new `cli/sdk.go`, a parent command per docs/sdk.md's own naming)
+reads `.ubx/config`'s `[providers]` table, reuses `provider.Acquire`
+unchanged, and writes one file per declared source to `sdk/generated/`
+by default (both CLI details docs/sdk.md's own "Out of scope" list had
+left open, decided for real this session). `sdk/ts/runtime/src/index.ts`
+builds `stack`/`resource`/`secret`/`cross`/`intent` and a `Computed<T>`
+Proxy exactly as designed, with one refinement found while building it:
+a declarative `FieldMap` data structure plus one shared runtime
+serializer, not N generated `toConfig()` methods (docs/sdk.md's own
+"Codegen design" section, corrected in place).
+
+Two real bugs found by tests actually asserting on real output, not
+caught by inspection: nested-block fields were silently excluded from a
+resource's own `Config` interface entirely (a `NestedBlock`-derived
+field carries no `Required`/`Optional` flags at all, a real schema fact
+the first settability rule didn't account for); a `tags`-shaped
+scalar-map field's own arbitrary keys were incorrectly run through the
+same wire-name-translation path real config fields use, throwing
+"unrecognized config field" on a key that was never supposed to be
+translated at all. Both fixed, both now covered by regression tests
+naming the exact failure mode. A third, unrelated inconsistency was
+found and fixed in passing: docs/schema.md's own founding `$secret`
+inner shape (`{"ref": ...}`) had never matched any real worked example
+since UBI-27 (`{"backend", "path"}`) — corrected there, with the real
+resolver code confirmed fully opaque to the inner shape either way.
+
+Live-verified against real schemas, not fixtures: `ubx sdk gen` against
+the real, already-cached `hashicorp/aws@6.54.0` (1,682 resource types,
+zero errors, deterministic across reruns) and `hashicorp/time@0.9.2`
+(4 types); the small `time` output then used as the real import target
+of a hand-written TypeScript program that `deno check` type-checks and
+`deno run` evaluates correctly — including a real same-stack `Computed<T>`
+`$ref` between two resources — under the exact locked-down Deno flag set
+this document's own evaluator section commits to. `go build/vet/test`
+and `gofmt -l .` clean across the whole repo; `deno test`/`deno check`
+clean for the runtime package. Next: slice 4, the evaluator harness
+itself (the Deno subprocess wrapper, the `Date`/`Math.random` override,
+`core.DoubleRun` wired in, this session's own adversarial table as its
+required test program). See STATE.md and docs/sdk.md's own
+"Implementation slices" section for the full account.
 
 ## Deferred (explicitly not now)
 

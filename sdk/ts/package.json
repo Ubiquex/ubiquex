@@ -1,0 +1,15 @@
+{
+  "name": "@ubx/sdk",
+  "version": "0.0.0",
+  "description": "Describe-only TypeScript runtime for ubx SDK programs (stack/resource/secret/cross, Computed<T>) -- docs/sdk.md. Not yet published; version 0.0.0 marks this explicitly.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./runtime/src/index.ts",
+  "types": "./runtime/src/index.ts",
+  "files": [
+    "runtime/src/index.ts"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

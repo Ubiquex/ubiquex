@@ -32,7 +32,19 @@ Value encoding (draft):
 - Concrete values: JSON scalars/objects/arrays.
 - Computed: `{ "$computed": { "from": "aws_db_instance.payments-db.endpoint" } }` —
   type-level distinction between known-now and known-after-apply.
-- Secret refs: `{ "$secret": { "ref": "db-password" } }` — NEVER material.
+- Secret refs: `{ "$secret": { "backend": "aws_secrets_manager", "path": "db-password" } }` —
+  NEVER material. (Corrected 2026-07-28, UBI-33/34: this founding draft
+  originally sketched a bare `{"ref": "db-password"}` inner shape; every
+  real worked example since — this document's own UBI-27 intent-file
+  amendment, `docs/architecture.md`'s intent file — has actually used
+  `{backend, path}` instead, and `core/resolver/refs.go`'s real
+  `asMarker`/resolve-time handling never interprets the inner object's
+  own keys at all, only that the outer envelope is exactly
+  `{"$secret": {...one object...}}` and that the attribute path is
+  schema-`Sensitive` — so neither shape was ever technically "wrong,"
+  but leaving the founding draft's stale example uncorrected was. See
+  the amendment section's own note, below, found while implementing
+  `@ubx/sdk`'s `secret()` constructor.)
 - Ephemeral: `{ "$ephemeral": true, ... }` — excluded from persisted state.
 
 ## Proposal (draft)
@@ -803,8 +815,20 @@ an end user in production.
     (`<stack>.<type>.<name>.<path>`), with `ledger_dir` as the one
     genuinely new field — consistent with `$ref`, not a second convention.
   - Existing `$secret`/`$ephemeral` markers (already drafted in this
-    document's own founding "IR — resource node" section) are used exactly
-    as originally drafted — no shape change.
+    document's own founding "IR — resource node" section) are used at the
+    **envelope** level exactly as originally drafted — no shape change
+    there. **Correction (2026-07-28, UBI-33/34):** this bullet originally
+    also claimed no change to `$secret`'s own *inner* shape, which was
+    false — the founding draft's inner shape (`{"ref": "..."}`) was never
+    actually what any real worked example used; `{"backend", "path"}` was,
+    starting with this same UBI-27 amendment's own intent-file example
+    above. `core/resolver`'s real code was, and still is, fully opaque to
+    the inner object either way (see the founding draft's own corrected
+    note, above) — the inconsistency was between two prose passages in
+    this document, not a behavior bug, found while implementing
+    `@ubx/sdk`'s `secret()` constructor against this document rather than
+    against the real resolver code, and reconciled here rather than left
+    for the next reader to independently rediscover.
 
 #### `Delta.Creates`' full node shape, pinned for real
 

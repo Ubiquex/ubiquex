@@ -1,0 +1,6 @@
+{
+  "tasks": {
+    "test": "deno test --no-remote src/",
+    "check": "deno check --no-remote src/index.ts"
+  }
+}
