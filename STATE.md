@@ -4,6 +4,141 @@
 
 ## Current phase
 
+**UBI-38 (2026-07-28), session 1 of the read-only projection quartet
+(UBI-38/39/40/48): `ubx verify` built and closed in Linear.**
+
+The auditor's command: independent full-chain verification, one command,
+entirely offline. `core.VerifyChain` (new `core/verify.go`) re-checks
+everything checkable without trusting a single already-computed value
+anywhere.
+
+**A real, genuinely new gap this command closes, confirmed by reading
+the real code before assuming coverage existed**: `core.Hash` has only
+ever been *called* to compute a proposal's own `id` (at accept time,
+`core/accept.go`'s own `validateAndHash`) — nothing anywhere in the
+codebase, on any read path (`Read`, `Chain`, `Fleet`,
+`ProposalsForAddress`), ever recomputed a stored proposal's own hash and
+compared it against its own `id`. Same gap, same shape, for
+`core.ApplyHash` against apply records. `core.IsRedactedValue` has only
+ever checked a `$redacted` marker's own *outer* shape
+(`{"$redacted": ...}`); nothing anywhere checked the inner
+`{"sha256": <64-hex>}` shape until this session. `ubx verify` is the
+first code in this project to check any of these three things for real.
+
+**The parent-chain walk is deliberately NOT `core.Ledger.Chain()`
+reused directly** — `Chain()`'s own all-or-nothing error return (any
+`Read` failure aborts the whole walk) is exactly wrong for a
+verification command: a broken link needs to be a *reported finding*
+("proposal X's parent Y doesn't exist"), not a command crash. `core.
+VerifyChain` walks `Head()` → `Read()` → `.Parent` itself, one step at a
+time, catching each `Read` failure and classifying it
+(`ErrProposalNotFound` → `missing_parent`, anything else →
+`corrupt_entry`) before continuing to report on whatever it already
+found.
+
+**A tampered proposal doesn't just fail its own check — every later
+proposal in the chain gets flagged too**, whether or not any of their
+own bytes were also touched (`tainted_descendant`). This is the ticket's
+own named adversarial row ("hash breaks + every descendant flagged"),
+and it's necessary, not decorative: a later proposal's own hash and
+parent link can check out perfectly while still resting on corrupted
+history — a human reading the report needs to know that.
+
+**Apply-record chain verification mirrors `BeginApply`'s own exact
+linkage rule, not a naive N/N-1 walk** — read directly from
+`core/apply.go` rather than assumed: a sealed attempt's own `Parent` is
+the id of the most recently *sealed* attempt before it, skipping any
+crashed/never-sealed attempt in between (whose own `Attempt` number
+still bumps the counter, but which is never itself a valid parent).
+Verified against a real crashed-then-retried sequence
+(`TestVerifyChain_ApplyChain_CrashedAttemptNotFlagged`) to prove this
+legitimate case is never mistaken for a broken chain.
+
+**Acceptance re-derivation reuses `runVerifyAcceptance` (UBI-11, `ubx
+why --verify-acceptance`) completely unchanged** — this command's own
+job is to call it once per `pr_merge`-accepted proposal the chain walk
+found, not reimplement it. `--repo-dir` opts into the git-history half
+(no network); `--github-repo` too opts into the GitHub reviewer
+re-check. Neither given, or only `--repo-dir`: reported as
+**inconclusive**, honestly, never rounded up to a pass — the ticket's
+own explicit "network-permitting, inconclusive reported honestly, never
+rounded up" requirement, checked directly against `runVerifyAcceptance`'s
+own real behavior (confirmed: no generic "inconclusive" concept existed
+anywhere in the codebase before this session; `ubx verify`'s own CLI
+layer is where that classification now lives, distinguishing "ran and
+found a problem" (exit 1) from "didn't run at all" (exit 0,
+inconclusive) from "ran and the tool itself failed" (exit 2) — three
+genuinely different outcomes `runVerifyAcceptance`'s own error return
+already encodes, just never named "inconclusive" as a first-class
+outcome before).
+
+**`local` acceptance is reported as convenience-tier** — there is
+nothing to independently re-derive a local acceptance against, and the
+ticket's own wording ("nothing to re-derive") is taken literally: it
+never counts toward `derived`, never toward `inconclusive`, and is
+never reported as anything resembling a pass/fail verdict.
+
+Nine hermetic `core` tests (`core/verify_test.go`) covering every named
+adversarial row directly: empty ledger, a valid multi-proposal chain
+(no findings), a tampered proposal byte (hash breaks + every descendant
+tainted), a dangling/missing parent, a truncated apply record, a
+legitimate crashed-apply-attempt sequence (confirmed NOT flagged),
+malformed and well-formed `$redacted` markers, and mixed schema versions
+in the same chain (a `schema_version: 1` proposal chained with a
+`schema_version: 2` one — the honest finding here, from research before
+writing this test: no real `schema_version: 1` proposal shape has ever
+existed anywhere in this project's real history to test against, since
+`Validate` has always forbidden the one thing that actually changed
+between v1 and v2 — non-empty `delta.destroys` — for every kind that
+predates the v2 shape; this test proves `VerifyChain` doesn't assume a
+fixed version, not that a genuine v1 payload round-trips correctly,
+which was never in scope here). Eight hermetic `cli` tests
+(`cli/verifycmd_test.go`): empty ledger, a valid chain, a tampered
+proposal exiting 1, `--json` shape, and the full `pr_merge` integration
+— derived (both `--repo-dir` and `--github-repo` given), both
+inconclusive shapes (neither flag, and `--repo-dir` alone), and a real
+forged-acceptance row (a second real git commit in the same repo,
+the ledger's own acceptance record hand-edited to point `merge_sha` at
+it — git commits are content-addressed and immutable, so "the file at
+that exact commit now hashes differently" can only mean the *ledger's*
+own record was tampered, not that history was rewritten; a cleaner,
+more honest adversarial construction than trying to simulate rewritten
+git history directly). All fixture-construction techniques (hand-writing
+`ledger/proposals/<id>.prop.json` and `.ubx/ledger.lock` directly,
+bypassing `Ledger.Append`) follow existing precedent already established
+in `core/ledger_test.go`/`core/apply_test.go`, confirmed by reading
+those tests first rather than inventing a new technique. `go build/vet/
+test`, `gofmt -l .` clean across the whole repo.
+
+Live-verified by hand against a real hermetic ledger (fakeprovider,
+never a real cloud provider — per the standing UBI-47 session 4/5 rule,
+this ticket's own "read-only means read-only... live legs are
+resolve/read-path only if needed at all" instruction needed no live leg
+at all here, since `ubx verify` never resolves or ships anything itself
+— every check is a pure read over already-recorded data): a clean
+`ubx verify` run, `--json`, and a real byte-tamper-then-verify catching
+it live, exit 1, exactly matching the hermetic test's own assertions.
+
+**ubiquex-docs updated in the same session, per protocol**: new
+`cli/verify.mdx` (usage, flags, two worked examples — a clean ledger and
+a tampered one, both with real transcripts above — an explanation of
+what each check actually re-verifies, the exit-code contract).
+`docs.json` slotted `cli/verify` into the existing "Observe" group
+(alongside `scan`/`status`/`why`/`render` — a pure read, same posture).
+`mint validate`/`mint broken-links` both clean.
+
+**Internal docs**: `docs/architecture.md` gained a new "Independent
+verification" headline section (matching every other significant
+capability's own cross-linking-not-duplicating pattern). `docs/plan.md`
+gained a changelog entry and a new "The read-only projection quartet"
+wedge subsection introducing the whole UBI-38/39/40/48 arc, with UBI-38's
+own close documented under it.
+
+**UBI-38 closed in Linear.** Session 2 (UBI-39, `ubx blame`) is next —
+per-attribute provenance from the `FoldState` walk.
+
+## Current phase (previous)
+
 **UBI-47 (2026-07-28), session 6: slice 6 built — the live finale, real
 end to end. UBI-47 closed in Linear. Phase 3 (the authoring frontends)
 complete.**
