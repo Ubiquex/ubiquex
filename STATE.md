@@ -4,6 +4,166 @@
 
 ## Current phase
 
+**UBI-33/34 (2026-07-28), session 3: slice 4 built — the evaluator
+harness, real `deno` subprocesses, all five in-scope adversarial rows
+confirmed.** Continuing sessions 1-2's own docs/sdk.md, per its own
+"Implementation slices" order. UBI-33/UBI-34 stay open in Linear — slice
+5 (`ubx resolve --from-code` CLI wiring) is next.
+
+**The session's own central finding, and it took getting wrong twice to
+find it for real.** Session 1's own design speculated a narrow
+`--allow-read` carve-out would be needed for the evaluator ("the
+program's own directory tree"). Early this session, a quick re-probe (a
+FIXED script statically importing one hardcoded sibling file, under full
+`--deny-read`) appeared to show no carve-out was needed at all — a
+tempting, simpler-sounding answer this session almost accepted outright.
+**It was wrong, and accepting it would have shipped a harness that
+couldn't actually work**: a fixed script can't parameterize which entry
+file to evaluate, and the real harness necessarily has to. A follow-up
+probe using the REAL shape (dynamically importing a path built from
+`Deno.args` via `new URL(...)`) failed immediately with `NotCapable` —
+even pointing at a file that had loaded fine moments earlier as a
+literal. Four more isolated probes (same directory, `../` sibling,
+absolute path, import-map-resolved bare specifier — each tested as both
+a literal AND a runtime-computed specifier) pinned the real, precise
+rule: **Deno's pre-execution static module-graph analysis needs no read
+permission at all for a LITERAL import specifier, regardless of
+directory — but a specifier assembled at runtime (even via plain string
+concatenation) always needs `--allow-read`, indistinguishable from
+arbitrary file access.** This is directory-independent — "same folder is
+trusted, elsewhere isn't" (this session's own first, wrong hypothesis)
+was never the actual rule.
+
+**The fix this drove, verified with the full realistic shape combined in
+one probe before writing any Go code against it:** `sdkeval/runner.go`
+generates a fresh runner `.ts` script per evaluation, with the entry
+file's own absolute path baked in as a literal `import` statement —
+never a fixed script dynamically importing a path read from argv. Safe
+specifically because `stack()` (slice 3, already built) defers running a
+program's own describe function to an explicit `.evaluate()` call: even
+though every statically-imported module (including the entry file)
+finishes evaluating before the runner's own top-level code runs, the
+entry file's own module body is just `export default stack(...)`, which
+touches nothing nondeterministic — the eager guards only need to be
+installed before `.evaluate()` is explicitly *called*, safely ordered in
+the runner's own body regardless of import timing. **Net result: the
+shipped evaluator flag set needs NO `--allow-read` carve-out at all** —
+`--no-remote` plus every `--deny-*` flag, unconditionally, nothing
+scoped — stronger than either session 1's original design or this
+session's own first (wrong) guess.
+
+**`core/canonical.go` gained `CanonicalJSON`/`CanonicalJSONBytes`** —
+the general-purpose canonicalizer docs/sdk.md named as real, unstarted
+work. Factored cleanly out of `canonicalProposalBytes`'s own JCS logic
+(sorted-key marshal + the int64/decimal-string number rule);
+`canonicalProposalBytes` itself now calls the new exported function
+rather than duplicating it — one canonicalizer, not two. Six new
+hermetic tests (`core/canonical_test.go`): key-order/whitespace
+insensitivity, float rejection, large-integer precision, all checked
+directly, independent of `Proposal`.
+
+**`sdk/ts/evaluator/guards.ts`** (new, harness-only, never published):
+the eager `Date`/`Math.random` override. `Date` is subclassed rather
+than wholesale-replaced, throwing `NondeterministicAPIError` only for
+the zero-argument constructor form and `.now()` — a `Date` built from
+explicit arguments (a literal timestamp, a parsed ISO string) is fully
+deterministic and stays legal, a real, deliberate distinction (checked
+with its own test) rather than an over-broad block. Five hermetic `deno
+test` cases.
+
+**`sdk/ts/embed.go`** (new `tsassets` package, at `sdk/ts/` specifically
+— Go's `//go:embed` can only reach files at or below the declaring
+file's own directory, which is why this couldn't live inside `sdkeval/`
+itself) embeds `guards.ts` + `@ubx/sdk`'s own `runtime/src/index.ts`
+directly into the `ubx` binary. `sdkeval/assets.go` extracts both to a
+temp directory once per process (`sync.OnceValues`) and writes a
+`deno.json` there mapping the bare `@ubx/sdk` specifier to the extracted
+runtime — confirmed this session that an import map discovered relative
+to the runner script governs resolution for the ENTIRE module graph,
+including a program living in a completely different directory.
+Evaluation works fully offline even though `@ubx/sdk` isn't published to
+npm yet — the runtime always ships inside the `ubx` binary itself.
+
+**`sdkeval`** (new top-level Go package — docs/sdk.md's own open "cli/ or
+a new sdkeval/ package" question, decided: a standalone package, matching
+`intentprovider/`/`cloudtrail/`/`gcpaudit/`'s own established shape,
+keeping `cli/` a thin wiring layer for slice 5, not this session's job).
+`Evaluate(ctx, entryFile) ([]byte, error)`: `core.DoubleRun` (reused
+completely unchanged) wraps two real, separate `deno` subprocess launches
+via `runOnce`, canonicalizing inside the closure exactly as docs/sdk.md's
+own "Double-run determinism" section already pinned. `runOnce` gives a
+clear, actionable error (naming `https://deno.com`) if `deno` isn't on
+`PATH`, and surfaces a failing subprocess's own stderr verbatim in every
+error (row 4's own requirement).
+
+**Row 5 ("output exceeding intent/v1 schema") needed a real correction
+too, found by actually reading the code it was supposed to reuse, not
+assumed from its name.** docs/sdk.md's own original text said this row
+would reuse "the identical schema `--from-doc`'s own structured-output
+validation already uses" (`intentprovider.IntentDraftJSONSchema`) —
+reading that package directly (not just trusting the name) found it to
+be **deliberately** a different, incompatible shape, per its own doc
+comment: a resource's own `config` is a JSON-encoded STRING there (an
+LLM structured-output API can't express an open-ended nested object),
+`sources` is entirely absent, and `intent.assumptions`/`defaults`/
+`questions` are required even when empty. None of that matches what
+`@ubx/sdk`'s own runtime actually emits. Reusing it verbatim would have
+rejected every valid SDK document. **Corrected** (`sdkeval/validate.go`):
+strict-unmarshal (`DisallowUnknownFields`) against `core/
+resolver.IntentFile` — the REAL, load-bearing Go type `ubx resolve`
+itself already parses a hand-written intent file into — plus direct
+structural checks (`schema_version`, `kind`, non-empty `stack`/
+`summary`, non-empty resource `type`/`name`, `config` decodes as a JSON
+object, and a NEW, real Go-side enforcement of this arc's own "op is
+always `create`" decision, not just a TS-side convention). One canonical
+Go source of truth for the wire shape, not a second, hand-maintained
+JSON Schema that could silently drift from it. Nine hermetic Go tests
+with hand-crafted JSON, documented honestly as defense-in-depth rather
+than a demonstrated live bypass: `@ubx/sdk`'s own runtime (slice 3)
+already preemptively blocks every one of these shapes at its own
+`resource()`/`intent()` API boundary, so there's no honest way for a
+normal program to reach this check with bad output through legitimate
+use at all.
+
+**All five of this session's own required adversarial rows, confirmed
+against real `deno` subprocesses** (`sdkeval/sdkeval_test.go`, fixtures
+under `sdkeval/testdata/`), not simulated:
+
+- **Row 1, both layers.** `Date.now()` used in a resource's own config —
+  caught immediately by the eager guard, never even reaching a second
+  subprocess run. A **separate, concrete backstop test**: `Deno.pid`
+  (real, legitimate process introspection the guards don't and shouldn't
+  block — confirmed accessible under the full `--deny-*` flag set with
+  no gate at all) leaking into a resource's own config, genuinely
+  differing between `DoubleRun`'s own two independent subprocess runs —
+  confirmed to produce a real `core.ErrDoubleRunMismatch`, proof the
+  second layer of defense actually catches what the first layer
+  structurally cannot see, not just an assumed-working backstop.
+- **Row 2**, fs/env/net reach — three separate fixtures, each
+  individually confirmed blocked with a real `NotCapable` error.
+- **Row 2b**, the dynamic remote-import escape session 1 found
+  empirically — reconfirmed here through the real end-to-end harness
+  (not just a standalone probe), still needing `--no-remote` specifically.
+- **Row 4**, a program throwing after one resource already ran — the
+  real thrown message surfaced verbatim in the returned error, and
+  confirmed `Evaluate` returns **no output at all** alongside the error
+  — never a partial document.
+
+`go build ./... && go vet ./... && gofmt -l . && go test ./...` clean
+across the whole repo (20 new tests in `sdkeval`, 6 new in `core`,
+alongside every pre-existing test); `deno test --no-remote
+guards_test.ts` (5 tests) and `deno check --no-remote guards.ts` clean
+for `sdk/ts/evaluator`.
+
+docs/sdk.md gained a new "Slice 4: built" subsection (the full
+`--allow-read` finding, the row-5 correction, the live-verification
+account) and a correction to its own adversarial row 2b's text (the
+stale "narrowly-scoped --allow-read path" wording). docs/plan.md gained
+a changelog entry and a session-3 addendum to the SDK program wedge
+subsection. Committed and pushed.
+
+## Current phase (previous)
+
 **UBI-33/34 (2026-07-28), session 2: slices 1–3 built — `sdk/codegen/ir`,
 `ubx sdk gen`, `@ubx/sdk`'s own runtime.** Real code this time, not
 design — continuing session 1's own docs/sdk.md, per its own
