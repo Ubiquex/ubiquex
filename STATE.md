@@ -4,6 +4,137 @@
 
 ## Current phase
 
+**UBI-47 (2026-07-28), session 2: slices 1–2 built — the topology
+parser (new `diagram/` package) and `ResourceIntent.DependsOn` (`core/
+resolver`), both real code, hermetically and end-to-end tested.**
+Continuing session 1's own docs/diagram-medium.md, per its own
+"Implementation slices" order (the user's own instruction this session
+combined slices 1 and 2 into one turn). UBI-47 stays open in Linear —
+slice 3 (`ubx propose --from-diagram` CLI wiring) is next.
+
+**`ResourceIntent.DependsOn` landed exactly as designed — no
+corrections needed, a clean confirmation the session-1 design held up
+against real implementation.** `core/resolver/resolver.go` gained the
+new, optional, additive field; `core/resolver/refs.go` gained
+`unionDependsOn`, merging it into the *same* dependency graph
+`scanRefEdges` already builds from `$ref`/`$cross` scanning (union, not
+a second graph) — read the real `resolveOnce` code first, not assumed,
+to confirm exactly where and how: an address inside the current resolve
+batch becomes a real graph edge (execution ordering, cycle detection,
+the resolved output's own `depends_on`); an address already recorded in
+the ledger (not in the batch) is validated via `l.FoldState` — the
+identical lookup `resolveRef`'s own non-batch `$ref` case already
+uses — but never added as an edge, matching that case's own existing
+behavior exactly (nothing to wait for, it already exists). A dangling
+address reuses `ErrRefNotFound` verbatim; a dependency naming something
+the same proposal also destroys reuses `ErrRefToDestroyTarget` verbatim
+— both the identical sentinels a `$ref`'s own equivalent failure already
+produces, not new diagram-specific ones. Eight hermetic tests
+(`core/resolver/dependson_test.go`): batch-internal edge ordering,
+cycle detection, already-ledgered dependency (validated, no edge),
+nonexistent/malformed address, destroy-target conflict, dedup against
+an identical `$ref`-derived edge, and a no-op confirmation for every
+existing producer that leaves the field empty.
+
+**The topology parser: built, with one real, honest correction found
+while implementing it, not papered over.** New top-level package
+`diagram/` (matching this project's own established shape for a
+substantial, independently testable subsystem — `intentprovider/`,
+`sdkeval/`, `sdk/codegen/` — decided this session, not left as session
+1's own "d2/topology, or similar" placeholder). `diagram.Parse`:
+`d2compiler.Compile` → a two-pass walk (classify every leaf node first —
+resource, reference, or unresolved — since an edge's own translation
+needs both endpoints already classified; translate edges second) →
+`resolver.IntentFile`. Built exactly per session 1's own design: D2
+compile errors surfaced verbatim (row 6); containers skipped entirely
+(`len(obj.ChildrenArray) == 0` gates every leaf, confirming "containers
+are pure grouping" holds in real code, not just design prose); node
+names from `obj.Label.Value`, falling back to `obj.ID`; type inference
+via `resolver.InferProvider` completely unchanged, an uninferable or
+ambiguous node excluded from `Resources` with a `blocking: true`
+`core.Question` naming it (rows 2/2b); a duplicate-label collision
+across containers deliberately left for `resolver.Resolve`'s own
+existing `ErrDuplicateResource` to catch, never disambiguated by the
+parser itself (row 3); a resource-to-resource edge becomes a
+`ResourceIntent.DependsOn` entry (row 1's own cycle-detection input).
+
+**The real correction**: session 1's own design doc left "how a
+topology-only edge reaches a `$cross` marker at all" genuinely
+unresolved — its own closing sentence ("see `depends_on`, next, for
+how...") doesn't actually answer the question it poses, found on
+inspection while trying to implement it, not assumed correct because it
+was already written down. Thought through properly rather than forced:
+`$cross`'s own wire shape requires a specific config attribute to live
+in, by definition, and a topology-only edge names none — unlike
+`DependsOn`'s own intra-stack case, there's no ordering-based substitute
+to reach for, either (a cross-stack reference resolves to a concrete,
+pinned value immediately; there's nothing to "wait for" that could
+stand in for the missing attribute). **Conclusion: a topology-only edge
+into a cross-stack reference node cannot express a real `$cross` marker
+in v1 at all** — a genuine, structural limit of what a diagram can say,
+not a bug to route around with something synthetic. The reference node
+itself is still fully recognized (type via the `@`-label/`class:
+external` grammar, `ledger_dir` resolved via the `../<stack>` convention
+or `--neighbor-ledger`-shaped override map, real `os.Stat` existence-
+checked — row 7's own "which directory was checked and wasn't there"
+confirmed for real, a deliberate, named scope boundary short of the
+deeper "is this exact address recorded there" check `$cross`'s own
+resolve-time `cross_stack_pin` mechanism performs). An edge into it
+becomes a visible, non-blocking `core.AmbiguityNote` (`defaults[]`)
+naming the relationship instead of silently dropping it — matching this
+arc's own "ambiguity as visible content" design center, now shown to
+apply to a structural limitation as cleanly as an interpretive gap.
+docs/diagram-medium.md's own stale passage corrected in place (not left
+contradicted silently), and the limitation named explicitly in its own
+"Out of scope" section.
+
+**Thirteen hermetic parser unit tests** (`diagram/parse_test.go`):
+typed nodes + edge → resources + `DependsOn`; deeply nested containers
+→ zero effect on resource name; class-less node → excluded, blocking
+question; ambiguous type across two fake providers → excluded, blocking
+question; unknown type → excluded, blocking question; duplicate label
+across containers → both entries present, never deduplicated by the
+parser; cross-stack reference via label form → recognized, excluded
+from resources, edge into it produces exactly one `defaults[]` note
+naming the address, never a `DependsOn` entry; unresolvable stack
+reference (no convention directory, no override) → real parse-time
+error; `--neighbor-ledger`-shaped override → succeeds where the
+convention alone wouldn't; D2 syntax error → surfaced; the label-only
+(no `class: external`) reference form → also recognized, confirming
+"either alone is accepted on parse"; determinism across five repeated
+parses of the same real diagram, edges included.
+
+**Three integration tests** (`diagram/integration_test.go`) prove the
+adversarial table's own "reused, not reinvented" claims for real, not
+just by citation: a real three-node edge cycle, parsed (successfully —
+`Parse` itself never detects it, by design) then handed to the real,
+completely unmodified `resolver.Resolve`, produces a real
+`ErrCycleDetected`; a real duplicate-label-across-containers diagram,
+parsed (both entries present) then resolved, produces a real
+`ErrDuplicateResource`; a full happy-path diagram resolves cleanly into
+a real `kind:"change"` proposal whose second create's own JSON literally
+contains `"depends_on":["payments.aws_vpc.main-vpc"]` — confirmed
+byte-for-byte, not just structurally.
+
+`go build ./... && go vet ./... && gofmt -l . && go test ./...` clean
+across the whole repo (8 new tests in `core/resolver`, 16 new in the new
+`diagram` package, alongside every pre-existing test). `go.mod`/`go.sum`
+gained `oss.terrastruct.com/d2` for real (session 1 only probed it in a
+scratch module) — confirmed again this session that only the narrow
+`d2compiler`/`d2graph` subpackages actually get imported, not the
+module's own heavy rendering machinery.
+
+docs/diagram-medium.md gained a new "Slices 1–2: built" subsection (the
+real correction, the real test account) and a fix to its own stale
+cross-stack-edge passage, corrected in place rather than left
+contradicting the "Slices 1–2" section silently. docs/schema.md's own
+`ResourceIntent.DependsOn` amendment updated from "real code lands in a
+later session" to "real code landed," naming the real tests. docs/
+plan.md gained a changelog entry and a session-2 addendum to the
+diagram medium wedge subsection. Committed and pushed.
+
+## Current phase (previous)
+
 **UBI-47 (2026-07-28), session 1, docs-first, no code: the diagram
 medium — D2 only.** New arc, filed and referenced per this session's own
 instruction (Linear ticket read in full, no comments). `docs/diagram-
