@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newChatCmd())
 	root.AddCommand(newSDKCmd())
 	root.AddCommand(newRenderCmd())
+	root.AddCommand(newVerifyCmd())
 
 	return root
 }

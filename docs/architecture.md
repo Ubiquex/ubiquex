@@ -2840,6 +2840,55 @@ otherwise) and confirmed empirically that D2's own `class:` mechanism
 it shipped) is the right vehicle for both parse-side type annotation and
 render-side icon classing — one shared vocabulary, not two.
 
+## Independent verification (built, UBI-38 — `ubx verify`)
+
+The auditor's command, and a natural gap-filler after Phase 3 (the
+authoring frontends) closed: the product's own core claim is
+"independently verifiable" — `ubx verify` makes that claim a demo rather
+than a slogan, one command, entirely offline. It re-checks everything
+checkable without trusting a single already-computed value anywhere:
+every proposal's own content hash against its own `id` (`core.Hash` had
+only ever been *called* to compute an id, at accept time — nothing
+anywhere re-verified one against stored bytes on read, until this
+command); the parent-chain walk itself, done independently rather than
+trusting `core.Ledger.Chain`'s own all-or-nothing error return, so a
+broken link is a reported finding, never a command crash; every sealed
+apply record's own hash and its prior-*sealed*-attempt chaining
+(mirroring `BeginApply`'s own exact linkage rule, not a naive N/N-1
+walk — a crashed, never-sealed attempt must never be flagged as a broken
+chain); every `$redacted` marker's own inner shape (`core.
+IsRedactedValue` only ever checked the outer `{"$redacted": ...}` shape;
+nothing checked that the inner object is actually `{"sha256": <64-hex>}`
+until now).
+
+**A tampered proposal doesn't just fail its own check — every later
+proposal in the chain is flagged too**, whether or not any of *their*
+own bytes were touched. A later proposal's own hash and parent link can
+check out perfectly while still resting on corrupted history; a human
+reading the report needs to know that, not just which one file changed.
+
+**Acceptance re-derivation is opportunistic, never rounded up.**
+`pr_merge`-accepted proposals get re-derived via the existing
+`runVerifyAcceptance` machinery (UBI-11, `ubx why --verify-acceptance`)
+reused completely unchanged — this command's own job is to run it once
+per `pr_merge`-accepted proposal the chain walk found, not reimplement
+it. Given `--repo-dir`, the git-history half runs (no network); given
+`--github-repo` too, the reviewer re-check also runs against the GitHub
+API. Neither flag given: reported honestly as *inconclusive*, never a
+silent pass. `local` acceptance is reported as convenience-tier — there
+is nothing to independently re-derive it against, and claiming
+otherwise would be exactly the kind of rounding-up this command exists
+to refuse.
+
+Exit codes follow the same UBI-20 contract every other verb does: 0
+everything checks out; 1 a real finding (a broken hash, a chain break, a
+failed acceptance re-derivation); 2 a genuine error (a corrupt head,
+a network/tool failure re-deriving acceptance) — "couldn't check" and
+"checked and found a problem" are never conflated into the same exit
+code. Works against both git-local and remote `LedgerStore` backends
+identically (`Chain`/`Read`/`ApplyAttempts` are all implemented purely
+in terms of the store-agnostic `LedgerStore` interface already).
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

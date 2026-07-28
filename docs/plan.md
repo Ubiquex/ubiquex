@@ -1497,6 +1497,31 @@
   and still green. See docs/diagram-medium.md's own "Slice 6: built --
   the live finale" section and STATE.md for the full account, including
   the real transcripts.
+- 2026-07-28 -- UBI-38 (session 1 of the read-only projection quartet):
+  `ubx verify` built -- independent full-chain verification, one
+  command, entirely offline. `core.VerifyChain` (new `core/verify.go`)
+  re-checks every proposal's own content hash against its own id (never
+  checked anywhere else on read, until now), the parent-chain walk
+  itself (never `Ledger.Chain`'s own all-or-nothing error return, so a
+  broken link is a reported finding, not a crash), every sealed apply
+  record's own hash and its prior-*sealed*-attempt chaining (mirroring
+  `BeginApply`'s own exact linkage rule -- a crashed, unsealed attempt
+  never breaks the chain), and every `$redacted` marker's own inner
+  shape (only the outer shape was ever checked before). A tampered
+  proposal doesn't just fail its own check -- every later proposal in
+  the chain gets flagged `tainted_descendant` too, whether or not their
+  own bytes were touched. `pr_merge` acceptance re-derivation reuses
+  `runVerifyAcceptance` (UBI-11) completely unchanged, run once per
+  `pr_merge`-accepted proposal the walk found; `--repo-dir`/
+  `--github-repo` opt in incrementally, reported honestly as
+  inconclusive rather than rounded up to a pass when omitted. Nine
+  hermetic `core` tests (every adversarial row: tampered byte, missing
+  parent, truncated apply record, a legitimate crashed-attempt NOT
+  flagged, malformed/well-formed `$redacted`, mixed schema versions,
+  empty ledger) plus eight `cli` tests (JSON shape, and the full
+  `pr_merge` integration -- derived, both inconclusive shapes, and a
+  forged-acceptance row using a real second git commit). `go build/vet/
+  test`, `gofmt -l .` clean. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4020,6 +4045,33 @@ truth" thesis, demonstrated four times over, not just stated once at the
 start. Mermaid/other diagram formats, Go/Python SDK languages, and any
 future medium each earn their own entry the same way — the conformance-
 fixture discipline every medium above already used, never a shortcut.
+
+### The read-only projection quartet: `verify`/`blame`/`stats`/`addresses` (UBI-38/39/40/48)
+
+Filed as a new arc immediately after Phase 3 closed — a natural
+gap-filler in the same spirit UBI-38's own ticket names itself: zero
+risk, read-only projections over data the ledger already has, no new
+wire format, no provider interaction beyond what already exists. One
+session per ticket, in order: UBI-38 (`ubx verify`, the auditor's
+command) → UBI-39 (`ubx blame`, per-attribute provenance) → UBI-40
+(`ubx stats`, the thesis metrics) → UBI-48 (`ubx addresses`, the active
+inventory). House rules across all four: hermetic tests per ticket's own
+adversarial rows; read-only truly means read-only (no `ubx ship`
+anywhere, live legs — where needed at all — are `resolve`/read-path
+only, per UBI-47 session 4's own standing rule); ubiquex-docs lands the
+same session as each verb; each ticket closes in Linear as its own
+session lands.
+
+**UBI-38 (`ubx verify`) — closed, session 1.** See docs/architecture.md's
+own "Independent verification" section for the full system-model account
+and STATE.md for the session-by-session detail. Real, load-bearing gap
+found and closed, not assumed already covered: `core.Hash` had only ever
+been *called* to compute a proposal's own id (at accept time) — nothing
+anywhere re-verified a stored proposal's bytes against its own id on
+read, across the whole codebase, until this session. Same gap for apply
+records (`core.ApplyHash`). `core.IsRedactedValue` had only ever checked
+a `$redacted` marker's own *outer* shape; nothing checked the inner
+`{"sha256": <64-hex>}` shape until now.
 
 ## Deferred (explicitly not now)
 
