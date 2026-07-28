@@ -4,6 +4,114 @@
 
 ## Current phase
 
+**UBI-39 (2026-07-29), session 2 of the read-only projection quartet:
+`ubx blame <address>` built and closed in Linear.**
+
+Per-attribute provenance — git blame for infrastructure. `core.Blame`
+(new `core/blame.go`) runs the identical fold `core.Ledger.FoldState`
+already performs (verified by reading `FoldState`'s own real code in
+full before writing a single line — a create seeds a base state, UBI-29's
+own apply-record discovery path for a shipped change-create, never
+`Delta.Creates`' own possibly-stale `config`; each later `Modification.
+After` patches it in ledger order; a shipped destroy tombstones it),
+except it never discards which proposal contributed which leaf the way
+`FoldState`'s own single merged value does. For every dot-path attribute,
+`Blame` remembers which proposal (and precise timestamp) most recently
+touched it — never just "the resource's own latest touching proposal,"
+since two different attributes can legitimately have two different
+answers, and the ticket's own first adversarial row demands exactly this.
+
+**A real bug found and fixed before it shipped, caught by a test written
+to mirror `FoldState`'s own guard specifically, not assumed equivalent
+because the shapes looked similar.** An early draft initialized the
+running fold's own `current` state as an empty, non-nil
+`map[string]interface{}{}`. `FoldState` itself starts with `var current
+map[string]interface{}` — a true `nil` — specifically so its own guard
+(`mod.Target != addr || current == nil`) correctly skips a `Modification`
+that arrives before any genesis create has ever seeded the address. An
+empty-but-non-nil map defeats that guard entirely (Go never treats `{}`
+as `nil`), which would have let `Blame` silently apply a modify with no
+genesis at all — a real correctness bug, not a hypothetical one, caught
+only by writing `TestBlame_ModifyWithNoGenesis_NeverApplied` specifically
+to probe this exact case (constructing a hand-built `drift_adopt`
+proposal whose own target was never adopted) rather than trusting the
+mirror was faithful by inspection alone. Fixed by making the `nil`
+initialization explicit, with a comment naming exactly why the zero-value
+shorthand isn't safe here.
+
+**`$redacted` provenance without material — exactly the ticket's own
+stated point, not an afterthought.** Confirmed by reading `provider.
+Redact`'s own doc comment and call sites first: redaction happens at the
+provider boundary, before a value ever reaches `core` at all, so a
+`$redacted` marker already survives `FoldState`'s own fold byte-for-byte
+— `Blame` inherits this for free through the exact same fields
+(`mod.After`, a create's own seed state) and never needs to redact
+anything itself. What it adds is showing that a redacted attribute still
+carries full, real provenance — who changed the secret and when, without
+ever seeing what it changed to.
+
+**A destroyed address blames its final pre-destroy state, not a cleared
+one — deliberately, not by omission.** Unlike `FoldState`'s own
+"current truth" view (which resets `current`/`found` to nothing the
+moment a shipped destroy tombstones an address, so a later re-create can
+correctly re-seed from scratch), `Blame`'s own walk keeps `current`/
+`provenance` untouched when it records a destroy, only flipping a
+`Destroyed` flag and recording `DestroyedBy`. A later legitimate
+re-create still resets both fresh, exactly the same re-seed `FoldState`
+itself performs — the two behaviors (retain-on-destroy,
+reset-on-recreate) coexist correctly because they're triggered by
+different branches of the same walk, confirmed by a real hermetic test
+building exactly that lifecycle.
+
+**`drift_adopt` attribution reuses `core.AttributeDrift`'s own existing
+output completely unchanged** — every matched `cloudtrail`/`gcp_audit`
+`intent.sources` entry a drift proposal already carries gets surfaced,
+sorted newest-event-first, never collapsed to a single guessed cause
+(the same posture `AttributeDrift` itself already holds, confirmed by
+reading its own real code rather than assumed).
+
+Ten hermetic `core` tests (`core/blame_test.go`): never-recorded address
+(not found), adoption genesis (every leaf attributed), multi-touch
+latest-wins per attribute (the ticket's own first adversarial row), the
+CloudTrail-actor row, redacted-attribute provenance, shipped-create
+genesis via the real UBI-29 apply-record discovery path (confirmed the
+`id` value — never present in the create's own `config` — came from the
+apply record, not guessed), an unshipped create correctly not found, a
+destroyed address blaming its final pre-destroy state, `pr_merge`
+approvers rendering correctly, and the modify-with-no-genesis regression
+guard for the bug above. Seven hermetic `cli` tests
+(`cli/blame_test.go`): the same multi-touch/CloudTrail/redacted/
+shipped-genesis rows built via the real CLI (`ubx scan`/`ubx resolve`/
+`ubx accept`/`ubx ship`, hermetic `fakeprovider` throughout), `--json`
+shape, unknown address (exit 2), invalid address argument (exit 2).
+`go build/vet/test`, `gofmt -l .` clean across the whole repo.
+
+Live-verified by hand against a real hermetic ledger too (fakeprovider,
+never a real cloud provider): a shipped create's own genesis blame, its
+own `--json` shape, and a real adopt-then-drift sequence showing
+`tags.env` correctly blamed on the drift proposal while `id`/`name`
+still correctly blame the original adoption — the exact "latest wins per
+attribute" property the hermetic tests already assert, reproduced live.
+
+**ubiquex-docs updated in the same session, per protocol**: new
+`cli/blame.mdx` (usage, flags, worked examples for a shipped create, a
+multi-touch latest-wins case, redacted-attribute provenance, CloudTrail
+attribution, and a destroyed address blaming its final pre-destroy state
+— every example using the real transcripts above). `docs.json` slotted
+`cli/blame` into the existing "Observe" group, right after `cli/verify`.
+`mint validate`/`mint broken-links` both clean.
+
+**Internal docs**: `docs/architecture.md` gained a new "Per-attribute
+provenance" headline section. `docs/plan.md` gained a changelog entry and
+UBI-39's own close documented under "The read-only projection quartet"
+wedge subsection (alongside UBI-38's).
+
+**UBI-39 closed in Linear.** Session 3 (UBI-40, `ubx stats`) is next —
+the thesis metrics: signed-flow resolution %, time-to-decision,
+attribution coverage, acceptance-method split.
+
+## Current phase (previous)
+
 **UBI-38 (2026-07-28), session 1 of the read-only projection quartet
 (UBI-38/39/40/48): `ubx verify` built and closed in Linear.**
 
