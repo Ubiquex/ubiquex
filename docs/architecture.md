@@ -2735,6 +2735,60 @@ identical adapter interface afterward (docs/plan.md's own medium-order
 decision), nearly free — same transcription job, a dialogue transcript
 instead of a file as input.
 
+## SDK program (designed, UBI-33/34 session 1 — docs/sdk.md; not yet implemented)
+
+Component map #7's first real design: the first authoring frontend that
+is ordinary, typed, human-authored code rather than prose transcribed by
+an LLM. Full design in docs/sdk.md (the multi-language contract — golden
+`intent/v1` fixtures as the spec — the `sdk/` monorepo layout, the
+describe-only `@ubx/sdk` runtime surface, the hermetic evaluator decided
+**empirically** this session against three real candidates, `core.
+DoubleRun` reused at the evaluation boundary, and the codegen design:
+provider schema → a language-neutral IR model → per-language templates,
+generated locally by `ubx sdk gen` at the config-pinned provider version,
+never published). Summarized here at the system-model level, matching
+how every other headline section in this document cross-links its own
+detail doc rather than duplicating it.
+
+**The boundary, restated at the level of this document's own founding
+invariants**: the same trust-chain invariant #3 the intent provider arc
+tested for prose ("the LLM operates in intent-space only... nothing it
+emits reaches apply without resolution + human signature") applies here
+without an LLM in the loop at all — an SDK program is just another
+`intent/v1` **producer**, handed to the exact same, completely
+unmodified `core/resolver` pipeline every other producer already uses.
+The hard part this arc actually adds is a different one: the evaluator
+that runs a program author's own TypeScript has to be genuinely hermetic
+(no network, filesystem, environment, or wall-clock reach) even though
+nothing about the trust chain requires it to be adversarial-proof against
+the program's own author — it's defense against what a describe-only
+program should never need to do, not defense against a malicious author
+with legitimate ledger access already.
+
+**Decided empirically, not from documentation**: Node's `--permission`
+model, Deno, and `isolated-vm` were each actually run against the real
+requirement this session, in this environment — Node disqualified
+outright (its permission model has no network or environment gate at
+any flag combination); Deno chosen (closes three of four requirements by
+default with zero flags, needed exactly one additional flag once a real
+gap — remote module imports bypassing `--deny-net` entirely — was found
+empirically rather than assumed closed); `isolated-vm` recorded as the
+stronger-but-costlier fallback (memory-isolated by construction, but a
+native-compiled dependency whose install script didn't even run cleanly
+under this session's own npm lockdown, and no native TypeScript support).
+Every number behind this decision is a probe this session actually ran,
+not asserted from either tool's own documentation.
+
+**Sequencing**: after multi-provider stacks (UBI-43, already built) —
+the SDK's own multi-provider inference (`resources[]` name only types;
+the resolver's existing `InferProvider` mechanism supplies the rest) was
+always going to depend on that landing first, per docs/plan.md's own
+medium-order note. Unlike the intent provider, the SDK has no ambiguity
+step to design around — a typed program has no interpretation to make
+transparent, so it carries no `assumptions`/`defaults`/`questions` at
+all, by construction, a real and named divergence from the md medium's
+own design center rather than an oversight.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

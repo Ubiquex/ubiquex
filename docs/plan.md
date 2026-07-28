@@ -1208,6 +1208,35 @@
   session; **UBI-46 closed in Linear**. See docs/intent-provider.md's
   new "Amendment: the chat medium" section and STATE.md for the full
   account.
+- 2026-07-28 — UBI-33/34 session 1: SDK program design, docs-first, no
+  code. docs/sdk.md (new): the multi-language contract (golden `intent/v1`
+  fixtures as the spec, enforced as byte-identical-after-canonicalization);
+  the `sdk/` monorepo layout (`conformance/`, `codegen/` shared IR model,
+  `ts/`); the describe-only `@ubx/sdk` runtime (`stack`/`resource`/
+  `secret`/`cross`/`intent`, `Computed<T>` as a branded, never-coercible
+  reference); the codegen design (provider schema → a language-neutral IR
+  model whose only name is the provider's real wire attribute name → per-
+  language templates); `ubx sdk gen`, local and offline-after-generation,
+  never publishing bindings. The hermetic evaluator was decided
+  **empirically** — Node's `--permission` model, Deno, and `isolated-vm`
+  were each actually probed against the real no-net/fs/env/clock
+  requirement in this session's own environment; Node disqualified (no
+  network/env gate exists at any flag combination); Deno chosen (closes
+  fs/env/net by default with zero flags; one real gap found and closed —
+  dynamic remote `import()` bypasses `--deny-net` entirely, needs `--no-
+  remote`); `isolated-vm` recorded as the stronger-but-costlier fallback
+  (strongest structural isolation, but its native build script didn't run
+  under this session's own npm lockdown, and no native TypeScript). Clock/
+  random, unblocked by all three (a JS-engine built-in, not a host
+  resource any of them gates), closed by an eager override plus
+  `core.DoubleRun` reused unchanged as the backstop, run across two real
+  subprocesses. A six-row required-outcome adversarial table lives inside
+  docs/sdk.md itself. docs/architecture.md gained a matching cross-linking
+  headline section. Implementation sized at 7 slices toward a real
+  TypeScript payments program converging with the existing md-medium
+  fixture's own resolved shape — see docs/sdk.md's own "Implementation
+  slices" and STATE.md for the full session account including the actual
+  probe output.
 
 ## Strategy
 
@@ -3147,11 +3176,95 @@ end to end. Both repos updated; **UBI-46 closed in Linear.** See
 docs/intent-provider.md's own new "Amendment: the chat medium" section
 and STATE.md for the full session account.
 
+### SDK program: multi-language contract + TypeScript (UBI-33/34)
+
+Designed 2026-07-28, session 1, docs-first, no code — docs/sdk.md (new)
+is the full design; docs/architecture.md gained a matching cross-linking
+headline section. Two hard constraints came pre-decided from the
+ticket's own design room and were not relitigated: the monorepo (`sdk/`
+inside `ubiquex-cli`, every language, one CI — golden conformance fixtures
+are the shared spec, syncing them across repos would be misery) and
+codegen'd bindings generated locally by `ubx sdk gen`, never published
+(only the tiny `@ubx/sdk` runtime ever ships to npm — Pulumi's own
+per-provider-package version-matrix pain, named explicitly as the
+anti-pattern this sidesteps structurally). Language order: TypeScript,
+then Go, then Python.
+
+The contract: golden `intent/v1` JSON fixtures ARE the spec (UBI-33's own
+framing), enforced as byte-identical-after-canonicalization — a new,
+general-purpose canonical-JSON function (factored out of `core.Hash`'s
+own JCS logic, not a second divergent implementation) makes "semantic
+identity across languages" and "byte-identical" the same operational
+claim. The `@ubx/sdk` describe-only runtime surface (`stack`/`resource`/
+`secret`/`cross`/`intent`, `Computed<T>` as a branded reference — never a
+real value, mirroring `$ref`'s own resolved-or-`$computed` split) and the
+codegen design (real provider schema → a shared, language-neutral IR
+model with exactly one deliberate rule — it only ever carries the
+provider's real wire attribute name, no per-language identifier
+convention baked in — → per-language templates) are both designed in
+full.
+
+**The hermetic evaluator was decided empirically this session, not from
+documentation**: Node's `--permission` model, Deno, and `isolated-vm`
+were each actually run against the real requirement (no net/fs/env/
+clock) in this environment. Node disqualified outright — its permission
+model has no flag that gates network or environment access at all,
+confirmed against the real `--help` output and a real probe. Deno chosen
+— closes fs/env/net by default with zero flags, plus one real gap found
+and closed empirically: dynamic `import("https://...")` bypasses `--deny-
+net` entirely (confirmed twice, once with zero flags and once with
+`--deny-net` passed explicitly, same result both times) and needs `--no-
+remote` specifically to close. `isolated-vm` recorded as the stronger-
+but-costlier fallback — a bare V8 isolate has nothing host-provided by
+default (no `require`/`process`/`fetch` exist at all, versus Node/Deno's
+"everything exists, specific things are permission-gated"), but its
+native build script didn't even run under this session's own npm
+lockdown, and it has no native TypeScript support. `Date.now()`/`Math.
+random()` were unblocked by all three (a JS-engine-built-in, not a host
+resource any permission system treats as gate-able) — closed instead by
+an eager global override inside the evaluator's own injected scope, with
+`core.DoubleRun` (reused completely unchanged) as the backstop for
+whatever the override can't foresee, run as two entirely separate `deno`
+subprocesses (not two in-process calls), a stronger guarantee than the
+resolver's own existing `DoubleRun` use.
+
+A required-outcome adversarial table lives inside docs/sdk.md itself
+(not a separate file, per this session's own explicit instruction):
+nondeterminism, fs/env/net sandbox escape, the remote-import gap found
+this session (its own row, not folded silently into the net row),
+codegen against an unknown/mismatched provider version, a program
+throwing mid-evaluation, and output exceeding the `intent/v1` schema —
+each with a real required outcome, not a hope. Implementation sized at
+7 named slices (docs/sdk.md's own "Implementation slices"): the shared
+IR + `provider.Schema` translation; `ubx sdk gen` live-verified against a
+real `hashicorp/aws` schema; the `@ubx/sdk` runtime; the evaluator
+harness (this session's own adversarial table becomes its required test
+program); `ubx resolve --from-code` CLI wiring (no resolver changes
+expected — SDK is just another `intent/v1` producer); the conformance
+harness's first golden case, deliberately reusing the existing md-medium
+payments example as its own target shape (with one honest, structural
+difference named: an SDK program has no interpretation step, so its own
+`assumptions`/`defaults`/`questions` stay empty by construction — the
+program's own source is the reviewable artifact instead); a live finale,
+a real TypeScript payments program evaluated for real, converging with
+the md medium's own resolved shape. docs/schema.md's own formal amendment
+for the SDK's new `intent.sources` kind pair (`sdk`/`sdk_evaluator`,
+mirroring `document`/`intent_provider`'s existing pairing) is deliberately
+deferred to the slice that actually produces that content, not pinned
+prematurely this session — named explicitly in docs/sdk.md so it isn't
+forgotten. See STATE.md for the full session account, including this
+session's own probe output.
+
 ## Deferred (explicitly not now)
 
-SDK + codegen, diagrams, a real policy engine (UBI-27's resolver carries
-a policy-stub hook, always empty for now), environments/promotion, Nexus
-SaaS, naming of proposal ledger format for external publication.
+diagrams, a real policy engine (UBI-27's resolver carries a policy-stub
+hook, always empty for now), environments/promotion, Nexus SaaS, naming
+of proposal ledger format for external publication.
+
+~~SDK + codegen~~ — **designed, UBI-33/34 session 1** (see its own wedge
+subsection above and docs/sdk.md); Go/Python's own evaluators (UBI-35/36)
+and all runtime/codegen/evaluator *code* are still session 2+ work of
+these tickets, not deferred any longer as a design question.
 
 ~~Intent provider, markdown intents (an LLM-authored `intent/v1` draft,
 never resolves/computes/touches a ledger or provider)~~ — **designed,
