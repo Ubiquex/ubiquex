@@ -3281,6 +3281,81 @@ key) — the identical refusal `resolveCross` itself already gives
 (`TestResolve_CrossStack_ByStackName_NoBaseIsGitLocal_Refused`), not a
 silent guess.
 
+## Two-step fusion: `ubx plan` + `ubx ship` (built, UBI-49)
+
+Founder decision: the four-verb ceremony (`propose` → `resolve` → `accept` →
+`ship`) is right for teams with a real review process to bind acceptance to
+(PR-merge signing, the Decision loop above), but it's real ceremony for a
+solo operator or a sandbox iterating fast — terraform's own two-command
+shape (`plan`, `apply`) is the ergonomics bar here, not a lower standard of
+safety. **Pure CLI fusion, no policy engine**: every invariant the four
+verbs already enforce (destroys confirmation, cross-stack pin staleness,
+freshness re-verification, idempotent re-run) stays exactly as strict;
+nothing here is a new gate, and nothing existing is deprecated.
+
+**`ubx plan`** fuses `propose` + `resolve` + a preview render into one
+command: any medium input this project already knows how to turn into an
+`ubx:intent/v1` document (a hand-written intent file, `--from-code`'s
+TypeScript SDK, `--from-doc`'s markdown draft, `--from-diagram`'s D2
+topology) resolves through the identical, unmodified
+`core/resolver.Resolve` every other entry point uses, and renders a full
+receipt — delta, cost_delta, blast radius, and any assumptions/defaults/
+questions the intent carried — for a human to review right there. Nothing
+is accepted or applied; like `ubx resolve` and `ubx propose` today, this is
+preview-only.
+
+The md/diagram media's own established "draft, then a separate human
+checkpoint before resolving" posture (docs/intent-provider.md, docs/
+diagram-medium.md) is deliberately **not** reproduced inside `ubx plan`:
+`ubx propose --from-doc`/`--from-diagram` keep their exact existing
+behavior (draft only, stop before resolving) for teams that want that
+extra checkpoint as its own step. `ubx plan` is a new, additional fast
+path whose own receipt — rendered before anything is saved, covering the
+full resolved proposal rather than just the draft's ambiguity content —
+already **is** the checkpoint. Nothing about the resolved proposal is
+signed or applied by rendering it; the checkpoint is real regardless of
+which step it happens at.
+
+The resolved-but-unaccepted proposal is written to a local, hash-addressed
+store — `.ubx/plans/<hash>.json`, alongside `.ubx/salt`/`.ubx/lock` but
+never inside `ledger/` (a plan is a draft, not a recorded decision) — keyed
+by the exact content hash `core.Hash` would compute for it, the same hash
+`accepted.ID` becomes once it's actually accepted. **Mental model: a
+resolved proposal IS a saved plan file** — hash-frozen the moment it's
+written, and staleness-detecting for free, since nothing about the
+hash-freezing or the ledger-parent pinning is new machinery: `core.Accept`
+already refuses a moved parent (`ErrParentMismatch`), and
+`resolver.VerifyPins` already refuses a moved cross-stack pin, exactly as
+they do for the four-verb path.
+
+**`ubx ship <hash>`** gains inline acceptance: `<hash>` is looked up first
+as an already-accepted proposal id in the ledger (the four-verb path,
+completely unchanged — including PR-merge acceptance as its own separate,
+still-available path); if not found there, as a plan saved by `ubx plan`,
+which ship then accepts inline, local tier, before applying. Inline
+acceptance runs through the exact same `checkDestroysConfirmed`/
+`resolver.VerifyPins`/`core.Accept` sequence `ubx accept`'s own local-file
+path already uses — `--confirm-destroys` is still required for any plan
+with `blast_radius.destroys > 0`, a stale cross-stack pin still refuses,
+and the ledger records `acceptance.method: "local"` exactly as it does
+today. A defensive integrity check specific to this fallback: the plan
+file's own content must still hash to the filename it was found at (a
+hand-edited or corrupted plan file is refused, never silently shipped
+under a hash that no longer describes its actual content).
+
+**What this doesn't do**: no cost estimation (`cost_delta` renders whatever
+`core/resolver` already computed — `0` today, unchanged by this arc); no
+policy gates, no auto-accept rules, no environment awareness (a future
+policy engine's own natural home is this exact inline-accept point in
+`ubx ship`, gating it, not a new mechanism grafted elsewhere); no change to
+what PR-merge acceptance is or how it's derived. `ubx plan --from-diagram`
+does incur one real, accepted inefficiency: `draftFromDiagram`'s own
+type-inference pass and the later `resolver.Resolve` call each launch
+every declared provider once, a real double schema-fetch (never a double
+cloud call — schema-only, cheap) rather than a deeper refactor threading a
+shared providers slice through both call sites, kept out of this arc's own
+tight scope.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

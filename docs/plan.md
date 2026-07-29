@@ -1845,6 +1845,49 @@
   cover" rewritten to reflect only what remains genuinely open.
   `go build/vet/test`, `gofmt -l .` clean. **UBI-50 closed.** See
   STATE.md for the full account.
+- 2026-07-29 -- UBI-49 (ubx plan + ship fusion, terraform-shaped
+  two-step workflow, one session, closed): `ubx plan` -- a new verb
+  fusing `propose`+`resolve`+a preview render into one command, any
+  medium input (`--from-code`/`--from-doc`/`--from-diagram`/a
+  hand-written intent file), resolved through the identical,
+  unmodified `core/resolver.Resolve` every other entry point already
+  uses, rendering a full receipt (delta, cost_delta, blast radius,
+  assumptions/defaults/questions) and saving the resolved-but-
+  unaccepted proposal at `.ubx/plans/<hash>.json`, keyed by its own
+  content hash. `ubx ship <hash>` gains inline local-tier acceptance:
+  falls back to the plan store when `<hash>` isn't already an
+  accepted ledger id, verifies the file's content still hashes to its
+  own filename (refusing a hand-edited/corrupted plan), then runs the
+  identical `checkDestroysConfirmed`/`resolver.VerifyPins`/
+  `core.Accept` sequence `ubx accept`'s own local-file path already
+  uses before applying -- `--confirm-destroys` still required, a
+  stale cross-stack pin still refuses, `acceptance.method: "local"`
+  recorded exactly as today. Pure CLI fusion: `resolve.go`'s own
+  provider-loading logic and `propose.go`'s own doc/diagram drafting
+  logic extracted into shared helpers (`loadResolveProviders`,
+  `draftFromDoc`/`draftFromDiagram`) so `plan.go` drives the identical
+  code every existing verb already runs, zero core-package changes,
+  the four-verb ceremony completely unchanged (verified: the full
+  existing test suite passes unmodified). The md/diagram media's own
+  "draft, then a human checkpoint before resolving" posture is
+  deliberately not reproduced inside `ubx plan` -- its own receipt,
+  covering the full resolved proposal rather than just the draft's
+  ambiguity content, already is that checkpoint; `ubx propose
+  --from-doc`/`--from-diagram` keep their exact existing draft-only
+  behavior for teams that want that as a separate step. 10 new
+  hermetic tests (`cli/plan_test.go`) covering all four medium inputs
+  end to end through the fused plan-then-ship path, the
+  --confirm-destroys/cross-stack-pin-staleness invariants, a
+  plan-file hash-mismatch refusal, and input-mode validation --
+  all passing on first real run against the fake provider binary.
+  `docs/architecture.md` gained a new "Two-step fusion" section
+  recording the design (the local hash-addressed plan store, the
+  human-checkpoint reasoning, the diagram medium's own accepted
+  double-schema-fetch inefficiency). ubiquex-docs: guides updated to
+  lead with the two-step flow, four-verb ceremony documented as the
+  team/production path. `go build/vet/test`, `gofmt -l .` clean
+  across the whole repo. **UBI-49 closed.** See STATE.md for the
+  full account.
 
 ## Strategy
 
@@ -4638,6 +4681,93 @@ session-4 closing amendment, and its own "What this doesn't yet cover"
 section was rewritten to name only what remains genuinely open after
 this session. `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. **UBI-50 closed.** See STATE.md for the full account.
+
+### ubx plan + ship fusion (UBI-49) — one session, closed
+
+Founder decision: the four-verb ceremony (`propose` → `resolve` →
+`accept` → `ship`) is right for teams binding acceptance to a real
+review process (PR-merge signing), but is real, avoidable ceremony for
+a solo operator or a sandbox iterating fast. Terraform's own two-command
+shape (`plan`, `apply`) is the ergonomics bar — pure CLI fusion over
+existing machinery, no policy engine, nothing deprecated.
+
+**`ubx plan`**, a new verb, fuses `propose`+`resolve`+a preview render
+into one command: any medium input (a hand-written intent file,
+`--from-code`'s TypeScript SDK, `--from-doc`'s markdown draft via the
+configured intent provider, `--from-diagram`'s D2 topology) resolves
+through the identical, unmodified `core/resolver.Resolve` every other
+entry point already uses — same invariants, same orphan/pin checks,
+same failure modes — and renders a full receipt (delta, cost_delta,
+blast radius, assumptions/defaults/questions) for review. Nothing is
+accepted or applied; like `resolve`/`propose` today, this is
+preview-only. The resolved-but-unaccepted proposal is saved at
+`.ubx/plans/<hash>.json`, a new local, hash-addressed store alongside
+`.ubx/salt`/`.ubx/lock` but never inside `ledger/` — keyed by the exact
+content hash the proposal's own `ID` becomes once actually accepted
+("a resolved proposal IS a saved plan file — hash-frozen,
+staleness-detecting," per the founder's own framing; staleness
+detection itself is free, inherited unchanged from `core.Accept`'s
+existing `ErrParentMismatch` and `resolver.VerifyPins`'s existing
+cross-stack pin check).
+
+The md/diagram media's own established "draft, then a separate human
+checkpoint before resolving" posture (docs/intent-provider.md, docs/
+diagram-medium.md) is deliberately **not** reproduced inside `ubx
+plan` — a real, considered departure, not an oversight: `ubx plan`'s
+own receipt, rendered before anything is saved, already covers the
+full resolved proposal (delta/blast radius/cost alongside any
+ambiguity content) rather than the draft's ambiguity content alone,
+so it already serves as the review checkpoint the four-verb path
+splits across two steps. `ubx propose --from-doc`/`--from-diagram`
+keep their exact existing draft-only behavior completely unchanged,
+for teams that specifically want that extra checkpoint as its own
+step.
+
+**`ubx ship <hash>`** gains inline acceptance: `<hash>` is looked up
+first as an already-accepted ledger id (the four-verb path, completely
+unchanged, including PR-merge acceptance as its own separate, still-
+available path); if not found, as a plan saved by `ubx plan`, accepted
+inline (local tier) before applying, through the exact same
+`checkDestroysConfirmed`/`resolver.VerifyPins`/`core.Accept` sequence
+`ubx accept`'s own local-file path already runs — `--confirm-destroys`
+still required for any plan with `blast_radius.destroys > 0`, a stale
+cross-stack pin still refuses, `acceptance.method: "local"` recorded
+exactly as today. A defensive integrity check specific to this
+fallback: the plan file's own content must still hash to the filename
+it was found at, refusing a hand-edited or corrupted plan rather than
+shipping it under a hash that no longer describes its actual content.
+
+**Pure CLI fusion, verified rather than assumed**: `resolve.go`'s own
+provider-loading block and `propose.go`'s own doc/diagram drafting
+logic were extracted into shared helpers (`loadResolveProviders`,
+`draftFromDoc`, `draftFromDiagram`) so `plan.go` drives the identical,
+unmodified code every existing verb already runs — zero changes to
+`core`/`core/resolver`/`core/executor` — and the full existing test
+suite (every package) passes unchanged after the refactor, confirmed
+by running it, not assumed from the diff's shape. `ubx plan
+--from-diagram` incurs one real, accepted inefficiency: its own
+diagram-parse type-inference pass and the later resolve call each
+launch every declared provider once (a real double schema-fetch, never
+a double cloud call) rather than threading a shared providers slice
+through both call sites — named honestly in `docs/architecture.md`
+rather than fixed with a deeper refactor outside this arc's own tight
+scope.
+
+10 new hermetic tests (`cli/plan_test.go`), all passing on first real
+run against the fake provider binary: all four medium inputs end to
+end through the fused plan-then-ship path (including a real assumption
+rendered alongside a resolved delta for `--from-doc`, and a real
+UBX_PROVIDER_MIRROR-backed multi-provider round trip for
+`--from-diagram`), `--confirm-destroys` still required, a cross-stack
+pin's staleness still blocking, a plan-file hash-mismatch refusal, a
+no-such-hash genuine error, and input-mode validation.
+`docs/architecture.md` gained a new "Two-step fusion" section
+recording this design. ubiquex-docs: guides updated to lead with the
+two-step flow (`ubx plan` → `ubx ship`) as the sandbox/solo path, the
+four-verb ceremony documented as the team/production path for PR-merge
+signing. `go build/vet/test`, `gofmt -l .` clean across the whole
+repo. **UBI-49 closed** in one session, matching its own "Est. 1-2
+sessions" sizing. See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 
