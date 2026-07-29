@@ -1,8 +1,11 @@
-// Package k8saudit is UBI-22's concrete implementation of core.EventLookup
+// Package k8s is UBI-22's concrete implementation of core.EventLookup
 // against EKS control-plane audit logs delivered to CloudWatch Logs — the
 // third platform-specific backend behind core.EventLookup, alongside
-// package cloudtrail (UBI-10, AWS management events) and package gcpaudit
-// (UBI-21, GCP Cloud Audit Logs). Same dependency-inversion discipline:
+// package cloudtrail (UBI-10, AWS management events) and package gcp
+// (UBI-21, GCP Cloud Audit Logs). Renamed from k8saudit (UBI-37, the
+// audit/ consolidation — see audit/azure's own doc comment for the full
+// rationale) with zero behavior change: same interface, same dispatch.
+// Same dependency-inversion discipline:
 // core defines the plain-Go shape it needs (core.EventLookup), this
 // package translates Kubernetes' own audit.k8s.io/v1 Event schema into it
 // at the boundary. core itself never imports an AWS SDK or knows anything
@@ -21,7 +24,7 @@
 // AWS's region or GCP's project is — this requires explicit,
 // optional .ubx/config ([k8s_audit]) configuration; see cli/config.go and
 // cli/attribution.go for the not_configured fallback when it's absent.
-package k8saudit
+package k8s
 
 import (
 	"context"
@@ -37,9 +40,9 @@ import (
 	"github.com/ubiquex/ubiquex-cli/core"
 )
 
-// Backend is k8saudit's own core.AttributionBackend value: "k8s_audit"/
+// Backend is k8s's own core.AttributionBackend value: "k8s_audit"/
 // "audit_unattributed" kinds (Name == "k8s_audit_logs", carried on
-// "audit_unattributed" sources same as gcpaudit's own Name/Backend
+// "audit_unattributed" sources same as package gcp's own Name/Backend
 // pattern).
 //
 // DeliveryLag is a documented, conservative PLACEHOLDER, not a measured
@@ -60,7 +63,7 @@ var Backend = core.AttributionBackend{
 // in CloudWatch Logs.
 //
 // KNOWN GAP, checked and flagged rather than assumed clean (mirroring
-// gcpaudit's own Pub/Sub-vs-Secret-Manager precedent, UBI-21): which
+// package gcp's own Pub/Sub-vs-Secret-Manager precedent, UBI-21): which
 // identity value a Kubernetes audit event's objectRef can be matched
 // against is unverified until this project's own Stage 2 live-cluster
 // work — core.AttributeDrift's identityCandidates only offers a
@@ -87,7 +90,7 @@ func LogGroupForCluster(cluster string) string {
 func New(ctx context.Context, region, logGroup string) (*Client, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
-		return nil, fmt.Errorf("k8saudit: load AWS config: %w", err)
+		return nil, fmt.Errorf("k8s: load AWS config: %w", err)
 	}
 	return &Client{api: sdkcwl.NewFromConfig(cfg), logGroup: logGroup}, nil
 }
@@ -100,7 +103,7 @@ func New(ctx context.Context, region, logGroup string) (*Client, error) {
 // resourceID is whatever value the caller wants matched -- this Client has
 // no opinion on which observed identity value (id, in practice, for
 // kubernetes_* types today) should be tried, same posture as
-// cloudtrail.Client/gcpaudit.Client. The filter pattern is a simple quoted
+// cloudtrail.Client/gcp.Client. The filter pattern is a simple quoted
 // term match (CloudWatch Logs' own "contains this text" syntax) -- safe
 // unescaped for any real Kubernetes object identity value, since
 // Kubernetes names/namespaces/uids are restricted to DNS-1123-safe
@@ -120,7 +123,7 @@ func (c *Client) LookupEvents(ctx context.Context, resourceID string, since, unt
 			NextToken:     nextToken,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("k8saudit: filter log events for %q: %w", resourceID, err)
+			return nil, fmt.Errorf("k8s: filter log events for %q: %w", resourceID, err)
 		}
 		for _, e := range out.Events {
 			parsed, ok := parseEvent(e)
@@ -161,7 +164,7 @@ type auditEvent struct {
 // core.CloudTrailEvent. ok is false if Message isn't parseable JSON at
 // all -- the caller skips it rather than failing the whole LookupEvents
 // call over one bad line, same discipline as cloudtrail.parseEvent/
-// gcpaudit.parseEntry.
+// gcp.parseEntry.
 //
 // core.CloudTrailEvent's field names are AWS-shaped (ActorARN, in
 // particular) -- reused here rather than introduced as a new,

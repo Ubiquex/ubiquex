@@ -64,8 +64,8 @@ const (
 // genuinely differ per platform (UBI-21, docs/architecture.md — GCP
 // support): which IntentSource kinds to emit, and how long that
 // backend's own event delivery can lag. core stays entirely
-// backend-agnostic — cloudtrail/ and gcpaudit/ each own their own
-// AttributionBackend value (cloudtrail.Backend, gcpaudit.Backend) rather
+// backend-agnostic — audit/cloudtrail/ and audit/gcp/ each own their own
+// AttributionBackend value (cloudtrail.Backend, gcp.Backend) rather
 // than core hardcoding either platform's specifics.
 type AttributionBackend struct {
 	// Name identifies this backend for IntentSource.Backend on an
@@ -78,7 +78,7 @@ type AttributionBackend struct {
 
 	// SuccessKind is the IntentSource.Kind for a matched event —
 	// "cloudtrail" for cloudtrail.Backend, "gcp_audit" for
-	// gcpaudit.Backend.
+	// gcp.Backend.
 	SuccessKind string
 
 	// UnattributedKind is the IntentSource.Kind for a failed attribution
@@ -119,7 +119,7 @@ type AttributionBackend struct {
 // the resource's own Observed state (id/arn/name) rather than a static
 // per-type table: which attribute a backend's own resource-matching
 // actually recognizes varies by service (and by platform — see
-// gcpaudit/client.go's own doc comment on GCP's scheme-less resource
+// audit/gcp/client.go's own doc comment on GCP's scheme-less resource
 // paths), and was confirmed empirically (not assumed) to be "id" for
 // aws_s3_bucket/aws_iam_role/aws_vpc — searching by the full ARN returned
 // nothing at all even for genuinely matching, real events (see STATE.md's

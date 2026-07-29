@@ -37,7 +37,7 @@ var testAWSBackend = AttributionBackend{
 	DeliveryLag:      15 * time.Minute,
 }
 
-// testGCPBackend mirrors gcpaudit.Backend's own value, same reasoning as
+// testGCPBackend mirrors gcp.Backend's own value, same reasoning as
 // testAWSBackend above.
 var testGCPBackend = AttributionBackend{
 	Name:             "gcp_audit_logs",
@@ -232,7 +232,7 @@ func TestAttributeDrift_FallsBackFromIDToARN(t *testing.T) {
 // TestAttributeDrift_GCPBackend_SingleMatch is UBI-21's own coverage of
 // the generalized backend parameter: a matched event under
 // testGCPBackend must emit "gcp_audit" (not "cloudtrail"), reusing
-// ActorARN for the GCP principal email (see gcpaudit/client.go's own
+// ActorARN for the GCP principal email (see audit/gcp/client.go's own
 // doc comment on why).
 func TestAttributeDrift_GCPBackend_SingleMatch(t *testing.T) {
 	observed := json.RawMessage(`{"id":"projects/p/topics/t"}`)

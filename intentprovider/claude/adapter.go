@@ -3,7 +3,7 @@
 // of intentprovider itself so a future OpenAI/Gemini/local adapter each
 // gets its own sibling package, never a shared vendor-SDK import forced
 // on the interface's own package. The same isolation
-// cloudtrail/gcpaudit/k8saudit already establish for platform-specific
+// audit/cloudtrail, audit/gcp, audit/k8s already establish for platform-specific
 // I/O, and the same reasoning ledgerstore's own s3-only wiring gave for
 // keeping gs/azblob out until they earn their own dependency cost.
 package claude

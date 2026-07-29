@@ -170,7 +170,7 @@ type K8sAuditConfig struct {
 	Region string `toml:"region" json:"region"`
 	// LogGroup overrides the CloudWatch Logs log group to search, for a
 	// cluster whose control-plane logging wasn't left at EKS's own
-	// default naming convention. Empty means k8saudit.LogGroupForCluster(Cluster).
+	// default naming convention. Empty means k8s.LogGroupForCluster(Cluster).
 	LogGroup string `toml:"log_group" json:"log_group"`
 }
 

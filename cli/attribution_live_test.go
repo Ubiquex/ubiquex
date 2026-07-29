@@ -175,8 +175,8 @@ func runGCloudForAttribution(t *testing.T, args ...string) {
 // ("projects/<PROJECT_ID>/topics/<name>"), which matches this type's own
 // observed "id" attribute exactly. google_secret_manager_secret's own
 // audit entries use the numeric project number instead -- a real,
-// confirmed gap in gcpaudit's own correlation logic today (see
-// gcpaudit/client.go's own doc comment, and STATE.md) that this test
+// confirmed gap in gcp's own correlation logic today (see
+// audit/gcp/client.go's own doc comment, and STATE.md) that this test
 // deliberately does not paper over by picking a type where it doesn't
 // apply.
 func TestScan_AttributesRealDrift_LiveGCPAudit(t *testing.T) {
@@ -199,7 +199,7 @@ func TestScan_AttributesRealDrift_LiveGCPAudit(t *testing.T) {
 	// way some other tests in this file use) -- attribution's own backend
 	// dispatch (cli/attribution.go's newAttributionBackend) keys off
 	// ScanRequest.ProviderSource, itself populated from --source, so ubx
-	// needs to know this scan is GCP to pick gcpaudit/ over cloudtrail/.
+	// needs to know this scan is GCP to pick audit/gcp/ over cloudtrail/.
 	adoptOut, err := runUbx(t, nil, "scan",
 		"--source", "hashicorp/google",
 		"--provider-version", attributionGCPProviderVersion,
@@ -243,7 +243,7 @@ func TestScan_AttributesRealDrift_LiveGCPAudit(t *testing.T) {
 	}
 
 	// Cloud Audit Logs' own delivery latency, directly measured while
-	// building gcpaudit/ (see gcpaudit.Backend's own doc comment): a
+	// building audit/gcp/ (see gcp.Backend's own doc comment): a
 	// Pub/Sub CreateTopic entry became queryable roughly 18 seconds after
 	// the API call returned -- far faster than CloudTrail's measured ~2
 	// minutes. Poll for up to 2 minutes anyway rather than assume this

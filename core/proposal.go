@@ -157,7 +157,7 @@ type IntentSource struct {
 	// "gcp_audit" sources, not literally an ARN -- reusing the same field
 	// (not introducing a GCP-specific one) is a deliberate choice: both
 	// backends implement the same core.EventLookup interface and produce
-	// the same core.CloudTrailEvent shape (see gcpaudit/client.go's own
+	// the same core.CloudTrailEvent shape (see audit/gcp/client.go's own
 	// doc comment for the full reasoning); SessionContext is AWS-specific
 	// and always empty for "gcp_audit" sources.
 	EventID        string          `json:"event_id,omitempty"`

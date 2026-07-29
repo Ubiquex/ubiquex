@@ -24,8 +24,8 @@ import (
 // interface and the sentinel errors implementations return; the
 // git-directory implementation (gitledgerstore.go, stdlib only) lives
 // here too, but a gocloud.dev/blob-backed implementation lives in its own
-// sibling package (ledgerstore/), the same split cloudtrail/gcpaudit/
-// k8saudit already establish for heavy SDK dependencies.
+// sibling package (ledgerstore/), the same split audit/cloudtrail, audit/gcp,
+// audit/k8s already establish for heavy SDK dependencies.
 //
 // Every method is byte-level: JSON marshal/unmarshal, and therefore
 // ErrCorruptLedgerEntry/ErrCorruptLedgerHead/ErrCorruptApplyRecord's own

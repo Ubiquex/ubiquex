@@ -9,7 +9,7 @@ import "encoding/json"
 // provider don't import each other -- this string is the wire-format
 // convention both independently conform to, the same pattern
 // IntentSource.Kind string literals already establish across
-// cloudtrail/gcpaudit/core.
+// audit/cloudtrail, audit/gcp, core.
 const RedactedMarkerKey = "$redacted"
 
 // isRedactedMarker reports whether a decoded-generic JSON object is

@@ -3,7 +3,7 @@
 // one code path (UBI-32 Arc B, docs/architecture.md — "LedgerStore
 // interface"). Kept out of package core deliberately: core stays
 // dependency-free (the same inversion StateReader/EventLookup already
-// establish for cloudtrail/gcpaudit/k8saudit's own heavy SDK
+// establish for audit/cloudtrail, audit/gcp, audit/k8s's own heavy SDK
 // dependencies), and gocloud.dev/blob's own driver packages each pull in
 // their respective cloud SDK.
 package ledgerstore

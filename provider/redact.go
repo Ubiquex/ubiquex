@@ -12,7 +12,7 @@ import (
 // $redacted value encoding, UBI-23). provider and core don't import each
 // other; this string is the wire-format convention both independently
 // conform to, the same pattern IntentSource.Kind string literals already
-// establish across cloudtrail/gcpaudit/core.
+// establish across audit/cloudtrail, audit/gcp, core.
 const redactedMarkerKey = "$redacted"
 
 // Redact walks block's Sensitive flags over observed (a resource's

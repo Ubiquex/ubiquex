@@ -8,7 +8,7 @@
 // "sdk/ts/evaluator/... the Go side lives in cli/ or a new sdkeval/
 // package" named this as an open call; a standalone package matches
 // this project's own established shape for a substantial, independently
-// testable subsystem (intentprovider/, cloudtrail/, gcpaudit/,
+// testable subsystem (intentprovider/, audit/cloudtrail/, audit/gcp/,
 // ledgerstore/ are all top-level too) -- cli/ stays a thin wiring layer,
 // not this session's job to build (ubx resolve --from-code is slice 5).
 package sdkeval

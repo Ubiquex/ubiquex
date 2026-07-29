@@ -6,10 +6,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/cloudtrail"
+	"github.com/ubiquex/ubiquex-cli/audit/cloudtrail"
+	"github.com/ubiquex/ubiquex-cli/audit/gcp"
+	"github.com/ubiquex/ubiquex-cli/audit/k8s"
 	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/gcpaudit"
-	"github.com/ubiquex/ubiquex-cli/k8saudit"
 )
 
 // errK8sAuditNotConfigured means a kubernetes_*/helm_release drift was
@@ -72,37 +72,37 @@ func attributeDrift(ctx context.Context, ledger *core.Ledger, addr core.Address,
 // via --source hashicorp/kubernetes or hashicorp/helm, which is exactly
 // what disambiguates it from an aws_eks_cluster's own CloudTrail-attributable
 // drift (docs/architecture.md — Kubernetes support §3). "hashicorp/google"
-// gets gcpaudit/; "hashicorp/kubernetes"/"hashicorp/helm" get k8saudit/,
+// gets audit/gcp; "hashicorp/kubernetes"/"hashicorp/helm" get audit/k8s,
 // returning errK8sAuditNotConfigured if .ubx/config's [k8s_audit].cluster
 // is unset -- never blocking, degrading to audit_unattributed/not_configured
-// at the call site instead; everything else -- "hashicorp/aws" explicitly,
-// and any unrecognized or empty source (a raw --provider path, no known
-// registry source) -- falls back to cloudtrail/, preserving exactly the
-// behavior every caller had before this backend registry existed. closeFn
-// is always non-nil and safe to call even when err != nil (a no-op in
-// that case).
+// at the call site instead; "hashicorp/azurerm" gets audit/azure (UBI-37);
+// everything else -- "hashicorp/aws" explicitly, and any unrecognized or
+// empty source (a raw --provider path, no known registry source) -- falls
+// back to audit/cloudtrail, preserving exactly the behavior every caller
+// had before this backend registry existed. closeFn is always non-nil and
+// safe to call even when err != nil (a no-op in that case).
 func newAttributionBackend(ctx context.Context, providerSource string, providerConfig json.RawMessage, k8sAudit K8sAuditConfig) (lookup core.EventLookup, backend core.AttributionBackend, closeFn func() error, err error) {
 	noop := func() error { return nil }
 	switch providerSource {
 	case "hashicorp/google":
-		client, err := gcpaudit.New(ctx, projectFromProviderConfig(providerConfig))
+		client, err := gcp.New(ctx, projectFromProviderConfig(providerConfig))
 		if err != nil {
-			return nil, gcpaudit.Backend, noop, err
+			return nil, gcp.Backend, noop, err
 		}
-		return client, gcpaudit.Backend, client.Close, nil
+		return client, gcp.Backend, client.Close, nil
 	case "hashicorp/kubernetes", "hashicorp/helm":
 		if k8sAudit.Cluster == "" {
-			return nil, k8saudit.Backend, noop, errK8sAuditNotConfigured
+			return nil, k8s.Backend, noop, errK8sAuditNotConfigured
 		}
 		logGroup := k8sAudit.LogGroup
 		if logGroup == "" {
-			logGroup = k8saudit.LogGroupForCluster(k8sAudit.Cluster)
+			logGroup = k8s.LogGroupForCluster(k8sAudit.Cluster)
 		}
-		client, err := k8saudit.New(ctx, k8sAudit.Region, logGroup)
+		client, err := k8s.New(ctx, k8sAudit.Region, logGroup)
 		if err != nil {
-			return nil, k8saudit.Backend, noop, err
+			return nil, k8s.Backend, noop, err
 		}
-		return client, k8saudit.Backend, noop, nil
+		return client, k8s.Backend, noop, nil
 	default:
 		client, err := cloudtrail.New(ctx, regionFromProviderConfig(providerConfig))
 		if err != nil {

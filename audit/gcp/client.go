@@ -1,10 +1,12 @@
-// Package gcpaudit is UBI-21 Stage 2's concrete implementation of
+// Package gcp is UBI-21 Stage 2's concrete implementation of
 // core.EventLookup against GCP's real Cloud Audit Logs (Cloud Logging's
 // ListLogEntries API) — the GCP counterpart to package cloudtrail (UBI-10),
 // same dependency-inversion discipline: core defines the plain-Go shape it
 // needs (core.EventLookup), this package translates the real GCP client
 // library's response into it at the boundary. core itself never imports a
-// GCP SDK.
+// GCP SDK. Renamed from gcpaudit (UBI-37, the audit/ consolidation — see
+// audit/azure's own doc comment for the full rationale) with zero
+// behavior change: same interface, same dispatch.
 //
 // Scope, deliberately narrow, mirroring cloudtrail's own AWS scoping
 // decision (docs/plan.md's UBI-10 rationale): **Admin Activity** audit
@@ -14,7 +16,7 @@
 // to "who changed this resource's configuration." Data Access audit logs
 // (opt-in, and the GCP equivalent of CloudTrail's data events) are
 // deliberately excluded, same reasoning as cloudtrail/'s own scope.
-package gcpaudit
+package gcp
 
 import (
 	"context"
@@ -36,7 +38,7 @@ import (
 // unmarshal the entry's Any payload back into an audit.AuditLog.
 const auditLogTypeURL = "type.googleapis.com/google.cloud.audit.AuditLog"
 
-// Backend is gcpaudit's own core.AttributionBackend value: "gcp_audit"/
+// Backend is gcp's own core.AttributionBackend value: "gcp_audit"/
 // "audit_unattributed" kinds (Name == "gcp_audit_logs", carried on
 // "audit_unattributed" sources), and a delivery lag based on direct
 // measurement against a real project (UBI-21 Stage 2), not GCP's own
@@ -89,7 +91,7 @@ type Client struct {
 func New(ctx context.Context, project string) (*Client, error) {
 	api, err := logging.NewClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gcpaudit: create logging client: %w", err)
+		return nil, fmt.Errorf("gcp: create logging client: %w", err)
 	}
 	return &Client{api: api, project: project}, nil
 }
@@ -131,7 +133,7 @@ func (c *Client) LookupEvents(ctx context.Context, resourceID string, since, unt
 			return events, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("gcpaudit: list log entries for %q: %w", resourceID, err)
+			return nil, fmt.Errorf("gcp: list log entries for %q: %w", resourceID, err)
 		}
 		parsed, ok := parseEntry(entry)
 		if !ok {

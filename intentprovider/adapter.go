@@ -1,7 +1,7 @@
 // Package intentprovider is UBI-41's own boundary for LLM-authored
 // intent/v1 drafts -- kept out of core deliberately (core stays
 // dependency-free; this needs an HTTP client and vendor SDKs, the same
-// inversion cloudtrail/gcpaudit/k8saudit already establish for
+// inversion audit/cloudtrail, audit/gcp, audit/k8s already establish for
 // platform-specific I/O), and kept as its own package rather than folded
 // into core/resolver (which stays provider-import-free, docs/resolver.md
 // -- and now, by the same discipline, intentprovider-import-free too).

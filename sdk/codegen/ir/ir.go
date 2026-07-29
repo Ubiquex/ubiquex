@@ -5,7 +5,7 @@
 // per-language template, e.g. sdk/codegen/templates/ts) consumes only
 // the types in this file, never provider.Schema directly -- the same
 // "one shared core, swappable per-language plugin" shape
-// intentprovider.Adapter/core.StateReader/cloudtrail+gcpaudit's
+// intentprovider.Adapter/core.StateReader/audit/cloudtrail+audit/gcp's
 // EventLookup already establish elsewhere in this codebase.
 package ir
 

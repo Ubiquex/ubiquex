@@ -19,7 +19,7 @@ var remoteLedgerOpener func(ctx context.Context, storeURI string) (LedgerStore, 
 // a store-URI-shaped ref. Called once, by the cli package's own startup
 // wiring (cli.NewRootCmd), since core itself stays free of
 // gocloud.dev/blob and its own driver packages -- the same inversion
-// cloudtrail/gcpaudit/k8saudit already establish for their own heavy SDK
+// audit/cloudtrail, audit/gcp, audit/k8s already establish for their own heavy SDK
 // dependencies, expressed as a registry (gocloud.dev/blob's own URLMux is
 // the direct precedent) rather than a parameter thread, since OpenRef's
 // own callers are scattered across core/resolver, not centralized behind

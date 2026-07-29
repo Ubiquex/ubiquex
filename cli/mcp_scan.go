@@ -146,7 +146,7 @@ func computeScanJSON(ctx context.Context, opts scanJSONOptions) (*scanJSON, erro
 			"propose \"both\" on a drifted resource generates two; omit out to receive both inline", addr)
 	}
 
-	// CloudTrail/k8saudit attribution is drift_adopt-specific (docs/schema.md),
+	// CloudTrail/audit-k8s attribution is drift_adopt-specific (docs/schema.md),
 	// same as the CLI's own scan path -- apply it to whichever generated
 	// proposal is the drift_adopt, if any.
 	var adoptProposal *core.Proposal
