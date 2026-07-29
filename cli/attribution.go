@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ubiquex/ubiquex-cli/audit/azure"
 	"github.com/ubiquex/ubiquex-cli/audit/cloudtrail"
 	"github.com/ubiquex/ubiquex-cli/audit/gcp"
 	"github.com/ubiquex/ubiquex-cli/audit/k8s"
@@ -103,6 +104,12 @@ func newAttributionBackend(ctx context.Context, providerSource string, providerC
 			return nil, k8s.Backend, noop, err
 		}
 		return client, k8s.Backend, noop, nil
+	case "hashicorp/azurerm":
+		client, err := azure.New(ctx, subscriptionFromProviderConfig(providerConfig))
+		if err != nil {
+			return nil, azure.Backend, noop, err
+		}
+		return client, azure.Backend, noop, nil
 	default:
 		client, err := cloudtrail.New(ctx, regionFromProviderConfig(providerConfig))
 		if err != nil {
@@ -133,4 +140,16 @@ func projectFromProviderConfig(raw json.RawMessage) string {
 	}
 	_ = json.Unmarshal(raw, &cfg)
 	return cfg.Project
+}
+
+// subscriptionFromProviderConfig is regionFromProviderConfig's Azure
+// counterpart: extracts "subscription_id" from the same provider-config
+// JSON already passed to Provider.Configure, e.g.
+// {"subscription_id":"...", "features":[{}]}.
+func subscriptionFromProviderConfig(raw json.RawMessage) string {
+	var cfg struct {
+		SubscriptionID string `json:"subscription_id"`
+	}
+	_ = json.Unmarshal(raw, &cfg)
+	return cfg.SubscriptionID
 }
