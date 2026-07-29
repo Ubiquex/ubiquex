@@ -476,11 +476,94 @@ outcome is a bug in the harness design, not an acceptable gap — matching
 | 3 | Probe resource leakage — sweep verification | A live-tier probe run is killed (`SIGKILL`) mid-way through create→destroy for some type, or a probe's own destroy step itself genuinely fails (a real UBI-44-shaped destroy-lie, or an ordinary transient failure) — real, throwaway infrastructure is left behind in the sandbox account. | Every resource a live probe ever creates is tagged/named with a discoverable, greppable convention (the same `ubx-*` naming precedent this project's own GCP/Azure live-tier sessions already established by hand). A separate, real sweep command — not a manual memory-based check — enumerates every resource matching that convention across the sandbox account and reports (or, with explicit confirmation, destroys) anything left behind. The harness's own run summary distinguishes three real, distinguishable outcomes: clean (nothing left), leaked-and-swept (found and cleaned up), and leaked-sweep-failed (found, but cleanup itself didn't succeed) — never silently reporting overall success while real, billing-incurring resources remain live in the account. |
 | 4 | A provider serving inconsistent schema between calls | Two `GetProviderSchema` calls against what's supposed to be the SAME acquired provider binary, same pinned version, return materially different results for the same type — a real (if rare) provider-side bug, or a silent binary substitution mid-run (e.g. a `UBX_PROVIDER_MIRROR` swap partway through a long bulk run). | The harness hashes the schema once, at the very start of a bulk run, and re-verifies that hash before trusting any later-arriving result within the SAME run — never silently generating half a registry against schema A and half against schema B. A detected mismatch fails the whole run loudly, naming exactly what changed (which type, which attribute, which flag), rather than producing a registry that looks complete but is internally self-contradictory. |
 
+## Amendment (session 2): the probe generator + hermetic tier, built
+
+The design above is now real code: `conformance/probe.go` (the `Finding`
+type and its `FindingClass`/`Tier`/`Confidence` enums, `ProbeType`,
+`ProbeSchema`, and the three hermetic-half probes — `probeIdentityShape`,
+`probeSensitiveEcho`, `probeDrift`), `conformance/probe_test.go` (18
+hermetic unit tests against hand-built `provider.Block` fixtures, no
+network, always runs), and `conformance/probe_live_schema_test.go`
+(gated `RequireLive`, same network-only reason as
+`gcp_provider_test.go`/`azure_provider_test.go`). Probe 3 (destroy
+honesty) still has no code at all, per its own "no hermetic half" design
+— nothing in this amendment touches it.
+
+**A few real decisions made concrete while building, not fully pinned by
+the design above**: the registry format's own `verb` axis resolves to
+`"read"` for all three hermetic-tier lie-classes (incomplete-read,
+sensitive-underflag, undriftable are all questions about what a
+`ReadResource` call returns), except `probeDrift`, which uses `"drift"`
+specifically — a real rescan operation, distinct enough from a plain read
+to name separately; `"destroy"` stays reserved, unused by any code that
+exists yet. `identityCandidateAttrs` (`id`, `self_link`, `arn`, `name`)
+is deliberately broader than `core.AttributeDrift`'s own narrower
+`identityCandidates` (`id`, `arn`, `name` only, for a different purpose)
+— matching how `TypeSpec.IdentityFields` has actually been populated by
+hand across every platform, not how attribution happens to search.
+`probeDrift`'s "settable attribute" check walks nested blocks
+recursively (a `provider.NestedBlock` carries no `Optional`/`Required`
+flag of its own in this project's schema shape — only attributes, at any
+depth, can be user-settable).
+
+**Live-verified against all five real, currently-onboarded providers**
+(`UBX_CONFORMANCE_LIVE=1`, this session), proving the design's own
+central "provider-agnostic by construction" claim against real schemas,
+not just hand-built fixtures — real, unedited counts:
+
+| Source | Types | Findings | incomplete-read (confirmed) | sensitive-underflag (candidate) | undriftable (candidate) |
+| --- | --- | --- | --- | --- | --- |
+| `hashicorp/aws` 6.54.0 | 1,682 | 742 | 134 | 607 | 1 |
+| `hashicorp/google` 7.40.0 | 1,319 | 278 | 0 | 278 | 0 |
+| `hashicorp/azurerm` 5.0.0 | 1,103 | 263 | 0 | 263 | 0 |
+| `hashicorp/kubernetes` 2.35.1 | 82 | 51 | 1 | 50 | 0 |
+| `hashicorp/helm` 2.17.0 | 1 | 1 | 0 | 1 | 0 |
+
+Two spot-checks against real, hand-verified ground truth this project
+already had on file confirm the mechanism reproduces known-real findings,
+not just that it runs without error: `helm_release`'s own
+`metadata.notes` (UBI-22/24's own hand-verified sensitive-echo finding)
+is caught as a `sensitive-underflag` candidate; `azurerm_resource_group`
+(UBI-37's own hand-verified `id`-alone-sufficient finding) correctly
+produces NO `incomplete-read` finding, since both `id` and `name` are
+present in its real schema. Determinism (running the identical real
+schema through `ProbeSchema` twice produces byte-identical output) is
+asserted directly against all five real schemas, not just the hermetic
+fixtures.
+
+**134 AWS types with zero recognized identity candidate at all**, and
+1 Kubernetes type — real, confirmed findings, not yet individually
+triaged (that's exactly the kind of "flagged, not silently resolved"
+handoff this design always intended a `Confirmed` finding to produce;
+which specific types these are, and whether they're genuinely
+unreadable or simply named differently than `id`/`self_link`/`arn`/
+`name`, is unstarted human-triage work, not resolved by this session).
+Zero GCP or Azure types tripped the hermetic identity check at all —
+consistent with both platforms' own prior, hand-verified finding that
+every sampled type carries a flat `id` (GCP: `id`/`self_link`/`name`;
+Azure: `id`/`name`).
+
+**Layering into `conformance.Registry` itself (writing a `Finding` back
+onto an existing `TypeSpec`, or reconciling a contradiction) is
+deliberately not attempted this session** — `Finding` stays a wholly
+separate, additive output for now, exactly as scoped in "What this
+doesn't yet cover" below (still true after this amendment, only
+narrower: the generator now genuinely exists; wiring it INTO the
+existing hand-written registry is real, unstarted follow-up).
+
 ## What this doesn't yet cover, named rather than assumed
 
-Not designed here, and therefore not yet a claim this arc makes about
-itself: the actual generator/probe CODE (session 2+ of this same arc, by
-its own sizing); any specific platform's real bulk live-tier run (a
+Updated after the session-2 amendment above (the hermetic-tier probe
+generator now exists; what follows is what STILL doesn't). Not built,
+and therefore not yet a claim this arc makes about itself: probe 3's own
+destroy-honesty plumbing (`core/executor.Ship`-based, no hermetic half,
+untouched by session 2); layering `Finding`s back into
+`conformance.Registry`'s own hand-written `TypeSpec` entries (session
+2's own `Finding` output is wholly separate/additive, not yet wired into
+the existing registry at all — see the amendment above); a live-tier
+probe for ANY of the four lie-classes (nothing in session 2 creates,
+mutates, or destroys a single real resource); any specific platform's real
+bulk live-tier run (a
 GCP-project-scale or full-AWS-account-scale execution against ~1,000+
 real types is real, ongoing infrastructure cost and time, explicitly
 scoped as per-platform follow-up, not this design session); Helm's own

@@ -1756,6 +1756,27 @@
   structurally incapable of ever finding another UBI-44-shaped bug.
   Four-row adversarial program. No code this session, per protocol --
   session 2+ builds the generator. See STATE.md for the full account.
+- 2026-07-29 -- UBI-50 session 2 (generated conformance harness -- the
+  probe generator + hermetic tier, built): `conformance/probe.go`'s
+  `Finding` type plus `ProbeType`/`ProbeSchema` and the three
+  hermetic-half probes designed in session 1
+  (identity-shape/sensitive-echo/drift-detectability -- probe 3, destroy
+  honesty, still has no code, per its own "no hermetic half" design).
+  18 hermetic unit tests, no network. Live-verified
+  (`UBX_CONFORMANCE_LIVE=1`, network-only, same reason as the existing
+  provider-acquire tests) against all five real, currently-onboarded
+  providers at once -- proving "provider-agnostic by construction"
+  against real schemas, not hand-built fixtures: aws (1,682 types, 742
+  findings), google (1,319 types, 278), azurerm (1,103 types, 263),
+  kubernetes (82 types, 51), helm (1 type, 1). Determinism and two
+  spot-checks against real, hand-verified ground truth already on file
+  (`helm_release.metadata.notes`, `azurerm_resource_group`'s own clean
+  identity shape) both confirmed directly against real schemas.
+  `docs/conformance-harness.md` gained a session-2 amendment. Not
+  built: probe 3, any live-tier probe, and layering `Finding` output
+  back into `conformance.Registry` (stays wholly separate/additive) --
+  named explicitly. `go build/vet/test`, `gofmt -l .` clean. See
+  STATE.md for the full account.
 
 ## Strategy
 
@@ -4372,7 +4393,7 @@ interaction beyond schema reads already established elsewhere, zero
 `ubx ship` against anything but `fakeprovider` across all four sessions —
 the arc landed exactly as scoped when it was filed.
 
-### Generated conformance harness (UBI-50) — session 1, docs-first
+### Generated conformance harness (UBI-50) — sessions 1-2
 
 Founder decision, filed immediately after UBI-37 (Azure, the fourth
 platform) closed: no permanent verified/unverified split across a
@@ -4437,10 +4458,46 @@ purpose. Live-tier runs are designated live legs, explicit and
 opt-in, generalizing the standing ship-verification rule to a new
 context, never a default.
 
-No code this session, per the ticket's own docs-first instruction and
-this project's own session protocol. Session 2+ (the ticket's own
-"~3-4 sessions design+build+first bulk run" sizing, not revised down
-here) builds the actual generator. See STATE.md for the full account.
+No code session 1, per the ticket's own docs-first instruction and this
+project's own session protocol.
+
+**Session 2: the probe generator + hermetic tier, built for real.**
+`conformance/probe.go` — `Finding{Source,Version,Type,Verb,Class,Tier,
+Confidence,Detail}`, `ProbeType`/`ProbeSchema`, and the three
+hermetic-half probes (`probeIdentityShape`, `probeSensitiveEcho`,
+`probeDrift`) designed in session 1. `verb` resolves to `"read"` for all
+three hermetic lie-classes except `probeDrift`'s own `"drift"`;
+`"destroy"` stays reserved, unused (probe 3 still has no code at all,
+per its own "no hermetic half" design). 18 hermetic unit tests
+(`conformance/probe_test.go`, hand-built `provider.Block` fixtures, no
+network) plus a real-provider integration test
+(`conformance/probe_live_schema_test.go`, `RequireLive`-gated, same
+network-only reason as the existing GCP/Azure provider-acquire tests) —
+**live-verified against all five real, currently-onboarded providers**:
+`hashicorp/aws` (1,682 types, 742 findings: 134 confirmed
+incomplete-read, 607 candidate sensitive-underflag, 1 candidate
+undriftable), `hashicorp/google` (1,319 types, 278 candidate
+sensitive-underflag, zero incomplete-read or undriftable), `hashicorp/
+azurerm` (1,103 types, 263 candidate sensitive-underflag, zero
+incomplete-read or undriftable), `hashicorp/kubernetes` (82 types, 51
+findings: 1 confirmed incomplete-read, 50 candidate
+sensitive-underflag), `hashicorp/helm` (1 type, 1 candidate
+sensitive-underflag). Determinism (identical schema, byte-identical
+`ProbeSchema` output across two runs) asserted directly against all
+five real schemas, not just hand-built fixtures. Two spot-checks against
+real, hand-verified ground truth already on file confirm the mechanism
+reproduces known-real findings, not just that it runs clean:
+`helm_release`'s own `metadata.notes` (UBI-22/24) caught as a
+sensitive-underflag candidate; `azurerm_resource_group` (UBI-37)
+correctly produces zero incomplete-read findings. `docs/
+conformance-harness.md` gained a session-2 amendment recording these
+real decisions and numbers. Not built this session: probe 3 (destroy
+honesty, no hermetic half exists to build), any live-tier probe for any
+of the four lie-classes, and layering `Finding` output back into
+`conformance.Registry`'s own hand-written `TypeSpec` entries (`Finding`
+stays wholly separate/additive for now) — named explicitly, not silently
+assumed done. `go build/vet/test`, `gofmt -l .` clean across the whole
+repo. See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 
