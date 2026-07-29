@@ -1652,6 +1652,35 @@
   reflexive own-stack case). `go build/vet/test`, `gofmt -l .` clean. All
   four quartet tickets (UBI-38/39/40/48) now closed -- see the wedge
   section below for the scoreboard. See STATE.md for the full account.
+- 2026-07-29 -- UBI-37 Stage 1 (Azure support, the UBI-21 playbook
+  verbatim, fourth platform): `audit/` restructure landed first as its
+  own commit (`cloudtrail`/`gcpaudit`/`k8saudit` -> `audit/cloudtrail`/
+  `audit/gcp`/`audit/k8s`, the latter two renamed to match; pure git mv
+  plus a tiny import-path sweep -- only `cli/attribution.go` had a real,
+  non-comment call site outside the moved packages; full suite green
+  proving zero behavior change before any Azure code landed), making
+  room for `audit/azure`. `hashicorp/azurerm` 5.0.0 verified empirically
+  via `provider.Acquire` -- negotiates tfplugin v5, matching
+  hashicorp/aws and hashicorp/google. `azure/azapi` separately assessed
+  (never assumed to match azurerm's own shape): negotiates v6 (the first
+  provider source this project has onboarded that doesn't speak v5) and
+  models every Azure resource via a handful of generic ARM-type-
+  parameterized types rather than one Go type per resource -- a poor fit
+  for the registry's own model, so it gets a standalone assessment test
+  instead of per-type entries. `conformance.Registry` gains 42
+  `hashicorp/azurerm` entries (FakeOnly, Implemented: false) across
+  compute/network/iam/storage/db/dns/messaging plus a new `management`
+  category for `azurerm_resource_group` (no prior platform needed one).
+  Every sampled type has both `id` (full ARM path) and `name` as flat
+  top-level attributes -- recorded as schema PRESENCE only, explicitly
+  not proof `id` alone suffices live, per this ticket's own
+  identity-shape caution (GCP's own storage_bucket/pubsub_topic/
+  secret_manager_secret entries already prove that gap can bite even
+  with an equally reasonable-looking schema). `go build/vet/test`,
+  `gofmt -l .` clean. Stage 2 (needs real Azure credentials, confirmed
+  available this session via `az account show`) continues in the same
+  session -- see the next entry once it lands. See STATE.md for the full
+  account.
 
 ## Strategy
 

@@ -1241,6 +1241,93 @@ Credentials against his own `personal-273114` project)
   the GCP project left exactly as found — same discipline every AWS
   `RealSafe` conformance test already follows.
 
+## Azure support (UBI-37)
+
+The fourth platform, "the UBI-21 playbook verbatim" per the ticket's own
+framing — not a new capability so much as a fourth, independent proof
+that `core.StateReader`/`core.EventLookup`/the (source, type)-keyed
+conformance registry are genuinely provider-agnostic, not
+AWS-and-GCP-shaped and merely undocumented as such. No design decision
+from UBI-21's own §1/§2 needed revisiting: `core.Address`/`--lookup`
+still carry no provider field, `ScanRequest.ProviderSource` already
+threads through to the teaching-error path and the attribution-backend
+registry without modification, and `core.EventLookup`'s single-method
+shape held up a third time with zero interface changes (see
+`audit/azure/client.go`'s own doc comment for what, if anything, DID
+surface as Azure-specific — mirroring `audit/gcp/client.go`'s own
+"KNOWN GAP" precedent rather than assuming a clean bill of health).
+
+**The `audit/` restructure rode along, per the ticket** ("collapse at
+backend #4," agreed in advance as the trigger point): `cloudtrail/`,
+`gcpaudit/`, `k8saudit/` moved to `audit/cloudtrail/`, `audit/gcp/`,
+`audit/k8s/` (the latter two also renamed to match — `gcpaudit`→`gcp`,
+`k8saudit`→`k8s`; `cloudtrail`'s own name was already directory-shaped
+and stayed put), making room for `audit/azure/` alongside its three
+siblings. Pure `git mv` plus an import-path/qualifier sweep — the actual
+blast radius was tiny: `core.EventLookup` and every `AttributionBackend`
+value are unchanged, and the ONLY real (non-comment) call site outside
+the moved packages themselves was `cli/attribution.go`'s own dispatch
+switch. Landed as its own commit, full `go test ./...` green before any
+Azure-specific code was added, proving zero behavior change from the
+move alone.
+
+### Stage 1 (this session, hermetic — no Azure subscription needed)
+
+- The provider layer verified empirically against `hashicorp/azurerm`
+  via `provider.Acquire` (same acquisition path every other source
+  already uses, registry.opentofu.org, checksum-verified) — schema pull,
+  protocol handshake, nothing else. **Empirical finding**:
+  `hashicorp/azurerm` 5.0.0 negotiates tfplugin **v5**, matching
+  `hashicorp/aws` and `hashicorp/google` — dual v5/v6 support earns its
+  keep a third time.
+- `azure/azapi` separately assessed, per the ticket's own "(and assess
+  azapi)" line — never assumed to behave like azurerm just because both
+  are Azure-namespace providers. **Empirical finding, and the whole
+  reason this was worth checking rather than assuming**: `azure/azapi`
+  2.11.0 negotiates tfplugin **v6** — the first provider source this
+  project has ever onboarded that doesn't speak v5. Its schema is also
+  structurally different: a small handful of generic, ARM-type-
+  parameterized resource types (`azapi_resource` and a few siblings)
+  rather than one native Go type per Azure resource the way azurerm (and
+  every AWS/GCP/Kubernetes type this project already tracks) works — a
+  poor fit for `conformance.Registry`'s own one-entry-per-resource-type
+  model, so azapi gets its own standalone assessment test
+  (`conformance/azure_provider_test.go`) rather than dozens of
+  near-identical registry entries. Not pursued further this session; a
+  real azapi-specific conformance/attribution story, if ever needed, is
+  its own follow-up.
+- `conformance.Registry` gains 42 `hashicorp/azurerm` `TypeSpec` entries
+  (`Safety: FakeOnly`, `Implemented: false` — the same seed-first,
+  work-through-later bootstrapping every earlier platform's own Stage 1
+  followed), spanning compute (Linux VM, AKS, ACR, Linux web/function
+  app, service plan), network (VNet/subnet/NSG/NIC/public IP/load
+  balancer/application gateway/firewall/NAT gateway), IAM (user-assigned
+  identity, role assignment), storage (storage account/container, managed
+  disk, Key Vault + secret + key), database (SQL Server/Database,
+  PostgreSQL/MySQL flexible server, Cosmos DB, Redis), DNS (public and
+  private zone, A record), messaging/observability (Service Bus
+  namespace/queue/topic, Event Hub namespace/hub, Monitor metric alert/
+  diagnostic setting/action group, Log Analytics workspace), and a new
+  `management` category for `azurerm_resource_group` (no prior platform
+  needed this bucket — AWS/GCP/Kubernetes have no direct analog to "the
+  container every other resource lives inside," Azure's Resource Group
+  concept has no equivalent in any provider this project has tracked
+  before).
+- **A real, empirically-confirmed structural difference from GCP,
+  spot-checked across all 42 seeded types**: every azurerm resource type
+  has BOTH `id` (the full `/subscriptions/<sub>/resourceGroups/<rg>/
+  providers/Microsoft.<namespace>/<type>/<name>` ARM path) and `name`
+  (the short resource name) as flat top-level schema attributes — no
+  GCP-style variation between `self_link`/`uid`/nested shapes. This is
+  recorded honestly as schema PRESENCE only, per this ticket's own
+  identity-shape caution ("probably work as `{"id"}` alone but PROVE
+  it") — not a live proof that `id` alone suffices for `ReadResource`,
+  which is exactly what GCP's own `google_storage_bucket`/
+  `google_pubsub_topic`/`google_secret_manager_secret` entries already
+  demonstrate can silently fail even with an equally reasonable-looking
+  schema. Stage 2 proves (or disproves) this per type, live, one at a
+  time — never assumed from the schema alone.
+
 ## Secrets (UBI-23)
 
 "Every infra change is a typed, hashed, signed proposal recorded in an
