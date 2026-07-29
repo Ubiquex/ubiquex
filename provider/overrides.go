@@ -37,6 +37,26 @@ var SensitiveOverrides = []SensitiveOverride{
 	{Source: "hashicorp/helm", Type: "helm_release", Path: "manifest"},
 	{Source: "hashicorp/helm", Type: "helm_release", Path: "metadata.values"},
 	{Source: "hashicorp/helm", Type: "helm_release", Path: "metadata.notes"},
+
+	// UBI-37 Stage 2's own sensitive-attribute audit finding, a
+	// structurally different justification from the Helm entries above
+	// (those are COMPUTED echoes of a template render; these are
+	// OPTIONAL, operator-authored config): azurerm_linux_web_app/
+	// azurerm_linux_function_app's own "app_settings" is a free-form
+	// map[string]string -- Azure App Service's real, documented
+	// mechanism for environment variables, and a well-known real-world
+	// pattern for stashing connection strings/API keys/secrets in
+	// plaintext (there is no azurerm-native "secret app setting" concept
+	// separate from this map; Key Vault references are themselves just
+	// specially-formatted string VALUES inside it). Terraform's own
+	// schema has no way to flag individual map entries Sensitive -- the
+	// whole attribute is a flat bag of arbitrary, user-defined keys, the
+	// same structural ceiling helm_release's own metadata.values hits.
+	// Full-attribute redaction is the same conservative choice made
+	// there: "secrets never in the ledger" wins over "some legitimate
+	// non-secret settings also get redacted."
+	{Source: "hashicorp/azurerm", Type: "azurerm_linux_web_app", Path: "app_settings"},
+	{Source: "hashicorp/azurerm", Type: "azurerm_linux_function_app", Path: "app_settings"},
 }
 
 // OverridePathsFor returns the dot-notation paths to force-redact for

@@ -53,6 +53,23 @@ func TestSensitiveOverrides_HelmReleaseSeeded(t *testing.T) {
 	}
 }
 
+// TestSensitiveOverrides_AzurermAppSettingsSeeded is a permanent
+// regression guard on UBI-37 Stage 2's own audit finding: azurerm_linux_
+// web_app/azurerm_linux_function_app's own free-form "app_settings" map
+// (Azure App Service's real environment-variable mechanism, and a
+// well-known real-world place operators stash connection strings/API
+// keys in plaintext) has no schema-level Sensitive flag at all -- there
+// is no per-key schema for a flat map[string]string, the same
+// structural ceiling helm_release's own metadata.values hits.
+func TestSensitiveOverrides_AzurermAppSettingsSeeded(t *testing.T) {
+	for _, typ := range []string{"azurerm_linux_web_app", "azurerm_linux_function_app"} {
+		got := OverridePathsFor("hashicorp/azurerm", typ)
+		if len(got) != 1 || got[0] != "app_settings" {
+			t.Fatalf("OverridePathsFor(hashicorp/azurerm, %s) = %v, want exactly [\"app_settings\"]", typ, got)
+		}
+	}
+}
+
 // TestRedact_OverrideOnlyAttributeRedacted is UBI-24's core case: an
 // attribute the schema never flags Sensitive at all, redacted purely
 // because it's in the override table.
