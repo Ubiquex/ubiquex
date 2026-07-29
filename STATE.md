@@ -4,6 +4,152 @@
 
 ## Current phase
 
+**UBI-50 (2026-07-29), session 3: triage, probe 3 (destroy honesty),
+registry layering, and the live tier for probes 1/2/4 — the next four
+slices off `docs/conformance-harness.md`'s own design, per direct
+instruction. Still In Progress in Linear (not closed — real work
+remains: a real bulk live-tier run, probe 3's own real-cloud
+confirmation, and writing layered verdicts back into the registry
+itself).**
+
+**Slice 1: triage a sample of the 134 zero-identity AWS types, live-tier
+policy decided before anything was created.** Listed and categorized all
+134 against the real `hashicorp/aws` 6.54.0 schema (not a sample — the
+full set, since the tooling to list them already existed from session
+2). Real, mechanical finding: 108 of 134 actually carry a plausible
+identity attribute after all, just type-prefixed rather than exactly
+`id`/`self_link`/`arn`/`name`
+(`aws_bedrock_guardrail_version`'s own `guardrail_arn`,
+`aws_iam_group_policies_exclusive`'s own `group_name`, and 106 more like
+them) — real AWS provider convention, not an edge case. A further 6
+"`_exclusive`"-shaped types matched the same way. `probeIdentityShape`
+refined: a `*_arn`/`*_id`/`*_name` suffix match now produces a weaker
+`Candidate` finding (never silently promoted to clean — a suffix match
+can also be a genuine foreign-key reference to a DIFFERENT resource),
+demoting AWS's own Confirmed count from 134 to 16. The remaining 16
+(`aws_macie2_organization_configuration`, `aws_organizations_aws_service_access`,
+and similar) plus Kubernetes' own `kubernetes_manifest` are real,
+structural singleton/account-scoped/composite-key resources with no
+per-instance identity attribute of any shape — **live-tier policy
+decided explicitly, before anything was created: excluded from
+live-tier auto-batch entirely**, needing a resolution model `ubx`'s
+current `{"id": ...}`-centric lookup convention doesn't support, not
+force-fit into a probe that would produce meaningless results.
+
+**Slice 2: probe 3 (destroy honesty) built and verified hermetically,
+end to end, through the REAL `core/executor.Ship` path — never a
+shortcut.** `conformance/destroy_probe.go`'s `ProbeDestroyHonesty`
+adopts via the real scan path (`core.RunScan`/`GenerateProposal`/
+`Accept`, unchanged from session 2), builds and accepts a real
+`Delta.Destroys` proposal by hand (no generator exists for this in
+`core`, matching every existing hermetic destroy test's own precedent),
+and ships it through `shipDestroyNode`/`reconcileDestroyLoop`'s own real
+code. Required extending `conformance`'s own `stateReaderAdapter`
+(`harness.go`) with `ApplyResourceChange`/`PlanResourceChange`,
+mirroring `cli/stateadapter.go`'s identical adapter exactly — the same
+concrete type now satisfies both `core.StateReader` and
+`executor.Applier`, "two views of the same adapter, not two
+implementations." Verified against the real fakeprovider binary, real
+tfplugin wire protocol (never a hand-rolled fake `Applier` the way
+`core/executor`'s own hermetic suite does): an honest destroy resolves
+genuinely destroyed at zero added cost (fast, always runs); a provider
+scripted to lie (`FAKEPROVIDER_APPLY_MODE=lying-destroy`, the exact same
+real fixture `cli/ship_lying_destroy_test.go` already uses) is correctly
+caught — `FindingDestroyLie`, `Confirmed` — and the address stays
+correctly un-tombstoned. The lying case pays `core/executor`'s own real
+~64-second production retry budget (unexported, not overridable from
+`conformance`), gated `UBX_TEST_SLOW=1` matching the existing
+`cli`-level precedent for the identical reason; both cases passed on
+first real run.
+
+**A real, deliberate, explicitly-flagged decision on ship doctrine vs.
+the standing ship-verification rule — asked, not assumed either way.**
+Probe 3's own LIVE confirmation (proving the destroy-lie detection
+against a REAL AWS destroy, not just fakeprovider) would need
+`executor.Ship` to reach a real `ApplyResourceChange` destroy call
+against real AWS — exactly what CLAUDE.md's ship-verification rule bans
+("never... against a real cloud provider... even one already
+credentialed... always, no exceptions"), born from the real UBI-47
+session 4 incident. Rather than either silently proceeding (real stakes,
+a hard rule, real incident precedent) or silently skipping the question
+entirely, this was surfaced directly to the user via `AskUserQuestion`
+before any real AWS destroy was attempted, framing both options
+honestly: keep probe 3 hermetic-only this session (probes 1/2/4's own
+live tier has no such conflict at all — create/read/mutate via the `aws`
+CLI directly, `core.RunScan` reads, never `executor.Ship`, matching
+every existing `RealSafe` conformance test's own precedent exactly), or
+treat this session as a sanctioned one-time exception. **The user chose
+the conservative option**: probe 3 stays hermetic-only; its own real-AWS
+confirmation is a deliberately separate, explicitly-scoped future
+decision, never bundled into this session's own live-tier work.
+
+**Slice 3: registry layering — machine verdicts layered under
+hand-verified findings, never replacing them.** `conformance/layer.go`'s
+`LayerFindings` groups generated `Finding`s by `(Source, Type)` and
+layers each group against `conformance.Registry`'s own matching
+`TypeSpec` (`ByType`) — purely additive, `Registry` itself never
+mutated, no `Finding` ever dropped. `detectContradictions` names two
+real, honest disagreement shapes without ever auto-resolving either
+direction: hand-recorded `IdentityFields` no longer present in the
+CURRENT schema at all (likely provider version drift since the entry
+was hand-verified); a `RealSafe`/`Implemented` type (a real account
+already confirmed it works) producing ANY incomplete-read concern for
+the current schema (worth a re-check, never assumed still accurate).
+**Checked against all five real, currently-onboarded providers: zero
+real contradictions across 723 layered verdicts** — every one of the
+154 hand-verified registry entries is consistent with the currently-
+pinned schema for its own platform, a real, checked confirmation (not
+assumed) that the registry hasn't silently drifted out of sync.
+
+**Slice 4: the live tier for probes 1, 2, and 4 — verified against one
+real, free AWS resource.** `conformance/live_probe.go`'s
+`ProbeIdentityShapeLive`/`ProbeSensitiveEchoLive`/`ProbeDriftLive` are
+the live confirmation halves of the three lie-classes probe 3 doesn't
+cover — deliberately read/rescan-only, nothing here ever calls
+`ApplyResourceChange`/`executor.Ship` at all (resource
+creation/destruction stays entirely out of band via the `aws` CLI,
+matching every existing live conformance test's own precedent exactly).
+Reused `aws_sns_topic` — already `RealSafe`/`Implemented` in the
+registry — for ALL three checks against ONE created-and-destroyed topic,
+minimizing real AWS footprint per the "free-tier types first,
+cost-aware" instruction: `ProbeIdentityShapeLive` confirmed `id` alone
+remains sufficient (matching the registry's own prior finding);
+`ProbeDriftLive` confirmed two untouched consecutive reads agree (an
+ordinary resource, not the `hashicorp/time` class). **A real false
+positive found and fixed on the FIRST real run**:
+`ProbeSensitiveEchoLive`'s own planted tag marker legitimately appears
+in BOTH `tags` and `tags_all` (AWS's own real, documented convention —
+`tags_all` is `tags` merged with any provider-level `default_tags`, not
+a leak) — the function's own signature was generalized from a single
+`markerAttr` to `expectedAttrs ...string` rather than left as a known
+gotcha for every future caller to rediscover. The topic was confirmed
+destroyed via a post-run `aws sns list-topics` sweep. Separately, the
+HERMETIC unit test for `ProbeIdentityShapeLive` itself surfaced its own
+real, if minor, finding on first run: fakeprovider's own `fake_widget`
+type echoes `name` back from the LOOKUP input rather than from stored
+state (`{"id":...}` alone reads `name` back empty) — confirming the
+comparison logic detects a genuine difference, not a hypothetical one,
+the very first time it was pointed at anything real.
+
+**`docs/conformance-harness.md` gained a session-3 amendment** recording
+all four slices' real findings and decisions. `docs/plan.md` gained a
+session-3 changelog entry and an extension to the UBI-50 wedge
+subsection (retitled "sessions 1-3"). **No ubiquex-docs change this
+session** — nothing user-visible shipped (internal probe-generator code,
+no new command/flag/behavior).
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo throughout,
+after every one of this session's four commits (identity-shape
+refinement, probe 3, registry layering, live tier). UBI-50 stays In
+Progress in Linear — real work remains (a real bulk live-tier run at
+platform scale, probe 3's own eventual real-cloud confirmation, writing
+`LayeredVerdict`s back into `registry.go` itself, and
+rerun-on-version-bump delta detection), matching the ticket's own
+"~3-4 sessions" sizing — this is session 3 of that estimate, with real,
+substantive scope still open.
+
+## Current phase (previous)
+
 **UBI-50 (2026-07-29), session 2: the probe generator + hermetic tier,
 built for real — the next slice off `docs/conformance-harness.md`'s own
 session-1 design, per direct instruction. Still In Progress in Linear
