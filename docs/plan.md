@@ -1936,6 +1936,47 @@
   blast-radius zero by construction -- discovery adds a new identity
   source only, never a new proposal kind or apply path. No code this
   session, per protocol. See STATE.md for the full account.
+- 2026-07-30 -- UBI-45 session 2 (cloud-side discovery -- the identity
+  bridge as real code + `ubx scan --discover` CLI wiring):
+  `discovery/arn.go`/`discovery/tiers.go` -- `ParseARN` splits an ARN's
+  own resource segment into a type-prefix + id (a real refinement found
+  while building, not assumed at design time: `(service,
+  resourceTypePrefix)`, not service alone, is what lets
+  `aws_iam_role`/`aws_iam_user`/`aws_iam_policy` disambiguate without
+  `--type` at all); `tierTable` seeded with session 1's own five
+  confirmed examples across all three tiers; an unclassified pair or a
+  failed Tier-C constructor surfaces `ErrNotYetAdoptable`, never a
+  fabricated lookup. `discovery/discover.go` -- a `TaggingAPI` interface
+  matching the real SDK client's own method signature exactly (zero
+  adapter code), pagination followed to completion, `CheckLimit` a
+  separate pure confirmation-gate function. `ubx scan --discover` wired
+  as a third mode alongside single-resource/`--all` (`cli/scan.go`,
+  `cli/scandiscover.go`), reusing `core.RunScan`/`core.GenerateProposal`
+  completely unchanged, mirroring `runScanAll`'s own structure; a real
+  bug found and fixed while building: a provider was being required even
+  when nothing discovered was adoptable. `--suggest-stacks` built as its
+  own separate, simpler read-only path -- no ledger, no provider,
+  nothing written. Two package-level seams
+  (`newDiscoveryTaggingAPI`/`newDiscoveryStateReader`, matching
+  `openRemoteLedgerStore`'s own convention) let hermetic CLI tests fully
+  control both halves without touching real AWS or fakeprovider's own
+  shared `fake_widget` fixture. All five adversarial rows verified
+  hermetically (17 new tests) -- a real finding along the way:
+  permission-denied and deleted-since-list collapse into the identical
+  `core.RunScan`-error code path, tested as one case rather than two
+  artificially separated ones; a second real bug found by the
+  idempotency test's own first failed attempt (a merely-generated
+  proposal isn't "already adopted" until a real `ubx accept` runs).
+  Live-verified, read-only, no ship: a real, hand-created SQS queue
+  (never via `ubx`) discovered end to end against real AWS -- real
+  tagging API, real Tier-C queue-URL construction, real
+  `hashicorp/aws` `ReadResource` call, a real zero-blast-radius
+  `adoption` proposal generated, confirmed via the filesystem that no
+  `ledger/` directory was ever created (nothing accepted). Swept clean
+  afterward. `go build/vet/test`, `gofmt -l .` clean across the whole
+  repo; zero regressions in the existing suite. Genesis attribution and
+  the live finale (slices 4-5) remain session 3+ work. See STATE.md for
+  the full account.
 
 ## Strategy
 
@@ -4817,7 +4858,7 @@ signing. `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. **UBI-49 closed** in one session, matching its own "Est. 1-2
 sessions" sizing. See STATE.md for the full account.
 
-### Cloud-side discovery (UBI-45) — session 1, docs-first
+### Cloud-side discovery (UBI-45) — sessions 1-2
 
 Founder decision: unparked directly (the ticket's own prior status was
 `PARKED — unpark trigger: wedge traction demanding non-Terraform
@@ -4893,12 +4934,59 @@ rather than re-derived. **Adoption stays record-only, blast-radius zero
 by construction** — this arc adds a new identity source only, never a
 new proposal kind, never a new apply path.
 
-No code this session, per protocol — session 2+ builds the identity
-bridge, `ubx scan --discover`'s own CLI wiring, and toward a live
-finale: a small, tagged, hand-created (ClickOps-style, never via `ubx`)
-real AWS resource set discovered and adopted through the signed flow
-end to end, with genesis attribution where available. See STATE.md for
-the full account.
+No code session 1, per protocol.
+
+**Session 2: the identity bridge as real code + `ubx scan --discover`
+CLI wiring.** `discovery/arn.go`/`discovery/tiers.go`: `ParseARN` splits
+an ARN's own resource segment into a type-prefix plus id — a real
+refinement found while building, not assumed at design time: keying the
+tier table by `(service, resourceTypePrefix)` rather than service alone
+is what lets `aws_iam_role`/`aws_iam_user`/`aws_iam_policy` (all
+service `iam`) disambiguate without needing `--type` at all.
+`tierTable` seeded with session 1's own five confirmed examples across
+all three tiers; an unclassified pair, or a Tier-C entry whose own
+constructor fails, surfaces `ErrNotYetAdoptable` — never a fabricated
+lookup. `discovery/discover.go`: a `TaggingAPI` interface matching the
+real SDK client's own `GetResources` method signature exactly (zero
+adapter code, the same dependency inversion `core.StateReader`/`core.
+EventLookup` already establish), pagination followed to completion,
+`CheckLimit` its own separate, pure confirmation-gate function. `ubx
+scan --discover` wired as a third mode alongside single-resource/
+`--all` (`cli/scan.go`, `cli/scandiscover.go`), reusing `core.RunScan`/
+`core.GenerateProposal` completely unchanged, mirroring `runScanAll`'s
+own structure closely; a real bug found and fixed while building: a
+provider was being required even when nothing discovered was
+adoptable, now skipped entirely in that case. `--suggest-stacks` built
+as its own separate, simpler read-only path — no ledger, no provider,
+nothing ever written. Two package-level seams
+(`newDiscoveryTaggingAPI`/`newDiscoveryStateReader`, the same
+convention `openRemoteLedgerStore` already establishes) let hermetic
+CLI tests fully control both the tagging API and the provider-read
+half without touching real AWS or fakeprovider's own shared
+`fake_widget` fixture — zero risk to the wide existing
+fakeprovider-based suite elsewhere in this project.
+
+**All five adversarial rows verified hermetically** (17 new tests: 10
+in `discovery`, 7 in `cli`) — a real finding along the way: permission
+denied mid-enumeration and resource deleted between list and read
+collapse into the *identical* `core.RunScan`-error code path, tested as
+one combined case rather than two artificially separated ones; a
+second real bug surfaced by the idempotency test's own first failed
+attempt (a merely-*generated* proposal isn't "already adopted" until a
+real `ubx accept` actually runs — the test's own original premise was
+wrong, caught by running it, not assumed correct from the test's own
+intent). **Live-verified, read-only, no ship**: a real, hand-created
+(`aws sqs create-queue`, never via `ubx`) SQS queue, tagged with a
+distinctive marker, discovered end to end against real AWS — the real
+tagging API, the real Tier-C queue-URL construction, the real
+`hashicorp/aws` `ReadResource` call, a real, complete, zero-blast-radius
+`adoption` proposal generated — confirmed via the filesystem that no
+`ledger/` directory was ever created at all (nothing accepted, purely
+record-only). Swept clean afterward, confirmed via both `aws sqs
+list-queues` and the tagging API. `go build/vet/test`, `gofmt -l .`
+clean across the whole repo; zero regressions anywhere in the existing
+suite. Genesis attribution and the live finale (slices 4-5) remain
+session 3+ work. See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 

@@ -393,38 +393,120 @@ today.
 
 ## Implementation slices, toward a real live finale
 
-Not started this session (docs-first, per protocol). The shape session
-2+ should build toward, in order:
+### Slices 1-3: built (2026-07-30, session 2)
 
-1. **The identity bridge as real code**: an ARN parser, the three-tier
-   classification table (seeded from this session's own confirmed
-   examples — `aws_iam_policy` Tier A; `aws_vpc`/`aws_iam_role`/
-   `aws_iam_user`/`aws_s3_bucket` Tier B; `aws_sqs_queue` Tier C),
-   surfacing "discovered, not yet adoptable" for anything unclassified.
-   Hermetic tests against captured (not live) tagging-API-shaped
-   fixtures for each tier, plus the pagination case named above.
-2. **`ubx scan --discover`** wired to `core.RunScan`/`core.
-   GenerateProposal`, completely unchanged — the CLI/enumeration layer
-   only, matching this arc's own "one operation, a new identity
-   source" framing.
-3. **`--suggest-stacks`** as its own read-only preview path.
-4. **Genesis attribution**, reusing `core.EventLookup` unchanged, new
-   creation-verb tables per backend.
-5. **The live finale**: a small, tagged, hand-created (ClickOps-style —
-   created via the AWS Console or plain `aws` CLI, never via `ubx`,
-   proving this arc genuinely doesn't need Terraform-managed origin) real
-   AWS resource set, discovered by tag, adopted through the signed flow
-   end to end, with genesis attribution where the backend allows it —
-   swept clean afterward, same discipline as every other live-verified
-   arc in this project.
+**The identity bridge, real code** (`discovery/arn.go`, `discovery/
+tiers.go`): `ParseARN` splits an ARN into partition/service/region/
+account/resource, further splitting resource on its first `/` into a
+resource-type prefix and id — the same `(service, resourceTypePrefix)`
+pair, not service alone, that lets `aws_iam_role`/`aws_iam_user`/
+`aws_iam_policy` (all `iam`) disambiguate without needing `--type` at
+all, a refinement found while implementing, not assumed from the design
+session. `tierTable`, keyed by that pair, seeded with exactly this
+session's own confirmed examples: `aws_iam_policy` (Tier A),
+`aws_vpc`/`aws_iam_role`/`aws_iam_user`/`aws_s3_bucket` (Tier B),
+`aws_sqs_queue` (Tier C, its own real queue-URL constructor). An
+unclassified `(service, prefix)` pair — or a classified Tier C entry
+whose constructor itself fails — surfaces as `ErrNotYetAdoptable`,
+never a fabricated lookup. Honestly named as this session's own fourth
+copy of the same tiny lookup-hint fact (alongside `conformance.
+Registry.LookupHint`, `core/lookuphints`, `tfstate.extraLookupAttrs`)
+— the structured `TypeSpec.LookupShape` consolidation remains
+recommended, not built.
+
+**`discovery.Discover`** (`discovery/discover.go`): a `TaggingAPI`
+interface shaped to match `*resourcegroupstaggingapi.Client.
+GetResources`'s own real method signature exactly, so the real SDK
+client satisfies it with zero adapter code (the same dependency
+inversion `core.StateReader`/`core.EventLookup` already establish) —
+hermetic tests script multi-page responses against a fake
+implementation, never a real AWS account. Paginates to completion
+before returning anything; `--type` allowlist resolved to expected
+`(service, prefix)` keys up front (`ErrUnknownDiscoveryType` if a
+named type has no tier-table entry at all — a fail-fast, whole-request
+error, distinct from a per-resource `ErrNotYetAdoptable`); every
+tag-matched, non-excluded ARN is classified and returned, adoptable or
+not. `CheckLimit` is its own small, pure confirmation-gate function
+(`DefaultLimit` 100), deliberately separated from pagination so the
+gate itself is hermetically testable without needing thousands of real
+tagged resources — exactly as session 1 named this gap honestly.
+
+**`ubx scan --discover`** (`cli/scan.go`, `cli/scandiscover.go`):
+wired as a third mode alongside single-resource and `--all`, mutually
+exclusive with both (mirrors `--all`'s own existing exclusivity
+check). `--tag key=value` (repeatable, same key OR-combines into the
+tagging API's own `TagFilters.Values`, different keys AND-combine —
+confirmed against the real API's own documented semantics via `go
+doc`, not assumed), `--discover-type` (a dedicated flag name, not a
+second meaning for the existing single-resource `--type` — avoids any
+ambiguity), `--region`, `--limit`/`--yes` for the confirmation gate,
+`--suggest-stacks`/`--stack-tag` for the read-only grouping preview
+(`runScanSuggestStacks`, a separate, simpler path — no ledger, no
+provider, nothing written, exactly per design). `runScanDiscover`
+mirrors `runScanAll`'s own structure closely: the identical
+`core.RunScan`/`core.GenerateProposal` pipeline, the identical
+`nextParent` chaining, the identical multi-provider-vs-single-provider
+branch — genuinely a new identity source only. Two package-level
+seams (`newDiscoveryTaggingAPI`, `newDiscoveryStateReader`), the same
+convention `openRemoteLedgerStore` already establishes, let hermetic
+CLI tests fully control both the tagging API and the provider-read
+half without touching real AWS or fakeprovider's own shared
+`fake_widget` fixture (whose schema has no bearing on discovery's own
+AWS-specific tier-table types) — zero risk introduced to the wide
+existing fakeprovider-based suite elsewhere in this project. A real,
+found-while-building refinement: a provider is only ever launched if
+at least one discovered resource actually bridged to a lookup shape —
+a `--tag` scope that turns up nothing adoptable never requires
+`--provider`/`--source` at all.
+
+**All five adversarial rows, hermetically verified**, `discovery/
+discover_test.go` + `cli/scandiscover_test.go`: no lookup shape (never
+silently dropped, `NotAdoptableReason` always populated); pagination
+(a real scripted 3-page fake, followed to completion) plus the
+confirmation gate (`CheckLimit`, both refusing and `--yes`-overridden);
+permission denied mid-enumeration and resource deleted between list
+and read — found, while testing, to be **the identical code path**:
+both are ordinary `core.RunScan` errors, both land in the same
+"provider read failed" skip category `runScanAll`'s own equivalent
+case already uses, confirmed with one combined test rather than two
+artificially separated ones; already-adopted rediscovery (a real `ubx
+accept` in between two discovery runs, confirming `core.RunScan`'s own
+existing idempotent classification needs zero new logic). 17 new tests
+total (10 in `discovery`, 7 in `cli`), all passing on first real run
+after fixes for two real bugs found by running them: a provider was
+being required even when nothing was adoptable, and the idempotency
+test's own premise was wrong on the first attempt (a merely-*generated*
+proposal was never actually accepted, so "already adopted" wasn't
+really being tested at all until a real `ubx accept` was inserted).
+
+**Live-verified, read-only, no ship**: a real, hand-created (`aws sqs
+create-queue`, never via `ubx`) SQS queue, tagged with a distinctive
+marker, discovered end to end via `ubx scan --discover --tag ...
+--source hashicorp/aws --provider-version 6.54.0` — the real tagging
+API found it, the real Tier C constructor built its real queue URL,
+the real `hashicorp/aws` provider read its real live state, and a
+real, complete `adoption` proposal was generated (`blast_radius`: all
+zero) — confirmed via the filesystem that no `ledger/` directory was
+ever created at all (nothing accepted, nothing appended, purely
+record-only). The queue was destroyed afterward and the sweep
+confirmed clean via both `aws sqs list-queues` and the tagging API.
+
+### Slices 4-5: not started
+
+**Genesis attribution** (reusing `core.EventLookup` unchanged, new
+creation-verb tables per backend) and **the live finale** (a larger,
+multi-resource, tagged, ClickOps-style set, adopted with genesis
+attribution where available) remain session 3+ work.
 
 ## Out of scope for v1, named so it isn't assumed covered
 
 Whole-account (untagged) enumeration as a supported mode; GCP/Azure
 mechanism validation (each its own future session); a structured
-`TypeSpec.LookupShape` field unifying the three duplicated lookup-hint
-tables (recommended, not built); bulk acceptance of discovered
-proposals; any policy engine, auto-accept rule, or environment
-awareness; re-adopting the tfplugin `ListResource` RPC as the primary
-mechanism (revisit trigger named above, not a decision made now); AWS
-Config as anything more than a possible future enrichment source.
+`TypeSpec.LookupShape` field unifying the four duplicated lookup-hint
+tables (recommended, not built — discovery's own `tierTable` is now
+the fourth); bulk acceptance of discovered proposals; any policy
+engine, auto-accept rule, or environment awareness; re-adopting the
+tfplugin `ListResource` RPC as the primary mechanism (revisit trigger
+named above, not a decision made now); AWS Config as anything more
+than a possible future enrichment source; genesis attribution and the
+live finale (slices 4-5, above).
