@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/discovery"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
@@ -35,6 +36,14 @@ func newScanCmd() *cobra.Command {
 		tfstatePath     string
 		outDir          string
 		jsonOut         bool
+		discover        bool
+		tagFlags        []string
+		discoverTypes   []string
+		region          string
+		limit           int
+		yes             bool
+		suggestStacks   bool
+		stackTag        string
 	)
 
 	cmd := &cobra.Command{
@@ -103,6 +112,49 @@ func newScanCmd() *cobra.Command {
 					Timeout:         timeout,
 				})
 			}
+
+			if discover {
+				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
+					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") || all || tfstatePath != "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--surface-as/--tf-dir/--all/--tfstate describe a " +
+						"single resource or tfstate-sourced bulk onboarding and don't apply to cloud-side discovery (docs/discovery.md)")}
+				}
+				tags, err := parseTagFlags(tagFlags)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: %w", err)}
+				}
+				if len(cfg.Providers) > 0 {
+					warnIfLegacyProviderFlagsGiven(cmd)
+				}
+				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+				defer cancel()
+				opts := scanDiscoverOptions{
+					Tags:            tags,
+					Types:           discoverTypes,
+					Region:          region,
+					Limit:           limit,
+					Yes:             yes,
+					Stack:           stack,
+					OutDir:          outDir,
+					LedgerDir:       ledgerDir,
+					Config:          cfg,
+					ProviderPath:    providerPath,
+					Source:          source,
+					ProviderVersion: providerVersion,
+					ProviderConfig:  providerConfig,
+					Providers:       cfg.Providers,
+					ProviderConfigs: cfg.ProviderConfigs,
+					Timeout:         timeout,
+				}
+				if suggestStacks {
+					return runScanSuggestStacks(ctx, cmd.OutOrStdout(), opts, stackTag)
+				}
+				if stack == "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover requires --stack (or --suggest-stacks for a read-only grouping preview first)")}
+				}
+				return runScanDiscover(ctx, cmd.OutOrStdout(), opts)
+			}
+
 			if stack == "" || resourceType == "" || resourceName == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding)")}
 			}
@@ -300,6 +352,14 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tfstatePath, "tfstate", "", "path to a Terraform state v4 JSON file, read once as a bulk-onboarding enumeration source (required with --all)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write each --all-generated proposal to its own file in this directory, instead of printing all of them to stdout")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20; single-resource scan only, not --all or --surface-as)")
+	cmd.Flags().BoolVar(&discover, "discover", false, "cloud-side discovery (UBI-45): enumerate resources via the AWS Resource Groups Tagging API instead of a tfstate file, generating an adoption proposal for each -- requires --tag")
+	cmd.Flags().StringArrayVar(&tagFlags, "tag", nil, "key=value tag filter for --discover (repeatable; multiple --tag with the same key OR-combine, different keys AND-combine)")
+	cmd.Flags().StringArrayVar(&discoverTypes, "discover-type", nil, "Terraform resource type allowlist for --discover (repeatable, e.g. aws_sqs_queue) -- narrows client-side; omit to classify every tag-matched resource")
+	cmd.Flags().StringVar(&region, "region", "", "AWS region to enumerate with --discover (the tagging API is itself regional)")
+	cmd.Flags().IntVar(&limit, "limit", 0, fmt.Sprintf("refuse --discover without --yes past this many adoptable resources (default %d)", discovery.DefaultLimit))
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm proceeding past --discover's own --limit")
+	cmd.Flags().BoolVar(&suggestStacks, "suggest-stacks", false, "with --discover, print a read-only stack-grouping preview instead of writing proposals -- writes nothing, assigns nothing")
+	cmd.Flags().StringVar(&stackTag, "stack-tag", "", "with --discover --suggest-stacks, the tag key to group discovered resources by (omit to fall back to a naming-prefix heuristic)")
 
 	return cmd
 }
