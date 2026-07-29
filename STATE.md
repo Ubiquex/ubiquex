@@ -4,6 +4,149 @@
 
 ## Current phase
 
+**UBI-45 (2026-07-30), session 3, CLOSING: genesis attribution + the
+live finale at scale — the two slices session 2 left open. UBI-45 is
+now closed in Linear — this is the arc's final session, across three:
+design (docs/discovery.md), build (the identity bridge + `ubx scan
+--discover`), and this closing session's real, live proof of every
+claim the design session made.**
+
+**Genesis attribution, real code** (`core/genesis.go`, new).
+`core.AttributeGenesis` reuses `AttributeDrift`'s own identity-
+candidate search (`identityCandidates`) and defensive exact-match
+filtering (`filterExactMatch`) completely unchanged — genesis
+attribution is the same mechanical search, pointed at a different
+question, not a second search mechanism. Two real, deliberate
+differences: `filterByEventName` narrows matched events to a
+caller-supplied **creation-verb** `EventName` (`core` stays entirely
+type/backend-agnostic, the same reason `AttributionBackend` itself is
+a parameter, not hardcoded); and `attributionSourcesOldestFirst` takes
+the **oldest** genuine match — the opposite of `AttributeDrift`'s own
+"newest first" convention, and correct here: a resource is created
+exactly once, so the earliest creation-verb match is the one that
+actually founded its lineage, never the most recent. An empty
+creation-verb list is a new, honest `ReasonNoCreationVerbs` — genesis
+attribution is never even attempted for that type, distinct from a
+real search that ran and came up empty (`ReasonNoMatchingEvent`). 6 new
+hermetic tests in `core` (matched creation event; multiple creation
+events, oldest wins; non-creation events correctly ignored; empty
+creation-verb list never even searches; a lookup error; within the
+backend's own delivery lag), all passing on first real run.
+
+**The creation-verb table itself reuses `discovery/tiers.go`'s own
+per-type table** (a new `typeSpec.CreationVerbs` field) rather than a
+fifth separately-maintained one — seeded with all six of this arc's
+own real AWS API operation names: `CreatePolicy` (`aws_iam_policy`),
+`CreateVpc` (`aws_vpc`), `CreateRole`/`CreateUser` (`aws_iam_role`/
+`aws_iam_user`), `CreateBucket` (`aws_s3_bucket`), `CreateQueue`
+(`aws_sqs_queue`) — CloudTrail's own `EventName` always matches the
+API operation name verbatim, confirmed live this session against real
+events, not guessed. `DiscoveredResource` gained a `CreationVerbs`
+field, populated by `classify()` alongside `Lookup` — empty whenever a
+type is unclassified, and possibly empty even for a classified type
+discovery doesn't yet know a creation verb for (none of the six
+seeded types are in that state today, but the mechanism handles it
+honestly either way).
+
+**Wired into `ubx scan --discover`** (`cli/attribution.go`'s new
+`attributeGenesis`, called from `runScanDiscover` right after
+`core.GenerateProposal` succeeds): reuses `newAttributionBackend` — the
+exact same per-provider-source backend registry the drift path already
+established in `cli/scan.go` — completely unchanged. No drift-time
+anchor exists for a resource `ubx` never saw created, so the search
+window is simply CloudTrail's own default 90-day management-event
+retention through the proposal's own `resolved_at`. The **existing**
+`--no-attribution` flag now gates both drift and genesis attribution —
+reused, not duplicated; its own help text updated to say so. Hermetic
+CLI tests mirror `cli/attribution_test.go`'s own already-established
+"blank every AWS credential source" technique exactly (same env vars,
+same reasoning: credential resolution fails synchronously, before any
+real network I/O) — proving the wiring never blocks `ubx scan
+--discover` from completing and adopting even when CloudTrail is
+totally unreachable, and that the resulting proposal still carries an
+honest `cloudtrail_unattributed` source rather than silently omitting
+attribution; a second test confirms `--no-attribution` skips genesis
+entirely (no source appended at all). A real, incidental finding while
+wiring this in: every *existing* discover CLI test that generates an
+adoption proposal had gone from instant to measurably slower once
+genesis attribution started firing for real (this machine's own real
+AWS credentials are live) — fixed by adding `--no-attribution` to every
+test that doesn't care about attribution itself, the same discipline
+already established project-wide for drift-attribution tests.
+
+**The live finale, real AWS, swept clean — every claim in
+`docs/discovery.md` checked against reality, not just designed.** Four
+resources, hand-created via the `aws` CLI directly (never through
+`ubx` — the "ClickOps, not Terraform-managed" proof this whole arc
+exists for), tagged with a shared marker plus a `Project` grouping tag
+across two groups:
+- `aws_sqs_queue` (Tier C) and `aws_iam_policy` (Tier A), tagged
+  `Project=payments`.
+- `aws_s3_bucket` (Tier B), tagged `Project=networking`.
+- A real DynamoDB table — deliberately **not** in `tierTable` at all —
+  tagged `Project=networking`, this session's own designated proof of
+  the "discovered, not yet adoptable" honest-gap rendering against a
+  genuinely real, taggable, discoverable AWS resource, never a
+  synthetic stand-in.
+
+`ubx scan --discover --suggest-stacks --stack-tag Project` correctly
+grouped all four real resources into `payments` (2) and `networking`
+(2) purely from their own real tags, writing nothing — the "stack
+suggestions reviewed" step, confirmed against reality. Discovering
+`Project=networking` produced exactly one adoptable proposal (the
+bucket) and one honest, real `discovered, ... not yet adoptable: no
+known lookup shape for this type` line for the DynamoDB table —
+proving the honest-gap rendering against real AWS, not a fixture, and
+that tags still carry through even when a resource isn't adoptable.
+Discovering `Project=payments` was deliberately run *after* polling
+`aws cloudtrail lookup-events` directly (a real, bounded background
+poll, checked every 30s) until the real `CreateQueue` event actually
+appeared — **~4 minutes in this account**, well under this project's
+own previously-documented 15-minute CloudTrail delivery-lag worst
+case — and produced both proposals with **successful genesis
+attribution**: `CreateQueue`/`CreatePolicy`, both correctly attributed
+to the real IAM user (`arn:aws:iam::839333509514:user/roozbeh`) who
+created them via the `aws` CLI, with real event IDs, real timestamps,
+real source IPs. (The S3 bucket's own `CreateBucket` event had not yet
+propagated by the time it was discovered — an honest, real
+`cloudtrail_unattributed`/`no_matching_event` outcome, itself a
+legitimate, expected finding, not a failure.)
+
+All three adoptable resources were accepted through the real,
+completely unmodified local-tier signing flow (`ubx accept`) — one
+real, incidental discovery along the way: this git-local ledger
+maintains **one shared head across every stack in the same ledger
+directory**, not a head per stack, so proposals generated across two
+different stacks in the same session must still be accepted in their
+own real dependency order (caught immediately by a real
+`ErrParentMismatch`, not silently misordered). `ubx why` on the
+accepted SQS queue's own id shows exactly:
+
+```
+source: cloudtrail -- arn:aws:iam::839333509514:user/roozbeh CreateQueue at 2026-07-29T21:47:45Z from 93.228.76.41
+```
+
+— genesis-by-adoption with the real attributed creator, this arc's own
+closing proof, live and unedited.
+
+All four real resources were destroyed afterward; the sweep confirmed
+clean via the tagging API (empty), `aws sqs list-queues` (empty), `aws
+iam list-policies --scope Local` (empty), and a direct `head-bucket`
+(404) / `describe-table` (`ResourceNotFoundException`) for the bucket
+and table respectively — zero residue.
+
+`docs/discovery.md` gained a "slices 4-5: built" section recording all
+of the above; `docs/plan.md` gained a session-3 closing changelog
+entry and closed out the UBI-45 wedge subsection (retitled "sessions
+1-3, closed"). `go build/vet/test`, `gofmt -l .` clean across the whole
+repo throughout; the full existing test suite re-run after every
+change and passes completely unchanged — zero regressions anywhere.
+**UBI-45 closed** across exactly three sessions: design, build, and a
+real, live, closing proof — nothing in the design doc was left
+unverified against reality.
+
+## Current phase (previous)
+
 **UBI-45 (2026-07-30), session 2: the identity bridge as real code +
 `ubx scan --discover` CLI wiring — the two slices session 1's own
 `docs/discovery.md` scoped first. Still In Progress in Linear — real
