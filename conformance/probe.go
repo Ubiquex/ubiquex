@@ -102,6 +102,25 @@ type Finding struct {
 // populated by hand, not how attribution happens to search.
 var identityCandidateAttrs = []string{"id", "self_link", "arn", "name"}
 
+// identityCandidateSuffixes is a real, session-2-added refinement, found
+// by triaging the 134 AWS types the exact-match check alone flagged
+// Confirmed: a real, live check against hashicorp/aws 6.54.0 showed 108
+// of those 134 actually DO carry a plausible identity attribute — just
+// type-prefixed rather than exactly "arn"/"id"/"name"
+// (aws_bedrock_guardrail_version's own "guardrail_arn",
+// aws_iam_group_policies_exclusive's own "group_name", and similar).
+// This is real AWS provider convention, not an edge case: a
+// type-prefixed identity attribute is, if anything, the MORE common
+// shape once account-scoped/"exclusive"-set/composite-association types
+// are counted. A suffix match is weaker evidence than an exact
+// canonical name (attributeNamesPresent's own check, above) — it can
+// also be a genuine FOREIGN KEY to a different resource
+// (aws_fis_target_account_configuration's own "account_id" names the
+// AWS account, not this resource's own identity) — so it never
+// downgrades a type to "clean," only to a weaker Candidate signal
+// naming the specific attribute a live-tier probe should try first.
+var identityCandidateSuffixes = []string{"_arn", "_id", "_name"}
+
 // probeIdentityShape is the hermetic half of lie-class 1
 // (docs/conformance-harness.md — "Identity-shape / incomplete-read"). It
 // can only ever confirm one thing: whether ANY recognized identity
@@ -109,19 +128,44 @@ var identityCandidateAttrs = []string{"id", "self_link", "arn", "name"}
 // (whether "id" alone, or some combination, actually round-trips a
 // complete ReadResource) is explicitly a live-tier-only question — see
 // the design doc's own "cannot prove sufficiency" line — so this
-// function returns no Finding at all for the common case, never a false
-// "confirmed clean." Only the type's own total absence of any
-// candidate — a schema offering nothing core.RunScan/core.AttributeDrift
-// could ever plausibly search by — is something the schema alone can
-// settle completely, hence Confirmed rather than Candidate.
+// function returns no Finding at all for the common exact-match case,
+// never a false "confirmed clean."
+//
+// Three-way outcome, not two — refined this session after triaging the
+// real AWS results: an EXACT canonical name present (the common case)
+// produces no Finding at all; NO exact name but a plausible
+// type-prefixed one (identityCandidateSuffixes) produces a Candidate
+// finding naming it, since a live-tier probe should try it before
+// concluding failure, but the schema alone can't promise it's really
+// this resource's own identity rather than a foreign-key reference;
+// NEITHER produces Confirmed — a schema offering nothing at all,
+// canonical or type-prefixed, that core.RunScan/core.AttributeDrift
+// could ever plausibly search by, is the one thing schema-only
+// inspection can settle completely. Real triage split, hashicorp/aws
+// 6.54.0 (see docs/conformance-harness.md's own session-3 amendment):
+// of 134 types originally flagged Confirmed by the exact-match check
+// alone, 114 actually have a plausible suffix-matched candidate (108
+// type-prefixed *_arn/*_id, 6 "_exclusive"-shaped *_name parent keys);
+// the remaining ~20 are real, structural singleton/composite/
+// account-scoped config resources with no per-instance identity
+// attribute of any shape — a live-tier policy decision (below, and in
+// docs/conformance-harness.md), not a probe bug.
 func probeIdentityShape(source, version, typeName string, block provider.Block) []Finding {
 	if len(attributeNamesPresent(block, identityCandidateAttrs)) > 0 {
 		return nil
 	}
+	if suffixed := attributeNamesWithSuffix(block, identityCandidateSuffixes); len(suffixed) > 0 {
+		return []Finding{{
+			Source: source, Version: version, Type: typeName, Verb: "read",
+			Class: FindingIncompleteRead, Tier: TierHermetic, Confidence: Candidate,
+			Detail: "no canonical identity attribute (id/self_link/arn/name) present, but " + strings.Join(suffixed, ",") +
+				" is a plausible type-prefixed candidate -- a live-tier probe should try it before concluding this type is unreadable; schema alone can't confirm it's self-identity rather than a foreign-key reference",
+		}}
+	}
 	return []Finding{{
 		Source: source, Version: version, Type: typeName, Verb: "read",
 		Class: FindingIncompleteRead, Tier: TierHermetic, Confidence: Confirmed,
-		Detail: "no recognized identity attribute (id/self_link/arn/name) found anywhere in this type's own schema -- ReadResource has no known lookup shape to try at all",
+		Detail: "no recognized identity attribute -- canonical (id/self_link/arn/name) or type-prefixed (*_arn/*_id/*_name) -- found anywhere in this type's own schema; ReadResource has no known lookup shape to try at all, likely a singleton/composite/account-scoped resource needing a different resolution model entirely (see docs/conformance-harness.md)",
 	}}
 }
 
@@ -215,6 +259,28 @@ func attributeNamesPresent(block provider.Block, candidates []string) []string {
 	}
 	sort.Strings(present)
 	return present
+}
+
+// attributeNamesWithSuffix returns every top-level attribute name in
+// block ending in one of suffixes, sorted for determinism — the weaker,
+// type-prefixed-identity signal probeIdentityShape falls back to once
+// no exact canonical name (attributeNamesPresent) is found. Top-level
+// only, deliberately not recursive into nested blocks: an identity
+// attribute for THIS resource is, by every real example this project
+// has ever seen across every platform, always a flat, top-level field —
+// never buried inside a nested config block.
+func attributeNamesWithSuffix(block provider.Block, suffixes []string) []string {
+	var matched []string
+	for _, a := range block.Attributes {
+		for _, suf := range suffixes {
+			if strings.HasSuffix(a.Name, suf) {
+				matched = append(matched, a.Name)
+				break
+			}
+		}
+	}
+	sort.Strings(matched)
+	return matched
 }
 
 // walkAttributes visits every attribute in block, and recursively every

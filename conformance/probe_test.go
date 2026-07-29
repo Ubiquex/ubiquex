@@ -39,6 +39,29 @@ func TestProbeIdentityShape_OnlySelfLinkPresent_NoFinding(t *testing.T) {
 	}
 }
 
+func TestProbeIdentityShape_SuffixMatchOnly_Candidate(t *testing.T) {
+	// Real AWS shape, found by triaging hashicorp/aws 6.54.0's own real
+	// "Confirmed" results this session: no canonical id/arn/name, but a
+	// type-prefixed "guardrail_arn" is a plausible identity candidate --
+	// weaker evidence than an exact canonical name, so Candidate, not
+	// Confirmed, but NOT the same as zero candidates at all either.
+	block := provider.Block{Attributes: []provider.Attribute{
+		attr("guardrail_arn", computed),
+		attr("version", optional),
+	}}
+	got := probeIdentityShape("hashicorp/aws", "6.54.0", "aws_bedrock_guardrail_version", block)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	f := got[0]
+	if f.Class != FindingIncompleteRead || f.Tier != TierHermetic || f.Confidence != Candidate {
+		t.Fatalf("unexpected finding shape: %+v", f)
+	}
+	if !strings.Contains(f.Detail, "guardrail_arn") {
+		t.Fatalf("Detail = %q, want it to name the suffix-matched candidate", f.Detail)
+	}
+}
+
 func TestProbeIdentityShape_NoCandidateAtAll_Confirmed(t *testing.T) {
 	block := provider.Block{Attributes: []provider.Attribute{
 		attr("size", optional),
