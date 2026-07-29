@@ -4,6 +4,172 @@
 
 ## Current phase
 
+**UBI-50 (2026-07-29), session 1 of a new arc: the generated conformance
+harness. Docs-first, per protocol — `docs/conformance-harness.md`
+written, no code this session. Marked In Progress in Linear (not
+closed — a real, multi-session arc, ~3-4 sessions by its own sizing).**
+
+Filed by the founder immediately after UBI-37 (Azure, the fourth
+platform) closed: no permanent verified/unverified split across a
+provider's own type universe — `conformance/registry.go` covers 154
+hand-written entries today (51 AWS, 42 Azure, 40 GCP, 20 Kubernetes, 1
+Helm) against a combined real universe well over 4,000 types (AWS alone:
+1,682 at 6.54.0). The resolution this arc designs: automate conformance
+so every type carries a machine verdict, hand-verification reserved for
+what a machine genuinely can't check — never lowering the claim, never
+discarding the 154 entries' own hard-won, live-verified knowledge.
+
+**Provider-agnostic by construction**, per the founder's own design-room
+comment added to the ticket before this session began: the probe
+generator, failure taxonomy, registry format, and version-bump rerun
+logic are all shared, designed once, against `provider.Schemas`/
+`Block`/`Attribute` — the same provider-agnostic foundation
+`core.StateReader`/`core.RunScan` already stand on. Per-platform work is
+scoped narrowly to live-tier plumbing only (sandbox credentials + a
+cost-tier table per cloud, Helm's own pinned-chart probe fixture) —
+explicitly out of THIS session's own scope, named rather than silently
+assumed included.
+
+**Four lie-classes designed, each mechanizing a real finding this
+project already made by hand at least once** — the doc's own central
+move, grounding every probe in something this project actually lived
+through rather than a hypothetical:
+
+1. **Identity-shape/incomplete-read** — the `google_storage_bucket`/
+   `google_pubsub_topic`/`google_secret_manager_secret`/
+   `azurerm_resource_group` class (UBI-21, UBI-37). Hermetic half:
+   confirm candidate identity attributes exist in the schema — PRESENCE
+   only, explicitly not proof of sufficiency, the same honest posture
+   every `FakeOnly` `TypeSpec` already holds. Live half: real create,
+   read back via each identity candidate alone and combined, diff every
+   returned attribute against what was actually set — silent
+   empty/null-on-success is the dangerous shape this mechanizes (loud
+   errors are already caught by the existing `ErrResourceUnreadable`
+   path).
+2. **Sensitive-flag audit vs. echo attributes** — the `helm_release`/
+   `azurerm_linux_web_app` class (UBI-22/24, UBI-37). Hermetic half is
+   keyword-matching against the same corpus this session's own manual
+   Azure audit used by hand — confirmed, honestly, to produce mostly
+   false positives (`private_ip_address`, `login_server`,
+   `public_key_pem`, `administrator_login` all matched and were all
+   clean on inspection) — so the design states plainly that hermetic
+   matches are candidates for human triage, never findings on their own.
+   Live half is genuinely stronger and mechanical: plant a unique marker
+   string in a free-form attribute, read back, search every OTHER
+   attribute for a verbatim echo under a different, non-`Sensitive`
+   path — a provable leak, not a guess.
+3. **Destroy honesty via read-back absence** — UBI-44's own
+   `google_pubsub_topic` class. **No hermetic half exists at all**,
+   named explicitly rather than silently absent — destroy is inherently
+   live. **A real gap in the existing harness surfaced while designing
+   this probe**: `conformance.RunAdoptMutateScanDiff` (today's only
+   harness entry point) never destroys anything — there is no destroy
+   step in it at all. A destroy probe needs genuinely new plumbing:
+   build a real `Delta.Destroys` proposal, accept it, run it through
+   `core/executor.Ship` (needing a real `ApplierPool`, not the raw
+   `provider.Launch`+adapter pair reads use today) — designed here, not
+   yet built.
+4. **Drift-detectability** — the `hashicorp/time` class. **Not a new
+   discovery** — this project already found and rejected exactly this,
+   live, during UBI-43 (`time_static` given `{"id": ...}` alone returns
+   every other attribute `null` on `ReadResource`, confirmed directly
+   before GCP was chosen as UBI-43's second provider instead; see
+   STATE.md/docs/plan.md/docs/architecture.md's own prior entries). This
+   session gives it new vocabulary ("undriftable"/"drift-detectability")
+   for the first time — the underlying phenomenon and its first real
+   example were already on file. Hermetic half: flag any type with zero
+   `Optional`/`Required` attributes (nothing a user could ever set,
+   nothing to diff against). Live half: real create, then a real
+   RESCAN with zero mutation — if consecutive reads of the SAME
+   untouched resource differ, that confirms undriftable, matching
+   `time_static`'s own already-observed behavior.
+
+**Registry format**: `(source, version, type, verb)` — a real, new axis
+today's `(source, type)`-only `TypeSpec` structurally can't express (one
+`Safety`/`Notes`/`Implemented` triple per type, no separate per-verb
+verdict) — `google_pubsub_topic`'s own real history (read/mutate fine,
+destroy silently lied) is exactly the gap this closes. Hand-verified
+findings (today's 154 entries) are LAYERED on top of any machine
+verdict, never replaced by one; a machine verdict that CONTRADICTS an
+existing hand-verified `Notes` entry is flagged for human review, never
+an automatic overwrite — a live-verified human finding has earned more
+trust than an automated pass, not less. Every type gets a real entry,
+even if that entry's own verdict is "hermetic-only, not yet
+live-verified" — replacing today's "no entry at all" default-assumption
+silence.
+
+**Failure taxonomy, honestly scoped rather than claimed uniformly
+automatable** — the design's own most important honesty check:
+`sensitive-underflag` (once live-confirmed via the marker-string echo)
+and `undriftable` (once live-confirmed) CAN feed
+`provider/overrides.go`/the registry mechanically. `incomplete-read`
+genuinely CANNOT fully auto-populate `core/lookuphints` today — traced
+directly to `core/scan.go`'s own `lookupHintText`, which hardcodes AWS's
+own "make sure `id` is included" advice, actively WRONG for GCP's "both
+required together" shape and unable to say anything useful for a
+silently-incomplete read at all (exactly why `google_storage_bucket`/
+`google_pubsub_topic`/`google_secret_manager_secret` were each
+deliberately never given a `LookupHint` despite being fully understood,
+UBI-21's own real precedent) — named as a real, PRE-EXISTING limit this
+arc doesn't pretend to have already fixed, not a new gap invented here.
+`destroy-lie` always stays a human-session flag — the structural fix
+belongs in `core/executor` (as UBI-44's own already did), never
+auto-generated from a registry finding.
+
+**Ship doctrine, made explicit because destroy probes are genuinely new
+plumbing with a real temptation to shortcut**: read/mutate probes reuse
+`conformance.RunAdoptMutateScanDiff`'s own real `core.RunScan`→
+`GenerateProposal`→`Accept` path completely unchanged. Destroy probes
+MUST go through `core/executor.Ship`'s real `shipDestroyNode`/
+`reconcileDestroyLoop` path, never a raw `provider.ApplyResourceChange`
+call the way, e.g., `provider/apply_live_test.go`'s own `hashicorp/time`
+wire-protocol tests legitimately do for a different purpose — bypassing
+`reconcileDestroyLoop`'s own universal post-destroy read-back (the exact
+UBI-44 fix) would make a destroy probe structurally incapable of ever
+finding another UBI-44-shaped bug, the opposite of this arc's entire
+purpose. Live-tier runs are designated live legs, explicit and opt-in —
+generalizing CLAUDE.md's own standing ship-verification rule (never
+`ubx ship` against real infrastructure without explicit, deliberate
+gating) to a new context: a live-tier conformance run touches real
+infrastructure too, and must be gated the identical way
+`UBX_CONFORMANCE_LIVE=1` already gates every existing live conformance
+test, never bundled into a broader "run everything" command.
+
+**A four-row adversarial program**, matching `docs/destroys-adversarial.md`'s
+own `# | Scenario | Injection | Required observable outcome` table
+format exactly: (1) a type whose create needs `Required` attributes the
+schema can't default — the probe must record an honest
+"skipped: cannot synthesize" verdict of its own, never invent a fake
+value just to force some create to succeed; (2) priced types are NEVER
+auto-created by a bulk run regardless of flags, only explicit
+per-type opt-in, with every skip named in the run's own summary; (3)
+probe resource leakage — every live-probe resource is tagged with a
+discoverable, greppable naming convention (the same `ubx-*` precedent
+this project's own GCP/Azure live-tier sessions already established by
+hand) so a real sweep command, not manual memory, can find and report
+(or destroy) anything left behind after a killed run; (4) a provider
+serving inconsistent schema between two calls in the same bulk run — the
+harness hashes the schema once at the start and fails the whole run
+loudly on any later mismatch, rather than silently generating half a
+registry against one schema and half against another.
+
+**`docs/plan.md` gained a new wedge subsection** ("Generated conformance
+harness (UBI-50) — session 1, docs-first") plus a changelog entry.
+**No ubiquex-docs change this session** — nothing user-visible shipped
+(pure internal design, no new command/flag/behavior), so the
+same-session ubiquex-docs update requirement doesn't apply; this is
+recorded here explicitly rather than silently skipped, per CLAUDE.md's
+own "if genuinely infeasible in-session, record a docs-debt entry" line
+— though this isn't docs debt exactly, since there is no user-visible
+surface yet to document.
+
+**UBI-50 marked In Progress in Linear** (not closed) with a full
+session-1 comment. Session 2+ builds the actual generator, per this
+arc's own "~3-4 sessions design+build+first bulk run" sizing, unchanged
+from the ticket's own honest estimate.
+
+## Current phase (previous)
+
 **UBI-37 (2026-07-29): Azure support, both stages, one session —
 the UBI-21 playbook verbatim, fourth platform. Closed in Linear.**
 
