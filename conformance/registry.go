@@ -813,8 +813,26 @@ const azureSeedNote = "Seeded for UBI-37 Stage 1 (docs/plan.md's Azure resource 
 // above for why that flat presence is not itself proof "id" alone
 // suffices for ReadResource.
 var azureRegistry = []TypeSpec{
-	{Type: "azurerm_resource_group", Source: "hashicorp/azurerm", Category: "management", Safety: FakeOnly,
-		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{
+		Type: "azurerm_resource_group", Source: "hashicorp/azurerm", Category: "management", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id alone is sufficient -- but its own real shape is a " +
+			"genuine surprise, found only by actually calling ReadResource: " +
+			"a resource group's own ARM id is JUST " +
+			"\"/subscriptions/<sub>/resourceGroups/<name>\", NOT the " +
+			"\"resourceGroups/<rg>/providers/Microsoft.Resources/" +
+			"resourceGroups/<name>\" shape every OTHER azurerm type's own " +
+			"id follows (a resource group nested one level too deep inside " +
+			"itself, which is what a first, schema-only guess produced and " +
+			"the live ReadResource call promptly rejected: \"unexpected " +
+			"segment ... present at the end of the URI\"). A resource " +
+			"group is its own top-level ARM scope, not a child resource " +
+			"living inside a resourceGroups/<rg>/providers/<ns>/<type>/ " +
+			"path the way every other azurerm type in this registry is. " +
+			"Verified by creating a throwaway resource group, testing it, " +
+			"and deleting it.",
+		Implemented: true,
+	},
 
 	{Type: "azurerm_linux_virtual_machine", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
 		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
