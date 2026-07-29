@@ -648,27 +648,127 @@ real, if minor, finding: fakeprovider's own `fake_widget` type echoes
 logic detects a genuine difference, not a hypothetical one, on the very
 first thing it was pointed at.
 
+## Amendment (session 4, closing): bulk run, ship doctrine settled, write-back
+
+**This is the arc's closing session** — the founder delegated its two
+remaining open decisions (probe 3's own real-cloud fate; whether/how to
+write generated verdicts back into the registry) to be resolved by
+judgment, conservatively, with the reasoning recorded here rather than
+just in a Linear comment.
+
+**Bulk live-tier run, real batch policy decided before anything was
+created**: free-tier types only (the sanctioned default — nothing
+priced was in scope, and nothing priced would have been included
+without stopping to ask first), scoped further to the four
+create-and-destroy-per-run AWS types this project's own suite already
+established as safe and fully self-contained
+(`aws_sqs_queue`/`aws_sns_topic`/`aws_iam_policy`/`aws_iam_user`) —
+deliberately excluding the three ADOPT-a-pre-existing-resource types
+(`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`) already in the suite, since
+those mutate real, ALREADY-EXISTING account infrastructure (the
+account's own default VPC, a real AWS-created IAM role) rather than a
+throwaway resource created for this run alone — a real, deliberate
+distinction, not an oversight, even though both classes are equally
+free. All three non-destroy probes (identity-shape, sensitive-echo,
+drift-detectability) ran against all four types — real bug found and
+fixed on the first run (`aws_sqs_queue` follows the same `tags`/
+`tags_all` dual-tag convention `aws_sns_topic` was already corrected
+for last session; the fix wasn't carried over consistently the first
+time). All four types passed clean on the second run. A dedicated sweep
+test plus a manual four-way `aws` CLI check both confirm zero leaked
+resources afterward.
+
+**Ship doctrine vs. probe 3's own real-cloud confirmation — decided
+conservatively, reasoning recorded rather than just the outcome.**
+Both options were genuinely open (the founder's own framing: "either is
+acceptable"). The case FOR a live leg: it would be the strongest
+possible proof of probe 3's own real-world value, and AWS itself has
+never actually been checked for a UBI-44-shaped destroy-lie the way GCP
+was — a live AWS confirmation would be genuinely new information, not
+just re-proving something already known. The case for staying
+hermetic-only: probe 3's own live confirmation requires
+`core/executor.Ship` to reach a REAL `ApplyResourceChange` destroy call
+against real AWS — the exact class of action CLAUDE.md's own
+ship-verification rule names explicitly and bans absolutely ("never...
+against a real cloud provider... even one already credentialed... always,
+no exceptions"), a rule that exists specifically because of a real prior
+incident (UBI-47 session 4: a "routine verification" `ship` created real
+AWS resources unintentionally). The rule draws no exception for a
+deliberately-scoped, well-understood conformance session — its own text
+is "always, no exceptions," not "except for careful, well-reasoned
+cases." Weighed against the ALREADY-STRONG hermetic verification this
+arc already has (real tfplugin wire protocol, real
+`FAKEPROVIDER_APPLY_MODE=lying-destroy` fixture, the identical scripted
+lie `cli/ship_lying_destroy_test.go` already proves catches this class
+at the CLI layer too) — the marginal value of a live AWS leg is real but
+not large, while the marginal risk of being the session that treats a
+hard "no exceptions" rule as having a quiet exception is a cost this
+arc doesn't need to pay to make its own point. **Decision: probe 3
+stays hermetic-only.** Its own real-cloud confirmation is named,
+explicitly, as this arc's one deliberately-open item — not silently
+dropped, not treated as done. A future session picking this up should
+treat it as a fresh, standalone decision (its own explicit ask, its own
+sacrificial resource, its own sweep), not something this arc already
+implicitly greenlit.
+
+**Verdict write-back, the mechanical piece, built for real.**
+`conformance/probegen` (new command, mirroring `conformance/gentool`'s
+own doc-comment conventions) runs `ProbeSchema` for real against every
+provider named in a new, single-source-of-truth
+`PinnedProviderVersions` map, and writes
+`conformance/findings_generated.go` — 1,335 real `Finding` entries
+across all 4,187 resource types this project's five onboarded providers
+report, committed as real, versioned, human-reviewable-if-large Go data
+(not JSON — matching this project's own established generated-file
+convention, `core/lookuphints/hints.go`, rather than introducing a new
+one). `conformance.AllVerdicts()` is the ready-made
+`LayerFindings(GeneratedFindings)` call — the base layer plus
+`Registry`'s own 154 hand-written entries layered on top, exactly as
+designed: `Registry` itself is never touched by the generator, a
+generated `Finding` never overwrites a hand-verified `TypeSpec`, and
+`detectContradictions`' own real check (zero contradictions across all
+five providers, confirmed in session 3) still applies to every entry in
+this now-committed set. **Regeneration path, documented in
+`probegen`'s own header comment, not just prose here**: bump the
+version in `PinnedProviderVersions`, then re-run
+`go run ./conformance/probegen -out conformance/findings_generated.go`
+— real network access to `registry.opentofu.org` needed (schema-only,
+no cloud account), deliberately never wired to a bare `go generate
+./...`, which must stay fully offline. `TestGeneratedFindings_WellFormed`
+is a fast, hermetic regression guard catching exactly the "forgot to
+regenerate after bumping the version pin" mistake (it checks every
+entry's own `Version` against the current `PinnedProviderVersions`, not
+just that the file parses).
+
 ## What this doesn't yet cover, named rather than assumed
 
-Updated after the session-3 amendment above. Not built, and therefore
-not yet a claim this arc makes about itself: probe 3's own LIVE
-confirmation against any real cloud provider (deliberately deferred, see
-the ship-doctrine decision above — hermetic verification only, so far);
-a real bulk live-tier run at platform scale (a GCP-project-scale or
-full-AWS-account-scale execution against ~1,000+ real types is real,
-ongoing infrastructure cost and time, explicitly scoped as per-platform
-follow-up, not any session so far — session 3's own live-tier work
-touched exactly one real resource); Helm's own probe fixture (a pinned
-trivial chart) or any other platform-specific live-tier plumbing (named
-in "Scope," above, as explicitly out of this document's own reach);
-writing a `LayeredVerdict` back into `conformance.Registry`'s own
-`TypeSpec` literal (session 3's own layering is read-only — it PRODUCES
-`LayeredVerdict`s, it doesn't edit `registry.go`); rerun-on-version-bump
-delta detection (designed in session 1, not yet built — `LayerFindings`
-lays real groundwork but doesn't itself diff across two versions); how a
-future `ubx status --drift` (or similar) consumer should actually
-PRESENT an `undriftable`-classified type to a user (this document
-designs the classification, not its own downstream UX); and whether/how
-the generated registry's own published output should be surfaced
-anywhere user-facing versus staying `ubiquex-cli`-internal — a real open
-question, not resolved here.
+Updated after the session-4 amendment above — this arc's own closing
+account of what's genuinely still open, not a comprehensive list of
+everything imaginable. Not built: probe 3's own live confirmation
+against any real cloud provider (a deliberate, reasoned decision to
+defer, not an oversight — see the amendment above; a future session
+should treat this as its own fresh ask); a real bulk live-tier run at
+FULL platform scale (this arc's own live-tier work touched five real,
+free AWS resources total across two sessions — genuinely "cost-aware
+batching," never a GCP-project-scale or full-AWS-account-scale
+execution against the full ~4,000+ real types, which remains real,
+ongoing infrastructure cost and time, explicitly out of this arc's own
+scope); Helm's own probe fixture (a pinned trivial chart) or any other
+platform-specific live-tier plumbing for GCP/Azure/Kubernetes
+specifically (named in "Scope," above, as explicitly out of this
+document's own reach — this arc's own live-tier work was AWS-only);
+automated rerun-on-version-bump DELTA detection (designed in session 1,
+still not built — `probegen`'s own regeneration path is manual, and
+`TestGeneratedFindings_WellFormed` catches a STALE file but doesn't
+itself diff two versions' own findings against each other and flag
+what changed); how a future `ubx status --drift` (or similar) consumer
+should actually PRESENT an `undriftable`-classified type to a user
+(this document designs the classification, not its own downstream UX);
+and whether/how the generated registry's own published output should
+be surfaced anywhere user-facing versus staying `ubiquex-cli`-internal
+— checked this session (nothing in `cli/lookup.mdx` or similar was
+promoted, since `Candidate`-tier machine findings aren't yet reliable
+enough for user-facing claims — the existing hand-verified/unverified
+framing there stays accurate as-is) but still a real open question for
+whenever a bulk live-tier run promotes enough `Candidate` findings to
+`Confirmed` to be worth publishing.

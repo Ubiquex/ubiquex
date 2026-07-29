@@ -1812,6 +1812,39 @@
   gained a session-3 amendment. `go build/vet/test`, `gofmt -l .`
   clean. Real AWS resource confirmed destroyed via a post-run sweep.
   See STATE.md for the full account.
+- 2026-07-29 -- UBI-50 session 4, closing (generated conformance
+  harness -- bulk live-tier run, ship doctrine settled, verdict
+  write-back): free-tier-only AWS batch (`aws_sqs_queue`/
+  `aws_sns_topic`/`aws_iam_policy`/`aws_iam_user`, deliberately
+  excluding the three ADOPT-a-pre-existing-resource types already in
+  the suite) run for real against all three non-destroy probes -- a
+  real `tags`/`tags_all` bug found on `aws_sqs_queue` (the identical
+  class already fixed for `aws_sns_topic` last session, not carried
+  over consistently the first time), fixed, all four types clean on
+  rerun, zero leaks confirmed by both an automated sweep test and a
+  manual four-way `aws` CLI check. Probe 3's own real-cloud
+  confirmation decided conservatively: stays hermetic-only, full
+  reasoning recorded in `docs/conformance-harness.md`'s own session-4
+  amendment (the standing ship-verification rule's "always, no
+  exceptions" language, weighed against the already-strong hermetic
+  proof this arc already has) -- named as this arc's one deliberately
+  open item, not dropped. Verdict write-back built: `PinnedProviderVersions`
+  (single source of truth, five pins), `conformance/probegen` (new
+  generator, network-dependent, deliberately not wired to
+  `go generate`), run for real producing `findings_generated.go` --
+  1,335 committed `Finding` entries across all 4,187 resource types
+  from all five onboarded providers -- and `conformance.AllVerdicts()`
+  as the ready-made base+overlay combination
+  (`LayerFindings(GeneratedFindings)`). Two new tests:
+  `TestGeneratedFindings_WellFormed` (hermetic staleness/shape guard)
+  and `TestAllVerdicts_LayersGeneratedFindingsUnderRegistry` (wiring
+  proof). ubiquex-docs checked, no update needed this session --
+  reasoning recorded (`Candidate`-tier machine findings aren't yet
+  ready for user-facing promotion). `docs/conformance-harness.md`
+  gained its session-4 closing amendment; "What this doesn't yet
+  cover" rewritten to reflect only what remains genuinely open.
+  `go build/vet/test`, `gofmt -l .` clean. **UBI-50 closed.** See
+  STATE.md for the full account.
 
 ## Strategy
 
@@ -4428,7 +4461,7 @@ interaction beyond schema reads already established elsewhere, zero
 `ubx ship` against anything but `fakeprovider` across all four sessions —
 the arc landed exactly as scoped when it was filed.
 
-### Generated conformance harness (UBI-50) — sessions 1-3
+### Generated conformance harness (UBI-50) — sessions 1-4, closed
 
 Founder decision, filed immediately after UBI-37 (Azure, the fourth
 platform) closed: no permanent verified/unverified split across a
@@ -4563,6 +4596,48 @@ for probes 1/2/4 (read-only, `aws` CLI + `core.RunScan`, never
 run (a tag marker legitimately duplicates into both `tags` and
 `tags_all`). `docs/conformance-harness.md` gained a session-3 amendment.
 See STATE.md for the full account.
+
+**Session 4, closing: bulk live-tier run, ship doctrine settled,
+verdict write-back — arc closed.** The founder delegated the two
+remaining open decisions to judgment, exercised conservatively, both
+reasoned through and recorded in `docs/conformance-harness.md`'s own
+session-4 amendment rather than left as an outcome alone. Bulk
+live-tier run: free-tier-only batch policy decided before anything was
+created (the sanctioned default; nothing priced was in scope), scoped
+to the four already-established self-contained AWS types
+(`aws_sqs_queue`/`aws_sns_topic`/`aws_iam_policy`/`aws_iam_user`),
+deliberately excluding the three ADOPT-a-pre-existing-resource types.
+A real bug found on the first run (`aws_sqs_queue`'s own
+`tags`/`tags_all` false positive, the identical class already fixed
+for `aws_sns_topic` last session but not carried over consistently);
+fixed, all four types clean on rerun, zero leaks confirmed by both an
+automated sweep test and a manual four-way `aws` CLI check. Probe 3's
+own real-cloud confirmation: weighed the case for a genuinely-new live
+AWS check against the standing ship-verification rule's own "always,
+no exceptions" text and its real UBI-47 incident precedent — decided
+to stay hermetic-only, named explicitly as this arc's one
+deliberately-open item for a future session to pick up as its own
+fresh ask. Verdict write-back built for real: `PinnedProviderVersions`
+(the single source of truth for this project's own five version pins),
+`conformance/probegen` (a new generator mirroring `conformance/
+gentool`'s own conventions, network-dependent, deliberately never
+wired to `go generate`), run for real producing `findings_generated.go`
+— 1,335 committed `Finding` entries across all 4,187 resource types
+this project's five onboarded providers report — and
+`conformance.AllVerdicts()` as the ready-made
+`LayerFindings(GeneratedFindings)` base+overlay combination, `Registry`
+itself never touched. Two new tests guard the committed data:
+`TestGeneratedFindings_WellFormed` (hermetic, catches a stale
+regeneration) and `TestAllVerdicts_LayersGeneratedFindingsUnderRegistry`
+(proves the wiring, not just that `GeneratedFindings` parses).
+ubiquex-docs checked, no update needed — reasoning recorded
+(`Candidate`-tier machine findings aren't yet reliable enough for
+user-facing promotion; existing hand-verified/unverified language
+stays accurate as-is). `docs/conformance-harness.md` gained its
+session-4 closing amendment, and its own "What this doesn't yet cover"
+section was rewritten to name only what remains genuinely open after
+this session. `go build/vet/test`, `gofmt -l .` clean across the whole
+repo. **UBI-50 closed.** See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 
