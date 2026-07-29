@@ -4,6 +4,100 @@
 
 ## Current phase
 
+**UBI-49 (2026-07-29), one session, closed: `ubx plan` + `ubx ship`
+fusion — a terraform-shaped two-step workflow over completely
+unmodified `core`/`core/resolver`/`core/executor` machinery, per the
+founder's own explicit scope notes (pure CLI fusion, no policy engine,
+nothing deprecated, all invariants unchanged).**
+
+**`ubx plan`** (new verb, `cli/plan.go`): fuses `propose`+`resolve`+a
+preview render into one command. Any medium input — a hand-written
+intent file, `--from-code`'s TypeScript SDK, `--from-doc`'s markdown
+draft, `--from-diagram`'s D2 topology — resolves through the identical,
+unmodified `core/resolver.Resolve` every other entry point already
+uses, renders a full receipt (delta, cost_delta, blast radius,
+assumptions/defaults/questions), and saves the resolved-but-unaccepted
+proposal at `.ubx/plans/<hash>.json` — a new local, hash-addressed
+store alongside `.ubx/salt`/`.ubx/lock`, never inside `ledger/`. The
+md/diagram media's own established "draft, then a human checkpoint
+before resolving" posture (`ubx propose --from-doc`/`--from-diagram`,
+docs/intent-provider.md, docs/diagram-medium.md) is deliberately **not**
+reproduced inside `ubx plan` — a real, considered departure: `ubx
+plan`'s own receipt already covers the full resolved proposal (delta/
+blast radius/cost alongside any ambiguity content), so it already
+serves as that checkpoint. `ubx propose --from-doc`/`--from-diagram`
+keep their exact existing draft-only behavior, completely unchanged,
+for teams that specifically want the extra checkpoint as its own step.
+
+**`ubx ship <hash>`** gains inline acceptance (`cli/ship.go`): `<hash>`
+is looked up first as an already-accepted ledger id (the four-verb
+path, completely unchanged, including PR-merge acceptance as its own
+separate, still-available path); if not found, as a plan saved by `ubx
+plan`, accepted inline (local tier) before applying — the exact same
+`checkDestroysConfirmed`/`resolver.VerifyPins`/`core.Accept` sequence
+`ubx accept`'s own local-file path already uses.
+`--confirm-destroys` is still required for any plan with
+`blast_radius.destroys > 0`, a stale cross-stack pin still refuses,
+`acceptance.method: "local"` recorded exactly as today. A defensive
+integrity check specific to this fallback (`acceptPlanInline`): the
+plan file's own content must still hash to the filename it was found
+at — a hand-edited or corrupted plan file is refused, never shipped
+under a hash that no longer describes its actual content.
+
+**Pure CLI fusion, verified rather than assumed.** `resolve.go`'s own
+provider-loading block was extracted into `loadResolveProviders`
+(shared by `resolve.go` and `plan.go`); `propose.go`'s own `--from-doc`/
+`--from-diagram` drafting logic was extracted into `draftFromDoc`/
+`draftFromDiagram` (shared by `propose.go` and `plan.go`). Zero changes
+to `core`/`core/resolver`/`core/executor`. The full existing test suite
+(every package) was run after each refactor step and passes completely
+unchanged — checked directly, not assumed safe from the diff's shape
+alone. `ubx plan --from-diagram` incurs one real, accepted
+inefficiency: `draftFromDiagram`'s own type-inference pass and the
+later `resolver.Resolve` call each launch every declared provider once
+— a real double schema-fetch (never a double cloud call) rather than
+threading a shared providers slice through both call sites, named
+honestly in `docs/architecture.md` rather than fixed with a deeper
+refactor outside this arc's own tight scope.
+
+**10 new hermetic tests** (`cli/plan_test.go`), all passing on first
+real run against the fake provider binary:
+`TestPlanShip_SimpleCreate_FusedAcceptApply` (the core two-step round
+trip, receipt content asserted), `TestPlanShip_DestroysRequireConfirmFlag`
+(mirrors `TestAccept_DestroysRequireConfirmFlag_Refused` for the fused
+path), `TestShip_PlanFile_HashMismatch_Refused` (a hand-tampered plan
+file refused), `TestShip_NoSuchHash_Errors`,
+`TestPlanShip_CrossStackPin_StaleBlocksShip` (mirrors
+`TestResolveAccept_CrossStackPin_StaleBlocksAccept`),
+`TestPlan_MutuallyExclusiveInputs`/`TestPlan_RequiresOneInput` (input-mode
+validation), `TestPlan_FromCode_SimpleCreate`,
+`TestPlanShip_FromDoc_FullReceipt` (a real assumption rendered alongside
+the resolved delta — the fusion's own defining behavior, distinct from
+`ubx propose --from-doc`), and `TestPlanShip_FromDiagram_ResolvesAndApplies`
+(a real `UBX_PROVIDER_MIRROR`-backed multi-provider round trip).
+
+**ubiquex-docs, same session**: `cli/plan.mdx` (new reference page,
+flags/transcripts verified against the actual built binary via
+fakeprovider, per doctrine — no real cloud calls for doc transcripts);
+`cli/ship.mdx` updated with the `<hash>` two-way lookup, a new "Inline
+acceptance: the fused path" section (including the destroys-confirm and
+plan-file-integrity transcripts), and `--confirm-destroys` in the flags
+table; `guides/plan-ship-flow.mdx` (new guide, hermetic `fake_widget`
+transcripts, same stand-in convention `guides/onboarding.mdx` already
+established), added as the FIRST entry in the "Creating Infrastructure"
+tutorial group (`docs.json`), ahead of `guides/create-flow.mdx` — which
+gained a cross-linking note marking it as the four-verb ceremony's own
+team/production-path walkthrough, unchanged otherwise (its own real AWS
+transcript was not touched). `cli/resolve.mdx`/`cli/propose.mdx`/
+`cli/accept.mdx` each gained a "Related" cross-link to `cli/plan.mdx`.
+`mint validate` clean.
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo
+throughout. **UBI-49 closed** in one session, matching its own "Est.
+1-2 sessions" sizing exactly.
+
+## Current phase (previous)
+
 **UBI-50 (2026-07-29), session 4, CLOSING: bulk live-tier run, ship
 doctrine settled, verdict write-back into the registry — the two
 remaining open decisions delegated to judgment by the founder,
