@@ -491,22 +491,105 @@ ever created at all (nothing accepted, nothing appended, purely
 record-only). The queue was destroyed afterward and the sweep
 confirmed clean via both `aws sqs list-queues` and the tagging API.
 
-### Slices 4-5: not started
+### Slices 4-5: built (2026-07-30, session 3, closing)
 
-**Genesis attribution** (reusing `core.EventLookup` unchanged, new
-creation-verb tables per backend) and **the live finale** (a larger,
-multi-resource, tagged, ClickOps-style set, adopted with genesis
-attribution where available) remain session 3+ work.
+**Genesis attribution** (`core/genesis.go`, new): `core.AttributeGenesis`
+reuses `AttributeDrift`'s own identity-candidate search and defensive
+exact-match filtering (`identityCandidates`, `filterExactMatch`)
+completely unchanged — genesis attribution is the same mechanical
+search, pointed at a different question, not a second search
+mechanism. Two real, deliberate differences: it narrows matched events
+to a **creation-verb** `EventName` (`filterByEventName`, a small
+per-type list the caller supplies — `core` stays entirely
+type/backend-agnostic, the same reason `AttributionBackend` itself is
+a parameter, not hardcoded); and among genuine matches, the **oldest**
+wins (`attributionSourcesOldestFirst`) — the opposite of
+`AttributeDrift`'s own "newest first" convention, and correct here: a
+resource is created exactly once, so the earliest creation-verb match
+is the one that actually founded its lineage. An empty creation-verb
+list means genesis attribution is never even attempted for that type —
+a new, honest `ReasonNoCreationVerbs`, distinct from a real search that
+came up empty. The creation-verb table itself lives in `discovery/
+tiers.go`'s own `typeSpec.CreationVerbs` field — reusing the identity
+bridge's own per-type table rather than a fifth separately-maintained
+one — seeded with all six of this arc's own real AWS API operation
+names (`CreateQueue`, `CreateBucket`, `CreateRole`, `CreateUser`,
+`CreatePolicy`, `CreateVpc` — CloudTrail's own `EventName` always
+matches the API operation verbatim, confirmed live this session, not
+guessed).
 
-## Out of scope for v1, named so it isn't assumed covered
+**Wired into `ubx scan --discover`** (`cli/attribution.go`'s new
+`attributeGenesis`, called from `runScanDiscover`): reuses
+`newAttributionBackend` — the exact same per-provider-source backend
+registry the drift path already established — completely unchanged.
+The search window has no drift-time anchor to work from at all (a
+discovered resource's own creation time is exactly the unknown this
+exists to find), so it searches CloudTrail's own default 90-day
+management-event retention through the proposal's own `resolved_at`.
+The existing `--no-attribution` flag now gates both drift and genesis
+attribution — reused, not duplicated. Hermetic tests mirror
+`cli/attribution_test.go`'s own established technique exactly: blanking
+every AWS credential source makes credential resolution fail
+synchronously (no real network I/O), proving the wiring never blocks
+discovery from completing and adopting even when CloudTrail is
+completely unreachable, and that the resulting proposal still carries
+an honest `cloudtrail_unattributed` source rather than silently
+omitting attribution. 7 new hermetic tests (6 in `core`, 1 new file's
+worth in `cli`), all passing on first real run.
+
+**The live finale, real AWS, swept clean.** Four resources, hand-
+created (`aws` CLI directly, never through `ubx` — the "ClickOps, not
+Terraform-managed" proof this whole arc exists for), tagged with a
+shared marker plus a `Project` grouping tag across two groups:
+
+- `aws_sqs_queue` (Tier C) and `aws_iam_policy` (Tier A), tagged
+  `Project=payments`.
+- `aws_s3_bucket` (Tier B), tagged `Project=networking`.
+- A DynamoDB table — deliberately **not** in `tierTable` at all —
+  tagged `Project=networking`, the session's own designated proof of
+  the "discovered, not yet adoptable" honest-gap rendering against a
+  genuinely real, taggable, discoverable AWS resource, not a
+  synthetic/hermetic stand-in.
+
+`ubx scan --discover --suggest-stacks --stack-tag Project` correctly
+grouped all four real resources into `payments` (2) and `networking`
+(2) from their own real tags, writing nothing. Discovering
+`Project=networking` produced exactly one adoptable proposal (the S3
+bucket) and one honest, real "not yet adoptable: no known lookup
+shape" line for the DynamoDB table — proving all three "Tags carried
+through even when not adoptable" claims and the honest-gap rendering
+against real AWS, not a fixture. Discovering `Project=payments` (run
+after waiting for CloudTrail's own real delivery lag — polled directly
+via `aws cloudtrail lookup-events` until the `CreateQueue` event
+actually appeared, ~4 minutes in this account, well under the
+project's own previously-documented 15-minute worst case) produced
+both proposals with **successful genesis attribution**: `CreateQueue`/
+`CreatePolicy`, both correctly attributed to the real IAM user who
+created them via the `aws` CLI, with real event IDs, real timestamps,
+real source IPs. All three adoptable resources were accepted through
+the real, unmodified local-tier signing flow; `ubx why` on the SQS
+queue's own accepted id shows exactly `source: cloudtrail --
+arn:aws:iam::839333509514:user/roozbeh CreateQueue at ... from ...` —
+genesis-by-adoption with the real attributed creator, the arc's own
+closing proof. All four real resources were destroyed afterward;
+confirmed clean via the tagging API (empty), `aws sqs list-queues`
+(empty), `aws iam list-policies` (empty), and a direct `head-bucket`/
+`describe-table` 404/`ResourceNotFoundException` for the bucket and
+table respectively.
+
+## Out of scope, named so it isn't assumed covered
 
 Whole-account (untagged) enumeration as a supported mode; GCP/Azure
-mechanism validation (each its own future session); a structured
+mechanism validation (each its own future session, per-platform,
+mirroring `audit/gcp`/`audit/azure`'s own arrival order); a structured
 `TypeSpec.LookupShape` field unifying the four duplicated lookup-hint
-tables (recommended, not built — discovery's own `tierTable` is now
-the fourth); bulk acceptance of discovered proposals; any policy
-engine, auto-accept rule, or environment awareness; re-adopting the
-tfplugin `ListResource` RPC as the primary mechanism (revisit trigger
-named above, not a decision made now); AWS Config as anything more
-than a possible future enrichment source; genesis attribution and the
-live finale (slices 4-5, above).
+tables (recommended across sessions 1-2, still not built); bulk
+acceptance of discovered proposals; any policy engine, auto-accept
+rule, or environment awareness; re-adopting the tfplugin `ListResource`
+RPC as the primary mechanism (revisit trigger named in session 1, not
+a decision made now); AWS Config as anything more than a possible
+future enrichment source; a full-scale (dozens-to-hundreds of
+resources) live run (this arc's own live-tier work stayed small and
+cost-aware throughout, matching every other live-verified arc in this
+project); a live finale on GCP/Azure (AWS-only, this arc's own scope
+throughout, per the mechanism decision's own explicit AWS focus).

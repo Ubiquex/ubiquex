@@ -1977,6 +1977,57 @@
   repo; zero regressions in the existing suite. Genesis attribution and
   the live finale (slices 4-5) remain session 3+ work. See STATE.md for
   the full account.
+- 2026-07-30 -- UBI-45 session 3, closing (genesis attribution + the
+  live finale at scale): `core.AttributeGenesis` (new, `core/
+  genesis.go`) reuses `AttributeDrift`'s own identity-candidate search
+  and defensive exact-match filtering completely unchanged, narrowing
+  to a caller-supplied creation-verb `EventName` and, among genuine
+  matches, taking the OLDEST (the opposite of `AttributeDrift`'s own
+  "newest first" -- a resource is created exactly once, so the earliest
+  creation-verb match is the one that actually founded its lineage). An
+  empty creation-verb list is a new, honest `ReasonNoCreationVerbs` --
+  genesis attribution is never even attempted, distinct from a real
+  search that came up empty. The creation-verb table itself reuses
+  `discovery/tiers.go`'s own per-type `typeSpec` (a new `CreationVerbs`
+  field) rather than a fifth separately-maintained table, seeded with
+  all six of this arc's own real AWS API operation names. Wired into
+  `ubx scan --discover` via a new `attributeGenesis` (`cli/
+  attribution.go`), reusing `newAttributionBackend`'s own per-provider-
+  source registry unchanged; the existing `--no-attribution` flag now
+  gates both drift and genesis attribution. Hermetic tests mirror
+  `cli/attribution_test.go`'s own established "blank every AWS
+  credential source" technique exactly, proving the wiring never
+  blocks adoption even when CloudTrail is unreachable. 7 new tests (6
+  `core`, 1 `cli`), all passing.
+
+  **The live finale, real AWS, swept clean.** Four resources hand-
+  created via the `aws` CLI directly (never through `ubx`), tagged
+  across two `Project` groups: `aws_sqs_queue` (Tier C) +
+  `aws_iam_policy` (Tier A) tagged `payments`; `aws_s3_bucket` (Tier B)
+  + a DynamoDB table (deliberately unclassified -- this session's own
+  designated proof of "discovered, not yet adoptable" against a real
+  resource, not a fixture) tagged `networking`.
+  `--suggest-stacks --stack-tag Project` correctly grouped all four
+  from their own real tags, writing nothing. Discovering `networking`
+  produced one adoptable proposal (the bucket) and one honest "not yet
+  adoptable" line (the table); discovering `payments` -- after polling
+  `aws cloudtrail lookup-events` directly until the real `CreateQueue`
+  event actually appeared (~4 minutes in this account, well under this
+  project's own previously-documented 15-minute worst case) -- produced
+  both proposals with successful genesis attribution: `CreateQueue`/
+  `CreatePolicy`, both correctly attributed to the real IAM user who
+  created them, real event IDs, real timestamps, real source IPs. All
+  three adoptable resources accepted through the real, unmodified
+  local-tier signing flow; `ubx why` on the accepted SQS queue shows
+  exactly `source: cloudtrail -- arn:aws:iam::839333509514:user/roozbeh
+  CreateQueue at ... from ...` -- genesis-by-adoption with the real
+  attributed creator. All four resources destroyed afterward, swept
+  clean (tagging API, `aws sqs list-queues`, `aws iam list-policies`
+  all empty; `head-bucket`/`describe-table` both confirm gone).
+  `go build/vet/test`, `gofmt -l .` clean across the whole repo; zero
+  regressions. **UBI-45 closed** across three sessions -- design,
+  build, and a real, live, closing proof of every claim the design
+  session made. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4858,7 +4909,7 @@ signing. `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. **UBI-49 closed** in one session, matching its own "Est. 1-2
 sessions" sizing. See STATE.md for the full account.
 
-### Cloud-side discovery (UBI-45) — sessions 1-2
+### Cloud-side discovery (UBI-45) — sessions 1-3, closed
 
 Founder decision: unparked directly (the ticket's own prior status was
 `PARKED — unpark trigger: wedge traction demanding non-Terraform
@@ -4987,6 +5038,54 @@ list-queues` and the tagging API. `go build/vet/test`, `gofmt -l .`
 clean across the whole repo; zero regressions anywhere in the existing
 suite. Genesis attribution and the live finale (slices 4-5) remain
 session 3+ work. See STATE.md for the full account.
+
+**Session 3, closing: genesis attribution + the live finale at scale.**
+`core.AttributeGenesis` (new) reuses `AttributeDrift`'s own identity-
+candidate search and defensive exact-match filtering completely
+unchanged, narrowing matches to a caller-supplied creation-verb
+`EventName` and taking the OLDEST genuine match (the opposite of
+`AttributeDrift`'s own "newest first" — a resource is created exactly
+once, so the earliest creation-verb match founded its lineage). An
+empty creation-verb list is a new, honest `ReasonNoCreationVerbs`,
+distinct from a real search that came up empty. The creation-verb
+table reuses `discovery/tiers.go`'s own per-type table (a new
+`CreationVerbs` field) rather than a fifth separately-maintained one,
+seeded with all six of this arc's own real AWS API operation names.
+Wired into `ubx scan --discover` via a new `attributeGenesis` (`cli/
+attribution.go`), reusing `newAttributionBackend`'s own per-provider-
+source registry unchanged; the existing `--no-attribution` flag now
+gates both drift and genesis attribution. Hermetic tests mirror
+`cli/attribution_test.go`'s own established "blank every AWS credential
+source" technique, proving the wiring never blocks adoption even when
+CloudTrail is unreachable — 7 new tests, all passing.
+
+**The live finale, real AWS, swept clean.** Four resources hand-created
+via the `aws` CLI directly (never through `ubx`), tagged across two
+`Project` groups: `aws_sqs_queue` (Tier C) + `aws_iam_policy` (Tier A)
+tagged `payments`; `aws_s3_bucket` (Tier B) + a DynamoDB table
+(deliberately unclassified — this session's own designated proof of
+"discovered, not yet adoptable" against a real resource) tagged
+`networking`. `--suggest-stacks --stack-tag Project` correctly grouped
+all four from their own real tags, writing nothing. Discovering
+`networking` produced one adoptable proposal and one honest "not yet
+adoptable" line for the table; discovering `payments` — after polling
+`aws cloudtrail lookup-events` directly until the real `CreateQueue`
+event appeared (~4 minutes, well under this project's own previously-
+documented 15-minute worst case) — produced both proposals with
+successful genesis attribution, both correctly attributed to the real
+IAM user who created them, real event IDs, real timestamps, real
+source IPs. All three adoptable resources accepted through the real,
+unmodified local-tier signing flow; `ubx why` on the accepted SQS
+queue shows exactly `source: cloudtrail --
+arn:aws:iam::839333509514:user/roozbeh CreateQueue at ... from ...` —
+genesis-by-adoption with the real attributed creator, this arc's own
+closing proof. All four resources destroyed afterward, swept clean
+(tagging API, `list-queues`, `list-policies` all empty; `head-bucket`/
+`describe-table` both confirm gone). `go build/vet/test`, `gofmt -l .`
+clean across the whole repo; zero regressions. **UBI-45 closed** across
+three sessions — design, build, and a real, live, closing proof of
+every claim the design session made. See STATE.md for the full
+account.
 
 ## Deferred (explicitly not now)
 
