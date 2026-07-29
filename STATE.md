@@ -4,6 +4,171 @@
 
 ## Current phase
 
+**UBI-45 (2026-07-30), session 1, docs-first: cloud-side discovery —
+tag/list-based adoption without tfstate. Unparked directly by the
+founder (prior status: `PARKED — unpark trigger: wedge traction
+demanding non-Terraform onboarding, or a real prospect with no usable
+tfstate`). Still In Progress in Linear — session 1 is design only, per
+protocol; real work remains (the identity bridge as real code, `ubx
+scan --discover`'s own CLI wiring, the live finale).**
+
+`docs/discovery.md` written — the wedge's second front door: teams
+with ClickOps-heavy, half-terraformed, or inherited/acquired accounts,
+which UBI-18's own tfstate-sourced bulk onboarding can't reach at all.
+"Point `ubx` at the account, not at the repo."
+
+**The mechanism decision, made empirically against a real AWS account
+(`839333509514`), not assumed from documentation.** A real, throwaway
+`aws_sqs_queue` was created, tagged `ubx-discovery-probe=<marker>`,
+queried, and destroyed this session (swept clean, confirmed via both
+`aws sqs list-queues` and the tagging API afterward — zero residue).
+Three real candidates checked:
+- **AWS Resource Groups Tagging API** — `aws resourcegroupstaggingapi
+  get-resources --tag-filters ...` answered immediately against the
+  tagged queue: `{ResourceARN, Tags}` only, zero setup barrier, no
+  opt-in needed. **Chosen as the primary mechanism** — critically
+  because a ClickOps-heavy/half-terraformed account (this ticket's own
+  target market) is *less* likely to already have a richer inventory
+  service running, not more.
+- **AWS Config** — `aws configservice describe-configuration-recorders`
+  against the same real account returned zero recorders. Real,
+  decisive: Config requires its own pre-existing setup this ticket's
+  own target accounts are least likely to have. Not chosen as primary;
+  named as a possible future opportunistic enrichment source only.
+- **The tfplugin wire protocol's own dormant `ListResource` RPC**
+  (`provider/tfplugin5`, `provider/tfplugin6` — real, generated,
+  **never called anywhere in this codebase before this session**).
+  Tested live: acquired the real `hashicorp/aws@6.54.0` binary via
+  `provider.Acquire`/`Launch` (exactly as every other command already
+  does), wrapped a throwaway same-package probe test
+  (`provider/zzz_probe_listresource_test.go` — written, run, then
+  **deleted, never committed** — confirmed via `git status` showing a
+  clean tree before continuing) around the raw `tfplugin5.Provider`
+  gRPC client (the negotiated protocol was v5, not v6, for this
+  binary), and called `GetMetadata` directly. Real findings: 1,682
+  total resource types, of which **exactly 53 implement
+  `ListResource`** (~3%) — none of this project's own four trusted
+  free-tier fixture types (`aws_sqs_queue`/`aws_sns_topic`/
+  `aws_iam_policy`/`aws_iam_user`) among them. Calling `ListResource`
+  for `aws_sqs_queue` (absent from the 53) didn't error — it opened a
+  stream and closed with a bare `EOF`, no events, no diagnostic — a
+  real, named ambiguity: nothing distinguishes "zero resources" from
+  "listing unsupported" from the stream's own behavior alone, only
+  cross-checking `GetMetadata.ListResources` first. Calling it for a
+  type genuinely in the 53 (`aws_iam_policy`) surfaced real "Invalid
+  Provider Server Combination" diagnostic errors from the AWS
+  provider's own muxed SDKv2/Plugin-Framework server architecture.
+  **Not viable as v1's mechanism** — named as the clearest single
+  future "revisit" trigger (re-probe coverage against later provider
+  releases) rather than silently dismissed or silently assumed usable.
+
+**The identity bridge — the arc's actual hard problem, checked
+directly rather than assumed solved by UBI-50.** The ticket frames
+"the conformance registry, now machine-complete via UBI-50" as the
+join between enumeration (ARNs) and adoption (provider lookup shapes).
+Checked against `conformance.Registry`/`TypeSpec` directly: UBI-50's
+own machine-completeness is real (every type of every onboarded
+provider now carries *some* verdict) but answers a narrower question
+than "lookup shape" — `IdentityFields` is CloudTrail-attribution-scoped,
+`LookupHint` is a narrow negative signal populated for exactly 3
+hand-verified AWS types, and neither is generalized to express "these
+two fields are required together" (GCP's own real need, still prose-
+only in `Notes`). Worse: this session's research found **three
+separately-maintained copies of the same tiny fact** already in this
+codebase (`conformance.Registry[i].LookupHint`, generated
+`core/lookuphints` — a 3-entry subset, and `tfstate.BuildLookup`'s own
+hand-written `extraLookupAttrs` — a fourth, independently-authored copy
+of the identical 3 entries). **Recommendation, not built this
+session**: a structured `TypeSpec.LookupShape` field (id-alone /
+id-plus-fields-together / unknown) consolidating all three, named
+honestly as real follow-up debt rather than silently added to.
+
+Despite that gap, every AWS type's real lookup shape was found to fall
+into one of three empirically-confirmed tiers, checked against
+`conformance.Registry`'s own live-verified (`RealSafe`/`Implemented`)
+entries: **Tier A** — id IS the ARN (`aws_iam_policy`, per the
+Registry's own existing Notes). **Tier B** — id is the ARN's own
+trailing segment, sometimes duplicated into a second field
+(`aws_vpc`; `aws_iam_role`/`aws_iam_user` — id AND name both the
+trailing name segment; `aws_s3_bucket` — id AND bucket both the
+trailing bucket name). **Tier C** — id is constructed from ARN
+components, not a substring — `aws_sqs_queue`'s own real queue URL
+(`https://sqs.us-east-1.amazonaws.com/839333509514/ubx-discovery-…`),
+confirmed live this session against the same probe queue: the ARN's
+own service/region/account/resource-id components are always
+sufficient inputs, no extra API round trip needed. A type discovery
+can't bridge (unclassified, or Tier C with no constructor built)
+surfaces as `discovered, not yet adoptable: no known lookup shape` —
+never silently dropped, the identical "skip, never abort the batch"
+posture `--all --tfstate` already established (docs/architecture.md's
+UBI-18 section).
+
+**Tag-scoped filtering as the primary UX** designed: `--tag`
+(repeatable, AND-combined, matching this session's own real probe
+shape) as the realistic default scope; `--type` as a client-side
+allowlist derived from each ARN's own service segment (never a second
+hand-maintained Terraform-type→AWS-service-namespace filter-string
+table alongside the identity bridge's own translation table);
+`--region`, since the tagging API is itself regional. Whole-account
+(untagged) enumeration stays explicitly out of scope, named as a
+firehose, not solved here.
+
+**Stack-grouping inference** designed as a separate, read-only
+`--suggest-stacks` preview (groups by a configurable tag or naming
+heuristic, writes nothing) — never an auto-assignment. Directly
+follows UBI-18's own already-established, documented precedent (a
+Terraform module path is a plain-text hint, never a silent stack
+split) applied to a weaker signal (tags/naming) with at least the same
+caution, not less. `--stack <name>` stays required to actually write
+any proposal, unchanged from every other command's convention.
+
+**The attribution bonus** designed as a reuse of
+`core.EventLookup`/`core.AttributeDrift`/the existing `audit/cloudtrail`,
+`audit/gcp`, `audit/azure`, `audit/k8s` backends and their
+per-source dispatch (`cli/attribution.go`) — completely unchanged
+machinery, two additive differences only: searching for a
+creation-verb event (a small, curated per-service table, same kind of
+knowledge every backend's own dispatch already requires) instead of
+any drift-causing event, and searching the earliest available point in
+whatever retention window the backend has (no drift-time anchor
+exists for a resource `ubx` never saw created) rather than a window
+around a known event time. Purely a bonus — a discovered resource
+adopts successfully with or without it, exactly like `--no-attribution`
+already makes drift attribution itself optional today.
+
+**Five-row adversarial program**, every row's required outcome reusing
+an already-existing, unmodified mechanism rather than inventing a new
+one: no lookup shape (→ "discovered, not yet adoptable," above); tag
+matching thousands of resources (tagging-API pagination — noted
+honestly as *not* empirically triggered this session, since only one
+resource was ever tagged for the identity-bridge probe, real follow-up
+work for session 2+ — plus a `--limit`-gated confirmation, the same
+"friction by default" posture `--confirm-destroys` already
+established); permission denied mid-enumeration (the tagging API's own
+broad `tag:GetResources` call succeeds but a specific resource's
+type-specific `ReadResource` permission is denied — reuses `--all
+--tfstate`'s own "provider read failed" skip category verbatim);
+resource deleted between list and read (reuses `--all --tfstate`'s own
+"deleted since state was last written" skip verbatim); already-adopted
+resource rediscovered (reuses `core.RunScan`'s own existing, unmodified
+address-based idempotent classification verbatim — zero new logic
+needed).
+
+**Adoption stays record-only, blast-radius zero by construction** —
+this arc adds a new identity source only, never a new proposal kind,
+never a new apply path; `core.RunScan`/`core.GenerateProposal` are not
+touched.
+
+`docs/plan.md` gained a new "Cloud-side discovery (UBI-45)" wedge
+subsection and a session-1 changelog entry. No code this session, per
+protocol — `go build/vet/test`, `gofmt -l .` confirmed clean
+throughout regardless (the throwaway probe test was written, run, and
+fully removed within this same session, never landing in a commit).
+Real AWS account confirmed swept clean of every probe resource. See
+docs/discovery.md for the full design.
+
+## Current phase (previous)
+
 **UBI-49 (2026-07-29), one session, closed: `ubx plan` + `ubx ship`
 fusion — a terraform-shaped two-step workflow over completely
 unmodified `core`/`core/resolver`/`core/executor` machinery, per the
