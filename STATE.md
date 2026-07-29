@@ -4,6 +4,126 @@
 
 ## Current phase
 
+**UBI-45 (2026-07-30), session 2: the identity bridge as real code +
+`ubx scan --discover` CLI wiring — the two slices session 1's own
+`docs/discovery.md` scoped first. Still In Progress in Linear — real
+work remains (genesis attribution, the live finale at real scale).**
+
+**The identity bridge, real code** (`discovery/arn.go`, `discovery/
+tiers.go`, new package). `ParseARN` splits an ARN's own resource
+segment on its first `/` into a resource-type prefix plus id — a real
+refinement found while implementing, not assumed at design time:
+keying the tier table by `(service, resourceTypePrefix)`, not service
+alone, is what lets `aws_iam_role`/`aws_iam_user`/`aws_iam_policy`
+(all AWS service `iam`) disambiguate without needing a `--type`
+allowlist at all — confirmed via `TestARN_ClassKey`. `tierTable`
+seeded with session 1's own five empirically-confirmed examples across
+all three tiers: `aws_iam_policy` (Tier A, id IS the ARN); `aws_vpc`/
+`aws_iam_role`/`aws_iam_user`/`aws_s3_bucket` (Tier B, id is the ARN's
+own trailing segment, some duplicated into a second field);
+`aws_sqs_queue` (Tier C, its own real queue-URL constructor,
+`sqsQueueURL`, confirmed byte-identical against the same real queue
+this session tested live). An unclassified `(service, prefix)` pair, or
+a Tier-C entry whose own constructor fails, surfaces `ErrNotYetAdoptable`
+— never a fabricated lookup, matching the ticket's own explicit
+instruction. Honestly named, in the doc comment itself, as this
+session's own fourth separately-maintained copy of the same tiny
+lookup-hint fact (alongside `conformance.Registry.LookupHint`,
+`core/lookuphints`, `tfstate.extraLookupAttrs`) — the structured
+`TypeSpec.LookupShape` consolidation session 1 recommended stays real
+follow-up work, not built this session either.
+
+**`discovery.Discover`** (`discovery/discover.go`, `discovery/
+client.go`): a `TaggingAPI` interface shaped to match
+`*resourcegroupstaggingapi.Client.GetResources`'s own real method
+signature exactly, so the real AWS SDK client (added to `go.mod` this
+session) satisfies it with zero adapter code — the identical
+dependency-inversion discipline `core.StateReader`/`core.EventLookup`
+already establish for the tfplugin provider client and CloudTrail.
+Pagination is followed to completion before anything is ever returned;
+`--type`/`--discover-type` resolves to expected `(service, prefix)`
+keys up front (`ErrUnknownDiscoveryType`, a fail-fast whole-request
+error, distinct from a per-resource `ErrNotYetAdoptable`). `CheckLimit`
+is deliberately its own small, pure confirmation-gate function
+(`DefaultLimit` 100) — exactly so it's hermetically testable without
+needing thousands of real tagged resources, the gap session 1 named
+honestly. `discovery/stacksuggest.go`'s `SuggestStacks` groups by an
+operator-named tag or a naming-prefix heuristic, read-only, mutates
+nothing — `--stack <name>` stays required to actually author anything,
+unchanged from every other command's own convention.
+
+**`ubx scan --discover`** (`cli/scan.go`, new `cli/scandiscover.go`):
+wired as a third mode alongside single-resource and `--all`, mutually
+exclusive with both, mirroring `--all`'s own existing exclusivity
+check exactly. New flags: `--tag` (repeatable "key=value", same key
+OR-combines into one `TagFilter`'s own `Values`, different keys
+AND-combine — confirmed against the real API's own documented
+semantics via `go doc`, not assumed), `--discover-type` (a dedicated
+flag name, never a second meaning layered onto the existing
+single-resource `--type`), `--region`, `--limit`/`--yes`, `--suggest-
+stacks`/`--stack-tag`. `runScanDiscover` mirrors `runScanAll`'s own
+structure closely: the identical `core.RunScan`/`core.GenerateProposal`
+pipeline, the identical `nextParent` chaining, the identical
+multi-provider-vs-single-provider branch (`docs/architecture.md`'s
+UBI-43 amendment) — a new identity source only, exactly as scoped. A
+real bug found and fixed while building: a provider was being launched
+(requiring `--provider`/`--source`) even when every discovered resource
+turned out to be "not yet adoptable" — fixed to skip provider
+construction entirely whenever nothing discovered actually needs a
+read. Two package-level seams (`newDiscoveryTaggingAPI`,
+`newDiscoveryStateReader`), the same convention `openRemoteLedgerStore`
+already establishes, let hermetic CLI tests fully control both the
+tagging API and the provider-read half without touching real AWS *or*
+fakeprovider's own shared `fake_widget` fixture (whose schema has
+nothing to do with discovery's own AWS-specific tier-table types) —
+zero risk introduced to the wide existing fakeprovider-based test suite
+elsewhere in this project.
+
+**All five adversarial rows verified hermetically**, 17 new tests (10
+`discovery`, 7 `cli`), all passing: no lookup shape (never silently
+dropped); tag matching thousands of resources (a real scripted 3-page
+fake pagination, followed to completion) plus the `--limit`/`--yes`
+confirmation gate; permission denied mid-enumeration and resource
+deleted between list and read — **found, while testing, to be the
+identical code path**: both are ordinary `core.RunScan` errors landing
+in the same "provider read failed" skip category `runScanAll`'s own
+equivalent case already uses, so both rows are verified together with
+one combined test rather than two artificially separated ones, a real
+discovery about the reused mechanism's own shape, not assumed from the
+design doc's own separate row numbering; already-adopted rediscovery
+(a real `ubx accept` run in between two discovery runs against the
+identical resource — the test's own first attempt was wrong, since a
+merely-*generated* proposal was never actually "already adopted" until
+something really accepts it, caught by running the test and reading
+its failure, not assumed correct from its own intent).
+
+**Live-verified, read-only, no ship, per doctrine.** A real SQS queue
+was created by hand (`aws sqs create-queue`, never through `ubx` —
+the "ClickOps, not Terraform-managed" proof this whole arc exists for),
+tagged with a distinctive marker, and discovered end to end via the
+real, built `ubx` binary: `ubx scan --discover --tag ... --source
+hashicorp/aws --provider-version 6.54.0` found it through the real
+tagging API, classified it Tier C, built its real queue URL
+(byte-identical to session 1's own live-probed example), launched the
+real `hashicorp/aws` provider, read its real live state, and generated
+a real, complete `adoption` proposal (`blast_radius`: all zero) —
+confirmed, via the filesystem, that no `ledger/` directory was ever
+created at all (only `.ubx/salt` — nothing accepted, nothing appended,
+purely record-only, exactly as designed). The queue was destroyed
+afterward and the sweep confirmed clean via both `aws sqs list-queues`
+and the tagging API — zero residue.
+
+`docs/discovery.md` gained a "slices 1-3: built" section recording all
+of the above; `docs/plan.md` gained a session-2 changelog entry and
+extended the UBI-45 wedge subsection (retitled "sessions 1-2"). `go
+build/vet/test`, `gofmt -l .` clean across the whole repo throughout;
+the full existing test suite (every package) re-run after these
+changes and passes completely unchanged — zero regressions. Genesis
+attribution and the live finale at real scale (slices 4-5) remain
+session 3+ work; UBI-45 stays In Progress in Linear.
+
+## Current phase (previous)
+
 **UBI-45 (2026-07-30), session 1, docs-first: cloud-side discovery —
 tag/list-based adoption without tfstate. Unparked directly by the
 founder (prior status: `PARKED — unpark trigger: wedge traction
