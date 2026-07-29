@@ -3,19 +3,25 @@ package conformance
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/core/executor"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
-// stateReaderAdapter adapts a provider.Provider to core.StateReader —
-// core deliberately doesn't import package provider (see core/scan.go),
-// so every consumer that needs both gets its own small copy of this; cli
-// has an equivalent (cli/stateadapter.go). Not worth a shared package for
-// ~20 lines.
+// stateReaderAdapter adapts a provider.Provider to core.StateReader AND
+// executor.Applier (UBI-50 session 3 added the latter two methods,
+// below, for the destroy-honesty probe — mirroring cli/stateadapter.go's
+// own identical adapter exactly, "two views of the same concrete
+// adapter, not two implementations") — core/core.executor deliberately
+// don't import package provider (see core/scan.go), so every consumer
+// that needs both gets its own small copy of this; not worth a shared
+// package for ~70 lines.
 //
 // salt (UBI-23, docs/architecture.md -- Secrets) redacts Sensitive
 // attributes before core ever sees observed state; source (UBI-24,
@@ -56,6 +62,56 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 		return observed, nil
 	}
 	return provider.Redact(a.source, typeName, rs.Block, a.salt, observed)
+}
+
+// ApplyResourceChange satisfies executor.Applier — mirrors
+// cli/stateadapter.go's own identical method exactly (UBI-26/UBI-30):
+// config is set identically to plannedState (no separate "desired
+// config" for a probe-driven apply, the same "constructing PlannedState
+// without planning" convention docs/executor.md's own amendment
+// describes), plannedPrivate threaded through unmodified (required for
+// a destroy), a real structured ERROR-severity diagnostic wrapped as
+// executor.TerminalError so core/executor's own state machine classifies
+// it correctly, and the result redacted through the identical
+// provider.Redact call ReadResource already uses.
+func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
+	rs, ok := resourceSchema.(*provider.Schema)
+	if !ok {
+		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+	}
+	result, err := a.p.ApplyResourceChange(ctx, rs, typeName, priorState, plannedState, plannedState, plannedPrivate)
+	if err != nil {
+		var diag *provider.DiagnosticError
+		if errors.As(err, &diag) {
+			return nil, &executor.TerminalError{Err: err}
+		}
+		return nil, err
+	}
+	if len(result) == 0 {
+		return result, nil
+	}
+	return provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+}
+
+// PlanResourceChange satisfies executor.Applier — mirrors
+// cli/stateadapter.go's own identical method exactly (UBI-30): a real
+// plan call is unconditionally required before a destroy's own
+// ApplyResourceChange, diagnostic classification identical to
+// ApplyResourceChange's own.
+func (a stateReaderAdapter) PlanResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, proposedNewState json.RawMessage) (json.RawMessage, []byte, error) {
+	rs, ok := resourceSchema.(*provider.Schema)
+	if !ok {
+		return nil, nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+	}
+	plannedState, plannedPrivate, err := a.p.PlanResourceChange(ctx, rs, typeName, priorState, proposedNewState)
+	if err != nil {
+		var diag *provider.DiagnosticError
+		if errors.As(err, &diag) {
+			return nil, nil, &executor.TerminalError{Err: err}
+		}
+		return nil, nil, err
+	}
+	return plannedState, plannedPrivate, nil
 }
 
 // AdoptMutateScanDiffConfig describes one conformance run.
