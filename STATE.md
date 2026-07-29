@@ -4,6 +4,129 @@
 
 ## Current phase
 
+**UBI-50 (2026-07-29), session 4, CLOSING: bulk live-tier run, ship
+doctrine settled, verdict write-back into the registry — the two
+remaining open decisions delegated to judgment by the founder,
+exercised conservatively, reasoning recorded in
+`docs/conformance-harness.md`'s own session-4 amendment, not just the
+outcome. UBI-50 is now closed in Linear — this is the arc's final
+session.**
+
+**Slice 1: bulk live-tier run, real batch policy decided before
+anything was created.** Free-tier-only (the sanctioned default;
+nothing priced was in scope, and nothing priced would have been
+included without stopping to ask first), scoped to the four
+create-and-destroy-per-run AWS types session 3 already established as
+safe and fully self-contained (`aws_sqs_queue`/`aws_sns_topic`/
+`aws_iam_policy`/`aws_iam_user`) — deliberately excluding the three
+ADOPT-a-pre-existing-resource types already in the suite
+(`aws_s3_bucket`/`aws_iam_role`/`aws_vpc`), since those mutate real,
+ALREADY-EXISTING account infrastructure rather than a throwaway
+resource created for this run alone, a real distinction even though
+both classes are equally free. `conformance/aws_bulk_live_test.go`
+(new) runs all three non-destroy probes (identity-shape, sensitive-echo,
+drift-detectability) against all four types, each in its own subtest,
+each creating a real resource and destroying it via `t.Cleanup`. **A
+real bug found on the first live run**: `aws_sqs_queue`'s own
+`ProbeSensitiveEchoLive` call excluded only `"tags"`, not `"tags_all"`,
+from the leak check — the identical `tags`/`tags_all` dual-tag false
+positive already found and fixed for `aws_sns_topic` last session, not
+carried over consistently to SQS this time. Fixed (added `"tags_all"`
+to the excluded-attrs list, matching the other three types); verified
+no resource leaked from the failed run via `aws sqs list-queues`
+before rerunning. All four types passed clean on the second run.
+`TestSweep_AWSBulkLiveRun_NoLeaks` (real `aws` CLI list checks filtered
+to the `ubx-conformance-bulk` prefix) plus a manual four-way `aws` CLI
+check both confirm zero leaked resources afterward.
+
+**Slice 2: probe 3's own real-cloud confirmation — decided
+conservatively, reasoning recorded, not just the outcome.** Both
+options were genuinely open per the founder's own framing. The case
+FOR a live leg: AWS has never actually been checked for a
+UBI-44-shaped destroy-lie the way GCP was — genuinely new information,
+not just re-proving something already known. The case for staying
+hermetic-only: probe 3's own live confirmation needs
+`core/executor.Ship` to reach a REAL `ApplyResourceChange` destroy
+against real AWS — exactly what CLAUDE.md's ship-verification rule
+bans, in its own words, "always, no exceptions," a rule born from a
+real prior incident (UBI-47 session 4: a "routine verification" `ship`
+created real AWS resources unintentionally). The rule draws no
+exception for a deliberately-scoped, well-understood conformance
+session. Weighed against the already-strong hermetic verification this
+arc already has (real tfplugin wire protocol, the real
+`FAKEPROVIDER_APPLY_MODE=lying-destroy` fixture, the identical scripted
+lie `cli/ship_lying_destroy_test.go` already proves catches this class
+at the CLI layer too) — the marginal value of a live AWS leg is real
+but not large, and not worth being the session that treats a hard "no
+exceptions" rule as having a quiet exception. **Decision: probe 3
+stays hermetic-only.** Named explicitly, in both
+`docs/conformance-harness.md`'s session-4 amendment and this ticket's
+own closing comment, as this arc's one deliberately-open item — a
+future session should treat it as its own fresh, standalone decision,
+not something this arc already implicitly greenlit.
+
+**Slice 3: verdict write-back — generated findings landed as a real,
+committed base layer.** `conformance/versions.go`'s
+`PinnedProviderVersions` (new) is the single source of truth for this
+project's own five version pins, honestly noting the existing
+per-file live-test constants don't yet consume it (a known,
+deliberate gap, not a silent inconsistency). `conformance/probegen`
+(new command, mirrors `conformance/gentool`'s own doc-comment
+conventions) runs `ProbeSchema` for real against every pinned
+provider, writing `conformance/findings_generated.go` — **1,335 real
+`Finding` entries across all 4,187 resource types** this project's
+five onboarded providers report (aws: 742 findings/1,682 types,
+azurerm: 263/1,103, google: 278/1,319, helm: 1/1, kubernetes: 51/82) —
+committed as real, versioned Go data (matching `core/lookuphints/
+hints.go`'s own established generated-file convention, not a new
+one). `conformance.AllVerdicts()` (new, in `layer.go`) is the
+ready-made `LayerFindings(GeneratedFindings)` combination — the base
+layer plus `Registry`'s own 154 hand-written entries layered on top,
+`Registry` itself never touched, exactly per the arc's own "layering,
+never replacing" design. Two new tests:
+`TestGeneratedFindings_WellFormed` (hermetic, checks every entry's
+shape and that its `Version` still matches the current
+`PinnedProviderVersions` — a real regression guard against a forgotten
+regeneration after a version bump) and
+`TestAllVerdicts_LayersGeneratedFindingsUnderRegistry` (proves the
+wiring is real — every verdict whose `(Source, Type)` matches a real
+`Registry` entry carries that exact entry as its `Spec`, via pointer
+identity, not a re-parsed copy). **Regeneration path documented in
+`probegen`'s own header comment**: bump `PinnedProviderVersions`, then
+`go run ./conformance/probegen -out conformance/findings_generated.go`
+— needs real network access to `registry.opentofu.org` (schema-only,
+no cloud account), deliberately never wired to `go generate ./...`
+which must stay fully offline.
+
+**ubiquex-docs: checked, no update needed, reasoning recorded.** No
+new CLI surface this session; `Candidate`-tier machine findings aren't
+yet reliable enough for user-facing promotion, so nothing was promoted
+into `cli/lookup.mdx` or similar — the existing hand-verified/
+unverified framing there stays accurate as-is. This is an explicit
+"checked, no update needed" conclusion, not a silent skip.
+
+**`docs/conformance-harness.md` gained a session-4, closing amendment**
+recording all three slices' real findings, numbers, and the probe-3
+reasoning in full, and its own "What this doesn't yet cover" section
+was rewritten to name only what remains genuinely open after this
+closing session (probe 3's real-cloud confirmation; full-platform-scale
+live runs beyond this arc's own cost-aware AWS batching; Helm/GCP/
+Azure/Kubernetes live-tier plumbing, never built, AWS-only so far;
+automated rerun-on-version-bump DELTA/diff detection, still manual;
+`ubx status --drift`'s own downstream UX for `undriftable` verdicts;
+whether generated registry output should ever be user-facing). `docs/
+plan.md` gained a session-4 changelog entry and closed out the UBI-50
+wedge subsection (retitled "sessions 1-4, closed").
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo
+throughout, after both of this session's commits (bulk live-tier run,
+verdict write-back). **UBI-50 is now closed in Linear** — the arc's
+own "~3-4 sessions" sizing landed at exactly 4, with one deliberate,
+named open item (probe 3's real-cloud confirmation) carried forward
+rather than force-closed.
+
+## Current phase (previous)
+
 **UBI-50 (2026-07-29), session 3: triage, probe 3 (destroy honesty),
 registry layering, and the live tier for probes 1/2/4 — the next four
 slices off `docs/conformance-harness.md`'s own design, per direct
