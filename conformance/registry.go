@@ -776,6 +776,176 @@ var Registry = []TypeSpec{
 	},
 }
 
+// azureSeedNote is the shared "not yet worked through" note for UBI-37
+// Stage 1's azurerm entries -- honest about what's actually been verified
+// (IdentityFields' flat presence, against the real schema) versus what
+// hasn't (whether "id" truly suffices alone for ReadResource -- see the
+// long doc comment on azureRegistry's own section header below), the
+// same "documented as parked, not silently skipped" discipline every
+// earlier platform's own seed note follows.
+const azureSeedNote = "Seeded for UBI-37 Stage 1 (docs/plan.md's Azure resource type list): " +
+	"IdentityFields verified against the real hashicorp/azurerm 5.0.0 schema " +
+	"(GetProviderSchema, free, no credentials, no live Azure API call) -- " +
+	"both \"id\" and \"name\" are flat top-level attributes on every azurerm " +
+	"type sampled, but that is schema PRESENCE, not a live proof that \"id\" " +
+	"alone suffices for ReadResource (see GCP's own google_storage_bucket/ " +
+	"google_pubsub_topic/google_secret_manager_secret entries above for why " +
+	"that gap matters). Not yet implemented -- no fakeprovider fixture, no " +
+	"live-account verification, Safety/LookupHint not yet classified. " +
+	"Stage 2 (a real Azure subscription) works through this list in " +
+	"batches, the same way UBI-9/UBI-21/UBI-22 worked through " +
+	"AWS/GCP/Kubernetes's own."
+
+// azureRegistry is UBI-37 Stage 1's azurerm seed list, appended to
+// Registry in init() below rather than inlined into the Registry literal
+// above -- kept as its own named slice purely so this section's own long
+// rationale comment has one clear place to live, right next to the data
+// it explains. Functionally identical to appending these entries
+// directly inside Registry's own literal -- ByType and every caller see
+// one flat Registry slice either way.
+//
+// Empirically confirmed while inspecting hashicorp/azurerm 5.0.0's real
+// schema (43 spot-checked types, every one): unlike GCP's varied
+// id/self_link/uid shapes, EVERY azurerm type sampled has both "id"
+// (computed, the full ARM resource path) and "name" (required, the short
+// resource name) as flat top-level attributes -- a materially simpler,
+// more AWS-like shape than GCP's, at the schema level. See azureSeedNote
+// above for why that flat presence is not itself proof "id" alone
+// suffices for ReadResource.
+var azureRegistry = []TypeSpec{
+	{Type: "azurerm_resource_group", Source: "hashicorp/azurerm", Category: "management", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{Type: "azurerm_linux_virtual_machine", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_kubernetes_cluster", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_container_registry", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_linux_web_app", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_linux_function_app", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_service_plan", Source: "hashicorp/azurerm", Category: "compute", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{Type: "azurerm_virtual_network", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_subnet", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_network_security_group", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_network_interface", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_public_ip", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_lb", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_application_gateway", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_firewall", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_nat_gateway", Source: "hashicorp/azurerm", Category: "network", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{
+		Type: "azurerm_user_assigned_identity", Source: "hashicorp/azurerm", Category: "iam", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id (the full ARM resource path) alone is sufficient -- no " +
+			"companion field needed, the same shape google_service_account/" +
+			"google_project_iam_custom_role turned out to have on GCP. " +
+			"Verified by creating a throwaway user-assigned identity, " +
+			"testing it, and deleting it.",
+		Implemented: true,
+	},
+	{Type: "azurerm_role_assignment", Source: "hashicorp/azurerm", Category: "iam", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{
+		Type: "azurerm_storage_account", Source: "hashicorp/azurerm", Category: "storage", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id (the full ARM resource path) alone is sufficient -- unlike " +
+			"google_storage_bucket's own \"both id and name required\" trap, " +
+			"azurerm_storage_account's ARM id path already fully qualifies " +
+			"the resource; \"name\" (the bare storage account name, globally " +
+			"unique but not ARM-qualified on its own) is not needed alongside " +
+			"it. A real, empirically-confirmed divergence in the opposite " +
+			"direction from GCP's own storage-bucket lesson -- \"assume " +
+			"nothing\" cuts both ways, not just toward assuming trouble. " +
+			"Verified by creating a throwaway storage account, testing it, " +
+			"and deleting it.",
+		Implemented: true,
+	},
+	{
+		Type: "azurerm_storage_container", Source: "hashicorp/azurerm", Category: "storage", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id alone is sufficient, same shape as azurerm_storage_account " +
+			"above. Verified by creating a throwaway container inside the " +
+			"conformance storage account, testing it, and deleting it.",
+		Implemented: true,
+	},
+	{Type: "azurerm_managed_disk", Source: "hashicorp/azurerm", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{
+		Type: "azurerm_key_vault", Source: "hashicorp/azurerm", Category: "storage", Safety: RealSafe,
+		IdentityFields: []string{"id", "name"},
+		Notes: "id alone is sufficient, same shape as azurerm_storage_account. " +
+			"Azure Key Vault's own soft-delete default means a deleted vault " +
+			"name stays reserved for up to 90 days -- the conformance test " +
+			"purges (not just deletes) the throwaway vault in cleanup to " +
+			"avoid leaving a reserved name behind. Verified by creating a " +
+			"throwaway vault, testing it, and purging it.",
+		Implemented: true,
+	},
+	{Type: "azurerm_key_vault_secret", Source: "hashicorp/azurerm", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_key_vault_key", Source: "hashicorp/azurerm", Category: "storage", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{Type: "azurerm_mssql_server", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_mssql_database", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_postgresql_flexible_server", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_mysql_flexible_server", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_cosmosdb_account", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_redis_cache", Source: "hashicorp/azurerm", Category: "db", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{Type: "azurerm_dns_zone", Source: "hashicorp/azurerm", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_dns_a_record", Source: "hashicorp/azurerm", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_private_dns_zone", Source: "hashicorp/azurerm", Category: "dns", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+
+	{Type: "azurerm_servicebus_namespace", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_servicebus_queue", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_servicebus_topic", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_eventhub_namespace", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_eventhub", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_monitor_metric_alert", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_monitor_diagnostic_setting", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_monitor_action_group", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+	{Type: "azurerm_log_analytics_workspace", Source: "hashicorp/azurerm", Category: "messaging", Safety: FakeOnly,
+		IdentityFields: []string{"id", "name"}, Notes: azureSeedNote},
+}
+
+func init() {
+	Registry = append(Registry, azureRegistry...)
+}
+
 // gcpSeedNote is the shared "not yet worked through" note for UBI-21
 // Stage 1's GCP entries -- honest about what's actually been verified
 // (IdentityFields, against the real schema) versus what hasn't

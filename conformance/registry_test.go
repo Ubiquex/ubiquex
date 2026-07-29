@@ -3,13 +3,14 @@ package conformance
 import "testing"
 
 var validCategories = map[string]bool{
-	"compute": true, "network": true, "iam": true,
-	"storage": true, "db": true, "dns": true, "messaging": true, "helm": true,
+	"compute": true, "network": true, "iam": true, "storage": true, "db": true,
+	"dns": true, "messaging": true, "helm": true, "management": true,
 }
 
 var validSources = map[string]bool{
 	"hashicorp/aws": true, "hashicorp/google": true,
 	"hashicorp/kubernetes": true, "hashicorp/helm": true,
+	"hashicorp/azurerm": true,
 }
 
 // TestRegistry_NoDuplicateTypes checks (Source, Type) uniqueness, not bare
