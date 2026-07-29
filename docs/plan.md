@@ -1777,6 +1777,41 @@
   back into `conformance.Registry` (stays wholly separate/additive) --
   named explicitly. `go build/vet/test`, `gofmt -l .` clean. See
   STATE.md for the full account.
+- 2026-07-29 -- UBI-50 session 3 (generated conformance harness --
+  triage, probe 3, registry layering, live tier): triaged all 134 AWS
+  "Confirmed" zero-identity types against the real schema before
+  building anything further -- 108 turned out to carry a
+  type-prefixed identity attribute (`*_arn`/`*_id`/`*_name`), a real
+  refinement to `probeIdentityShape` (a new, weaker `Candidate` tier),
+  dropping AWS's own Confirmed count 134 -> 16. Live-tier policy for
+  the remaining 16 (+ `kubernetes_manifest`) decided before anything
+  was created: excluded from auto-batch entirely, real structural
+  singleton/composite resources needing a different resolution model.
+  Probe 3 (destroy honesty) built and verified hermetically end to
+  end through the REAL `core/executor.Ship` path (never a shortcut) --
+  `conformance`'s own `stateReaderAdapter` extended to also satisfy
+  `executor.Applier`; an honest fakeprovider destroy resolves
+  destroyed at zero cost, a scripted lying destroy is caught
+  (`FindingDestroyLie`, `Confirmed`) exactly like UBI-44's own real
+  finding, gated `UBX_TEST_SLOW=1` for the real ~64s retry budget.
+  **A real, explicit decision on ship doctrine vs. the standing
+  ship-verification rule**: probe 3's own LIVE confirmation would need
+  `executor.Ship` to reach real `ApplyResourceChange` against real
+  AWS -- exactly what CLAUDE.md bans, "always, no exceptions." Flagged
+  to the user before any real AWS destroy was attempted; decided:
+  probe 3 stays hermetic-only, its real-AWS confirmation deliberately
+  deferred as a separate future decision. Registry layering
+  (`LayerFindings`/`detectContradictions`) built -- purely additive,
+  checked against all five real providers: zero real contradictions
+  across 723 layered verdicts. Live tier for probes 1/2/4 (identity-
+  shape/sensitive-echo/drift, read-only, `aws` CLI + `core.RunScan`,
+  never `executor.Ship`) verified against one real AWS resource
+  (`aws_sns_topic`) -- a real false positive corrected after the first
+  live run (a tag marker legitimately duplicates into both `tags` and
+  `tags_all`, AWS's own real convention). `docs/conformance-harness.md`
+  gained a session-3 amendment. `go build/vet/test`, `gofmt -l .`
+  clean. Real AWS resource confirmed destroyed via a post-run sweep.
+  See STATE.md for the full account.
 
 ## Strategy
 
@@ -4393,7 +4428,7 @@ interaction beyond schema reads already established elsewhere, zero
 `ubx ship` against anything but `fakeprovider` across all four sessions —
 the arc landed exactly as scoped when it was filed.
 
-### Generated conformance harness (UBI-50) — sessions 1-2
+### Generated conformance harness (UBI-50) — sessions 1-3
 
 Founder decision, filed immediately after UBI-37 (Azure, the fourth
 platform) closed: no permanent verified/unverified split across a
@@ -4498,6 +4533,36 @@ of the four lie-classes, and layering `Finding` output back into
 stays wholly separate/additive for now) — named explicitly, not silently
 assumed done. `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. See STATE.md for the full account.
+
+**Session 3: triage, probe 3, registry layering, and the live tier for
+probes 1/2/4.** All 134 AWS "Confirmed" zero-identity types triaged
+against the real schema before building further — 108 carry a
+type-prefixed identity attribute after all (`*_arn`/`*_id`/`*_name`), a
+real refinement to `probeIdentityShape` (a new `Candidate` tier, never
+silently promoted to clean), dropping AWS's own Confirmed count to 16.
+Live-tier policy for those 16 (plus `kubernetes_manifest`) decided
+before anything was created: excluded from auto-batch, real structural
+singleton/composite resources this arc's current lookup model can't
+address. Probe 3 built and verified hermetically end to end through the
+REAL `core/executor.Ship` path — `conformance`'s own `stateReaderAdapter`
+extended to also satisfy `executor.Applier`; an honest fakeprovider
+destroy costs nothing extra, a scripted lie is caught
+(`FindingDestroyLie`, `Confirmed`), gated `UBX_TEST_SLOW=1` for the real
+~64s retry budget. **A real, explicit decision on ship doctrine vs. the
+standing ship-verification rule**: probe 3's own live confirmation would
+need `executor.Ship` to reach real `ApplyResourceChange` against real
+AWS, exactly what CLAUDE.md bans "always, no exceptions" — flagged to
+the user before any real AWS destroy was attempted; decided to keep
+probe 3 hermetic-only, its real-AWS confirmation a deliberately separate
+future decision. `LayerFindings`/`detectContradictions` built (purely
+additive, `Registry` never mutated) — zero real contradictions found
+across all 723 layered verdicts from all five real providers. Live tier
+for probes 1/2/4 (read-only, `aws` CLI + `core.RunScan`, never
+`executor.Ship`) verified against one real, free AWS resource
+(`aws_sns_topic`) — a real false positive corrected after the first live
+run (a tag marker legitimately duplicates into both `tags` and
+`tags_all`). `docs/conformance-harness.md` gained a session-3 amendment.
+See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 

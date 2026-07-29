@@ -551,29 +551,124 @@ doesn't yet cover" below (still true after this amendment, only
 narrower: the generator now genuinely exists; wiring it INTO the
 existing hand-written registry is real, unstarted follow-up).
 
+## Amendment (session 3): probe 3, registry layering, and the live tier
+
+**Triage, per direct instruction, before anything was built further**:
+the real 134 AWS "Confirmed incomplete-read" types from session 2's own
+live run were listed and categorized against the real
+`hashicorp/aws` 6.54.0 schema. 108 turned out to carry a plausible
+identity attribute after all — just type-prefixed rather than exactly
+`id`/`self_link`/`arn`/`name` (`aws_bedrock_guardrail_version`'s own
+`guardrail_arn`, and 107 more like it); a further 6 "`_exclusive`"-shaped
+types (`aws_iam_group_policies_exclusive` and siblings) key off a parent
+resource's own `*_name` field. `probeIdentityShape` was refined to
+recognize a `*_arn`/`*_id`/`*_name` suffix as a weaker, `Candidate`
+signal (never silently promoted to clean — a suffix match can also be a
+genuine foreign-key reference to a DIFFERENT resource) — dropping AWS's
+own Confirmed count from 134 to 16, and demoting the rest to Candidate
+rather than either leaving them wrong or silently deleting the finding.
+**Live-tier policy for the remaining 16 AWS types (plus
+`kubernetes_manifest`), decided before anything was created**: real,
+structural singleton/account-scoped/composite-key resources
+(`aws_macie2_organization_configuration`, `aws_organizations_aws_service_access`,
+and similar — one per account/region, no per-instance identity attribute
+of any shape) or a resource whose identity lives inside a dynamic body
+(`kubernetes_manifest`'s own manifest, not a fixed attribute) — excluded
+from live-tier auto-batch entirely, needing a resolution model `ubx`'s
+current `{"id": ...}`-centric lookup convention doesn't support at all.
+Not force-fit into a probe that would produce meaningless results.
+
+**Probe 3 (destroy honesty) built, verified hermetically end to end,
+through the real `core/executor.Ship` path — never a shortcut.**
+`ProbeDestroyHonesty` adopts via the real scan path (unchanged), builds
+and accepts a real `Delta.Destroys` proposal, and ships it through
+`shipDestroyNode`/`reconcileDestroyLoop`'s own real code, requiring
+`conformance`'s own `stateReaderAdapter` to be extended with
+`ApplyResourceChange`/`PlanResourceChange` (mirroring
+`cli/stateadapter.go`'s identical adapter exactly — the same concrete
+type now satisfies both `core.StateReader` and `executor.Applier`).
+Verified against the real fakeprovider binary, real tfplugin wire
+protocol: an honest destroy resolves genuinely destroyed at zero added
+cost; a provider scripted to lie
+(`FAKEPROVIDER_APPLY_MODE=lying-destroy`, the same fixture
+`cli/ship_lying_destroy_test.go` already uses) is caught —
+`FindingDestroyLie`, `Confirmed` — and the address stays correctly
+un-tombstoned. The lying case pays `core/executor`'s own real ~64-second
+production retry budget (unexported, not overridable from `conformance`)
+— gated `UBX_TEST_SLOW=1`, matching the existing `cli`-level precedent
+for the identical reason; the honest case is fast and always runs.
+
+**A real, deliberate decision on ship doctrine vs. the standing
+ship-verification rule, made explicitly rather than either silently
+proceeding or silently skipping**: probe 3's own LIVE confirmation
+(running it against a real AWS destroy) would need `executor.Ship` to
+reach a real `ApplyResourceChange` destroy call against real AWS —
+exactly what CLAUDE.md's ship-verification rule bans ("never... against
+a real cloud provider... even one already credentialed... always, no
+exceptions"), born from the real UBI-47 session 4 incident. Flagged to
+the user directly before any real AWS destroy was attempted; decided:
+**probe 3 stays hermetic-only this session** — its own real-AWS
+confirmation is a deliberately separate, explicitly-scoped future
+decision, not bundled into this session's own live-tier work. Probes
+1/2/4's own live tier (create/read/mutate via the `aws` CLI directly,
+`core.RunScan` reads, never `executor.Ship`) has no such conflict at all
+and matches every existing `RealSafe` conformance test's own precedent
+exactly.
+
+**Registry layering built**: `LayerFindings` groups generated `Finding`s
+by `(Source, Type)` and layers each group against
+`conformance.Registry`'s own matching `TypeSpec` (`ByType`) — purely
+additive, `Registry` never mutated. `detectContradictions` names two
+real disagreement shapes (hand-recorded `IdentityFields` no longer
+present in the current schema; a `RealSafe`/`Implemented` type producing
+ANY incomplete-read concern at all) without ever auto-resolving either
+direction. Checked against all five real, currently-onboarded providers:
+**zero real contradictions across 723 layered verdicts** — every
+hand-verified registry entry is consistent with the currently-pinned
+schema, a real, checked confirmation, not assumed.
+
+**Live tier built and verified for probes 1, 2, and 4**, against one
+real, free AWS resource (`aws_sns_topic`, already `RealSafe` in the
+registry — reused, not a new resource type, to keep the real footprint
+to a single created-and-destroyed topic). `ProbeIdentityShapeLive`
+confirmed `id` alone remains sufficient, matching the registry's own
+prior finding. `ProbeSensitiveEchoLive` — a real correction made after
+the FIRST live run surfaced a false positive: a planted tag marker
+legitimately appears in BOTH `tags` and `tags_all` (AWS's own real,
+documented dual-tag convention, `tags_all` being `tags` merged with any
+provider-level `default_tags`) — the function's own signature was
+generalized from a single `markerAttr` to `expectedAttrs ...string`
+rather than leaving this as a known gotcha for every future caller to
+rediscover. `ProbeDriftLive` confirmed two untouched consecutive reads
+agree — an ordinary resource, not the `hashicorp/time` class. The
+hermetic unit test for `ProbeIdentityShapeLive` itself surfaced its own
+real, if minor, finding: fakeprovider's own `fake_widget` type echoes
+`name` back from the LOOKUP input rather than from stored state
+(`{"id":...}` alone reads `name` back empty) — confirming the comparison
+logic detects a genuine difference, not a hypothetical one, on the very
+first thing it was pointed at.
+
 ## What this doesn't yet cover, named rather than assumed
 
-Updated after the session-2 amendment above (the hermetic-tier probe
-generator now exists; what follows is what STILL doesn't). Not built,
-and therefore not yet a claim this arc makes about itself: probe 3's own
-destroy-honesty plumbing (`core/executor.Ship`-based, no hermetic half,
-untouched by session 2); layering `Finding`s back into
-`conformance.Registry`'s own hand-written `TypeSpec` entries (session
-2's own `Finding` output is wholly separate/additive, not yet wired into
-the existing registry at all — see the amendment above); a live-tier
-probe for ANY of the four lie-classes (nothing in session 2 creates,
-mutates, or destroys a single real resource); any specific platform's real
-bulk live-tier run (a
-GCP-project-scale or full-AWS-account-scale execution against ~1,000+
-real types is real, ongoing infrastructure cost and time, explicitly
-scoped as per-platform follow-up, not this design session); Helm's own
-probe fixture (a pinned trivial chart) or any other platform-specific
-live-tier plumbing (named in "Scope," above, as explicitly out of this
-document's own reach); how a future `ubx status --drift` (or similar)
-consumer should actually PRESENT an `undriftable`-classified type to a
-user (this document designs the classification, not its own downstream
-UX); and whether/how the generated registry's own published output
-(the ticket's own "Registry output published — per-type, per-verb,
-honest" line) should be surfaced anywhere user-facing (ubiquex-docs, a
-public dashboard, or similar) versus staying `ubiquex-cli`-internal —
-a real open question, not resolved here.
+Updated after the session-3 amendment above. Not built, and therefore
+not yet a claim this arc makes about itself: probe 3's own LIVE
+confirmation against any real cloud provider (deliberately deferred, see
+the ship-doctrine decision above — hermetic verification only, so far);
+a real bulk live-tier run at platform scale (a GCP-project-scale or
+full-AWS-account-scale execution against ~1,000+ real types is real,
+ongoing infrastructure cost and time, explicitly scoped as per-platform
+follow-up, not any session so far — session 3's own live-tier work
+touched exactly one real resource); Helm's own probe fixture (a pinned
+trivial chart) or any other platform-specific live-tier plumbing (named
+in "Scope," above, as explicitly out of this document's own reach);
+writing a `LayeredVerdict` back into `conformance.Registry`'s own
+`TypeSpec` literal (session 3's own layering is read-only — it PRODUCES
+`LayeredVerdict`s, it doesn't edit `registry.go`); rerun-on-version-bump
+delta detection (designed in session 1, not yet built — `LayerFindings`
+lays real groundwork but doesn't itself diff across two versions); how a
+future `ubx status --drift` (or similar) consumer should actually
+PRESENT an `undriftable`-classified type to a user (this document
+designs the classification, not its own downstream UX); and whether/how
+the generated registry's own published output should be surfaced
+anywhere user-facing versus staying `ubiquex-cli`-internal — a real open
+question, not resolved here.
