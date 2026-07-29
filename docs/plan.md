@@ -1723,6 +1723,39 @@
   through the `az` CLI directly, out of band, the same discipline
   `gcloud`/`aws` already held to. `go build/vet/test`, `gofmt -l .`
   clean across the whole repo. See STATE.md for the full account.
+- 2026-07-29 -- UBI-50 session 1 (generated conformance harness,
+  docs-first): `docs/conformance-harness.md` written -- the full design
+  for automating conformance so every type of every provider carries a
+  machine verdict, generalizing `conformance/registry.go`'s 154
+  hand-written entries rather than replacing their own hard-won,
+  live-verified knowledge. Provider-agnostic by construction (the
+  founder's own design-room comment on the ticket): the probe generator,
+  failure taxonomy, registry format, and version-bump rerun logic are
+  all shared, built once against `provider.Schemas`/`Block`/`Attribute`;
+  per-platform work is scoped narrowly to live-tier plumbing only. Four
+  lie-classes designed, each mechanizing a real finding this project
+  already made by hand: identity-shape/incomplete-read, sensitive-flag
+  audit vs. echo attributes (with a live-tier marker-string echo check
+  stronger than hermetic keyword-matching alone), destroy honesty via
+  read-back absence (UBI-44's own class -- live-only, no hermetic half,
+  named explicitly as a gap the hermetic tier can't close), and
+  drift-detectability (the `hashicorp/time` class -- a real UBI-43
+  finding already on file, given new vocabulary here for the first
+  time). Registry format keyed by `(source, version, type, verb)` -- a
+  real new axis today's `(source, type)`-only keying can't express (a
+  type can pass read/mutate and fail destroy independently). Failure
+  taxonomy honestly scoped: `sensitive-underflag`/`undriftable` findings
+  can feed `provider/overrides.go`/the registry mechanically when
+  live-confirmed; `incomplete-read` cannot fully auto-populate
+  `core/lookuphints` (its own shipped message hardcodes AWS's "add id"
+  advice, wrong for GCP's own shapes -- a pre-existing limit, not newly
+  introduced); `destroy-lie` always stays a human-session flag. Ship
+  doctrine: destroy probes must go through `core/executor.Ship`'s real
+  path (new plumbing -- no destroy step exists in the harness today),
+  never a raw `ApplyResourceChange` shortcut, or a probe would be
+  structurally incapable of ever finding another UBI-44-shaped bug.
+  Four-row adversarial program. No code this session, per protocol --
+  session 2+ builds the generator. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4338,6 +4371,76 @@ in Linear as of this session. Zero new wire formats, zero new provider
 interaction beyond schema reads already established elsewhere, zero
 `ubx ship` against anything but `fakeprovider` across all four sessions —
 the arc landed exactly as scoped when it was filed.
+
+### Generated conformance harness (UBI-50) — session 1, docs-first
+
+Founder decision, filed immediately after UBI-37 (Azure, the fourth
+platform) closed: no permanent verified/unverified split across a
+provider's own type universe — today's `conformance/registry.go` covers
+154 hand-written entries (51 AWS, 42 Azure, 40 GCP, 20 Kubernetes, 1
+Helm) out of a combined universe well over 4,000 real types (AWS alone:
+1,682 at 6.54.0). The resolution: automate conformance so EVERY type
+carries a machine verdict, with hand-verification reserved for what a
+machine genuinely can't check — never lowering the claim, never
+deleting the 154 entries' own hard-won, live-verified knowledge.
+
+**Provider-agnostic by construction** (the founder's own design-room
+clarification, added as a comment on the ticket before this session
+began): the probe generator, failure taxonomy, registry format, and
+version-bump rerun logic are all shared, built once, against
+`provider.Schemas`/`Block`/`Attribute` — the same provider-agnostic
+foundation `core.StateReader`/`core.RunScan` already stand on. AWS is
+merely the first bulk run, not a design assumption. Per-platform work is
+scoped narrowly to live-tier plumbing only: sandbox credentials + a
+cost-tier table per cloud, and Helm's own pinned-chart probe fixture.
+
+**Session 1 (this session), docs-first, per protocol**: `docs/
+conformance-harness.md` — the full design. Four lie-classes, each
+mechanizing a REAL finding this project already made by hand at least
+once: identity-shape/incomplete-read (the `google_storage_bucket`/
+`google_pubsub_topic`/`google_secret_manager_secret`/
+`azurerm_resource_group` class), sensitive-flag audit vs. echo
+attributes (the `helm_release`/`azurerm_linux_web_app` class), destroy
+honesty via read-back absence (UBI-44's own `google_pubsub_topic` class
+— live-only, no hermetic half exists, named explicitly), and
+drift-detectability (the `hashicorp/time` class, a real UBI-43 finding
+already on file, never previously given this vocabulary). Two execution
+tiers (hermetic: all types, CI-runnable, no cloud; live: real
+create→read→mutate→destroy, cost-aware, priced types never
+auto-included). A generated registry format keyed by `(source, version,
+type, verb)` — a real, new axis today's `(source, type)`-only `TypeSpec`
+can't express (a type can pass read/mutate and fail destroy
+independently, exactly `google_pubsub_topic`'s own history) — with
+hand-verified findings layered on top, never replaced, and a machine
+verdict that contradicts one flagged for human review rather than
+silently overwriting it. A typed failure taxonomy (`incomplete-read`/
+`sensitive-underflag`/`destroy-lie`/`undriftable`) with an honest account
+of which findings can feed `core/lookuphints`/`provider/overrides.go`
+mechanically today and which genuinely can't (`core/lookuphints`' own
+shipped message hardcodes AWS's own "add id" advice, actively wrong for
+GCP's "both required together"/silent-incomplete shapes — a real,
+pre-existing limit this arc doesn't silently claim to have already
+fixed). Rerun-on-version-bump delta detection. A four-row adversarial
+program (a type whose create needs attributes the schema can't default —
+skip-and-say, never fake; priced types never auto-created; probe
+resource leakage caught by a real sweep, not memory; a provider serving
+inconsistent schema mid-run). Ship doctrine: read/mutate probes reuse
+`conformance.RunAdoptMutateScanDiff`'s own real `core.RunScan`/
+`GenerateProposal`/`Accept` path unchanged; destroy probes MUST go
+through `core/executor.Ship`'s real `shipDestroyNode`/
+`reconcileDestroyLoop` path (new plumbing — no destroy step exists in
+the harness today at all) rather than a raw `ApplyResourceChange`
+shortcut, since bypassing `reconcileDestroyLoop`'s own universal
+post-destroy read-back would make a destroy probe structurally incapable
+of ever finding another UBI-44-shaped bug — exactly this arc's own
+purpose. Live-tier runs are designated live legs, explicit and
+opt-in, generalizing the standing ship-verification rule to a new
+context, never a default.
+
+No code this session, per the ticket's own docs-first instruction and
+this project's own session protocol. Session 2+ (the ticket's own
+"~3-4 sessions design+build+first bulk run" sizing, not revised down
+here) builds the actual generator. See STATE.md for the full account.
 
 ## Deferred (explicitly not now)
 
