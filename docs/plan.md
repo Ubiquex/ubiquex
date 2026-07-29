@@ -1888,6 +1888,54 @@
   team/production path. `go build/vet/test`, `gofmt -l .` clean
   across the whole repo. **UBI-49 closed.** See STATE.md for the
   full account.
+- 2026-07-30 -- UBI-45 session 1, docs-first (cloud-side discovery --
+  tag/list-based adoption without tfstate): `docs/discovery.md` written,
+  unparked per direct instruction. Mechanism decision made empirically,
+  not assumed -- a real, throwaway `aws_sqs_queue` created, tagged, and
+  destroyed against the real account this session: AWS Resource Groups
+  Tagging API confirmed zero-setup and working immediately (chosen,
+  primary); AWS Config confirmed NOT enabled in the same real account
+  (zero configuration recorders -- a real adoption barrier for exactly
+  this ticket's own target market, not chosen); the dormant tfplugin
+  `ListResource` RPC (never called anywhere in this codebase before
+  this session) tested live against the real `hashicorp/aws@6.54.0`
+  binary via a throwaway same-package probe test (deleted, never
+  committed) -- 53 of 1,682 resource types implement it (~3%), none of
+  this project's own four trusted free-tier fixture types among them,
+  real "Invalid Provider Server Combination" diagnostics even for a
+  covered type -- not viable as v1's mechanism, named as the clearest
+  future "revisit" trigger instead. The identity bridge (ARN -> provider
+  lookup shape) named as the arc's real hard problem: checked directly
+  against `conformance.Registry`'s own live-verified entries, every
+  AWS type's lookup shape falls into one of three empirically-confirmed
+  tiers (id IS the ARN -- `aws_iam_policy`; id is the ARN's own trailing
+  segment, sometimes duplicated into a second field --
+  `aws_vpc`/`aws_iam_role`/`aws_iam_user`/`aws_s3_bucket`; id is
+  constructed from ARN components -- `aws_sqs_queue`'s own queue URL,
+  confirmed live this session). A real, honest finding along the way:
+  three separately-maintained copies of the same tiny lookup-hint fact
+  already exist in this codebase (`conformance.Registry.LookupHint`,
+  generated `core/lookuphints`, `tfstate.BuildLookup`'s own
+  `extraLookupAttrs`) -- a structured `TypeSpec.LookupShape` field is
+  recommended as real follow-up work, not built this session. Tag-scoped
+  filtering designed as the primary UX (`--tag`, a client-side `--type`
+  allowlist derived from each ARN's own service segment rather than a
+  second hand-maintained filter-string table, `--region`); stack-
+  grouping inference designed as a separate, read-only `--suggest-stacks`
+  preview, never an auto-assignment, directly following UBI-18's own
+  established "module path is a hint, never a silent stack split"
+  precedent; the attribution bonus designed as a reuse of
+  `core.EventLookup`/the existing `audit/` backends unchanged, searching
+  for creation-verb events instead of arbitrary drift events. Five-row
+  adversarial program (no lookup shape, pagination + a confirmation
+  gate, permission-denied mid-enumeration, resource deleted between list
+  and read, already-adopted rediscovery) -- every row's required outcome
+  reuses an already-existing, unmodified mechanism (`--all --tfstate`'s
+  own skip taxonomy, `core.RunScan`'s own idempotent classification),
+  named explicitly rather than re-derived. Adoption stays record-only,
+  blast-radius zero by construction -- discovery adds a new identity
+  source only, never a new proposal kind or apply path. No code this
+  session, per protocol. See STATE.md for the full account.
 
 ## Strategy
 
@@ -4768,6 +4816,89 @@ four-verb ceremony documented as the team/production path for PR-merge
 signing. `go build/vet/test`, `gofmt -l .` clean across the whole
 repo. **UBI-49 closed** in one session, matching its own "Est. 1-2
 sessions" sizing. See STATE.md for the full account.
+
+### Cloud-side discovery (UBI-45) — session 1, docs-first
+
+Founder decision: unparked directly (the ticket's own prior status was
+`PARKED — unpark trigger: wedge traction demanding non-Terraform
+onboarding, or a real prospect with no usable tfstate`). The wedge's
+second front door, named and explicitly scoped out of UBI-18's own bulk
+onboarding: *"cloud-side discovery is explicitly a different epic"*.
+Where UBI-18 needs a tfstate file to source resource identity from,
+this arc makes the cloud account itself the discovery source — "point
+`ubx` at the account, not at the repo," reaching ClickOps-heavy,
+half-terraformed, or inherited/acquired accounts UBI-18 alone can't
+touch.
+
+**Session 1, docs-first, per protocol**: `docs/discovery.md` — the
+mechanism decision made empirically against a real AWS account, not
+assumed from documentation. A real, throwaway `aws_sqs_queue` created,
+tagged, queried, and destroyed this session to confirm the AWS Resource
+Groups Tagging API's own real shape (ARN + tags only, zero setup
+barrier, confirmed working immediately in an account that had never
+used it before) — chosen as the primary mechanism. AWS Config checked
+in the same real account and found **not enabled at all** (zero
+configuration recorders) — a real, decisive adoption barrier for
+exactly this ticket's own target market, not chosen as primary, named
+as a possible future enrichment path only. The tfplugin wire protocol's
+own dormant `ListResource` RPC (never called anywhere in this codebase
+before this session) tested live against the real `hashicorp/
+aws@6.54.0` binary via a throwaway same-package probe test (deleted,
+never committed): only 53 of 1,682 resource types implement it (~3%),
+none of this project's own four trusted free-tier fixture types among
+them, real provider-internal diagnostic errors even for a type that
+claims support — not viable today, named as the clearest future
+"revisit" trigger instead of silently assumed unusable.
+
+**The identity bridge** — enumeration returns ARNs, adoption needs
+provider lookup shapes — named as the arc's actual hard problem, not a
+formality. Checked directly against `conformance.Registry`'s own
+live-verified entries (not assumed complete from UBI-50's own "machine-
+complete" framing): `TypeSpec.IdentityFields`/`LookupHint` answer a
+narrower question than "lookup shape," and this session found **three
+separately-maintained copies of the same tiny lookup-hint fact**
+already in this codebase (`conformance.Registry.LookupHint`, generated
+`core/lookuphints`, `tfstate.BuildLookup`'s own `extraLookupAttrs`) — a
+structured `TypeSpec.LookupShape` field is recommended as real
+follow-up work, named honestly rather than silently added to as a
+fourth copy. Every AWS type's real lookup shape falls into one of three
+empirically-confirmed tiers: id IS the ARN (`aws_iam_policy`); id is
+the ARN's own trailing segment, sometimes duplicated into a second
+field (`aws_vpc`/`aws_iam_role`/`aws_iam_user`/`aws_s3_bucket`); id is
+constructed from ARN components (`aws_sqs_queue`'s own queue URL,
+confirmed live this session). A type discovery can't bridge surfaces as
+"discovered, not yet adoptable: no known lookup shape" — never silently
+dropped, the same "skip, never abort the batch" posture `--all
+--tfstate` already established.
+
+Tag-scoped filtering designed as the primary UX (`--tag`, a client-side
+`--type` allowlist derived from each ARN's own service segment, never a
+second hand-maintained filter-string table, `--region`); stack-grouping
+inference designed as a separate, read-only `--suggest-stacks` preview,
+never an auto-assignment — directly following UBI-18's own established
+"a Terraform module path is a hint, never a silent stack split"
+precedent, applied to a weaker signal (tags/naming) with at least the
+same caution; the attribution bonus designed as a reuse of
+`core.EventLookup`/the existing `audit/` backends completely unchanged,
+searching for creation-verb events instead of arbitrary drift events,
+purely additive exactly like `--no-attribution` already makes drift
+attribution itself optional today. Five-row adversarial program (no
+lookup shape; tag matching thousands of resources, pagination + a
+`--limit`-gated confirmation; permission denied mid-enumeration;
+resource deleted between list and read; already-adopted rediscovery,
+idempotent) — every row's required outcome reuses an already-existing,
+unmodified mechanism (`--all --tfstate`'s own skip taxonomy,
+`core.RunScan`'s own idempotent classification), named explicitly
+rather than re-derived. **Adoption stays record-only, blast-radius zero
+by construction** — this arc adds a new identity source only, never a
+new proposal kind, never a new apply path.
+
+No code this session, per protocol — session 2+ builds the identity
+bridge, `ubx scan --discover`'s own CLI wiring, and toward a live
+finale: a small, tagged, hand-created (ClickOps-style, never via `ubx`)
+real AWS resource set discovered and adopted through the signed flow
+end to end, with genesis attribution where available. See STATE.md for
+the full account.
 
 ## Deferred (explicitly not now)
 
