@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,7 +174,7 @@ func TestScanDiscover_PaginationAndLimitGate(t *testing.T) {
 		types: map[string]bool{"aws_sqs_queue": true},
 		read:  echoingRead,
 	})
-	out2, err2 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--limit", "2", "--yes", "--provider", "unused")
+	out2, err2 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--limit", "2", "--yes", "--provider", "unused", "--no-attribution")
 	requireExitCode(t, err2, 0, out2)
 	if !strings.Contains(out2, "3 adopted, 0 skipped") {
 		t.Fatalf("expected --yes to proceed past the limit and adopt all 3, got: %s", out2)
@@ -209,7 +210,7 @@ func TestScanDiscover_ProviderReadFailed_PermissionDeniedAndDeleted(t *testing.T
 		},
 	})
 
-	out, err := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--provider", "unused")
+	out, err := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--provider", "unused", "--no-attribution")
 	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "1 adopted, 2 skipped") {
 		t.Fatalf("expected 1 adopted (ok-queue), 2 skipped (denied+deleted), got: %s", out)
@@ -234,7 +235,7 @@ func TestScanDiscover_AlreadyAdopted_Idempotent(t *testing.T) {
 		read:  echoingRead,
 	})
 
-	out1, err1 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused")
+	out1, err1 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused", "--no-attribution")
 	requireExitCode(t, err1, 0, out1)
 	if !strings.Contains(out1, "1 adopted, 0 skipped") {
 		t.Fatalf("expected the first run to adopt the queue, got: %s", out1)
@@ -256,7 +257,7 @@ func TestScanDiscover_AlreadyAdopted_Idempotent(t *testing.T) {
 		types: map[string]bool{"aws_sqs_queue": true},
 		read:  echoingRead,
 	})
-	out2, err2 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--provider", "unused")
+	out2, err2 := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments", "--ledger-dir", ledgerDir, "--provider", "unused", "--no-attribution")
 	requireExitCode(t, err2, 1, out2)
 	if !strings.Contains(out2, "already known to the ledger") {
 		t.Fatalf("expected the rediscovered resource to be skipped as already known, got: %s", out2)
@@ -281,7 +282,7 @@ func TestScanDiscover_HappyPath_WritesProposalsToOutDir(t *testing.T) {
 	})
 
 	out, err := runUbx(t, nil, "scan", "--discover", "--tag", "Project=payments", "--stack", "payments",
-		"--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused")
+		"--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused", "--no-attribution")
 	requireExitCode(t, err, 0, out)
 	if !strings.Contains(out, "2 adopted, 0 skipped") {
 		t.Fatalf("expected both resources adopted, got: %s", out)
@@ -291,6 +292,85 @@ func TestScanDiscover_HappyPath_WritesProposalsToOutDir(t *testing.T) {
 	}
 	if !strings.Contains(out, "payments.aws_iam_policy.policy-a") {
 		t.Fatalf("expected the iam policy's own address in the output, got: %s", out)
+	}
+}
+
+// TestScanDiscover_GenesisAttribution_DegradesGracefully_NoCredentials
+// mirrors TestScan_AttributionDegradesGracefully_NoCredentials's own
+// hermetic technique exactly (attribution_test.go): blanking every
+// credential source the default AWS SDK chain would try makes
+// credential resolution fail synchronously, before any real network
+// call -- proving the genesis-attribution wiring (cli/attribution.go's
+// attributeGenesis, called from runScanDiscover) never blocks discovery
+// from completing and adopting, even when CloudTrail is completely
+// unreachable, and that the resulting proposal carries an honest
+// audit_unattributed source rather than silently omitting attribution
+// entirely.
+func TestScanDiscover_GenesisAttribution_DegradesGracefully_NoCredentials(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_PROFILE", "ubx-test-nonexistent-profile")
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "no-such-config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "no-such-credentials"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	ledgerDir := t.TempDir()
+	outDir := filepath.Join(ledgerDir, "proposals")
+	withDiscoveryTaggingAPI(t, &fakeCLITaggingAPI{pages: [][]types.ResourceTagMapping{
+		{cliMapping("arn:aws:sqs:us-east-1:1:my-queue", nil)},
+	}})
+	withDiscoveryStateReader(t, &fakeDiscoveryStateReaderImpl{
+		types: map[string]bool{"aws_sqs_queue": true},
+		read:  echoingRead,
+	})
+
+	// Deliberately WITHOUT --no-attribution -- this is the path that
+	// tries (and, given the blanked credentials above, fails) real
+	// genesis attribution. It must still produce a normal adoption
+	// proposal, not an error.
+	out, err := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments",
+		"--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused")
+	requireExitCode(t, err, 0, out)
+	if !strings.Contains(out, "1 adopted, 0 skipped") {
+		t.Fatalf("expected the adoption to succeed despite unreachable CloudTrail, got: %s", out)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outDir, "payments.aws_sqs_queue.my-queue.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "cloudtrail_unattributed") {
+		t.Fatalf("expected an honest cloudtrail_unattributed source recorded, got: %s", data)
+	}
+}
+
+// TestScanDiscover_NoAttribution_SkipsGenesisEntirely confirms
+// --no-attribution opts all the way out -- no unattributed source
+// appended either, matching --no-attribution's own existing drift-path
+// behavior exactly.
+func TestScanDiscover_NoAttribution_SkipsGenesisEntirely(t *testing.T) {
+	ledgerDir := t.TempDir()
+	outDir := filepath.Join(ledgerDir, "proposals")
+	withDiscoveryTaggingAPI(t, &fakeCLITaggingAPI{pages: [][]types.ResourceTagMapping{
+		{cliMapping("arn:aws:sqs:us-east-1:1:my-queue", nil)},
+	}})
+	withDiscoveryStateReader(t, &fakeDiscoveryStateReaderImpl{
+		types: map[string]bool{"aws_sqs_queue": true},
+		read:  echoingRead,
+	})
+
+	out, err := runUbx(t, nil, "scan", "--discover", "--tag", "env=prod", "--stack", "payments",
+		"--ledger-dir", ledgerDir, "--out-dir", outDir, "--provider", "unused", "--no-attribution")
+	requireExitCode(t, err, 0, out)
+
+	data, err := os.ReadFile(filepath.Join(outDir, "payments.aws_sqs_queue.my-queue.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "cloudtrail") {
+		t.Fatalf("expected --no-attribution to skip genesis attribution entirely, no cloudtrail source at all, got: %s", data)
 	}
 }
 

@@ -49,6 +49,14 @@ type DiscoveredResource struct {
 	// returned slice, never silently dropped, whether or not it could
 	// be bridged to a lookup.
 	NotAdoptableReason string
+
+	// CreationVerbs is this resource's own classified type's tier-table
+	// entry's own CreationVerbs, carried through for the genesis-
+	// attribution bonus (cli/scandiscover.go) -- empty whenever Lookup
+	// is nil too (an unclassified type has no creation-verb knowledge
+	// either), and possibly empty even when Lookup is set (a classified
+	// type discovery doesn't yet know a creation verb for).
+	CreationVerbs []string
 }
 
 // Options is one Discover call's own scope.
@@ -148,6 +156,7 @@ func classify(a ARN, m types.ResourceTagMapping) DiscoveredResource {
 		return d
 	}
 	d.Lookup = lookup
+	d.CreationVerbs = spec.CreationVerbs
 	return d
 }
 

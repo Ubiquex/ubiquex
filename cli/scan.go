@@ -145,6 +145,7 @@ func newScanCmd() *cobra.Command {
 					Providers:       cfg.Providers,
 					ProviderConfigs: cfg.ProviderConfigs,
 					Timeout:         timeout,
+					NoAttribution:   noAttribution,
 				}
 				if suggestStacks {
 					return runScanSuggestStacks(ctx, cmd.OutOrStdout(), opts, stackTag)
@@ -343,7 +344,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout (single-resource mode only; use --out-dir with --all)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan (or the whole --all walk)")
-	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip CloudTrail attribution for drift proposals (UBI-10)")
+	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip audit-log attribution: drift attribution for drift proposals (UBI-10), or genesis attribution (who created it) for --discover's own adoption proposals (UBI-45)")
 	cmd.Flags().StringVar(&surfaceAs, "surface-as", "", "on drift, open a GitHub \"issue\" or \"pr\" with a receipt instead of just printing the proposal (UBI-11 stage 3; requires --github-repo)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository to surface drift in (required with --surface-as)")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory of .tf files to compute a best-effort write-back preview diff from, for the receipt (optional)")

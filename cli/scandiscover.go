@@ -72,6 +72,7 @@ type scanDiscoverOptions struct {
 	Providers       map[string]string
 	ProviderConfigs map[string]map[string]any
 	Timeout         time.Duration
+	NoAttribution   bool
 }
 
 // runScanDiscover mirrors runScanAll's own structure closely (cli/
@@ -241,6 +242,15 @@ func runScanDiscover(ctx context.Context, out io.Writer, opts scanDiscoverOption
 			continue
 		}
 		proposal.Parent = nextParent
+
+		// The attribution bonus (UBI-45, docs/discovery.md): who created
+		// this resource, best-effort, reusing the exact same
+		// newAttributionBackend registry cli/attribution.go's own drift
+		// path already uses, unchanged -- see attributeGenesis's own doc
+		// comment for the two real differences from drift attribution.
+		if !opts.NoAttribution {
+			attributeGenesis(ctx, addr, res.Observed, proposal, providerConfig, providerSource, opts.Config.K8sAudit, d.CreationVerbs)
+		}
 
 		hash, err := core.Hash(proposal)
 		if err != nil {

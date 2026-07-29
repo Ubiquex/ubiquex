@@ -64,6 +64,43 @@ func attributeDrift(ctx context.Context, ledger *core.Ledger, addr core.Address,
 	proposal.Intent.Sources = append(proposal.Intent.Sources, sources...)
 }
 
+// attributeGenesis best-effort attaches genesis-attribution audit-log
+// evidence (UBI-45, docs/discovery.md's own "attribution bonus") to a
+// freshly discovered resource's own new adoption proposal, before it's
+// printed/written -- the exact same best-effort, never-blocking posture
+// attributeDrift already established for drift, reusing
+// newAttributionBackend completely unchanged (the same per-provider-
+// source backend registry). The two real differences are entirely in
+// what's searched for and what window: core.AttributeGenesis's own
+// creationVerbs narrowing (never any drift-time anchor to work from --
+// a discovered resource's own creation time is exactly the unknown this
+// exists to find), so the search window is simply "as far back as this
+// backend's own default retention goes" (CloudTrail's own documented
+// 90-day management-event trail) through resolvedAt (or now).
+func attributeGenesis(ctx context.Context, addr core.Address, observed json.RawMessage, proposal *core.Proposal, providerConfig json.RawMessage, providerSource string, k8sAudit K8sAuditConfig, creationVerbs []string) {
+	until := time.Now().UTC()
+	if resolvedAt, err := time.Parse(time.RFC3339, proposal.Resolution.ResolvedAt); err == nil {
+		until = resolvedAt
+	}
+	since := until.Add(-90 * 24 * time.Hour) // CloudTrail's own default management-event retention
+
+	lookup, backend, closeFn, err := newAttributionBackend(ctx, providerSource, providerConfig, k8sAudit)
+	if err != nil {
+		reason := core.ReasonNotLogged
+		if errors.Is(err, errK8sAuditNotConfigured) {
+			reason = core.ReasonNotConfigured
+		}
+		proposal.Intent.Sources = append(proposal.Intent.Sources, core.IntentSource{
+			Kind: backend.UnattributedKind, Reason: reason, Backend: backend.Name,
+		})
+		return
+	}
+	defer closeFn()
+
+	sources := core.AttributeGenesis(ctx, lookup, addr, observed, since, until, backend, creationVerbs)
+	proposal.Intent.Sources = append(proposal.Intent.Sources, sources...)
+}
+
 // newAttributionBackend picks the right core.EventLookup/
 // core.AttributionBackend pair for providerSource (UBI-21, docs/
 // architecture.md — GCP support: "a small registry mapping provider

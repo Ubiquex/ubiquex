@@ -62,6 +62,16 @@ type typeSpec struct {
 	AugmentFields []string
 	// Construct (Tier C only) builds the lookup id from the parsed ARN.
 	Construct func(a ARN) (id string, err error)
+
+	// CreationVerbs names the CloudTrail EventName(s) that mean "this
+	// resource was just created" (e.g. "CreateQueue") — the genesis-
+	// attribution bonus's own small, curated per-type knowledge
+	// (session 3, docs/discovery.md's "attribution bonus"), reusing
+	// this same per-type table rather than a fifth separately-
+	// maintained one. Empty means genesis attribution isn't attempted
+	// for this type at all yet (core.AttributeGenesis's own
+	// ReasonNoCreationVerbs, never silently skipped without a reason).
+	CreationVerbs []string
 }
 
 // tierTable is keyed by (service, resourceTypePrefix) — see ARN.classKey
@@ -69,14 +79,16 @@ type typeSpec struct {
 // (docs/discovery.md). Deliberately small: every entry here is either
 // live-verified in conformance.Registry (RealSafe/Implemented) or
 // confirmed directly this session (aws_sqs_queue) — this table never
-// guesses a tier from a type's name or category alone.
+// guesses a tier from a type's name or category alone. CreationVerbs are
+// AWS's own well-documented API operation names (CloudTrail's EventName
+// always matches the API operation verbatim) — real, not guessed.
 var tierTable = map[string]typeSpec{
-	"iam:policy": {TerraformType: "aws_iam_policy", Tier: TierA},
-	"ec2:vpc":    {TerraformType: "aws_vpc", Tier: TierB},
-	"iam:role":   {TerraformType: "aws_iam_role", Tier: TierB, AugmentFields: []string{"name"}},
-	"iam:user":   {TerraformType: "aws_iam_user", Tier: TierB, AugmentFields: []string{"name"}},
-	"s3:":        {TerraformType: "aws_s3_bucket", Tier: TierB, AugmentFields: []string{"bucket"}},
-	"sqs:":       {TerraformType: "aws_sqs_queue", Tier: TierC, Construct: sqsQueueURL},
+	"iam:policy": {TerraformType: "aws_iam_policy", Tier: TierA, CreationVerbs: []string{"CreatePolicy"}},
+	"ec2:vpc":    {TerraformType: "aws_vpc", Tier: TierB, CreationVerbs: []string{"CreateVpc"}},
+	"iam:role":   {TerraformType: "aws_iam_role", Tier: TierB, AugmentFields: []string{"name"}, CreationVerbs: []string{"CreateRole"}},
+	"iam:user":   {TerraformType: "aws_iam_user", Tier: TierB, AugmentFields: []string{"name"}, CreationVerbs: []string{"CreateUser"}},
+	"s3:":        {TerraformType: "aws_s3_bucket", Tier: TierB, AugmentFields: []string{"bucket"}, CreationVerbs: []string{"CreateBucket"}},
+	"sqs:":       {TerraformType: "aws_sqs_queue", Tier: TierC, Construct: sqsQueueURL, CreationVerbs: []string{"CreateQueue"}},
 }
 
 // sqsQueueURL builds an aws_sqs_queue's own real lookup id — the queue

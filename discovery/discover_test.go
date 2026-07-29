@@ -123,6 +123,34 @@ func TestDiscover_NoLookupShape_NeverSilentlySkipped(t *testing.T) {
 	}
 }
 
+// TestDiscover_CreationVerbsCarriedThrough confirms the genesis-
+// attribution bonus's own per-type knowledge rides along with every
+// classified, adoptable resource (never on an unclassified one).
+func TestDiscover_CreationVerbsCarriedThrough(t *testing.T) {
+	api := &fakeTaggingAPI{pages: [][]types.ResourceTagMapping{
+		{
+			mapping("arn:aws:sqs:us-east-1:1:my-queue", nil),
+			mapping("arn:aws:dynamodb:us-east-1:1:table/unclassified", nil),
+		},
+	}}
+	got, err := Discover(context.Background(), api, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range got {
+		switch d.ARN {
+		case "arn:aws:sqs:us-east-1:1:my-queue":
+			if len(d.CreationVerbs) != 1 || d.CreationVerbs[0] != "CreateQueue" {
+				t.Fatalf("expected aws_sqs_queue's own CreationVerbs [CreateQueue], got %v", d.CreationVerbs)
+			}
+		case "arn:aws:dynamodb:us-east-1:1:table/unclassified":
+			if len(d.CreationVerbs) != 0 {
+				t.Fatalf("expected no CreationVerbs for an unclassified type, got %v", d.CreationVerbs)
+			}
+		}
+	}
+}
+
 func TestDiscover_TypeAllowlist_ClientSideFiltering(t *testing.T) {
 	api := &fakeTaggingAPI{pages: [][]types.ResourceTagMapping{
 		{
