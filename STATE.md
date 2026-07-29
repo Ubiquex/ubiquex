@@ -4,6 +4,138 @@
 
 ## Current phase
 
+**UBI-50 (2026-07-29), session 2: the probe generator + hermetic tier,
+built for real — the next slice off `docs/conformance-harness.md`'s own
+session-1 design, per direct instruction. Still In Progress in Linear
+(not closed — real work remains: probe 3, the live tier, and registry
+layering).**
+
+`conformance/probe.go` (new): `Finding{Source, Version, Type, Verb,
+Class FindingClass, Tier, Confidence, Detail}` — the executable unit of
+the design doc's own `(source, version, type, verb)` registry format.
+`FindingClass` is the closed four-value taxonomy the design already
+named (`incomplete-read`/`sensitive-underflag`/`destroy-lie`/
+`undriftable`); `Tier` is `hermetic`/`live` (only `hermetic` is ever
+produced by anything built this session); `Confidence` is `candidate`/
+`confirmed` — the design's own load-bearing honesty distinction between
+"a schema-only check settled this completely" and "worth a human's (or
+a future live probe's) attention, never itself a claim of certainty."
+
+**Three hermetic-half probes, one per lie-class the hermetic tier can
+say anything about at all** (probe 3, destroy honesty, has no hermetic
+half by design — nothing built for it this session, correctly):
+
+- `probeIdentityShape` — confirms at least one of `id`/`self_link`/
+  `arn`/`name` exists in a type's own schema (a broader candidate list
+  than `core.AttributeDrift`'s own narrower `id`/`arn`/`name`, matching
+  how `TypeSpec.IdentityFields` has actually been populated by hand
+  across every platform, not how attribution happens to search). Total
+  absence is the one thing the hermetic tier can settle completely —
+  `Confirmed`, not `Candidate` — since a type with zero recognized
+  identity attributes has no plausible lookup shape for `core.RunScan`
+  to ever try in the first place.
+- `probeSensitiveEcho` — walks every attribute recursively (including
+  nested blocks, dot-path named, e.g. `metadata.notes`) and flags every
+  COMPUTED, non-`Sensitive` attribute whose name matches the exact
+  keyword corpus this project's own manual UBI-22/24/37 audits already
+  used by hand. Always `Candidate`, never `Confirmed` — the design's own
+  explicit honesty requirement, backed by this project's own real
+  history: UBI-37's manual Azure audit found this corpus matches mostly
+  false positives (`private_ip_address`, `login_server`,
+  `public_key_openssh`, `administrator_login` — none of them real leaks)
+  against exactly one real gap (`app_settings`, which the keyword scan
+  doesn't even match — confirmed directly, by a dedicated test asserting
+  this specific known limitation, not left implicit).
+- `probeDrift` — flags a type as a candidate-undriftable when NO
+  attribute anywhere in its schema (walked recursively through nested
+  blocks, since a `provider.NestedBlock` carries no `Optional`/
+  `Required` flag of its own) is `Optional` or `Required` — nothing a
+  user could ever legitimately set, so `FoldState`'s own diff has
+  nothing to compare against a live read.
+
+`ProbeType` combines all three for one type; `ProbeSchema` runs
+`ProbeType` across every entry in `schemas.Resources` (deliberately
+never `DataSources` — a read-only external reference the ledger never
+manages, out of scope for a lie-class about whether `ubx`'s own
+adopt/scan/destroy path tells the truth), sorted by
+`(Type, Class, Verb, Detail)` for fully reproducible output regardless
+of Go's own randomized map iteration — CLAUDE.md's own standing
+determinism rule, and exactly the property "rerun on version bump"
+(future work) needs to diff against.
+
+**18 hermetic unit tests** (`conformance/probe_test.go`, hand-built
+`provider.Block` fixtures, no network, always runs in `go test ./...`):
+every probe's own clean/dirty case, the nested-block dotted-path
+mechanism, the known-false-positive keywords asserted to still match
+(never silently skipped) while staying `Candidate`, the `app_settings`
+non-match asserted directly as a named, honest limitation, and
+`ProbeSchema`'s own determinism/nil-entry-skip/`DataSources`-exclusion
+behavior.
+
+**Live-verified against all five real, currently-onboarded providers
+at once** (`UBX_CONFORMANCE_LIVE=1`, `conformance/
+probe_live_schema_test.go`, gated for the identical network-only reason
+`gcp_provider_test.go`/`azure_provider_test.go` already are — no cloud
+account, no credentials, only `GetProviderSchema`), proving the design's
+own central "provider-agnostic by construction" claim against real
+schemas rather than only hand-built fixtures. Real, unedited counts:
+
+| Source | Types | Findings | incomplete-read (confirmed) | sensitive-underflag (candidate) | undriftable (candidate) |
+| --- | --- | --- | --- | --- | --- |
+| `hashicorp/aws` 6.54.0 | 1,682 | 742 | 134 | 607 | 1 |
+| `hashicorp/google` 7.40.0 | 1,319 | 278 | 0 | 278 | 0 |
+| `hashicorp/azurerm` 5.0.0 | 1,103 | 263 | 0 | 263 | 0 |
+| `hashicorp/kubernetes` 2.35.1 | 82 | 51 | 1 | 50 | 0 |
+| `hashicorp/helm` 2.17.0 | 1 | 1 | 0 | 1 | 0 |
+
+Two spot-checks against real, hand-verified ground truth already on
+file confirm the mechanism reproduces known-real findings, not just
+that it runs clean: `helm_release`'s own `metadata.notes` (UBI-22/24)
+is caught as a `sensitive-underflag` candidate; `azurerm_resource_group`
+(UBI-37's own hand-verified `id`-alone-sufficient finding) correctly
+produces zero `incomplete-read` findings. Determinism (identical schema,
+byte-identical `ProbeSchema` output across two consecutive runs) is
+asserted directly against all five real schemas, not just the hermetic
+fixtures — total run time for all five real acquires + full-schema
+probes + determinism re-runs: under 9 seconds.
+
+**134 AWS types and 1 Kubernetes type have zero recognized identity
+candidate at all** — real, `Confirmed` findings, flagged rather than
+silently resolved, exactly the handoff a `Confirmed` finding is designed
+to produce. Which specific types these are, and whether they're
+genuinely unreadable via `ubx`'s own universal lookup shape or simply
+named differently than `id`/`self_link`/`arn`/`name`, is unstarted
+human-triage work — not attempted this session. Zero GCP or Azure types
+tripped this check at all, consistent with both platforms' own prior,
+hand-verified finding that every sampled type carries a flat `id`.
+
+**Not built this session, named explicitly rather than silently
+assumed done**: probe 3 (destroy honesty — no hermetic half exists to
+build, by the design's own account); any live-tier probe for any of the
+four lie-classes (nothing this session creates, mutates, or destroys a
+single real resource — this is schema-reading only); layering `Finding`
+output back into `conformance.Registry`'s own hand-written `TypeSpec`
+entries (`Finding` stays a wholly separate, additive output for now,
+not yet reconciled against the existing 154 entries at all).
+
+**`docs/conformance-harness.md` gained a session-2 amendment** recording
+the real decisions made concrete while building (the `verb` axis
+resolving to `"read"`/`"drift"`; `identityCandidateAttrs`'s own broader-
+than-`core.AttributeDrift` list; the recursive nested-block walk for
+both `probeSensitiveEcho` and `probeDrift`) and the real live-verified
+numbers table above, plus a narrowed "What this doesn't yet cover"
+section. `docs/plan.md` gained a session-2 changelog entry and an
+extension to the UBI-50 wedge subsection (retitled "sessions 1-2").
+**No ubiquex-docs change this session** — nothing user-visible shipped
+(internal probe-generator code, no new command/flag/behavior).
+
+`go build/vet/test`, `gofmt -l .` clean across the whole repo throughout.
+UBI-50 stays In Progress in Linear — real work remains (probe 3, the
+live tier, registry layering, and eventually a real bulk run), matching
+the ticket's own "~3-4 sessions" sizing, not yet exhausted.
+
+## Current phase (previous)
+
 **UBI-50 (2026-07-29), session 1 of a new arc: the generated conformance
 harness. Docs-first, per protocol — `docs/conformance-harness.md`
 written, no code this session. Marked In Progress in Linear (not
