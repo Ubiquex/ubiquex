@@ -1328,6 +1328,105 @@ move alone.
   schema. Stage 2 proves (or disproves) this per type, live, one at a
   time — never assumed from the schema alone.
 
+### Stage 2 (this session, continued — needed a real Azure subscription
+and credentials, confirmed available via `az account show` and used
+directly)
+
+- Five types promoted to `RealSafe` and live-verified via the same
+  `conformance.RunAdoptMutateScanDiff` harness every earlier platform's
+  own Stage 2 used: `azurerm_resource_group`, `azurerm_storage_account`,
+  `azurerm_storage_container`, `azurerm_key_vault`,
+  `azurerm_user_assigned_identity`. Real per-type findings, each the kind
+  of thing only a live `ReadResource` call surfaces:
+  - `azurerm_storage_account`/`azurerm_storage_container`/
+    `azurerm_key_vault`/`azurerm_user_assigned_identity`: `id` alone (the
+    full ARM resource path) is sufficient — confirming Stage 1's own
+    schema-level guess for these four, but only because it was actually
+    checked live, not assumed to transfer.
+  - `azurerm_resource_group`: `id` alone is ALSO sufficient, but its own
+    real shape is a genuine surprise the schema alone couldn't have
+    predicted — a resource group's own ARM id is JUST
+    `/subscriptions/<sub>/resourceGroups/<name>`, not the
+    `resourceGroups/<rg>/providers/Microsoft.Resources/
+    resourceGroups/<name>` shape every OTHER azurerm type's own id
+    follows. A resource group is its own top-level ARM scope, never a
+    child resource nested inside another `resourceGroups/<rg>/
+    providers/<ns>/<type>/<name>` path — the first, schema-only guess
+    (mechanically deriving every type's id the same way) got this one
+    wrong, and only a real `ReadResource` call ("unexpected segment ...
+    present at the end of the URI") caught it.
+  - A one-time subscription setup surprise, same genre as UBI-21's own
+    ADC setup: `Microsoft.Storage`/`Microsoft.KeyVault`/
+    `Microsoft.ManagedIdentity` resource providers were `NotRegistered`
+    on this subscription — a real, misleadingly-worded first failure
+    (`SubscriptionNotFound`, not anything naming the actual cause) until
+    `az provider register` was run and polled to completion for each.
+  - Key Vault's own soft-delete default means a deleted vault's name
+    stays reserved for up to 90 days — every live test purges (not just
+    deletes) its own throwaway vault in cleanup to avoid leaving a
+    reserved name behind, confirmed necessary by checking
+    `az keyvault list-deleted` after a plain delete.
+- `audit/azure/` implemented and live-verified: a real drift on a real
+  resource group, correlated against Azure Monitor's Activity Log with
+  the actual caller's real Azure AD identity recorded, via the actual
+  `ubx scan` command end to end — not a synthetic fixture, the same bar
+  `cloudtrail/`/`gcp/` were both held to. **A real, materially dangerous
+  correlation gap found and fixed, not assumed clean**: Activity Log's
+  own `resourceId` field for the same resource group came back
+  **lowercase** (`.../resourcegroups/<name>`), while the azurerm
+  provider's own observed `"id"` attribute — and therefore every
+  candidate `core.AttributeDrift`'s `identityCandidates` would ever try
+  — uses **camelCase** (`.../resourceGroups/<name>`). An exact match
+  against the raw ARM id silently found zero events every time, no error
+  raised, indistinguishable from a genuine no-event case — structurally
+  the same class of danger as GCP's own `google_pubsub_topic`/
+  `google_secret_manager_secret` silent-incomplete-read gap, just one
+  layer further out (correlation, not the resource read itself). Fixed
+  in `audit/azure/client.go`: the server-side query now scopes only by
+  time window and `resourceGroupName` (parsed out of the candidate ARM
+  id), and every returned event is matched against the candidate
+  case-insensitively, client-side, reporting the match using the
+  candidate's own original casing — so `core.AttributeDrift`'s own
+  downstream exact-match check still sees a byte-identical hit, and
+  every OTHER platform's own exact-match behavior stays untouched.
+  Activity Log's own delivery latency was measured directly, not
+  assumed: a resource group `Update` Administrative event became
+  queryable roughly 60–90 seconds after the API call returned (bounded
+  by 10-second poll granularity) — slower than GCP's measured ~18
+  seconds, faster than CloudTrail's documented ~15-minute ceiling.
+  `azure.Backend.DeliveryLag` is set to 5 minutes, a safety margin above
+  that measurement, the same posture `gcp.Backend`'s own `DeliveryLag`
+  already established.
+- A sensitive-attribute audit (UBI-23/24 cross-check) ran directly
+  against the real schema for all 42 seeded types, the same "checked
+  directly and found none further" discipline UBI-24's own Kubernetes/
+  Helm audit already established. Every genuinely credential-bearing
+  computed attribute this session found (storage account keys/
+  connection strings, Cosmos DB keys, Redis keys, ServiceBus/EventHub
+  keys, VM/DB admin passwords, Key Vault secret values, AKS kubeconfigs,
+  web/function app auth client secrets) is already `Sensitive`-flagged
+  by the provider itself — no gap there. One real gap found:
+  `azurerm_linux_web_app`/`azurerm_linux_function_app`'s own
+  `app_settings` is a free-form `map[string]string` — Azure App
+  Service's real environment-variable mechanism, and a well-known
+  real-world place operators plaintext-stash connection strings/API
+  keys — with no per-key schema to flag individual entries Sensitive,
+  the same structural ceiling `helm_release`'s own `metadata.values`
+  already hit. Added to `provider/overrides.go`'s `SensitiveOverrides`
+  table as a full-attribute redaction, the same conservative choice made
+  there.
+- Every fixture created for live verification was destroyed afterward
+  (confirmed via a post-session sweep of resource groups/Key Vaults,
+  including checking `az keyvault list-deleted` for any un-purged
+  vault), the subscription left exactly as found — same discipline every
+  AWS/GCP `RealSafe` conformance test already follows. No `ubx ship` was
+  ever run against this or any other real cloud provider this session
+  (every real resource was created/mutated/destroyed directly via the
+  `az` CLI, out of band — the identical discipline `gcloud`/`aws` were
+  already held to for AWS/GCP's own conformance work) — the
+  ship-verification rule (CLAUDE.md, UBI-47 session 4) stayed intact
+  throughout.
+
 ## Secrets (UBI-23)
 
 "Every infra change is a typed, hashed, signed proposal recorded in an

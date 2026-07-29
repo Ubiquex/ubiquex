@@ -1681,6 +1681,48 @@
   available this session via `az account show`) continues in the same
   session -- see the next entry once it lands. See STATE.md for the full
   account.
+- 2026-07-29 -- UBI-37 Stage 2 (Azure support, continued same session):
+  five types promoted RealSafe and live-verified against a real
+  subscription (`azurerm_resource_group`, `azurerm_storage_account`,
+  `azurerm_storage_container`, `azurerm_key_vault`,
+  `azurerm_user_assigned_identity`) -- `id` alone sufficient for all
+  five, but `azurerm_resource_group`'s own ARM id shape is a real
+  surprise the schema alone couldn't predict (its own top-level
+  `/subscriptions/<sub>/resourceGroups/<name>` scope, not the
+  `resourceGroups/<rg>/providers/<ns>/<type>/<name>` shape every OTHER
+  azurerm type follows). Subscription needed
+  `Microsoft.Storage`/`Microsoft.KeyVault`/`Microsoft.ManagedIdentity`
+  resource providers registered before first use (a real, one-time,
+  misleadingly-worded `SubscriptionNotFound` failure until fixed).
+  `audit/azure/` implements `core.EventLookup` against Azure Monitor's
+  Activity Log, wired into `cli/attribution.go`'s dispatch under
+  `hashicorp/azurerm` -- `core.EventLookup`'s single-method interface
+  held up a fourth time, zero changes. **A real, materially dangerous
+  correlation gap found and fixed via live verification, not assumed
+  clean**: Activity Log's own `resourceId` comes back lowercase while
+  azurerm's own observed `"id"` is camelCase -- an exact match against
+  the raw ARM id silently found zero events, no error, indistinguishable
+  from a genuine no-event case (the same class of danger as GCP's own
+  silent-incomplete-read gap, one layer further out). Fixed: server-side
+  query scoped by time window + resourceGroupName only, case-insensitive
+  client-side match, reported using the candidate's own original casing
+  so `core.AttributeDrift`'s downstream exact-match still sees a
+  byte-identical hit. Delivery latency measured directly: ~60-90 seconds
+  (GCP measured ~18s, CloudTrail documents ~15min) -- `DeliveryLag` set
+  to 5 minutes, a safety margin, not tuned tightly. A sensitive-attribute
+  audit (UBI-23/24 cross-check) against all 42 seeded types found every
+  genuinely credential-bearing computed attribute already
+  `Sensitive`-flagged by the provider -- one real gap,
+  `azurerm_linux_web_app`/`azurerm_linux_function_app`'s own free-form
+  `app_settings` map (no per-key schema possible, the same structural
+  ceiling `helm_release`'s own `metadata.values` hit), added to
+  `provider/overrides.go` as a full-attribute redaction. Every real
+  fixture destroyed after (Key Vaults purged, not just deleted),
+  subscription swept clean and confirmed empty -- zero `ubx ship` runs
+  against any real cloud provider this session, every real mutation went
+  through the `az` CLI directly, out of band, the same discipline
+  `gcloud`/`aws` already held to. `go build/vet/test`, `gofmt -l .`
+  clean across the whole repo. See STATE.md for the full account.
 
 ## Strategy
 
