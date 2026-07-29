@@ -30,6 +30,21 @@ type LayeredVerdict struct {
 // Sorted by (Source, Type) for the same reproducibility ProbeSchema's
 // own output already guarantees — two runs against the identical
 // findings slice produce byte-identical output.
+// AllVerdicts is the ready-made "base layer + hand-verified overlay"
+// combination (UBI-50 session 4, docs/conformance-harness.md's own
+// "Verdict write-back" amendment): layers the committed, generated
+// GeneratedFindings (findings_generated.go, conformance/probegen's own
+// output) under conformance.Registry's own 154 hand-written TypeSpec
+// entries, via LayerFindings — the single call site most callers
+// actually want, rather than reaching for GeneratedFindings/
+// LayerFindings separately. Every type ANY currently-onboarded provider
+// has ever been probed against gets a real LayeredVerdict; a type
+// that's ALSO hand-verified carries its own real TypeSpec alongside,
+// never replaced.
+func AllVerdicts() []LayeredVerdict {
+	return LayerFindings(GeneratedFindings)
+}
+
 func LayerFindings(findings []Finding) []LayeredVerdict {
 	type key struct{ source, typ string }
 	grouped := map[key][]Finding{}
