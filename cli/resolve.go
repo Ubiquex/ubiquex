@@ -119,55 +119,9 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				}
 			}
 
-			// docs/resolver.md's own "Amendment (UBI-43): multi-provider
-			// stacks" -- a stack with a real [providers] table in
-			// .ubx/config gets a genuine multi-provider set, one declared
-			// provider per entry, each launched to fetch its own schema
-			// (type→provider inference needs to ask every declared
-			// provider, not just the ones a specific intent file happens
-			// to touch); a single-provider stack (no table) keeps working
-			// exactly as it always has, one provider launched, wrapped as
-			// the one-element case.
-			var providers []resolver.DeclaredProvider
-			if len(cfg.Providers) > 0 {
-				warnIfLegacyProviderFlagsGiven(cmd)
-				for _, src := range sortedProviderSources(cfg.Providers) {
-					version := cfg.Providers[src]
-					parsed, err := provider.ParseSource(src)
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-					}
-					result, err := provider.Acquire(ctx, parsed, version)
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: acquire provider %s@%s: %w", src, version, err)}
-					}
-					client, err := provider.Launch(ctx, result.Path)
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: launch provider %s@%s: %w", src, version, err)}
-					}
-					defer client.Close()
-					schemas, err := client.Provider.Schema(ctx)
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch schema for %s@%s: %w", src, version, err)}
-					}
-					providers = append(providers, resolver.DeclaredProvider{Source: src, Version: version, Schema: newSchemaInspector(schemas)})
-				}
-			} else {
-				applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
-				path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-				}
-				client, err := provider.Launch(ctx, path)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-				}
-				defer client.Close()
-				schemas, err := client.Provider.Schema(ctx)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: fetch provider schema: %w", err)}
-				}
-				providers = []resolver.DeclaredProvider{{Source: source, Version: providerVersion, Schema: newSchemaInspector(schemas)}}
+			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
 			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, intent.Stack, cfg)
@@ -211,4 +165,68 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript SDK program (@ubx/sdk) instead of reading an intent file (mutually exclusive with the positional argument)")
 
 	return cmd
+}
+
+// loadResolveProviders is `ubx resolve`'s own provider-loading logic
+// (docs/resolver.md's "Amendment (UBI-43): multi-provider stacks"),
+// extracted so `ubx plan` (UBI-49) can resolve any medium input through
+// the identical, unmodified path rather than a second copy of it: a stack
+// with a real [providers] table in .ubx/config gets a genuine
+// multi-provider set, one declared provider per entry, each launched to
+// fetch its own schema; a single-provider stack (no table) keeps working
+// exactly as it always has, one provider launched, wrapped as the
+// one-element case. Every launched client is closed before this function
+// returns -- newSchemaInspector wraps only the already-fetched static
+// schema data (schemainspector.go), so there is no need to hold a client
+// open past its own schema fetch, the same reasoning loadDiagramProviders
+// (propose.go) already documents for its own, symmetric loop.
+func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, providerPath, source, providerVersion *string) ([]resolver.DeclaredProvider, error) {
+	var providers []resolver.DeclaredProvider
+	if len(cfg.Providers) > 0 {
+		warnIfLegacyProviderFlagsGiven(cmd)
+		for _, src := range sortedProviderSources(cfg.Providers) {
+			version := cfg.Providers[src]
+			parsed, err := provider.ParseSource(src)
+			if err != nil {
+				return nil, err
+			}
+			result, err := provider.Acquire(ctx, parsed, version)
+			if err != nil {
+				return nil, fmt.Errorf("acquire provider %s@%s: %w", src, version, err)
+			}
+			client, err := provider.Launch(ctx, result.Path)
+			if err != nil {
+				return nil, fmt.Errorf("launch provider %s@%s: %w", src, version, err)
+			}
+			schemas, err := client.Provider.Schema(ctx)
+			closeErr := client.Close()
+			if err != nil {
+				return nil, fmt.Errorf("fetch schema for %s@%s: %w", src, version, err)
+			}
+			if closeErr != nil {
+				return nil, fmt.Errorf("close provider %s@%s: %w", src, version, closeErr)
+			}
+			providers = append(providers, resolver.DeclaredProvider{Source: src, Version: version, Schema: newSchemaInspector(schemas)})
+		}
+		return providers, nil
+	}
+
+	applyProviderDefaults(cmd, providerPath, source, providerVersion, cfg)
+	path, _, err := resolveProviderBinary(ctx, *providerPath, *source, *providerVersion)
+	if err != nil {
+		return nil, err
+	}
+	client, err := provider.Launch(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	schemas, err := client.Provider.Schema(ctx)
+	closeErr := client.Close()
+	if err != nil {
+		return nil, fmt.Errorf("fetch provider schema: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close provider: %w", closeErr)
+	}
+	return []resolver.DeclaredProvider{{Source: *source, Version: *providerVersion, Schema: newSchemaInspector(schemas)}}, nil
 }

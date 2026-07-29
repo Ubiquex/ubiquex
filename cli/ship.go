@@ -12,6 +12,7 @@ import (
 
 	"github.com/ubiquex/ubiquex-cli/core"
 	"github.com/ubiquex/ubiquex-cli/core/executor"
+	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/provider"
 )
 
@@ -34,17 +35,28 @@ func newShipCmd() *cobra.Command {
 		providerConfig  string
 		timeout         time.Duration
 		jsonOut         bool
+		confirmDestroys bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "ship <proposal-id>",
-		Short: "Execute an accepted drift_revert or change proposal against live cloud -- the only command that applies",
-		Long: `Executes an already-accepted drift_revert or change proposal: for a drift_revert, restores the
+		Use:   "ship <hash>",
+		Short: "Accept (local tier, if needed) and execute a drift_revert or change proposal against live cloud -- the only command that applies",
+		Long: `Executes a drift_revert or change proposal: for a drift_revert, restores the
 resource's live state to match the ledger's recorded truth; for a change (UBI-27, "ubx resolve"'s own
-output), creates and modifies resources for real, in real dependency order, feeding each resource's
-real applied output into any sibling still carrying a $computed marker pointing at it. This is the one
-ubx command that changes real infrastructure -- accept/why/status/scan/revert-plan/resolve only ever
-read or record.
+output, or "ubx plan"'s fused equivalent, UBI-49), creates and modifies resources for real, in real
+dependency order, feeding each resource's real applied output into any sibling still carrying a
+$computed marker pointing at it. This is the one ubx command that changes real infrastructure --
+accept/why/status/scan/revert-plan/resolve/plan only ever read or record.
+
+<hash> is looked up two ways, in order: first as an already-accepted proposal id in this stack's
+ledger (the four-verb ceremony's own path -- "ubx accept" ran separately, including PR-merge
+acceptance); if not found there, as a plan "ubx plan" saved at .ubx/plans/<hash>.json, which this
+command then accepts inline, local tier, before applying -- ALL of local accept's own invariants
+still apply exactly as they do standalone: --confirm-destroys is still required for any plan with
+blast_radius.destroys > 0, a stale cross-stack pin still refuses (resolver.VerifyPins), and the
+ledger records acceptance.method: "local" exactly like "ubx accept" would. PR-merge acceptance
+remains available as its own separate path ("ubx accept --from-merge") for teams who want it --
+inline acceptance here is local tier only, never a substitute for it.
 
 Safe to re-run: ubx ship is idempotent by contract (docs/executor.md). A resource already applied in a
 prior attempt is skipped -- including, for a change proposal, recovering its real applied output from
@@ -59,8 +71,9 @@ once at the start -- so reality moving mid-run is refused, never bulldozed. Only
 change proposals can be shipped; every other kind is record-only (nothing to ship).`,
 		Args: cobra.ExactArgs(1),
 		// Exit code is the CI contract (docs/exit-codes.mdx): 0 applied (or
-		// already fully applied -- a genuine no-op), 1 partially applied or
-		// failed (an actionable finding -- retry, or investigate why),
+		// already fully applied -- a genuine no-op), 1 partially applied,
+		// failed, or an inline-accept refusal (an actionable finding --
+		// confirm destroys, resolve staleness, retry, or investigate why),
 		// 2 a genuine error (bad input, provider/ledger failure).
 		// SilenceUsage/Errors: same reasoning as every other UBI-20-audited
 		// command (status.go).
@@ -81,7 +94,16 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 
 			p, err := ledger.Read(args[0])
 			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				// UBI-49: not yet an accepted proposal in this stack's ledger
+				// -- fall back to a plan "ubx plan" saved locally, and accept
+				// it inline (local tier) before proceeding, subject to every
+				// invariant standalone "ubx accept" already enforces.
+				accepted, acceptErr := acceptPlanInline(ledger, ledgerDir, args[0], confirmDestroys)
+				if acceptErr != nil {
+					return &ExitCodeError{Code: acceptErrorCode(acceptErr), Err: fmt.Errorf("ship: %w", acceptErr)}
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s) via local plan\n", accepted.ID, accepted.Stack)
+				p = accepted
 			}
 			// A friendly, early exit before ever launching a provider --
 			// executor.Ship enforces both of these authoritatively too
@@ -174,8 +196,48 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"}")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "overall timeout for the ship run")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
+	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required for inline local-tier acceptance of any plan with blast_radius.destroys > 0 (docs/schema.md); unused when <hash> is already an accepted proposal, since that confirmation already happened at its own accept time")
 
 	return cmd
+}
+
+// acceptPlanInline is UBI-49's own ship-time fallback (docs/architecture.md's
+// "Two-step fusion" amendment): hash isn't yet an accepted proposal in this
+// stack's ledger, so read the plan "ubx plan" saved locally and run it
+// through the exact same local-tier acceptance checks "ubx accept" already
+// enforces standalone -- in the same order accept.go's own RunE does them
+// (destroys confirmed as early as possible, pins re-verified unconditionally,
+// then core.Accept itself) -- before ship proceeds to apply it. Nothing here
+// is a new invariant; this is the same core.Accept/checkDestroysConfirmed/
+// resolver.VerifyPins every other acceptance path already goes through,
+// called from a second entry point.
+func acceptPlanInline(ledger *core.Ledger, ledgerDir, hash string, confirmDestroys bool) (*core.Proposal, error) {
+	draft, err := readPlanFile(ledgerDir, hash)
+	if err != nil {
+		return nil, fmt.Errorf("no accepted proposal %s in this stack's ledger, and no plan file at %s: %w", hash, planFilePath(ledgerDir, hash), err)
+	}
+
+	// Integrity check specific to this fallback: a plan file is always
+	// written at exactly its own content hash's path (plan.go's own
+	// writePlanFile) -- if its content doesn't hash to the filename it was
+	// found at, the file was hand-edited or corrupted since, and shipping
+	// it under the hash the caller actually asked for would be shipping
+	// something other than what that hash names.
+	computedHash, err := core.Hash(draft)
+	if err != nil {
+		return nil, err
+	}
+	if computedHash != hash {
+		return nil, fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, hash), computedHash, hash)
+	}
+
+	if err := checkDestroysConfirmed(draft, confirmDestroys); err != nil {
+		return nil, err
+	}
+	if err := resolver.VerifyPins(draft); err != nil {
+		return nil, err
+	}
+	return core.Accept(ledger, draft)
 }
 
 // reportAlreadyApplied handles executor.Ship's simplest idempotency case

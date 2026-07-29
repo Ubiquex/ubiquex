@@ -16,6 +16,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAcceptCmd())
 	root.AddCommand(newResolveCmd())
 	root.AddCommand(newProposeCmd())
+	root.AddCommand(newPlanCmd())
 	root.AddCommand(newWhyCmd())
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newWritebackCmd())

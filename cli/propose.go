@@ -119,47 +119,19 @@ func newProposeCmd() *cobra.Command {
 }
 
 // runProposeFromDoc is `ubx propose --from-doc`'s own RunE body
-// (docs/intent-provider.md's own md-pipeline design): read the raw
-// document, redact secret-shaped material at capture (before anything
-// ever leaves this machine), draft via the configured intent provider
-// with retry-with-errors/hard-fail already built into DraftWithRetry,
-// populate provenance, render the ambiguity content for a human to
-// review, and write the draft. Never resolves, never touches a ledger.
+// (docs/intent-provider.md's own md-pipeline design): draft via
+// draftFromDoc, render the ambiguity content for a human to review, and
+// write the draft. Never resolves, never touches a ledger.
 func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout time.Duration) error {
-	if stack == "" {
-		return &ExitCodeError{Code: 2, Err: errors.New("propose --from-doc: --stack is required")}
-	}
-
-	raw, err := os.ReadFile(docPath)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: err}
-	}
-
 	cfg, err := LoadConfig(cmd.ErrOrStderr())
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
 	}
 
-	adapter, err := buildIntentAdapter(cfg)
+	draft, err := draftFromDoc(cmd, cfg, docPath, stack, timeout)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
 	}
-
-	redacted, findings := intentprovider.Redact(raw)
-	errOut := cmd.ErrOrStderr()
-	for _, f := range findings {
-		fmt.Fprintf(errOut, "warning: propose --from-doc: redacted possible secret material (%s) before sending %s to the %s adapter\n", f, docPath, adapter.Name())
-	}
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
-
-	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
-	}
-
-	intentprovider.PopulateSources(draft, intentprovider.SourceKindDocument, docPath, intentprovider.HashDocument(raw), adapter.Name(), adapter.Model(), rawOutput)
 
 	outWriter := cmd.OutOrStdout()
 	renderAmbiguity(outWriter, draft)
@@ -179,66 +151,67 @@ func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout t
 	return nil
 }
 
+// draftFromDoc is the md medium's own draft producer (docs/intent-
+// provider.md): read the raw document, redact secret-shaped material at
+// capture (before anything ever leaves this machine), draft via the
+// configured intent provider with retry-with-errors/hard-fail already
+// built into DraftWithRetry, and populate provenance. Extracted from
+// runProposeFromDoc (UBI-49) so `ubx plan --from-doc` (plan.go) can drive
+// the identical drafting step before resolving it in the same command,
+// rather than a second copy of this logic -- the resolve step itself
+// stays a separate, explicit call in each caller, never folded in here.
+func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeout time.Duration) (*resolver.IntentFile, error) {
+	if stack == "" {
+		return nil, errors.New("--stack is required")
+	}
+
+	raw, err := os.ReadFile(docPath)
+	if err != nil {
+		return nil, err
+	}
+
+	adapter, err := buildIntentAdapter(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	redacted, findings := intentprovider.Redact(raw)
+	errOut := cmd.ErrOrStderr()
+	for _, f := range findings {
+		fmt.Fprintf(errOut, "warning: redacted possible secret material (%s) before sending %s to the %s adapter\n", f, docPath, adapter.Name())
+	}
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	defer cancel()
+
+	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted)
+	if err != nil {
+		return nil, err
+	}
+
+	intentprovider.PopulateSources(draft, intentprovider.SourceKindDocument, docPath, intentprovider.HashDocument(raw), adapter.Name(), adapter.Model(), rawOutput)
+	return draft, nil
+}
+
 // runProposeFromDiagram is `ubx propose --from-diagram`'s own RunE body
-// (docs/diagram-medium.md's own design): read the raw .d2 file, load the
-// declared providers' schemas for type inference, parse the topology into
-// an intent/v1 draft (diagram.Parse -- fully deterministic, no LLM in this
-// path at all), pin the diagram file itself as the draft's own provenance
-// source, render whatever ambiguity content the parse produced (including
-// the $cross structural limitation, which surfaces here as an ordinary
+// (docs/diagram-medium.md's own design): draft via draftFromDiagram,
+// render whatever ambiguity content the parse produced (including the
+// $cross structural limitation, which surfaces here as an ordinary
 // defaults[] note -- docs/diagram-medium.md's own "a genuine v1 limit, not
 // a bug" framing) for a human to review, and write the draft. Never
 // resolves, never touches a ledger -- the same two-step shape as
 // --from-doc, not --from-code's one-step shape, because a diagram parse
 // can produce real, visible ambiguity that needs a review gate first.
 func runProposeFromDiagram(cmd *cobra.Command, diagramPath, stack, out, summary string, neighborLedgerFlags []string, timeout time.Duration) error {
-	if stack == "" {
-		return &ExitCodeError{Code: 2, Err: errors.New("propose --from-diagram: --stack is required")}
-	}
-
-	raw, err := os.ReadFile(diagramPath)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: err}
-	}
-
-	neighborLedgers, err := parseNeighborLedgerFlags(neighborLedgerFlags)
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-diagram: %w", err)}
-	}
-
 	cfg, err := LoadConfig(cmd.ErrOrStderr())
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-diagram: %w", err)}
 	}
-	if len(cfg.Providers) == 0 {
-		return &ExitCodeError{Code: 2, Err: errors.New("propose --from-diagram: no [providers] declared in .ubx/config -- the diagram medium has no legacy single-provider fallback (like \"ubx sdk gen\", it's a post-multi-provider-stacks feature); declare at least one source in [providers]")}
-	}
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
-
-	providers, err := loadDiagramProviders(ctx, cfg)
+	draft, err := draftFromDiagram(cmd, cfg, diagramPath, stack, summary, neighborLedgerFlags, timeout)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-diagram: %w", err)}
 	}
-
-	draft, err := diagram.Parse(diagramPath, bytes.NewReader(raw), stack, providers, diagram.Options{
-		NeighborLedgers: neighborLedgers,
-		BaseDir:         filepath.Dir(diagramPath),
-	})
-	if err != nil {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-diagram: %w", err)}
-	}
-
-	if summary == "" {
-		summary = fmt.Sprintf("%d resource(s) authored via %s for stack %q", len(draft.Resources), filepath.Base(diagramPath), stack)
-	}
-	draft.Intent.Summary = summary
-	draft.Intent.Sources = append(draft.Intent.Sources, core.IntentSource{
-		Kind:        intentprovider.SourceKindDocument,
-		Ref:         diagramPath,
-		ContentHash: intentprovider.HashDocument(raw),
-	})
 
 	outWriter := cmd.OutOrStdout()
 	renderAmbiguity(outWriter, draft)
@@ -256,6 +229,63 @@ func runProposeFromDiagram(cmd *cobra.Command, diagramPath, stack, out, summary 
 	}
 	fmt.Fprintf(outWriter, "wrote draft: %s\n", out)
 	return nil
+}
+
+// draftFromDiagram is the diagram medium's own draft producer (docs/
+// diagram-medium.md): read the raw .d2 file, load the declared providers'
+// schemas for type inference, and parse the topology into an intent/v1
+// draft (diagram.Parse -- fully deterministic, no LLM in this path at
+// all), pinning the diagram file itself as the draft's own provenance
+// source. Extracted from runProposeFromDiagram (UBI-49) so `ubx plan
+// --from-diagram` (plan.go) can drive the identical parsing step before
+// resolving it in the same command, rather than a second copy of this
+// logic -- the resolve step itself stays a separate, explicit call in
+// each caller, never folded in here.
+func draftFromDiagram(cmd *cobra.Command, cfg *Config, diagramPath, stack, summary string, neighborLedgerFlags []string, timeout time.Duration) (*resolver.IntentFile, error) {
+	if stack == "" {
+		return nil, errors.New("--stack is required")
+	}
+
+	raw, err := os.ReadFile(diagramPath)
+	if err != nil {
+		return nil, err
+	}
+
+	neighborLedgers, err := parseNeighborLedgerFlags(neighborLedgerFlags)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cfg.Providers) == 0 {
+		return nil, errors.New("no [providers] declared in .ubx/config -- the diagram medium has no legacy single-provider fallback (like \"ubx sdk gen\", it's a post-multi-provider-stacks feature); declare at least one source in [providers]")
+	}
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	defer cancel()
+
+	providers, err := loadDiagramProviders(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	draft, err := diagram.Parse(diagramPath, bytes.NewReader(raw), stack, providers, diagram.Options{
+		NeighborLedgers: neighborLedgers,
+		BaseDir:         filepath.Dir(diagramPath),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if summary == "" {
+		summary = fmt.Sprintf("%d resource(s) authored via %s for stack %q", len(draft.Resources), filepath.Base(diagramPath), stack)
+	}
+	draft.Intent.Summary = summary
+	draft.Intent.Sources = append(draft.Intent.Sources, core.IntentSource{
+		Kind:        intentprovider.SourceKindDocument,
+		Ref:         diagramPath,
+		ContentHash: intentprovider.HashDocument(raw),
+	})
+	return draft, nil
 }
 
 // parseNeighborLedgerFlags parses repeated "<stack>=<path>" --neighbor-ledger
