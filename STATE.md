@@ -4,6 +4,164 @@
 
 ## Current phase
 
+**UBI-37 (2026-07-29): Azure support, both stages, one session —
+the UBI-21 playbook verbatim, fourth platform. Closed in Linear.**
+
+Filed as a new arc immediately after the read-only projection quartet
+closed. Unparked by explicit user instruction this session (the ticket's
+own "PARKED — unpark trigger: real Azure demand" note notwithstanding —
+Roozbeh chose to light it up directly, and a real, `az login`-authenticated
+Azure subscription (`ubiquex`, `315b4ae0-7c86-41f1-b0a0-ac735e8b4683`) was
+confirmed available via `az account show` before Stage 2 work began).
+
+**The `audit/` restructure rode along first, as its own commit** —
+`cloudtrail`/`gcpaudit`/`k8saudit` moved to `audit/cloudtrail`/`audit/gcp`/
+`audit/k8s` (the latter two renamed to match; `cloudtrail`'s own name
+already fit), making room for the new `audit/azure`. Pure `git mv` plus a
+tiny import-path/qualifier sweep — the only real (non-comment) call site
+outside the moved packages was `cli/attribution.go`'s own dispatch switch.
+Full `go test ./...` green before any Azure-specific code landed, proving
+zero behavior change from the move alone.
+
+**Stage 1 (hermetic, no Azure account needed).** `hashicorp/azurerm`
+verified empirically via `provider.Acquire` — negotiates tfplugin v5,
+matching `hashicorp/aws`/`hashicorp/google`. `azure/azapi` separately
+assessed, never assumed to match azurerm's own shape: negotiates v6 (the
+FIRST provider source this project has ever onboarded that doesn't speak
+v5) and models every Azure resource via a handful of generic
+ARM-type-parameterized types (`azapi_resource` and a few siblings) rather
+than one Go type per resource — a poor fit for `conformance.Registry`'s
+own model, so it got a standalone assessment test instead of per-type
+entries. `conformance.Registry` gained 42 `hashicorp/azurerm` entries
+(`FakeOnly`, `Implemented: false`) across compute/network/iam/storage/
+db/dns/messaging, plus a brand-new `management` category for
+`azurerm_resource_group` (no prior platform needed one — AWS/GCP/
+Kubernetes have nothing analogous to "the container every other resource
+lives inside"). Empirically confirmed across all 42: every azurerm type
+has both `id` (full ARM path) and `name` as flat top-level attributes —
+materially simpler than GCP's own varied `id`/`self_link`/`uid` shapes —
+recorded as schema PRESENCE only, explicitly not proof `id` alone
+suffices live, per the ticket's own identity-shape caution.
+
+**Stage 2 (a real Azure subscription, continued the same session).**
+Five types promoted `RealSafe`, live-verified via
+`conformance.RunAdoptMutateScanDiff` against real resources
+created/mutated/destroyed through the `az` CLI directly (never `ubx
+ship` — the ship-verification rule held throughout, the identical
+discipline `gcloud`/`aws` already established for GCP/AWS's own live
+conformance work): `azurerm_resource_group`, `azurerm_storage_account`,
+`azurerm_storage_container`, `azurerm_key_vault`,
+`azurerm_user_assigned_identity`. `id` alone sufficient for all five —
+but `azurerm_resource_group`'s own ARM id shape was a genuine surprise
+the schema alone couldn't predict: a resource group's id is JUST
+`/subscriptions/<sub>/resourceGroups/<name>`, not the
+`resourceGroups/<rg>/providers/<ns>/<type>/<name>` shape every OTHER
+azurerm type's own id follows — a resource group is its own top-level
+ARM scope, never nested inside another resource group's own path. Caught
+only by a real `ReadResource` call rejecting the first, mechanically-derived
+guess ("unexpected segment ... present at the end of the URI").
+
+A real, one-time subscription-setup surprise, same genre as UBI-21's own
+ADC setup: `Microsoft.Storage`/`Microsoft.KeyVault`/
+`Microsoft.ManagedIdentity` resource providers were `NotRegistered` on
+this subscription, producing a misleadingly-worded `SubscriptionNotFound`
+error on the very first `az storage account create` until `az provider
+register` was run and polled to completion for each. Key Vault's own
+soft-delete default (a deleted vault's name stays reserved up to 90 days)
+meant every Key Vault live test purges, not just deletes, its own
+throwaway vault in cleanup — confirmed necessary by checking `az keyvault
+list-deleted`.
+
+**`audit/azure/client.go` implements `core.EventLookup` against Azure
+Monitor's Activity Log**, wired into `cli/attribution.go`'s dispatch
+switch under `"hashicorp/azurerm"` — `core.EventLookup`'s single-method
+interface held up a FOURTH time with zero changes. **A real, materially
+dangerous correlation gap found and fixed via live verification, not
+assumed clean, structurally the same class of danger as GCP's own
+silent-incomplete-read gap (UBI-21) one layer further out**: Activity
+Log's own `resourceId` field for a real resource group came back
+lowercase (`.../resourcegroups/<name>`), while the azurerm provider's own
+observed `"id"` attribute — the exact candidate `core.AttributeDrift`
+searches by — is camelCase (`.../resourceGroups/<name>`). An exact match
+against the raw ARM id silently found zero events every single time, no
+error raised, completely indistinguishable from a genuine no-event case —
+first caught live, not in a hermetic test, when a real drift on a real
+resource group produced `audit_unattributed`/`no_matching_event` despite
+`az monitor activity-log list` proving the real event existed and was
+already queryable. Fixed: the server-side query now scopes only by time
+window and `resourceGroupName` (parsed out of the candidate ARM id, itself
+case-insensitively), and every returned event is matched against the
+candidate case-INsensitively, client-side, reporting the match using the
+candidate's own original casing — so `core.AttributeDrift`'s downstream
+exact-match check still sees a byte-identical hit, and every OTHER
+platform's own exact-match behavior is completely untouched. Live-verified
+end to end afterward via a real `ubx scan --source hashicorp/azurerm`
+against a real drift: real caller identity (`me@roozbeh.net`, my own real
+Azure AD principal) correctly attributed, both matching source events
+recorded. Delivery latency measured directly, not assumed: a resource
+group `Update` Administrative event became queryable roughly 60-90 seconds
+after the API call returned (bounded by this session's own 10-second poll
+granularity, not sub-second precision) — slower than GCP's measured ~18
+seconds, faster than CloudTrail's documented ~15-minute ceiling.
+`azure.Backend.DeliveryLag` set to 5 minutes, a safety margin above that
+measurement, not tuned tightly to it.
+
+**A sensitive-attribute audit (UBI-23/24 cross-check) ran directly
+against the real schema for all 42 seeded types** — the same "checked
+directly and found none further" discipline UBI-24's own Kubernetes/Helm
+audit established, not asserted from memory. Every genuinely
+credential-bearing computed attribute found (storage account keys/
+connection strings, Cosmos DB keys, Redis keys, ServiceBus/EventHub keys,
+VM/DB admin passwords, Key Vault secret values, AKS kubeconfigs, web/
+function app auth client secrets) is already `Sensitive`-flagged by the
+provider itself — no gap there. Every other keyword-matched candidate
+(`private_ip_address`, `login_server`, `public_key_pem`, `administrator_login`,
+and similar) turned out to be a false positive on direct inspection — an
+IP-address classification, a public hostname, PUBLIC key material,
+a username (never a secret on its own), not a real leak. **One real gap
+found**: `azurerm_linux_web_app`/`azurerm_linux_function_app`'s own
+`app_settings` is a free-form `map[string]string` — Azure App Service's
+real environment-variable mechanism, and a well-known real-world place
+operators plaintext-stash connection strings/API keys — with no per-key
+schema to flag individual entries `Sensitive`, the same structural
+ceiling `helm_release`'s own `metadata.values` already hit. Added to
+`provider/overrides.go`'s `SensitiveOverrides` table as a full-attribute
+redaction, the same conservative "secrets never in the ledger over some
+non-secret settings also redacted" choice made for Helm.
+
+**Every real Azure resource created this session was destroyed
+afterward** — confirmed via a final subscription sweep (`az group list`,
+`az keyvault list`, `az keyvault list-deleted`, all filtered to this
+session's own `ubx-*` naming prefix) showing zero remaining resources.
+Zero `ubx ship` runs against any real cloud provider this session, per
+the standing ship-verification rule — every real mutation went through
+the `az` CLI directly, out of band, the identical discipline `gcloud`/
+`aws` were already held to for GCP's/AWS's own live conformance work.
+
+**`go build/vet/test`, `gofmt -l .` clean across the whole repo**
+throughout every commit this session (six on the `ubiquex-cli` side: the
+`audit/` restructure, Stage 1 conformance, Stage 1 docs, Stage 2
+conformance, Stage 2 attribution backend, Stage 2 sensitive-attribute
+audit, Stage 2 docs — plus this STATE.md update). **ubiquex-docs updated
+in the same session, per protocol**: `getting-started/installation.mdx`
+gained `--source hashicorp/azurerm`/Azure credential-chain mentions;
+`cli/lookup.mdx` gained a full `## Azure` section (the five live-verified
+types' table, the `azurerm_resource_group` id-shape surprise, the
+`azapi` v6/generic-provider aside); `concepts/attribution.mdx` gained a
+full `## Azure via Activity Log` section (a real transcript, the
+resourceId-casing `<Warning>`, the measured delivery-latency figure) plus
+small `k8saudit`→(unnamed backend) reference cleanups. `mint validate`/
+`mint broken-links` both clean. No new nav entries needed (Azure content
+went inline into existing pages, matching GCP's own precedent exactly).
+
+**UBI-37 closed in Linear.** No open thread carries into the next
+session — the one deliberately-scoped-out item (a real, hourly-billed
+Azure resource for anything beyond the five cheap/free types already
+verified) is exactly the kind of judgment call this ticket's own "cheap/
+free bias" already anticipated, not an oversight.
+
+## Current phase (previous)
+
 **UBI-48 (2026-07-29), session 4 (final) of the read-only projection
 quartet: `ubx addresses` built and closed in Linear. The quartet is
 complete — all four of UBI-38/39/40/48 are closed.**
