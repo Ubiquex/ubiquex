@@ -2,6 +2,19 @@
 
 ## Changelog
 
+- 2026-07-30 — Design-room decision (no session): environments &
+  promotion (UBI-14, the founding open question, closed). Recorded in
+  docs/architecture.md §Environments & promotion — envs stay
+  non-concepts (directory + base prefix, ratified final); promotion is
+  re-resolution against the target env's reality, never copying
+  (staleness-by-construction forbids copies); the link is EVIDENCE not
+  a pin: intent.sources gains {kind: "promotion", ref, base} —
+  additive, a provenance claim not an equality claim, immune to source-
+  chain advancement; why renders the promoted-from trail; enforcement
+  ("prod requires promotion evidence") deliberately left to the future
+  policy engine, never schema law. CLI surface (ubx promote) filed as
+  its own small build ticket.
+
 - 2026-07-10 — v1 of plan, from founding design session. Wedge chosen: drift
   attribution. Executor strategy: tfplugin direct, no TF/OpenTofu/Pulumi engines.
 - 2026-07-10 — Slice 1 revised from tfplugin v6-only to dual v5/v6. Real

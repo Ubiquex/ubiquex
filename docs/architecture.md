@@ -3356,6 +3356,43 @@ cloud call — schema-only, cheap) rather than a deeper refactor threading a
 shared providers slice through both call sites, kept out of this arc's own
 tight scope.
 
+### Environments & promotion (decided 2026-07-30, design room — UBI-14)
+
+The founding open question, answered with what the intervening arcs
+already built:
+
+**Environments remain non-concepts.** An environment is a directory
+with config overrides and a deeper base-store prefix
+(`.../staging/payments/` vs `.../prod/payments/`) — ratified as final,
+not provisional. No `env` field exists anywhere in the schema.
+
+**Promotion is re-resolution, never copying.** "Promote to prod" means:
+the intent (any medium) is resolved AGAIN against the target
+environment's own reality — its providers, its live state, its pins —
+producing a new proposal in the target env's chain, signed through the
+normal ceremony. A copied proposal would be stale in the target by
+construction; staleness-by-construction is why copying is not offered.
+
+**The promotion link is evidence, not a pin.** The target proposal's
+`intent.sources` carries `{kind: "promotion", ref: <source proposal
+id>, base: <source stack base>}` — additive, following the
+source-kind extension precedent. It is a provenance claim ("modeled on
+staging proposal 8f3c…"), not an equality claim: target values may
+legitimately differ (prod is bigger), and the reviewer signs the
+difference knowingly with both proposals visible. Because it is
+evidence rather than a pin, the source chain advancing later never
+stales the promoted proposal — promotion records history, not
+freshness. `why` renders the trail: "promoted from staging/8f3c…".
+
+**Enforcement is deliberately absent from the schema.** "Prod changes
+must carry promotion evidence from staging" is a policy — the policy
+engine's scope when that component gets its arc — never a hashing rule.
+
+CLI surface (`ubx promote <proposal-id> --to <dir>`: read the source
+proposal's intent, re-resolve in the target context, stamp the
+promotion source, emit the draft) is a small build ticket, separate
+from this design.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
