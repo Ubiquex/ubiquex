@@ -147,10 +147,26 @@ type Question struct {
 // audit content -- evidence of provenance, never an enforced binding: a
 // human editing the draft file before resolve is legitimate and
 // unaffected). See intentprovider.PopulateSources.
+//
+// UBI-55 (docs/schema.md's own "Amendment: promotion evidence") adds
+// "promotion": {kind: "promotion", ref: <source proposal id>, base:
+// <source stack base>} -- a provenance claim, not an equality claim
+// (docs/architecture.md's own "Environments & promotion"): the target
+// proposal's own values may legitimately differ from the source's, and
+// nothing here is ever validated against it. Additive to whatever
+// document/intent_provider/dialogue sources the fresh re-resolution
+// already produced, never replacing them -- see cli/promote.go.
 type IntentSource struct {
-	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed | document | intent_provider
+	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed | document | intent_provider | promotion
 	Ref         string `json:"ref,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
+
+	// Base is populated only for Kind == "promotion": the source
+	// proposal's own stack base (core.Ledger.BaseStore(), or the
+	// source's own --ledger-dir for the default git-local store, which
+	// carries no separate base-store concept of its own) -- the "staging"
+	// half of why's own "promoted from staging/8f3c…" rendering.
+	Base string `json:"base,omitempty"`
 
 	// The following are populated only for Kind == "cloudtrail" or
 	// "gcp_audit". ActorARN carries the GCP caller's principal email for

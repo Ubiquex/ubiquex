@@ -365,8 +365,11 @@ func shortID(id string) string {
 // with the event id/content_hash demoted to an indented detail line; that
 // story, not the event id, is what "who changed this" is actually asking
 // for. cloudtrail_unattributed sources render their reason in words rather
-// than a bare enum value. Every other kind (dialogue/manual_edit/issue) is
-// unchanged from before this session.
+// than a bare enum value. "promotion" sources (UBI-55) render the exact
+// human story docs/architecture.md's own "Environments & promotion"
+// names literally ("promoted from staging/8f3c…") — see docs/schema.md's
+// "Amendment: promotion evidence" for the field shape. Every other kind
+// (dialogue/manual_edit/issue) is unchanged from before this session.
 func renderIntentSource(out io.Writer, s core.IntentSource, indent string) {
 	switch s.Kind {
 	case "cloudtrail":
@@ -378,6 +381,8 @@ func renderIntentSource(out io.Writer, s core.IntentSource, indent string) {
 		fmt.Fprintf(out, "%s  event %s (content_hash=%s)\n", indent, s.EventID, s.ContentHash)
 	case "cloudtrail_unattributed":
 		fmt.Fprintf(out, "%ssource: cloudtrail_unattributed -- %s\n", indent, unattributedReason(s.Reason))
+	case "promotion":
+		fmt.Fprintf(out, "%ssource: promoted from %s/%s\n", indent, s.Base, shortID(s.Ref))
 	default:
 		fmt.Fprintf(out, "%ssource: %s %s (content_hash=%s)\n", indent, s.Kind, s.Ref, s.ContentHash)
 	}

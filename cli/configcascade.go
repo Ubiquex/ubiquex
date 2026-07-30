@@ -93,6 +93,20 @@ func LoadConfigResolved(warnOut io.Writer) (*ResolvedConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
+	return loadConfigResolvedFromDir(dir, warnOut)
+}
+
+// loadConfigResolvedFromDir is LoadConfigResolved's own cascade-walk-plus-
+// merge logic, parameterized on the starting directory instead of always
+// starting from configSearchStartDir() -- `ubx promote --to <target-dir>`
+// (UBI-55) is the first caller that genuinely needs a SECOND config,
+// scoped to a directory that isn't the process's own cwd (the target
+// environment's own directory, distinct from the source proposal's
+// ledger dir): every other command opens exactly one ledger/config, at
+// cwd, so this seam never needed to exist before. Behavior for every
+// existing caller is unchanged -- LoadConfigResolved is now a one-line
+// wrapper around this with dir = configSearchStartDir().
+func loadConfigResolvedFromDir(dir string, warnOut io.Writer) (*ResolvedConfig, error) {
 	walk, err := walkCascade(dir, warnOut)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)

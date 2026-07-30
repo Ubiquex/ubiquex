@@ -195,6 +195,18 @@ func LoadConfig(warnOut io.Writer) (*Config, error) {
 	return rc.Config, nil
 }
 
+// loadConfigFromDir is LoadConfig's own dir-parameterized counterpart --
+// see loadConfigResolvedFromDir's own doc comment (configcascade.go) for
+// why this seam exists (UBI-55, `ubx promote --to <target-dir>` needs a
+// second config scoped to a directory that isn't cwd).
+func loadConfigFromDir(dir string, warnOut io.Writer) (*Config, error) {
+	rc, err := loadConfigResolvedFromDir(dir, warnOut)
+	if err != nil {
+		return nil, err
+	}
+	return rc.Config, nil
+}
+
 // configSearchStartDir returns where the cascade starts walking upward
 // from -- the real working directory in production. A package var (not a
 // bare os.Getwd() call) purely so tests can point it at an isolated temp

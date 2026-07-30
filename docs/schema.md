@@ -1640,6 +1640,101 @@ docs/diagram-medium.md's own "Slice 4: built" section for how `ubx
 render` actually uses this to draw a `$cross` edge from the correct
 node.
 
+### Amendment: promotion evidence — a new `intent.sources[].kind` value + `.base` field (2026-07-30, UBI-55)
+
+Resolves the "Environment/promotion model" open question below, per the
+design ratified in docs/architecture.md's "Environments & promotion"
+(2026-07-30, UBI-14): promotion is re-resolution, never copying, and the
+link between a target proposal and the source proposal it was modeled on
+is evidence, not a pin.
+
+**New `intent.sources[].kind` value: `"promotion"`**:
+
+```json
+{
+  "kind": "promotion",
+  "ref": "<source proposal id>",
+  "base": "<source stack base>"
+}
+```
+
+- `ref` is the source proposal's own id, in whatever ledger `ubx promote`
+  read it from — never copied content, a pointer only.
+- `base` names the source's own stack base: `core.Ledger.BaseStore()` for
+  a remote `LedgerStore`, or the source's own `--ledger-dir` for the
+  default git-local store (which carries no separate base-store concept
+  of its own) — the "staging" half of `ubx why`'s own "promoted from
+  staging/8f3c…" rendering (docs/architecture.md's own example, rendered
+  verbatim by `cli/why.go`'s `renderIntentSource`).
+- No `content_hash` — a promotion source names a proposal id, not a
+  file; nothing to hash. `ContentHash` is left empty, `omitempty`.
+- **Additive to whatever the fresh re-resolution already produced**,
+  never replacing it: `ubx promote` re-derives the target proposal from
+  the SAME authoring document (`document`/`intent_provider` sources,
+  freshly stamped by the identical `draftFromDoc`/`draftFromDiagram`
+  pipeline every other entry point already uses) and then appends one
+  `promotion` entry on top. A proposal promoted twice (promoted from a
+  proposal that was itself promoted) gets exactly one new `promotion`
+  entry per hop — the full chain is reconstructed by following `ref`
+  through successive ledgers, the same way a git commit's parent chain
+  is walked one hop at a time, not flattened into one proposal's own
+  `intent.sources`.
+- **A provenance claim, never an equality claim** (docs/architecture.md's
+  own explicit ratification): `core.Validate`/`core/resolver` never
+  read this field, never compare the target's values against the
+  source's. A reviewer sees both proposals and signs the difference
+  knowingly.
+- **Evidence, not a pin — the source chain advancing later never stales
+  the promoted proposal.** Unlike a `cross_stack_pin` resolution input
+  (which DOES activate staleness detection against the neighbor's
+  advancing head, docs/architecture.md — Amendment above), a `promotion`
+  source names a fixed, historical fact ("this proposal was modeled on
+  that one") that stays true forever regardless of what the source stack
+  does next. `core/resolver` never reads a `promotion` source at
+  resolve time — there is no "is this promotion source stale" check to
+  even omit; the property holds by construction, not by a check that
+  was considered and skipped.
+
+**New `IntentSource.Base string` field**, `omitempty`, populated only for
+`Kind == "promotion"`.
+
+**A real "document ref isn't always relocatable" gap, found while
+building this, recorded honestly rather than silently worked around.**
+`ubx propose --from-doc`/`--from-diagram` stamp a `document` source's
+`ref` as whatever path string the caller typed — not normalized to
+repo-root- or ledger-relative — and `ubx resolve --from-code`'s own
+`document` source (`goeval`/`tseval`/`pyeval`'s `stampDocumentSource`)
+stamps only `filepath.Base(entryFile)`, discarding the directory
+entirely. `ubx promote` needs to re-read that same file from disk to
+re-resolve it, so it inherits both gaps: a `.md`/`.d2` ref resolves
+correctly only if `ubx promote` is invoked from the same working
+directory the original `ubx propose` was; an SDK-authored (`.ts`/`.go`/
+`.py`) `document` ref can never be relocated at all, since its own
+directory was never recorded anywhere. `ubx promote` refuses cleanly
+and names this specific reason rather than silently failing or
+guessing a path — see cli/promote.go. Recommending a follow-up ticket to
+give every medium's `document` ref a genuinely portable (repo-root-
+relative, full-path) convention; out of scope for this session, which
+only consumes the existing convention, not changes it.
+
+**Dialogue-kind sources are not yet promotable either, for a different,
+also-named reason**: a `dialogue` source's own `ref` is relative to the
+SOURCE ledger directory (`dialogues/<hash>.dlg.json`, docs/schema.md's
+own "Amendment: the chat medium," below), and re-stamping the identical
+ref string against a different target ledger directory would silently
+point at the wrong (or a nonexistent) file — a broken provenance claim
+worse than refusing outright. `ubx promote` refuses this case too,
+naming the reason, rather than emitting a `dialogue` source whose `ref`
+doesn't actually resolve in the target ledger.
+
+**Real code landed 2026-07-30, UBI-55** (`core/proposal.go`'s new
+`Base` field; `cli/promote.go`, new; `cli/why.go`'s `renderIntentSource`
+gains a `case "promotion":` rendering "promoted from `<base>/<short
+id>`", matching docs/architecture.md's own example verbatim). Purely
+additive — same "no `schema_version` bump" reasoning as every prior
+amendment to this struct: a proposal recorded before this amendment
+simply has no `promotion`-kind source, never ambiguously.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
@@ -1756,5 +1851,14 @@ entries — not an in-place edit of this section.
   abstraction; a remote-tierable dialogues store is a real, named,
   unbuilt follow-up, not assumed covered by this resolution.
 - Cross-stack workspace index format.
-- Environment/promotion model (same proposal re-resolved per env) — design before
-  the wedge grows environments.
+- Environment/promotion model (same proposal re-resolved per env) —
+  **resolved, UBI-14 (design) + UBI-55 (build)** (see "Amendment:
+  promotion evidence," above). Two real gaps found during the build,
+  not assumed away: an SDK-authored (`.ts`/`.go`/`.py`) proposal's own
+  `document` source ref can't be relocated (only the entry file's
+  basename is stamped, directory discarded), and a `dialogue`-kind
+  source's ref is ledger-dir-relative, not portable to a different
+  target ledger. `ubx promote` refuses both cases cleanly rather than
+  silently mishandling them; a follow-up to give every medium's
+  `document`/`dialogue` ref a portable convention is recommended, not
+  built this session.
