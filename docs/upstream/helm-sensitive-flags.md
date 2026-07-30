@@ -66,7 +66,7 @@ their output (a Secret, a ConfigMap, a startup script, ...), after
   - `metadata[0].values` — the resolved values JSON, e.g.
     `"{\"dbPassword\":\"hunter2\"}"`.
 
-We found this while building [`ubx`](https://github.com/Ubiquex/ubiquex-cli),
+We found this while building [`ubx`](https://github.com/Ubiquex/ubiquex),
 a tool that reads Terraform providers' own `Sensitive` schema flags to
 decide what never to persist to its own storage. Because `manifest`/
 `metadata.values`/`metadata.notes` aren't flagged, our first

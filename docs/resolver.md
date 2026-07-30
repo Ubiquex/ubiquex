@@ -47,7 +47,7 @@ confirmed empirically (`grep`, not guessed): no typechecker, no graph, no
 algorithms live in a **separate** repo, `/Users/roozbeh/Ubiquex/ubx`
 (`internal/xcl/typechecker`, `internal/xcl/ir`, `internal/xcl/scope`,
 `internal/xcl/crossstack`, `internal/xcl/workspace`) — a different,
-Pulumi-targeting compiler product, not `ubiquex-cli` and not `xcl`. This
+Pulumi-targeting compiler product, not `ubiquex` and not `xcl`. This
 document lifts rules from *that* repo. Worth stating plainly since the
 docs pointed at the wrong one by name.
 

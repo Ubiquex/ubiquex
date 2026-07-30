@@ -1,4 +1,4 @@
-# Architecture — ubiquex-cli (ubx v2)
+# Architecture — ubiquex (ubx v2)
 
 ## Thesis
 

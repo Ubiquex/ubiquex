@@ -22,7 +22,7 @@
 > codegen) and the TypeScript-specific design half of UBI-34 (`@ubx/sdk`,
 > first language to ship). Two hard constraints came pre-decided from the
 > ticket's own design room (Pulumi case-study comments) and are not
-> relitigated here: the **monorepo** (`sdk/` inside `ubiquex-cli`, all
+> relitigated here: the **monorepo** (`sdk/` inside `ubiquex`, all
 > languages, one CI) and **codegen'd bindings are generated locally,
 > never published** (`ubx sdk gen` runs against the config-pinned
 > provider version on the user's own machine; only the tiny `@ubx/sdk`

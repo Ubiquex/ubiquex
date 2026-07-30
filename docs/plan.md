@@ -2082,6 +2082,45 @@
   `core.DoubleRun` carried the full determinism guarantee in every case.
   See STATE.md and docs/sdk.md's own "The Python evaluator: decided
   empirically" section for the full account.
+- 2026-07-30 -- UBI-52 + UBI-53 session 1 (source-tree cleanup + repo
+  rename, paired so import paths churn once): full tree audit first
+  (`docs/source-tree.md`, new) -- both founder-flagged renames confirmed
+  real (`tfstate/` -> `stateimport/`, `tfwrite/` -> `writeback/`, the
+  latter matching the already-existing `ubx writeback` verb one-to-one),
+  the opaque `claude-501/` directory found to be an untracked, never-
+  committed stray artifact (deleted, not renamed), a real naming
+  inconsistency found during the audit itself (`sdkeval`/`goeval`/
+  `pyeval` -- only two of three named their language; `sdkeval` ->
+  `tseval` for consistency). Two real tensions recorded honestly, not
+  silently resolved: `sdk/go`'s own already-shipped module path left
+  alone (UBI-53's original sequencing note is now stale), the lookup-
+  hint tables still not consolidated (now four copies, not three --
+  recommending a dedicated ticket). Combined mechanical pass: `git mv`
+  + one import-sweep covering both the internal renames and the module
+  path change (`github.com/ubiquex/ubiquex-cli` ->
+  `github.com/ubiquex/ubiquex`) together. **A real bug caught by
+  testing, not assumed clean from build+vet alone**: the sed sweep
+  corrupted the embedded raw protobuf descriptor byte-blob inside
+  `provider/tfplugin{5,6}/*.pb.go` (a length-prefixed binary encoding
+  disguised as a Go string literal) -- panicked at package `init()`
+  only, invisible to `go build`/`go vet`; fixed by reverting exactly
+  those two generated files, updating their `.proto` sources normally.
+  One real hashed-content consequence, found by checking not assumed
+  (this arc's own "ledger integrity" check): `payments.go`'s own import
+  line change altered its real content hash, requiring
+  `golden/payments_go.json` regeneration (verified independently via
+  `shasum`, not just trusted from a failing test's own output) -- no
+  other fixture anywhere in the repo affected, checked directly.
+  `go build/vet/test ./...` green, `gofmt -l .` clean, a real `ubx
+  verify` run against a real hermetic ledger confirmed chain integrity.
+  Every non-Go reference swept in both repos (`ubiquex-docs`' own
+  `CLAUDE.md`, `docs.json`, install instructions, every cross-repo link
+  -- `mint validate`/`mint broken-links` both clean); historical
+  narrative in `STATE.md`/changelog entries in both repos deliberately
+  left untouched, matching this project's own standing practice. GitHub-
+  side rename and local checkout directory rename are founder actions,
+  not performed by this session. See docs/source-tree.md and STATE.md
+  for the full account.
 
 ## Strategy
 
@@ -4027,7 +4066,7 @@ Designed 2026-07-28, session 1, docs-first, no code — docs/sdk.md (new)
 is the full design; docs/architecture.md gained a matching cross-linking
 headline section. Two hard constraints came pre-decided from the
 ticket's own design room and were not relitigated: the monorepo (`sdk/`
-inside `ubiquex-cli`, every language, one CI — golden conformance fixtures
+inside `ubiquex`, every language, one CI — golden conformance fixtures
 are the shared spec, syncing them across repos would be misery) and
 codegen'd bindings generated locally by `ubx sdk gen`, never published
 (only the tiny `@ubx/sdk` runtime ever ships to npm — Pulumi's own
@@ -4533,6 +4572,117 @@ unmodified `sdk/codegen/ir` model needed zero changes across any of the
 three per-language templates, and `core.DoubleRun` carried the full
 determinism guarantee in every case, needing a language-level guard
 layer in exactly one case (TS) out of three.
+
+### Source-tree cleanup + repo rename (UBI-52 + UBI-53)
+
+Session 1, audit-first, paired deliberately so import paths churn once,
+not twice (UBI-53's own stated reason for sequencing the two together).
+Full audit table + verdicts, real findings, and the naming convention:
+`docs/source-tree.md` (new). Naming convention also recorded in
+CLAUDE.md's own "Code conventions" section.
+
+**Founder-flagged, both confirmed real**: `tfstate/` → `stateimport/`
+(the package's own role is "import identity to bootstrap onboarding,"
+not "a Terraform state file parser" — `onboarding/` rejected as a name
+since `guides/cloud-discovery.mdx` already established "onboarding" as
+the user-facing feature name for TWO independent mechanisms, tfstate-
+and discovery-based; naming only the tfstate-specific package
+`onboarding/` would wrongly claim the whole concept). `tfwrite/` →
+`writeback/` (implements the already-existing `ubx writeback` verb
+one-to-one — the new name isn't invented, it's the name the package's
+own caller already uses). The opaque directory: `claude-501/` at the
+repo root, found by direct inspection to be **untracked** (`git log
+--all` returns nothing) — an empty stray scratch-path artifact from an
+earlier session, never real. Deleted, not renamed.
+
+**A real inconsistency found during the audit, not named in either
+ticket**: `sdkeval`/`goeval`/`pyeval` — only two of three evaluator
+package names encode which language they evaluate. `sdkeval` was named
+when it was the only one (UBI-34, before Go/Python existed); renamed to
+`tseval/` for the same "consistent family" reasoning the founder-flagged
+renames use, at near-zero marginal cost since the mechanical tooling
+already exists for the other three.
+
+**Two real tensions recorded honestly, not silently resolved**:
+`sdk/go`'s own module path (`github.com/ubiquex/ubx-sdk-go`) was
+deliberately NOT renamed to nest under the new `ubiquex` repo path —
+UBI-53's own original sequencing note (written before UBI-35 existed)
+is now stale; the module already shipped, tested, documented, real.
+The lookup-hint tables (UBI-45's own finding) are STILL not
+consolidated — now four separately-maintained copies, not three (a
+fourth, `discovery/tiers.go`'s own `tierTable`, was added in UBI-45
+session 2) — deliberately deferred again, this arc's own scope being
+naming/structure, not a cross-cutting data-model consolidation; a
+dedicated Linear ticket recommended rather than letting a fifth copy
+appear silently.
+
+**The mechanical pass, combined, same session**: `git mv` for all four
+renames, `go.mod`'s module line `github.com/ubiquex/ubiquex-cli` →
+`github.com/ubiquex/ubiquex`, one import-path sweep covering both the
+internal renames and the module path change together. **A real bug,
+found by testing, not assumed away**: the sed sweep (correctly scoped to
+`*.go` files) accidentally corrupted `provider/tfplugin{5,6}/*.pb.go`'s
+own embedded raw protobuf descriptor byte-blob — a length-prefixed
+binary encoding disguised as an ordinary Go string literal (the
+generated code's own `go_package` metadata, textually containing the
+old module path) — text-substituting inside it changed the string's
+byte length without updating the length-prefix bytes encoded earlier in
+the same blob, corrupting the binary format and panicking at package
+`init()` (`slice bounds out of range`) the moment `go test` first
+imported the `provider` package. Caught immediately by running the real
+test suite, not assumed clean from a successful `go build`+`go vet`
+alone (build/vet never execute package `init()`, so neither would have
+caught this). Fixed by reverting exactly those two generated files
+(their own embedded metadata is functionally inert — Go's own import
+resolution never reads it — and regenerating them from the real
+upstream `.proto` files is out of this session's own scope); the
+`.proto` **source** files (human-maintained, not a binary blob) had
+their own `go_package` option updated normally, for whichever future
+session regenerates the bindings.
+
+**The one real hashed-content consequence, found by checking, not
+assumed** — this arc's own version of UBI-53's own "ledger integrity"
+check: `sdk/conformance/programs/go/payments.go` imports its own
+sibling `generated` package via the full module path; the import line
+changing changed the file's own real bytes, which changed its own real
+SHA-256 content hash, which is exactly what `golden/payments_go.json`'s
+own `intent.sources[0].content_hash` field freezes. Regenerated against
+the real post-rename file (verified independently via `shasum -a 256`
+before writing the new value in, not just trusted from the failing
+test's own "got" output) — the same way the original fixture was made:
+run the real evaluator, capture the real output, never hand-computed.
+Checked directly, not assumed: no other golden/ledger/proposal fixture
+anywhere in the repo references the module path in a way that reaches
+hashed content (grepped every `.json` fixture and every SDK program
+under `sdk/`, `cli/testdata/`, `goeval/testdata/`, `pyeval/testdata/`
+for the literal string) — `payments.json`/`payments_py.json` unaffected
+(TS/Python programs don't import Go packages).
+
+`go build/vet/test ./...` green, `gofmt -l .` clean, `sdk/go`'s own
+separate module still builds unaffected, a real `ubx verify` run
+against a real (fakeprovider-backed, hermetic) ledger confirmed chain
+integrity intact post-rename. Every non-Go reference swept: `CLAUDE.md`
+(plus its own new naming-convention paragraph), `README.md`,
+`.goreleaser.yaml` (ldflags + GitHub release repo name), `docs/*.md`
+(a careful pass distinguishing *historical* narrative referencing the
+repo's real name at the time — left untouched, matching this project's
+own standing practice for `STATE.md`/changelog entries — from *live*
+design statements describing an ongoing, still-true structural fact,
+which were updated), and `ubiquex-docs` (its own `CLAUDE.md`, `docs.json`
+navbar link, `getting-started/installation.mdx`'s real clone/download
+commands, every cross-repo link and prose mention across `cli/`,
+`guides/`, `concepts/`, `contribution/` — `mint validate`/`mint
+broken-links` both clean; `ubiquex-docs`' own `STATE.md` left untouched
+for the identical historical-record reason).
+
+**Founder action, not performed by this session**: the GitHub-side
+rename (Settings → repository name) and the local checkout directory
+rename (`~/Ubiquex/ubiquex-cli` → `~/Ubiquex/ubiquex`) — this session
+runs from inside that very directory and cannot safely rename its own
+containing directory mid-session. All code-side work is complete and
+green under the CURRENT (pre-rename) remote URL; the git remote origin
+URL update and both tickets' closing happen once the founder confirms
+the GitHub-side rename is done.
 
 ### Diagram medium: D2 only (UBI-47) — closed
 

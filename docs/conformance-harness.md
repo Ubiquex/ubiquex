@@ -765,7 +765,7 @@ what changed); how a future `ubx status --drift` (or similar) consumer
 should actually PRESENT an `undriftable`-classified type to a user
 (this document designs the classification, not its own downstream UX);
 and whether/how the generated registry's own published output should
-be surfaced anywhere user-facing versus staying `ubiquex-cli`-internal
+be surfaced anywhere user-facing versus staying `ubiquex`-internal
 — checked this session (nothing in `cli/lookup.mdx` or similar was
 promoted, since `Candidate`-tier machine findings aren't yet reliable
 enough for user-facing claims — the existing hand-verified/unverified
