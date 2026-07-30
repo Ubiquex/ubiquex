@@ -4,6 +4,207 @@
 
 ## Current phase
 
+**UBI-36 (2026-07-30), session 1: the Python SDK, third and final
+language under UBI-33's multi-language contract — CLOSING. UBI-36 was
+Backlog/"demand-gated" ("unpark trigger: real user demand named, not
+speculative"); proceeded on this session's own explicit instruction,
+which is itself the demand signal — recorded honestly, not silently
+overridden. Both UBI-36 and UBI-33 (the umbrella contract) are now
+closed in Linear.**
+
+**The evaluator decision, made empirically FIRST per house standard,
+reversed its own expected outcome.** Two real candidates run for real:
+subprocess restriction retargeted from the Go arc's own `sandbox-exec`/
+`bwrap` wrappers at CPython (expected to win, "now that UBI-35 built the
+machinery"), and WASI (CPython compiled to WebAssembly, run under
+`wasmtime` — the ticket's own "maturity check" candidate). **WASI won,
+decisively**:
+
+- **Subprocess + `sandbox-exec` retargeted at CPython**: real, working,
+  but needed a genuinely new fix the Go probe never needed —
+  `(allow file-read-metadata)`, unscoped, because Python's own startup
+  chases several real symlink hops to compute `sys.executable`/
+  `sys.prefix` (a static Go binary does essentially none of this). Once
+  fixed: file/network/`pip` import all cleanly blocked (Homebrew keeps
+  stdlib and site-packages at genuinely different top-level paths — deny
+  one, allow the other, and `pip` itself is unreachable by construction,
+  not by a rule naming it). `python3 -I` (isolated mode) closes the
+  `PYTHONPATH` half, but as a *language flag*, a second, independent
+  layer this candidate needs that Go's own answer never did. Every one
+  of these guarantees is a **policy that could be gotten wrong** — as
+  the missing-metadata gap itself demonstrated, live, mid-session.
+- **WASI via `wasmtime`**: a real, current, version-matched prebuilt
+  CPython-WASI build exists today (`brettcannon/cpython-wasi-build`, a
+  real CPython core developer's own release channel, `v3.14.6`,
+  byte-matching this session's own installed Python) — downloaded and
+  run for real. Baseline (zero grants): can't even find its own stdlib
+  (`ModuleNotFoundError: encodings`) — confirms **zero ambient
+  filesystem access of any kind** by default. Granting exactly two
+  directories (stdlib, program dir) is enough to run real programs
+  correctly (`json`/`dataclasses`/`typing`/`hashlib`/`enum` all work,
+  ~220ms including WASM startup). Against that minimal grant: file read/
+  write blocked with `ENOENT` (deny by nonexistence, not `EPERM`), env
+  vars entirely absent unless explicitly passed via `--env` (wasmtime
+  forwards zero host env by default), network **absent as a WASI
+  capability** (`_socket` has no `getaddrinfo`; a raw numeric-IP
+  `connect()` fails with `Not supported`), subprocess spawning
+  **absent as a WASI capability** (`wasi does not support processes` —
+  not a policy, a missing capability), `pip` unreachable (site-packages
+  never preopened), `os.listdir("/")` fails (no root filesystem view
+  exists at all). `PYTHONPATH` checked directly, not assumed closed for
+  free: pointing it at a directory the evaluator itself never preopens
+  is harmless regardless of what the program sets it to — the real
+  guarantee is "never preopen beyond what's needed," not a language
+  flag. **Genuinely cross-platform, verified**: the identical
+  `python.wasm` artifact + identical `wasmtime run` invocation, run on
+  this session's own macOS host AND inside a real Ubuntu 24.04 Linux
+  container (a separately-installed Linux `wasmtime` binary, same
+  version) — byte-identical probe output on both. One mechanism, not
+  Go's own two platform-specific ones.
+
+**`PYTHONHASHSEED`, probed explicitly as instructed.** `set`/
+`frozenset` iteration order is genuinely randomized per process by
+default (three runs, three different orders, confirmed on both native
+CPython and under WASI identically); `PYTHONHASHSEED=0` pins it (three
+runs, byte-identical, both places). The precise, real scope: plain
+`dict` iteration is insertion-order per the language spec since 3.7,
+*unaffected* regardless of hash seed — confirmed stable across every
+run. The evaluator pins `PYTHONHASHSEED=0` unconditionally regardless,
+`core.DoubleRun` as the backstop for everything else (`time.time_ns()`
+confirmed live to be caught by DoubleRun, the same two-layer shape Go's
+own `time.Now()` finding established).
+
+**A real implementation-time bug, found and fixed, recorded honestly**:
+building `pyeval`, a WASI mount that *looked* like it worked (the
+sandboxed program printed a correct-looking `intent/v1` document) turned
+out not to be testing what it claimed. A nested guest path
+(`--dir <host>/ubx_sdk::/ubxsdk/ubx_sdk`, no separate preopen for
+`/ubxsdk` itself) was never actually independently listable
+(`os.listdir("/ubxsdk")` raised `FileNotFoundError`) — the "passing"
+smoke test had resolved `import ubx_sdk` by accident, via the test
+script's own directory (which happened to also contain a copy of the
+package for unrelated reasons), not via the intended mount at all.
+Found by checking `ubx_sdk.__file__` explicitly rather than trusting
+non-error output meant success. Fix: **one top-level preopen per real
+directory tree** — mount the runtime source's own parent directory
+directly at `/ubxsdk` (a single top-level preopen), never nested under
+a second, ungranted parent segment. `pyeval`'s own real Go test suite
+now asserts on resolved content (`ubx_sdk.__file__`, actual output),
+not just exit code, so this class of regression is caught directly.
+
+**Findings written up in `docs/sdk.md`'s new "The Python evaluator:
+decided empirically" section** (full probe transcripts, exact commands,
+exact error strings) and its own "A real implementation-time bug"
+subsection, before/alongside the implementation — matching this
+project's "record the real answer, then build against it" discipline.
+
+**Built the same session, all real, all tested:**
+
+- **`sdk/py/ubx_sdk/`** (new) — `Stack`/`Resource`/`Secret`/`Cross`/
+  `Intent`/`Run` mirroring TS/Go's own semantics. `Computed` via
+  `__getattr__` — Python's own native attribute-customization hook (used
+  by countless dot-dict/ORM/mock libraries), not an imitation of TS's
+  Proxy trap; coercion blocked via Python's own actual implicit-
+  coercion protocol (`__str__`/`__bool__`/`__int__`/`__float__`/
+  `__index__`/`__iter__`/`__len__`), not a literal port of JS's trap
+  list — `__repr__` deliberately left un-blocked (never implicitly
+  invoked by concatenation/arithmetic the way JS's `toString` is;
+  blocking it would only hurt debuggability for no safety gain). Config
+  values serialized via `dataclasses.fields()` introspection — Python is
+  natively introspectable, so no `reflect`-equivalent library is needed
+  at all, a real simplification over Go's own runtime. 12 new hermetic
+  tests (stdlib `unittest`, zero extra dependencies, consistent with the
+  sandboxed evaluator's own "no pip" posture), all passing, plus a live
+  re-run inside the real WASI sandbox during development.
+- **`sdk/codegen/templates/py`** (new) — a Python template on the *same,
+  unmodified* `sdk/codegen/ir` model. The smallest field-naming problem
+  of any of the three languages: every real provider wire name this
+  project has generated against is already lowercase-with-underscores —
+  already a valid Python identifier verbatim, unlike TS's camelCase or
+  Go's PascalCase conversion. The one real edge case: a wire name
+  colliding with a Python keyword, closed with a trailing underscore
+  (the same convention generated protobuf/thrift bindings use). Renders
+  `@dataclass` Config classes, no `Attrs` type (mirrors Go's own
+  "Computed has no static per-field shape" simplification). 8 new tests
+  mirroring the TS/Go template suites one-for-one; generated output
+  imported and ran correctly on the first real compile-check (no
+  ordering bug this time, unlike Go's own `import`-after-`var` mistake —
+  Python has no equivalent ordering constraint).
+- **`pyeval/`** (new, top-level package, mirroring `sdkeval`/`goeval`'s
+  own shape) — structurally closer to `sdkeval` than `goeval`: Python is
+  interpreted, so there's no build/run split to exploit; a fresh
+  `wasmtime` subprocess re-interprets the program's own source on every
+  `core.DoubleRun` call. `wasi_assets.go` acquires and caches the pinned
+  CPython-WASI build (~42MB) under `~/.ubx/python-wasi/<version>/` on
+  first use — the same `provider.Acquire`-style "fetch a pinned artifact
+  once, reuse the cache after" precedent this project already trusts,
+  chosen over embedding into the `ubx` binary specifically to avoid
+  growing every install by 42MB regardless of whether its own user ever
+  touches Python SDK programs. `runner.go` preopens exactly three
+  top-level directories (stdlib, the embedded `ubx_sdk` runtime source,
+  the program's own directory) and passes zero other env except
+  `PYTHONHASHSEED=0`/`PYTHONPATH` — deliberately NOT `PYTHONHOME` (found
+  empirically to break stdlib resolution if set explicitly, the opposite
+  of every other language's evaluator in this arc). `provenance.go`/
+  `validate.go` duplicate `sdkeval`'s/`goeval`'s own small, language-
+  agnostic logic — the THIRD copy, now the real, named trigger to
+  extract a shared package as a deliberate, deferred follow-up. 8 new
+  hermetic real-subprocess tests (happy path, determinism, fs/net
+  sandbox escape as deny-by-nonexistence, env-absent-not-merely-denied,
+  exception mid-evaluation, missing entry file) — all passing for real.
+- **`cli/resolve.go`**: `--from-code` extension dispatch gained `.py` →
+  `pyeval` (a third `case` in `evaluateSDKProgram`'s own `switch`). New
+  end-to-end test, `TestResolveFromCode_Py_SimpleCreate`, mirrors the
+  TS/Go ones exactly: real WASI-sandboxed run, real resolve, real
+  accept, real `ubx why` showing the Python-authored document
+  provenance.
+- **`cli/sdk.go`**: `ubx sdk gen` gained `--lang py`. Real bindings
+  generated against the real `hashicorp/aws@6.54.0` schema (1,682 types,
+  matching the TS/Go sessions' own real figure) — confirmed to actually
+  import and construct against `sdk/py/ubx_sdk` via a real
+  `importlib.import_module` compile-check in the test, not string
+  assertions alone. Python-specific filename convention: underscores,
+  not TS/Go's hyphenated one (`import hashicorp-aws` is a Python
+  `SyntaxError`).
+- **`sdk/conformance/programs/py/payments.py`** (new, independently
+  authored, not a transliteration) — real, live, WASI-sandboxed,
+  `core.DoubleRun`-verified output matches the TS/Go/md golden's own
+  `resources`/`stack`/`intent.summary` byte-for-byte after
+  canonicalization. Its own separate golden file
+  (`golden/payments_py.json`), same structural reason as Go's own:
+  `payments.py` is a different real file with a different real content
+  hash. `TestPaymentsGoldenCase_Py` passes for real alongside
+  `TestPaymentsGoldenCase_TS`/`_Go` — **all three languages, one test
+  file, one shared spec, proven together.**
+
+`go build/vet/test`/`gofmt -l .` clean across the whole repo (`sdk/py`
+has no `go.mod` of its own — pure Python, no nested-module ceremony
+needed at all, unlike `sdk/go`); zero regressions, full existing suite
+re-run and passing.
+
+`ubiquex-docs` updated the SAME session: `cli/resolve.mdx` gained a full
+"Authoring in Python" section (real transcripts); `cli/sdk-gen.mdx`
+gained `--lang py` and a real "Example: Python" section;
+`sdk/index.mdx` restructured into "## TypeScript"/"## Go"/"## Python"
+top-level sections. `mint validate`/`mint broken-links` both clean.
+
+**UBI-36 closed in Linear with a closing comment. UBI-33 (the
+multi-language contract umbrella) closed alongside it, with a full
+contract-retrospective comment**: the golden-`intent/v1`-fixtures-as-
+spec contract held across three languages with three structurally
+different evaluator shapes (a sandboxed interpreter for TS, a compiled-
+program cheat for Go, a WASM sandbox for Python); the shared, unmodified
+`sdk/codegen/ir` model needed zero changes across any of the three
+per-language templates; `core.DoubleRun` carried the full determinism
+guarantee in every case, needing a language-level guard layer in
+exactly one case (TS) out of three.
+
+See docs/plan.md's own "SDK program: Python, third and final language
+(UBI-36) — UBI-33 closed" subsection and docs/sdk.md's own "The Python
+evaluator: decided empirically" section for the full account.
+
+## Current phase (previous)
+
 **UBI-35 (2026-07-30), session 1: the Go SDK, second language under
 UBI-33's multi-language contract. New arc, not a closing session — UBI-33
 stays open (Python/UBI-36 still unstarted). The compiled-program
