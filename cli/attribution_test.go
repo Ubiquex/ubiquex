@@ -61,7 +61,7 @@ func TestScan_AttributionDegradesGracefully_NoCredentials(t *testing.T) {
 		"--out", filepath.Join(ledgerDir, "drift.json"),
 	)
 	requireExitCode(t, err, 1, driftOut)
-	if !strings.Contains(driftOut, "drifted:") {
+	if !strings.Contains(driftOut, "Drift found") {
 		t.Fatalf("expected a 'drifted' classification, got: %s", driftOut)
 	}
 

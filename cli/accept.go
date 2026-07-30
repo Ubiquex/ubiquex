@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -74,14 +75,9 @@ func newAcceptCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
 			}
 
-			data, err := os.ReadFile(args[0])
+			p, err := readProposalArg(ledgerDir, args[0])
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
-			}
-
-			var p core.Proposal
-			if err := json.Unmarshal(data, &p); err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("parse proposal: %w", err)}
 			}
 
 			// docs/schema.md's "Amendment: destroys" -- this project's first
@@ -90,7 +86,7 @@ func newAcceptCmd() *cobra.Command {
 			// re-verification work): a human must explicitly acknowledge a
 			// destructive proposal by name, every time, not just once
 			// implicitly by running `ubx accept` at all.
-			if err := checkDestroysConfirmed(&p, confirmDestroys); err != nil {
+			if err := checkDestroysConfirmed(p, confirmDestroys); err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 			}
 
@@ -125,7 +121,7 @@ func newAcceptCmd() *cobra.Command {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 				}
 				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider, salt, reverifySource), addr, reverifySource,
-					json.RawMessage(providerConfig), &p); err != nil {
+					json.RawMessage(providerConfig), p); err != nil {
 					return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 				}
 			}
@@ -136,11 +132,11 @@ func newAcceptCmd() *cobra.Command {
 			// real provider round trip, checking whether a neighbor ledger's
 			// head has moved is a free, local filesystem read, so there's no
 			// cost/latency reason to make an operator ask for it explicitly.
-			if err := resolver.VerifyPins(&p); err != nil {
+			if err := resolver.VerifyPins(p); err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 			}
 
-			accepted, err := core.Accept(ledger, &p)
+			accepted, err := core.Accept(ledger, p)
 			if err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: err}
 			}
@@ -188,6 +184,47 @@ func checkDestroysConfirmed(p *core.Proposal, confirmed bool) error {
 		return ErrDestroysNotConfirmed
 	}
 	return nil
+}
+
+// readProposalArg is UBI-49 finding #6's own fix for accept's local-file
+// path: ref is tried as a file path first (unchanged for hand-authored
+// drafts -- the only thing this command ever supported before this
+// session), and only on a not-found does it fall back to the plan store
+// (resolvePlanHash, the same short-hash-aware lookup ship.go's own
+// acceptPlanInline fallback already uses) -- the hash `ubx plan`/`ubx
+// scan --propose`/`ubx terminate` printed as their own "next: ubx ship
+// <hash>" handoff is just as acceptable to `ubx accept` directly. A plan
+// file found this way gets the identical hash-matches-filename integrity
+// check acceptPlanInline already performs. If neither interpretation
+// finds anything, the error names both, per docs/cli-output-spec.md
+// principle 6 (teaching errors enumerate all modes).
+func readProposalArg(ledgerDir, ref string) (*core.Proposal, error) {
+	data, fileErr := os.ReadFile(ref)
+	if fileErr == nil {
+		var p core.Proposal
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, fmt.Errorf("parse proposal: %w", err)
+		}
+		return &p, nil
+	}
+	if !os.IsNotExist(fileErr) {
+		return nil, fileErr
+	}
+
+	fullHash, p, planErr := resolvePlanHash(ledgerDir, ref)
+	if planErr != nil {
+		return nil, fmt.Errorf("no such file %q, and no matching plan in %s: %w -- "+
+			"pass a path to a hand-authored proposal file, or a hash printed by `ubx plan`/`ubx scan --propose`/`ubx terminate`",
+			ref, filepath.Join(ledgerDir, ".ubx", "plans"), planErr)
+	}
+	computedHash, err := core.Hash(p)
+	if err != nil {
+		return nil, err
+	}
+	if computedHash != fullHash {
+		return nil, fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, fullHash), computedHash, fullHash)
+	}
+	return p, nil
 }
 
 // acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier: derive

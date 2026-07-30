@@ -157,7 +157,7 @@ func newScanCmd() *cobra.Command {
 			}
 
 			if stack == "" || resourceType == "" || resourceName == "" {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding)")}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding, or --discover for cloud-side discovery)")}
 			}
 			if surfaceAs != "" && propose == "revert" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
@@ -168,6 +168,41 @@ func newScanCmd() *cobra.Command {
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
+
+			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+			}
+			defer closeLedger()
+
+			// UBI-49 finding #4: single-resource scan used to resolve a
+			// provider ONLY through the legacy singular --provider/--source
+			// flags/[provider] config, even on a stack whose real authority
+			// is a [providers] table (the same table --all/--discover/ship/
+			// status already honor) -- unreadable there without falling
+			// back to flags the stack doesn't otherwise need. When
+			// cfg.Providers is declared, infer which source owns
+			// resourceType (a real, free schema check -- see
+			// inferProviderForType) instead of the legacy path.
+			if len(cfg.Providers) > 0 {
+				warnIfLegacyProviderFlagsGiven(cmd)
+				inferredSource, inferredVersion, ierr := inferProviderForType(ctx, cfg.Providers, resourceType)
+				if ierr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, ierr)}
+				}
+				source = inferredSource
+				providerVersion = inferredVersion
+				providerPath = ""
+				if !cmd.Flags().Changed("provider-config") {
+					if pc, ok := cfg.ProviderConfigs[inferredSource]; ok {
+						b, merr := json.Marshal(pc)
+						if merr != nil {
+							return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: provider_configs: marshal %q: %w", addr, inferredSource, merr)}
+						}
+						providerConfig = string(b)
+					}
+				}
+			}
 
 			path, checksum, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
 			if err != nil {
@@ -180,20 +215,30 @@ func newScanCmd() *cobra.Command {
 			}
 			defer client.Close()
 
-			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
-			}
-			defer closeLedger()
-
 			salt, err := ledger.Salt()
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 			}
+
+			// UBI-49 finding #5: an already-tracked address's own recorded
+			// lookup (the same source status.go's fleet walk already reads,
+			// core.Ledger.LastLookup) is consulted first -- --lookup only
+			// wins if given explicitly. Fixes the asymmetry where
+			// status --drift could find a URL-identified resource's drift
+			// but per-resource scan went blind on the exact same address.
+			currentState := json.RawMessage(lookup)
+			if !cmd.Flags().Changed("lookup") {
+				if recorded, found, lerr := ledger.LastLookup(addr); lerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, lerr)}
+				} else if found {
+					currentState = recorded
+				}
+			}
+
 			res, err := core.RunScan(ctx, newStateReader(client.Provider, salt, source), ledger, core.ScanRequest{
 				Address:          addr,
 				ProviderConfig:   json.RawMessage(providerConfig),
-				CurrentState:     json.RawMessage(lookup),
+				CurrentState:     currentState,
 				ProviderChecksum: checksum,
 				ProviderSource:   source,
 			})
@@ -312,21 +357,44 @@ func newScanCmd() *cobra.Command {
 				return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan %s: %s, %q proposal(s) generated (see above)", addr, kindLabel, propose)}
 			}
 
-			for _, p := range proposals {
-				fmt.Fprintf(out2, "%s: %s (%s) -- generated a %q proposal\n", kindLabel, addr, res.ObservedHash, p.Kind)
+			// UBI-49 finding #6: scan --propose used to print the full
+			// proposal JSON to the terminal and save nothing -- the only
+			// hash visible (res.ObservedHash) wasn't even one `ubx accept`
+			// could use, so acting on drift meant hand-copying JSON into a
+			// file. Every generated proposal is now saved to the plan
+			// store (the same .ubx/plans/ `ubx plan` already writes to)
+			// and reported as a card naming its own real, ship-able hash --
+			// `ubx ship`'s inline accept applies identically here as it
+			// does to a plan's own hash.
+			header := "Drift found"
+			if kindLabel == "new" {
+				header = "New resource found"
+			}
+			fmt.Fprintf(out2, "%s  %s\n\n", header, addr)
 
+			hashes := make([]string, 0, len(proposals))
+			for _, p := range proposals {
 				b, err := json.MarshalIndent(p, "", "  ")
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: marshal proposal: %w", addr, err)}
 				}
-				if out == "" {
-					fmt.Fprintln(out2, string(b))
-					continue
-				}
-				if err := os.WriteFile(out, b, 0o644); err != nil {
+				hash, err := core.Hash(p)
+				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
+				if _, err := writePlanFile(ledgerDir, hash, b); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+				}
+				if out != "" {
+					if err := os.WriteFile(out, b, 0o644); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+					}
+				}
+				hashes = append(hashes, hash)
+				fmt.Fprintf(out2, "  %-14s%s     +%d create(s) ~%d modify(ies) -%d destroy(s)\n",
+					p.Kind, shortHash(hash), p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
 			}
+			fmt.Fprintf(out2, "\n  saved to plan store            next: %s\n", nextShipHint(hashes))
 			// A proposal was generated -- new resource or drift -- an
 			// actionable finding, not a failure (UBI-20 exit-code contract).
 			return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan %s: %s, %q proposal(s) generated (see above)", addr, kindLabel, propose)}
@@ -377,4 +445,22 @@ type scanJSON struct {
 	Outcome      string           `json:"outcome"` // "new" | "drifted" | "unchanged"
 	ObservedHash string           `json:"observed_hash"`
 	Proposals    []*core.Proposal `json:"proposals,omitempty"`
+}
+
+// nextShipHint renders scan --propose's own "next:" handoff (UBI-49
+// finding #6, docs/cli-output-spec.md principle 3): one hash names the
+// obvious next step directly; two (--propose both) name the primary
+// resolution first and the alternative parenthetically, since a human
+// still has to pick one -- there's no "obvious" default between adopting
+// drift and reverting it the way there is for a single generated
+// proposal.
+func nextShipHint(hashes []string) string {
+	switch len(hashes) {
+	case 1:
+		return fmt.Sprintf("ubx ship %s", shortHash(hashes[0]))
+	case 2:
+		return fmt.Sprintf("ubx ship %s  (or %s)", shortHash(hashes[0]), shortHash(hashes[1]))
+	default:
+		return "ubx ship <hash>"
+	}
 }

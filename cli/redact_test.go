@@ -58,7 +58,7 @@ func TestScan_RedactsSensitiveAttribute_AdoptionAndDriftBothDirections(t *testin
 		"--out", adoptPath,
 	)
 	requireExitCode(t, err, 1, scanOut)
-	if !strings.Contains(scanOut, "new:") {
+	if !strings.Contains(scanOut, "New resource found") {
 		t.Fatalf("expected a 'new' classification, got: %s", scanOut)
 	}
 	requireNoSecretMaterial(t, adoptPath, secretV1, secretV2)
@@ -100,7 +100,7 @@ func TestScan_RedactsSensitiveAttribute_AdoptionAndDriftBothDirections(t *testin
 		"--no-attribution",
 	)
 	requireExitCode(t, err, 1, scanOut3)
-	if !strings.Contains(scanOut3, "drifted:") {
+	if !strings.Contains(scanOut3, "Drift found") {
 		t.Fatalf("expected a 'drifted' classification when the secret rotates, got: %s", scanOut3)
 	}
 	requireNoSecretMaterial(t, driftPath, secretV1, secretV2)

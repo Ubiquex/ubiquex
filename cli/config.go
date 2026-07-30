@@ -226,6 +226,20 @@ func applyStackDefault(cmd *cobra.Command, stack *string, cfg *Config) {
 	}
 }
 
+// stackRequiredError is UBI-49 finding #2's teaching-error text: names
+// both ways to supply stack (the flag, the config key) and which config
+// file (if any) was actually consulted, so a caller whose config's own
+// `stack` didn't apply isn't left guessing why -- rather than the bare
+// "--stack is required" this project's own UBI-20 teaching-error
+// standard (principle 6, docs/cli-output-spec.md) says isn't enough.
+func stackRequiredError(verb string, files []string) error {
+	hint := "no .ubx/config.hcl found in the cascade"
+	if len(files) > 0 {
+		hint = "nearest config checked: " + files[0]
+	}
+	return fmt.Errorf("%s: --stack is required: pass --stack or set `stack = \"...\"` in .ubx/config.hcl (%s)", verb, hint)
+}
+
 // applyProviderDefaults fills providerPath/source/providerVersion from
 // cfg's [provider] table if neither --provider nor --source was
 // explicitly given -- the same mutual exclusivity the flags themselves

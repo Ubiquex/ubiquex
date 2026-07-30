@@ -124,7 +124,7 @@ func TestScanAcceptWhy(t *testing.T) {
 		"--out", filepath.Join(ledgerDir, "adopt.json"),
 	)
 	requireExitCode(t, err, 1, scanOut)
-	if !strings.Contains(scanOut, "new:") {
+	if !strings.Contains(scanOut, "New resource found") {
 		t.Fatalf("expected a 'new' classification, got: %s", scanOut)
 	}
 
@@ -157,7 +157,7 @@ func TestScanAcceptWhy(t *testing.T) {
 		"--no-attribution", // hermetic: never touch real AWS CloudTrail from this suite (see attribution_test.go for the gated live/fake-lookup coverage)
 	)
 	requireExitCode(t, err, 1, scanOut2)
-	if !strings.Contains(scanOut2, "drifted:") {
+	if !strings.Contains(scanOut2, "Drift found") {
 		t.Fatalf("expected a 'drifted' classification, got: %s", scanOut2)
 	}
 

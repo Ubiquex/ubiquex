@@ -1,10 +1,26 @@
 package cli
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// mustExtractShipHash pulls the FIRST hash named on scan --propose's own
+// "next: ubx ship <hash>" line -- the same handoff a human would copy,
+// used here to reach into the plan store the card's own hash names.
+var shipHashPattern = regexp.MustCompile(`next: ubx ship ([0-9a-f]+)`)
+
+func mustExtractShipHash(t *testing.T, out string) string {
+	t.Helper()
+	m := shipHashPattern.FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no \"next: ubx ship <hash>\" line found in: %s", out)
+	}
+	return m[1]
+}
 
 // adoptThenDrift runs scan (adopt) + accept, then scan again with a
 // different lookup to produce a drifted outcome -- the common setup every
@@ -45,53 +61,79 @@ func adoptThenDrift(t *testing.T, extraArgs ...string) (ledgerDir, scanOut strin
 	return ledgerDir, scanOut
 }
 
+// countProposalLines counts scan --propose's own card lines (UBI-49
+// finding #6) -- one per generated proposal, each ending in a
+// "+N create(s) ~N modify(ies) -N destroy(s)" blast-radius summary --
+// standing in for the old JSON dump's "generated a %q proposal" count.
+func countProposalLines(out string) int {
+	return strings.Count(out, "create(s) ~")
+}
+
 func TestScan_ProposeDefault_GeneratesDriftAdoptOnly(t *testing.T) {
-	_, out := adoptThenDrift(t)
-	if strings.Count(out, "generated a") != 1 {
+	ledgerDir, out := adoptThenDrift(t)
+	if countProposalLines(out) != 1 {
 		t.Fatalf("expected exactly one generated proposal by default, got: %s", out)
 	}
-	if !strings.Contains(out, `"drift_adopt"`) {
+	if !strings.Contains(out, "drift_adopt") {
 		t.Fatalf("expected a drift_adopt proposal, got: %s", out)
 	}
-	if strings.Contains(out, `"drift_revert"`) {
+	if strings.Contains(out, "drift_revert") {
 		t.Fatalf("default --propose must not generate a drift_revert, got: %s", out)
+	}
+
+	// The card's own hash must be a real, ship-able plan-store entry
+	// (finding #6's whole point) -- not just a printed label.
+	hash := mustExtractShipHash(t, out)
+	if _, _, err := resolvePlanHash(ledgerDir, hash); err != nil {
+		t.Fatalf("expected the card's own hash %s to resolve in the plan store: %v", hash, err)
 	}
 }
 
 func TestScan_ProposeRevert_GeneratesDriftRevertOnly(t *testing.T) {
-	_, out := adoptThenDrift(t, "--propose", "revert")
-	if strings.Count(out, "generated a") != 1 {
+	ledgerDir, out := adoptThenDrift(t, "--propose", "revert")
+	if countProposalLines(out) != 1 {
 		t.Fatalf("expected exactly one generated proposal, got: %s", out)
 	}
-	if !strings.Contains(out, `"drift_revert"`) {
+	if !strings.Contains(out, "drift_revert") {
 		t.Fatalf("expected a drift_revert proposal, got: %s", out)
 	}
-	if strings.Contains(out, `"drift_adopt"`) {
+	if strings.Contains(out, "drift_adopt") {
 		t.Fatalf("--propose revert must not generate a drift_adopt, got: %s", out)
 	}
+
+	hash := mustExtractShipHash(t, out)
+	_, p, err := resolvePlanHash(ledgerDir, hash)
+	if err != nil {
+		t.Fatalf("expected the card's own hash %s to resolve in the plan store: %v", hash, err)
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := string(data)
 	// before=observed(drifted)/after=ledger(restored), the reverse of
 	// drift_adopt's own convention.
-	if !strings.Contains(out, `"before": {`) || !strings.Contains(out, `"staging"`) {
-		t.Fatalf("expected before to carry the observed/drifted value, got: %s", out)
+	if !strings.Contains(saved, "staging") {
+		t.Fatalf("expected before to carry the observed/drifted value, got: %s", saved)
 	}
-	if !strings.Contains(out, `"prod"`) {
-		t.Fatalf("expected after to carry the ledger-recorded value, got: %s", out)
+	if !strings.Contains(saved, "prod") {
+		t.Fatalf("expected after to carry the ledger-recorded value, got: %s", saved)
 	}
 	// Real blast radius -- unlike drift_adopt's all-zero.
-	if !strings.Contains(out, `"modifies": 1`) {
-		t.Fatalf("expected a real (non-zero) blast_radius.modifies, got: %s", out)
+	if p.BlastRadius.Modifies != 1 {
+		t.Fatalf("expected a real (non-zero) blast_radius.modifies, got: %+v", p.BlastRadius)
 	}
 }
 
 func TestScan_ProposeBoth_GeneratesBothProposals(t *testing.T) {
 	_, out := adoptThenDrift(t, "--propose", "both")
-	if strings.Count(out, "generated a") != 2 {
+	if countProposalLines(out) != 2 {
 		t.Fatalf("expected exactly two generated proposals, got: %s", out)
 	}
-	if !strings.Contains(out, `"drift_adopt"`) {
+	if !strings.Contains(out, "drift_adopt") {
 		t.Fatalf("expected a drift_adopt proposal, got: %s", out)
 	}
-	if !strings.Contains(out, `"drift_revert"`) {
+	if !strings.Contains(out, "drift_revert") {
 		t.Fatalf("expected a drift_revert proposal, got: %s", out)
 	}
 }
@@ -161,10 +203,10 @@ func TestScan_ProposeHasNoEffectOnNewResource(t *testing.T) {
 		"--propose", "revert",
 	)
 	requireExitCode(t, err, 1, out)
-	if !strings.Contains(out, `"adoption"`) {
+	if !strings.Contains(out, "adoption") {
 		t.Fatalf("a never-seen resource must still generate an adoption proposal regardless of --propose, got: %s", out)
 	}
-	if strings.Count(out, "generated a") != 1 {
+	if countProposalLines(out) != 1 {
 		t.Fatalf("expected exactly one generated proposal, got: %s", out)
 	}
 }

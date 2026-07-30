@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -105,10 +107,11 @@ propose-time PR trailer hash, etc.).`,
 				return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram")}
 			}
 
-			cfg, err := LoadConfig(cmd.ErrOrStderr())
+			rc, err := LoadConfigResolved(cmd.ErrOrStderr())
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
+			cfg := rc.Config
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -116,12 +119,20 @@ propose-time PR trailer hash, etc.).`,
 			var intent resolver.IntentFile
 			switch {
 			case fromDoc != "":
+				applyStackDefault(cmd, &stack, cfg)
+				if stack == "" {
+					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-doc", rc.Files)}
+				}
 				draft, err := draftFromDoc(cmd, cfg, fromDoc, stack, timeout)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
 				}
 				intent = *draft
 			case fromDiagram != "":
+				applyStackDefault(cmd, &stack, cfg)
+				if stack == "" {
+					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-diagram", rc.Files)}
+				}
 				// draftFromDiagram already loads every declared provider
 				// once for diagram.Parse's own type-inference pass; the
 				// resolver.Resolve call below loads them again (schema-only,
@@ -279,4 +290,73 @@ func readPlanFile(ledgerDir, hash string) (*core.Proposal, error) {
 		return nil, fmt.Errorf("parse plan file: %w", err)
 	}
 	return &p, nil
+}
+
+// ErrPlanNotFound and ErrPlanAmbiguous are resolvePlanHash's own sentinel
+// outcomes (UBI-49 finding #6) -- distinct from the raw os.ReadFile error
+// planFilePath/readPlanFile's exact-hash callers already return, so a
+// caller like `ubx accept` can render a teaching error naming both "no
+// such file" and "no such plan" without string-matching an OS error.
+var (
+	ErrPlanNotFound  = errors.New("no matching plan in the plan store")
+	ErrPlanAmbiguous = errors.New("ambiguous plan hash prefix")
+)
+
+// resolvePlanHash resolves ref -- a full content hash, or any unique
+// prefix of one (docs/cli-output-spec.md principle 3, "short-form input
+// accepted wherever hashes are arguments") -- against the plan store at
+// ledgerDir/.ubx/plans/. The exact-hash case is a single stat+read, no
+// directory listing at all; a prefix falls back to scanning every file
+// there. Returns the plan's own real full hash alongside its parsed
+// proposal, since a caller (ship.go's acceptPlanInline, accept.go's own
+// fallback) needs the real hash for its own integrity check and for
+// whatever it records, not just whatever ref the user happened to type.
+func resolvePlanHash(ledgerDir, ref string) (fullHash string, p *core.Proposal, err error) {
+	if exact, err := readPlanFile(ledgerDir, ref); err == nil {
+		return ref, exact, nil
+	} else if !os.IsNotExist(err) {
+		return "", nil, err
+	}
+
+	dir := filepath.Join(ledgerDir, ".ubx", "plans")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("%s: %w", ref, ErrPlanNotFound)
+		}
+		return "", nil, err
+	}
+
+	var matches []string
+	for _, e := range entries {
+		name := strings.TrimSuffix(e.Name(), ".json")
+		if strings.HasPrefix(name, ref) {
+			matches = append(matches, name)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil, fmt.Errorf("%s: %w", ref, ErrPlanNotFound)
+	case 1:
+		p, err := readPlanFile(ledgerDir, matches[0])
+		if err != nil {
+			return "", nil, err
+		}
+		return matches[0], p, nil
+	default:
+		sort.Strings(matches)
+		return "", nil, fmt.Errorf("%s: %w (matches %s)", ref, ErrPlanAmbiguous, strings.Join(matches, ", "))
+	}
+}
+
+// shortHash is docs/cli-output-spec.md principle 3's own display
+// convention ("short hashes (12 chars) everywhere") -- purely cosmetic,
+// never used for lookup (resolvePlanHash accepts any prefix length, not
+// just this one).
+func shortHash(full string) string {
+	const shortLen = 12
+	if len(full) <= shortLen {
+		return full
+	}
+	return full[:shortLen]
 }

@@ -123,9 +123,14 @@ func newProposeCmd() *cobra.Command {
 // draftFromDoc, render the ambiguity content for a human to review, and
 // write the draft. Never resolves, never touches a ledger.
 func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout time.Duration) error {
-	cfg, err := LoadConfig(cmd.ErrOrStderr())
+	rc, err := LoadConfigResolved(cmd.ErrOrStderr())
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
+	}
+	cfg := rc.Config
+	applyStackDefault(cmd, &stack, cfg)
+	if stack == "" {
+		return &ExitCodeError{Code: 2, Err: stackRequiredError("propose --from-doc", rc.Files)}
 	}
 
 	draft, err := draftFromDoc(cmd, cfg, docPath, stack, timeout)
@@ -203,9 +208,14 @@ func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeou
 // --from-doc, not --from-code's one-step shape, because a diagram parse
 // can produce real, visible ambiguity that needs a review gate first.
 func runProposeFromDiagram(cmd *cobra.Command, diagramPath, stack, out, summary string, neighborLedgerFlags []string, timeout time.Duration) error {
-	cfg, err := LoadConfig(cmd.ErrOrStderr())
+	rc, err := LoadConfigResolved(cmd.ErrOrStderr())
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-diagram: %w", err)}
+	}
+	cfg := rc.Config
+	applyStackDefault(cmd, &stack, cfg)
+	if stack == "" {
+		return &ExitCodeError{Code: 2, Err: stackRequiredError("propose --from-diagram", rc.Files)}
 	}
 
 	draft, err := draftFromDiagram(cmd, cfg, diagramPath, stack, summary, neighborLedgerFlags, timeout)

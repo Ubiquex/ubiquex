@@ -4,6 +4,169 @@
 
 ## Current phase
 
+**UX-fix arc, session 1 (2026-07-30): correctness — UBI-49 findings #2-#7,
+built against the new `docs/cli-output-spec.md` — CLOSED.** First of a
+3-session arc the founder laid out from the first end-user test
+(2026-07-30): session 1 is correctness (this session), session 2 is
+consent + visuals (UBI-61/UBI-62), session 3 is `ubx init` writing
+runnable config (UBI-59) + docs re-capture. `docs/cli-output-spec.md`
+(new, founder-approved design-room doc) is now the authoritative visual
+spec for the whole arc — read before any of sessions 2/3.
+
+**Findings #2/#3 (stack-cascade misses).** `ubx plan --from-doc`/
+`--from-diagram` and `ubx propose --from-doc`/`--from-diagram` both
+called the shared `draftFromDoc`/`draftFromDiagram` (propose.go) without
+ever calling `applyStackDefault` first — config's own `stack` key was
+silently ignored, flag-required despite config supplying it. `ubx chat`
+had the same bug in a more direct form: it checked `stack == ""` BEFORE
+even loading config. Fixed at all 5 call sites (plan.go's two branches,
+propose.go's two RunE funcs, chat.go's runChat) — same one-line
+`applyStackDefault(cmd, &stack, cfg)` fix already used everywhere else.
+New `stackRequiredError(verb, files)` helper (cli/config.go) upgrades the
+bare "--stack is required" into finding #2's own teaching-error text,
+naming the config key and the nearest config file actually consulted
+(`rc.Files[0]` from `LoadConfigResolved`, which all 5 call sites now use
+instead of the bare `LoadConfig` wrapper). `scan`'s own missing-flags
+message (finding #3's second half) now names `--discover` alongside
+`--all` — it was previously the only mode omitted.
+
+**Finding #4 (scan's per-resource mode ignores the modern `providers`
+map).** `cli/scan.go`'s single-resource path always launched a provider
+via the legacy singular `--provider`/`--source` flags/`[provider]`
+config, never checking `cfg.Providers` the way `--all`/`--discover`/
+`ship`/`status` already do. New `inferProviderForType` (providerresolve.go):
+launches each declared source in turn (sorted, for reproducible
+"checked:" listings), asks its own real schema, and picks the first real
+owner of the target type — the same free, no-credentials `GetProviderSchema`
+call this project has relied on since UBI-9. Launches the winning
+provider a second time downstream for the real read — the same known,
+accepted duplication `plan.go`'s own `--from-diagram` comment already
+documents for an identical situation, not a new inefficiency.
+
+**Finding #5 (scan ignores the ledger's own recorded lookup).** Per-
+resource scan's `CurrentState` always defaulted to the literal `--lookup`
+flag value (`"{}"` if omitted), even for an address the ledger already
+tracks — `core.Ledger.LastLookup` (already existed, already used by
+`status.go`'s fleet walk) was never consulted. Fixed: when `--lookup`
+wasn't explicitly given, `ledger.LastLookup(addr)` supplies the recorded
+value first; an explicit `--lookup` still always wins. Verified with a
+real fixture-echo asymmetry test (a resource drifted to a lookup richer
+than empty-`{}` would reconstruct; omitting `--lookup` on a tracked
+address now correctly reports "no drift" where it previously would have
+reported a false-positive drift).
+
+**Finding #6 (scan --propose saves nothing; accept can't take a hash).**
+The core UX gap the founder's own test hit: drift resolution required
+hand-copying JSON from the terminal into a file. Fixed both halves:
+
+- `scan --propose` now writes every generated proposal to the SAME plan
+  store `ubx plan` already uses (`.ubx/plans/<hash>.json`) and prints a
+  card (kind, 12-char `shortHash`, one-line blast-radius delta) ending
+  with a `next: ubx ship <shorthash>` handoff — plain/uncolored per this
+  session's scope (color is UBI-61's job next session), but structurally
+  matching `docs/cli-output-spec.md`'s own scan section.
+- New `resolvePlanHash(ledgerDir, ref)` (plan.go): resolves a full hash
+  OR any unique prefix against the plan store (glob + filename-prefix
+  match; `ErrPlanAmbiguous`/`ErrPlanNotFound` sentinels). `ship.go`'s
+  existing `acceptPlanInline` fallback now uses it (short hashes scan/
+  terminate print actually ship). `accept.go`'s local-file path now
+  tries the file path first (unchanged for hand-authored drafts), falls
+  back to `resolvePlanHash` on not-found, and — if BOTH fail — a teaching
+  error naming both interpretations and the plan store directory.
+  Deliberately scoped to the plan store only this session: short-hash
+  resolution against the ledger's own ACCEPTED-proposal store would need
+  an indexed-listing capability across every backend (local/git/s3/gs/
+  azblob) — a materially bigger feature, not attempted here.
+
+**Finding #7 (`ubx terminate`, new verb).** New `cli/terminate.go`.
+Founder-decided verb name (Linear comment on UBI-49, resolved same day
+finding #7 was filed): the human-facing verb is `terminate`, wire/schema
+vocabulary stays `destroys[]`/tombstone underneath. `ubx terminate
+<address>...` (self-contained `<stack>.<type>.<name>` addresses, the
+same convention `blame`/`why` already use — not a bare `--stack`-scoped
+short form, so multi-address termination is unambiguous and validated
+to share one stack) builds `resolver.IntentFile{Destroys: args}` and
+calls the UNMODIFIED `resolver.Resolve` — reuses 100% of existing
+destroy validation (`ErrDestroyTargetMissing`/`ErrDuplicateDestroy`/
+`ErrDestroyOrphaned`/`ErrDestroyTargetNoLookup`, all in
+core/resolver/destroys.go) with zero new core code, confirmed live
+against a real primary→mirror `$ref` dependency (orphan protection
+refuses correctly) and a real missing-target case. Never touches the
+ledger — saves to the plan store exactly like `ubx plan`, no
+`--confirm-destroys` check here (that's ship/accept's job at apply
+time, unchanged).
+
+`ubx destroy` decision (the founder's own "decide at build" note):
+resolved as a teaching-error stub, NOT a silent alias — every other
+consent-relevant surface in this project is explicit (double consent,
+typed confirmations, the plan/ship split itself), and this session's own
+principle 6 scope (teaching errors) made the call straightforward. `ubx
+destroy <anything>` always errors, naming `ubx terminate` by name.
+
+**One real product bug caught by manual live verification, not just
+tests**: `newDestroyCmd` initially didn't set `SilenceUsage`/
+`SilenceErrors` (every other command in this codebase does) — running
+`ubx destroy <addr>` dumped cobra's own usage/flags block above the
+teaching error, inconsistent with every other error path. Caught by
+actually running the built binary, not assumed from the hermetic test
+(which only asserts `err.Error()` content, not cobra's own stdout usage
+dump) — fixed before commit.
+
+**Named, deliberate test-coverage gap**: `ErrDestroyTargetNoLookup` (a
+destroy target that exists per `FoldState` but was never given a
+recorded lookup — a pre-UBI-29 apply-record edge case) is NOT covered by
+a `cli`-level `ubx terminate` test this session. It's already
+exhaustively covered at `core/resolver`'s own test level (multiple
+tests, unchanged by this session — terminate is 100% passthrough to
+`resolver.Resolve` for this check), and reproducing the lookup-less
+precondition at the CLI level would need direct `core`-package ledger
+seeding (bypassing every normal create/adopt path, none of which can
+produce this state today) — judged not worth the added test-only
+surface for a check terminate adds zero new code for.
+
+**Hermetic tests**: `cli/stackcascade_test.go` (finding #2/#3, 6 tests),
+`cli/scan_cascade_test.go` (findings #3/#4/#5, 3 tests),
+`cli/planhash_test.go` (finding #6 infra, 3 tests),
+`cli/scan_ship_e2e_test.go` + `cli/accept_planstore_test.go` (finding
+#6's own end-to-end asks, 4 tests), `cli/terminate_test.go` (finding #7,
+5 tests) — 21 new tests, all real fakeprovider round-trips or direct
+unit tests, zero mocks of this project's own code. Existing tests
+touching scan's human-text output shape (`scan_propose_test.go`,
+`attribution_test.go`, `redact_test.go`, `scan_test.go`) updated for the
+new card format — reworked to assert against the plan store's own real
+content (`resolvePlanHash`) rather than the old stdout JSON dump, not
+just patched to keep passing. `go build/vet/test ./...`, `gofmt -l .`
+all clean; one real live pass with the built `ubx`+`fakeprovider`
+binaries (config-cascaded `plan --from-doc`, multi-provider `scan` with
+zero provider flags, `scan --propose` → `ship <shorthash>`, `terminate`
+→ `ship --confirm-destroys <shorthash>`, orphan-protection refusal via a
+real primary→mirror `$ref` chain) — never a real cloud provider, per
+CLAUDE.md doctrine.
+
+**ubiquex-docs, same session**: `cli/terminate.mdx` (new, full flag
+reference + real fakeprovider transcripts, registered in `docs.json`'s
+"Decide" group); `cli/scan.mdx` re-captured for every fakeprovider/
+mock-reproducible example (9 transcripts: short-form, new/drifted/no-
+drift, redacted-attribute — switched from the old fictional
+`fake_db_instance`/`master_password` to the real supported
+`fake_secret_resource`/`api_key` fixture pairing since the former isn't
+an actual fakeprovider type — revert, both GitHub surface-as modes via a
+throwaway local httptest mock, and the `UBX_PROVIDER_MIRROR` registry
+example); `cli/accept.mdx` gained a new "Accepting by hash, from the
+plan store" section with a real transcript. `mint validate` clean,
+committed and pushed to both repos.
+
+**Docs debt, named explicitly (not skipped silently)**: `cli/scan.mdx`'s
+Kubernetes/Helm section's own classification-line transcript (a real
+`kubernetes_secret_v1` against a real local `kind` cluster) still shows
+a `<shorthash>` placeholder rather than a re-captured real one — no
+local kind cluster was available this session to re-verify it live.
+Flagged inline in the doc itself with a `<Note>`, not silently left
+looking like real output. Follow-up: re-capture against a real cluster
+whenever one's available, ideally alongside session 3's own docs pass.
+
+## Current phase (previous)
+
 **UBI-55 (2026-07-30), session 1: `ubx promote` — CLOSED.** Builds the
 CLI surface for UBI-14's "Environments & promotion" design (ratified the
 same day, docs/architecture.md), spawned as its own follow-up ticket per

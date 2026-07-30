@@ -64,14 +64,16 @@ is written to disk, ever, for a session that never reaches "/save".`,
 }
 
 func runChat(cmd *cobra.Command, ledgerDir, stack, out string, timeout time.Duration) error {
-	if stack == "" {
-		return &ExitCodeError{Code: 2, Err: errors.New("chat: --stack is required")}
-	}
-
-	cfg, err := LoadConfig(cmd.ErrOrStderr())
+	rc, err := LoadConfigResolved(cmd.ErrOrStderr())
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("chat: %w", err)}
 	}
+	cfg := rc.Config
+	applyStackDefault(cmd, &stack, cfg)
+	if stack == "" {
+		return &ExitCodeError{Code: 2, Err: stackRequiredError("chat", rc.Files)}
+	}
+
 	adapter, err := buildIntentAdapter(cfg)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("chat: %w", err)}

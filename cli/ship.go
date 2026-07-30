@@ -212,9 +212,13 @@ change proposals can be shipped; every other kind is record-only (nothing to shi
 // resolver.VerifyPins every other acceptance path already goes through,
 // called from a second entry point.
 func acceptPlanInline(ledger *core.Ledger, ledgerDir, hash string, confirmDestroys bool) (*core.Proposal, error) {
-	draft, err := readPlanFile(ledgerDir, hash)
+	// resolvePlanHash (UBI-49 finding #6) accepts hash as either a full
+	// content hash or a unique prefix of one -- whatever `ubx scan
+	// --propose`/`ubx terminate` printed as their own short "next: ubx
+	// ship <shorthash>" handoff, not just plan.go's own full-hash output.
+	fullHash, draft, err := resolvePlanHash(ledgerDir, hash)
 	if err != nil {
-		return nil, fmt.Errorf("no accepted proposal %s in this stack's ledger, and no plan file at %s: %w", hash, planFilePath(ledgerDir, hash), err)
+		return nil, fmt.Errorf("no accepted proposal %s in this stack's ledger, and no plan file matching it in .ubx/plans/: %w", hash, err)
 	}
 
 	// Integrity check specific to this fallback: a plan file is always
@@ -227,8 +231,8 @@ func acceptPlanInline(ledger *core.Ledger, ledgerDir, hash string, confirmDestro
 	if err != nil {
 		return nil, err
 	}
-	if computedHash != hash {
-		return nil, fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, hash), computedHash, hash)
+	if computedHash != fullHash {
+		return nil, fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, fullHash), computedHash, fullHash)
 	}
 
 	if err := checkDestroysConfirmed(draft, confirmDestroys); err != nil {
