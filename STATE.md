@@ -4,6 +4,192 @@
 
 ## Current phase
 
+**UBI-35 (2026-07-30), session 1: the Go SDK, second language under
+UBI-33's multi-language contract. New arc, not a closing session — UBI-33
+stays open (Python/UBI-36 still unstarted). The compiled-program
+evaluator hypothesis was tested empirically FIRST, per the ticket's own
+framing ("decides the whole arc's session count"), and confirmed on both
+target platforms — then the whole arc (runtime, codegen, CLI wiring,
+conformance) built the same session.**
+
+**The probe, real and rigorous, matching the TS session's own Deno-probe
+discipline (real commands, real output, real gaps named).** Wrote a
+throwaway Go probe binary attempting six things a hermetic evaluator
+must deny (read a home-dir file, read `/etc/hosts`, write to `/tmp`,
+read an env var, dial `8.8.8.8:53`, resolve DNS) and ran it under
+increasingly real restriction:
+
+- **macOS `sandbox-exec`**: a first, naive `(deny default)` profile
+  crashed the probe binary before it printed anything — `exit 134`
+  (SIGABRT), zero stdout. The real crash report (macOS writes one to
+  `~/Library/Logs/DiagnosticReports/*.ips` for every abort — read
+  directly, not guessed at) pointed at `dyld4::CacheFinder` on the
+  faulting thread: the naive profile had denied `dyld` itself the
+  shared-cache read it needs before `main` ever runs — this session's
+  own analog of the Deno remote-import gap (a profile that *looks*
+  extra-safe actually blocks something load-bearing). The fix, found by
+  reading Apple's own shipped profiles (`/System/Library/Sandbox/
+  Profiles/`), not guessed at: import `system.sb` (Apple's own base
+  profile for first-party daemons — dyld bootstrap access, a handful of
+  narrowly-scoped OS reads, and one unix-socket-only `network-outbound`
+  rule confirmed not to be a real network permission) as a base, then
+  layer explicit denies on top. Run for real: every capability except
+  env-var visibility came back cleanly blocked, process ran to
+  completion (`exit 0`). Subprocess-escape checked directly (not
+  assumed): `sandbox-exec`'d `curl`/`nc` denied identically — macOS
+  sandbox profiles apply to the whole descendant process tree by
+  default.
+- **Linux namespaces/`bubblewrap`**: no bare Linux host available this
+  session (a real, honestly-recorded scoping limit) — tested inside a
+  Linux container instead. `CLONE_NEWNET` (exactly what Go's own
+  `syscall.SysProcAttr.Cloneflags` exposes directly) blocked TCP dial +
+  DNS cleanly, verified two ways (Docker's `--network none` and raw
+  `unshare --net`, identical `network is unreachable` result both
+  times). `bubblewrap` (`bwrap` — the real, already-packaged Linux tool
+  built for exactly this, the same mechanism Flatpak uses) gave the
+  cleanest result of the whole probe: bind-mounting only the binary's
+  own directory means denied paths don't exist in the sandboxed
+  process's view at all, so opens fail with `no such file or directory`
+  — "deny by nonexistence," structurally *stronger* than macOS's
+  policy-based `EPERM`. **A real caveat found, not assumed**: both
+  `unshare --net` and `bwrap` failed with `Operation not permitted`
+  inside this session's own unprivileged Docker container (creating a
+  *new* namespace needs elevated privilege), both worked once re-run
+  `--privileged` — a real, non-obvious edge for a Go evaluator running
+  inside someone else's already-hardened container (a customer's own CI
+  image). `--cap-drop=ALL` alone, confirmed NOT to block network
+  (capabilities gate privileged operations, not ordinary `connect()`) —
+  rules out "just drop capabilities" as sufficient.
+- **Plain env-scrubbing** (`env -i`): confirmed real but insufficient
+  alone — env visibility disappeared, file read/write/network all still
+  succeeded. Ruled out as the primary mechanism precisely because a real
+  syscall-level one proved achievable on both platforms.
+
+**The determinism story turned out simpler than TypeScript's.** Compiled
+Go has no monkey-patchable `Date.now()`/`Math.random()`-equivalent
+ambient global — `time.Now()`/`math/rand` are direct, statically-linked
+calls a program's own source imports explicitly, nothing externally
+patchable the way a JS engine's global object is. No Go analog of
+`guards.ts` exists or is needed — `core.DoubleRun` alone is the whole
+determinism guarantee, one layer instead of TS's two. A further
+simplification: building happens ONCE, outside any sandbox (Go
+compilation doesn't execute the source it compiles — `CGO_ENABLED=0`,
+no `go generate`, means no arbitrary-code-execution risk at build time),
+and `DoubleRun` runs the SAME already-built binary twice; TS's own
+evaluator has no equivalent build/run split to exploit, since Deno both
+parses and executes on every invocation.
+
+**Findings written up in `docs/sdk.md`'s new "The Go evaluator: decided
+empirically" section** (full probe transcripts, exact profiles, exact
+error strings), before any implementation code was written — matching
+this project's own "record the real answer, then build against it"
+discipline.
+
+**Built the same session, all real, all tested:**
+
+- **`sdk/go/`** (new, its own nested Go module, `github.com/ubx-sdk-go`,
+  per UBI-33's own hard constraint) — `runtime/runtime.go`: `Stack`/
+  `Resource`/`Secret`/`Cross`/`Intent` mirroring `@ubx/sdk`'s semantics;
+  `Computed` as an address-wrapper struct with an explicit `.Field(name)`
+  drill-down method (Go has no Proxy — the honest, named simplification
+  vs. TS's implicit property-access recursion); config values typed
+  `any`, recursively serialized via `reflect` against a generated
+  `FieldMap`, mirroring `serializeConfig`/`serializeOpaque` exactly
+  (nil interface field = omitted, matching TS's "only keys actually
+  present" walk). 11 new hermetic tests, all passing.
+- **`sdk/codegen/templates/go`** (new) — a Go template on the *same,
+  unmodified* `sdk/codegen/ir` model. Notably smaller output than the TS
+  template: Go's `Computed` has no static per-field type, so there's no
+  Go analog of TS's `Attrs` interface to render at all — only a `Config`
+  struct (plus nested object structs) and the runtime descriptor. 7 new
+  tests mirroring `sdk/codegen/templates/ts`'s own suite one-for-one.
+- **`goeval/`** (new, top-level package, mirroring `sdkeval`'s own
+  shape) — `buildProgram` compiles once (`go build`, `CGO_ENABLED=0`;
+  `GOPROXY=off` closes Go's own real analog of the remote-import gap: a
+  `go.mod` reaching for anything beyond a local `replace`/the module
+  cache fails the build loudly — confirmed against a real unfetchable
+  dependency, `rsc.io/quote`, real error: `module lookup disabled by
+  GOPROXY=off`; `GOFLAGS=-mod=mod`, found empirically not assumed,
+  reconciles an ordinary toolchain-version mismatch without a spurious
+  "updates to go.mod needed" failure). Builds from a throwaway COPY of
+  the program's own module (found the hard way: without this, `-mod=mod`
+  silently rewrote the checked-in fixture `go.mod`'s own `go` directive
+  on every test run — a real hygiene bug, fixed before it became git
+  noise for every contributor). `sandbox_darwin.go`/`sandbox_linux.go`/
+  `sandbox_other.go` (build-tag-gated): `sandbox-exec`/`bwrap`/hard-error
+  respectively — Linux fails loudly if `bwrap` is missing or namespace
+  creation is denied, never a silent unsandboxed fallback.
+  `provenance.go`/`validate.go` duplicate `sdkeval`'s own small,
+  language-agnostic logic (a real, small, deliberate duplication — a
+  third copy at UBI-36/Python would be the actual trigger for
+  extracting a shared package, not this one). 9 new hermetic
+  real-subprocess tests (happy path, determinism, fs/net sandbox
+  escape, env-scrubbed-not-merely-denied, remote-dependency-blocked,
+  panic mid-evaluation, missing go.mod) — all passing for real on this
+  session's own macOS environment.
+- **`cli/resolve.go`**: `--from-code` now dispatches by entry-file
+  extension (`.ts` → `sdkeval`, `.go` → `goeval`) — the ONLY change to
+  already-shipped UBI-34 code, one `switch` statement
+  (`evaluateSDKProgram`). New end-to-end test,
+  `TestResolveFromCode_Go_SimpleCreate`, mirrors the existing TS one
+  exactly: real compile, real sandboxed run, real resolve, real accept,
+  real `ubx why` showing the Go-authored document provenance.
+- **`cli/sdk.go`**: `ubx sdk gen` gained `--lang ts|go` (default `ts`,
+  existing behavior unchanged). Real bindings generated against the
+  real `hashicorp/aws@6.54.0` schema (1,682 types, matching the TS
+  session's own real figure) — confirmed to actually COMPILE against
+  `sdk/go/runtime`, not just look plausible: a real bug (the template
+  emitted `import` after a `var` declaration — Go requires imports
+  first) was caught by a real `go build` compile-check in the test, not
+  by string assertions alone, and fixed.
+- **`sdk/conformance/programs/go/payments.go`** (new, independently
+  authored, not a mechanical transliteration of `payments.ts`) — real,
+  live, sandboxed, `core.DoubleRun`-verified output matches the TS/md
+  golden's own `resources`/`stack`/`intent.summary` byte-for-byte after
+  canonicalization. A SEPARATE golden file (`golden/payments_go.json`),
+  not the same one, for a real structural reason: the document-
+  provenance entry names the entry file itself, and `payments.go`/
+  `payments.ts` are two different files with two different real content
+  hashes, so no single golden document could ever match both — what it
+  proves is the same thing the original TS+md convergence proved, a
+  third independent producer reaching the same resolved infrastructure.
+  `TestPaymentsGoldenCase_Go` passes for real alongside the existing
+  `TestPaymentsGoldenCase_TS`.
+
+**A real, honest sequencing note, recorded not ignored**: UBI-53 (repo
+rename `ubiquex-cli`→`ubiquex`, Backlog, not started) says the rename
+should happen *before* UBI-35 so the published Go import path is born
+clean. Proceeded with UBI-35 now anyway, under the current real module
+path — UBI-53 wasn't part of this session's given scope (CLAUDE.md: only
+reference given Linear IDs), the GitHub-side rename needs founder
+action, and a module-path rename is a small, separately-scoped,
+mechanical `sed` sweep whenever UBI-53 actually lands.
+
+`go build/vet/test`/`gofmt -l .` clean across the whole repo, including
+`sdk/go`'s own nested module — zero regressions, full existing suite
+re-run and passing. **Not a closing session** — no Linear status change,
+no closing comment (this session's own instruction said "commit and
+push," not "close"); UBI-33 stays open until Python (UBI-36) also ships.
+
+`ubiquex-docs` updated the SAME session, per protocol (not deferred as
+docs-debt): `cli/resolve.mdx` gained a full "Authoring in Go" section
+(real transcripts — `ubx sdk gen --lang go` + `ubx resolve --from-code
+payments.go`, run for real against the real `hashicorp/aws@6.54.0`
+schema, `delta.creates[]` confirmed byte-identical to the existing
+TypeScript transcript already on that page) plus flag-table/usage-line
+updates; `cli/sdk-gen.mdx` gained `--lang`, a real "Example: Go" section,
+and an updated "neither runtime package is published yet" section;
+`sdk/index.mdx` restructured into "## TypeScript"/"## Go" top-level
+sections, each with its own runtime-surface/codegen/hermetic-evaluator
+subsections, "What a program can't do yet" updated to cover both
+languages. `mint validate`/`mint broken-links` both clean.
+
+See docs/plan.md's own "SDK program: Go, second language (UBI-35)"
+subsection and docs/sdk.md's own "The Go evaluator: decided empirically"
+section for the full account.
+
+## Current phase (previous)
+
 **UBI-45 (2026-07-30), session 3, CLOSING: genesis attribution + the
 live finale at scale — the two slices session 2 left open. UBI-45 is
 now closed in Linear — this is the arc's final session, across three:
