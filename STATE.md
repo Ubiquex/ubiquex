@@ -4,6 +4,123 @@
 
 ## Current phase
 
+**UBI-55 (2026-07-30), session 1: `ubx promote` — CLOSED.** Builds the
+CLI surface for UBI-14's "Environments & promotion" design (ratified the
+same day, docs/architecture.md), spawned as its own follow-up ticket per
+that design room's own closing note.
+
+**The re-resolution problem, found and reasoned through before writing
+any code.** `core.Ledger.Read` only ever returns an already-resolved
+`*core.Proposal` (`Delta`, values already computed) — there is no path
+back to a `resolver.IntentFile` (the pre-resolution `$ref`-bearing input)
+from a stored proposal id; that shape is never persisted to the ledger
+or any sibling store. So "re-resolve the same intent" cannot mean
+"replay from the ledger record" — it has to mean "re-read the SAME
+authoring document (.md/.d2) the source proposal's own intent.sources
+already names, and run it through the pipeline again." Verified which
+`intent.sources` kinds are actually re-readable before committing to a
+design: `document` (from `ubx propose --from-doc`/`--from-diagram`) is
+the only kind with a real, working file behind it; `dialogue` (`ubx
+chat`) IS file-backed but its own ref is relative to the SOURCE ledger
+directory specifically, not portable to a different target; an SDK-
+authored (`--from-code`) `document` source's own ref is stamped as only
+`filepath.Base(entryFile)` (goeval/tseval/pyeval's own
+`stampDocumentSource`, all three, unchanged), discarding the directory
+needed to relocate it. Both gaps are real, pre-existing, and now named
+explicitly (docs/schema.md's own "Amendment: promotion evidence") —
+`ubx promote` refuses both cases by name rather than silently
+mishandling them, and a follow-up to give every medium's
+`document`/`dialogue` ref a portable convention is recommended, not
+built this session.
+
+**What was built.** `cli/promote.go`, new: `ubx promote <proposal-id>
+--to <target-dir>` reads the source proposal (must be already-accepted —
+an unaccepted `ubx plan` draft is refused, since promotion evidence
+vouches for a proposal that went through the real accept ceremony),
+finds its `document`-kind source, re-derives the intent via the SAME,
+unmodified `draftFromDoc`/`draftFromDiagram` (propose.go) dispatched by
+the ref's own `.md`/`.d2` extension, resolves it via the unmodified
+`core/resolver.Resolve` against the TARGET's own config/ledger/providers
+(`loadResolveProviders`, `openLedgerForStack`, both reused unchanged),
+appends one additive `{"kind":"promotion","ref":"<source id>",
+"base":"<source stack base>"}` intent.sources entry, and saves the
+result via the unmodified `writePlanFile` (plan.go) — ship-able via the
+two-step flow with no extra wiring, matching the ticket's own
+requirement exactly. Never touches a ledger itself, the same
+preview-only posture `ubx resolve`/`ubx plan` already have.
+
+**Schema**: `core.IntentSource` gains `Base string` (additive,
+`omitempty`) and the `"promotion"` kind value — docs/schema.md's own new
+"Amendment: promotion evidence" section, no `schema_version` bump, same
+reasoning as every prior amendment. The "Environment/promotion model"
+open question (docs/schema.md's own tracked list, open since the
+founding session) is marked resolved, pointing at the new amendment.
+
+**`ubx why`** gains a `case "promotion":` in `renderIntentSource`,
+rendering "promoted from `<base>/<short id>`" — the literal string
+docs/architecture.md's own design names as the example. `sourceStackBase`
+uses the source's own `Ledger.BaseStore()` if a remote store is
+configured, else the source's own `--ledger-dir` (the default git-local
+store has no separate base-store concept of its own) — real, useful
+values in both cases, not an empty string.
+
+**A new seam, added carefully, zero behavior change for every existing
+caller.** `LoadConfig`/`LoadConfigResolved` always walked the cascade
+from the process's own cwd — no existing command ever needed a SECOND
+config scoped to a different directory. `ubx promote --to <target-dir>`
+is the first that does. Refactored `LoadConfigResolved` into a one-line
+wrapper around a new `loadConfigResolvedFromDir(dir, warnOut)`
+(configcascade.go) + a matching `loadConfigFromDir` (config.go) —
+existing callers' behavior is byte-identical (same dir, same walk).
+
+**Adversarial rows from the ticket, all decided and tested**: source not
+found (plain `ErrProposalNotFound`); source is an unaccepted plan-store
+draft (refused, with the specific reason and remediation, decided and
+recorded: promotion evidence requires the real accept ceremony); target
+dir has no config (allowed — the exact same "defaults apply" convention
+`LoadConfig` already establishes for every other command, not a new
+rule); promote across bases via `[ledger.external]` (works by
+construction — `openLedgerForStack` against the target's own `cfg`
+already threads `Ledger.External` through, nothing promotion-specific
+needed); a promoted proposal itself re-promoted (chain of promotion
+evidence renders correctly: each hop appends exactly ONE new promotion
+entry naming its own immediate source, never flattened — verified with a
+real three-environment staging→qa→prod hermetic test proving prod's own
+proposal names qa, not staging, while staging's own earlier promotion
+entry stays independently readable in qa's own ledger).
+
+**Real, live verification — not just unit tests.** Built the real `ubx`
+binary and a real `fakeprovider` binary, set up a `UBX_PROVIDER_MIRROR`
+local mirror directory (the same mechanism CLAUDE.md's own "never ship
+against real cloud" rule already establishes for verification), and ran
+a genuine staging→prod session end to end: `ubx plan --from-diagram` +
+`ubx ship` in `staging/`, `ubx promote` to `prod/`, `ubx ship` in
+`prod/`, `ubx why` rendering the real "promoted from ./2fd3355f7909…"
+line. Also live-captured the cwd-mismatch failure (`ubx promote` run
+from a different directory than the original `ubx plan --from-diagram`)
+and the unaccepted-plan-draft refusal — every transcript in
+`ubiquex-docs`' new pages is real, unedited command output, not
+fabricated.
+
+**Nine hermetic tests** (`cli/promote_test.go`): happy path (fresh
+target-side resolve, promotion source stamped, base correct, original
+document/intent_provider sources still present — additive, not
+replaced), source not found, source is an unaccepted plan draft
+(specific refusal), no re-resolvable source at all, dialogue source
+(named refusal), SDK-authored source (named refusal), target dir with no
+config (allowed), the three-environment promotion-chain test, and `ubx
+why`'s own promotion rendering. `go build/vet/test ./...` and `gofmt -l
+.` all clean.
+
+**ubiquex-docs, same session**: `cli/promote.mdx` (new, full flag
+reference + the live-captured transcripts above), `guides/promotion.mdx`
+(new, full staging→prod walkthrough), `cli/why.mdx` (new "A promoted
+proposal" section + Related links), both new pages registered in
+`docs.json`'s nav. `mint validate` clean. Committed and pushed to both
+repos. UBI-55 closed in Linear with a full closing comment.
+
+## Current phase (previous)
+
 **UBI-54 (2026-07-30), session 1: consolidate lookup-hint knowledge —
 CLOSED.** Audit-first per this session's own explicit instruction:
 located all four per-type identity-knowledge tables

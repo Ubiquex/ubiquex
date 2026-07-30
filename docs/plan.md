@@ -2,6 +2,35 @@
 
 ## Changelog
 
+- 2026-07-30 — UBI-55: `ubx promote <proposal-id> --to <target-dir>`
+  built, closing the "Environments & promotion" open question's own CLI
+  surface (UBI-14's design, ratified 2026-07-30). Re-resolution, never
+  copying: reads an accepted source proposal's own `document`-kind
+  authoring source (a `.md`/`.d2` file), re-derives the intent via the
+  exact same `draftFromDoc`/`draftFromDiagram` pipeline `ubx propose`/
+  `ubx plan` already use, resolves it through the unmodified
+  `core/resolver.Resolve` against the TARGET directory's own config/
+  ledger/providers, and appends an additive `intent.sources` entry —
+  `{"kind":"promotion","ref":"<source id>","base":"<source stack
+  base>"}` (`docs/schema.md`'s own "Amendment: promotion evidence") —
+  never replacing the fresh re-resolution's own sources. `ubx why` gains
+  a `case "promotion":` rendering "promoted from `<base>/<short id>`",
+  the literal architecture.md example. Two real, load-bearing gaps found
+  while building this, refused by name rather than silently
+  worked around: an SDK-authored (`--from-code`) source's own `ref` is
+  basename-only (directory discarded, can't be relocated); a
+  `dialogue`-kind (`ubx chat`) source's own `ref` is ledger-dir-relative,
+  not portable to a different target. The source proposal must be
+  already-accepted (not an unaccepted `ubx plan` draft) — promotion
+  evidence vouches for a proposal that went through the real accept
+  ceremony. Nine hermetic tests, zero live network calls; a real,
+  live-verified end-to-end staging→prod transcript (hermetic
+  `fakeprovider` via `UBX_PROVIDER_MIRROR`, no real cloud, no live LLM
+  call — the `.d2` diagram medium needs neither) backs
+  `ubiquex-docs`' new `cli/promote.mdx` + `guides/promotion.mdx` +
+  `cli/why.mdx`'s own new section. See STATE.md for the full session
+  account.
+
 - 2026-07-30 — UBI-54: lookup-hint knowledge consolidated. The four
   separately-maintained per-type lookup-hint tables found across UBI-45
   session 1/2 and UBI-52's audit (`conformance.Registry.LookupHint`,
