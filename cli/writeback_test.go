@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 const writebackDriftProposal = `{
@@ -163,7 +163,7 @@ func TestWriteback_ResourceBlockAbsent(t *testing.T) {
 		t.Fatalf("expected a resource-block-not-found error, got: %v", err)
 	}
 	if !strings.Contains(out, "no matching resource block found") {
-		t.Fatalf("expected the underlying tfwrite error detail printed, got: %s", out)
+		t.Fatalf("expected the underlying writeback error detail printed, got: %s", out)
 	}
 }
 

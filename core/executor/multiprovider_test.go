@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // --- fakeApplierPool: a real multi-entry ApplierPool, for hermetic tests

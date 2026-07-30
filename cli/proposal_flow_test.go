@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestAcceptThenWhy exercises the whole Slice 2 loop through the CLI

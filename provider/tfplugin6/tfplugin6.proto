@@ -25,7 +25,7 @@
 // go_package option below has been changed.
 //
 syntax = "proto3";
-option go_package = "github.com/ubiquex/ubiquex-cli/provider/tfplugin6";
+option go_package = "github.com/ubiquex/ubiquex/provider/tfplugin6";
 
 import "google/protobuf/timestamp.proto";
 

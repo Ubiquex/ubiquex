@@ -1,10 +1,12 @@
-// Package tfstate parses Terraform state v4 JSON — UBI-18's bulk
+// Package stateimport parses Terraform state v4 JSON — UBI-18's bulk
 // onboarding enumeration source (docs/architecture.md — Bulk onboarding).
 // This file is read exactly once, at onboarding: a border-crossing
 // artifact, never an ongoing dependency. ubx never opens a state file
 // again after this package hands back the resources in it; the ledger
-// owns everything from that point on.
-package tfstate
+// owns everything from that point on. Named for its role (importing
+// identity to bootstrap onboarding), not the Terraform file format it
+// happens to read (UBI-52 — docs/source-tree.md).
+package stateimport
 
 import (
 	"encoding/json"

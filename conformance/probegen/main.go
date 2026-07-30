@@ -36,8 +36,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/conformance"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/conformance"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 func main() {

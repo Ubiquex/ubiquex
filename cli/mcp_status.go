@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // statusJSONOptions is computeStatusJSON's input -- mirrors `ubx

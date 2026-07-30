@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/discovery"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/discovery"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // newDiscoveryTaggingAPI is a package-level seam (the same convention

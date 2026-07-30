@@ -17,14 +17,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/goeval"
-	"github.com/ubiquex/ubiquex-cli/pyeval"
-	"github.com/ubiquex/ubiquex-cli/sdkeval"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/goeval"
+	"github.com/ubiquex/ubiquex/pyeval"
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // requireDeno skips when deno isn't on PATH -- same reasoning as
-// sdkeval's own requireDeno (a genuinely new hard dependency; skip
+// tseval's own requireDeno (a genuinely new hard dependency; skip
 // loudly rather than break `go test ./...` for a contributor who
 // hasn't installed it).
 func requireDeno(t *testing.T) {
@@ -59,9 +59,9 @@ func TestPaymentsGoldenCase_TS(t *testing.T) {
 	defer cancel()
 
 	programPath := filepath.Join("..", "programs", "ts", "payments.ts")
-	got, err := sdkeval.Evaluate(ctx, programPath)
+	got, err := tseval.Evaluate(ctx, programPath)
 	if err != nil {
-		t.Fatalf("sdkeval.Evaluate(%s): %v", programPath, err)
+		t.Fatalf("tseval.Evaluate(%s): %v", programPath, err)
 	}
 
 	goldenRaw, err := os.ReadFile(filepath.Join("..", "golden", "payments.json"))

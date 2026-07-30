@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // liveBucketURI is the real, already-existing S3 bucket prior live

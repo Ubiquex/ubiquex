@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // Turn is one user turn in a captured dialogue -- always the REDACTED

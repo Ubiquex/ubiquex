@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin5"
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin6"
+	"github.com/ubiquex/ubiquex/provider/tfplugin5"
+	"github.com/ubiquex/ubiquex/provider/tfplugin6"
 )
 
 // ubxTerraformVersion is what ubx reports as its "terraform_version" in

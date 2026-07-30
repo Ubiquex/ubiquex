@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/provider"
-	"github.com/ubiquex/ubiquex-cli/tfstate"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/provider"
+	"github.com/ubiquex/ubiquex/stateimport"
 )
 
 // scanAllOptions is ubx scan --all's flag surface, gathered into one
@@ -64,7 +64,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: read state file: %w", err)}
 	}
-	resources, err := tfstate.Parse(data)
+	resources, err := stateimport.Parse(data)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 	}
@@ -163,7 +163,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		}
 		seen[addr] = true
 
-		lookup, err := tfstate.BuildLookup(r.Type, r.Attributes)
+		lookup, err := stateimport.BuildLookup(r.Type, r.Attributes)
 		if err != nil {
 			skipped["no identity in state"]++
 			fmt.Fprintf(out, "skipped: %s -- %v\n", addr, err)

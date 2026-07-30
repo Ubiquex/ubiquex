@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/sdkeval"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // newPlanCmd is UBI-49's own terraform-shaped fusion of propose+resolve+
@@ -136,7 +136,7 @@ propose-time PR trailer hash, etc.).`,
 				}
 				intent = *draft
 			case fromCode != "":
-				canon, err := sdkeval.Evaluate(ctx, fromCode)
+				canon, err := tseval.Evaluate(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}

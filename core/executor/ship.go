@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Applier is core/executor's own minimal view of "something that can read

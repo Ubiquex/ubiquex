@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // attributionAWSProviderVersion is pinned, not "latest" (see

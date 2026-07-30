@@ -1,7 +1,7 @@
 // Package goeval is docs/sdk.md's own "The Go evaluator: decided
 // empirically" (UBI-35 session 1) made real: the Go-side wrapper that
 // compiles a Go SDK program to a real binary and runs it, hermetically,
-// as the sandboxed unit -- unlike sdkeval (TypeScript), which spawns a
+// as the sandboxed unit -- unlike tseval (TypeScript), which spawns a
 // sandboxed INTERPRETER (Deno) that re-parses the program's own source
 // on every run, a compiled Go program already IS the whole sandboxed
 // unit once built: hermeticity comes from OS-level process restriction
@@ -19,8 +19,8 @@
 // parses and executes on every invocation, so DoubleRun there wraps the
 // whole "load + run" step, not just "run."
 //
-// A new top-level package, not folded into cli/, matching sdkeval's own
-// precedent (docs/sdk.md, "the Go side lives in cli/ or a new sdkeval/
+// A new top-level package, not folded into cli/, matching tseval's own
+// precedent (docs/sdk.md, "the Go side lives in cli/ or a new tseval/
 // package" -- decided there, applied identically here).
 package goeval
 
@@ -28,7 +28,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Evaluate builds entryFile's own Go module into a binary (once), then
@@ -36,7 +36,7 @@ import (
 // current platform's own mechanism (sandbox_darwin.go/sandbox_linux.go),
 // requiring byte-identical stdout across both. Once confirmed stable,
 // stamps real provenance (stampDocumentSource) and re-canonicalizes,
-// exactly mirroring sdkeval.Evaluate's own structure and return
+// exactly mirroring tseval.Evaluate's own structure and return
 // contract: canonical (RFC 8785/JCS-style, core.CanonicalJSONBytes)
 // intent/v1 bytes, provenance-stamped, on success; core.ErrDoubleRunMismatch
 // if the two runs disagree; a structural-validation error if the result

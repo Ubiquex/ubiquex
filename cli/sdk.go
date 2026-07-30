@@ -11,11 +11,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
-	"github.com/ubiquex/ubiquex-cli/sdk/codegen/ir"
-	gotemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/go"
-	pytemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/py"
-	tstemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/ts"
+	"github.com/ubiquex/ubiquex/provider"
+	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
+	gotemplate "github.com/ubiquex/ubiquex/sdk/codegen/templates/go"
+	pytemplate "github.com/ubiquex/ubiquex/sdk/codegen/templates/py"
+	tstemplate "github.com/ubiquex/ubiquex/sdk/codegen/templates/ts"
 )
 
 // newSDKCmd is UBI-33/34's own CLI entry point -- a parent command, not

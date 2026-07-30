@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // LiveReadProbeConfig describes one live-tier read-only probe run —

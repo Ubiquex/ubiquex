@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 func TestPopulateSources(t *testing.T) {

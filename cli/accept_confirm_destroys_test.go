@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // destroyProposalJSON is a hand-written, minimally valid kind:"change"

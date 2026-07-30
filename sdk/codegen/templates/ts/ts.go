@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/sdk/codegen/ir"
+	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
 )
 
 // GeneratedFile renders one TypeScript module covering every resource

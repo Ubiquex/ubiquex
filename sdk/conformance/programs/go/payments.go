@@ -15,7 +15,7 @@ package main
 import (
 	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
 
-	generated "github.com/ubiquex/ubiquex-cli/sdk/conformance/programs/go/generated"
+	generated "github.com/ubiquex/ubiquex/sdk/conformance/programs/go/generated"
 )
 
 func main() {

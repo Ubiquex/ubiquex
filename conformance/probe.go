@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // FindingClass names one of the four lie-classes docs/conformance-harness.md's

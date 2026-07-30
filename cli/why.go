@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // proposalIDPattern matches a full 64-hex-char content hash — the only

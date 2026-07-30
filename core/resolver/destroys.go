@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // parseDestroyBatch validates intent's own destroys[] list and returns it

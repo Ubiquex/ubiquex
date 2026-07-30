@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // scanJSONOptions is computeScanJSON's input -- mirrors `ubx scan`'s own

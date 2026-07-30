@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
-	"github.com/ubiquex/ubiquex-cli/intentprovider/claude"
+	"github.com/ubiquex/ubiquex/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
 // buildIntentAdapter resolves cfg.Intent (the [intent] config table,

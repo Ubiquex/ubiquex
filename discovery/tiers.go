@@ -55,7 +55,7 @@ type typeSpec struct {
 	Tier          Tier
 	// AugmentFields (Tier B only) names additional lookup fields to set
 	// to the same trailing ResourceID value core/lookuphints and
-	// tfstate.BuildLookup already separately maintain this exact fact
+	// stateimport.BuildLookup already separately maintain this exact fact
 	// for (docs/discovery.md's own "recommendation, not built this
 	// session" — this table is discovery's own fourth copy, honestly
 	// named as such rather than silently pretended unified).

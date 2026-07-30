@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 func attr(name string, opts ...func(*provider.Attribute)) provider.Attribute {

@@ -8,9 +8,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/ubiquex/ubiquex-cli/core/executor"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core/executor"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // providerPool is the concrete, cli-side implementation of

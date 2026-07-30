@@ -11,7 +11,7 @@ import (
 
 // stampDocumentSource injects one intent.sources entry into raw
 // (already-evaluated, unstamped) intent/v1 JSON, naming entryFile
-// itself -- mirrors sdkeval's and goeval's own stampDocumentSource
+// itself -- mirrors tseval's and goeval's own stampDocumentSource
 // exactly (same "document" kind, same Go-side-only hashing boundary,
 // same additive-not-overwriting behavior); duplicated rather than
 // shared for the same small-and-language-agnostic reasoning goeval's

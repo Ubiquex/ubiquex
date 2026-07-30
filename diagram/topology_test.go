@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 func TestTopology_ExcludesSummarySourcesAmbiguity(t *testing.T) {

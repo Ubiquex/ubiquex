@@ -1,4 +1,4 @@
-module github.com/ubiquex/ubiquex-cli/sdk/conformance/programs/go
+module github.com/ubiquex/ubiquex/sdk/conformance/programs/go
 
 go 1.23
 

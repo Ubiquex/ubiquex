@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/ledgerstore"
+	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
 // newConfigCmd is UBI-32 Arc A's own provenance surface

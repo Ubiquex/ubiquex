@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // newChatCmd is UBI-46's own entry point: the chat medium, riding

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // awsSchema/helmSchema are two disjoint fakeSchemas -- neither owns the

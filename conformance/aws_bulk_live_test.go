@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestBulkLiveProbes_AWSFreeTierBatch is UBI-50's own first real

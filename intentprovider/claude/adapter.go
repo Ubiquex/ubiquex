@@ -18,7 +18,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // DefaultModel is this adapter's own hardcoded fallback default when

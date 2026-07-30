@@ -1,23 +1,26 @@
-// Package sdkeval is docs/sdk.md's own "evaluator harness" (slice 4):
-// the Go-side wrapper that spawns the real, locked-down Deno subprocess
-// evaluating an SDK program (@ubx/sdk, sdk/ts/runtime), wires
-// core.DoubleRun across two entirely separate subprocess runs, and
-// validates the resulting document's own real structural shape.
+// Package tseval (renamed from tseval, UBI-52 — docs/source-tree.md,
+// for consistency with its own sibling evaluators goeval/pyeval, all
+// three now naming which language they evaluate) is docs/sdk.md's own
+// "evaluator harness" (slice 4): the Go-side wrapper that spawns the
+// real, locked-down Deno subprocess evaluating a TypeScript SDK program
+// (@ubx/sdk, sdk/ts/runtime), wires core.DoubleRun across two entirely
+// separate subprocess runs, and validates the resulting document's own
+// real structural shape.
 //
 // A new top-level package, not folded into cli/ -- docs/sdk.md's own
-// "sdk/ts/evaluator/... the Go side lives in cli/ or a new sdkeval/
+// "sdk/ts/evaluator/... the Go side lives in cli/ or a new tseval/
 // package" named this as an open call; a standalone package matches
 // this project's own established shape for a substantial, independently
 // testable subsystem (intentprovider/, audit/cloudtrail/, audit/gcp/,
 // ledgerstore/ are all top-level too) -- cli/ stays a thin wiring layer,
 // not this session's job to build (ubx resolve --from-code is slice 5).
-package sdkeval
+package tseval
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Evaluate spawns the evaluator harness against entryFile TWICE, via
@@ -53,7 +56,7 @@ func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 		return core.CanonicalJSONBytes(raw)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("sdkeval: %w", err)
+		return nil, fmt.Errorf("tseval: %w", err)
 	}
 
 	stamped, err := stampDocumentSource(rawCanon, entryFile)
@@ -62,7 +65,7 @@ func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 	}
 	final, err := core.CanonicalJSONBytes(stamped)
 	if err != nil {
-		return nil, fmt.Errorf("sdkeval: %w", err)
+		return nil, fmt.Errorf("tseval: %w", err)
 	}
 
 	if err := validateIntentShape(final); err != nil {

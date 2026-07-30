@@ -13,7 +13,7 @@ import (
 // (already-evaluated, unstamped) intent/v1 JSON, naming entryFile
 // itself: {"kind": "document", "ref": "<basename>", "content_hash":
 // "sha256:<hex of the RAW entry file's own bytes>"} -- mirrors
-// sdkeval's own stampDocumentSource exactly (same "document" kind, same
+// tseval's own stampDocumentSource exactly (same "document" kind, same
 // Go-side-only hashing boundary, same additive-not-overwriting
 // behavior); duplicated rather than shared because it is small,
 // language-agnostic, and UBI-36 (Python) would make a third copy the

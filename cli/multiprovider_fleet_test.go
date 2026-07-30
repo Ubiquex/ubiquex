@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core/executor"
+	"github.com/ubiquex/ubiquex/core/executor"
 )
 
 // schemaStubApplier is a fakeApplierStub with a real, scriptable Schema()

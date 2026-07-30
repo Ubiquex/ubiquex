@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	ghub "github.com/ubiquex/ubiquex-cli/github"
+	"github.com/ubiquex/ubiquex/core"
+	ghub "github.com/ubiquex/ubiquex/github"
 )
 
 // runVerifyAcceptance is `ubx why --verify-acceptance` (UBI-11 stage 1,

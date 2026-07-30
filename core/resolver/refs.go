@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Marker keys -- docs/schema.md's value-encoding conventions. $ref/$cross

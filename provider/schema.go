@@ -3,8 +3,8 @@ package provider
 import (
 	"encoding/json"
 
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin5"
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin6"
+	"github.com/ubiquex/ubiquex/provider/tfplugin5"
+	"github.com/ubiquex/ubiquex/provider/tfplugin6"
 )
 
 // Schemas is ubx's protocol-agnostic view of a provider's full schema dump,

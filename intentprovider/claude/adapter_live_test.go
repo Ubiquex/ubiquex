@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
-	"github.com/ubiquex/ubiquex-cli/intentprovider/claude"
-	"github.com/ubiquex/ubiquex-cli/intentprovider/conformance"
+	"github.com/ubiquex/ubiquex/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider/claude"
+	"github.com/ubiquex/ubiquex/intentprovider/conformance"
 )
 
 // requireSlowLive skips t unless UBX_TEST_SLOW=1 is set -- this test

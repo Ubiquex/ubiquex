@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // IntentFileKind is the only legal IntentFile.Kind value for v1.

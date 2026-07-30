@@ -21,7 +21,7 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Key layout, all relative to whatever prefix the caller's own *blob.Bucket

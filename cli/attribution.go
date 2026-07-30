@@ -6,11 +6,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/audit/azure"
-	"github.com/ubiquex/ubiquex-cli/audit/cloudtrail"
-	"github.com/ubiquex/ubiquex-cli/audit/gcp"
-	"github.com/ubiquex/ubiquex-cli/audit/k8s"
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/audit/azure"
+	"github.com/ubiquex/ubiquex/audit/cloudtrail"
+	"github.com/ubiquex/ubiquex/audit/gcp"
+	"github.com/ubiquex/ubiquex/audit/k8s"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // errK8sAuditNotConfigured means a kubernetes_*/helm_release drift was

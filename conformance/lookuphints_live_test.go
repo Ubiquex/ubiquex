@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // TestLookupHints_LiveWrongLookup_TeachesTheMissingField is UBI-20

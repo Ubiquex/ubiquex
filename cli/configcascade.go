@@ -332,7 +332,7 @@ var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // joinProvenancePath extends base with key, quoting key if it isn't a
 // bare identifier (a provider source string like "hashicorp/aws" never
 // is). This is a new convention for this surface specifically -- neither
-// core/state.go's dotSet nor tfwrite's own dot-path splitting has ever
+// core/state.go's dotSet nor writeback's own dot-path splitting has ever
 // needed to quote a segment, since a resource attribute name is always a
 // bare identifier; a provider source string is not.
 func joinProvenancePath(base, key string) string {

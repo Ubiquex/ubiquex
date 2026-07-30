@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 const revertPlanProposal = `{
@@ -135,7 +135,7 @@ func TestRevertPlan_ResourceNotFoundInTFDir_ManualStep(t *testing.T) {
 		t.Fatalf("expected a manual-steps section, got: %s", out)
 	}
 	if !strings.Contains(out, "no matching resource block found") {
-		t.Fatalf("expected the underlying tfwrite error named, got: %s", out)
+		t.Fatalf("expected the underlying writeback error named, got: %s", out)
 	}
 	if strings.Contains(out, ".tf diff") {
 		t.Fatalf("nothing was applied -- must not print a .tf diff section, got: %s", out)

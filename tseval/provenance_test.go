@@ -1,4 +1,4 @@
-package sdkeval
+package tseval
 
 import (
 	"crypto/sha256"

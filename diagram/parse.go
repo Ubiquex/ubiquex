@@ -25,8 +25,8 @@ import (
 	"oss.terrastruct.com/d2/d2compiler"
 	"oss.terrastruct.com/d2/d2graph"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // externalClass is the D2 class name docs/diagram-medium.md's own

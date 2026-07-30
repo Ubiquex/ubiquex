@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core/lookuphints"
+	"github.com/ubiquex/ubiquex/core/lookuphints"
 )
 
 var (

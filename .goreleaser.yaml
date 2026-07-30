@@ -20,8 +20,8 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/ubiquex/ubiquex-cli/cli.Version={{ .Version }}
-      - -X github.com/ubiquex/ubiquex-cli/cli.Commit={{ .ShortCommit }}
+      - -X github.com/ubiquex/ubiquex/cli.Version={{ .Version }}
+      - -X github.com/ubiquex/ubiquex/cli.Commit={{ .ShortCommit }}
 
 archives:
   - id: ubx
@@ -39,7 +39,7 @@ checksum:
 release:
   github:
     owner: Ubiquex
-    name: ubiquex-cli
+    name: ubiquex
   name_template: "v{{ .Version }}"
 
 changelog:

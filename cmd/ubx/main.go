@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ubiquex/ubiquex-cli/cli"
+	"github.com/ubiquex/ubiquex/cli"
 )
 
 func main() {

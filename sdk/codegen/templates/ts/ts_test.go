@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/sdk/codegen/ir"
+	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
 )
 
 func rt(wireType string, fields ...ir.Field) *ir.ResourceType {

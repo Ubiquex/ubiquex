@@ -11,11 +11,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/goeval"
-	"github.com/ubiquex/ubiquex-cli/provider"
-	"github.com/ubiquex/ubiquex-cli/pyeval"
-	"github.com/ubiquex/ubiquex-cli/sdkeval"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/goeval"
+	"github.com/ubiquex/ubiquex/provider"
+	"github.com/ubiquex/ubiquex/pyeval"
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // newResolveCmd is UBI-27's resolver CLI surface: a new verb, not a flag
@@ -61,7 +61,7 @@ ledger's current head, activating neighbor-advance staleness for real once the p
 
 --from-code <entry>.ts|.go|.py, mutually exclusive with the positional intent-file argument,
 evaluates an SDK program instead of reading a file from disk -- dispatched by the entry file's own
-extension: .ts through the hermetic Deno evaluator (sdkeval, @ubx/sdk), .go by compiling the program
+extension: .ts through the hermetic Deno evaluator (tseval, @ubx/sdk), .go by compiling the program
 to a real binary and running it under this platform's own OS-level sandbox (goeval,
 github.com/ubiquex/ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py under WASI
 (pyeval, ubx_sdk; wasmtime running a real CPython-WASI build -- see docs/sdk.md's own "The Go
@@ -177,7 +177,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 }
 
 // evaluateSDKProgram dispatches --from-code to the language-specific
-// evaluator named by entryFile's own extension -- .ts to sdkeval (the
+// evaluator named by entryFile's own extension -- .ts to tseval (the
 // hermetic Deno evaluator), .go to goeval (compile + run under this
 // platform's own OS-level sandbox), .py to pyeval (run under WASI via
 // wasmtime). All three return the identical canonical, provenance-
@@ -190,7 +190,7 @@ func evaluateSDKProgram(ctx context.Context, entryFile string) ([]byte, error) {
 	case ".py":
 		return pyeval.Evaluate(ctx, entryFile)
 	case ".ts":
-		return sdkeval.Evaluate(ctx, entryFile)
+		return tseval.Evaluate(ctx, entryFile)
 	default:
 		return nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}

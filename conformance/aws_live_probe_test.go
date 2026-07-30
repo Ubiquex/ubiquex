@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestLiveProbes_AWSSNSTopic is UBI-50 session 3's own live-tier

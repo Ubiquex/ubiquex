@@ -13,14 +13,14 @@
 // compiled binary's whole "cheat"), Python is interpreted, so there is
 // no build/run split to exploit -- runOnce spawns a fresh wasmtime
 // subprocess re-interpreting the program's own source every time,
-// structurally closer to TS's own sdkeval shape than to goeval's.
+// structurally closer to TS's own tseval shape than to goeval's.
 package pyeval
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Evaluate spawns the evaluator harness against entryFile TWICE, via
@@ -28,7 +28,7 @@ import (
 // PYTHONHASHSEED is pinned unconditionally (docs/sdk.md's own
 // PYTHONHASHSEED finding) so the common nondeterminism source never
 // even reaches this backstop, but DoubleRun still catches anything else
-// (mirrors sdkeval.Evaluate/goeval.Evaluate's own structure exactly).
+// (mirrors tseval.Evaluate/goeval.Evaluate's own structure exactly).
 func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
 		raw, err := runOnce(ctx, entryFile)

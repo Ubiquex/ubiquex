@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/ledgerstore"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
 // openLedgerForStack opens the Ledger a command should use, per

@@ -26,7 +26,7 @@ import (
 	sdkcloudtrail "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Backend is cloudtrail's own core.AttributionBackend value, unchanged

@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/tfwrite"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/writeback"
 )
 
 // newRevertPlanCmd is UBI-16's "revert emits plan" (docs/plan.md M3-4,
@@ -115,8 +115,8 @@ func printPlan(out io.Writer, modifies []core.Modification) {
 }
 
 // printTFDiffAndManualSteps applies each modifies entry against tfDir via
-// the same tfwrite machinery ubx writeback uses -- fed a Modification whose
-// After is already the restore target, so no changes to tfwrite itself are
+// the same writeback machinery ubx writeback uses -- fed a Modification whose
+// After is already the restore target, so no changes to writeback itself are
 // needed; "reverse direction" describes the semantic meaning (the file
 // moves back toward original truth), not a different code path. Every
 // applied attribute prints as a diff; every declined attribute, and every
@@ -128,12 +128,12 @@ func printPlan(out io.Writer, modifies []core.Modification) {
 // exit code -- any manual step needed is an actionable finding, not a
 // clean pass.
 func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modification) (int, error) {
-	var declined []tfwrite.DeclinedAttribute
+	var declined []writeback.DeclinedAttribute
 	var notFound []string
 	anyDiff := false
 
 	for _, m := range modifies {
-		path, newContent, report, err := tfwrite.FindAndApply(tfDir, m.Target, m)
+		path, newContent, report, err := writeback.FindAndApply(tfDir, m.Target, m)
 		if err != nil {
 			notFound = append(notFound, fmt.Sprintf("%s: %v", m.Target, err))
 			continue

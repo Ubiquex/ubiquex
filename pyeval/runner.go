@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	pyassets "github.com/ubiquex/ubiquex-cli/sdk/py"
+	pyassets "github.com/ubiquex/ubiquex/sdk/py"
 )
 
 // runtimeGuestPath is the fixed guest path ubx_sdk's own runtime source

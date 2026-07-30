@@ -1,4 +1,4 @@
-package tfwrite
+package writeback
 
 import (
 	"bytes"

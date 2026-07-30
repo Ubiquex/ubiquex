@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // acceptFromMergeForVerifyTest runs a full accept --from-merge (against a

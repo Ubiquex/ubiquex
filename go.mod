@@ -1,4 +1,4 @@
-module github.com/ubiquex/ubiquex-cli
+module github.com/ubiquex/ubiquex
 
 go 1.26.3
 

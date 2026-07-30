@@ -37,7 +37,7 @@ import (
 	sdkcwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Backend is k8s's own core.AttributionBackend value: "k8s_audit"/

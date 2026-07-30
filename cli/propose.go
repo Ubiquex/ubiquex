@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/diagram"
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/diagram"
+	"github.com/ubiquex/ubiquex/intentprovider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // newProposeCmd serves three genuinely different pipeline stages under

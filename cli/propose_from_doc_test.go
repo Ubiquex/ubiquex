@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // fakeIntentAdapter is a hermetic, fully deterministic fake -- no

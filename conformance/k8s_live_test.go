@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // k8sProviderVersion/helmProviderVersion are pinned, not "latest" (see

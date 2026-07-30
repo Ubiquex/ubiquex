@@ -15,7 +15,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/ubiquex/ubiquex-cli/conformance"
+	"github.com/ubiquex/ubiquex/conformance"
 )
 
 func main() {

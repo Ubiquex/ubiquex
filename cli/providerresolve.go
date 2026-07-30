@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // resolveProviderBinary returns a path to a provider binary ready to

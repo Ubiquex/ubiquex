@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 func adoptViaCLI(t *testing.T, ledgerDir, stack, resourceType, name, lookup string, env []string) {

@@ -18,7 +18,7 @@ import (
 	"oss.terrastruct.com/d2/d2format"
 	"oss.terrastruct.com/d2/d2parser"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // emitResource is one live resource's own emit-time view, gathered before

@@ -1,4 +1,4 @@
-package tfwrite
+package writeback
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 func mod(addr core.Address, after map[string]json.RawMessage) core.Modification {

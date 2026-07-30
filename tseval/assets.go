@@ -1,4 +1,4 @@
-package sdkeval
+package tseval
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	tsassets "github.com/ubiquex/ubiquex-cli/sdk/ts"
+	tsassets "github.com/ubiquex/ubiquex/sdk/ts"
 )
 
 // embeddedFiles are exactly the files sdk/ts/embed.go's own //go:embed
@@ -30,29 +30,29 @@ var embeddedFiles = []string{
 // for a program author's own editor/IDE type-checking, never required
 // for evaluation to work.
 var extractAssets = sync.OnceValues(func() (string, error) {
-	dir, err := os.MkdirTemp("", "ubx-sdkeval-")
+	dir, err := os.MkdirTemp("", "ubx-tseval-")
 	if err != nil {
-		return "", fmt.Errorf("sdkeval: create assets dir: %w", err)
+		return "", fmt.Errorf("tseval: create assets dir: %w", err)
 	}
 
 	for _, name := range embeddedFiles {
 		data, err := tsassets.Assets.ReadFile(name)
 		if err != nil {
-			return "", fmt.Errorf("sdkeval: read embedded %s: %w", name, err)
+			return "", fmt.Errorf("tseval: read embedded %s: %w", name, err)
 		}
 		dest := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return "", fmt.Errorf("sdkeval: %w", err)
+			return "", fmt.Errorf("tseval: %w", err)
 		}
 		if err := os.WriteFile(dest, data, 0o644); err != nil {
-			return "", fmt.Errorf("sdkeval: %w", err)
+			return "", fmt.Errorf("tseval: %w", err)
 		}
 	}
 
 	runtimePath := filepath.Join(dir, "runtime", "src", "index.ts")
 	importMap := fmt.Sprintf(`{"imports":{"@ubx/sdk":%q}}`, runtimePath)
 	if err := os.WriteFile(filepath.Join(dir, "deno.json"), []byte(importMap), 0o644); err != nil {
-		return "", fmt.Errorf("sdkeval: write import map: %w", err)
+		return "", fmt.Errorf("tseval: write import map: %w", err)
 	}
 
 	return dir, nil

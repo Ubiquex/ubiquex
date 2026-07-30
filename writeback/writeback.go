@@ -1,7 +1,10 @@
-// Package tfwrite is UBI-11 stage 2's ".tf write-back": correcting an
-// existing Terraform resource block's literal attribute values to match an
-// accepted drift_adopt proposal's recorded reality — narrow-scope and
-// surgical by design (see docs/architecture.md's Decision loop section):
+// Package writeback is UBI-11 stage 2's ".tf write-back", implementing
+// the `ubx writeback` verb directly: correcting an existing Terraform
+// resource block's literal attribute values to match an accepted
+// drift_adopt proposal's recorded reality — narrow-scope and surgical
+// by design (see docs/architecture.md's Decision loop section). Named
+// for the CLI verb it implements, not the Terraform file format it
+// edits (UBI-52 — docs/source-tree.md):
 //
 //   - In scope: overwriting a literal attribute value (string, number,
 //     bool, or a literal map/list of those), including nested paths like
@@ -30,7 +33,7 @@
 // used, for exactly one thing: rendering a literal value's tokens
 // (TokensForValue), so quoting/formatting for new content matches HCL
 // conventions.
-package tfwrite
+package writeback
 
 import (
 	"errors"
@@ -42,7 +45,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 var (
@@ -187,7 +190,7 @@ func ApplyModification(src []byte, filename string, addr core.Address, mod core.
 func FindAndApply(dir string, addr core.Address, mod core.Modification) (path string, newContent []byte, report *Report, err error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.tf"))
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("tfwrite: glob %s: %w", dir, err)
+		return "", nil, nil, fmt.Errorf("writeback: glob %s: %w", dir, err)
 	}
 
 	type candidate struct {
@@ -198,7 +201,7 @@ func FindAndApply(dir string, addr core.Address, mod core.Modification) (path st
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("tfwrite: read %s: %w", f, err)
+			return "", nil, nil, fmt.Errorf("writeback: read %s: %w", f, err)
 		}
 		if countResourceBlocks(src, f, addr) > 0 {
 			matches = append(matches, candidate{f, src})
@@ -207,7 +210,7 @@ func FindAndApply(dir string, addr core.Address, mod core.Modification) (path st
 
 	switch len(matches) {
 	case 0:
-		return "", nil, nil, fmt.Errorf("tfwrite: %w: %s %q in %s", ErrResourceBlockNotFound, addr.Type, addr.Name, dir)
+		return "", nil, nil, fmt.Errorf("writeback: %w: %s %q in %s", ErrResourceBlockNotFound, addr.Type, addr.Name, dir)
 	case 1:
 		newContent, report, err := ApplyModification(matches[0].src, matches[0].path, addr, mod)
 		return matches[0].path, newContent, report, err
@@ -216,18 +219,18 @@ func FindAndApply(dir string, addr core.Address, mod core.Modification) (path st
 		for _, m := range matches {
 			names = append(names, m.path)
 		}
-		return "", nil, nil, fmt.Errorf("tfwrite: %w: %s %q found in %v", ErrMultipleResourceBlocks, addr.Type, addr.Name, names)
+		return "", nil, nil, fmt.Errorf("writeback: %w: %s %q found in %v", ErrMultipleResourceBlocks, addr.Type, addr.Name, names)
 	}
 }
 
 func parseBody(src []byte, filename string) (*hclsyntax.Body, error) {
 	f, diags := hclsyntax.ParseConfig(src, filename, hcl.InitialPos)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("tfwrite: parse %s: %w", filename, diags)
+		return nil, fmt.Errorf("writeback: parse %s: %w", filename, diags)
 	}
 	body, ok := f.Body.(*hclsyntax.Body)
 	if !ok {
-		return nil, fmt.Errorf("tfwrite: %s: unexpected body type %T", filename, f.Body)
+		return nil, fmt.Errorf("writeback: %s: unexpected body type %T", filename, f.Body)
 	}
 	return body, nil
 }
@@ -246,11 +249,11 @@ func findResourceBlock(src []byte, filename string, addr core.Address) (*hclsynt
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("tfwrite: %w: %s %q in %s", ErrResourceBlockNotFound, addr.Type, addr.Name, filename)
+		return nil, fmt.Errorf("writeback: %w: %s %q in %s", ErrResourceBlockNotFound, addr.Type, addr.Name, filename)
 	case 1:
 		return matches[0], nil
 	default:
-		return nil, fmt.Errorf("tfwrite: %w: %s %q in %s (%d blocks)", ErrMultipleResourceBlocks, addr.Type, addr.Name, filename, len(matches))
+		return nil, fmt.Errorf("writeback: %w: %s %q in %s (%d blocks)", ErrMultipleResourceBlocks, addr.Type, addr.Name, filename, len(matches))
 	}
 }
 

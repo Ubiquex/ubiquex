@@ -12,7 +12,7 @@ import (
 )
 
 // requireDeno skips a test when the real deno binary isn't on PATH --
-// same reasoning as sdkeval's own requireDeno (a new, genuinely hard
+// same reasoning as tseval's own requireDeno (a new, genuinely hard
 // dependency this arc introduces; skip loudly rather than hard-fail
 // `go test ./...` for a contributor who hasn't installed it yet).
 func requireDeno(t *testing.T) {
@@ -122,7 +122,7 @@ func requireHermeticSandbox(t *testing.T) {
 
 // TestResolveFromCode_Go_SimpleCreate mirrors TestResolveFromCode_SimpleCreate
 // exactly, but authors the same logical intent in Go instead of
-// TypeScript, through goeval instead of sdkeval (UBI-35's own dispatch,
+// TypeScript, through goeval instead of tseval (UBI-35's own dispatch,
 // resolve.go's evaluateSDKProgram) -- proof the two languages really do
 // converge on the exact same downstream pipeline, not just similar-
 // looking output.
@@ -191,7 +191,7 @@ func requireWasmtime(t *testing.T) {
 // TestResolveFromCode_Py_SimpleCreate mirrors
 // TestResolveFromCode_SimpleCreate/TestResolveFromCode_Go_SimpleCreate
 // exactly, but authors the same logical intent in Python instead,
-// through pyeval instead of sdkeval/goeval -- proof all three languages
+// through pyeval instead of tseval/goeval -- proof all three languages
 // really do converge on the exact same downstream pipeline.
 func TestResolveFromCode_Py_SimpleCreate(t *testing.T) {
 	requireWasmtime(t)
@@ -247,7 +247,7 @@ func TestResolveFromCode_Py_SimpleCreate(t *testing.T) {
 
 func TestResolveFromCode_MutuallyExclusiveWithPositionalArg(t *testing.T) {
 	// No requireDeno -- the mutual-exclusivity check happens before
-	// sdkeval.Evaluate is ever called.
+	// tseval.Evaluate is ever called.
 	ledgerDir := t.TempDir()
 	entryPath := filepath.Join("testdata", "sdk_resolve", "create_widget.ts")
 	intentPath := filepath.Join(ledgerDir, "intent.json")

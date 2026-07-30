@@ -9,15 +9,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/tfwrite"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/writeback"
 )
 
 // newWritebackCmd is UBI-11 stage 2: ".tf write-back" (docs/architecture.md
 // — Decision loop). Triggered only by an already-accepted drift_adopt
 // proposal — never a change or anything still in draft, since write-back
 // records reality into existing source, it doesn't propose new
-// infrastructure. Every attribute tfwrite declines is reported, not
+// infrastructure. Every attribute writeback declines is reported, not
 // silently dropped, and by default nothing is written to disk at all — a
 // diff is printed for review, matching every other "human in the loop"
 // surface in this trust chain (see cmd's own --write flag for opting into
@@ -79,7 +79,7 @@ func newWritebackCmd() *cobra.Command {
 			var unresolved []string
 			var declinedCount int
 			for _, m := range p.Delta.Modifies {
-				path, newContent, report, err := tfwrite.FindAndApply(tfDir, m.Target, m)
+				path, newContent, report, err := writeback.FindAndApply(tfDir, m.Target, m)
 				if err != nil {
 					fmt.Fprintf(out, "%s: %v\n", m.Target, err)
 					unresolved = append(unresolved, m.Target.String())

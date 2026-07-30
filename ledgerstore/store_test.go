@@ -11,7 +11,7 @@ import (
 
 	"gocloud.dev/blob/memblob"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // newTestStore returns a Store backed by a fresh, empty memblob bucket --

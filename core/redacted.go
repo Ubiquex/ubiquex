@@ -29,7 +29,7 @@ func isRedactedMarker(v map[string]interface{}) bool {
 }
 
 // IsRedactedValue reports whether raw decodes to exactly
-// {"$redacted": {...}} -- used by rendering/write-back code (cli, tfwrite)
+// {"$redacted": {...}} -- used by rendering/write-back code (cli, writeback)
 // that needs to recognize a redacted attribute value without recursing
 // into it or ever printing/writing its contents.
 func IsRedactedValue(raw json.RawMessage) bool {

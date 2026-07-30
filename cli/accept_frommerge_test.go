@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // fakeGitHubServer serves exactly the two GitHub API endpoints `ubx accept

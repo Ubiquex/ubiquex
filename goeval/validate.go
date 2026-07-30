@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // validateIntentShape strict-unmarshals canon against the real
-// core/resolver.IntentFile type -- the same reuse sdkeval's own
+// core/resolver.IntentFile type -- the same reuse tseval's own
 // validateIntentShape already established as correct (one canonical
 // source of truth for the wire shape, not a second, hand-maintained
 // schema that could silently drift from it). Duplicated rather than

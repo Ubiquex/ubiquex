@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // Hermetic tests for ResourceIntent.DependsOn (docs/schema.md's own

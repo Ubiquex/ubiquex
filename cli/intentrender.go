@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // renderAmbiguity is `ubx propose --from-doc`'s own human-facing render

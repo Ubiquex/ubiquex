@@ -1,4 +1,4 @@
-package tfstate
+package stateimport
 
 import (
 	"encoding/json"

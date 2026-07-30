@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ubiquex/ubiquex-cli/diagram"
+	"github.com/ubiquex/ubiquex/diagram"
 )
 
 // newRenderCmd is UBI-47 slice 4's own render half of the diagram medium

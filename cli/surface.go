@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	ghub "github.com/ubiquex/ubiquex-cli/github"
-	"github.com/ubiquex/ubiquex-cli/tfwrite"
+	"github.com/ubiquex/ubiquex/core"
+	ghub "github.com/ubiquex/ubiquex/github"
+	"github.com/ubiquex/ubiquex/writeback"
 )
 
 // surfaceDrift is UBI-11 stage 3's GitHub App skeleton: given a
@@ -78,12 +78,12 @@ func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr cor
 }
 
 // driftDiffPreview computes a best-effort ".tf write-back would do this"
-// preview for the receipt — if tfDir is empty, or tfwrite can't find/apply
+// preview for the receipt — if tfDir is empty, or writeback can't find/apply
 // a match (no .tf files given, resource block absent, etc.), the preview
 // is simply omitted rather than failing drift surfacing over an optional
-// enrichment. Reuses tfwrite.FindAndApply exactly as `ubx writeback` does;
+// enrichment. Reuses writeback.FindAndApply exactly as `ubx writeback` does;
 // nothing here requires the proposal to be accepted first, since this is
-// purely a dry-run preview, never a real write (tfwrite.FindAndApply
+// purely a dry-run preview, never a real write (writeback.FindAndApply
 // itself never touches disk — only cli/writeback.go's own --write flag
 // does that).
 func driftDiffPreview(p *core.Proposal, tfDir string) string {
@@ -92,7 +92,7 @@ func driftDiffPreview(p *core.Proposal, tfDir string) string {
 	}
 	var b strings.Builder
 	for _, m := range p.Delta.Modifies {
-		path, newContent, _, err := tfwrite.FindAndApply(tfDir, m.Target, m)
+		path, newContent, _, err := writeback.FindAndApply(tfDir, m.Target, m)
 		if err != nil {
 			fmt.Fprintf(&b, "(no .tf preview for %s: %v)\n", m.Target, err)
 			continue

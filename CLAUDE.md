@@ -1,8 +1,11 @@
-# CLAUDE.md — ubiquex-cli
+# CLAUDE.md — ubiquex
 
 ## What this is
 
-`ubiquex-cli` (binary: `ubx`) is a ground-up v2 of the Ubiquex infrastructure engine.
+`ubiquex` (binary: `ubx`; repo renamed from `ubiquex-cli` UBI-53, the
+product outgrew the "-cli" suffix — it now contains the SDK monorepo,
+the conformance harness, the MCP server) is a ground-up v2 of the
+Ubiquex infrastructure engine.
 Core thesis: **infrastructure change management via a proposal ledger** — every infra
 change is a typed, hashed, signed proposal recorded in an append-only per-stack ledger.
 Files, diagrams, chat, and docs are projections/frontends; the ledger is authoritative.
@@ -39,11 +42,28 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 
 ## Code conventions
 
-- Language: Go (module: `github.com/ubiquex/ubiquex-cli`).
+- Language: Go (module: `github.com/ubiquex/ubiquex`).
 - Layout: `core/` (IR, ledger, hashing), `provider/` (tfplugin client),
-  `cli/` (cobra commands), `tfwrite/` (surgical .tf edits), `github/`
-  (acceptance derivation), `cloudtrail/` (attribution), `conformance/`
-  (per-type registry + harness, test-only), `docs/`.
+  `cli/` (cobra commands), `writeback/` (surgical .tf edits), `github/`
+  (acceptance derivation), `audit/` (per-cloud drift/genesis attribution
+  backends), `conformance/` (per-type registry + harness, test-only),
+  `sdk/` (the multi-language SDK monorepo — TS/Go/Python runtimes,
+  codegen, evaluators), `docs/`.
+- **Package naming (UBI-52)**: name a package for ubx's own role, in
+  ubx's own vocabulary — not for whatever external product, file
+  format, or protocol the code happens to touch — unless the package's
+  entire reason to exist IS being a client for that exact external
+  thing (a generated protocol binding, a named cloud product's own API
+  client), in which case the external name IS the correct one (e.g.
+  `provider/tfplugin5` correctly names Terraform's own real wire
+  protocol; `tfstate/` incorrectly named a file format instead of its
+  own role, "import identity for onboarding" — renamed `stateimport/`).
+  Keep names short and lowercase (`audit/`, `diagram/`, `tseval/`/
+  `goeval/`/`pyeval/`). When a package implements an existing CLI verb
+  one-to-one, name it after that verb (`writeback/` implements `ubx
+  writeback`). Test: if you can't state the package's purpose in one
+  sentence from the name alone, the name is wrong. Full audit + verdicts:
+  `docs/source-tree.md`.
 - Determinism is a feature: anything feeding a hash must have canonical,
   reproducible serialization. No map-iteration ordering, no timestamps in
   hashed content, no environment leakage.

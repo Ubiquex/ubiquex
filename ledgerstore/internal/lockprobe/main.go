@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/ledgerstore"
+	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
 func main() {

@@ -22,7 +22,7 @@ import (
 // entryFile must live inside a real Go module (a go.mod found by
 // searching upward) that itself requires github.com/ubiquex/ubx-sdk-go
 // -- the evaluator does not auto-inject that dependency (unlike
-// sdkeval's own embedded-runtime-plus-import-map mechanism for
+// tseval's own embedded-runtime-plus-import-map mechanism for
 // @ubx/sdk); a real go.mod (with a `replace` during local development,
 // same as sdk/conformance/programs/go's own real one) is the ordinary,
 // idiomatic way any Go project declares a dependency, and requiring one

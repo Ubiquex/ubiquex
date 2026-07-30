@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // MaxAttempts is DraftWithRetry's own attempt budget -- one first attempt

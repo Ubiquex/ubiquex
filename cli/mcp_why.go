@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // computeWhyJSON is the `ubx_why` MCP tool's own "do the lookup, build the

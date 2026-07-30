@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // fakeSchema is a hermetic resolver.SchemaInspector -- mirrors

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/executor"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/executor"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // stateReaderAdapter adapts a provider.Provider to core.StateReader. core

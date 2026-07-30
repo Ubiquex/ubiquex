@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // fakeAdapter is a hermetic, fully deterministic fake -- no network, no

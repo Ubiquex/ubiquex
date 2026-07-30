@@ -1,4 +1,4 @@
-package sdkeval
+package tseval
 
 import (
 	"crypto/sha256"
@@ -44,7 +44,7 @@ import (
 func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 	data, err := os.ReadFile(entryFile)
 	if err != nil {
-		return nil, fmt.Errorf("sdkeval: stamp source: read entry file: %w", err)
+		return nil, fmt.Errorf("tseval: stamp source: read entry file: %w", err)
 	}
 	sum := sha256.Sum256(data)
 	source := map[string]interface{}{
@@ -55,11 +55,11 @@ func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 
 	var generic map[string]interface{}
 	if err := json.Unmarshal(raw, &generic); err != nil {
-		return nil, fmt.Errorf("sdkeval: stamp source: decode evaluated output: %w", err)
+		return nil, fmt.Errorf("tseval: stamp source: decode evaluated output: %w", err)
 	}
 	intentObj, ok := generic["intent"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("sdkeval: stamp source: evaluated output has no intent object")
+		return nil, fmt.Errorf("tseval: stamp source: evaluated output has no intent object")
 	}
 	existing, _ := intentObj["sources"].([]interface{})
 	intentObj["sources"] = append(existing, source)
@@ -67,7 +67,7 @@ func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 
 	stamped, err := json.Marshal(generic)
 	if err != nil {
-		return nil, fmt.Errorf("sdkeval: stamp source: re-encode: %w", err)
+		return nil, fmt.Errorf("tseval: stamp source: re-encode: %w", err)
 	}
 	return stamped, nil
 }

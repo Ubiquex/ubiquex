@@ -9,12 +9,12 @@ import (
 
 // Version is the ubx build version: a released tag like "0.1.0" for a
 // goreleaser build, "dev" for anything else. Overridden at build time via
-// -ldflags "-X github.com/ubiquex/ubiquex-cli/cli.Version=...".
+// -ldflags "-X github.com/ubiquex/ubiquex/cli.Version=...".
 var Version = "dev"
 
 // Commit is the short (7-char) commit SHA the binary was built from.
 // Overridden at build time via
-// -ldflags "-X github.com/ubiquex/ubiquex-cli/cli.Commit=...". Left empty
+// -ldflags "-X github.com/ubiquex/ubiquex/cli.Commit=...". Left empty
 // for a plain `go build` with no ldflags -- versionString falls back to
 // buildInfoRevision in that case, which reads the same information from
 // Go's own VCS build-info stamping (present automatically for any build

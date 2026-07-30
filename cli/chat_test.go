@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // chatFakeAdapter is a hermetic, fully deterministic fake -- no network,

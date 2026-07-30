@@ -7,8 +7,8 @@ import (
 	"oss.terrastruct.com/d2/d2format"
 	"oss.terrastruct.com/d2/d2parser"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // These tests exercise emitD2/attrTooltip/d2Quote directly -- the text-

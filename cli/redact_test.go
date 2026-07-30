@@ -191,7 +191,7 @@ func requireNoSecretMaterial(t *testing.T, path string, secrets ...string) {
 
 // TestWriteback_DeclinesRedactedAttribute is the CLI-level confirmation
 // that `ubx writeback` never writes a redacted marker into a real .tf
-// file, end to end through the actual command (tfwrite/tfwrite_test.go
+// file, end to end through the actual command (writeback/writeback_test.go
 // already covers the underlying mechanism in isolation).
 func TestWriteback_DeclinesRedactedAttribute(t *testing.T) {
 	ledgerDir := t.TempDir()

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 func isDarwin() bool { return runtime.GOOS == "darwin" }
@@ -20,7 +20,7 @@ func isLinux() bool  { return runtime.GOOS == "linux" }
 // hermetic mechanism available (docs/sdk.md's own "The Go evaluator:
 // decided empirically" -- macOS via sandbox-exec, Linux via bubblewrap;
 // see sandbox_darwin.go/sandbox_linux.go/sandbox_other.go), mirroring
-// sdkeval's own requireDeno: run for real whenever the real mechanism is
+// tseval's own requireDeno: run for real whenever the real mechanism is
 // present (as it is in this session's own macOS environment), skip
 // loudly rather than hard-fail otherwise.
 func requireSandbox(t *testing.T) {

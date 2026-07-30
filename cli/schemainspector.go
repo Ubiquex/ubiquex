@@ -3,8 +3,8 @@ package cli
 import (
 	"strings"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // schemaInspectorAdapter implements resolver.SchemaInspector against a

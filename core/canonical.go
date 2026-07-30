@@ -89,7 +89,7 @@ func canonicalProposalBytes(p *Proposal) ([]byte, error) {
 // needed for the SDK evaluator's own byte-identical-after-canonicalization
 // comparison, and as something that must be factored out of
 // canonicalProposalBytes's own JCS logic rather than reimplemented a
-// second time in a second place; sdkeval (docs/sdk.md slice 4) is that
+// second time in a second place; tseval (docs/sdk.md slice 4) is that
 // caller.
 func CanonicalJSON(v interface{}) ([]byte, error) {
 	canon, err := canonicalizeNumbers(v)
@@ -107,7 +107,7 @@ func CanonicalJSON(v interface{}) ([]byte, error) {
 }
 
 // CanonicalJSONBytes is CanonicalJSON's own convenience entry point for a
-// caller that starts from raw JSON text (e.g. sdkeval's own evaluator
+// caller that starts from raw JSON text (e.g. tseval's own evaluator
 // subprocess stdout) rather than an already-decoded value -- decodes with
 // UseNumber (so a large integer survives intact rather than rounding
 // through float64) and then canonicalizes exactly as CanonicalJSON does.

@@ -243,7 +243,7 @@ func TestHash_DomainPrefixApplied(t *testing.T) {
 
 // CanonicalJSON/CanonicalJSONBytes -- the general-purpose canonicalizer
 // factored out of canonicalProposalBytes's own JCS logic this session
-// (UBI-33/34 slice 4), for sdkeval's own use (docs/sdk.md's "byte-
+// (UBI-33/34 slice 4), for tseval's own use (docs/sdk.md's "byte-
 // identical-after-canonicalization" conformance discipline). These tests
 // exercise the exported entry points directly, independent of Proposal.
 

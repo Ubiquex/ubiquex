@@ -11,8 +11,8 @@ import (
 	"gocloud.dev/blob"
 	"gocloud.dev/blob/memblob"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/ledgerstore"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
 // UBI-32: `ubx accept --from-merge` against a remote-store stack -- git

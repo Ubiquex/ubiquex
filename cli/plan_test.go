@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestPlanShip_SimpleCreate_FusedAcceptApply exercises UBI-49's own two-step

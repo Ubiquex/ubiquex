@@ -89,8 +89,8 @@ import (
 	"github.com/zclconf/go-cty/cty"
 	ctymsgpack "github.com/zclconf/go-cty/cty/msgpack"
 
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin5"
-	"github.com/ubiquex/ubiquex-cli/provider/tfplugin6"
+	"github.com/ubiquex/ubiquex/provider/tfplugin5"
+	"github.com/ubiquex/ubiquex/provider/tfplugin6"
 )
 
 func main() {

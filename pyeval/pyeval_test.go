@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // requireWasmtime skips a test when the real wasmtime binary isn't on
-// PATH -- same reasoning as sdkeval's own requireDeno and goeval's own
+// PATH -- same reasoning as tseval's own requireDeno and goeval's own
 // requireSandbox: a genuinely new hard dependency this arc introduces;
 // skip loudly rather than break `go test ./...` for a contributor who
 // hasn't installed it yet, run for real whenever it's present (as it is

@@ -7,7 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 func TestNew_DefaultsModel(t *testing.T) {

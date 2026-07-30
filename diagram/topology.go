@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // topologyResource is one resources[] entry's own topology-relevant

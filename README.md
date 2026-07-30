@@ -1,4 +1,4 @@
-# ubiquex-cli
+# ubiquex
 
 `ubx` — infrastructure change management via a proposal ledger.
 
@@ -13,8 +13,10 @@ providers directly (tfplugin v5/v6) — no Terraform, no state files.
 ## Layout
 
 - `core/` — IR, ledger, canonical hashing
-- `provider/` — tfplugin v6 client
+- `provider/` — tfplugin v5/v6 client
 - `cli/` — the `ubx` binary
+- `sdk/` — the multi-language SDK monorepo (TypeScript/Go/Python)
 - `docs/` — architecture, schema constitution, plan
 
-See `docs/architecture.md` for the system model.
+See `docs/architecture.md` for the system model, `docs/source-tree.md`
+for the full package-by-package layout.

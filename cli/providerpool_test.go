@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core/executor"
+	"github.com/ubiquex/ubiquex/core/executor"
 )
 
 // fakeCloser counts Close calls -- providerPool_test.go's own stand-in for

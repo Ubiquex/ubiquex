@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // gcpProviderVersion is pinned, not "latest" (see docs/architecture.md —

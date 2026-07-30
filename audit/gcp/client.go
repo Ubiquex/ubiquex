@@ -29,7 +29,7 @@ import (
 	"google.golang.org/genproto/googleapis/cloud/audit"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // auditLogTypeURL is the well-known type URL Cloud Audit Log entries use

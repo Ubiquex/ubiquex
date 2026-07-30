@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // fakeSchema is a hermetic SchemaInspector -- real provider Sensitive/

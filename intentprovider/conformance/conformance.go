@@ -18,8 +18,8 @@ import (
 	"embed"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core/resolver"
-	"github.com/ubiquex/ubiquex-cli/intentprovider"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 //go:embed fixtures/*.md

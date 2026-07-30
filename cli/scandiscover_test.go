@@ -13,8 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 
-	"github.com/ubiquex/ubiquex-cli/core"
-	"github.com/ubiquex/ubiquex-cli/discovery"
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/discovery"
 )
 
 // fakeCLITaggingAPI is a hermetic, fully scripted discovery.TaggingAPI

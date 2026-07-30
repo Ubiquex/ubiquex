@@ -1,4 +1,4 @@
-package sdkeval
+package tseval
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // requireDeno skips a test when the real deno binary isn't on PATH --
@@ -26,7 +26,7 @@ import (
 func requireDeno(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("deno"); err != nil {
-		t.Skip("deno not found in PATH -- skipping sdkeval's real-subprocess tests (see this function's own doc comment)")
+		t.Skip("deno not found in PATH -- skipping tseval's real-subprocess tests (see this function's own doc comment)")
 	}
 }
 

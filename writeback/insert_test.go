@@ -1,11 +1,11 @@
-package tfwrite
+package writeback
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 const multilineNoCommaTF = `resource "aws_instance" "web" {

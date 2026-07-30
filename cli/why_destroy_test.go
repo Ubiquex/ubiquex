@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestWhy_RendersDestroyedResource exercises UBI-30's rendering gap end to
