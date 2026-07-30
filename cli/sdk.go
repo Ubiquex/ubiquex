@@ -26,7 +26,7 @@ import (
 func newSDKCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sdk",
-		Short: "SDK program commands (UBI-33/34): local codegen today, TypeScript evaluation later",
+		Short: "SDK program commands: local codegen today, TypeScript evaluation later",
 	}
 	cmd.AddCommand(newSDKGenCmd())
 	return cmd

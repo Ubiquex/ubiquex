@@ -108,8 +108,8 @@ func newProposeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&fromDoc, "from-doc", "", "path to a markdown authoring document -- transcribes it into an intent/v1 draft via the configured [intent] provider (UBI-41)")
-	cmd.Flags().StringVar(&fromDiagram, "from-diagram", "", "path to a .d2 diagram -- transcribes its topology into an intent/v1 draft (UBI-47)")
+	cmd.Flags().StringVar(&fromDoc, "from-doc", "", "path to a markdown authoring document -- transcribes it into an intent/v1 draft via the configured [intent] provider")
+	cmd.Flags().StringVar(&fromDiagram, "from-diagram", "", "path to a .d2 diagram -- transcribes its topology into an intent/v1 draft")
 	cmd.Flags().StringVar(&stack, "stack", "", "target stack name (required with --from-doc or --from-diagram)")
 	cmd.Flags().StringVar(&out, "out", "", "write the intent/v1 draft here instead of stdout (only with --from-doc or --from-diagram)")
 	cmd.Flags().StringVar(&summary, "summary", "", "intent.summary for the draft (only with --from-diagram -- a diagram has no prose to derive one from; defaults to a generated summary naming the stack and resource count if omitted)")

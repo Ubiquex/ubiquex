@@ -29,6 +29,9 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
    this repo) are updated immediately as before.
 6. Only reference Linear issue IDs given in the handoff prompt; never infer one.
    When filing new issues, verify the title against the Linear board.
+7. Background agents are not used in this project's sessions — work is sequential
+   by design (a background docs agent wedged mid-session during the UX-fix arc;
+   the fix is doing the work inline, in the foreground, every time).
 
 ## Git rules (strict)
 

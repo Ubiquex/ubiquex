@@ -1,22 +1,39 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
+// docsConfigRef is the one place this file names where the full,
+// annotated key encyclopedia actually lives (UBI-59: it moved to
+// cli/config.mdx -- `ubx init`'s own generated output, and its `--full`
+// mode, both point here instead of re-documenting every key inline).
+const docsConfigRef = "https://github.com/Ubiquex/ubiquex-docs, cli/config"
+
 // newInitCmd is UBI-19's config bootstrapper -- a new verb, no
 // init-shaped command existed before this session
-// (docs/architecture.md — Config defaults). Writes .ubx/config.<format>:
-// a real, active value for every key the caller supplied a flag for, a
-// commented-out example for everything else, so the file is immediately
-// useful as its own documentation of what's possible.
+// (docs/architecture.md — Config defaults).
+//
+// UBI-59 (founder first-user test): the original version of this command
+// wrote pure documentation -- every key commented out, four overlapping
+// provider shapes shown as equals with no guidance, rare keys getting the
+// most prose while the one thing every next step actually needs (a
+// provider) was buried. Default output now is a MINIMAL RUNNABLE config:
+// a real stack (from --stack, or the directory's own name), and a real
+// provider if one was given via flags or a short TTY prompt -- written
+// straight into the modern [providers]/[provider_configs] map (docs/
+// architecture.md §Multi-provider stacks) never the legacy singular
+// [provider]/[provider_config] shape, which a brand-new user has no
+// reason to ever see. `--full` restores the old exhaustive, annotated
+// encyclopedia (every key, real or commented) for whoever wants the full
+// reference inline instead of cli/config.mdx.
 //
 // --format defaults to "hcl" (UBI-32 Arc A: HCL is canonical -- "what
 // `ubx init` writes by default, what docs examples show,"
@@ -30,24 +47,33 @@ func newInitCmd() *cobra.Command {
 	var (
 		dir             string
 		force           bool
+		full            bool
 		format          string
 		stack           string
 		source          string
 		providerVersion string
 		providerPath    string
 		providerConfig  string
+		region          string
 		githubRepo      string
 		tfDir           string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Write a starter .ubx/config.<format> -- real values for whatever flags are given, commented examples for the rest",
+		Short: "Write a minimal, runnable .ubx/config.<format> -- real stack + provider if given, a pointer to the full reference for everything else",
 		Long: `Write .ubx/config.<format>, the defaults file every ubx command reads (docs/architecture.md — Config defaults
-and Config formats): provider identity, provider configuration, default stack, GitHub repository, and .tf directory.
-Any flag you give here is written as a real, active value; anything you don't is written as a commented-out example
-showing the correct syntax. --format selects hcl (canonical), toml, or yaml (strict, fully-quoted output); if not
-given, falls back to ~/.ubx/config's own init_format (a personal preference, never project config), then hcl.
+and Config formats). Default output is minimal and runnable: stack (from --stack, or this directory's own name)
+and, if given, a provider -- written into the modern [providers]/[provider_configs] map, the same shape a
+multi-provider stack uses (never the legacy singular [provider]/[provider_config] table, which --provider's own
+local-binary-path escape hatch still writes for local/dev use -- see --provider below). Everything else
+(github_repo, tf_dir, k8s_audit, ledger, intent) is left out of the default output entirely rather than shown
+commented -- see the full key reference at https://github.com/Ubiquex/ubiquex-docs, cli/config, or pass --full to
+get the old exhaustive, annotated file inline instead.
+
+If no provider is given by flag and this is a real terminal, a short prompt asks for one (registry source,
+version, optional region) -- press enter at the first prompt to skip and configure a provider later by hand.
+
 Refuses to overwrite an existing config unless --force is given.`,
 		// init has no "finding" concept -- it either writes the file or it
 		// doesn't (UBI-20 exit-code contract): 0 or 2 only.
@@ -70,12 +96,18 @@ Refuses to overwrite an existing config unless --force is given.`,
 				}
 			}
 			var render func(configTemplateValues) string
-			switch format {
-			case "hcl":
+			switch {
+			case full && format == "hcl":
+				render = renderConfigTemplateFullHCL
+			case full && format == "toml":
+				render = renderConfigTemplateFullTOML
+			case full && format == "yaml":
+				render = renderConfigTemplateFullYAML
+			case format == "hcl":
 				render = renderConfigTemplateHCL
-			case "toml":
+			case format == "toml":
 				render = renderConfigTemplateTOML
-			case "yaml":
+			case format == "yaml":
 				render = renderConfigTemplateYAML
 			default:
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --format must be one of hcl, toml, yaml (got %q)", format)}
@@ -86,6 +118,33 @@ Refuses to overwrite an existing config unless --force is given.`,
 				if err := json.Unmarshal([]byte(providerConfig), &providerConfigMap); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --provider-config: %w", err)}
 				}
+			}
+			if region != "" {
+				if providerConfigMap == nil {
+					providerConfigMap = map[string]any{}
+				}
+				providerConfigMap["region"] = region
+			}
+
+			// UBI-59: a provider is the one thing a brand-new config
+			// actually needs to be runnable -- if neither escape hatch
+			// (--provider path, --source registry) was given by flag, and
+			// this is a real terminal on both ends (not a hermetic test's
+			// bytes.Buffer/strings.Reader, not CI/scripted stdin), ask
+			// once, briefly, rather than write a config that immediately
+			// fails the first `ubx plan`. A non-interactive invocation
+			// with no provider flags gets exactly the old silent behavior
+			// -- no hang, no guess -- just a config with no provider yet.
+			if providerPath == "" && source == "" && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout()) {
+				promptedSource, promptedVersion, promptedConfig := promptForProvider(cmd)
+				source, providerVersion = promptedSource, promptedVersion
+				if promptedConfig != nil {
+					providerConfigMap = promptedConfig
+				}
+			}
+
+			if stack == "" {
+				stack = deriveStackFromDir(dir)
 			}
 
 			path := filepath.Join(dir, ".ubx", "config."+format)
@@ -112,7 +171,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %s already exists in this directory -- writing %s would create two config files with only one ever read per discovery order (config.hcl -> config.toml -> config -> config.yaml); use --format to match the existing file, or --force to write %s anyway", existing, path, path)}
 			}
 
-			content := render(configTemplateValues{
+			values := configTemplateValues{
 				Stack:           stack,
 				Source:          source,
 				ProviderVersion: providerVersion,
@@ -120,7 +179,8 @@ Refuses to overwrite an existing config unless --force is given.`,
 				ProviderConfig:  providerConfigMap,
 				GithubRepo:      githubRepo,
 				TFDir:           tfDir,
-			})
+			}
+			content := render(values)
 
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
@@ -129,27 +189,96 @@ Refuses to overwrite an existing config unless --force is given.`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: %w", err)}
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "wrote %s\n", path)
+			if !hasProvider(values) {
+				fmt.Fprintf(out, "next: add a provider (re-run with --source/--provider-version, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
+			} else {
+				fmt.Fprintf(out, "next: write an intent file and run `ubx plan <file>.json`, or `ubx plan --from-doc <file>.md --stack %s` -- see %s\n", stack, docsConfigRef)
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&dir, "dir", ".", "directory to write .ubx/config.<format> into")
+	cmd.Flags().StringVar(&dir, "dir", ".", "directory to write .ubx/config.<format> into -- also where the stack name defaults from, if --stack is omitted")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing .ubx/config.<format>")
+	cmd.Flags().BoolVar(&full, "full", false, "write the full, exhaustive annotated reference instead of the default minimal runnable config (every key, real values where given, commented examples for the rest)")
 	cmd.Flags().StringVar(&format, "format", "hcl", "config format to write: hcl (canonical), toml, or yaml (strict); falls back to ~/.ubx/config's own init_format, then hcl, if not given")
-	cmd.Flags().StringVar(&stack, "stack", "", "default stack name to write into the config")
-	cmd.Flags().StringVar(&source, "source", "", "default provider source, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
-	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "default provider version, e.g. 6.54.0 (used with --source)")
-	cmd.Flags().StringVar(&providerPath, "provider", "", "default provider binary path (mutually exclusive with --source)")
-	cmd.Flags().StringVar(&providerConfig, "provider-config", "", `default provider config, e.g. {"region":"us-east-1"}`)
+	cmd.Flags().StringVar(&stack, "stack", "", "default stack name to write into the config (default: this directory's own name)")
+	cmd.Flags().StringVar(&source, "source", "", "default provider registry source, e.g. hashicorp/aws -- written into the modern [providers] map (mutually exclusive with --provider; requires --provider-version)")
+	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
+	cmd.Flags().StringVar(&providerPath, "provider", "", "default provider binary path -- a local/dev escape hatch, written into the legacy singular [provider] table (mutually exclusive with --source; there is no local-path slot in the modern map)")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "", `default provider config, e.g. {"region":"us-east-1"} -- merged with --region if both are given`)
+	cmd.Flags().StringVar(&region, "region", "", "shorthand for --provider-config's most common key -- equivalent to --provider-config '{\"region\":\"<region>\"}'")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "default GitHub repository, e.g. acme/infra")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "default .tf directory")
 
 	return cmd
 }
 
+// promptForProvider is UBI-59's own "short TTY prompt" -- three lines,
+// any of which can be skipped by pressing enter, never more than that:
+// the whole point is getting a brand-new user to a runnable config
+// faster than hand-editing commented-out TOML/HCL/YAML, not replacing
+// that editing with an equally long interview. Returning "" for source
+// means "configure later" -- the caller falls back to the default
+// (empty/unconfigured) provider exactly like a flag-less, non-interactive
+// invocation would.
+func promptForProvider(cmd *cobra.Command) (source, version string, providerConfig map[string]any) {
+	out := cmd.OutOrStdout()
+	scanner := bufio.NewScanner(cmd.InOrStdin())
+
+	fmt.Fprint(out, "Provider registry source, e.g. hashicorp/aws (enter to skip, configure later): ")
+	if !scanner.Scan() {
+		return "", "", nil
+	}
+	source = strings.TrimSpace(scanner.Text())
+	if source == "" {
+		return "", "", nil
+	}
+
+	fmt.Fprint(out, "Version, e.g. 6.60.0 (required -- no \"latest\" pin): ")
+	if !scanner.Scan() {
+		return "", "", nil
+	}
+	version = strings.TrimSpace(scanner.Text())
+	if version == "" {
+		fmt.Fprintln(out, "no version given -- leaving the provider unconfigured; fill in providers/provider_configs by hand, or re-run with --source/--provider-version")
+		return "", "", nil
+	}
+
+	fmt.Fprint(out, "Region, optional (enter to skip): ")
+	if scanner.Scan() {
+		if r := strings.TrimSpace(scanner.Text()); r != "" {
+			providerConfig = map[string]any{"region": r}
+		}
+	}
+	return source, version, providerConfig
+}
+
+// deriveStackFromDir is UBI-59's "stack (from dir name or --stack)":
+// dir's own resolved (absolute) base name -- resolving to absolute first
+// so the common `ubx init` (dir defaults to ".") reads the real
+// directory name, not the literal string ".". Returns "" for anything
+// that isn't a usable name (root, or a resolution failure) -- the
+// caller's own fallback (an empty Stack, exactly like today's
+// no-flags-given behavior) handles that case identically to any other
+// "nothing given" path.
+func deriveStackFromDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	base := filepath.Base(abs)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return base
+}
+
 // configTemplateValues holds whatever real values ubx init was given --
-// zero values mean "write a commented example instead."
+// zero values mean "write a commented example instead" (or, in the
+// default minimal template, "omit entirely").
 type configTemplateValues struct {
 	Stack           string
 	Source          string
@@ -160,24 +289,210 @@ type configTemplateValues struct {
 	TFDir           string
 }
 
-// renderConfigTemplateTOML builds .ubx/config.toml's full text: a header
-// comment, then one block per config key, real values where given,
-// commented examples otherwise.
+// hasProvider reports whether v carries a real provider, either shape --
+// the one condition that decides both the closing "next:" hint's own
+// wording and the minimal template's provider block content.
+func hasProvider(v configTemplateValues) bool {
+	return v.ProviderPath != "" || v.Source != ""
+}
+
+// nextStepComment is the closing "next:" pointer every template (minimal
+// or --full, any format) ends with -- UBI-59's own explicit fix for the
+// original template's "no next-step pointer" gap. hasProvider decides
+// which of two honest next steps applies: a runnable config can go
+// straight to `ubx plan`; one with no provider yet needs that filled in
+// first, or `ubx plan` fails immediately, no better than before this
+// session.
+func nextStepComment(stack string, hasProvider bool) string {
+	if stack == "" {
+		stack = "<stack>"
+	}
+	if !hasProvider {
+		return fmt.Sprintf(
+			"# next: add a provider above (uncomment providers/provider_configs, or\n"+
+				"# re-run `ubx init --source <registry-source> --provider-version <version>`),\n"+
+				"# then `ubx plan --from-doc <file>.md --stack %s` -- see %s\n",
+			stack, docsConfigRef)
+	}
+	return fmt.Sprintf(
+		"# next: write an intent file and run `ubx plan <file>.json`, or\n"+
+			"# `ubx plan --from-doc <file>.md --stack %s` -- see %s\n",
+		stack, docsConfigRef)
+}
+
+// --- Minimal, runnable templates (UBI-59's own default) --------------------
+
+// renderConfigTemplateHCL builds the default, minimal .ubx/config.hcl:
+// a real stack, a real provider if one was given (modern [providers]
+// map, or the legacy singular [provider] table for --provider's own
+// local-path escape hatch -- never both), real github_repo/tf_dir if
+// given, and a closing next-step pointer. Nothing else -- every other
+// key (k8s_audit, ledger, intent) is left for cli/config.mdx or --full,
+// not shown commented here at all.
+func renderConfigTemplateHCL(v configTemplateValues) string {
+	var b strings.Builder
+	b.WriteString("# .ubx/config.hcl -- generated by `ubx init` (HCL is the canonical format).\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
+	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n\n")
+
+	if v.Stack != "" {
+		fmt.Fprintf(&b, "stack = %s\n\n", literalValue(v.Stack))
+	}
+
+	switch {
+	case v.ProviderPath != "":
+		fmt.Fprintf(&b, "provider = {\n  path = %s\n}\n\n", literalValue(v.ProviderPath))
+	case v.Source != "":
+		fmt.Fprintf(&b, "providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		if len(v.ProviderConfig) > 0 {
+			b.WriteString("provider_configs = {\n")
+			fmt.Fprintf(&b, "  %s = {\n", literalValue(v.Source))
+			for _, k := range sortedKeys(v.ProviderConfig) {
+				fmt.Fprintf(&b, "    %s = %s\n", k, literalValue(v.ProviderConfig[k]))
+			}
+			b.WriteString("  }\n}\n\n")
+		}
+	default:
+		b.WriteString("# providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n")
+		b.WriteString("# provider_configs = {\n#   \"hashicorp/aws\" = {\n#     region = \"us-east-1\"\n#   }\n# }\n\n")
+	}
+
+	if v.GithubRepo != "" {
+		fmt.Fprintf(&b, "github_repo = %s\n", literalValue(v.GithubRepo))
+	}
+	if v.TFDir != "" {
+		fmt.Fprintf(&b, "tf_dir = %s\n", literalValue(v.TFDir))
+	}
+	if v.GithubRepo != "" || v.TFDir != "" {
+		b.WriteString("\n")
+	}
+
+	b.WriteString("# Full key reference (github_repo, tf_dir, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
+	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
+
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	return b.String()
+}
+
+// renderConfigTemplateTOML is renderConfigTemplateHCL's TOML sibling.
+// Root-level (non-table) keys MUST come before any [table] header -- in
+// TOML, a bare key after a [table] section belongs to that table, not the
+// document root, regardless of blank lines between them (the same real
+// ordering constraint the original --full template already had to get
+// right).
 func renderConfigTemplateTOML(v configTemplateValues) string {
 	var b strings.Builder
 	b.WriteString("# .ubx/config.toml -- generated by `ubx init --format=toml`.\n")
-	b.WriteString("# CLI flags always override these; see https://github.com/Ubiquex/ubiquex-docs, cli/config.\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
 	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n\n")
 
-	// Root-level (non-table) keys MUST come before any [table] header --
-	// in TOML, a bare key after a [table] section belongs to that table,
-	// not the document root, regardless of blank lines between them. This
-	// is a real ordering constraint, not a style choice: getting it
-	// backwards (tables first) silently swallows stack/github_repo/tf_dir
-	// into whatever table came last, and every value defined this way
-	// reads back empty -- caught only by writing a real config file with
-	// `ubx init` and decoding it back, not by inspecting the string
-	// template by eye.
+	if v.Stack != "" {
+		fmt.Fprintf(&b, "stack = %q\n\n", v.Stack)
+	}
+	if v.GithubRepo != "" {
+		fmt.Fprintf(&b, "github_repo = %q\n", v.GithubRepo)
+	}
+	if v.TFDir != "" {
+		fmt.Fprintf(&b, "tf_dir = %q\n", v.TFDir)
+	}
+	if v.GithubRepo != "" || v.TFDir != "" {
+		b.WriteString("\n")
+	}
+
+	switch {
+	case v.ProviderPath != "":
+		b.WriteString("[provider]\n")
+		fmt.Fprintf(&b, "path = %q\n\n", v.ProviderPath)
+	case v.Source != "":
+		b.WriteString("[providers]\n")
+		fmt.Fprintf(&b, "%q = %q\n\n", v.Source, v.ProviderVersion)
+		if len(v.ProviderConfig) > 0 {
+			fmt.Fprintf(&b, "[provider_configs.%q]\n", v.Source)
+			for _, k := range sortedKeys(v.ProviderConfig) {
+				fmt.Fprintf(&b, "%s = %s\n", k, literalValue(v.ProviderConfig[k]))
+			}
+			b.WriteString("\n")
+		}
+	default:
+		b.WriteString("# [providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n#\n")
+		b.WriteString("# [provider_configs.\"hashicorp/aws\"]\n# region = \"us-east-1\"\n\n")
+	}
+
+	b.WriteString("# Full key reference (github_repo, tf_dir, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
+	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
+
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	return b.String()
+}
+
+// renderConfigTemplateYAML is renderConfigTemplateHCL's YAML sibling, in
+// strict mode's own spirit: every real value quoted explicitly, never
+// left as a bare token strict-mode parsing would otherwise have to judge.
+func renderConfigTemplateYAML(v configTemplateValues) string {
+	var b strings.Builder
+	b.WriteString("# .ubx/config.yaml -- generated by `ubx init --format=yaml`.\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
+	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n")
+	b.WriteString("# Strict mode: quote every value explicitly -- an unquoted numeric-looking\n")
+	b.WriteString("# value that would silently narrow (e.g. 6.60 -> 6.6) is a hard error.\n\n")
+
+	if v.Stack != "" {
+		fmt.Fprintf(&b, "stack: %s\n\n", literalValue(v.Stack))
+	}
+	if v.GithubRepo != "" {
+		fmt.Fprintf(&b, "github_repo: %s\n", literalValue(v.GithubRepo))
+	}
+	if v.TFDir != "" {
+		fmt.Fprintf(&b, "tf_dir: %s\n", literalValue(v.TFDir))
+	}
+	if v.GithubRepo != "" || v.TFDir != "" {
+		b.WriteString("\n")
+	}
+
+	switch {
+	case v.ProviderPath != "":
+		fmt.Fprintf(&b, "provider:\n  path: %s\n\n", literalValue(v.ProviderPath))
+	case v.Source != "":
+		fmt.Fprintf(&b, "providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		if len(v.ProviderConfig) > 0 {
+			fmt.Fprintf(&b, "provider_configs:\n  %s:\n", literalValue(v.Source))
+			for _, k := range sortedKeys(v.ProviderConfig) {
+				fmt.Fprintf(&b, "    %s: %s\n", k, literalValue(v.ProviderConfig[k]))
+			}
+			b.WriteString("\n")
+		}
+	default:
+		b.WriteString("# providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
+		b.WriteString("# provider_configs:\n#   \"hashicorp/aws\":\n#     region: \"us-east-1\"\n\n")
+	}
+
+	b.WriteString("# Full key reference (github_repo, tf_dir, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
+	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
+
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	return b.String()
+}
+
+// --- Full, exhaustive annotated templates (`ubx init --full`) --------------
+//
+// UBI-59: this is (modulo internal ticket numbers, stripped -- "generated
+// output" is user-facing, this project's own internal issue tracker
+// isn't) the same exhaustive, one-block-per-key reference the original
+// `ubx init` always wrote. It moved out of the default path because a
+// brand-new user's very first file was pure documentation with no
+// working provider in it -- it hasn't gone away; cli/config.mdx is now
+// its primary home, and --full is the same content for whoever wants it
+// inline instead of a browser tab.
+
+func renderConfigTemplateFullTOML(v configTemplateValues) string {
+	var b strings.Builder
+	b.WriteString("# .ubx/config.toml -- generated by `ubx init --format=toml --full`.\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
+	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n\n")
+
 	b.WriteString("# Default stack for commands that need one (e.g. `ubx scan`, `ubx status --stack`).\n")
 	if v.Stack != "" {
 		fmt.Fprintf(&b, "stack = %q\n", v.Stack)
@@ -202,17 +517,14 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider identity: EITHER a local binary path, OR a registry source + explicit version.\n")
+	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch only;\n")
+	b.WriteString("# new stacks should prefer [providers] below instead.\n")
 	b.WriteString("[provider]\n")
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "path = %q\n", v.ProviderPath)
 		b.WriteString("# source = \"hashicorp/aws\"\n")
 		b.WriteString("# version = \"6.54.0\"\n")
-	case v.Source != "":
-		b.WriteString("# path = \"/path/to/terraform-provider-aws\"\n")
-		fmt.Fprintf(&b, "source = %q\n", v.Source)
-		fmt.Fprintf(&b, "version = %q\n", v.ProviderVersion)
 	default:
 		b.WriteString("# path = \"/path/to/terraform-provider-aws\"\n")
 		b.WriteString("# source = \"hashicorp/aws\"\n")
@@ -220,26 +532,35 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider configuration, e.g. the region a provider should read from.\n")
+	b.WriteString("# Provider configuration for the legacy [provider] shape above.\n")
 	b.WriteString("[provider_config]\n")
-	if len(v.ProviderConfig) > 0 {
-		keys := make([]string, 0, len(v.ProviderConfig))
-		for k := range v.ProviderConfig {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+	b.WriteString("# region = \"us-east-1\"\n\n")
+
+	b.WriteString("# A stack's whole declared provider set -- source -> pinned version, explicit\n")
+	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
+	b.WriteString("# multi-provider alike.\n")
+	if v.Source != "" {
+		b.WriteString("[providers]\n")
+		fmt.Fprintf(&b, "%q = %q\n\n", v.Source, v.ProviderVersion)
+	} else {
+		b.WriteString("# [providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n\n")
+	}
+
+	b.WriteString("# Per-source provider configuration, for [providers] above.\n")
+	if v.Source != "" && len(v.ProviderConfig) > 0 {
+		fmt.Fprintf(&b, "[provider_configs.%q]\n", v.Source)
+		for _, k := range sortedKeys(v.ProviderConfig) {
 			fmt.Fprintf(&b, "%s = %s\n", k, literalValue(v.ProviderConfig[k]))
 		}
+		b.WriteString("\n")
 	} else {
-		b.WriteString("# region = \"us-east-1\"\n")
+		b.WriteString("# [provider_configs.\"hashicorp/aws\"]\n# region = \"us-east-1\"\n\n")
 	}
-	b.WriteString("\n")
 
 	b.WriteString("# EKS control-plane audit log attribution for kubernetes_*/helm_release\n")
-	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
-	b.WriteString("# cluster unset means such a drift's attribution records\n")
-	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
+	b.WriteString("# drift -- entirely optional, no CLI flag equivalent. Absent or cluster unset\n")
+	b.WriteString("# means such a drift's attribution records audit_unattributed/not_configured,\n")
+	b.WriteString("# never blocking detection.\n")
 	b.WriteString("[k8s_audit]\n")
 	b.WriteString("# cluster = \"my-eks-cluster\"\n")
 	b.WriteString("# region = \"us-east-1\"\n")
@@ -250,23 +571,16 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
 	b.WriteString("[ledger]\n")
-	b.WriteString("# store = \"s3://acme-ledger/acme/prod/\"\n")
+	b.WriteString("# store = \"s3://acme-ledger/acme/prod/\"\n\n")
 
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
 	return b.String()
 }
 
-// renderConfigTemplateHCL builds .ubx/config.hcl's full text -- the
-// canonical format `ubx init` writes by default (UBI-32 Arc A).
-// Every table is an attribute holding an object-constructor expression
-// (`provider = { ... }`), never an HCL block -- see confighcl.go's own
-// doc comment for why blocks don't work here at all (quoted argument
-// names aren't valid HCL). Unlike the TOML renderer, key order here is
-// never load-bearing -- an object-constructor expression has no
-// "everything after this belongs to a different section" footgun.
-func renderConfigTemplateHCL(v configTemplateValues) string {
+func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	var b strings.Builder
-	b.WriteString("# .ubx/config.hcl -- generated by `ubx init` (HCL is the canonical format).\n")
-	b.WriteString("# CLI flags always override these; see https://github.com/Ubiquex/ubiquex-docs, cli/config.\n")
+	b.WriteString("# .ubx/config.hcl -- generated by `ubx init --full` (HCL is the canonical format).\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
 	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n")
 	b.WriteString("# Literal values only: no variables, functions, or interpolation.\n\n")
 
@@ -294,63 +608,59 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider identity: EITHER a local binary path, OR a registry source + explicit version.\n")
+	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch\n")
+	b.WriteString("# only; new stacks should prefer `providers` below instead.\n")
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider = {\n  path = %s\n  # source = \"hashicorp/aws\"\n  # version = \"6.54.0\"\n}\n", literalValue(v.ProviderPath))
-	case v.Source != "":
-		fmt.Fprintf(&b, "provider = {\n  # path = \"/path/to/terraform-provider-aws\"\n  source  = %s\n  version = %s\n}\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	default:
 		b.WriteString("# provider = {\n#   path = \"/path/to/terraform-provider-aws\"\n#   source = \"hashicorp/aws\"\n#   version = \"6.54.0\"\n# }\n")
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider configuration, e.g. the region a provider should read from.\n")
-	if len(v.ProviderConfig) > 0 {
-		b.WriteString("provider_config = {\n")
-		keys := make([]string, 0, len(v.ProviderConfig))
-		for k := range v.ProviderConfig {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(&b, "  %s = %s\n", k, literalValue(v.ProviderConfig[k]))
-		}
-		b.WriteString("}\n")
+	b.WriteString("# Provider configuration for the legacy provider shape above.\n")
+	b.WriteString("# provider_config = {\n#   region = \"us-east-1\"\n# }\n\n")
+
+	b.WriteString("# A stack's whole declared provider set -- source -> pinned version, explicit\n")
+	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
+	b.WriteString("# multi-provider alike.\n")
+	if v.Source != "" {
+		fmt.Fprintf(&b, "providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	} else {
-		b.WriteString("# provider_config = {\n#   region = \"us-east-1\"\n# }\n")
+		b.WriteString("# providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n\n")
 	}
-	b.WriteString("\n")
 
-	b.WriteString("# A stack's whole declared provider set (UBI-43 multi-provider stacks) --\n")
-	b.WriteString("# source -> pinned version, explicit pins only.\n")
-	b.WriteString("# providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n\n")
-
-	b.WriteString("# Per-source provider configuration, for a multi-provider stack.\n")
-	b.WriteString("# provider_configs = {\n#   \"hashicorp/aws\" = {\n#     region = \"us-east-1\"\n#   }\n# }\n\n")
+	b.WriteString("# Per-source provider configuration, for `providers` above.\n")
+	if v.Source != "" && len(v.ProviderConfig) > 0 {
+		b.WriteString("provider_configs = {\n")
+		fmt.Fprintf(&b, "  %s = {\n", literalValue(v.Source))
+		for _, k := range sortedKeys(v.ProviderConfig) {
+			fmt.Fprintf(&b, "    %s = %s\n", k, literalValue(v.ProviderConfig[k]))
+		}
+		b.WriteString("  }\n}\n\n")
+	} else {
+		b.WriteString("# provider_configs = {\n#   \"hashicorp/aws\" = {\n#     region = \"us-east-1\"\n#   }\n# }\n\n")
+	}
 
 	b.WriteString("# EKS control-plane audit log attribution for kubernetes_*/helm_release\n")
-	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
-	b.WriteString("# cluster unset means such a drift's attribution records\n")
-	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
+	b.WriteString("# drift -- entirely optional, no CLI flag equivalent. Absent or cluster unset\n")
+	b.WriteString("# means such a drift's attribution records audit_unattributed/not_configured,\n")
+	b.WriteString("# never blocking detection.\n")
 	b.WriteString("# k8s_audit = {\n#   cluster = \"my-eks-cluster\"\n#   region = \"us-east-1\"\n#   log_group = \"/aws/eks/my-eks-cluster/cluster\"\n# }\n\n")
 
 	b.WriteString("# Which LedgerStore backs this stack -- absent or \"git\" is today's exact\n")
 	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
-	b.WriteString("# ledger = {\n#   store = \"s3://acme-ledger/acme/prod/\"\n# }\n")
+	b.WriteString("# ledger = {\n#   store = \"s3://acme-ledger/acme/prod/\"\n# }\n\n")
 
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
 	return b.String()
 }
 
-// renderConfigTemplateYAML builds .ubx/config.yaml's full text, in
-// strict mode's own spirit: every real value quoted explicitly, never
-// left as a bare token strict-mode parsing would otherwise have to judge
-// (docs/architecture.md's own "writes fully-quoted, unambiguous output").
-func renderConfigTemplateYAML(v configTemplateValues) string {
+func renderConfigTemplateFullYAML(v configTemplateValues) string {
 	var b strings.Builder
-	b.WriteString("# .ubx/config.yaml -- generated by `ubx init --format=yaml`.\n")
-	b.WriteString("# CLI flags always override these; see https://github.com/Ubiquex/ubiquex-docs, cli/config.\n")
+	b.WriteString("# .ubx/config.yaml -- generated by `ubx init --format=yaml --full`.\n")
+	b.WriteString("# CLI flags always override these; see " + docsConfigRef + ".\n")
 	b.WriteString("# Unknown keys warn, they don't fail -- safe to hand-edit.\n")
 	b.WriteString("# Strict mode: quote every value explicitly -- an unquoted numeric-looking\n")
 	b.WriteString("# value that would silently narrow (e.g. 6.60 -> 6.6) is a hard error.\n\n")
@@ -379,53 +689,60 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider identity: EITHER a local binary path, OR a registry source + explicit version.\n")
+	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch\n")
+	b.WriteString("# only; new stacks should prefer `providers` below instead.\n")
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider:\n  path: %s\n  # source: \"hashicorp/aws\"\n  # version: \"6.54.0\"\n", literalValue(v.ProviderPath))
-	case v.Source != "":
-		fmt.Fprintf(&b, "provider:\n  # path: \"/path/to/terraform-provider-aws\"\n  source: %s\n  version: %s\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	default:
 		b.WriteString("# provider:\n#   path: \"/path/to/terraform-provider-aws\"\n#   source: \"hashicorp/aws\"\n#   version: \"6.54.0\"\n")
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Provider configuration, e.g. the region a provider should read from.\n")
-	if len(v.ProviderConfig) > 0 {
-		b.WriteString("provider_config:\n")
-		keys := make([]string, 0, len(v.ProviderConfig))
-		for k := range v.ProviderConfig {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(&b, "  %s: %s\n", k, literalValue(v.ProviderConfig[k]))
-		}
+	b.WriteString("# Provider configuration for the legacy provider shape above.\n")
+	b.WriteString("# provider_config:\n#   region: \"us-east-1\"\n\n")
+
+	b.WriteString("# A stack's whole declared provider set -- source -> pinned version, explicit\n")
+	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
+	b.WriteString("# multi-provider alike.\n")
+	if v.Source != "" {
+		fmt.Fprintf(&b, "providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	} else {
-		b.WriteString("# provider_config:\n#   region: \"us-east-1\"\n")
+		b.WriteString("# providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
 	}
-	b.WriteString("\n")
 
-	b.WriteString("# A stack's whole declared provider set (UBI-43 multi-provider stacks) --\n")
-	b.WriteString("# source -> pinned version, explicit pins only.\n")
-	b.WriteString("# providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
-
-	b.WriteString("# Per-source provider configuration, for a multi-provider stack.\n")
-	b.WriteString("# provider_configs:\n#   \"hashicorp/aws\":\n#     region: \"us-east-1\"\n\n")
+	b.WriteString("# Per-source provider configuration, for `providers` above.\n")
+	if v.Source != "" && len(v.ProviderConfig) > 0 {
+		fmt.Fprintf(&b, "provider_configs:\n  %s:\n", literalValue(v.Source))
+		for _, k := range sortedKeys(v.ProviderConfig) {
+			fmt.Fprintf(&b, "    %s: %s\n", k, literalValue(v.ProviderConfig[k]))
+		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("# provider_configs:\n#   \"hashicorp/aws\":\n#     region: \"us-east-1\"\n\n")
+	}
 
 	b.WriteString("# EKS control-plane audit log attribution for kubernetes_*/helm_release\n")
-	b.WriteString("# drift (UBI-22) -- entirely optional, no CLI flag equivalent. Absent or\n")
-	b.WriteString("# cluster unset means such a drift's attribution records\n")
-	b.WriteString("# audit_unattributed/not_configured, never blocking detection.\n")
+	b.WriteString("# drift -- entirely optional, no CLI flag equivalent. Absent or cluster unset\n")
+	b.WriteString("# means such a drift's attribution records audit_unattributed/not_configured,\n")
+	b.WriteString("# never blocking detection.\n")
 	b.WriteString("# k8s_audit:\n#   cluster: \"my-eks-cluster\"\n#   region: \"us-east-1\"\n#   log_group: \"/aws/eks/my-eks-cluster/cluster\"\n\n")
 
 	b.WriteString("# Which LedgerStore backs this stack -- absent or \"git\" is today's exact\n")
 	b.WriteString("# in-repo directory behavior (--ledger-dir), unchanged. A stack name is\n")
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
-	b.WriteString("# ledger:\n#   store: \"s3://acme-ledger/acme/prod/\"\n")
+	b.WriteString("# ledger:\n#   store: \"s3://acme-ledger/acme/prod/\"\n\n")
 
+	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
 	return b.String()
 }
+
+// sortedKeys (configcascade.go) returns m's own keys, sorted --
+// determinism is a feature (CLAUDE.md's own standing rule): a provider
+// config is a Go map once decoded from --provider-config's JSON, and
+// writing it out must do so in a reproducible order, not whatever map
+// iteration happens to produce this run. Reused here unchanged, not
+// redefined -- genericTree is a type alias for map[string]any.
 
 // literalValue renders a decoded-JSON value (string, float64, bool --
 // the only types encoding/json ever produces from a flat

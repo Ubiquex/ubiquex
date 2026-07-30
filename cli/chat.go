@@ -40,7 +40,7 @@ func newChatCmd() *cobra.Command {
 		Short: "Interactively draft an intent/v1 draft, one turn at a time, via the configured [intent] provider",
 		Long: `Reads turns from stdin, one per line, redrafting the whole conversation via the
 configured [intent] provider after every turn (docs/intent-provider.md's own
-"Amendment: the chat medium", UBI-46). Type "/save" to finalize -- this writes the
+"Amendment: the chat medium"). Type "/save" to finalize -- this writes the
 captured conversation to dialogues/<hash>.dlg.json and the current draft to --out
 (or stdout), then exits. Type "/quit", or send EOF, to abandon the session: nothing
 is written to disk, ever, for a session that never reaches "/save".`,

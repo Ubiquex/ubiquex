@@ -83,7 +83,7 @@ func newBlameCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
 	cmd.Flags().BoolVar(&all, "all", false, "show every attribute, including zero/null/empty provider defaults hidden by default within a grouped block")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd

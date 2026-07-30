@@ -57,7 +57,7 @@ func newTerminateCmd() *cobra.Command {
 intent and resolves it through the identical, unmodified core/resolver.Resolve every other
 entry point already uses -- same orphan-protection, same duplicate/missing-target checks, same
 failure modes as a hand-written destroys[] intent file. Renders the full receipt (the
-destroyed resource's own last-known state, per UBI-30's full-state-at-review requirement) and
+destroyed resource's own last-known state, per the full-state-at-review requirement) and
 saves the resolved-but-unaccepted proposal to .ubx/plans/<hash>.json, exactly like "ubx plan".
 
 This command never touches a ledger -- nothing here is accepted or applied. Run "ubx ship

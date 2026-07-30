@@ -34,7 +34,7 @@ var buildIntentAdapter = func(cfg *Config) (intentprovider.Adapter, error) {
 		}
 		return claude.New(claude.Config{Model: cfg.Intent.Model, APIKey: apiKey}), nil
 	default:
-		return nil, fmt.Errorf("intent: adapter %q is not supported yet -- only \"claude\" is built (UBI-41)", adapterName)
+		return nil, fmt.Errorf("intent: adapter %q is not supported yet -- only \"claude\" is built", adapterName)
 	}
 }
 

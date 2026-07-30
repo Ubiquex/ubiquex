@@ -66,13 +66,13 @@ func newShipCmd() *cobra.Command {
 		Use:   "ship [hash]",
 		Short: "Accept (local tier, if needed) and execute a drift_revert or change proposal against live cloud -- the only command that applies",
 		Long: `Executes a drift_revert or change proposal: for a drift_revert, restores the
-resource's live state to match the ledger's recorded truth; for a change (UBI-27, "ubx resolve"'s own
-output, or "ubx plan"'s fused equivalent, UBI-49), creates and modifies resources for real, in real
+resource's live state to match the ledger's recorded truth; for a change ("ubx resolve"'s own
+output, or "ubx plan"'s fused equivalent), creates and modifies resources for real, in real
 dependency order, feeding each resource's real applied output into any sibling still carrying a
 $computed marker pointing at it. This is the one ubx command that changes real infrastructure --
 accept/why/status/scan/revert-plan/resolve/plan only ever read or record.
 
-<hash> is optional (UBI-62): omitted, it resolves to the most recent unshipped plan for the
+<hash> is optional: omitted, it resolves to the most recent unshipped plan for the
 resolved stack (--stack, or config's own default) -- shown explicitly before anything happens, never
 silently guessed. If plans for more than one stack exist and --stack wasn't given, nothing is
 guessed between stacks either: a TTY is prompted to choose, a non-TTY is refused with the same

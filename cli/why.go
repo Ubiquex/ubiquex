@@ -160,11 +160,11 @@ func newWhyCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open, for a bare proposal-id argument -- required only when .ubx/config's [ledger] store is a remote store (a resource-address argument already names its own stack); unused for the default git store")
-	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out (UBI-11)")
+	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20); the chain view emits a JSON array under \"chain\"")
-	cmd.Flags().BoolVar(&dialogue, "dialogue", false, "if this proposal's intent.sources names a captured dialogue (UBI-46, ubx chat), read and render the actual conversation behind it -- change proposal -> the draft it came from -> the real conversation")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text; the chain view emits a JSON array under \"chain\"")
+	cmd.Flags().BoolVar(&dialogue, "dialogue", false, "if this proposal's intent.sources names a captured dialogue (ubx chat), read and render the actual conversation behind it -- change proposal -> the draft it came from -> the real conversation")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }

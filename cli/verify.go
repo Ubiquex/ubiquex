@@ -345,7 +345,7 @@ func newVerifyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack to verify -- required only for a remote [ledger] store; git-local verifies every proposal in the chain regardless of stack, --stack narrows which findings get reported")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", "", "local git working tree to re-derive pr_merge acceptances against (omit to report them as inconclusive rather than attempt it)")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for the reviewer re-check half of pr_merge re-derivation (git-history re-check runs without it, given --repo-dir)")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Minute, "timeout for each pr_merge acceptance's own re-derivation call (only with --repo-dir)")
 	return cmd
 }

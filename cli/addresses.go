@@ -85,7 +85,7 @@ func newAddressesCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack to inventory -- this repo's own stack by default; a different name resolves via the same base store / [ledger.external] mechanism $cross uses")
 	cmd.Flags().BoolVar(&all, "all", false, "include tombstoned (destroyed) addresses, annotated -- excluded by default")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each distinct provider@version and fetching its schema (applied once per distinct pair, not once for the whole command)")
 	return cmd
 }

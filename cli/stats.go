@@ -86,7 +86,7 @@ func newStatsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&stack, "stack", "", "restrict the report to one stack (default: every stack the ledger holds; required for a remote [ledger] store)")
 	cmd.Flags().StringVar(&sinceFlag, "since", "", "only proposals accepted at or after this RFC3339 timestamp")
 	cmd.Flags().StringVar(&untilFlag, "until", "", "only proposals accepted at or before this RFC3339 timestamp")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
 	return cmd
 }
 
