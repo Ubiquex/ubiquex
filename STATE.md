@@ -4,6 +4,119 @@
 
 ## Current phase
 
+**UX-fix arc, session 3 (final) (2026-07-31): `ubx init` writes runnable
+config (UBI-59) — CLOSED. The whole 3-session UX-fix arc (UBI-49
+correctness, UBI-61/UBI-62 consent+visuals, UBI-59 this session) the
+founder laid out from the first end-user test on 2026-07-30 is now
+complete.**
+
+**The bug**: `ubx init`'s generated `.ubx/config` was pure documentation —
+every key commented out, so `ubx plan` failed immediately after `ubx
+init` with no provider configured. Four overlapping provider shapes
+(`provider`/`providers`/`provider_config`/`provider_configs`) were shown
+as equals with no guidance; rare keys (`k8s_audit`, `ledger`) got the
+most prose while the one thing every next step needs (a provider) was
+buried; internal Linear ticket numbers leaked into user-facing output
+(flag `--help` text, error messages, a cobra `Short:` description) well
+beyond `init` itself; there was no next-step pointer at all.
+
+**The fix (`cli/init.go`, fully rewritten).** Default output is now
+minimal and runnable: a real `stack` (from `--stack`, or the directory's
+own name via new `deriveStackFromDir`) and, if given, a real provider —
+written straight into the modern `providers`/`provider_configs` map
+(`len(cfg.Providers) > 0` already triggers the multi-provider pool path
+everywhere — `ship.go`, `status.go`, `scan.go`, `resolve.go`,
+`propose.go`, `sdk.go` — so a single entry there is already "the modern
+shape," not a stepping stone to it). `--source`+`--provider-version`
+(existing flags, reused rather than inventing new ones — consistency
+with every other command's identical pair) populate `providers`; new
+`--region` is sugar for `--provider-config`'s single most common key,
+mergeable with a full `--provider-config` JSON blob. `--provider <path>`
+(local/dev escape hatch) still writes the legacy singular `provider`
+table — deliberately, since the modern map has no local-path slot at all
+(it's keyed strictly by registry source, confirmed against
+`providerpool.go`) — documented as an explicit, reasoned exception, not
+an oversight. Everything else (`github_repo`, `tf_dir`, `k8s_audit`,
+`ledger`, `intent`) is omitted entirely from the default output (not even
+commented) — the encyclopedia moved to `cli/config.mdx`; new `--full`
+flag restores the old exhaustive per-key-annotated template (all three
+formats, TOML's own version gaining the `providers`/`provider_configs`
+block it was previously missing, for parity). A closing `next:` comment
+(and matching stdout line) always appears, worded differently depending
+on whether a provider actually got configured (`hasProvider`): plan-ready
+stacks get `ubx plan <file>.json`/`--from-doc`; unconfigured ones get told
+to add a provider first, before the same pointer.
+
+**Short TTY prompt** (`promptForProvider`): only fires when neither
+`--provider` nor `--source` was given AND both stdin/stdout are real
+terminals (`isTerminal`, `cli/style.go` — the same seam UBI-62 already
+established; every hermetic test's `bytes.Buffer`/`strings.Reader` never
+qualifies, confirmed via `scan_test.go`'s own `runUbx` doc comment before
+relying on it). Three short questions (source, version, optional region),
+any skippable by pressing enter at the first one — verified against a
+*real* pty via `expect` (not a shell pipe, which isn't a TTY and would
+have hit the non-interactive refusal path instead — checked directly
+before trusting the docs transcript) for both the filled-in and
+skip-at-first-question paths.
+
+**Ticket-number sweep, well beyond `init.go`.** Grepped every
+`cmd.Flags().*Var` help string, cobra `Short:`/`Long:` field (including
+multi-line backtick strings, which an initial single-line grep pattern
+missed on the first pass — caught by then running every real `--help`
+output, one level of subcommands deep, through a second, more thorough
+grep before calling the sweep done), and `fmt.Errorf` user-facing message
+across `cli/*.go` for a literal `UBI-\d+`. Fixed 21 leaks total across
+`accept.go`, `addresses.go`, `blame.go`, `chat.go`, `intentadapter.go`,
+`propose.go`, `scan.go` (5), `sdk.go`, `ship.go` (2), `stats.go`,
+`status.go`, `terminate.go`, `verify.go`, `why.go` (3), plus `init.go`'s
+own 5 template-comment leaks. Deliberately left untouched: Go source doc
+comments (`//`, never shown to a user) and `conformance`/`fakeprovider`
+internal tooling (test-only surfaces per `CLAUDE.md`'s own package
+taxonomy, not part of the real CLI's user-facing output).
+
+**Hermetic tests** (`cli/init_test.go`, rewritten): 15 tests, including
+the ticket's own headline ask —
+`TestInit_OutputImmediatelySupportsPlan_ViaMirror` drives `ubx init
+--source fake/widget --provider-version 0.1.0` against the
+`UBX_PROVIDER_MIRROR` hermetic seam (the same one
+`stackcascade_test.go`'s pre-existing multi-provider tests already use),
+then `ubx plan <file>.json` with **zero** further flags — proving the
+written config is genuinely plan-able, not just well-formed. Also: stack-
+from-dir-name, `--region` alone and merged with `--provider-config`, the
+`--provider` path escape hatch, `--full`'s encyclopedia preserved, both
+TTY-prompt paths (filled-in and skip), and every pre-existing
+force/format/shadow-conflict test updated for the new default (most
+notably: "no flags given" no longer means an empty `Stack` — it means
+the directory's own name, by design). `go build/vet/test ./...`,
+`gofmt -l .` clean. Live-verified against the real built `ubx` binary for
+every format (hcl/toml/yaml) and every provider shape, plus a full
+`--help`-output sweep (every command, one subcommand level deep) proving
+zero `UBI-` references remain anywhere in the CLI's actual output surface.
+
+**Docs (`ubiquex-docs`), same session**: `cli/init.mdx` rewritten around
+the new default (minimal-runnable, `--full`, `--region`, the TTY prompt —
+including a real `expect`-captured pty transcript for both prompt paths —
+and a "no edits, immediately plan-able" end-to-end example matching
+`TestInit_OutputImmediatelySupportsPlan_ViaMirror`); `cli/config.mdx`'s
+introductory HCL/TOML/YAML examples and "What it covers" table/example
+re-oriented around `providers`/`provider_configs` as the primary,
+recommended shape (`provider`/`provider_config` reframed as "the legacy
+single-provider shape," not one of four equal options); a short real
+`ubx init --source ... --region ...` transcript added to
+`getting-started/installation.mdx`'s own "Next" section (previously just
+a link, no transcript to re-capture at all). Every flag table
+cross-checked against the real built binary's own `--help` output
+(exact match). `mint validate` clean, committed and pushed to both repos.
+
+**CLAUDE.md**: session protocol gained a new point 7 — background agents
+are not used in this project's sessions, work is sequential by design —
+institutionalizing the lesson from session 2's own wedge (a background
+docs agent hung mid-transcript-recapture; session 2's "resume" run had to
+verify and finish that work inline before it could proceed at all, per
+the handoff prompt for this session).
+
+## Current phase (previous)
+
 **UX-fix arc, session 2 (2026-07-30/31): consent + visuals (UBI-61/UBI-62)
 — CLOSED.** Second of the founder's 3-session arc (session 1: correctness,
 UBI-49 findings #2-#7; session 3 next: `ubx init` writing runnable config
