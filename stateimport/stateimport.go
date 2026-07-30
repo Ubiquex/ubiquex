@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/ubiquex/ubiquex/core/lookuphints"
 )
 
 // ErrMalformedState wraps every parse-time failure — genuinely
@@ -140,36 +142,33 @@ func indexKeyString(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// extraLookupAttrs augments the default {"id": ...} lookup for the small
-// set of types empirically known (conformance/registry.go's Notes,
-// pinned in ubiquex-docs' cli/lookup.mdx) to need more than their bare
-// id. This is NOT mechanically derived from conformance.TypeSpec's
-// IdentityFields, which answers a related but distinct question (which
-// attributes carry stable identity for CloudTrail attribution) — the two
-// don't always coincide: aws_sqs_queue's IdentityFields includes "url" as
-// a distinct field, but its lookup needs no separate "url" key at all,
-// since "id" already equals it. Every other RealSafe type with additional
-// IdentityFields (aws_iam_policy, aws_sqs_queue, aws_sns_topic, aws_vpc)
-// needs no augmentation here for the same reason: its bare id already is
-// what an extra field would have contributed. See docs/architecture.md's
-// "Building a lookup from state, per type".
-var extraLookupAttrs = map[string][]string{
-	"aws_s3_bucket": {"bucket"},
-	"aws_iam_role":  {"name"},
-	"aws_iam_user":  {"name"},
-}
-
 // BuildLookup constructs the ReadResource lookup for one managed
-// resource, from its own recorded state attributes.
+// resource, from its own recorded state attributes. The augmentation
+// beyond the default {"id": ...} for the small set of types empirically
+// known to need more than their bare id comes from core/lookuphints
+// (UBI-54's consolidation of what was formerly this package's own
+// hand-duplicated copy), hardcoded to "hashicorp/aws" since a bare
+// resourceType carries no provider-source information here and every
+// augmented type known to date is AWS's own (a pre-existing limitation,
+// not introduced by this consolidation — see docs/source-tree.md).
+// core/lookuphints' own augmentation data is NOT mechanically derived
+// from conformance.TypeSpec's IdentityFields, which answers a related but
+// distinct question (which attributes carry stable identity for
+// CloudTrail attribution) — the two don't always coincide: aws_sqs_queue's
+// IdentityFields includes "url" as a distinct field, but its lookup needs
+// no separate "url" key at all, since "id" already equals it. See
+// docs/architecture.md's "Building a lookup from state, per type".
 func BuildLookup(resourceType string, attrs map[string]json.RawMessage) (json.RawMessage, error) {
 	id, ok := attrs["id"]
 	if !ok || len(id) == 0 || string(id) == "null" {
 		return nil, ErrNoIdentity
 	}
 	lookup := map[string]json.RawMessage{"id": id}
-	for _, extra := range extraLookupAttrs[resourceType] {
-		if v, ok := attrs[extra]; ok {
-			lookup[extra] = v
+	if extras, ok := lookuphints.For("hashicorp/aws", resourceType); ok {
+		for _, extra := range extras {
+			if v, ok := attrs[extra]; ok {
+				lookup[extra] = v
+			}
 		}
 	}
 	b, err := json.Marshal(lookup)

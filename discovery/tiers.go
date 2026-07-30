@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/ubiquex/ubiquex/core/lookuphints"
 )
 
 // Tier classifies how a Terraform resource type's own provider lookup
@@ -53,13 +55,6 @@ type typeSpec struct {
 	// it resolved to.
 	TerraformType string
 	Tier          Tier
-	// AugmentFields (Tier B only) names additional lookup fields to set
-	// to the same trailing ResourceID value core/lookuphints and
-	// stateimport.BuildLookup already separately maintain this exact fact
-	// for (docs/discovery.md's own "recommendation, not built this
-	// session" — this table is discovery's own fourth copy, honestly
-	// named as such rather than silently pretended unified).
-	AugmentFields []string
 	// Construct (Tier C only) builds the lookup id from the parsed ARN.
 	Construct func(a ARN) (id string, err error)
 
@@ -85,9 +80,9 @@ type typeSpec struct {
 var tierTable = map[string]typeSpec{
 	"iam:policy": {TerraformType: "aws_iam_policy", Tier: TierA, CreationVerbs: []string{"CreatePolicy"}},
 	"ec2:vpc":    {TerraformType: "aws_vpc", Tier: TierB, CreationVerbs: []string{"CreateVpc"}},
-	"iam:role":   {TerraformType: "aws_iam_role", Tier: TierB, AugmentFields: []string{"name"}, CreationVerbs: []string{"CreateRole"}},
-	"iam:user":   {TerraformType: "aws_iam_user", Tier: TierB, AugmentFields: []string{"name"}, CreationVerbs: []string{"CreateUser"}},
-	"s3:":        {TerraformType: "aws_s3_bucket", Tier: TierB, AugmentFields: []string{"bucket"}, CreationVerbs: []string{"CreateBucket"}},
+	"iam:role":   {TerraformType: "aws_iam_role", Tier: TierB, CreationVerbs: []string{"CreateRole"}},
+	"iam:user":   {TerraformType: "aws_iam_user", Tier: TierB, CreationVerbs: []string{"CreateUser"}},
+	"s3:":        {TerraformType: "aws_s3_bucket", Tier: TierB, CreationVerbs: []string{"CreateBucket"}},
 	"sqs:":       {TerraformType: "aws_sqs_queue", Tier: TierC, Construct: sqsQueueURL, CreationVerbs: []string{"CreateQueue"}},
 }
 
@@ -115,18 +110,22 @@ var ErrNotYetAdoptable = fmt.Errorf("not yet adoptable: no known lookup shape fo
 
 // BuildLookup translates a into the json.RawMessage lookup key
 // core.RunScan's own ReadResource call needs, per its classified tier.
-// terraformType is the TerraformType this ARN was resolved to (by
-// Discover's own classification step, ClassifyARN) — needed here only
-// to know which AugmentFields apply, since two Tier-B entries can want
-// different augmented field names.
+// Tier B's own augmented fields (e.g. aws_iam_role's "name",
+// aws_s3_bucket's "bucket") come from core/lookuphints (UBI-54) rather
+// than a table of discovery's own — the same generated data
+// core/scan.go's teaching-error mechanism already consumes, hardcoded to
+// "hashicorp/aws" since discovery is itself AWS-only today (ARN parsing,
+// the tagging API) — not a new limitation.
 func BuildLookup(spec typeSpec, a ARN) (json.RawMessage, error) {
 	switch spec.Tier {
 	case TierA:
 		return json.Marshal(map[string]string{"id": a.String()})
 	case TierB:
 		lookup := map[string]string{"id": a.ResourceID}
-		for _, field := range spec.AugmentFields {
-			lookup[field] = a.ResourceID
+		if fields, ok := lookuphints.For("hashicorp/aws", spec.TerraformType); ok {
+			for _, field := range fields {
+				lookup[field] = a.ResourceID
+			}
 		}
 		return json.Marshal(lookup)
 	case TierC:
