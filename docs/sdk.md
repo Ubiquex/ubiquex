@@ -1,19 +1,21 @@
-# SDK program — the multi-language contract, and TypeScript first (UBI-33/34)
+# SDK program — the multi-language contract, complete across TypeScript, Go, and Python (UBI-33/34/35/36)
 
-> **UBI-34 (TypeScript) closed 2026-07-28, session 4 — all seven
-> implementation slices built, tested, and live-verified**; see "Slices
-> 1–3: built," "Slice 4: built," and "Slices 5–7: built," below, for the
-> full real account. **UBI-33 (the multi-language contract) stays open**
-> — Python (UBI-36) is unstarted; this document's own language-neutral IR
-> model and canonical-JSON discipline are the shared foundation it'll
-> build against. **UBI-35 (Go) session 1, 2026-07-30: the compiled-
-> program evaluator hypothesis tested empirically and confirmed** — see
-> "The Go evaluator: decided empirically," below — with the runtime,
-> codegen templates, `resolve --from-code` dispatch, and the Go
-> conformance case built the same session. Session 1's own design intent
-> below is preserved as the historical record of what was decided before
-> any code existed; it is superseded wherever a later "built" section
-> says so, not silently.
+> **All three languages shipped, and UBI-33 (the multi-language
+> contract) is closed.** UBI-34 (TypeScript) closed 2026-07-28, session
+> 4 — all seven implementation slices built, tested, and live-verified;
+> see "Slices 1–3: built," "Slice 4: built," and "Slices 5–7: built,"
+> below. UBI-35 (Go) closed 2026-07-30, session 1 — the compiled-program
+> evaluator hypothesis tested empirically and confirmed; see "The Go
+> evaluator: decided empirically," below. UBI-36 (Python) closed
+> 2026-07-30, session 1 — the evaluator decision reversed its own
+> expected outcome (WASI beat the expected subprocess-sandbox
+> front-runner); see "The Python evaluator: decided empirically," below.
+> Each language's own runtime, codegen templates, `resolve --from-code`
+> dispatch, and conformance case were built the same session as its own
+> evaluator decision — real, not just designed. Session 1's own original
+> design intent below is preserved as the historical record of what was
+> decided before any code existed; it is superseded wherever a later
+> "built" section says so, not silently.
 >
 > Session 1, design only, no code (historical). This document is the
 > contract half of UBI-33 (the umbrella: multi-language contract + shared
@@ -1319,12 +1321,234 @@ smaller, simpler evaluator than TS's — no embedded runtime assets to
 extract, no generated-runner-script indirection, no clock/random
 override module — because the compiled-program "cheat" really does hold.
 
+## The Python evaluator: decided empirically (UBI-36 session 1)
+
+Python is the arc's own acknowledged hard case — UBI-36's own description
+names it "famously miserable": no compiled-program cheat (unlike Go —
+CPython is an interpreter, general-purpose and otherwise capable of
+anything, the same structural problem TS's own evaluator has), and no
+built-in permission model the way Deno has. Two real candidates were
+probed empirically, with the same rigor as the Go session's own probes,
+before either was assumed to be the answer: **subprocess restriction
+applied to CPython** (the Go arc's own `sandbox-exec`/`bubblewrap`
+wrappers, retargeted — expected, going in, to be the front-runner "now
+that UBI-35 built the machinery") and **WASI** (CPython compiled to
+WebAssembly, run under `wasmtime` — the "maturity check" candidate).
+**The result reverses the expectation**: WASI won, decisively, on real
+evidence — stronger isolation, a genuinely simpler cross-platform story,
+and (checked, not assumed) real enough today to ship. Container-level
+isolation (the ticket's own named fallback) was not built or probed
+separately — everything it would have offered (namespace-level process
+restriction) is what candidate 1 already tests directly, and WASI made
+neither candidate necessary as the final answer.
+
+### Candidate 1 — subprocess + `sandbox-exec`/`bubblewrap` applied to CPython: real, working, but structurally weaker
+
+Retargeting the Go arc's own macOS profile at the real, installed
+`python3` (not a compiled binary) surfaced a genuinely new failure mode
+within minutes: even a maximally permissive `(allow file-read* (subpath
+...))` scoped to Python's own install tree wasn't enough — `python3`
+failed at startup with `realpath: ... Operation not permitted`, tracing
+through several Homebrew symlink hops to compute `sys.executable`/
+`sys.prefix`. The fix, found empirically (not assumed from the Go
+profile, which never needed it — a statically-linked Go binary does
+essentially no filesystem introspection of its own installation at
+startup): `(allow file-read-metadata)`, **unscoped**, matching a real
+precedent already sitting in Apple's own `bsd.sb` ("allow processes to
+traverse symlinks") that went unused in the Go session because it was
+never needed there. Metadata-only reads (existence, size, permissions —
+never content) are conventionally allowed broadly while actual *data*
+reads stay scoped; this is Python's own first real, language-specific
+gap the Go probe never had to close.
+
+With that fix, the profile works, and closes exactly what UBI-36 named:
+
+```text
+READ_ETC_HOSTS: BLOCKED (Operation not permitted)
+WRITE_TMP_FILE: BLOCKED (Operation not permitted)
+NET_DIAL_TCP: BLOCKED (Operation not permitted)
+IMPORT_PIP: BLOCKED (No module named 'pip')
+SUBPROCESS_SPAWN: ALLOWED, but inherits the same sandbox (a spawned `nc`
+  denied network identically — confirmed, not assumed, the same "whole
+  process tree" property the Go session found)
+```
+
+`IMPORT_PIP` blocked by construction, not by a rule naming `pip`
+specifically: Homebrew keeps the stdlib (`.../Cellar/python@3.14/.../
+lib/python3.14`) and site-packages (`/opt/homebrew/lib/python3.14/
+site-packages`) at two genuinely different top-level paths — allowing
+only the former (and explicitly denying the latter, `deny` after
+`allow`, last-match-wins) closes "site-packages reach" *and* "no `pip`"
+in one real, structural move: `pip` itself is a site-packages install,
+never reachable from an interpreter that can't see that directory at
+all. `python3 -I` (isolated mode: ignores `PYTHONPATH`, the user's own
+site-packages, all `PYTHON*` env vars) closes the "`PYTHONPATH` reach"
+half honestly, but *as a language flag, not a sandbox property* — a
+second, independent layer this candidate needs that Go's own evaluator
+never did (Go has no comparable "trust me, ignore my own environment"
+runtime flag to depend on, because the sandbox alone was already
+sufficient there). Real, working — but every one of the guarantees above
+is a **policy decision that could be gotten wrong** (as the
+`file-read-metadata` gap itself just demonstrated, live, this session),
+not a structural absence of the capability.
+
+### Candidate 2 — WASI (`wasmtime` + a prebuilt CPython-WASI build): the strongest isolation of any candidate probed across this whole arc
+
+A real, current, version-matched prebuilt exists — not a hypothetical:
+[`brettcannon/cpython-wasi-build`](https://github.com/brettcannon/cpython-wasi-build)
+(a real CPython core developer's maintained release channel) ships
+`v3.14.6`, byte-matching this session's own installed CPython version,
+built against WASI SDK 24. CPython's own WASI support is real and
+improving — [PEP 816](https://peps.python.org/pep-0816/) (accepted,
+targeting 3.15) formalizes it as an officially supported Tier 2
+platform, checked via a real web search this session, not assumed
+current. Downloaded and run for real, via `wasmtime` (installed via
+`brew install wasmtime`, itself a real, actively maintained project):
+
+```text
+$ wasmtime run python.wasm -c "print('hi')"
+Could not find platform independent libraries <prefix>
+Fatal Python error: Failed to import encodings module
+ModuleNotFoundError: No module named 'encodings'
+```
+
+— confirms the baseline WASI posture *before* granting anything at all:
+**zero ambient filesystem access of any kind**, not even enough for
+Python to find its own standard library. Granting exactly two
+directories (`--dir <stdlib>::/lib`, `--dir <program-dir>::/prog`) and
+setting `PYTHONHOME=/lib` is enough to run real programs correctly —
+`json`, `hashlib`, `dataclasses`, `typing`, `enum` (everything this
+arc's own runtime needs) all work, in ~220ms including WASM startup.
+Against that minimal, correctly-scoped grant, every capability the
+subprocess candidate needed a policy to deny is **structurally absent**
+instead:
+
+```text
+READ_ETC_HOSTS:  BLOCKED (No such file or directory) -- ENOENT, not EPERM: "/" itself has no listing
+WRITE_TMP_FILE:  BLOCKED (No such file or directory) -- same
+READ_ENV_HOME:   BLOCKED_OR_UNSET -- wasmtime forwards ZERO host env vars unless passed via --env
+NET_DIAL_TCP:    BLOCKED (module '_socket' has no attribute 'getaddrinfo')
+raw connect() to a numeric IP (no DNS involved at all): BLOCKED (OSError: [Errno 58] Not supported)
+IMPORT_PIP:      BLOCKED (No module named 'pip') -- site-packages was never preopened, full stop
+SUBPROCESS_SPAWN: BLOCKED ([Errno 58] wasi does not support processes.) -- not a policy, a missing WASI capability
+os.listdir("/"): BLOCKED (FileNotFoundError: No such file or directory: '/') -- no root filesystem view exists at all
+```
+
+Every one of these is **deny by nonexistence** — the same category
+`docs/sdk.md`'s own TS section named as `isolated-vm`'s strongest
+property, but here backed by a real, working build rather than a native
+addon that failed to compile under this project's own npm lockdown.
+Network and subprocess-spawning in particular aren't *policy-denied*,
+the way `sandbox-exec`/`bwrap` deny them — they are **capabilities that
+do not exist in the WASI Preview 1 surface at all**, closing the whole
+"a sandbox rule could be misconfigured" risk class structurally, for
+exactly the two capabilities that matter most.
+
+**`PYTHONPATH` reach, checked directly, not assumed closed for free**: a
+first test deliberately mounted an "evil" directory *and* pointed
+`PYTHONPATH` at its guest path — the import succeeded (`EVIL MODULE
+LOADED`), proving WASI's own sandboxing is entirely about **which host
+directories the evaluator itself chooses to preopen**, not about
+`PYTHONPATH` being inert. Re-run with `PYTHONPATH` still set to the same
+path but that directory **never preopened**: `ModuleNotFoundError`,
+cleanly. The real, correct conclusion: `PYTHONPATH` is neutralized
+structurally by the evaluator only ever preopening exactly the stdlib
+and program directories — never by a language flag (unlike `-I` for
+candidate 1) — so a malicious program setting it to anything is
+inherently harmless as long as the evaluator's own grant stays minimal.
+
+**Genuinely cross-platform, verified, not assumed**: the exact same
+`python.wasm` artifact and the exact same `wasmtime run` invocation,
+tested on this session's own macOS host and inside a real Ubuntu 24.04
+Linux container (a separately-installed Linux `wasmtime` binary,
+`v47.0.2`, same version) — **byte-identical probe output on both
+platforms**. This is a real structural simplification over Go's own
+answer: Go needed two genuinely different platform mechanisms
+(`sandbox-exec` vs. `bubblewrap`, two separate source files, two
+separately-verified behaviors); Python's WASI evaluator needs exactly
+one, because WASM's whole premise — host-OS independence — held up
+under a real test, not just its own marketing.
+
+### PYTHONHASHSEED: the determinism trap, probed explicitly as asked
+
+Python randomizes `str`/`bytes` hashing per-process by default (since
+3.3, a hash-flooding DoS mitigation) — confirmed live, three consecutive
+runs of a script building a `set` of stack/resource names produced three
+different iteration orders with `PYTHONHASHSEED` unset, on both native
+CPython and under WASI identically. `PYTHONHASHSEED=0` (any fixed value
+works) pins it — three runs, byte-identical, again on both native and
+WASI. **The precise, real scope of the trap, worth stating exactly**:
+this affects `set`/`frozenset` iteration order only — a plain `dict`'s
+own iteration order is insertion-order, guaranteed by the language spec
+since 3.7, *not* hash-seed-dependent, and stayed stable across every run
+regardless of `PYTHONHASHSEED` in this session's own tests. A program
+that never builds a `set`/`frozenset` whose iteration order leaks into
+output has nothing to fix here; the evaluator pins `PYTHONHASHSEED=0`
+unconditionally anyway (via `wasmtime run --env PYTHONHASHSEED=0`,
+`wasmtime` forwards no host env otherwise) as the cheap, always-safe
+default, with `core.DoubleRun` as the backstop for this and everything
+else — the exact same two-layer shape as Go's `time.Now()` finding: a
+real nondeterminism source pinned where practical, caught unconditionally
+where it isn't.
+
+### Decision
+
+Ship a Python evaluator built on **WASI via `wasmtime`**, not the
+expected subprocess-sandbox front-runner. Structurally the strongest
+isolation this whole three-language arc has produced (network and
+subprocess-spawning absent as capabilities, not merely denied by
+policy); one mechanism instead of two platform-specific ones; a real,
+version-matched prebuilt CPython-WASI build available today, not a
+someday. `wasmtime` is a new required external tool (`PATH` lookup,
+exactly like Go's own `bwrap` requirement and TS's own `deno`
+requirement — not a new category of dependency this project hasn't
+already accepted twice), and the CPython-WASI build itself
+(python.wasm + its own stdlib tree, ~42MB) is **acquired and cached
+locally on first use**, not embedded into the `ubx` binary — the same
+`provider.Acquire`-style "fetch a pinned, versioned artifact once, reuse
+the local cache after" precedent this project already trusts, chosen
+over embedding specifically because embedding would grow every `ubx`
+install by ~42MB regardless of whether its own user ever touches Python
+SDK programs at all. `PYTHONHASHSEED=0` pinned unconditionally,
+`core.DoubleRun` as the backstop, exactly mirroring the discipline
+Go's own `time.Now()` finding established. The subprocess-sandbox
+candidate is real and documented above, not discarded lightly — it
+loses on the evidence, not on a guess.
+
+### A real implementation-time bug: a mount that *looked* like it worked, but wasn't tested for what it claimed
+
+Building `pyeval` (the Go-side harness) surfaced a genuine "verify, don't
+assume it worked because the output looked right" lesson, worth
+recording with the same honesty as the probe findings themselves. The
+runtime source (`ubx_sdk`) needs to be preopened into the sandbox at a
+fixed guest path so a program's own `import ubx_sdk` resolves — the
+first attempt mounted it two guest path segments deep
+(`--dir <host>/ubx_sdk::/ubxsdk/ubx_sdk`, no separate preopen for
+`/ubxsdk` itself) and a manual smoke test of exactly that shape appeared
+to pass: the program printed a correct `intent/v1` document. It was
+wrong. `os.listdir("/ubxsdk")` inside the sandbox raised
+`FileNotFoundError` — the nested guest path was never actually
+independently listable — and the "passing" smoke test had been finding
+`ubx_sdk` by accident, via the test script's OWN directory (also
+preopened, and which happened to also contain a copy of the package for
+unrelated reasons), not via the intended mount at all. The real fix,
+found by checking `ubx_sdk.__file__` explicitly rather than trusting
+that non-error output meant success: **preopen at exactly one guest path
+segment per real directory tree** — mount the runtime source's own
+parent directory directly at `/ubxsdk` (a single top-level preopen), not
+nested under a second, ungranted parent segment. Once fixed, `pyeval`'s
+own real Go test suite (which checks `ubx_sdk.__file__`/output content,
+not just exit code) catches this class of regression directly. The
+larger lesson, consistent with this whole arc's own standing discipline
+(the Deno read-permission probe, the Go `dyld` crash, the
+`file-read-metadata` gap earlier in this very session): a sandboxed
+program producing plausible-looking output is not proof a mount/grant
+did what it was intended to do — assert on what actually resolved, not
+just whether something ran without an error.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
-Python's own evaluator/runtime (UBI-36, "no cheat, wait for demand," per
-the ticket's own risk note — Go's own compiled-program "cheat" is now
-decided empirically, see "The Go evaluator: decided empirically," above);
-a full Linux mount-namespace filesystem jail built from scratch (this
+A full Linux mount-namespace filesystem jail built from scratch (this
 session's Linux answer relies on `bubblewrap`, an existing, already-
 hardened tool, rather than hand-rolling `pivot_root`/mount-namespace code
 directly — a deliberate, smaller build, not an oversight); typed
@@ -1339,5 +1563,10 @@ evaluator subprocess, beyond noting the harness needs some (see the
 adversarial table's own "what this doesn't cover"); a policy engine
 gate on anything an SDK program produces (component map #9, still not
 built at all, unrelated to this arc specifically); publishing
-`@ubx/sdk` to npm for real (mentioned in UBI-34's own scope, no release
-plumbing designed this session).
+`@ubx/sdk` to npm, `ubx-sdk-go` to a real Go module proxy, or `ubx_sdk`
+to PyPI for real (mentioned in each language's own scope, no release
+plumbing designed for any of the three); extracting `stampDocumentSource`/
+`validateIntentShape` into one shared package instead of three small,
+duplicated copies (`sdkeval`, `goeval`, `pyeval` each carry their own —
+a real, deliberate "rule of three" deferral, not an oversight, now that
+all three copies exist).
