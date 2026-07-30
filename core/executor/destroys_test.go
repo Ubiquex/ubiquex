@@ -86,8 +86,8 @@ func TestShipDestroy_KillBeforeCall_NeverLanded_RetriedNormally(t *testing.T) {
 	}
 	ra := &core.ResourceApply{Address: addr}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
-	recordTransition(ra, core.ResourceInFlight, "") // exactly what a crash right before the call leaves behind -- no precheck reconciliation entry at all
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "") // exactly what a crash right before the call leaves behind -- no precheck reconciliation entry at all
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}
@@ -124,11 +124,11 @@ func TestShipDestroy_KillAfterCall_AlreadyLanded_ResolvesDestroyed(t *testing.T)
 	}
 	ra := &core.ResourceApply{Address: addr}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
 	// The pre-attempt precheck actually ran and confirmed present_matches,
 	// exactly as a real attempt 1 would have recorded before in_flight.
 	ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "present_matches"})
-	recordTransition(ra, core.ResourceInFlight, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "")
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}
@@ -510,11 +510,11 @@ func TestShipDestroy_ReShipAfterPartialDestroy(t *testing.T) {
 	}
 	firstRA := &core.ResourceApply{Address: firstAddr}
 	rec.Resources = append(rec.Resources, firstRA)
-	recordTransition(firstRA, core.ResourcePending, "")
+	recordTransition(context.Background(), firstRA, core.ResourcePending, "")
 	firstRA.Reconciliation = append(firstRA.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "present_matches"})
-	recordTransition(firstRA, core.ResourceInFlight, "")
+	recordTransition(context.Background(), firstRA, core.ResourceInFlight, "")
 	firstRA.Reconciliation = append(firstRA.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "destroyed"})
-	recordTransition(firstRA, core.ResourceApplied, "")
+	recordTransition(context.Background(), firstRA, core.ResourceApplied, "")
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}

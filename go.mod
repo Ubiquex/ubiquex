@@ -20,6 +20,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.18.1
 	gocloud.dev v0.46.0
+	golang.org/x/term v0.44.0
 	google.golang.org/api v0.287.1
 	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d
 	google.golang.org/grpc v1.82.0

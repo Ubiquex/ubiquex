@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 )
 
 // genericTree is the one shared shape every format's own parser produces
@@ -444,20 +445,35 @@ func sortedKeys(m genericTree) []string {
 // docs/architecture.md's own "provenance surface" requirement -- shared
 // by the `ubx config` provenance view and its own hermetic tests.
 func renderProvenance(rc *ResolvedConfig) string {
+	return renderProvenanceStyled(rc, plainStyler())
+}
+
+// renderProvenanceStyled is renderProvenance's own styled core (UBI-61,
+// docs/cli-output-spec.md: "Provenance table gains alignment + dimmed
+// file paths + the cascade-ceiling line styled as a footer. No content
+// changes -- it was the one command that tested well.") -- real column
+// alignment via text/tabwriter (the previous version emitted a literal
+// "\t" and left lining it up to whatever the terminal's own tab stops
+// happened to do) and the "<- file" provenance column dimmed, since it's
+// supporting detail, not the value itself. Every fact rendered is
+// unchanged from before this session.
+func renderProvenanceStyled(rc *ResolvedConfig, st *styler) string {
 	keys := make([]string, 0, len(rc.Provenance))
 	for k := range rc.Provenance {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	var b strings.Builder
+	tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
 	for _, k := range keys {
-		fmt.Fprintf(&b, "%s = %v\t<- %s\n", k, rc.Values[k], rc.Provenance[k])
+		fmt.Fprintf(tw, "%s = %v\t%s\n", k, rc.Values[k], st.Dim("<- "+rc.Provenance[k]))
 	}
+	tw.Flush()
 	if rc.CeilingReason != "" {
-		fmt.Fprintf(&b, "cascade stopped at: %s (%s)\n", rc.CeilingReason, rc.CeilingPath)
+		fmt.Fprintf(&b, "%s\n", st.Dim(fmt.Sprintf("cascade stopped at: %s (%s)", rc.CeilingReason, rc.CeilingPath)))
 	}
 	if rc.UserGlobalFile != "" {
-		fmt.Fprintf(&b, "user-global config consulted: %s\n", rc.UserGlobalFile)
+		fmt.Fprintf(&b, "%s\n", st.Dim(fmt.Sprintf("user-global config consulted: %s", rc.UserGlobalFile)))
 	}
 	return b.String()
 }

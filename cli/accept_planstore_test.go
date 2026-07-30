@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,8 @@ func TestAccept_ShortHashFromPlanStore_Accepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := shortHash(mustExtractPlanHash(t, planOut))
+	fullHash := mustExtractPlanHash(t, planOut)
+	hash := shortRef(fullHash)
 
 	acceptOut, err := runUbx(t, env, "accept", hash, "--ledger-dir", ledgerDir)
 	if err != nil {
@@ -44,6 +46,12 @@ func TestAccept_ShortHashFromPlanStore_Accepts(t *testing.T) {
 	}
 	if !strings.Contains(acceptOut, "accepted") {
 		t.Fatalf("expected an acceptance report, got: %s", acceptOut)
+	}
+
+	// UBI-62: a plan consumed via accept is pruned too, same as ship's own
+	// inline-accept path -- "latest" must never re-offer it.
+	if _, err := os.Stat(planFilePath(ledgerDir, fullHash)); !os.IsNotExist(err) {
+		t.Fatalf("expected the accepted plan file to be pruned, stat err = %v", err)
 	}
 }
 

@@ -115,7 +115,7 @@ payments.primary -> shared_ref
 
 	// Ambiguity rendering: the edge into the reference node can't carry a
 	// real $cross marker, so it must surface as a visible default note.
-	if !strings.Contains(out, "Defaults (1):") {
+	if !strings.Contains(out, "AI defaults") {
 		t.Fatalf("expected the $cross structural limitation rendered as a default note, got:\n%s", out)
 	}
 	if !strings.Contains(out, "wrote draft: "+outPath) {

@@ -204,8 +204,8 @@ func TestAddresses_Tombstoned_ExcludedByDefault_IncludedWithAll(t *testing.T) {
 	if !strings.Contains(allOut, "payments.fake_widget.widget-gone") {
 		t.Fatalf("expected the tombstoned address with --all, got: %s", allOut)
 	}
-	if !strings.Contains(allOut, "DESTROYED by "+shortID(destroy.ID)) {
-		t.Fatalf("expected a DESTROYED annotation naming %s, got: %s", shortID(destroy.ID), allOut)
+	if !strings.Contains(allOut, "DESTROYED by "+displayHash(destroy.ID, false)) {
+		t.Fatalf("expected a DESTROYED annotation naming %s, got: %s", displayHash(destroy.ID, false), allOut)
 	}
 }
 

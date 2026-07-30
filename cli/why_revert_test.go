@@ -89,9 +89,9 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 	}
 
 	// Newest first: revert, then drift_adopt, then adoption.
-	revertIdx := strings.Index(whyOut, shortID(revertID))
-	driftAdoptIdx := strings.Index(whyOut, shortID(driftAdoptID))
-	adoptIdx := strings.Index(whyOut, shortID(adoptID))
+	revertIdx := strings.Index(whyOut, displayHash(revertID, false))
+	driftAdoptIdx := strings.Index(whyOut, displayHash(driftAdoptID, false))
+	adoptIdx := strings.Index(whyOut, displayHash(adoptID, false))
 	if revertIdx == -1 || driftAdoptIdx == -1 || adoptIdx == -1 {
 		t.Fatalf("expected all three proposal ids to appear (short form), got: %s", whyOut)
 	}

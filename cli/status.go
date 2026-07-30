@@ -91,12 +91,13 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			}
 
 			out := cmd.OutOrStdout()
+			st := newStyler(cmd)
 
 			if !drift {
 				resources := make([]statusResourceJSON, 0, len(fleet))
 				for _, e := range fleet {
 					if !jsonOut {
-						fmt.Fprintf(out, "%s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+						fmt.Fprintf(out, "%s: %s %s (accepted %s)\n", e.Address, e.Kind, st.Hash(e.ProposalID), e.AcceptedAt)
 					}
 					resources = append(resources, statusResourceJSON{
 						Address:    addressToJSON(e.Address),
@@ -185,7 +186,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 						continue
 					}
 
-					entry, drifted, unreadable := classifyFleetEntry(ctx, out, jsonOut, ledger, app, providerConfig, provSource, e)
+					entry, drifted, unreadable := classifyFleetEntry(ctx, out, st, jsonOut, ledger, app, providerConfig, provSource, e)
 					if drifted {
 						driftedCount++
 					}
@@ -212,7 +213,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 						resources = append(resources, unreadableNoLookup(out, jsonOut, e))
 						continue
 					}
-					entry, drifted, unreadable := classifyFleetEntry(ctx, out, jsonOut, ledger, stateReader, json.RawMessage(providerConfig), source, e)
+					entry, drifted, unreadable := classifyFleetEntry(ctx, out, st, jsonOut, ledger, stateReader, json.RawMessage(providerConfig), source, e)
 					if drifted {
 						driftedCount++
 					}
@@ -306,7 +307,7 @@ func unreadableNoLookup(out io.Writer, jsonOut bool, e core.FleetEntry) statusRe
 	}
 	if !jsonOut {
 		fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
-			e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+			e.Address, e.Kind, displayHash(e.ProposalID, false), e.AcceptedAt, entry.Reason)
 	}
 	return entry
 }
@@ -330,7 +331,7 @@ func unreadableProviderUnavailable(out io.Writer, jsonOut bool, e core.FleetEntr
 	}
 	if !jsonOut {
 		fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
-			e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+			e.Address, e.Kind, displayHash(e.ProposalID, false), e.AcceptedAt, entry.Reason)
 	}
 	return entry
 }
@@ -345,7 +346,7 @@ func unreadableProviderUnavailable(out io.Writer, jsonOut bool, e core.FleetEntr
 // unreadableNoLookup, before ever reaching here, since that check is
 // identical in both walks and doesn't need app/providerConfig/
 // providerSource at all).
-func classifyFleetEntry(ctx context.Context, out io.Writer, jsonOut bool, ledger *core.Ledger, app core.StateReader, providerConfig json.RawMessage, providerSource string, e core.FleetEntry) (entry statusResourceJSON, drifted, unreadable bool) {
+func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut bool, ledger *core.Ledger, app core.StateReader, providerConfig json.RawMessage, providerSource string, e core.FleetEntry) (entry statusResourceJSON, drifted, unreadable bool) {
 	entry = statusResourceJSON{
 		Address:    addressToJSON(e.Address),
 		Kind:       string(e.Kind),
@@ -364,7 +365,7 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, jsonOut bool, ledger
 		entry.Reason = err.Error()
 		if !jsonOut {
 			fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %v\n",
-				e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, err)
+				e.Address, e.Kind, st.Hash(e.ProposalID), e.AcceptedAt, err)
 		}
 		return entry, false, true
 	}
@@ -373,13 +374,25 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, jsonOut bool, ledger
 	case core.ScanUnchanged:
 		entry.Status = "clean"
 		if !jsonOut {
-			fmt.Fprintf(out, "clean: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+			fmt.Fprintf(out, "%s %s: %s %s (accepted %s)\n", st.Green("clean:"), e.Address, e.Kind, st.Hash(e.ProposalID), e.AcceptedAt)
 		}
 		return entry, false, false
 	case core.ScanDrifted:
 		entry.Status = "drifted"
 		if !jsonOut {
-			fmt.Fprintf(out, "drifted: %s: %s %s (accepted %s)\n", e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt)
+			fmt.Fprintf(out, "%s %s: %s %s (accepted %s)\n", st.Yellow("drifted:"), e.Address, e.Kind, st.Hash(e.ProposalID), e.AcceptedAt)
+			// UBI-61: show WHAT drifted, not just that it did -- the same
+			// attribute-level diff renderModifies already renders for a
+			// drift_adopt proposal, computed here directly from
+			// ScanResult.PreviousState/Observed (core.DiffAttributes,
+			// already exported) rather than waiting for `ubx scan
+			// --propose` to generate a proposal first.
+			if before, after, derr := core.DiffAttributes(res.PreviousState, res.Observed); derr == nil {
+				for _, path := range sortedAttributePaths(before, after) {
+					fmt.Fprintf(out, "    %s %s: %s -> %s\n", st.Yellow("~"), path, rawOrAbsent(before[path]), rawOrAbsent(after[path]))
+				}
+			}
+			fmt.Fprintf(out, "    next: ubx scan --propose both --stack %s --type %s --name %s\n", e.Address.Stack, e.Address.Type, e.Address.Name)
 		}
 		return entry, true, false
 	default:
@@ -392,7 +405,7 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, jsonOut bool, ledger
 		entry.Reason = "ledger has no reconstructable prior state for this address"
 		if !jsonOut {
 			fmt.Fprintf(out, "unreadable: %s: %s %s (accepted %s) -- %s\n",
-				e.Address, e.Kind, shortID(e.ProposalID), e.AcceptedAt, entry.Reason)
+				e.Address, e.Kind, displayHash(e.ProposalID, false), e.AcceptedAt, entry.Reason)
 		}
 		return entry, false, true
 	}

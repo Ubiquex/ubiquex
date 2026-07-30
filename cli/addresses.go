@@ -288,7 +288,7 @@ func renderAddressesHuman(out io.Writer, listing *addressListing) {
 		}
 		fmt.Fprintf(out, "%s\n", e.Address)
 		if e.Tombstoned {
-			fmt.Fprintf(out, "  DESTROYED by %s\n", shortID(e.TombstonedBy))
+			fmt.Fprintf(out, "  DESTROYED by %s\n", displayHash(e.TombstonedBy, false))
 		}
 		if e.Provider != nil {
 			fmt.Fprintf(out, "  provider: %s@%s\n", e.Provider.Source, e.Provider.Version)

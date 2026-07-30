@@ -139,7 +139,7 @@ func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout t
 	}
 
 	outWriter := cmd.OutOrStdout()
-	renderAmbiguity(outWriter, draft)
+	renderAmbiguity(outWriter, newStyler(cmd), draft)
 
 	data, err := json.MarshalIndent(draft, "", "  ")
 	if err != nil {
@@ -224,7 +224,7 @@ func runProposeFromDiagram(cmd *cobra.Command, diagramPath, stack, out, summary 
 	}
 
 	outWriter := cmd.OutOrStdout()
-	renderAmbiguity(outWriter, draft)
+	renderAmbiguity(outWriter, newStyler(cmd), draft)
 
 	data, err := json.MarshalIndent(draft, "", "  ")
 	if err != nil {

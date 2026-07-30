@@ -43,7 +43,7 @@ func TestTerminate_HappyPath_ShipsAndTombstones(t *testing.T) {
 	}
 	hash := mustExtractPlanHash(t, termOut)
 
-	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys")
+	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys", "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship --confirm-destroys: %v\noutput: %s", err, shipOut)
 	}
@@ -118,7 +118,7 @@ func TestTerminate_OrphanProtection_Refused(t *testing.T) {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
 	hash := mustExtractPlanHash(t, planOut)
-	if _, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir); err != nil {
+	if _, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes"); err != nil {
 		t.Fatalf("ubx ship: %v", err)
 	}
 

@@ -66,6 +66,17 @@ func runUbx(t *testing.T, env []string, args ...string) (stdout string, err erro
 	out := &bytes.Buffer{}
 	root.SetOut(out)
 	root.SetErr(out)
+	// Every test in this package that doesn't explicitly drive stdin
+	// (runUbxWithStdin, chat_test.go) must never fall back to cobra's own
+	// default -- the REAL process's os.Stdin, whatever it happens to be
+	// on whatever machine runs this suite (a real terminal in an
+	// interactive dev session, a pipe/redirect in CI) -- exactly the kind
+	// of ambient host-machine state this project's own hermeticity
+	// discipline (configSearchStartDir, userHomeDir) already rules out
+	// everywhere else. An empty reader is never a *os.File, so
+	// isTerminal(cmd.InOrStdin()) always resolves false here, matching
+	// every test's own implicit "non-interactive" expectation.
+	root.SetIn(strings.NewReader(""))
 	root.SetArgs(args)
 
 	if len(env) > 0 {

@@ -896,8 +896,8 @@ func TestShip_CrashBetweenInFlightWriteAndCall_NeverLanded_RetriedAsFailed(t *te
 	}
 	ra := &core.ResourceApply{Address: addr}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
-	recordTransition(ra, core.ResourceInFlight, "") // exactly what a crash right before the call leaves behind
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "") // exactly what a crash right before the call leaves behind
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}
@@ -932,8 +932,8 @@ func TestShip_CrashBetweenCallAndResultWrite_AlreadyLanded_ResolvesApplied(t *te
 	}
 	ra := &core.ResourceApply{Address: addr}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
-	recordTransition(ra, core.ResourceInFlight, "")
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "")
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}
@@ -1003,8 +1003,8 @@ func TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApp
 	}
 	ra := &core.ResourceApply{Address: addr}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
-	recordTransition(ra, core.ResourceInFlight, "")
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "")
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}
@@ -1320,10 +1320,10 @@ func TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_Re
 	primaryResult := json.RawMessage(`{"id":"primary-real-id","value":"v1"}`)
 	ra := &core.ResourceApply{Address: primary}
 	rec.Resources = append(rec.Resources, ra)
-	recordTransition(ra, core.ResourcePending, "")
-	recordTransition(ra, core.ResourceInFlight, "")
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "")
 	ra.ProviderResult = primaryResult
-	recordTransition(ra, core.ResourceApplied, "")
+	recordTransition(context.Background(), ra, core.ResourceApplied, "")
 	if err := l.SaveApplyProgress(rec); err != nil {
 		t.Fatalf("save progress: %v", err)
 	}

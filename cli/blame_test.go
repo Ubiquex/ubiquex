@@ -61,15 +61,15 @@ func TestBlame_MultiTouch_LatestWinsPerAttribute(t *testing.T) {
 		t.Fatalf("expected a tags.env entry, got: %s", out)
 	}
 	envBlock := blockFor(out, "tags.env:")
-	if !strings.Contains(envBlock, shortID(driftID)) {
-		t.Fatalf("expected tags.env blamed on the drift proposal %s, got block: %s", shortID(driftID), envBlock)
+	if !strings.Contains(envBlock, displayHash(driftID, false)) {
+		t.Fatalf("expected tags.env blamed on the drift proposal %s, got block: %s", displayHash(driftID, false), envBlock)
 	}
-	if strings.Contains(envBlock, shortID(adoptID)) {
+	if strings.Contains(envBlock, displayHash(adoptID, false)) {
 		t.Fatalf("tags.env block should NOT mention the original adoption once drifted, got: %s", envBlock)
 	}
 
 	nameBlock := blockFor(out, "name:")
-	if !strings.Contains(nameBlock, shortID(adoptID)) {
+	if !strings.Contains(nameBlock, displayHash(adoptID, false)) {
 		t.Fatalf("expected the untouched \"name\" attribute still blamed on the original adoption, got: %s", nameBlock)
 	}
 }
@@ -152,7 +152,7 @@ func TestBlame_RedactedAttributeProvenance(t *testing.T) {
 	if !strings.Contains(passwordBlock, "(redacted)") {
 		t.Fatalf("expected \"(redacted)\" in the password block, got: %s", passwordBlock)
 	}
-	if !strings.Contains(passwordBlock, shortID(acceptedID)) {
+	if !strings.Contains(passwordBlock, displayHash(acceptedID, false)) {
 		t.Fatalf("expected provenance to survive redaction, got: %s", passwordBlock)
 	}
 }
@@ -190,7 +190,7 @@ func TestBlame_ShippedCreateGenesis(t *testing.T) {
 		t.Fatalf("ubx blame: %v\noutput: %s", err, out)
 	}
 	idBlock := blockFor(out, "id:")
-	if !strings.Contains(idBlock, shortID(changeID)) {
+	if !strings.Contains(idBlock, displayHash(changeID, false)) {
 		t.Fatalf("expected \"id\" (computed, never in config) blamed on the change proposal via its own apply record, got: %s", idBlock)
 	}
 	if !strings.Contains(idBlock, "change") {
@@ -267,27 +267,16 @@ func lineContaining(out, needle string) string {
 	return ""
 }
 
-// blockFor returns the lines from the entry starting with prefix up to
-// (not including) the next entry, blame's own "path: value" then indented
-// detail lines shape.
-func blockFor(out, prefix string) string {
-	lines := strings.Split(out, "\n")
-	start := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, prefix) {
-			start = i
-			break
+// blockFor returns the whole blank-line-delimited paragraph containing
+// needle -- blame's own grouped rendering (UBI-61) separates each
+// provenance group with a blank line, so a group's "▸ N attribute(s) ·
+// set by ..." header and every attribute line underneath it (including
+// needle, wherever indented) are always one paragraph together.
+func blockFor(out, needle string) string {
+	for _, p := range strings.Split(out, "\n\n") {
+		if strings.Contains(p, needle) {
+			return p
 		}
 	}
-	if start == -1 {
-		return ""
-	}
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		if lines[i] != "" && !strings.HasPrefix(lines[i], " ") {
-			end = i
-			break
-		}
-	}
-	return strings.Join(lines[start:end], "\n")
+	return ""
 }

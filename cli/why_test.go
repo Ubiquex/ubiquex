@@ -59,8 +59,8 @@ func TestWhy_ResourceAddress_ChainOrdering(t *testing.T) {
 	if !strings.Contains(whyOut, "2 proposal(s)") {
 		t.Fatalf("expected a 2-proposal summary, got: %s", whyOut)
 	}
-	driftIdx := strings.Index(whyOut, shortID(driftID))
-	adoptIdx := strings.Index(whyOut, shortID(adoptID))
+	driftIdx := strings.Index(whyOut, displayHash(driftID, false))
+	adoptIdx := strings.Index(whyOut, displayHash(adoptID, false))
 	if driftIdx == -1 || adoptIdx == -1 {
 		t.Fatalf("expected both proposal ids to appear (short form), got: %s", whyOut)
 	}

@@ -58,6 +58,7 @@ func newPlanCmd() *cobra.Command {
 		stack           string
 		summary         string
 		neighborLedgers []string
+		fullHashes      bool
 	)
 
 	cmd := &cobra.Command{
@@ -117,6 +118,7 @@ propose-time PR trailer hash, etc.).`,
 			defer cancel()
 
 			var intent resolver.IntentFile
+			var sourceLabel string
 			switch {
 			case fromDoc != "":
 				applyStackDefault(cmd, &stack, cfg)
@@ -128,6 +130,7 @@ propose-time PR trailer hash, etc.).`,
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
 				}
 				intent = *draft
+				sourceLabel = fromDoc
 			case fromDiagram != "":
 				applyStackDefault(cmd, &stack, cfg)
 				if stack == "" {
@@ -146,6 +149,7 @@ propose-time PR trailer hash, etc.).`,
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-diagram: %w", err)}
 				}
 				intent = *draft
+				sourceLabel = fromDiagram
 			case fromCode != "":
 				canon, err := tseval.Evaluate(ctx, fromCode)
 				if err != nil {
@@ -154,6 +158,7 @@ propose-time PR trailer hash, etc.).`,
 				if err := json.Unmarshal(canon, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse evaluated intent: %w", err)}
 				}
+				sourceLabel = fromCode
 			default:
 				data, err := os.ReadFile(args[0])
 				if err != nil {
@@ -162,6 +167,7 @@ propose-time PR trailer hash, etc.).`,
 				if err := json.Unmarshal(data, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse intent file: %w", err)}
 				}
+				sourceLabel = args[0]
 			}
 
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)
@@ -201,8 +207,9 @@ propose-time PR trailer hash, etc.).`,
 			}
 
 			outWriter := cmd.OutOrStdout()
-			renderPlanReceipt(outWriter, p)
-			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\n", planPath, hash)
+			st := newStylerFull(cmd, fullHashes)
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(p.Stack, sourceLabel))
+			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
 			return nil
 		},
 	}
@@ -221,33 +228,67 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringVar(&stack, "stack", "", "target stack name (required with --from-doc or --from-diagram; the intent-file and --from-code inputs already name their own stack)")
 	cmd.Flags().StringVar(&summary, "summary", "", "intent.summary for the draft (only with --from-diagram -- a diagram has no prose to derive one from; defaults to a generated summary naming the stack and resource count if omitted)")
 	cmd.Flags().StringArrayVar(&neighborLedgers, "neighbor-ledger", nil, "<stack>=<path> mapping a diagram's own cross-stack reference to a real ledger directory, overriding the \"../<stack>\" convention (repeatable, only with --from-diagram)")
+	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }
 
-// renderPlanReceipt is `ubx plan`'s own human-readable preview: the same
-// "make the content visible, not just the decision" posture `ubx why`
-// already applies to an accepted proposal (renderProposal, why.go),
-// rendered here for one that's ONLY been resolved -- nothing about it is
-// accepted or signed yet, this is the review surface a human reads before
-// ever running `ubx ship`.
-func renderPlanReceipt(out io.Writer, p *core.Proposal) {
-	fmt.Fprintf(out, "%s: %s\n", p.Stack, p.Intent.Summary)
+// renderPlanReceipt is `ubx plan`'s own human-readable preview (also
+// reused, unchanged, by `ubx terminate` and `ubx ship`'s own interactive
+// confirmation) -- the same "make the content visible, not just the
+// decision" posture `ubx why` already applies to an accepted proposal
+// (renderProposal, why.go), rendered here for one that's ONLY been
+// resolved -- nothing about it is accepted or signed yet, this is the
+// review surface a human reads before ever running `ubx ship`.
+//
+// header is the caller-built "Plan  <stack> · from <source>"-shaped
+// first line (docs/cli-output-spec.md's own worked plan example) --
+// built by the caller, not derived here, since what counts as "source"
+// differs per caller (an authoring document's path for `ubx plan
+// --from-doc`/`--from-diagram`, an intent file's path for a hand-written
+// one, nothing at all for `ubx terminate`, whose own address IS the
+// spec) and `ubx ship`'s own confirmation header names a plan age
+// instead of a source entirely.
+func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string) {
+	fmt.Fprintln(out, header)
+	if p.Intent.Summary != "" {
+		fmt.Fprintln(out, st.Dim(p.Intent.Summary))
+	}
+	fmt.Fprintln(out)
+
+	renderCreates(out, st, p.Delta.Creates, "  ")
+	renderModifies(out, st, p.Delta.Modifies, "  ")
+	renderDestroys(out, st, p.Delta.Destroys, "  ", true)
+	if len(p.Delta.Creates) > 0 || len(p.Delta.Modifies) > 0 || len(p.Delta.Destroys) > 0 {
+		fmt.Fprintln(out)
+	}
+
 	fmt.Fprintf(out, "delta: +%d create(s), ~%d modify(ies), -%d destroy(s)\n",
 		len(p.Delta.Creates), len(p.Delta.Modifies), len(p.Delta.Destroys))
-	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+	fmt.Fprintf(out, "blast radius: %s %s %s\n",
+		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
+		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),
+		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))
 	if len(p.CostDelta.MonthlyUSD) > 0 {
 		fmt.Fprintf(out, "cost delta: $%s/mo\n", p.CostDelta.MonthlyUSD)
 	}
-	renderModifies(out, p.Delta.Modifies, "")
-	renderDestroys(out, p.Delta.Destroys, "", true)
 
 	if len(p.Intent.Assumptions) == 0 && len(p.Intent.Defaults) == 0 && len(p.Intent.Questions) == 0 {
 		return
 	}
 	fmt.Fprintln(out)
-	renderNotes(out, "Assumptions", p.Intent.Assumptions)
-	renderNotes(out, "Defaults", p.Intent.Defaults)
-	renderQuestions(out, p.Intent.Questions)
+	renderAmbiguityStyled(out, st, p.Intent.Assumptions, p.Intent.Defaults, p.Intent.Questions)
+}
+
+// planReceiptHeader builds renderPlanReceipt's own "Plan  <stack> · from
+// <source>" header line -- source is empty for a caller with no natural
+// authoring-document source (a hand-written intent file passed
+// positionally still names itself; `ubx terminate` passes "" since the
+// address IS the spec, no file involved at all).
+func planReceiptHeader(stack, source string) string {
+	if source == "" {
+		return fmt.Sprintf("Plan  %s", stack)
+	}
+	return fmt.Sprintf("Plan  %s · from %s", stack, source)
 }
 
 // planFilePath is where `ubx plan` saves a resolved-but-unaccepted
@@ -347,16 +388,4 @@ func resolvePlanHash(ledgerDir, ref string) (fullHash string, p *core.Proposal, 
 		sort.Strings(matches)
 		return "", nil, fmt.Errorf("%s: %w (matches %s)", ref, ErrPlanAmbiguous, strings.Join(matches, ", "))
 	}
-}
-
-// shortHash is docs/cli-output-spec.md principle 3's own display
-// convention ("short hashes (12 chars) everywhere") -- purely cosmetic,
-// never used for lookup (resolvePlanHash accepts any prefix length, not
-// just this one).
-func shortHash(full string) string {
-	const shortLen = 12
-	if len(full) <= shortLen {
-		return full
-	}
-	return full[:shortLen]
 }

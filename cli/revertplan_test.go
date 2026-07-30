@@ -180,3 +180,21 @@ func TestRevertPlan_RejectsUnacceptedProposal(t *testing.T) {
 		t.Fatalf("expected a not-accepted error, got: %v", err)
 	}
 }
+
+// TestRawOrAbsent_CompactsIndentedJSON is UBI-61's own regression test: a
+// proposal round-tripped through a saved plan file (.ubx/plans/<hash>.json,
+// itself written pretty-printed via json.MarshalIndent for human
+// readability -- same as the ledger's own on-disk proposal format) must
+// never carry that indentation as literal bytes into a one-line rendering
+// -- `ubx ship`'s receipt for a plan-store hash rendered nested JSON
+// (tags, etc.) indented across several lines before this fix, while `ubx
+// plan`'s own receipt for identical content rendered it compact, purely
+// because of which code path happened to touch the bytes last.
+func TestRawOrAbsent_CompactsIndentedJSON(t *testing.T) {
+	indented := []byte("{\n  \"env\": \"prod\",\n  \"team\": \"payments\"\n}")
+	got := rawOrAbsent(indented)
+	want := `{"env":"prod","team":"payments"}`
+	if got != want {
+		t.Fatalf("rawOrAbsent(indented JSON) = %q, want compacted %q", got, want)
+	}
+}

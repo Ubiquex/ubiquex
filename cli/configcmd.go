@@ -42,7 +42,7 @@ address that store/--stack combination derives (docs/architecture.md — Address
 			if len(rc.Files) == 0 && rc.UserGlobalFile == "" {
 				fmt.Fprintln(cmd.OutOrStdout(), "no .ubx/config found (checked every directory from here up to the filesystem root)")
 			}
-			fmt.Fprint(cmd.OutOrStdout(), renderProvenance(rc))
+			fmt.Fprint(cmd.OutOrStdout(), renderProvenanceStyled(rc, newStyler(cmd)))
 
 			if store := rc.Config.Ledger.Store; store != "" && store != "git" {
 				if stack == "" {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -196,7 +197,13 @@ func sortedAttributePaths(before, after map[string]json.RawMessage) []string {
 // actual JSON value. A $redacted value (UBI-23, docs/architecture.md --
 // Secrets) renders as "(redacted)" rather than its raw JSON -- the salted
 // hash isn't secret material itself, but it has no business appearing
-// inline next to a human-readable attribute name either.
+// inline next to a human-readable attribute name either. Always compacted
+// (UBI-61): a proposal round-tripped through a saved plan file
+// (.ubx/plans/<hash>.json, itself written pretty-printed for human
+// readability on disk) would otherwise carry that same indentation as
+// literal bytes into this one-line rendering, making `ubx ship`'s receipt
+// for a plan-store hash look different from `ubx plan`'s own receipt for
+// identical content -- one visual language, not two by accident.
 func rawOrAbsent(raw json.RawMessage) string {
 	if raw == nil {
 		return "(absent)"
@@ -204,5 +211,9 @@ func rawOrAbsent(raw json.RawMessage) string {
 	if core.IsRedactedValue(raw) {
 		return "(redacted)"
 	}
-	return string(raw)
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }

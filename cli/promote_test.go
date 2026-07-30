@@ -69,7 +69,7 @@ func TestPromote_HappyPath_ReResolvesAgainstTarget(t *testing.T) {
 		t.Fatalf("ubx promote: %v\noutput: %s", err, out)
 	}
 
-	if !strings.Contains(out, "promoted "+shortID(sourceID)+" -> payments") {
+	if !strings.Contains(out, "promoted "+displayHash(sourceID, false)+" -> payments") {
 		t.Errorf("expected a promoted-header line, got:\n%s", out)
 	}
 	if !strings.Contains(out, "delta: +1 create(s)") {
@@ -251,7 +251,7 @@ func TestPromote_ChainOfPromotionEvidence_WalksOneHopAtATime(t *testing.T) {
 		t.Fatalf("promote staging->qa: %v\noutput: %s", err, qaPromoteOut)
 	}
 	qaHash := mustExtractPlanHash(t, qaPromoteOut)
-	shipOut, err := runUbx(t, env, "ship", qaHash, "--ledger-dir", qaDir, "--provider", fakeProviderBinary)
+	shipOut, err := runUbx(t, env, "ship", qaHash, "--ledger-dir", qaDir, "--provider", fakeProviderBinary, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship (accept the qa promotion): %v\noutput: %s", err, shipOut)
 	}
@@ -312,7 +312,7 @@ func TestWhy_RendersPromotionSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why: %v\noutput: %s", err, out)
 	}
-	want := "source: promoted from staging/" + shortID(strings.Repeat("8", 64))
+	want := "source: promoted from staging/" + displayHash(strings.Repeat("8", 64), false)
 	if !strings.Contains(out, want) {
 		t.Errorf("expected why to render %q, got:\n%s", want, out)
 	}

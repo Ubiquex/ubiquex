@@ -44,6 +44,7 @@ func newScanCmd() *cobra.Command {
 		yes             bool
 		suggestStacks   bool
 		stackTag        string
+		fullHashes      bool
 	)
 
 	cmd := &cobra.Command{
@@ -366,9 +367,10 @@ func newScanCmd() *cobra.Command {
 			// and reported as a card naming its own real, ship-able hash --
 			// `ubx ship`'s inline accept applies identically here as it
 			// does to a plan's own hash.
-			header := "Drift found"
+			st := newStylerFull(cmd, fullHashes)
+			header := st.Yellow("Drift found")
 			if kindLabel == "new" {
-				header = "New resource found"
+				header = st.Green("New resource found")
 			}
 			fmt.Fprintf(out2, "%s  %s\n\n", header, addr)
 
@@ -391,8 +393,11 @@ func newScanCmd() *cobra.Command {
 					}
 				}
 				hashes = append(hashes, hash)
-				fmt.Fprintf(out2, "  %-14s%s     +%d create(s) ~%d modify(ies) -%d destroy(s)\n",
-					p.Kind, shortHash(hash), p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+				fmt.Fprintf(out2, "  %-14s%s     %s %s %s\n",
+					p.Kind, st.Ref(hash),
+					st.Green(fmt.Sprintf("+%d create(s)", p.BlastRadius.Creates)),
+					st.Yellow(fmt.Sprintf("~%d modify(ies)", p.BlastRadius.Modifies)),
+					st.Red(fmt.Sprintf("-%d destroy(s)", p.BlastRadius.Destroys)))
 			}
 			fmt.Fprintf(out2, "\n  saved to plan store            next: %s\n", nextShipHint(hashes))
 			// A proposal was generated -- new resource or drift -- an
@@ -429,6 +434,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm proceeding past --discover's own --limit")
 	cmd.Flags().BoolVar(&suggestStacks, "suggest-stacks", false, "with --discover, print a read-only stack-grouping preview instead of writing proposals -- writes nothing, assigns nothing")
 	cmd.Flags().StringVar(&stackTag, "stack-tag", "", "with --discover --suggest-stacks, the tag key to group discovered resources by (omit to fall back to a naming-prefix heuristic)")
+	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 
 	return cmd
 }
@@ -457,9 +463,9 @@ type scanJSON struct {
 func nextShipHint(hashes []string) string {
 	switch len(hashes) {
 	case 1:
-		return fmt.Sprintf("ubx ship %s", shortHash(hashes[0]))
+		return fmt.Sprintf("ubx ship %s", shortRef(hashes[0]))
 	case 2:
-		return fmt.Sprintf("ubx ship %s  (or %s)", shortHash(hashes[0]), shortHash(hashes[1]))
+		return fmt.Sprintf("ubx ship %s  (or %s)", shortRef(hashes[0]), shortRef(hashes[1]))
 	default:
 		return "ubx ship <hash>"
 	}

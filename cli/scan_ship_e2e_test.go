@@ -49,7 +49,7 @@ func TestScanPropose_Revert_ShipShortHash_AppliesAgainstLedger(t *testing.T) {
 	hash := mustExtractShipHash(t, out)
 
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
-	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
+	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship %s (plan-store short hash from scan --propose): %v\noutput: %s", hash, err, shipOut)
 	}

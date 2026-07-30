@@ -69,6 +69,7 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	shipOut, err := runUbx(t, env, "ship", hash,
 		"--provider", fakeProviderBinary,
 		"--ledger-dir", ledgerDir,
+		"--yes",
 	)
 	if err != nil {
 		t.Fatalf("ubx ship <hash> (no prior accept): %v\noutput: %s", err, shipOut)
@@ -147,7 +148,7 @@ func TestPlanShip_DestroysRequireConfirmFlag(t *testing.T) {
 		t.Fatalf("ledger head moved to %q without --confirm-destroys -- the refused plan must never be accepted", got)
 	}
 
-	shipOut2, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys")
+	shipOut2, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys", "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship --confirm-destroys: %v\noutput: %s", err, shipOut2)
 	}
@@ -338,7 +339,7 @@ func TestPlan_FromCode_SimpleCreate(t *testing.T) {
 	}
 	hash := mustExtractPlanHash(t, planOut)
 
-	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
+	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
@@ -388,12 +389,12 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected the resolved delta's own blast radius, got: %s", planOut)
 	}
-	if !strings.Contains(planOut, "Assumptions (1):") || !strings.Contains(planOut, "used the default tag set") {
+	if !strings.Contains(planOut, "AI defaults") || !strings.Contains(planOut, "used the default tag set") {
 		t.Fatalf("expected the draft's own assumption alongside the resolved receipt, got: %s", planOut)
 	}
 	hash := mustExtractPlanHash(t, planOut)
 
-	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
+	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
@@ -441,7 +442,7 @@ payments: {
 	}
 	hash := mustExtractPlanHash(t, planOut)
 
-	shipOut, err := runUbx(t, env, "ship", hash, "--ledger-dir", dir)
+	shipOut, err := runUbx(t, env, "ship", hash, "--ledger-dir", dir, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}

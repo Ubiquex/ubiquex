@@ -132,7 +132,7 @@ func runChat(cmd *cobra.Command, ledgerDir, stack, out string, timeout time.Dura
 				continue
 			}
 			lastDraft, lastRaw = draft, raw
-			renderAmbiguity(outWriter, draft)
+			renderAmbiguity(outWriter, newStyler(cmd), draft)
 		}
 	}
 	fmt.Fprintln(outWriter, "session abandoned, nothing saved")
@@ -176,7 +176,7 @@ func finalizeChat(cmd *cobra.Command, ledgerDir string, dlg *intentprovider.Dial
 	intentprovider.PopulateSources(&output, intentprovider.SourceKindDialogue, relPath, hash, dlg.Adapter, dlg.Model, lastRaw)
 
 	fmt.Fprintf(outWriter, "captured dialogue: %s\n", fullPath)
-	renderAmbiguity(outWriter, &output)
+	renderAmbiguity(outWriter, newStyler(cmd), &output)
 
 	outData, err := json.MarshalIndent(&output, "", "  ")
 	if err != nil {

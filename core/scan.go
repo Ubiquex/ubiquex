@@ -78,6 +78,17 @@ type ScanResult struct {
 	PreviousHash string          // "" if Outcome == ScanNew
 	Lookup       json.RawMessage // the lookup key used to read Address — persisted into the generated proposal, see GenerateProposal
 
+	// PreviousState is the ledger's own reconstructed truth (the same
+	// FoldState result PreviousHash was computed from) -- nil if Outcome
+	// == ScanNew. Additive (2026-07-31, UBI-61): lets a caller render an
+	// actual attribute-level diff for a ScanDrifted result (core.
+	// DiffAttributes(res.PreviousState, res.Observed), already exported)
+	// instead of only ever reporting THAT something drifted. Costs
+	// nothing extra to populate -- RunScan already calls FoldState for
+	// PreviousHash's own sake; this just keeps the result around too
+	// instead of discarding it after hashing.
+	PreviousState json.RawMessage
+
 	// ProviderChecksum is "sha256:<hex>" of the exact provider binary used
 	// for this scan, if the caller supplied one (see ScanRequest) —
 	// persisted into the generated proposal's resolution.inputs entry as
@@ -148,6 +159,7 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 		Observed:         observed,
 		ObservedHash:     hash,
 		PreviousHash:     prevHash,
+		PreviousState:    foldedState,
 		Lookup:           req.CurrentState,
 		ProviderChecksum: req.ProviderChecksum,
 	}

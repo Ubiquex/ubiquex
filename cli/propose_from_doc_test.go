@@ -72,14 +72,14 @@ func TestProposeFromDoc_WritesDraftAndRendersAmbiguity(t *testing.T) {
 		t.Fatalf("ubx propose --from-doc: %v\noutput: %s", err, out)
 	}
 
-	if !strings.Contains(out, "Assumptions (1):") {
-		t.Errorf("output missing rendered Assumptions section:\n%s", out)
+	if !strings.Contains(out, "AI defaults") {
+		t.Errorf("output missing rendered AI-defaults block:\n%s", out)
 	}
 	if !strings.Contains(out, "chose db.t3.small") {
 		t.Errorf("output missing the actual assumption text:\n%s", out)
 	}
-	if !strings.Contains(out, "Defaults (1):") {
-		t.Errorf("output missing rendered Defaults section:\n%s", out)
+	if !strings.Contains(out, "set engine to postgres") {
+		t.Errorf("output missing the actual default text:\n%s", out)
 	}
 	if !strings.Contains(out, "Questions (1):") || !strings.Contains(out, "[blocking") {
 		t.Errorf("output missing rendered blocking Question:\n%s", out)

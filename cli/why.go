@@ -30,6 +30,7 @@ func newWhyCmd() *cobra.Command {
 		githubRepo       string
 		jsonOut          bool
 		dialogue         bool
+		fullHashes       bool
 	)
 
 	cmd := &cobra.Command{
@@ -52,6 +53,7 @@ func newWhyCmd() *cobra.Command {
 			applyStackDefault(cmd, &stack, cfg)
 
 			out := cmd.OutOrStdout()
+			st := newStylerFull(cmd, fullHashes)
 
 			if proposalIDPattern.MatchString(args[0]) {
 				// A bare proposal ID carries no stack of its own -- unlike
@@ -87,7 +89,7 @@ func newWhyCmd() *cobra.Command {
 				}
 
 				if !jsonOut {
-					renderProposal(out, p)
+					renderProposal(out, st, p)
 					renderApplies(out, attempts)
 					if dialogue {
 						renderDialogue(out, p, dlg)
@@ -148,7 +150,7 @@ func newWhyCmd() *cobra.Command {
 
 			fmt.Fprintf(out, "%s: %d proposal(s), newest first\n", addr, len(proposals))
 			for _, p := range chain {
-				if err := renderProposalCompact(out, ledger, p); err != nil {
+				if err := renderProposalCompact(out, st, ledger, p); err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
 			}
@@ -163,6 +165,7 @@ func newWhyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20); the chain view emits a JSON array under \"chain\"")
 	cmd.Flags().BoolVar(&dialogue, "dialogue", false, "if this proposal's intent.sources names a captured dialogue (UBI-46, ubx chat), read and render the actual conversation behind it -- change proposal -> the draft it came from -> the real conversation")
+	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }
 
@@ -185,20 +188,24 @@ type whyJSON struct {
 // renderIntentSource (see its doc comment) instead of a bare kind/ref/hash
 // line — dialogue/manual_edit/issue sources render byte-identically to
 // before; only cloudtrail/cloudtrail_unattributed sources look different.
-func renderProposal(out io.Writer, p *core.Proposal) {
-	fmt.Fprintf(out, "proposal %s (%s)\n", p.ID, p.Kind)
+func renderProposal(out io.Writer, st *styler, p *core.Proposal) {
+	fmt.Fprintf(out, "proposal %s (%s)\n", st.Hash(p.ID), p.Kind)
 	fmt.Fprintf(out, "stack:  %s\n", p.Stack)
 	fmt.Fprintf(out, "status: %s\n", p.Status)
 	fmt.Fprintf(out, "intent: %s\n", p.Intent.Summary)
 	for _, s := range p.Intent.Sources {
-		renderIntentSource(out, s, "  ")
+		renderIntentSource(out, st, s, "  ")
 	}
 	if p.Acceptance != nil {
 		fmt.Fprintf(out, "accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
 	}
-	fmt.Fprintf(out, "blast radius: +%d ~%d -%d\n", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
-	renderModifies(out, p.Delta.Modifies, "")
-	renderDestroys(out, p.Delta.Destroys, "", true)
+	fmt.Fprintf(out, "blast radius: %s %s %s\n",
+		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
+		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),
+		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))
+	renderCreates(out, st, p.Delta.Creates, "")
+	renderModifies(out, st, p.Delta.Modifies, "")
+	renderDestroys(out, st, p.Delta.Destroys, "", true)
 }
 
 // renderApplies is UBI-26's own addition to `ubx why`'s single-proposal
@@ -252,6 +259,40 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 	}
 }
 
+// renderCreates prints each Delta.Creates entry -- rendered for the
+// first time ever this session (docs/cli-output-spec.md's plan mockup:
+// creates get their own "+ type.name    create" block, same as modifies/
+// destroys already had): before this, a create was only ever counted
+// (delta/blast-radius numbers), never itemized, the one asymmetry left
+// once modifies/destroys both got their own content-visible rendering
+// (UBI-27/UBI-30). Decodes the same permissive {stack,type,name,config}
+// shape core.createNodeAddress uses internally (unexported there, so
+// re-decoded locally rather than reaching into core) -- a node this
+// can't make sense of is skipped, never a panic or a blank line, mirroring
+// every other renderer's own "make the content visible" but never fail
+// posture here.
+func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent string) {
+	for _, raw := range creates {
+		var node struct {
+			Type   string                     `json:"type"`
+			Name   string                     `json:"name"`
+			Config map[string]json.RawMessage `json:"config"`
+		}
+		if err := json.Unmarshal(raw, &node); err != nil || node.Type == "" || node.Name == "" {
+			continue
+		}
+		fmt.Fprintf(out, "%s%s %s.%s create\n", indent, st.Green("+"), node.Type, node.Name)
+		keys := make([]string, 0, len(node.Config))
+		for k := range node.Config {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(out, "%s    %s: %s\n", indent, k, rawOrAbsent(node.Config[k]))
+		}
+	}
+}
+
 // renderModifies prints each Delta.Modifies entry's changed attributes,
 // current -> new (drift_adopt's before/after convention, or
 // drift_revert's own reversed one -- Kind already prints verbatim above,
@@ -259,11 +300,16 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 // renders "(redacted)" via rawOrAbsent, the same rule revert-plan's own
 // printPlan uses -- so a proposal involving a sensitive attribute change
 // is visibly a change without ever surfacing the salted hash next to a
-// human-readable attribute name.
-func renderModifies(out io.Writer, modifies []core.Modification, indent string) {
+// human-readable attribute name. A yellow "~" leads each line
+// (docs/cli-output-spec.md: yellow = modifies/drift) -- the existing
+// "change: <target>: <path>: <before> -> <after>" wording is otherwise
+// unchanged, so every reader (human or an existing test's own substring
+// assertion) still finds the identical content, just with color layered
+// on top when a TTY is actually watching.
+func renderModifies(out io.Writer, st *styler, modifies []core.Modification, indent string) {
 	for _, m := range modifies {
 		for _, path := range sortedAttributePaths(m.Before, m.After) {
-			fmt.Fprintf(out, "%schange: %s: %s: %s -> %s\n", indent, m.Target, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+			fmt.Fprintf(out, "%s%s change: %s: %s: %s -> %s\n", indent, st.Yellow("~"), m.Target, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
 		}
 	}
 }
@@ -279,10 +325,12 @@ func renderModifies(out io.Writer, modifies []core.Modification, indent string) 
 // were both invisible in `ubx why`'s output. showState controls whether
 // each attribute is printed too (the full single-proposal view) or just
 // the address (the terser per-entry chain view, matching
-// renderProposalCompact's own existing terseness elsewhere).
-func renderDestroys(out io.Writer, destroys []core.DestroyEntry, indent string, showState bool) {
+// renderProposalCompact's own existing terseness elsewhere). A red "-"
+// leads each line (docs/cli-output-spec.md: red = destroys, "red-led"
+// full-state block).
+func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, indent string, showState bool) {
 	for _, d := range destroys {
-		fmt.Fprintf(out, "%sdestroy: %s\n", indent, d.Address)
+		fmt.Fprintf(out, "%s%s destroy: %s\n", indent, st.Red("-"), d.Address)
 		if !showState {
 			continue
 		}
@@ -333,13 +381,14 @@ func destroyOutcome(reconciliation []core.ReconciliationAttempt) string {
 // so a resource whose genesis is a shipped create (rather than an
 // adoption) shows the full resolve -> accept -> ship story in its own
 // chain view, not just the accepted decision.
-func renderProposalCompact(out io.Writer, ledger *core.Ledger, p *core.Proposal) error {
-	fmt.Fprintf(out, "- %s %s (%s): %s\n", p.Kind, shortID(p.ID), p.Resolution.ResolvedAt, p.Intent.Summary)
+func renderProposalCompact(out io.Writer, st *styler, ledger *core.Ledger, p *core.Proposal) error {
+	fmt.Fprintf(out, "- %s %s (%s): %s\n", p.Kind, st.Hash(p.ID), p.Resolution.ResolvedAt, p.Intent.Summary)
 	for _, s := range p.Intent.Sources {
-		renderIntentSource(out, s, "    ")
+		renderIntentSource(out, st, s, "    ")
 	}
-	renderModifies(out, p.Delta.Modifies, "    ")
-	renderDestroys(out, p.Delta.Destroys, "    ", false)
+	renderCreates(out, st, p.Delta.Creates, "    ")
+	renderModifies(out, st, p.Delta.Modifies, "    ")
+	renderDestroys(out, st, p.Delta.Destroys, "    ", false)
 	if p.Kind == core.KindDriftRevert || p.Kind == core.KindChange {
 		attempts, err := ledger.ApplyAttempts(p.ID)
 		if err != nil {
@@ -348,16 +397,6 @@ func renderProposalCompact(out io.Writer, ledger *core.Ledger, p *core.Proposal)
 		renderApplies(out, attempts)
 	}
 	return nil
-}
-
-// shortID is a presentation-layer truncation only (docs/schema.md's hash.go
-// comment: "a short display form is a presentation concern, not part of
-// the canonical identity itself") — never used to look anything back up.
-func shortID(id string) string {
-	if len(id) <= 12 {
-		return id
-	}
-	return id[:12] + "…"
 }
 
 // renderIntentSource prints one intent.sources entry. cloudtrail sources
@@ -370,21 +409,22 @@ func shortID(id string) string {
 // names literally ("promoted from staging/8f3c…") — see docs/schema.md's
 // "Amendment: promotion evidence" for the field shape. Every other kind
 // (dialogue/manual_edit/issue) is unchanged from before this session.
-func renderIntentSource(out io.Writer, s core.IntentSource, indent string) {
+func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent string) {
+	label := st.Purple("source:")
 	switch s.Kind {
 	case "cloudtrail":
-		fmt.Fprintf(out, "%ssource: cloudtrail -- %s %s at %s", indent, s.ActorARN, s.EventName, s.EventTime)
+		fmt.Fprintf(out, "%s%s cloudtrail -- %s %s at %s", indent, label, s.ActorARN, s.EventName, s.EventTime)
 		if s.SourceIP != "" {
 			fmt.Fprintf(out, " from %s", s.SourceIP)
 		}
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "%s  event %s (content_hash=%s)\n", indent, s.EventID, s.ContentHash)
 	case "cloudtrail_unattributed":
-		fmt.Fprintf(out, "%ssource: cloudtrail_unattributed -- %s\n", indent, unattributedReason(s.Reason))
+		fmt.Fprintf(out, "%s%s cloudtrail_unattributed -- %s\n", indent, label, unattributedReason(s.Reason))
 	case "promotion":
-		fmt.Fprintf(out, "%ssource: promoted from %s/%s\n", indent, s.Base, shortID(s.Ref))
+		fmt.Fprintf(out, "%s%s promoted from %s/%s\n", indent, label, s.Base, st.Hash(s.Ref))
 	default:
-		fmt.Fprintf(out, "%ssource: %s %s (content_hash=%s)\n", indent, s.Kind, s.Ref, s.ContentHash)
+		fmt.Fprintf(out, "%s%s %s %s (content_hash=%s)\n", indent, label, s.Kind, s.Ref, s.ContentHash)
 	}
 }
 

@@ -30,8 +30,10 @@ import (
 // broken hashes; it either has an answer or it doesn't.
 func newBlameCmd() *cobra.Command {
 	var (
-		ledgerDir string
-		jsonOut   bool
+		ledgerDir  string
+		jsonOut    bool
+		all        bool
+		fullHashes bool
 	)
 
 	cmd := &cobra.Command{
@@ -75,46 +77,141 @@ func newBlameCmd() *cobra.Command {
 				}
 				return nil
 			}
-			renderBlameHuman(out, result)
+			renderBlameHuman(out, newStylerFull(cmd, fullHashes), result, all)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (UBI-20)")
+	cmd.Flags().BoolVar(&all, "all", false, "show every attribute, including zero/null/empty provider defaults hidden by default within a grouped block")
+	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }
 
-func renderBlameHuman(out io.Writer, result *core.BlameResult) {
-	fmt.Fprintf(out, "%s\n", result.Address)
-	if result.Destroyed {
-		fmt.Fprintf(out, "DESTROYED by %s at %s -- blaming the final pre-destroy state\n", shortID(result.DestroyedBy.ProposalID), result.DestroyedBy.At)
-	}
-	fmt.Fprintln(out)
+// blameGroupKey is docs/cli-output-spec.md's own blame grouping key
+// (founder test finding, UBI-61): entries that share identical
+// provenance -- same proposal, same acceptance -- are the ordinary case
+// (one proposal usually sets many attributes at once) and read far
+// better as one header covering all of them than as N repeated blocks
+// each re-stating the identical "set by/accepted" story. SetAt is
+// included even though it's already implied by ProposalID (one proposal
+// has exactly one SetAt) -- matching the founder's own literal framing
+// ("same proposal/time/acceptance") rather than assuming the implication
+// holds forever.
+type blameGroupKey struct {
+	ProposalID       string
+	SetAt            string
+	AcceptanceMethod string
+}
 
-	for _, e := range result.Entries {
-		value := string(e.Value)
-		if e.Redacted {
-			value = "(redacted)"
+// blameGroup is every entry sharing one blameGroupKey, in the same
+// relative order core.Blame produced them.
+type blameGroup struct {
+	blameGroupKey
+	Kind             core.ProposalKind
+	Approvers        []string
+	AttributedActors []string
+	Entries          []core.BlameEntry
+}
+
+// groupBlameEntries preserves first-seen order (both across groups and
+// within a group) rather than sorting -- core.Blame's own entries are
+// already produced in a meaningful order (docs/schema.md), and this
+// grouping pass is purely a presentation collapse over it, never a
+// reordering.
+func groupBlameEntries(entries []core.BlameEntry) []blameGroup {
+	var order []blameGroupKey
+	byKey := map[blameGroupKey]*blameGroup{}
+	for _, e := range entries {
+		key := blameGroupKey{ProposalID: e.ProposalID, SetAt: e.SetAt, AcceptanceMethod: e.AcceptanceMethod}
+		g, ok := byKey[key]
+		if !ok {
+			g = &blameGroup{blameGroupKey: key, Kind: e.Kind, Approvers: e.Approvers, AttributedActors: e.AttributedActors}
+			byKey[key] = g
+			order = append(order, key)
 		}
-		fmt.Fprintf(out, "%s: %s\n", e.Path, value)
-		if e.ProposalID == "" {
-			fmt.Fprintln(out, "  set by: unknown")
+		g.Entries = append(g.Entries, e)
+	}
+	groups := make([]blameGroup, 0, len(order))
+	for _, key := range order {
+		groups = append(groups, *byKey[key])
+	}
+	return groups
+}
+
+// isBlameDefaultValue reports whether raw looks like a provider default
+// left untouched (docs/cli-output-spec.md: "empty/null/zero-default
+// attributes collapsed by default behind --all -- 24 lines of ""/null/
+// false drowns the 3 lines that matter") -- null, empty string, zero
+// number, false, or an empty object/array. A value that fails to parse
+// as JSON at all is never hidden (never silently drop something this
+// can't confidently classify as a default).
+func isBlameDefaultValue(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	switch trimmed {
+	case "", "null", `""`, "0", "false", "{}", "[]":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showAll bool) {
+	fmt.Fprintf(out, "Blame  %s\n\n", result.Address)
+	if result.Destroyed {
+		fmt.Fprintf(out, "%s by %s at %s -- blaming the final pre-destroy state\n\n",
+			st.Red("DESTROYED"), st.Hash(result.DestroyedBy.ProposalID), result.DestroyedBy.At)
+	}
+
+	for _, g := range groupBlameEntries(result.Entries) {
+		if g.ProposalID == "" {
+			for _, e := range g.Entries {
+				value := string(e.Value)
+				if e.Redacted {
+					value = "(redacted)"
+				}
+				fmt.Fprintf(out, "%s: %s\n", e.Path, value)
+				fmt.Fprintln(out, "  set by: unknown")
+			}
 			continue
 		}
-		fmt.Fprintf(out, "  set by %s (%s), %s\n", shortID(e.ProposalID), e.Kind, e.SetAt)
-		switch e.AcceptanceMethod {
+
+		var shown, hidden []core.BlameEntry
+		for _, e := range g.Entries {
+			if !showAll && !e.Redacted && isBlameDefaultValue(e.Value) {
+				hidden = append(hidden, e)
+			} else {
+				shown = append(shown, e)
+			}
+		}
+
+		fmt.Fprintf(out, "%s %d attribute(s) · set by %s (%s) · %s",
+			st.Dim("▸"), len(g.Entries), st.Hash(g.ProposalID), g.Kind, g.SetAt)
+		switch g.AcceptanceMethod {
 		case "":
 			// no acceptance recorded -- shouldn't happen for anything
 			// reachable via ProposalsForAddress, but never crash over it.
 		case "pr_merge":
-			fmt.Fprintf(out, "  accepted: pr_merge, approvers: %s\n", strings.Join(e.Approvers, ", "))
+			fmt.Fprintf(out, " · pr_merge (%s)", strings.Join(g.Approvers, ", "))
 		default:
-			fmt.Fprintf(out, "  accepted: %s\n", e.AcceptanceMethod)
+			fmt.Fprintf(out, " · %s", g.AcceptanceMethod)
 		}
-		if len(e.AttributedActors) > 0 {
-			fmt.Fprintf(out, "  attributed to: %s\n", strings.Join(e.AttributedActors, ", "))
+		fmt.Fprintln(out)
+		if len(g.AttributedActors) > 0 {
+			fmt.Fprintf(out, "    %s %s\n", st.Purple("attributed to:"), strings.Join(g.AttributedActors, ", "))
 		}
+		for _, e := range shown {
+			value := string(e.Value)
+			if e.Redacted {
+				value = "(redacted)"
+			}
+			fmt.Fprintf(out, "    %s: %s\n", e.Path, value)
+		}
+		if len(hidden) > 0 {
+			fmt.Fprintf(out, "    %s %d provider default(s) hidden -- --all to show\n", st.Dim("·"), len(hidden))
+		}
+		fmt.Fprintln(out)
 	}
 }
 

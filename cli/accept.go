@@ -75,7 +75,7 @@ func newAcceptCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
 			}
 
-			p, err := readProposalArg(ledgerDir, args[0])
+			p, planHash, err := readProposalArg(ledgerDir, args[0])
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
@@ -140,6 +140,16 @@ func newAcceptCmd() *cobra.Command {
 			if err != nil {
 				return &ExitCodeError{Code: acceptErrorCode(err), Err: err}
 			}
+			// UBI-62: a plan consumed via acceptance (whether or not it's
+			// ever shipped afterward) is pruned from the plan store, same
+			// as ship.go's own inline-accept path -- "latest" must never
+			// re-offer it either way it was consumed. Tidiness, not
+			// correctness: a failed removal only warns.
+			if planHash != "" {
+				if err := os.Remove(planFilePath(ledgerDir, planHash)); err != nil && !os.IsNotExist(err) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: accept: could not prune consumed plan file: %v\n", err)
+				}
+			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s)\n", accepted.ID, accepted.Stack)
 			return nil
@@ -198,33 +208,39 @@ func checkDestroysConfirmed(p *core.Proposal, confirmed bool) error {
 // check acceptPlanInline already performs. If neither interpretation
 // finds anything, the error names both, per docs/cli-output-spec.md
 // principle 6 (teaching errors enumerate all modes).
-func readProposalArg(ledgerDir, ref string) (*core.Proposal, error) {
+// readProposalArg returns the resolved proposal plus, only when it came
+// from the plan store rather than a hand-authored file, that plan's own
+// full hash (planHash == "" for a file path) -- so the caller can prune
+// it from .ubx/plans/ after a successful accept (UBI-62: "shipped plans
+// pruned from latest" applies equally here, since accepting via a hash
+// consumes the draft exactly as shipping one does).
+func readProposalArg(ledgerDir, ref string) (p *core.Proposal, planHash string, err error) {
 	data, fileErr := os.ReadFile(ref)
 	if fileErr == nil {
-		var p core.Proposal
-		if err := json.Unmarshal(data, &p); err != nil {
-			return nil, fmt.Errorf("parse proposal: %w", err)
+		var fileP core.Proposal
+		if err := json.Unmarshal(data, &fileP); err != nil {
+			return nil, "", fmt.Errorf("parse proposal: %w", err)
 		}
-		return &p, nil
+		return &fileP, "", nil
 	}
 	if !os.IsNotExist(fileErr) {
-		return nil, fileErr
+		return nil, "", fileErr
 	}
 
-	fullHash, p, planErr := resolvePlanHash(ledgerDir, ref)
+	fullHash, planP, planErr := resolvePlanHash(ledgerDir, ref)
 	if planErr != nil {
-		return nil, fmt.Errorf("no such file %q, and no matching plan in %s: %w -- "+
+		return nil, "", fmt.Errorf("no such file %q, and no matching plan in %s: %w -- "+
 			"pass a path to a hand-authored proposal file, or a hash printed by `ubx plan`/`ubx scan --propose`/`ubx terminate`",
 			ref, filepath.Join(ledgerDir, ".ubx", "plans"), planErr)
 	}
-	computedHash, err := core.Hash(p)
-	if err != nil {
-		return nil, err
+	computedHash, herr := core.Hash(planP)
+	if herr != nil {
+		return nil, "", herr
 	}
 	if computedHash != fullHash {
-		return nil, fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, fullHash), computedHash, fullHash)
+		return nil, "", fmt.Errorf("plan file at %s hashes to %s, not %s -- stale or corrupted plan file", planFilePath(ledgerDir, fullHash), computedHash, fullHash)
 	}
-	return p, nil
+	return planP, fullHash, nil
 }
 
 // acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier: derive

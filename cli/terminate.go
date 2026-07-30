@@ -46,6 +46,7 @@ func newTerminateCmd() *cobra.Command {
 		out             string
 		timeout         time.Duration
 		knownDependents []string
+		fullHashes      bool
 	)
 
 	cmd := &cobra.Command{
@@ -140,8 +141,9 @@ by design (docs/cli-output-spec.md principle 6).`,
 			}
 
 			outWriter := cmd.OutOrStdout()
-			renderPlanReceipt(outWriter, p)
-			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, hash, nextShipHint([]string{hash}))
+			st := newStylerFull(cmd, fullHashes)
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(stack, ""))
+			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
 			return nil
 		},
 	}
@@ -154,6 +156,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for provider acquisition/schema fetch")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }
 
