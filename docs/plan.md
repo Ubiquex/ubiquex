@@ -2,6 +2,24 @@
 
 ## Changelog
 
+- 2026-07-30 — UBI-54: lookup-hint knowledge consolidated. The four
+  separately-maintained per-type lookup-hint tables found across UBI-45
+  session 1/2 and UBI-52's audit (`conformance.Registry.LookupHint`,
+  generated `core/lookuphints`, `stateimport.BuildLookup`'s own
+  `extraLookupAttrs`, `discovery/tiers.go`'s own `tierTable.AugmentFields`)
+  are down to one authoritative source: `conformance.Registry.LookupHint`
+  → generated `core/lookuphints` (this pipeline already existed since
+  UBI-20, dependency direction verified sound before committing to it) →
+  three consumers (`core/scan.go`, unchanged; `stateimport.BuildLookup`
+  and `discovery.BuildLookup`'s Tier-B branch, both now calling
+  `lookuphints.For("hashicorp/aws", ...)` instead of their own hand-
+  duplicated maps). `discovery/tiers.go`'s `tierTable` itself was not
+  replaced — its `Tier`/`Construct`/`CreationVerbs` knowledge is unique,
+  not redundant. Zero behavior change: every existing test in
+  `stateimport`/`discovery`/`conformance` passed unmodified, no test file
+  edited. See docs/source-tree.md's "The lookup-hint tables: consolidated
+  (UBI-54)" section for the full account.
+
 - 2026-07-30 — Design-room decision (no session): environments &
   promotion (UBI-14, the founding open question, closed). Recorded in
   docs/architecture.md §Environments & promotion — envs stay

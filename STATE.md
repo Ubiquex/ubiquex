@@ -4,6 +4,59 @@
 
 ## Current phase
 
+**UBI-54 (2026-07-30), session 1: consolidate lookup-hint knowledge —
+CLOSED.** Audit-first per this session's own explicit instruction:
+located all four per-type identity-knowledge tables
+(`conformance.Registry.LookupHint`, generated `core/lookuphints`,
+`stateimport.BuildLookup`'s own `extraLookupAttrs`, `discovery/
+tiers.go`'s own `tierTable.AugmentFields`) and wrote a role/consumer
+table before touching any code — see docs/source-tree.md's "The
+lookup-hint tables: consolidated (UBI-54)" section for the full account,
+this is a summary.
+
+**The dependency-direction check, done before committing to the
+ticket's own recommendation, not assumed.** The ticket recommended
+`conformance.Registry` as the one authoritative source; verified against
+real dependency directions rather than taken on faith: `Registry.
+LookupHint` (hand-maintained, test-only, never imported by shipped code)
+→ generated `core/lookuphints` (already existed since UBI-20, already
+the correct shipped-code-safe view) → this pipeline was already right,
+nothing new to build there. The real work was making `stateimport` and
+`discovery` consumers of `core/lookuphints` instead of each carrying its
+own hand-duplicated copy.
+
+**What changed.** `stateimport.BuildLookup` — `extraLookupAttrs` map
+removed, now calls `lookuphints.For("hashicorp/aws", resourceType)`.
+`discovery/tiers.go` — `typeSpec.AugmentFields` field removed (and its
+three hand-typed values), `BuildLookup`'s Tier-B branch now calls the
+same `lookuphints.For` call. Both hardcoded to `"hashicorp/aws"` — this
+matches each package's own real, pre-existing behavior exactly (neither
+had a source parameter before; every augmented type was already AWS-only
+in both), documented honestly as a pre-existing limitation rather than
+newly introduced or newly hidden. `discovery/tiers.go`'s `tierTable`
+itself was **not** replaced — its `Tier`/`Construct`/`CreationVerbs`
+knowledge is unique to that table, no counterpart anywhere else.
+`core/scan.go`'s own existing `lookuphints.For` consumer (UBI-20) needed
+no change — already correct.
+
+**Zero behavior change, verified not assumed.** Read every test file
+touching the changed code (`stateimport_test.go`, `tiers_test.go`,
+`conformance/lookuphints_live_test.go`) before editing anything: all
+assert observable output (`BuildLookup`'s returned JSON, `ClassifyARN`'s
+tier, the teaching-error message text), none assert internal map/field
+shape directly. `go build/vet/test ./...` and `gofmt -l .` all clean
+after the change, zero test files edited — `git status` confirms only
+`discovery/tiers.go` and `stateimport/stateimport.go` touched.
+
+docs/source-tree.md's own "four copies not three" section (written
+UBI-52) superseded with the real account of what UBI-54 did. docs/
+plan.md changelog entry added. No ubiquex-docs changes — this is an
+internal architecture consolidation, teaching-error output and
+discovery classification results stay byte-identical by construction,
+no new CLI surface. UBI-54 closed in Linear with a closing comment.
+
+## Current phase (previous)
+
 **UBI-52 + UBI-53 (2026-07-30), session 1: source-tree cleanup + repo
 rename, paired so import paths churn once — CLOSED, both tickets.
 Audit-first: the full tree table landed in `docs/source-tree.md` before

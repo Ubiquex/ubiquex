@@ -182,27 +182,48 @@ matching this project's own established precedent for handling a stale
 sequencing note (the same treatment UBI-35's own session gave the
 UBI-53-before-UBI-35 tension in the first place).
 
-## The lookup-hint tables: still not consolidated, now four copies not three
+## The lookup-hint tables: consolidated (UBI-54)
 
 UBI-45's own session 1 found **three** separately-maintained copies of
 the same tiny per-type lookup-hint fact
 (`conformance.Registry.LookupHint`, generated `core/lookuphints`,
-`tfstate.BuildLookup`'s own `extraLookupAttrs`) and recommended a
-structured `TypeSpec.LookupShape` field to consolidate them —
-"recommended, not built" (`docs/plan.md`). UBI-45 session 2 added a
-**fourth**: `discovery/tiers.go`'s own `tierTable`, its own doc comment
-honestly naming itself "this session's own fourth copy of the same tiny
-lookup-hint fact ... the structured `TypeSpec.LookupShape` consolidation
-remains recommended, not built." Checked again this session, precisely:
-still four, still not consolidated, the gap growing not shrinking each
-time a new lookup-shape-aware feature ships. **Disposition: still
-deferred, deliberately, not built as part of this rename arc** (this
-arc's own scope is naming/structure, not a cross-cutting data-model
-consolidation touching four independent subsystems) — but two sessions
-of "recommended, not built" without a tracking ticket is itself a real
-gap. Recommending a dedicated Linear ticket be filed for
-`TypeSpec.LookupShape` specifically, the next time any of the four call
-sites needs to change, rather than letting a fifth copy appear.
+`tfstate.BuildLookup`'s own `extraLookupAttrs`); UBI-45 session 2 added a
+**fourth**: `discovery/tiers.go`'s own `tierTable.AugmentFields`. UBI-52's
+own audit (above) found the count still at four, still not consolidated,
+and recommended a dedicated ticket be filed.
+
+UBI-54 filed that ticket and closed it. The dependency direction the
+ticket asked to be verified before committing to it held up:
+`conformance.Registry.LookupHint` (hand-maintained, authoritative,
+machine-complete/version-aware since UBI-50, deliberately test-only —
+never imported by shipped code) → generated `core/lookuphints` (already
+existed since UBI-20, already the correct shipped-code-safe view,
+nothing new to build) → now genuinely the **one** shipped source, with
+three consumers instead of one:
+
+- `core/scan.go`'s teaching-error mechanism (UBI-20) — already wired,
+  needed no change.
+- `stateimport.BuildLookup` — its own hand-duplicated `extraLookupAttrs`
+  map is gone; it now calls `lookuphints.For("hashicorp/aws",
+  resourceType)`. The hardcoded source matches this package's own
+  pre-existing, real behavior exactly (`BuildLookup` never took a source
+  parameter and every augmented type was already AWS-only) — named
+  honestly as a pre-existing limitation, not newly introduced or newly
+  hidden.
+- `discovery/tiers.go`'s `tierTable` — its own `AugmentFields` field is
+  gone; `BuildLookup`'s Tier-B branch now calls the same `lookuphints.For`
+  call, hardcoded to `"hashicorp/aws"` for the same reason (discovery is
+  itself AWS-only: ARN parsing, the tagging API). `tierTable` itself was
+  **not** replaced — its `Tier`/`Construct`/`CreationVerbs` knowledge has
+  no counterpart in any other table and stays exactly as it was.
+
+Zero behavior change, verified rather than assumed: every existing test
+in `stateimport`, `discovery`, and `conformance` (including the live
+teaching-error round trip, `conformance/lookuphints_live_test.go`) passed
+unmodified — none of those tests asserted the internal map/field shape
+directly, only `BuildLookup`'s returned JSON / `ClassifyARN`'s tier / the
+teaching-error message text, so swapping the internal data source needed
+no test-file edits at all.
 
 ## The mechanical pass, paired (UBI-53)
 
