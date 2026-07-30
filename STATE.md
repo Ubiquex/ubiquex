@@ -4,6 +4,112 @@
 
 ## Current phase
 
+**UX-fix arc, session 2 (2026-07-30/31): consent + visuals (UBI-61/UBI-62)
+— CLOSED.** Second of the founder's 3-session arc (session 1: correctness,
+UBI-49 findings #2-#7; session 3 next: `ubx init` writing runnable config
+(UBI-59) + docs re-capture). This session's own code (style.go, the
+executor progress hook, plan/ship/scan/status/why/blame renderers, UBI-62
+consent flow) was actually built and hermetically tested in a prior run
+of this same session, but that run wedged mid-transcript-recapture on a
+background docs agent — this run picked up the uncommitted working tree,
+verified it (`go build/vet/test ./...`, `gofmt -l .` all clean, 21+ new
+tests reviewed line-by-line, not just re-run), committed it, then
+finished the docs re-capture INLINE (no background agent this time) and
+pushed both repos.
+
+**UBI-61 (colored, structured receipts).** `cli/style.go` (new): manual
+ANSI codes, not a third-party color library — the palette is 7 fixed
+codes and nothing here needs a live-updating widget, so `fatih/color`/
+`lipgloss` would be pure dependency weight for nothing this actually
+needs. `golang.org/x/term` (already transitively present) is used
+directly for real TTY detection (`os.ModeCharDevice` alone
+misclassifies `/dev/null`, confirmed via `stat` before relying on the
+stronger check) — the only new *direct* dependency this session adds.
+`NO_COLOR`/non-TTY both mean plain output (`colorEnabled`); `--json` is
+never touched, built entirely separately from every styled renderer.
+Semantic mapping: green creates/confirmations, yellow modifies/drift/
+verification, red destroys, blue hashes/identities, purple AI judgment/
+attribution — applied consistently across `plan`/`ship`/`scan`/`status`/
+`why`/`blame`. Two founder-test-driven renderer changes beyond pure
+color: `blame` now groups attributes by shared provenance (same
+proposal/acceptance) instead of repeating "set by/accepted" per
+attribute, and hides zero/null/empty provider-default values behind
+`--all` (24 lines of `""`/`null` was drowning the 3 that mattered);
+`status --drift` now renders the actual attribute-level diff inline
+plus a `next:` handoff naming the exact `ubx scan` invocation that
+resolves it, instead of a bare "drifted" verdict. `--full-hashes` added
+to every command that renders a hash (default: 12-char + `…`, matching
+`docs/cli-output-spec.md` principle 3) — replaced the two
+slightly-inconsistent truncation helpers (`plan.go`'s `shortHash`,
+`why.go`'s `shortID`) with one `displayHash`/`shortRef` pair (the latter
+marker-free, for hashes rendered as copy-pasteable command arguments).
+
+**UBI-62 (ship's interactive confirmation).** `ubx ship [hash]` — hash is
+now optional; omitted, it resolves to the most recent unshipped plan for
+the resolved stack (`resolveBareShipTarget`), always named explicitly
+before anything happens, and refuses (TTY: prompts to choose: non-TTY:
+teaching error) rather than guess between multiple stacks' worth of
+candidates. For the local-tier-inline-accept path specifically (an
+already-accepted proposal still ships immediately, unchanged — that
+consent already happened at its own `ubx accept` time): the full receipt
+renders again via the same `renderPlanReceipt` `ubx plan` uses, then a
+typed `yes` (terraform's exact pattern, not y/n) is required before
+`core.Accept` ever runs — the prompt IS the signing moment.
+`--confirm-destroys` is checked BEFORE the prompt renders (no point
+asking a human to type `yes` for something that's refused regardless) —
+two distinct consents for the irreversible class, exactly as scoped.
+`--yes` skips the read (still renders the receipt) for CI/scripts; a
+non-TTY without it refuses outright rather than hang on an unwatched
+stdin or treat EOF as consent. A consumed plan (accepted, whether
+shipped cleanly or not) is pruned from `.ubx/plans/`. New
+`core/executor/progress.go`: a context-value-carried `ProgressEvent`
+sink (`WithProgress`/`emitProgress`) — zero signature changes to
+`Ship`/`shipChange`/`shipDriftRevert`/`shipDestroyNode`, byte-identical
+behavior for every existing caller that never calls `WithProgress` —
+feeding `ubx ship`'s own live per-resource transition/reconcile-attempt
+narration (the mandatory read-back verification line, per
+`docs/cli-output-spec.md`) as it happens, not buffered to the end. Not a
+frame-animated spinner — a deliberate, lower-risk choice for a
+correctness-critical apply path.
+
+**Verification, this run**: full diff read file-by-file (not just
+diffstat) before committing — `cli/style.go`, `cli/ship.go` (the
+confirmation flow in full), `cli/blame.go`/`why.go`/`plan.go`/`status.go`/
+`scan.go` renderers, and the new test files (`ship_confirm_test.go`
+covers TTY-typed-yes/decline, non-TTY refusal, bare-ship latest-plan
+resolution, multi-stack refusal, empty-store error). Cross-checked
+UBI-61/UBI-62's actual Linear ticket text (not assumed from STATE.md's
+own forward-looking mention) before treating scope as satisfied. `go
+build/vet/test ./...`, `gofmt -l .` clean.
+
+**Docs re-capture (this run, inline — no background agent)**: found the
+prior wedged run had already left `ubiquex-docs` with uncommitted
+changes across `cli/{blame,config,plan,scan,ship,status,terminate,why}.mdx`.
+Rather than assume that work was trustworthy, verified it independently
+before committing: built `ubx`+`fakeprovider` fresh from this session's
+own source, reproduced several transcripts byte-for-byte (content
+identical modulo hash/timestamp, which necessarily differ between
+independent runs of a genuinely content-hashed, timestamp-bearing
+proposal), and diffed every command's real `--help` flag table against
+every doc's own Flags section — full match, zero drift, for all 7
+commands touched. `mint validate` clean. Pre-existing docs debt (the
+`scan.mdx` Kubernetes/Helm section's placeholder `<shorthash>`, no local
+`kind` cluster available) carried forward unchanged, still flagged
+inline, not silently dropped.
+
+**Committed and pushed, both repos**: `ubiquex` (`cli: colored
+structured receipts + ship interactive confirmation`, 44 files, includes
+the new `golang.org/x/term` direct dependency) and `ubiquex-docs`
+(`cli: colored receipts + ship interactive confirmation -- transcripts
+re-captured`, 8 files). UBI-61 and UBI-62 both closed in Linear.
+
+**Next up: session 3** — `ubx init` writing runnable config (UBI-59) +
+its own docs pass, per the founder's original 3-session arc plan (see
+"Current phase (previous)" below for session 1's own findings, still the
+most recent prior context beyond this one).
+
+## Current phase (previous)
+
 **UX-fix arc, session 1 (2026-07-30): correctness — UBI-49 findings #2-#7,
 built against the new `docs/cli-output-spec.md` — CLOSED.** First of a
 3-session arc the founder laid out from the first end-user test
