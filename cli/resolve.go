@@ -14,6 +14,7 @@ import (
 	"github.com/ubiquex/ubiquex-cli/core/resolver"
 	"github.com/ubiquex/ubiquex-cli/goeval"
 	"github.com/ubiquex/ubiquex-cli/provider"
+	"github.com/ubiquex/ubiquex-cli/pyeval"
 	"github.com/ubiquex/ubiquex-cli/sdkeval"
 )
 
@@ -50,7 +51,7 @@ func newResolveCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "resolve <intent-file>",
-		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript/Go SDK program, --from-code) into a draft change proposal",
+		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript/Go/Python SDK program, --from-code) into a draft change proposal",
 		Long: `Resolves a hand-written, machine-shaped intent file (ubx:intent/v1) into a draft
 kind:"change" proposal -- creates, modifies, and destroys (docs/resolver.md).
 Intra-stack references are checked against the ledger's own dependency graph (with real cycle
@@ -58,19 +59,21 @@ detection) and emitted in dependency order; cross-stack references are pinned ag
 ledger's current head, activating neighbor-advance staleness for real once the proposal is accepted
 (see "ubx accept"'s own pin re-verification).
 
---from-code <entry>.ts|.go, mutually exclusive with the positional intent-file argument, evaluates
-an SDK program instead of reading a file from disk -- dispatched by the entry file's own extension:
-.ts through the hermetic Deno evaluator (sdkeval, @ubx/sdk), .go by compiling the program to a real
-binary and running it under this platform's own OS-level sandbox (goeval, github.com/ubiquex/ubx-sdk-go;
-sandbox-exec on macOS, bubblewrap on Linux -- see docs/sdk.md's own "The Go evaluator: decided
-empirically"). Either way, the resulting intent/v1 document, provenance-stamped with the entry
-file's own content hash (intent.sources: {"kind":"document", "ref", "content_hash"}, the same
-"document" kind the md medium already uses), is handed to the exact same, completely unmodified
-pipeline below: an SDK program is just another intent/v1 producer, never a special case, regardless
-of language. Unlike the md medium, which needs a human-review gate between an LLM's own ambiguous
-draft and resolution (ubx propose --from-doc, then a separate ubx resolve), a typed SDK program has
-no ambiguity to review first -- it says what it says -- so --from-code resolves directly, one
-command, no separate draft step.
+--from-code <entry>.ts|.go|.py, mutually exclusive with the positional intent-file argument,
+evaluates an SDK program instead of reading a file from disk -- dispatched by the entry file's own
+extension: .ts through the hermetic Deno evaluator (sdkeval, @ubx/sdk), .go by compiling the program
+to a real binary and running it under this platform's own OS-level sandbox (goeval,
+github.com/ubiquex/ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py under WASI
+(pyeval, ubx_sdk; wasmtime running a real CPython-WASI build -- see docs/sdk.md's own "The Go
+evaluator" and "The Python evaluator: decided empirically" sections for the full account of each).
+Either way, the resulting intent/v1 document, provenance-stamped with the entry file's own content
+hash (intent.sources: {"kind":"document", "ref", "content_hash"}, the same "document" kind the md
+medium already uses), is handed to the exact same, completely unmodified pipeline below: an SDK
+program is just another intent/v1 producer, never a special case, regardless of language. Unlike
+the md medium, which needs a human-review gate between an LLM's own ambiguous draft and resolution
+(ubx propose --from-doc, then a separate ubx resolve), a typed SDK program has no ambiguity to
+review first -- it says what it says -- so --from-code resolves directly, one command, no separate
+draft step.
 
 A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
 never inferred from a resource's absence) and resolve-time orphan-protected: a destroy target
@@ -100,7 +103,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: --from-code and a positional intent-file argument are mutually exclusive")}
 			}
 			if fromCode == "" && len(args) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts")}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts|.go|.py")}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -168,7 +171,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and (--from-code) evaluating the SDK program -- one shared budget for the whole command, not per sub-operation")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
-	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk) or Go (ubx-sdk-go) SDK program, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
+	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
 
 	return cmd
 }
@@ -176,17 +179,20 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 // evaluateSDKProgram dispatches --from-code to the language-specific
 // evaluator named by entryFile's own extension -- .ts to sdkeval (the
 // hermetic Deno evaluator), .go to goeval (compile + run under this
-// platform's own OS-level sandbox). Both return the identical canonical,
-// provenance-stamped intent/v1 shape; nothing downstream of this
-// function needs to know which language produced it.
+// platform's own OS-level sandbox), .py to pyeval (run under WASI via
+// wasmtime). All three return the identical canonical, provenance-
+// stamped intent/v1 shape; nothing downstream of this function needs to
+// know which language produced it.
 func evaluateSDKProgram(ctx context.Context, entryFile string) ([]byte, error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
 		return goeval.Evaluate(ctx, entryFile)
+	case ".py":
+		return pyeval.Evaluate(ctx, entryFile)
 	case ".ts":
 		return sdkeval.Evaluate(ctx, entryFile)
 	default:
-		return nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts or .go", filepath.Ext(entryFile), entryFile)
+		return nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}
 }
 

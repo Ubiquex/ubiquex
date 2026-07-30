@@ -1,3 +1,5 @@
 .DS_Store
 /ubx
 /dist/
+__pycache__/
+*.pyc

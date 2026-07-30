@@ -14,6 +14,7 @@ import (
 	"github.com/ubiquex/ubiquex-cli/provider"
 	"github.com/ubiquex/ubiquex-cli/sdk/codegen/ir"
 	gotemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/go"
+	pytemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/py"
 	tstemplate "github.com/ubiquex/ubiquex-cli/sdk/codegen/templates/ts"
 )
 
@@ -64,7 +65,7 @@ func newSDKGenCmd() *cobra.Command {
 		Long: `Reads .ubx/config's own [providers] table (the same source of truth "ubx resolve"/"ubx ship" already read),
 acquires each declared provider's real binary at its pinned version, dumps its real schema (no Configure, no
 credentials needed -- a pure local gRPC call against the launched binary), and writes one file per provider
-source under --out, in the language named by --lang ("ts" or "go"): idiomatic bindings whose generated field
+source under --out, in the language named by --lang ("ts", "go", or "py"): idiomatic bindings whose generated field
 map maps back to the provider's real wire attribute names at evaluation time.
 
 Always regenerates from the exact config-pinned version's real, freshly-acquired schema -- never a stale cache
@@ -75,8 +76,8 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if lang != "ts" && lang != "go" {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: --lang must be \"ts\" or \"go\", got %q", lang)}
+			if lang != "ts" && lang != "go" && lang != "py" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: --lang must be \"ts\", \"go\", or \"py\", got %q", lang)}
 			}
 
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
@@ -106,7 +107,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 	}
 
 	cmd.Flags().StringVar(&out, "out", "sdk/generated", "directory to write generated bindings into (one file per declared provider source)")
-	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts" or "go"`)
+	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (applied per provider, not once for the whole command)")
 
 	return cmd
@@ -161,20 +162,30 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		types = append(types, resType)
 	}
 
-	var content, ext string
+	var content, ext, filenameStem string
 	switch lang {
 	case "go":
 		content, err = gotemplate.GeneratedFile(goPackageName(out), source, version, types)
 		ext = ".go"
+		filenameStem = sanitizeSourceForFilename(source)
+	case "py":
+		content, err = pytemplate.GeneratedFile(source, version, types)
+		ext = ".py"
+		// Python module names can't contain a hyphen ("import
+		// hashicorp-aws" is a SyntaxError) -- underscores, not the
+		// hyphenated convention TS/Go both use, so the generated file is
+		// actually importable by name.
+		filenameStem = strings.ReplaceAll(sanitizeSourceForFilename(source), "-", "_")
 	default:
 		content, err = tstemplate.GeneratedFile(source, version, types)
 		ext = ".ts"
+		filenameStem = sanitizeSourceForFilename(source)
 	}
 	if err != nil {
 		return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
 	}
 
-	path = filepath.Join(out, sanitizeSourceForFilename(source)+ext)
+	path = filepath.Join(out, filenameStem+ext)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", 0, err
 	}

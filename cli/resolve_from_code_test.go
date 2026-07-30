@@ -178,6 +178,73 @@ func TestResolveFromCode_Go_SimpleCreate(t *testing.T) {
 	}
 }
 
+// requireWasmtime skips a test when the real wasmtime binary isn't on
+// PATH -- same reasoning as requireDeno/requireHermeticSandbox: a new,
+// genuinely hard dependency this arc introduces.
+func requireWasmtime(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("wasmtime"); err != nil {
+		t.Skip("wasmtime not found in PATH -- skipping ubx resolve --from-code's own Python real-subprocess tests")
+	}
+}
+
+// TestResolveFromCode_Py_SimpleCreate mirrors
+// TestResolveFromCode_SimpleCreate/TestResolveFromCode_Go_SimpleCreate
+// exactly, but authors the same logical intent in Python instead,
+// through pyeval instead of sdkeval/goeval -- proof all three languages
+// really do converge on the exact same downstream pipeline.
+func TestResolveFromCode_Py_SimpleCreate(t *testing.T) {
+	requireWasmtime(t)
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	entryPath := filepath.Join("testdata", "sdk_resolve_py", "create_widget.py")
+
+	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
+	resolveOut, err := runUbx(t, env, "resolve",
+		"--from-code", entryPath,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--out", resolvedPath,
+		"--timeout", "120s",
+	)
+	if err != nil {
+		t.Fatalf("ubx resolve --from-code (py): %v\noutput: %s", err, resolveOut)
+	}
+	if !strings.Contains(resolveOut, "1 create(s), 0 modify(ies)") {
+		t.Fatalf("expected a 1-create summary, got: %s", resolveOut)
+	}
+
+	raw, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := string(raw)
+	if !strings.Contains(resolved, `"kind": "change"`) {
+		t.Fatalf("resolved proposal missing kind:change: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"fake_widget"`) || !strings.Contains(resolved, `"widget1"`) {
+		t.Fatalf("resolved proposal missing the Python-authored fake_widget/widget1 resource: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "create_widget.py"`) {
+		t.Fatalf("resolved proposal missing a document intent.sources entry naming create_widget.py: %s", resolved)
+	}
+
+	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx accept (from-code py resolved): %v\noutput: %s", err, acceptOut)
+	}
+	changeID := mustExtractID(t, acceptOut)
+
+	whyOut, err := runUbx(t, env, "why", changeID, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx why (from-code py change): %v\noutput: %s", err, whyOut)
+	}
+	if !strings.Contains(whyOut, "document create_widget.py") {
+		t.Fatalf("why output missing the document provenance source: %s", whyOut)
+	}
+}
+
 func TestResolveFromCode_MutuallyExclusiveWithPositionalArg(t *testing.T) {
 	// No requireDeno -- the mutual-exclusivity check happens before
 	// sdkeval.Evaluate is ever called.
