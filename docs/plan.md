@@ -2028,6 +2028,28 @@
   regressions. **UBI-45 closed** across three sessions -- design,
   build, and a real, live, closing proof of every claim the design
   session made. See STATE.md for the full account.
+- 2026-07-30 -- UBI-35 session 1 (Go SDK, second language under UBI-33's
+  contract): the compiled-program evaluator hypothesis -- hermeticity via
+  OS-level process restriction instead of a sandboxed interpreter --
+  tested empirically FIRST, per the ticket's own framing, and confirmed
+  on both target platforms (macOS `sandbox-exec`, Linux `bubblewrap`),
+  with the same rigor as the TS session's own Deno probes: real commands,
+  real crash reports read directly, real gaps named (a naive deny-all
+  sandbox-exec profile crashes the process at `dyld` startup; Linux
+  namespace creation needs elevated privilege when already nested inside
+  another hardened container). Confirmed, not just designed: the whole
+  arc built the same session -- `sdk/go/` (new nested Go module, the
+  runtime), `sdk/codegen/templates/go` (new, on the unmodified shared IR
+  model), `goeval/` (new, the sandboxed compile-once/run-twice
+  evaluator), `cli/resolve.go`'s `--from-code` extension dispatch,
+  `cli/sdk.go`'s `--lang go`, and a real Go conformance case
+  (`payments.go`, its own `golden/payments_go.json`) matching the TS/md
+  golden's own resources/stack/summary byte-for-byte after
+  canonicalization. `go build/vet/test`/`gofmt -l .` clean across the
+  whole repo, including `sdk/go`'s own nested module. Not a closing
+  session -- UBI-33 stays open (Python, UBI-36, unstarted). See STATE.md
+  and docs/sdk.md's own "The Go evaluator: decided empirically" section
+  for the full account.
 
 ## Strategy
 
@@ -4208,6 +4230,110 @@ clean. `go build/vet/test`/`gofmt -l .` clean across the whole repo.
 Both repos committed and pushed. See STATE.md and docs/sdk.md's own
 "Slices 5–7: built" section for the full account, including the real
 transcripts and the real byte-comparison.
+
+### SDK program: Go, second language (UBI-35)
+
+Session 1 (2026-07-30): **the compiled-program evaluator hypothesis
+tested empirically and confirmed, then the whole arc built the same
+session** — probe, `sdk/go` runtime, Go codegen template, `resolve
+--from-code` dispatch, and a real Go conformance case, all in one
+session (unlike TS, which took four). Full account, including every
+probe's real command/output, in docs/sdk.md's own "The Go evaluator:
+decided empirically" section.
+
+**The probe, run first, per the ticket's own framing ("decides the whole
+arc's session count")**: unlike TypeScript (needs a sandboxed
+interpreter, Deno, because the runtime executing the program is shared
+and otherwise capable of anything), a Go SDK program is compiled and
+runs as an ordinary OS process — the hypothesis was that OS-level
+restriction of that process, not a language-level permission system,
+could carry the same hermeticity guarantee. Confirmed on both target
+platforms, empirically, with the same rigor as the Deno probes: macOS's
+`sandbox-exec` (Apple's own `system.sb` base profile + explicit denies —
+a naive from-scratch deny-all profile crashes the process at `dyld`
+startup, root-caused via a real crash report, not guessed at) and
+Linux's `bubblewrap` (unprivileged user+mount+net namespaces, verified
+inside a container, with one real, honestly-recorded caveat: nested-
+namespace creation needs elevated privilege when already running inside
+another hardened container — a real portability gap, this arc's own
+analog of the Deno remote-import gap). Plain env-scrubbing alone,
+confirmed insufficient by itself (blocks env visibility, not file/
+network syscalls) — ruled out as the primary mechanism precisely because
+a real syscall-level one proved achievable on both platforms.
+
+**The determinism story turned out simpler than TypeScript's**: compiled
+Go has no monkey-patchable `Date.now()`/`Math.random()`-equivalent
+ambient global to eagerly guard, so there is no Go analog of `guards.ts`
+at all — `core.DoubleRun`, run against the same already-built binary
+twice, is the whole backstop, one layer instead of two. A further real
+simplification found along the way: building happens once, outside any
+sandbox (Go compilation doesn't execute the source it compiles, so
+`CGO_ENABLED=0` and no `go generate` step means no arbitrary-code-
+execution risk at build time), and `core.DoubleRun` runs the SAME binary
+twice — TS's own evaluator has no equivalent "build once" phase to hoist
+out of the loop, since Deno both parses and executes on every
+invocation.
+
+**Built the same session**: `sdk/go/` (new, its own nested Go module,
+`github.com/ubx-sdk-go`, per UBI-33's own hard constraint) — a runtime
+mirroring `@ubx/sdk`'s semantics (`Stack`/`Resource`/`Secret`/`Cross`/
+`Intent`; `Computed` as an address-wrapper type with an explicit
+`.Field(name)` drill-down method, the honest Go equivalent of a Proxy Go
+doesn't have; config values typed `any` and recursively serialized via
+reflection against a generated `FieldMap`, mirroring `serializeConfig`/
+`serializeOpaque` exactly). `sdk/codegen/templates/go` (new) — a Go
+template on the *same, unmodified* `sdk/codegen/ir` model, real notably
+smaller than the TS template's own output: Go's `Computed` has no static
+per-field type, so there's no Go analog of TS's `Attrs` interface to
+render at all, only a `Config` struct (plus nested object structs) and
+the runtime descriptor. `goeval/` (new, top-level package, mirroring
+`sdkeval`'s own shape) — compiles the program once (`go build`,
+`CGO_ENABLED=0`, `GOPROXY=off` closing Go's own real analog of the
+remote-import gap: a `go.mod` reaching for anything beyond a local
+`replace`/the module cache fails the build loudly rather than fetching
+untrusted code, confirmed against a real unfetchable dependency;
+`GOFLAGS=-mod=mod`, found empirically, reconciles an ordinary toolchain-
+version mismatch without a spurious failure; builds from a throwaway
+copy of the program's own module, never mutating the author's real
+files), runs it twice sandboxed via `core.DoubleRun`, stamps the same
+`"document"` provenance kind `sdkeval` already uses, validates against
+the same `core/resolver.IntentFile`. `cli/resolve.go`'s `--from-code`
+now dispatches by entry-file extension (`.ts` → `sdkeval`, `.go` →
+`goeval`) — the only change to already-shipped UBI-34 code, one `switch`
+statement. `cli/sdk.go` gained `--lang ts|go` on `ubx sdk gen` (default
+`ts`, unchanged behavior) — real bindings generated against the real
+`hashicorp/aws@6.54.0` schema (1,682 types, matching the TS session's
+own real figure) confirmed to actually compile against `sdk/go/runtime`,
+not just look plausible (a real bug — `import` emitted after a `var`
+declaration — caught by that compile check, not by string assertions
+alone). `sdk/conformance/programs/go/payments.go` (new, independently
+authored, not a transliteration) — real, live, sandboxed, double-run-
+verified output matches the TS/md golden's own `resources`/`stack`/
+`intent.summary` byte-for-byte after canonicalization; a *separate*
+golden file (`golden/payments_go.json`), not the same one, for a real
+structural reason: the document-provenance entry names the entry file
+itself, and `payments.go`/`payments.ts` are two different files with two
+different real content hashes, so no single golden document could ever
+match both.
+
+**A real, honest sequencing note**: UBI-53 (repo rename
+`ubiquex-cli`→`ubiquex`, Backlog, not started) says the rename should
+happen *before* UBI-35 so the published Go import path is born clean.
+Proceeded with UBI-35 now anyway — UBI-53 wasn't part of this session's
+given scope (CLAUDE.md: only reference given Linear IDs), the GitHub-
+side rename needs founder action, and a module-path rename is a small,
+separately-scoped, mechanical sed sweep whenever UBI-53 actually lands —
+recorded here rather than silently ignored.
+
+`go build/vet/test`/`gofmt -l .` clean across the whole repo, including
+`sdk/go`'s own nested module. `ubiquex-docs` updated the same session
+(`cli/resolve.mdx`'s new "Authoring in Go" section, real transcripts;
+`cli/sdk-gen.mdx`'s new `--lang go` example; `sdk/index.mdx` restructured
+into parallel TypeScript/Go sections) — `mint validate`/`mint
+broken-links` both clean. Not a closing session — UBI-33 stays open
+(Python, UBI-36, still unstarted); no Linear status change or closing
+comment this session, matching the session's own given instruction
+("commit and push," not "close").
 
 ### Diagram medium: D2 only (UBI-47) — closed
 

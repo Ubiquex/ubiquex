@@ -4,12 +4,16 @@
 > implementation slices built, tested, and live-verified**; see "Slices
 > 1–3: built," "Slice 4: built," and "Slices 5–7: built," below, for the
 > full real account. **UBI-33 (the multi-language contract) stays open**
-> — Go (UBI-35) and Python (UBI-36) are unstarted; this document's own
-> language-neutral IR model and canonical-JSON discipline are the shared
-> foundation they'll build against. Session 1's own design intent below
-> is preserved as the historical record of what was decided before any
-> code existed; it is superseded wherever a later "built" section says
-> so, not silently.
+> — Python (UBI-36) is unstarted; this document's own language-neutral IR
+> model and canonical-JSON discipline are the shared foundation it'll
+> build against. **UBI-35 (Go) session 1, 2026-07-30: the compiled-
+> program evaluator hypothesis tested empirically and confirmed** — see
+> "The Go evaluator: decided empirically," below — with the runtime,
+> codegen templates, `resolve --from-code` dispatch, and the Go
+> conformance case built the same session. Session 1's own design intent
+> below is preserved as the historical record of what was decided before
+> any code existed; it is superseded wherever a later "built" section
+> says so, not silently.
 >
 > Session 1, design only, no code (historical). This document is the
 > contract half of UBI-33 (the umbrella: multi-language contract + shared
@@ -1093,11 +1097,237 @@ pushed. See STATE.md for the full session account.
    demonstrated this session, not just an aspiration stated in this
    document. **UBI-34 closed in Linear.**
 
+## The Go evaluator: decided empirically (UBI-35 session 1)
+
+UBI-35's own ticket framed the central open question as a hypothesis to
+falsify before anything else got built: unlike a TypeScript program (needs
+a sandboxed *interpreter* — Deno — because the runtime that executes it is
+shared, general-purpose, and otherwise capable of anything), a Go SDK
+program is *compiled* and runs as an ordinary OS process. If real
+OS-level restriction of that child *process* is achievable on both target
+platforms, hermeticity doesn't need a language-level permission system at
+all — the same `core.DoubleRun` two-run byte-compare TS's own evaluator
+already uses becomes the determinism half, and process-level sandboxing
+becomes the isolation half. This was tested empirically, with the same
+rigor as the Deno probes (real commands, real error strings, real gaps
+named), before any runtime/codegen/CLI code was written. **The hypothesis
+is confirmed, not falsified**, on both platforms, with one real portability
+caveat on Linux (below).
+
+### macOS: `sandbox-exec`, real and working
+
+A first, naive "deny everything" profile —
+
+```scheme
+(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+```
+
+ — crashed the probe binary before it printed a single line: `exit 134`
+(`SIGABRT`), no stdout, no stderr. The real crash report (macOS writes one
+to `~/Library/Logs/DiagnosticReports/*.ips` for every abort — read
+directly, not guessed at) pointed at `dyld4::CacheFinder` on the faulting
+thread: the sandbox had denied `dyld` itself the read access it needs to
+open the shared library cache, so the process never reached `main` at
+all. This is the macOS-side analog of the Deno remote-import gap — a
+naive profile looks like it's just "extra safe," but it's actually
+blocking something load-bearing the runtime needs before your own code
+ever executes.
+
+The fix, found by reading Apple's own shipped profiles
+(`/System/Library/Sandbox/Profiles/`, not guessed at): `system.sb` —
+Apple's own base profile for first-party daemons — imports
+`dyld-support.sb` and grants exactly the bootstrap access a process needs
+to start (shared cache, `/usr/lib`, `/System`), plus a narrowly-scoped,
+unix-socket-only `network-outbound` rule for `/private/var/run/syslog`
+(confirmed by reading the rule directly — not a real network permission).
+Importing it as a base and layering explicit denies on top is a real,
+working profile:
+
+```scheme
+(version 1)
+(import "system.sb")
+(allow process-exec)
+(allow process-fork)
+(allow file-read* file-map-executable (subpath "<the evaluator's own scratch/binary dir>"))
+(deny file-write*)
+(deny file-read* (subpath "/Users"))
+(deny file-read* (subpath "/private/etc"))
+(deny file-read* (subpath "/private/var"))
+(deny network-outbound)
+(deny network-inbound)
+```
+
+Run for real against a compiled Go probe binary that attempts six things
+a hermetic evaluator must deny — reading a home-directory file, reading
+`/etc/hosts`, writing to `/tmp`, reading an env var, dialing
+`8.8.8.8:53` over TCP, and resolving DNS for `example.com` — every
+capability except env-var visibility came back cleanly blocked, and the
+process ran to completion (`exit 0`) rather than crashing:
+
+```text
+READ_HOME_FILE: BLOCKED (open /Users/roozbeh/.zshrc: operation not permitted)
+READ_ETC_HOSTS: BLOCKED (open /etc/hosts: operation not permitted)
+WRITE_TMP_FILE: BLOCKED (open /tmp/ubx-go-probe-write-test: operation not permitted)
+READ_ENV_HOME: ALLOWED (/Users/roozbeh)
+NET_DIAL_TCP: BLOCKED (dial tcp 8.8.8.8:53: connect: operation not permitted)
+DNS_LOOKUP: BLOCKED (lookup example.com: no such host)
+```
+
+**Subprocess-escape checked directly, not assumed**: an adversarial SDK
+program doesn't have to make the denied syscall itself — it could shell
+out to `curl` or `nc` and let a different binary try. Tested for real:
+`sandbox-exec -f <profile> /usr/bin/curl ...` and `sandbox-exec -f
+<profile> nc -z 8.8.8.8 53`, run directly (not even via the Go probe),
+both denied identically (`nc` exits 1, no connection). macOS sandbox
+profiles apply to the whole process tree by default — there is no
+separate "scope it to just this binary" step needed, and no equivalent of
+the Deno dynamic-import gap found on this path.
+
+Env-var visibility is real and expected to stay allowed here —
+`sandbox-exec` is a filesystem/network/Mach-IPC policy, not an
+environment-variable filter. That's a separate, simpler mechanism (the
+evaluator sets `exec.Cmd.Env` directly), not a sandbox-profile concern.
+
+### Linux: namespaces (`CLONE_NEWNET`, `bubblewrap`), real and working, with a real nesting caveat
+
+Tested for real inside a Linux container (no bare-metal Linux host
+available in this session's environment — a real, honestly-recorded
+scoping limit, unlike the macOS results above which ran directly on the
+host). Baseline first, unrestricted: the same six-check probe, cross-
+compiled for `linux/amd64`, run in a plain `alpine:3.20` container —
+everything allowed, confirming the probe itself is a valid negative
+control before testing any restriction.
+
+**Network namespace isolation** (`CLONE_NEWNET` — exactly what Go's own
+`syscall.SysProcAttr.Cloneflags` exposes directly, no external tool
+required in principle) blocks both TCP dial and DNS cleanly:
+
+```text
+NET_DIAL_TCP: BLOCKED (dial tcp 8.8.8.8:53: connect: network is unreachable)
+DNS_LOOKUP: BLOCKED (lookup example.com on 192.168.65.7:53: dial udp 192.168.65.7:53: connect: network is unreachable)
+```
+
+verified two ways: Docker's own `--network none` flag, and directly via
+`unshare --net <probe>` (the same underlying kernel primitive, invoked
+without Docker's own flag doing anything special) — both produced the
+identical `network is unreachable` result, confirming this is the real
+namespace primitive at work, not a Docker-specific behavior.
+
+**`bubblewrap` (`bwrap`)** — the real, already-widely-packaged Linux tool
+built for exactly this ("sandbox one child process": unprivileged user +
+mount + net namespaces together, the same mechanism Flatpak uses) — gives
+the cleanest result of the whole probe, and a structurally *stronger*
+form of denial than macOS's policy-based `EPERM`: bind-mounting only
+`/lib`, `/proc`, `/dev`, and the binary itself means denied paths don't
+exist in the sandboxed process's view at all, so opens fail with `no such
+file or directory`, not `operation not permitted` — "deny by
+nonexistence," the same category `docs/sdk.md`'s own TS section named as
+`isolated-vm`'s strongest property:
+
+```text
+READ_HOME_FILE: BLOCKED (open /root/.zshrc: no such file or directory)
+READ_ETC_HOSTS: BLOCKED (open /etc/hosts: no such file or directory)
+WRITE_TMP_FILE: BLOCKED (open /tmp/ubx-go-probe-write-test: no such file or directory)
+NET_DIAL_TCP: BLOCKED (dial tcp 8.8.8.8:53: connect: network is unreachable)
+DNS_LOOKUP: BLOCKED (... connection refused)
+```
+
+**The real caveat, found empirically, not assumed**: both `unshare --net`
+and `bwrap` failed outright with `Operation not permitted` when run
+inside this session's own (unprivileged) Docker container — creating a
+*new* namespace requires either root or `CAP_SYS_ADMIN`-equivalent
+privilege, which this session's default container didn't have; both
+worked once re-run with `--privileged`. On a bare Linux host this is
+normally a non-issue (unprivileged user namespaces are enabled by default
+on most modern distros, which is exactly what lets `bwrap` run
+unprivileged in the first place) — but **a Go evaluator running inside
+someone else's already-hardened container** (a customer's own CI image,
+a locked-down build agent) may find namespace creation denied for the
+same reason found here. This is this arc's own version of the Deno
+remote-import gap: a real, non-obvious edge worth documenting rather than
+silently assuming "Linux always works." The evaluator must fail loudly
+(refuse to run unsandboxed) rather than silently degrade when this
+happens — never a silent fallback to unrestricted execution.
+
+**Capabilities alone are not a substitute**, confirmed directly:
+`--cap-drop=ALL` with an otherwise-normal network namespace still allowed
+both the TCP dial and the DNS lookup. Capabilities gate privileged
+operations (raw sockets, mount, `ptrace`); they don't gate an ordinary
+`connect()`. This rules out "just drop capabilities" as sufficient on its
+own — namespace isolation is the load-bearing mechanism.
+
+Raw hand-authored `seccomp` (a custom BPF syscall-number allowlist,
+built from scratch against the Go runtime's own syscall surface) was
+evaluated but not hand-built this session: `bwrap` already layers a
+seccomp filter underneath its namespace isolation as part of what it
+does, so the marginal isolation value of hand-rolling one directly is
+low, while the engineering cost (Go's runtime syscall surface is broad
+and version-dependent, so a hand-built allowlist is a real ongoing
+maintenance burden) is high. `bwrap`/namespaces solve the actual
+requirement (no network, no arbitrary file access) more directly; noting
+this as a scoped decision, not a silent gap.
+
+### Plain env-scrubbing: real, but confirmed insufficient alone
+
+Tested directly (`env -i <probe>`, no sandbox of any kind): env-var
+visibility for `HOME` correctly disappeared, but file read, file write,
+and network dial **all still succeeded** — env-scrubbing removes ambient
+*configuration* (an `AWS_ACCESS_KEY_ID`, an `http_proxy`), it does not
+touch the process's raw ability to open a file descriptor or a socket.
+Confirmed, not assumed: this rules out "env-scrubbing as the honest
+floor" as this arc's actual mechanism, precisely because both platforms
+proved a real syscall-level mechanism *is* achievable — env-scrubbing
+remains a real, cheap, additional layer (the evaluator still clears the
+child's environment down to an explicit minimal set), just not the
+primary one.
+
+### The determinism story turns out simpler than TypeScript's
+
+TS's evaluator needs two defense layers because JavaScript's
+nondeterministic entry points (`Date.now()`, `Math.random()`) are
+*ambient, monkey-patchable globals* — `guards.ts`'s `GuardedDate` overrides
+them eagerly, with `core.DoubleRun` as the backstop for whatever the
+override can't see. **Compiled Go has no equivalent ambient global to
+patch**: `time.Now()` and `math/rand`'s auto-seeded top-level functions
+are direct, statically-linked calls the program's own source imports
+explicitly — there is no runtime-reachable hook to intercept them from
+outside the program, the way a JS engine's global object can be mutated
+before the program runs. This isn't a gap; it's a structural
+simplification. `core.DoubleRun` doesn't need to know *why* two runs
+diverged — any nondeterminism, from `time.Now()` or anywhere else,
+produces different bytes across the two runs and gets caught by the same
+byte-compare TS already relies on as its own backstop layer. For Go,
+that backstop **is** the whole determinism story — one layer, not two.
+(A `go vet`-style static lint flagging `time`/`math/rand` imports in an
+SDK program is real, cheap, future defense-in-depth — not required for
+soundness, since `DoubleRun` alone is already a complete guarantee.)
+
+### Decision
+
+Ship a Go evaluator built on: **`sandbox-exec` on macOS** (fully proven
+above), **`bubblewrap` on Linux when present on `PATH`** (fully proven
+above; the evaluator checks for it and fails loudly, refusing to run
+unsandboxed, rather than silently degrading, if it's missing or if
+namespace creation is denied) — both wrapped in `core.DoubleRun` exactly
+as TS's evaluator already does, reusing `core.CanonicalJSONBytes`
+unchanged. No language-level guard layer is needed or possible for Go;
+`DoubleRun` alone carries the full determinism guarantee. This is a
+smaller, simpler evaluator than TS's — no embedded runtime assets to
+extract, no generated-runner-script indirection, no clock/random
+override module — because the compiled-program "cheat" really does hold.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
-Go and Python's own evaluators/runtimes (UBI-35/36, each its own sizing
-and its own sandbox story — Go's compiled-program "cheat," Python's "no
-cheat, wait for demand," per the ticket's own risk note); typed
+Python's own evaluator/runtime (UBI-36, "no cheat, wait for demand," per
+the ticket's own risk note — Go's own compiled-program "cheat" is now
+decided empirically, see "The Go evaluator: decided empirically," above);
+a full Linux mount-namespace filesystem jail built from scratch (this
+session's Linux answer relies on `bubblewrap`, an existing, already-
+hardened tool, rather than hand-rolling `pivot_root`/mount-namespace code
+directly — a deliberate, smaller build, not an oversight); typed
 cross-stack handles (`cross()` takes a hand-typed address string in v1,
 the same posture a hand-written `$cross` marker already has — a
 codegen'd handle that type-checks a neighbor stack's own resource shape
