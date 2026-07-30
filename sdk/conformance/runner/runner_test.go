@@ -1,9 +1,10 @@
 // Package runner is docs/sdk.md's own "sdk/conformance/runner/": evaluate
 // each language's program, canonicalize, byte-compare to golden/ (slice
-// 6, built alongside slice 7's live finale, UBI-33/34 session 4). Only a
-// TS runner exists so far -- UBI-35/36 (Go/Python) each add their own
-// evaluator and their own case in this same suite, against the identical
-// golden files, once built.
+// 6, built alongside slice 7's live finale, UBI-33/34 session 4). TS and
+// Go runners exist so far (UBI-35 added Go's own case, its own golden
+// file -- see TestPaymentsGoldenCase_Go's own doc comment for why a
+// separate golden file, not the same one) -- UBI-36 (Python) adds a
+// third case in this same suite once built.
 package runner
 
 import (
@@ -11,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/ubiquex/ubiquex-cli/core"
+	"github.com/ubiquex/ubiquex-cli/goeval"
 	"github.com/ubiquex/ubiquex-cli/sdkeval"
 )
 
@@ -60,6 +63,70 @@ func TestPaymentsGoldenCase_TS(t *testing.T) {
 	}
 
 	goldenRaw, err := os.ReadFile(filepath.Join("..", "golden", "payments.json"))
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
+	want, err := core.CanonicalJSONBytes(goldenRaw)
+	if err != nil {
+		t.Fatalf("canonicalize golden fixture: %v", err)
+	}
+
+	if string(got) != string(want) {
+		t.Fatalf("evaluated output does not match the golden fixture, byte for byte after canonicalization:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+// requireHermeticSandbox skips when this platform has no verified
+// hermetic mechanism for goeval (sandbox-exec on macOS, bubblewrap on
+// Linux) -- same reasoning as requireDeno, one language over.
+func requireHermeticSandbox(t *testing.T) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			t.Skip("sandbox-exec not found in PATH -- skipping sdk/conformance's own real Go-evaluator tests")
+		}
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bubblewrap (bwrap) not found in PATH -- skipping sdk/conformance's own real Go-evaluator tests")
+		}
+	default:
+		t.Skip("no verified hermetic sandbox mechanism on this platform -- skipping sdk/conformance's own real Go-evaluator tests")
+	}
+}
+
+// TestPaymentsGoldenCase_Go is UBI-35's own sibling to
+// TestPaymentsGoldenCase_TS: programs/go/payments.go, independently
+// authored (not a mechanical transliteration of payments.ts -- see that
+// file's own doc comment), evaluated for real through goeval (compile +
+// run under this platform's own OS-level sandbox, core.DoubleRun across
+// two real runs of the same built binary) -- byte-compared against
+// golden/payments_go.json after canonicalization on both sides.
+//
+// A SEPARATE golden file from payments.json, not the same one, for a
+// real, structural reason: intent.sources' own document-provenance entry
+// names the entry file itself and its own real content hash -- payments.go
+// and payments.ts are two different files with two different real
+// hashes, so no single golden document could ever be byte-identical to
+// both at once. What payments_go.json proves is the same thing the
+// original TS+md convergence proof established (docs/sdk.md's own "Live
+// finale"): the SAME resolved resources/stack/intent.summary, reached by
+// a third independent producer -- checked here at the resources/stack/
+// summary level (Go-specific provenance is expected and real, not a
+// mismatch to paper over).
+func TestPaymentsGoldenCase_Go(t *testing.T) {
+	requireHermeticSandbox(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	programPath := filepath.Join("..", "programs", "go", "payments.go")
+	got, err := goeval.Evaluate(ctx, programPath)
+	if err != nil {
+		t.Fatalf("goeval.Evaluate(%s): %v", programPath, err)
+	}
+
+	goldenRaw, err := os.ReadFile(filepath.Join("..", "golden", "payments_go.json"))
 	if err != nil {
 		t.Fatalf("read golden fixture: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -93,6 +94,86 @@ func TestResolveFromCode_SimpleCreate(t *testing.T) {
 		t.Fatalf("why output missing change kind: %s", whyOut)
 	}
 	if !strings.Contains(whyOut, "document create_widget.ts") {
+		t.Fatalf("why output missing the document provenance source: %s", whyOut)
+	}
+}
+
+// requireHermeticSandbox skips a test when this platform has no verified
+// hermetic mechanism available for the Go evaluator (goeval) -- mirrors
+// requireDeno's own reasoning, one level down (goeval's own package
+// already skips identically; this mirrors it here since `ubx resolve
+// --from-code` is a second, real subprocess call site for the same
+// dependency).
+func requireHermeticSandbox(t *testing.T) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			t.Skip("sandbox-exec not found in PATH -- skipping ubx resolve --from-code's own Go real-subprocess tests")
+		}
+	case "linux":
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bubblewrap (bwrap) not found in PATH -- skipping ubx resolve --from-code's own Go real-subprocess tests")
+		}
+	default:
+		t.Skip("no verified hermetic sandbox mechanism on this platform -- skipping ubx resolve --from-code's own Go real-subprocess tests")
+	}
+}
+
+// TestResolveFromCode_Go_SimpleCreate mirrors TestResolveFromCode_SimpleCreate
+// exactly, but authors the same logical intent in Go instead of
+// TypeScript, through goeval instead of sdkeval (UBI-35's own dispatch,
+// resolve.go's evaluateSDKProgram) -- proof the two languages really do
+// converge on the exact same downstream pipeline, not just similar-
+// looking output.
+func TestResolveFromCode_Go_SimpleCreate(t *testing.T) {
+	requireHermeticSandbox(t)
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	entryPath := filepath.Join("testdata", "sdk_resolve_go", "create_widget.go")
+
+	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
+	resolveOut, err := runUbx(t, env, "resolve",
+		"--from-code", entryPath,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--out", resolvedPath,
+		"--timeout", "60s",
+	)
+	if err != nil {
+		t.Fatalf("ubx resolve --from-code (go): %v\noutput: %s", err, resolveOut)
+	}
+	if !strings.Contains(resolveOut, "1 create(s), 0 modify(ies)") {
+		t.Fatalf("expected a 1-create summary, got: %s", resolveOut)
+	}
+
+	raw, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := string(raw)
+	if !strings.Contains(resolved, `"kind": "change"`) {
+		t.Fatalf("resolved proposal missing kind:change: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"fake_widget"`) || !strings.Contains(resolved, `"widget1"`) {
+		t.Fatalf("resolved proposal missing the Go-authored fake_widget/widget1 resource: %s", resolved)
+	}
+	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "create_widget.go"`) {
+		t.Fatalf("resolved proposal missing a document intent.sources entry naming create_widget.go: %s", resolved)
+	}
+
+	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx accept (from-code go resolved): %v\noutput: %s", err, acceptOut)
+	}
+	changeID := mustExtractID(t, acceptOut)
+
+	whyOut, err := runUbx(t, env, "why", changeID, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx why (from-code go change): %v\noutput: %s", err, whyOut)
+	}
+	if !strings.Contains(whyOut, "document create_widget.go") {
 		t.Fatalf("why output missing the document provenance source: %s", whyOut)
 	}
 }
