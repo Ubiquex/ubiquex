@@ -130,8 +130,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("terminate: marshal proposal: %w", err)}
 			}
 
-			planPath, err := writePlanFile(ledgerDir, hash, data)
-			if err != nil {
+			if _, err := writePlanFile(ledgerDir, hash, data); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("terminate: %w", err)}
 			}
 			if out != "" {
@@ -143,7 +142,9 @@ by design (docs/cli-output-spec.md principle 6).`,
 			outWriter := cmd.OutOrStdout()
 			st := newStylerFull(cmd, fullHashes)
 			renderPlanReceipt(outWriter, st, p, planReceiptHeader(stack, ""))
-			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
+			// UBI-49 polish: the hash is the reference, the plan file's
+			// own path on disk is not -- see plan.go's identical fix.
+			fmt.Fprintf(outWriter, "\nubx-proposal: %s\nnext: %s\n", st.Hash(hash), nextShipHint([]string{hash}))
 			return nil
 		},
 	}

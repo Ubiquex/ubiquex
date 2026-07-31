@@ -38,7 +38,7 @@ func TestShip_Destroy_NarratesReadBackAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx terminate: %v\noutput: %s", err, termOut)
 	}
-	hash := mustExtractPlanHash(t, termOut)
+	hash := mustExtractPlanHash(t, ledgerDir, termOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys", "--yes")
 	if err != nil {

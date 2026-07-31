@@ -196,7 +196,7 @@ propose-time PR trailer hash, etc.).`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: marshal proposal: %w", err)}
 			}
 
-			planPath, err := writePlanFile(ledgerDir, hash, data)
+			_, err = writePlanFile(ledgerDir, hash, data)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
@@ -209,7 +209,13 @@ propose-time PR trailer hash, etc.).`,
 			outWriter := cmd.OutOrStdout()
 			st := newStylerFull(cmd, fullHashes)
 			renderPlanReceipt(outWriter, st, p, planReceiptHeader(p.Stack, sourceLabel))
-			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
+			// UBI-49 polish: the hash IS the reference (docs/cli-output-
+			// spec.md principle 3) -- the plan file's own path on disk is
+			// an implementation detail nothing downstream ever needs (not
+			// even `ubx ship`, which resolves by hash through the plan
+			// store, never a path); dropped as pure noise a human had to
+			// visually skip past to find the two lines that matter.
+			fmt.Fprintf(outWriter, "\nubx-proposal: %s\nnext: %s\n", st.Hash(hash), nextShipHint([]string{hash}))
 			return nil
 		},
 	}
@@ -262,8 +268,10 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 		fmt.Fprintln(out)
 	}
 
-	fmt.Fprintf(out, "delta: +%d create(s), ~%d modify(ies), -%d destroy(s)\n",
-		len(p.Delta.Creates), len(p.Delta.Modifies), len(p.Delta.Destroys))
+	fmt.Fprintf(out, "delta: %s, %s, %s\n",
+		st.Green(fmt.Sprintf("+%d create(s)", len(p.Delta.Creates))),
+		st.Yellow(fmt.Sprintf("~%d modify(ies)", len(p.Delta.Modifies))),
+		st.Red(fmt.Sprintf("-%d destroy(s)", len(p.Delta.Destroys))))
 	fmt.Fprintf(out, "blast radius: %s %s %s\n",
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
 		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),

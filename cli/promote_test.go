@@ -76,7 +76,7 @@ func TestPromote_HappyPath_ReResolvesAgainstTarget(t *testing.T) {
 		t.Errorf("expected the target's own fresh resolve delta, got:\n%s", out)
 	}
 
-	hash := mustExtractPlanHash(t, out)
+	hash := mustExtractPlanHash(t, targetDir, out)
 	planFile := filepath.Join(targetDir, ".ubx", "plans", hash+".json")
 	if _, err := os.Stat(planFile); err != nil {
 		t.Fatalf("expected a saved plan file at %s: %v", planFile, err)
@@ -142,7 +142,7 @@ func TestPromote_SourceIsUnacceptedPlanDraft_Refused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, sourceDir, planOut)
 
 	_, err = runUbx(t, nil, "promote", hash, "--ledger-dir", sourceDir, "--to", targetDir)
 	if err == nil {
@@ -250,7 +250,7 @@ func TestPromote_ChainOfPromotionEvidence_WalksOneHopAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote staging->qa: %v\noutput: %s", err, qaPromoteOut)
 	}
-	qaHash := mustExtractPlanHash(t, qaPromoteOut)
+	qaHash := mustExtractPlanHash(t, qaDir, qaPromoteOut)
 	shipOut, err := runUbx(t, env, "ship", qaHash, "--ledger-dir", qaDir, "--provider", fakeProviderBinary, "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship (accept the qa promotion): %v\noutput: %s", err, shipOut)
@@ -272,7 +272,7 @@ func TestPromote_ChainOfPromotionEvidence_WalksOneHopAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote qa->prod: %v\noutput: %s", err, prodPromoteOut)
 	}
-	prodHash := mustExtractPlanHash(t, prodPromoteOut)
+	prodHash := mustExtractPlanHash(t, prodDir, prodPromoteOut)
 	prodPlan, err := readPlanFile(prodDir, prodHash)
 	if err != nil {
 		t.Fatalf("read prod's own saved plan: %v", err)

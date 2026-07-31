@@ -392,7 +392,22 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut 
 					fmt.Fprintf(out, "    %s %s: %s -> %s\n", st.Yellow("~"), path, rawOrAbsent(before[path]), rawOrAbsent(after[path]))
 				}
 			}
-			fmt.Fprintf(out, "    next: ubx scan --propose both --stack %s --type %s --name %s\n", e.Address.Stack, e.Address.Type, e.Address.Name)
+			// UBI-49 residual round 1 finding #3: attribution is
+			// scan-propose-time only (a fresh CloudTrail lookback needs a
+			// window this live drift check doesn't have any business
+			// running itself) -- this surfaces whatever a PRIOR scan
+			// --propose/accept cycle already recorded for this exact
+			// address, if any, never a live attempt for the drift being
+			// shown right now. Omitted entirely when no prior adopt
+			// recorded real attribution -- never a placeholder.
+			if line, ok := lastRecordedAttribution(st, ledger, e.Address); ok {
+				fmt.Fprintf(out, "    %s\n", line)
+			}
+			// UBI-49 polish: flag-free scan (residual round 1) means the
+			// obvious next step is just `ubx scan --propose both` now --
+			// stack already resolves from the cascade, and omitting
+			// --type/--name walks the whole fleet, this address included.
+			fmt.Fprintf(out, "    next: ubx scan --propose both\n")
 		}
 		return entry, true, false
 	default:

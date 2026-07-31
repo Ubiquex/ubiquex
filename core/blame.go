@@ -38,6 +38,21 @@ type BlameEntry struct {
 	// drift_adopt proposal (today's only real producer of cloudtrail/
 	// gcp_audit sources), empty otherwise.
 	AttributedActors []string
+
+	// UnattributedReason/UnattributedBackend surface WHY attribution came
+	// back empty (UBI-49 residual #5's correction, 2026-07-31): the wire
+	// layer already recorded this at scan-propose time (a
+	// cloudtrail_unattributed/audit_unattributed intent source, complete
+	// with its own Reason) -- the gap this fixes is display-only, blame
+	// simply never rendered it. Populated only when AttributedActors is
+	// empty AND the setting proposal actually attempted attribution and
+	// came back empty (never populated for a proposal kind that never
+	// attempts attribution at all, e.g. a plain shipped change) --
+	// UnattributedBackend is empty for the legacy "cloudtrail_unattributed"
+	// kind (which predates needing one; it only ever meant CloudTrail) and
+	// names the platform for the generalized "audit_unattributed" kind.
+	UnattributedReason  string
+	UnattributedBackend string
 }
 
 // DestroyProvenance names the proposal that tombstoned an address --
@@ -224,6 +239,9 @@ func Blame(l *Ledger, addr Address) (*BlameResult, error) {
 				entry.Approvers = a.Approvers
 			}
 			entry.AttributedActors = attributedActors(prov.proposal)
+			if len(entry.AttributedActors) == 0 {
+				entry.UnattributedReason, entry.UnattributedBackend = unattributedNote(prov.proposal)
+			}
 		}
 		entries = append(entries, entry)
 	}
@@ -310,6 +328,23 @@ func isRedactedLeaf(v interface{}) bool {
 	}
 	_, ok = m[RedactedMarkerKey]
 	return ok && len(m) == 1
+}
+
+// unattributedNote reports the recorded reason (and, for the generalized
+// "audit_unattributed" kind, which backend) p's own attribution attempt
+// came back empty -- UBI-49 residual #5's correction: the wire layer
+// already records this at scan-propose time, this just surfaces it for
+// blame. Only ever called when attributedActors(p) is already empty; "",
+// "" means p carries no unattributed source at all (an ordinary proposal
+// that never attempted attribution in the first place, e.g. a plain
+// shipped change).
+func unattributedNote(p *Proposal) (reason, backend string) {
+	for _, s := range p.Intent.Sources {
+		if s.Kind == "cloudtrail_unattributed" || s.Kind == "audit_unattributed" {
+			return s.Reason, s.Backend
+		}
+	}
+	return "", ""
 }
 
 // attributedActors names every CloudTrail/GCP-audit actor p's own

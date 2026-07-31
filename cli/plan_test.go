@@ -59,7 +59,7 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 		t.Fatalf("expected a cost delta line in the receipt, got: %s", planOut)
 	}
 
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	planFile := filepath.Join(ledgerDir, ".ubx", "plans", hash+".json")
 	if _, err := os.Stat(planFile); err != nil {
@@ -74,7 +74,9 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship <hash> (no prior accept): %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "accepted "+hash+" (stack payments) via local plan") {
+	// UBI-49 polish: ship's own "accepted" line shows the short hash form
+	// now (docs/cli-output-spec.md principle 3), not the full one.
+	if !strings.Contains(shipOut, "accepted "+displayHash(hash, false)+" (stack payments) via local plan") {
 		t.Fatalf("expected ship to report inline local-tier acceptance, got: %s", shipOut)
 	}
 	if !strings.Contains(shipOut, "outcome: applied") {
@@ -135,7 +137,7 @@ func TestPlanShip_DestroysRequireConfirmFlag(t *testing.T) {
 	if !strings.Contains(planOut, "destroy: payments.fake_widget.victim") {
 		t.Fatalf("expected the receipt to render the destroy target, got: %s", planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
 	if exitCode(err) != 1 {
@@ -179,7 +181,7 @@ func TestShip_PlanFile_HashMismatch_Refused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	planFile := filepath.Join(ledgerDir, ".ubx", "plans", hash+".json")
 	raw, err := os.ReadFile(planFile)
@@ -267,7 +269,7 @@ func TestPlanShip_CrossStackPin_StaleBlocksShip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan (cross-stack): %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, stackDir, planOut)
 
 	neighborAdopt2 := filepath.Join(neighborDir, "adopt2.json")
 	scanOut2, err := runUbx(t, env, "scan",
@@ -337,7 +339,7 @@ func TestPlan_FromCode_SimpleCreate(t *testing.T) {
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected a 1-create blast radius, got: %s", planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
@@ -392,7 +394,7 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 	if !strings.Contains(planOut, "AI defaults") || !strings.Contains(planOut, "used the default tag set") {
 		t.Fatalf("expected the draft's own assumption alongside the resolved receipt, got: %s", planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
@@ -440,7 +442,7 @@ payments: {
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected a 1-create blast radius, got: %s", planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, dir, planOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--ledger-dir", dir, "--yes")
 	if err != nil {
@@ -463,12 +465,22 @@ func readLedgerHead(t *testing.T, ledgerDir string) string {
 // mustExtractPlanHash pulls the "ubx-proposal: <hash>" line `ubx plan`
 // prints as its own last line -- unlike `ubx propose`'s bare trailer-only
 // output, plan's own hash line follows a full receipt, so this scans for
-// the line rather than assuming it's the entire output.
-func mustExtractPlanHash(t *testing.T, planOutput string) string {
+// the line rather than assuming it's the entire output. UBI-49 polish:
+// the line itself only ever shows the short (12-char + "…") form now
+// (docs/cli-output-spec.md principle 3 -- the full hash is no longer
+// printed anywhere in human-text output at all), so this resolves it
+// back to the real, full hash via resolvePlanHash -- the exact same
+// prefix-resolution `ubx ship`/`ubx accept` themselves use, not a
+// test-only shortcut.
+func mustExtractPlanHash(t *testing.T, ledgerDir, planOutput string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?m)^ubx-proposal: ([0-9a-f]{64})$`).FindStringSubmatch(planOutput)
+	m := regexp.MustCompile(`(?m)^ubx-proposal: ([0-9a-f]+)`).FindStringSubmatch(planOutput)
 	if m == nil {
 		t.Fatalf("could not find a ubx-proposal hash line in plan output: %s", planOutput)
 	}
-	return m[1]
+	fullHash, _, err := resolvePlanHash(ledgerDir, m[1])
+	if err != nil {
+		t.Fatalf("resolvePlanHash(%s) from plan output's own short hash: %v", m[1], err)
+	}
+	return fullHash
 }

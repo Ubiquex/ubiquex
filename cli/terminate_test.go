@@ -41,17 +41,20 @@ func TestTerminate_HappyPath_ShipsAndTombstones(t *testing.T) {
 	if !strings.Contains(termOut, "delta: +0 create(s), ~0 modify(ies), -1 destroy(s)") {
 		t.Fatalf("expected a 1-destroy receipt, got: %s", termOut)
 	}
-	hash := mustExtractPlanHash(t, termOut)
+	hash := mustExtractPlanHash(t, ledgerDir, termOut)
 
 	shipOut, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--confirm-destroys", "--yes")
 	if err != nil {
 		t.Fatalf("ubx ship --confirm-destroys: %v\noutput: %s", err, shipOut)
 	}
-	destroyID := mustExtractIDFromShip(t, shipOut)
-
-	whyOut, err := runUbx(t, env, "why", destroyID, "--ledger-dir", ledgerDir)
+	// The proposal's own ID IS its content hash (docs/schema.md) -- ship's
+	// inline accept never changes it, so the plan's own full hash (already
+	// known from mustExtractPlanHash, above) is reused directly rather
+	// than re-extracting it from ship's own "accepted <hash>" line, which
+	// only ever prints the short form now (UBI-49 polish).
+	whyOut, err := runUbx(t, env, "why", hash, "--ledger-dir", ledgerDir)
 	if err != nil {
-		t.Fatalf("ubx why %s: %v\noutput: %s", destroyID, err, whyOut)
+		t.Fatalf("ubx why %s: %v\noutput: %s", hash, err, whyOut)
 	}
 	if !strings.Contains(whyOut, "destroy: "+addr) {
 		t.Fatalf("expected a \"destroy: %s\" line, got: %s", addr, whyOut)
@@ -117,7 +120,7 @@ func TestTerminate_OrphanProtection_Refused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 	if _, err := runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes"); err != nil {
 		t.Fatalf("ubx ship: %v", err)
 	}
@@ -150,21 +153,4 @@ func TestDestroy_TeachesTowardTerminate(t *testing.T) {
 	if !strings.Contains(err.Error(), "ubx terminate") {
 		t.Fatalf("expected the error to name ubx terminate, got: %v", err)
 	}
-}
-
-// mustExtractIDFromShip pulls the accepted-inline proposal id from ship's
-// own "accepted <id> (stack ...) via local plan" line.
-func mustExtractIDFromShip(t *testing.T, shipOut string) string {
-	t.Helper()
-	const marker = "accepted "
-	i := strings.Index(shipOut, marker)
-	if i < 0 {
-		t.Fatalf("no \"accepted <id>\" line found in: %s", shipOut)
-	}
-	rest := shipOut[i+len(marker):]
-	end := strings.IndexAny(rest, " \n")
-	if end < 0 {
-		t.Fatalf("malformed \"accepted <id>\" line in: %s", shipOut)
-	}
-	return rest[:end]
 }

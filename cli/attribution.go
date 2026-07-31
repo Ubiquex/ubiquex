@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ubiquex/ubiquex/audit/azure"
@@ -189,4 +190,93 @@ func subscriptionFromProviderConfig(raw json.RawMessage) string {
 	}
 	_ = json.Unmarshal(raw, &cfg)
 	return cfg.SubscriptionID
+}
+
+// recordedAttributedActor finds sources' own first (newest, per
+// AttributeDrift's own ordering) real cloudtrail/gcp_audit source with an
+// actor identity -- the "who:" half of a scan card or status --drift's
+// own recorded-attribution surfacing. ok is false if sources carries no
+// real attribution at all (never attempted, or attempted and empty).
+func recordedAttributedActor(sources []core.IntentSource) (s core.IntentSource, ok bool) {
+	for _, src := range sources {
+		if (src.Kind == "cloudtrail" || src.Kind == "gcp_audit") && src.ActorARN != "" {
+			return src, true
+		}
+	}
+	return core.IntentSource{}, false
+}
+
+// recordedUnattributedReason finds sources' own recorded
+// cloudtrail_unattributed/audit_unattributed entry, if any -- UBI-49
+// residual #5's correction: attribution having come back empty is
+// already recorded, WITH its reason, at scan-propose time; this is just
+// the read side other call sites (scan's own card, ship's recent-drift
+// warning) share instead of each re-deriving it.
+func recordedUnattributedReason(sources []core.IntentSource) (reason, backend string, ok bool) {
+	for _, s := range sources {
+		if s.Kind == "cloudtrail_unattributed" || s.Kind == "audit_unattributed" {
+			return s.Reason, s.Backend, true
+		}
+	}
+	return "", "", false
+}
+
+// lastRecordedAttribution finds addr's own most recent drift_adopt/
+// adoption proposal and surfaces its recorded attribution, if any --
+// UBI-49 residual round 1 finding #3's own reconciliation of
+// docs/cli-output-spec.md's status --drift mockup (which shows a "who:"
+// line for the drift being displayed) against the real architecture
+// (attribution only ever happens at scan-propose time, a fresh CloudTrail
+// lookback with its own correlation window -- status --drift has no
+// business attempting one itself, just to render one line). This only
+// ever replays HISTORY: whatever a prior scan --propose/accept cycle
+// already recorded for this exact address, never a live attempt for the
+// drift being shown right now -- callers render it accordingly (e.g. with
+// an explicit "(recorded at ...)" qualifier, not as if it explains the
+// CURRENT drift). Stops at the most recent adopt-kind proposal
+// specifically: if THAT one carries no real attribution, older history
+// isn't consulted either, since surfacing a much staler actor as "who"
+// would be more misleading than surfacing nothing.
+func lastRecordedAttribution(st *styler, ledger *core.Ledger, addr core.Address) (line string, ok bool) {
+	proposals, err := ledger.ProposalsForAddress(addr)
+	if err != nil {
+		return "", false
+	}
+	for i := len(proposals) - 1; i >= 0; i-- {
+		p := proposals[i]
+		if p.Kind != core.KindDriftAdopt && p.Kind != core.KindAdoption {
+			continue
+		}
+		s, found := recordedAttributedActor(p.Intent.Sources)
+		if !found {
+			return "", false
+		}
+		return fmt.Sprintf("%s %s · %s · %s (recorded at %s)", st.Purple("who:"), s.ActorARN, s.EventName, s.EventTime, p.Kind), true
+	}
+	return "", false
+}
+
+// attributionCardLine renders sources' own attribution outcome as one
+// display line for a scan card (docs/cli-output-spec.md's own "who:"
+// line) -- "" if sources carries no attribution info at all (attribution
+// was never attempted for this proposal's kind, or --no-attribution was
+// given). UBI-49 residual #5's correction made this necessary: before,
+// an unattributed result was silently indistinguishable from "never
+// attempted" -- now it renders its own recorded reason plus a re-scan
+// hint, exactly like an attributed result renders its own actor.
+func attributionCardLine(st *styler, sources []core.IntentSource) string {
+	if s, ok := recordedAttributedActor(sources); ok {
+		line := fmt.Sprintf("%s %s · %s · %s", st.Purple("who:"), s.ActorARN, s.EventName, s.EventTime)
+		if s.SourceIP != "" {
+			line += " from " + s.SourceIP
+		}
+		return line
+	}
+	if reason, backend, ok := recordedUnattributedReason(sources); ok {
+		if backend != "" {
+			return fmt.Sprintf("%s none found yet (%s, %s) -- re-scan to attribute", st.Dim("attribution:"), unattributedReason(reason), backend)
+		}
+		return fmt.Sprintf("%s none found yet (%s) -- re-scan to attribute", st.Dim("attribution:"), unattributedReason(reason))
+	}
+	return ""
 }

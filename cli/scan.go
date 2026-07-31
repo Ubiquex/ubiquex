@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -157,8 +158,42 @@ func newScanCmd() *cobra.Command {
 				return runScanDiscover(ctx, cmd.OutOrStdout(), opts)
 			}
 
-			if stack == "" || resourceType == "" || resourceName == "" {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack, --type, and --name (or --all --tfstate <path> for bulk onboarding, or --discover for cloud-side discovery)")}
+			if stack == "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan requires --stack (or --all --tfstate <path> for bulk onboarding, or --discover for cloud-side discovery) -- pass --stack or set stack=\"...\" in .ubx/config.hcl")}
+			}
+
+			// UBI-49 residual round 1's "fleet-scoped --propose": neither
+			// --type nor --name given means "walk every address this
+			// stack's own ledger already tracks" (core.Ledger.Fleet, the
+			// same walk `ubx status` already does) -- not an error. Both
+			// given still means the single-resource path below, unchanged;
+			// only ONE of the two given is still ambiguous (which one was
+			// meant to narrow what?) and stays a hard error.
+			if resourceType == "" && resourceName == "" {
+				if jsonOut {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: --json is only supported for a single-resource scan -- pass --type and --name to narrow, or use `ubx status --drift --json` for a fleet-wide JSON report", stack)}
+				}
+				if out != "" || outDir != "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: --out/--out-dir are only supported for a single-resource scan (--type and --name) -- a fleet-wide walk always saves directly to the plan store", stack)}
+				}
+				if surfaceAs != "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: --surface-as is only supported for a single-resource scan -- pass --type and --name to narrow", stack)}
+				}
+				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+				defer cancel()
+				ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, err)}
+				}
+				defer closeLedger()
+				if len(cfg.Providers) > 0 {
+					warnIfLegacyProviderFlagsGiven(cmd)
+				}
+				st := newStylerFull(cmd, fullHashes)
+				return runScanFleet(ctx, cmd.OutOrStdout(), st, ledger, ledgerDir, stack, propose, noAttribution, cfg, providerPath, source, providerVersion, providerConfig)
+			}
+			if resourceType == "" || resourceName == "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: pass both --type and --name to scan one resource, or neither to scan every resource this stack's ledger already tracks", stack)}
 			}
 			if surfaceAs != "" && propose == "revert" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
@@ -393,11 +428,7 @@ func newScanCmd() *cobra.Command {
 					}
 				}
 				hashes = append(hashes, hash)
-				fmt.Fprintf(out2, "  %-14s%s     %s %s %s\n",
-					p.Kind, st.Ref(hash),
-					st.Green(fmt.Sprintf("+%d create(s)", p.BlastRadius.Creates)),
-					st.Yellow(fmt.Sprintf("~%d modify(ies)", p.BlastRadius.Modifies)),
-					st.Red(fmt.Sprintf("-%d destroy(s)", p.BlastRadius.Destroys)))
+				renderScanCard(out2, st, p, hash)
 			}
 			fmt.Fprintf(out2, "\n  saved to plan store            next: %s\n", nextShipHint(hashes))
 			// A proposal was generated -- new resource or drift -- an
@@ -409,9 +440,9 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source)")
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
-	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource belongs to (required unless --all, where it defaults to the state file's own basename)")
-	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket (required unless --all)")
-	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack (required unless --all)")
+	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource(s) belong to (required unless --all, where it defaults to the state file's own basename; falls back to .ubx/config's own stack key otherwise)")
+	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket -- pass both --type and --name to scan one resource, or neither to walk every resource this stack's ledger already tracks")
+	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack -- pass both --type and --name to scan one resource, or neither to walk every resource this stack's ledger already tracks")
 	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider (e.g. {\"id\":\"...\"})")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (e.g. {\"region\":\"us-east-1\"})")
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
@@ -451,6 +482,41 @@ type scanJSON struct {
 	Outcome      string           `json:"outcome"` // "new" | "drifted" | "unchanged"
 	ObservedHash string           `json:"observed_hash"`
 	Proposals    []*core.Proposal `json:"proposals,omitempty"`
+}
+
+// renderScanCard prints one generated proposal's own card entry --
+// kind, ship-able hash, a short description, then content (UBI-49
+// residual round 1's "scan cards regain content" polish,
+// docs/cli-output-spec.md's own worked example): the attribute-level
+// diff already sitting on Delta.Modifies (both drift_adopt and
+// drift_revert carry one; an adoption's own Delta.Creates has no prior
+// state to diff against, so nothing renders there), and, for drift_adopt
+// specifically, its own attribution outcome -- attributed (who:) or the
+// recorded reason it came back empty (attribution:, UBI-49 residual #5's
+// correction: this used to be silently omitted either way).
+func renderScanCard(out io.Writer, st *styler, p *core.Proposal, hash string) {
+	var desc string
+	switch p.Kind {
+	case core.KindAdoption:
+		desc = "record-only · adopts into the ledger"
+	case core.KindDriftAdopt:
+		desc = "record-only · records reality as signed"
+	case core.KindDriftRevert:
+		desc = "restores the ledger's own recorded state"
+	default:
+		desc = fmt.Sprintf("+%d create(s) ~%d modify(ies) -%d destroy(s)", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+	}
+	fmt.Fprintf(out, "  %-14s%s     %s\n", p.Kind, st.Ref(hash), desc)
+	for _, m := range p.Delta.Modifies {
+		for _, path := range sortedAttributePaths(m.Before, m.After) {
+			fmt.Fprintf(out, "      %s %s: %s -> %s\n", st.Yellow("~"), path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+		}
+	}
+	if p.Kind == core.KindDriftAdopt {
+		if line := attributionCardLine(st, p.Intent.Sources); line != "" {
+			fmt.Fprintf(out, "      %s\n", line)
+		}
+	}
 }
 
 // nextShipHint renders scan --propose's own "next:" handoff (UBI-49

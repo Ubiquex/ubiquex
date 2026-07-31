@@ -37,7 +37,7 @@ func TestAccept_ShortHashFromPlanStore_Accepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	fullHash := mustExtractPlanHash(t, planOut)
+	fullHash := mustExtractPlanHash(t, ledgerDir, planOut)
 	hash := shortRef(fullHash)
 
 	acceptOut, err := runUbx(t, env, "accept", hash, "--ledger-dir", ledgerDir)

@@ -61,12 +61,20 @@ func adoptThenDrift(t *testing.T, extraArgs ...string) (ledgerDir, scanOut strin
 	return ledgerDir, scanOut
 }
 
+// cardHeaderPattern matches renderScanCard's own per-proposal header line
+// (UBI-49 residual round 1's "scan cards regain content" polish
+// replaced the old "+N create(s) ~N modify(ies) -N destroy(s)" summary
+// with kind-specific descriptive text -- "record-only · ..."/"restores
+// the ledger's own recorded state" -- so counting cards now matches the
+// one thing every card header still has in common: two leading spaces,
+// a left-padded kind name, then its own hash).
+var cardHeaderPattern = regexp.MustCompile(`(?m)^  (adoption|drift_adopt|drift_revert)\s+[0-9a-f]+\s+`)
+
 // countProposalLines counts scan --propose's own card lines (UBI-49
-// finding #6) -- one per generated proposal, each ending in a
-// "+N create(s) ~N modify(ies) -N destroy(s)" blast-radius summary --
-// standing in for the old JSON dump's "generated a %q proposal" count.
+// finding #6) -- one per generated proposal -- standing in for the old
+// JSON dump's "generated a %q proposal" count.
 func countProposalLines(out string) int {
-	return strings.Count(out, "create(s) ~")
+	return len(cardHeaderPattern.FindAllString(out, -1))
 }
 
 func TestScan_ProposeDefault_GeneratesDriftAdoptOnly(t *testing.T) {

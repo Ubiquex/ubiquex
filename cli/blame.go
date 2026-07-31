@@ -109,10 +109,12 @@ type blameGroupKey struct {
 // relative order core.Blame produced them.
 type blameGroup struct {
 	blameGroupKey
-	Kind             core.ProposalKind
-	Approvers        []string
-	AttributedActors []string
-	Entries          []core.BlameEntry
+	Kind                core.ProposalKind
+	Approvers           []string
+	AttributedActors    []string
+	UnattributedReason  string
+	UnattributedBackend string
+	Entries             []core.BlameEntry
 }
 
 // groupBlameEntries preserves first-seen order (both across groups and
@@ -127,7 +129,14 @@ func groupBlameEntries(entries []core.BlameEntry) []blameGroup {
 		key := blameGroupKey{ProposalID: e.ProposalID, SetAt: e.SetAt, AcceptanceMethod: e.AcceptanceMethod}
 		g, ok := byKey[key]
 		if !ok {
-			g = &blameGroup{blameGroupKey: key, Kind: e.Kind, Approvers: e.Approvers, AttributedActors: e.AttributedActors}
+			g = &blameGroup{
+				blameGroupKey:       key,
+				Kind:                e.Kind,
+				Approvers:           e.Approvers,
+				AttributedActors:    e.AttributedActors,
+				UnattributedReason:  e.UnattributedReason,
+				UnattributedBackend: e.UnattributedBackend,
+			}
 			byKey[key] = g
 			order = append(order, key)
 		}
@@ -198,8 +207,22 @@ func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showA
 			fmt.Fprintf(out, " · %s", g.AcceptanceMethod)
 		}
 		fmt.Fprintln(out)
-		if len(g.AttributedActors) > 0 {
+		switch {
+		case len(g.AttributedActors) > 0:
 			fmt.Fprintf(out, "    %s %s\n", st.Purple("attributed to:"), strings.Join(g.AttributedActors, ", "))
+		case g.UnattributedReason != "":
+			// UBI-49 residual #5's correction: the wire layer already
+			// recorded WHY attribution came back empty at scan-propose
+			// time -- this was previously the one thing blame silently
+			// dropped instead of rendering. Backend only ever populated
+			// for the generalized "audit_unattributed" kind (empty for
+			// legacy "cloudtrail_unattributed," which needs no
+			// disambiguation -- see core.IntentSource's own doc comment).
+			if g.UnattributedBackend != "" {
+				fmt.Fprintf(out, "    %s unattributed (%s, %s)\n", st.Dim("attributed:"), unattributedReason(g.UnattributedReason), g.UnattributedBackend)
+			} else {
+				fmt.Fprintf(out, "    %s unattributed (%s)\n", st.Dim("attributed:"), unattributedReason(g.UnattributedReason))
+			}
 		}
 		for _, e := range shown {
 			value := string(e.Value)
@@ -231,15 +254,17 @@ type destroyedByJSON struct {
 }
 
 type blameEntryJSON struct {
-	Path             string          `json:"path"`
-	Value            json.RawMessage `json:"value"`
-	Redacted         bool            `json:"redacted"`
-	ProposalID       string          `json:"proposal_id,omitempty"`
-	Kind             string          `json:"kind,omitempty"`
-	SetAt            string          `json:"set_at,omitempty"`
-	AcceptanceMethod string          `json:"acceptance_method,omitempty"`
-	Approvers        []string        `json:"approvers,omitempty"`
-	AttributedActors []string        `json:"attributed_actors,omitempty"`
+	Path                string          `json:"path"`
+	Value               json.RawMessage `json:"value"`
+	Redacted            bool            `json:"redacted"`
+	ProposalID          string          `json:"proposal_id,omitempty"`
+	Kind                string          `json:"kind,omitempty"`
+	SetAt               string          `json:"set_at,omitempty"`
+	AcceptanceMethod    string          `json:"acceptance_method,omitempty"`
+	Approvers           []string        `json:"approvers,omitempty"`
+	AttributedActors    []string        `json:"attributed_actors,omitempty"`
+	UnattributedReason  string          `json:"unattributed_reason,omitempty"`
+	UnattributedBackend string          `json:"unattributed_backend,omitempty"`
 }
 
 func blameToJSON(result *core.BlameResult) blameJSON {
@@ -254,15 +279,17 @@ func blameToJSON(result *core.BlameResult) blameJSON {
 	}
 	for _, e := range result.Entries {
 		entry := blameEntryJSON{
-			Path:             e.Path,
-			Value:            e.Value,
-			Redacted:         e.Redacted,
-			ProposalID:       e.ProposalID,
-			Kind:             string(e.Kind),
-			SetAt:            e.SetAt,
-			AcceptanceMethod: e.AcceptanceMethod,
-			Approvers:        e.Approvers,
-			AttributedActors: e.AttributedActors,
+			Path:                e.Path,
+			Value:               e.Value,
+			Redacted:            e.Redacted,
+			ProposalID:          e.ProposalID,
+			Kind:                string(e.Kind),
+			SetAt:               e.SetAt,
+			AcceptanceMethod:    e.AcceptanceMethod,
+			Approvers:           e.Approvers,
+			AttributedActors:    e.AttributedActors,
+			UnattributedReason:  e.UnattributedReason,
+			UnattributedBackend: e.UnattributedBackend,
 		}
 		payload.Entries = append(payload.Entries, entry)
 	}

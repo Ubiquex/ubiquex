@@ -287,9 +287,39 @@ func TestScanAll_RejectsNonAdoptPropose(t *testing.T) {
 func TestScanAll_SingleResourceModeStillRequiresStackTypeName(t *testing.T) {
 	_, err := runUbx(t, nil, "scan", "--ledger-dir", t.TempDir())
 	if err == nil {
-		t.Fatal("expected an error when neither --all nor --stack/--type/--name are given")
+		t.Fatal("expected an error when neither --all nor --stack are given")
 	}
-	if !strings.Contains(err.Error(), "scan requires --stack, --type, and --name") {
+	if !strings.Contains(err.Error(), "scan requires --stack") {
 		t.Fatalf("expected the usual required-flags error, got: %v", err)
+	}
+}
+
+// TestScan_StackKnown_NeitherTypeNorNameGiven_WalksFleet_EmptyLedger is
+// TestScanAll_SingleResourceModeStillRequiresStackTypeName's own sibling
+// for the OTHER half of the old combined error (UBI-49 residual round 1):
+// once --stack IS known, omitting --type/--name is no longer an error at
+// all -- it's the fleet-scoped walk's own trigger (cli/scanfleet_test.go
+// has its own dedicated tests for a populated fleet; this just proves an
+// empty one reports cleanly rather than erroring).
+func TestScan_StackKnown_NeitherTypeNorNameGiven_WalksFleet_EmptyLedger(t *testing.T) {
+	out, err := runUbx(t, nil, "scan", "--stack", "payments", "--ledger-dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("expected a fleet-scoped walk (even of an empty ledger), not an error: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, "0 resource(s) tracked for stack payments") {
+		t.Fatalf("expected an empty-fleet report, got: %s", out)
+	}
+}
+
+// TestScan_OnlyTypeGiven_StillErrors proves giving exactly one of
+// --type/--name (as opposed to neither, the fleet-walk trigger, or both,
+// the single-resource path) stays a hard, unambiguous error.
+func TestScan_OnlyTypeGiven_StillErrors(t *testing.T) {
+	_, err := runUbx(t, nil, "scan", "--stack", "payments", "--type", "fake_widget", "--ledger-dir", t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error when --type is given without --name")
+	}
+	if !strings.Contains(err.Error(), "pass both --type and --name") {
+		t.Fatalf("expected the both-or-neither error, got: %v", err)
 	}
 }

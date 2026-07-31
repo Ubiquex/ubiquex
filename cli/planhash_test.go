@@ -41,7 +41,7 @@ func TestShip_ShortHash_ResolvesUniquePrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	fullHash := mustExtractPlanHash(t, planOut)
+	fullHash := mustExtractPlanHash(t, ledgerDir, planOut)
 	short := shortRef(fullHash)
 	if len(short) != 12 || !strings.HasPrefix(fullHash, short) {
 		t.Fatalf("shortRef(%q) = %q, want a 12-char prefix", fullHash, short)

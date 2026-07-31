@@ -168,18 +168,30 @@ consistency shows its own work instead of sitting silent.`,
 				if err := os.Remove(planFilePath(ledgerDir, fullHash)); err != nil && !os.IsNotExist(err) {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: ship: could not prune consumed plan file: %v\n", err)
 				}
-				fmt.Fprintf(out, "accepted %s (stack %s) via local plan\n", accepted.ID, accepted.Stack)
+				fmt.Fprintf(out, "accepted %s (stack %s) via local plan\n", st.Hash(accepted.ID), accepted.Stack)
 				p = accepted
 			}
 			// A friendly, early exit before ever launching a provider --
 			// executor.Ship enforces both of these authoritatively too
 			// (ErrUnsupportedKind/ErrNotAccepted), this just avoids the
 			// acquire/launch round trip for an obviously-wrong proposal.
-			if p.Kind != core.KindDriftRevert && p.Kind != core.KindChange {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is kind %q -- ship only executes drift_revert or change proposals", p.ID, p.Kind)}
-			}
 			if p.Acceptance == nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is not accepted", p.ID)}
+			}
+			if p.Kind != core.KindDriftRevert && p.Kind != core.KindChange {
+				// UBI-49 residual #4: an adoption/drift_adopt proposal's own
+				// resolution IS its acceptance -- there's nothing left to
+				// execute, and that's success, not the failure erroring
+				// here used to render it as (the accept above -- whether
+				// just now via the plan fallback, or earlier via `ubx
+				// accept`/a prior `ubx ship` -- already fully committed
+				// it). Recognized here, before ever trying and failing
+				// against executor.Ship's own ErrUnsupportedKind.
+				if isRecordOnlyKind(p.Kind) {
+					fmt.Fprintf(out, "%s (%s) -- record-only, nothing to execute -- %s resolved\n", st.Hash(p.ID), p.Kind, st.Green("✓"))
+					return nil
+				}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: proposal %s is kind %q -- ship only executes drift_revert or change proposals", p.ID, p.Kind)}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -336,6 +348,7 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 		age = humanAge(t)
 	}
 	renderPlanReceipt(out, st, draft, fmt.Sprintf("Ship  %s · %s", draft.Stack, age))
+	warnIfRecentUnattributedAdopt(out, st, draft)
 
 	if !yes {
 		if !isTerminal(cmd.InOrStdin()) {
@@ -362,6 +375,45 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 func parseResolvedAt(p *core.Proposal) (time.Time, bool) {
 	t, err := time.Parse(time.RFC3339, p.Resolution.ResolvedAt)
 	return t, err == nil
+}
+
+// warnIfRecentUnattributedAdopt is UBI-49 residual #5's one behavioral
+// addition (the display-only surfacing lives in attributionCardLine/
+// blame.go instead): an unattributed adoption/drift_adopt is PERMANENT
+// once accepted -- core.Blame/why never re-attempt attribution later,
+// they only ever replay what was recorded at accept time. A drift this
+// recent (<10 minutes since it was resolved) may simply be too new for
+// CloudTrail's own delivery window (typically 2-5 minutes, per
+// core.ReasonDeliveryWindow) -- re-scanning in a few minutes could still
+// attribute it for real. Warns, never blocks: the human still decides,
+// same as every other consent moment in this codebase.
+func warnIfRecentUnattributedAdopt(out io.Writer, st *styler, p *core.Proposal) {
+	if !isRecordOnlyKind(p.Kind) {
+		return
+	}
+	reason, backend, ok := recordedUnattributedReason(p.Intent.Sources)
+	if !ok {
+		return
+	}
+	resolvedAt, ok := parseResolvedAt(p)
+	if !ok || time.Since(resolvedAt) >= 10*time.Minute {
+		return
+	}
+	detail := unattributedReason(reason)
+	if backend != "" {
+		detail += ", " + backend
+	}
+	fmt.Fprintf(out, "%s this drift is %s and has no recorded attribution (%s) -- accepting now records it as unattributed permanently; consider re-scanning in a few minutes first\n\n",
+		st.Yellow("warning:"), humanAge(resolvedAt), detail)
+}
+
+// isRecordOnlyKind reports whether k's own resolution IS its acceptance
+// -- nothing left for `ubx ship` to execute against a real provider
+// (UBI-49 residual #4). adoption/drift_adopt are both "record reality as
+// signed" (docs/cli-output-spec.md's own scan-card wording); drift_revert
+// and change are the only two kinds executor.Ship actually applies.
+func isRecordOnlyKind(k core.ProposalKind) bool {
+	return k == core.KindAdoption || k == core.KindDriftAdopt
 }
 
 // humanAge renders a duration-since-t the way a person reads it --

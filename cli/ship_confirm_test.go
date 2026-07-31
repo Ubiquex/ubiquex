@@ -51,7 +51,7 @@ func TestShip_TTY_TypedYes_Accepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	shipOut, err := runUbxTTY(t, "yes\n", env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
 	if err != nil {
@@ -86,7 +86,7 @@ func TestShip_TTY_TypedSomethingElse_DeclinesCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 	ledgerHeadBefore := readLedgerHead(t, ledgerDir)
 
 	shipOut, err := runUbxTTY(t, "nope\n", env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
@@ -127,7 +127,7 @@ func TestShip_NonTTY_NoYes_RefusesWithTeachingError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	_, err = runUbx(t, env, "ship", hash, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
@@ -156,7 +156,7 @@ func TestShip_Bare_ResolvesLatestPlanForStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	hash := mustExtractPlanHash(t, planOut)
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
 
 	shipOut, err := runUbx(t, env, "ship", "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes")
 	if err != nil {
