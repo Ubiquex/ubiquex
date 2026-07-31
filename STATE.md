@@ -4,6 +4,209 @@
 
 ## Current phase
 
+**UBI-63 + docs v2 session (2026-07-31) — closed. Two sessions in one
+sitting: the ticket's own three named bugs plus a real live finale on
+the founder's actual wounded `playground-3` AWS stack, and the full
+`docs/cli-output-spec.md` v2 receipt-format rewrite. Grew well beyond
+the original three-bug scope — four MORE real, live bugs surfaced
+during the finale itself, each fixed with the same rigor, not
+worked around.**
+
+### Session 1 — UBI-63
+
+**Bug 1 ($ref transcription), root-caused, not patched around.** The
+Claude adapter's own system prompt (`intentprovider/claude/adapter.go`)
+was instructing the model to write `"$ref:<address>.<path>"` as a
+literal STRING instead of the real `{"$ref": {"to": "..."}}` object —
+confirmed live: this exact broken string shipped straight to a real
+`CreatePolicy` call, which AWS correctly rejected. Fixed at the source
+(prompt corrected) AND defense-in-depth at the resolver
+(`ErrMarkerStringLiteral`, `core/resolver/refs.go` — any producer
+emitting this shape now hits a hard resolve-time error, regardless of
+which upstream adapter/hand-written file produced it). New capability,
+same fix: a `$ref`/`$computed`/`$secret` marker embedded ONE LEVEL DOWN
+inside a JSON-encoded string config attribute (an IAM policy document)
+is now decoded, resolved, and re-encoded (`resolveStringValue`,
+`containsMarker`) — docs/schema.md's "JSON-embedded refs" amendment.
+Conformance gap closed: fixture #1 (`payments.md`) never exercised a
+real cross-resource reference at all; new fixture #2
+(`intentprovider/conformance/fixtures/platform.md`, an IAM role + inline
+policy) proves the harness itself would have caught this bug before it
+ever reached a real API call.
+
+**Deferred materialization — a real design change requested mid-session,
+after bug 1's own original fix proved too narrow.** The initial fix hard
+-refused a JSON-embedded ref that resolved to an unresolved `$computed`
+marker (same reasoning as `$secret`) — found live, the SAME session, to
+make the FLAGSHIP AWS pattern unusable: a role's inline policy naming a
+same-batch sibling's ARN (a queue, a bucket) before that sibling has
+applied. The founder's own explicit direction: "the case must work —
+two-proposal workarounds are not acceptable as the final answer." Fixed:
+`unsafeToEmbedMarker` → `unsafeToEmbedSecret` (only `$secret` refused
+now); a JSON-embedded `$computed` persists into the SIGNED proposal as a
+genuine template, still contributing the correct dependency edge.
+`core/executor/ship.go`'s `substituteComputed` gained a `case string:`
+(gated by new `containsComputedMarker`) that fills the template in with
+the real applied value at ship time — the exact same "outputs feed
+forward mid-walk" mechanism a top-level `$computed` already used,
+reaching one level into a string's own decoded interior now. Verified
+end-to-end for real against AWS (below), not just in tests. 3 new
+executor rows (single embedded computed, two embedded computeds/no
+cross-wiring, kill -9 between dependency-apply and template-fill) + 2
+resolver rows (template persists correctly; `$secret` still refused).
+docs/schema.md, docs/resolver.md, docs/executor.md, and
+`ubiquex-docs/cli/resolve.mdx` all amended.
+
+**Bug 2 (nested-block encoding), found live TWICE on the same resource
+type.** First: `aws_ecr_repository.image_scanning_configuration`
+(schema `MaxItems=1`) rejected a bare object with "array required, got
+map[string]interface{}" — SDKv2's own "single nested block" HCL
+convention, confirmed empirically against the real provider. Fixed,
+narrowly, gated on `MaxItems == 1`. During the live finale itself, a
+DIFFERENT block on the SAME resource — `encryption_configuration` — hit
+the identical error, this time with real schema `MaxItems=0` ("not
+declared", not 1). Broadened correctly rather than special-cased again:
+a bare object is now UNCONDITIONALLY accepted as shorthand for a
+one-element list/set, regardless of MaxItems — a bare object is never
+ambiguous (always means "exactly one"), so gating on a specific MaxItems
+value was always an unnecessarily narrow proxy. `provider/ctyvalue.go`,
+`provider/schema.go`'s own doc comment corrected. 4 tests
+(MaxItems=1/0/5-still-accepted, array-shape still works).
+
+**A real, general validation gap, found live and fixed generally (not
+just for today's stack).** The model wrote `repository_name` for
+`aws_ecr_repository`'s real "name" attribute — `provider/ctyvalue.go`'s
+`encodeBlockValue` silently ignored the unrecognized key AND silently
+sent an explicit `null` for the now-missing, schema-`Required` "name" —
+reaching AWS as an empty, rejected value instead of a clear ubx-side
+error. Founder's own call, given the choice: "fix the real gap now."
+Fixed: `ErrUnrecognizedConfigKey` (a config key matching no real
+Attribute/NestedBlock name) and `ErrRequiredAttributeMissing` (a
+`Required` attribute genuinely absent) are now hard encode-time errors,
+naming the exact key. Surfaced (not caused) a real, pre-existing
+diagram-medium limitation: `diagram.Parse` always emits `config: {}`
+(topology only, by design, docs/diagram-medium.md's own founding rule) —
+previously silently shippable for ANY resource type only because of the
+exact bug just fixed; now correctly refuses until enriched some other
+way. `TestPlanShip_FromDiagram_ResolvesAndApplies` split into a resolve-
+only positive test and a new negative test proving the clear refusal;
+docs/diagram-medium.md amended naming this explicitly. 4 new
+`provider/ctyvalue_test.go` rows.
+
+**A lookup-key-derivation bug, found live during the actual terminate.**
+`aws_iam_role_policy_attachment` DOES declare a real "id" in its own
+schema, but its own real AWS `ReadResource` needs "role"/"policy_arn"
+present in `current_state` too — `core.DeriveLookupFromResult`'s own
+id-only assumption ("every type touched so far has id alone sufficient")
+was proven false live: a real destroy-precheck read failed with AWS
+literally reporting an empty role name. Fixed generally:
+`DeriveLookupFromResult(result, requiredAttrNames)` now also captures
+every schema-`Required` attribute's real value, not just "id".
+`core/executor.Applier.ApplyResourceChange` gained a `lookup` return
+value (the one place, `cli/stateadapter.go`, with a concrete schema in
+scope — core/core.executor's provider-import-free boundary stays
+intact); `conformance/harness.go`'s mirror-adapter and `ship_test.go`'s
+fake updated to match. 4 new `core/derivelookup_test.go` rows.
+`conformance/registry.go`'s own PARKED entry for this type amended with
+the live finding.
+
+**A fourth, unrelated live bug: Claude's own `effort` API parameter
+isn't universally supported.** `ubx-playground-3`'s own config pins
+`[intent].model = "claude-haiku-4-5-20251001"` — the adapter always sent
+`effort: "high"`, and Haiku returned a real 400: "This model does not
+support the effort parameter." Fixed: `effortSupported(model)` (a
+`"haiku"` substring check, not an exhaustive allowlist) gates whether
+`OutputConfig.Effort` is set at all; omitted cleanly for Haiku (the
+SDK's own `omitzero` tag), sent as before for everything else.
+`docs/intent-provider.md` amended.
+
+**Live finale — the founder's real, wounded `playground-3` AWS stack
+(account 839333509514, eu-central-1), fully recovered.** Re-planned
+`platform.md` for real (real Claude API, Haiku model, real credential
+plumbing worked out live with the founder — `ant auth login` writes to
+a profile file my own tool sandbox can't see, so every real `ubx plan`/
+`ubx ship`/`ubx scan`/`ubx terminate` command this finale needed was run
+BY the founder, in their own shell, with results relayed back for
+diagnosis — never worked around). Recovered two real orphaned resources
+first (a role + queue from the ORIGINAL bug repro, `force_detach_
+policies`/`tags`/`region` SDKv2 read-nondeterminism drift adopted before
+re-terminating), then shipped all 5 real resources correctly in
+dependency order: `aws_ecr_repository`, `aws_sqs_queue`, `aws_iam_role`,
+`aws_iam_policy`, `aws_iam_role_policy_attachment` — hitting, in order,
+the ECR MaxItems=0 bug, the `repository_name` validation gap, the
+lookup-key bug, and (each time a resource actually shipped) real,
+benign SDKv2 read-nondeterminism drift (`tags`/`region`/
+`force_detach_policies`/`inline_policy` reading back `null` instead of
+their own zero-value) needing its own scan-adopt-reship cycle before
+each subsequent terminate attempt could proceed — every single one
+diagnosed from first principles, empirically, before fixing. Verified
+live via the real `aws` CLI: all 5 resources existed with real ARNs,
+including the deferred-materialization template correctly resolved in
+the shipped IAM policy document (`Resource: arn:aws:sqs:eu-central-1:
+839333509514:ci-notifications`, not a placeholder). All 5 terminated;
+confirmed clean afterward (`aws ecr/sqs/iam` all report not-found,
+`ubx status` shows 0 resources).
+
+**Real AWS credentials were shared in the conversation transcript
+(twice) by the founder** to help unblock a Claude-credential dead end
+before the `ant auth login`/founder's-own-shell approach was settled on
+— flagged live each time, never echoed back or reused in a stored
+artifact; founder was advised to rotate the key given it's now in
+session history.
+
+**Every fix this session has hermetic tests; full `go build/vet/test
+./...` + `gofmt -l .` clean after every change, checked repeatedly
+throughout, not just at the end.**
+
+### Session 2 — docs/cli-output-spec.md v2
+
+Formalized the founder's own rough, uncommitted v2 markup (found at
+session start, kept as authoritative input, not overwritten) into the
+doc's full v2 section: `init`'s green success line (kept the pre-
+existing "next: add a provider..." guidance line alongside the
+founder's new two-liner — a deliberate merge, not the founder's markup
+verbatim, recorded as such); `ubx plan`'s medium auto-detection (bare
+`ubx plan`, no flag: exactly one real medium file in `--ledger-dir`
+plans automatically, multiple candidates get a teaching error naming
+each one's own flag, README/CHANGELOG/LICENSE-class files never false-
+positive, a `.ts`/`.go`/`.py` file only counts with the real SDK import
+string actually present — `cli/plan.go`'s new `autodetectMedium`); a
+real, related gap fixed along the way: `ubx plan --from-code` only ever
+dispatched `.ts` before this session, never `.go`/`.py` like `ubx
+resolve --from-code` already did — now shares the identical
+`evaluateSDKProgram` dispatcher; the pre-receipt progress line
+(`drafting via claude:<model>… ✓ · resolving…`, `--from-doc` only,
+printed by `ubx plan` itself so `ubx propose --from-doc` stays
+untouched); the full v2 receipt format (bold+green resource headers,
+`formatConfigValueV2`'s own formatted JSON blocks for JSON-embedded
+string attributes, a resolved `$computed` marker rendered as the
+friendly `$ref:<address>` notation — a DISPLAY convention only, never a
+revival of the broken wire shape bug 1 fixed — correct spacing, bold
+summary via a new `forceBold` helper since naively nesting `Bold(Green(
+...))` doesn't compose with this package's own single-reset-per-call
+color design, green+bold footer, no AI summary sentence). Founder's own
+markup said "ship's receipt inherits the same format — it re-renders
+the plan"; this directly conflicted with UBI-63 bug 3's own fix (ship no
+longer re-renders the full receipt at confirmation, just a one-line
+summary) — flagged explicitly, founder's own call: bug 3's one-line
+summary stands, the markup note is the correction. Every affected
+transcript across BOTH repos re-captured against the real, fully-fixed
+binary — `cli/init.mdx`, `cli/plan.mdx`, `cli/ship.mdx` (including a
+real, live-captured ticking-timer transcript from the actual
+`playground-3` SQS destroy), `cli/terminate.mdx`, `cli/promote.mdx`,
+`cli/accept.mdx`, `cli/resolve.mdx` (new JSON-embedded-refs section),
+`guides/promotion.mdx`, `guides/plan-ship-flow.mdx` — several of these
+were already stale from BEFORE this session (pre-progress-narration
+output, a fabricated-looking `ubx promote` transcript) and got
+regenerated as real, current transcripts along the way, not just
+patched for the v2 spacing change. `mint validate`/`mint broken-links`
+clean on `ubiquex-docs`.
+
+UBI-63 closed in Linear, completion comment posted covering both
+sessions' full scope.
+
+## Current phase (previous)
+
 **UBI-49 polish session (2026-07-31), following the founder's second
 playground test.** Not part of the original 3-session UX-fix arc's own
 count (that arc — UBI-49 correctness, UBI-61/UBI-62, UBI-59 — closed last
