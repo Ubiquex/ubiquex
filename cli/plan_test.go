@@ -411,7 +411,22 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 // but drives it through `ubx plan --from-diagram` all the way to a fused
 // `ubx ship`, proving the diagram medium's own double provider-load
 // (documented in plan.go) still produces a correct, appliable result.
-func TestPlanShip_FromDiagram_ResolvesAndApplies(t *testing.T) {
+// TestPlanShip_FromDiagram_Resolves proves the diagram-medium half that's
+// actually always true: `ubx plan --from-diagram` resolves a real
+// proposal end to end. It does NOT ship it -- see
+// TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly,
+// below, for why: diagram.Parse always emits an empty "{}" config
+// (topology only, never attribute values, diagram/parse.go) has no
+// mechanism to supply one, so shipping a diagram-authored resource
+// against a real schema with ANY Required attribute (true of nearly
+// every real resource type, `fake_widget`'s own "name" included) now
+// correctly refuses rather than silently sending a null the real
+// provider would reject with a cryptic error (UBI-63 session 2's own
+// required-attribute validation, provider/ctyvalue.go). This is a real,
+// pre-existing diagram-medium limitation this validation surfaced, not
+// a regression from it -- see docs/diagram-medium.md's own "topology
+// only" scope note.
+func TestPlanShip_FromDiagram_Resolves(t *testing.T) {
 	dir := t.TempDir()
 	mirrorDir := t.TempDir()
 
@@ -442,14 +457,52 @@ payments: {
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected a 1-create blast radius, got: %s", planOut)
 	}
+}
+
+// TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly
+// is the negative twin, above: shipping the identical diagram-authored
+// proposal now fails with a clear, actionable error naming the exact
+// missing attribute -- never the old cryptic remote rejection a real
+// provider would have returned for a silently-nulled required field.
+func TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[providers]
+"fake/widget" = "0.1.0"
+`)
+
+	diagramPath := filepath.Join(dir, "topo.d2")
+	writeFile(t, diagramPath, `
+classes: {
+  fake_widget: {}
+}
+payments: {
+  primary: main-widget {
+    class: fake_widget
+  }
+}
+`)
+
+	env := []string{"FAKEPROVIDER_MODE=ok-v6", "UBX_PROVIDER_MIRROR=" + mirrorDir}
+	planOut, err := runUbx(t, env, "plan", "--from-diagram", diagramPath, "--stack", "payments", "--ledger-dir", dir)
+	if err != nil {
+		t.Fatalf("ubx plan --from-diagram: %v\noutput: %s", err, planOut)
+	}
 	hash := mustExtractPlanHash(t, dir, planOut)
 
-	shipOut, err := runUbx(t, env, "ship", hash, "--ledger-dir", dir, "--yes")
-	if err != nil {
-		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
+	// A "failed" outcome is the expected, correct result here -- ubx
+	// ship's own non-zero exit for it surfaces as a non-nil err, not a
+	// test failure.
+	shipOut, _ := runUbx(t, env, "ship", hash, "--ledger-dir", dir, "--yes")
+	if !strings.Contains(shipOut, `a required attribute is missing from config: "name"`) {
+		t.Fatalf("expected a clear, actionable required-attribute error naming \"name\", got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: failed") {
+		t.Fatalf("expected outcome: failed, got: %s", shipOut)
 	}
 }
 

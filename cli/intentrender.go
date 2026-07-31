@@ -58,8 +58,18 @@ func renderAIDefaults(w io.Writer, st *styler, assumptions, defaults []core.Ambi
 	if len(all) == 0 {
 		return
 	}
-	fmt.Fprintln(w, st.Purple("AI defaults — you are signing these:"))
-	for _, n := range all {
+	// docs/cli-output-spec.md §v2: header bold (forceBold keeps the
+	// existing purple "AI judgment" color, style.go's own doc comment on
+	// why a naive nested Bold(Purple(...)) call wouldn't); one empty line
+	// after the header and between every entry -- never a trailing blank
+	// after the LAST entry, since every caller's own footer already
+	// starts with its own leading blank line (double-blank otherwise).
+	fmt.Fprintln(w, st.forceBold(st.Purple("AI defaults — you are signing these:")))
+	fmt.Fprintln(w)
+	for i, n := range all {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
 		fmt.Fprintf(w, "%s %s\n", st.Purple("◦"), n.Text)
 		for _, a := range n.Affects {
 			fmt.Fprintf(w, "    affects: %s\n", a)

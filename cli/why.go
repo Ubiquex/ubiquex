@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -272,7 +273,7 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 // every other renderer's own "make the content visible" but never fail
 // posture here.
 func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent string) {
-	for _, raw := range creates {
+	for i, raw := range creates {
 		var node struct {
 			Type   string                     `json:"type"`
 			Name   string                     `json:"name"`
@@ -281,14 +282,31 @@ func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent 
 		if err := json.Unmarshal(raw, &node); err != nil || node.Type == "" || node.Name == "" {
 			continue
 		}
-		fmt.Fprintf(out, "%s%s %s.%s create\n", indent, st.Green("+"), node.Type, node.Name)
+		// docs/cli-output-spec.md §v2 (UBI-63): "+ <type>.<name> create"
+		// renders green AND bold (GreenBold, not a plain Green "+" the way
+		// this looked before); one empty line separates resource blocks.
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "%s%s\n", indent, st.GreenBold(fmt.Sprintf("+ %s.%s create", node.Type, node.Name)))
 		keys := make([]string, 0, len(node.Config))
 		for k := range node.Config {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		attrIndent := indent + "    "
 		for _, k := range keys {
-			fmt.Fprintf(out, "%s    %s: %s\n", indent, k, rawOrAbsent(node.Config[k]))
+			// docs/cli-output-spec.md §v2: JSON-valued attributes (IAM/
+			// trust policies) render as formatted, readable JSON blocks,
+			// never escaped single-line strings; a resolved $computed
+			// marker renders as the friendly $ref:<address> notation
+			// (formatConfigValueV2, configvaluev2.go).
+			val := formatConfigValueV2(attrIndent, node.Config[k])
+			if strings.Contains(val, "\n") {
+				fmt.Fprintf(out, "%s%s:\n%s%s\n", attrIndent, k, attrIndent, val)
+			} else {
+				fmt.Fprintf(out, "%s%s: %s\n", attrIndent, k, val)
+			}
 		}
 	}
 }

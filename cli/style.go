@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -134,6 +135,37 @@ func (s *styler) Blue(text string) string   { return s.color(ansiBlue, text) }
 func (s *styler) Purple(text string) string { return s.color(ansiPurple, text) }
 func (s *styler) Dim(text string) string    { return s.color(ansiDim, text) }
 func (s *styler) Bold(text string) string   { return s.color(ansiBold, text) }
+
+// GreenBold combines both codes in one escape sequence (docs/cli-output-
+// spec.md §v2: resource-create headers and the plan/ship footer are
+// "green AND bold") -- color()'s own single-reset-at-the-end design
+// means nesting a Bold(Green(text)) call would terminate the whole
+// sequence early at the inner call's own reset, clobbering the outer
+// style; this applies both codes once, correctly.
+func (s *styler) GreenBold(text string) string {
+	if s == nil || !s.enabled || text == "" {
+		return text
+	}
+	return ansiBold + ansiGreen + text + ansiReset
+}
+
+// forceBold makes an ALREADY-composed line bold throughout, including
+// through any other color() calls embedded inside it (docs/cli-output-
+// spec.md §v2: "each line BOLD," e.g. the delta/blast-radius summary,
+// where the create/modify/destroy counts individually stay green/
+// yellow/red exactly as before). Nesting Bold(text) around a string
+// that itself contains other styled segments doesn't work with this
+// package's single-reset-at-the-end color() design: each inner call's
+// own ansiReset would cancel the outer bold partway through. This
+// re-asserts bold immediately after every embedded reset instead, so
+// bold persists across every inner color segment and the plain text
+// between them alike.
+func (s *styler) forceBold(line string) string {
+	if s == nil || !s.enabled || line == "" {
+		return line
+	}
+	return ansiBold + strings.ReplaceAll(line, ansiReset, ansiReset+ansiBold) + ansiReset
+}
 
 // displayHash is the one canonical hash-truncation convention for the
 // whole package (docs/cli-output-spec.md principle 3: "short hashes (12

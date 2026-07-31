@@ -149,3 +149,160 @@ well).
 
 fatih/color-class minimal ANSI vs lipgloss decided at build with the
 dependency-footprint discipline (measure, record).
+
+---
+
+# v2 — the founder's annotated UX, formalized (2026-07-31, UBI-63)
+
+Marked up by the founder against real transcripts of the complex
+5-resource platform.md case (the same session that surfaced UBI-63's
+three bugs — broken `$ref` transcription, a nested-block encode gap,
+and ship's own repeated-receipt/frozen-timer UX). These override v1
+where they conflict. What follows is the founder's original markup,
+formalized: every ambiguity it left open is resolved below, named as a
+resolution rather than silently picked.
+
+## init
+
+Success is affirmative and green:
+```
++ .ubx/config.hcl has been generated successfully        (green)
+    see <docs config reference>                           (dim)
+```
+**Resolved**: the founder's own markup showed a bare two-line success
+message, dropping the pre-existing "next: write an intent file and run
+`ubx plan` ... — see &lt;docs&gt;" guidance line entirely. That line carries
+real, concrete next-step guidance (which command to run, which flag to
+add) nothing in the new two-liner replaces — kept as a third line,
+unchanged, rather than lost. The "see" line's own docs reference reuses
+the existing `docsConfigRef` constant (the same one the kept "next:"
+line already cites) rather than introducing a second, different,
+unverified docs URL alongside it.
+
+## plan — medium auto-detection
+
+- `ubx plan` bare (no positional argument, no `--from-*` flag): if
+  exactly ONE medium file exists in `--ledger-dir` (default `.`), plan
+  it automatically — no flag needed.
+- Multiple candidates: never guess — a teaching error lists every
+  candidate with its own correct flag ("plan: multiple mediums found:
+  platform.md, topology.d2 — pick one: ubx plan --from-doc platform.md
+  | ubx plan --from-diagram topology.d2").
+- Zero candidates: the ordinary "requires exactly one of ..." error,
+  unchanged.
+- **Detection rules, as built** (`autodetectMedium`, cli/plan.go):
+  - `.md` → `--from-doc` candidate, **except** a fixed, case-insensitive
+    denylist of well-known project-meta markdown basenames (with or
+    without the `.md` extension): `readme`, `changelog`, `license`,
+    `contributing`, `code_of_conduct`, `security`, `authors`, `notice`.
+    This is the "README.md-class files must never false-positive" rule
+    — a project's own README (or CHANGELOG/LICENSE/etc.) sitting next
+    to a real authoring doc is never itself mistaken for one.
+  - `.d2` → `--from-diagram` candidate, unconditionally (no ambiguous
+    non-authoring `.d2` convention exists to guard against).
+  - `.ts`/`.go`/`.py` → `--from-code` candidate, **only** if the file's
+    own content contains the real SDK import marker for that language
+    (`"@ubx/sdk"` for TS, `"github.com/ubiquex/ubx-sdk-go/runtime"` for
+    Go, `import ubx_sdk` for Python) — a bare extension match would
+    false-positive constantly on an arbitrary `.go`/`.ts`/`.py` file
+    sitting in the same directory (a near-certainty for `.go`, since
+    `ubx` itself is a Go module); content sniffing on the one string
+    every real SDK program actually carries is precise instead.
+  - Scans `--ledger-dir` itself (which defaults to `.`, the working
+    directory) rather than the live process's real `os.Getwd()`
+    directly — this codebase's own established hermetic-testing
+    discipline (`configSearchStartDir`/`userHomeDir`, cli/scan_test.go)
+    already rules out consulting real ambient process state in a test;
+    scanning the already-flagged, already-hermetic `--ledger-dir`
+    concept achieves the identical real-world behavior (bare `ubx plan`
+    run from a project directory sees that directory's own files)
+    without reintroducing that exact class of gap.
+  - `--from-*` flags remain for explicit selection, unconditionally —
+    auto-detection only ever fires when none of them (and no positional
+    argument) was given.
+
+## plan — progress
+
+Before the receipt, a progress line renders for the `--from-doc` case
+specifically (the intent-provider call is a real, seconds-long network
+round trip; parsing a `.d2` diagram or evaluating an SDK program is
+effectively instant, so neither gets one):
+```
+drafting via claude:claude-opus-4-8… ✓ · resolving…
+```
+Printed by `ubx plan` itself (not inside the shared `draftFromDoc`,
+which `ubx propose --from-doc` also calls) — `ubx propose --from-doc`
+never resolves, so "· resolving…" would be a lie there; this keeps
+`propose`'s own output completely untouched.
+
+## plan — receipt format (exact, from the founder's markup, resolved)
+
+- Header: `Plan  <stack> · from <file>` — the "from &lt;file&gt;" segment
+  dim.
+- NO AI summary sentence under the header (removed) — the field itself
+  (`Intent.Summary`) is untouched in the stored proposal; only the
+  render was dropped, once every resource block below it already shows
+  the real content in full.
+- Each resource block:
+  - `+ <type>.<name> create` — green AND bold.
+  - attributes indented beneath, then ONE empty line before the next
+    resource (never a trailing blank line after the last one).
+  - JSON-valued attributes (IAM policies, trust policies — a config
+    string whose own content decodes as JSON) render as FORMATTED,
+    readable, indented JSON blocks — never an escaped single-line
+    string.
+  - **Resolved**: a resolved `$computed` marker (`{"$computed":
+    {"from": "<address>"}}`, docs/resolver.md — the placeholder a
+    reference to a not-yet-concrete sibling attribute resolves to)
+    renders inline as `$ref:<stack>.<type>.<name>.<attr>` — the
+    founder's own markup showed literally this notation, drawn from a
+    real transcript of the *broken* pre-fix receipt (UBI-63 bug 1, where
+    a literal `"$ref:..."` string was itself the wire-format bug). This
+    is a **display-only** convention for an unresolved-but-legitimate
+    `$computed` value, never a revival of the broken wire shape: the
+    real wire format for an unresolved reference is (and stays) the
+    `{"$ref": {"to": "..."}}` object (docs/schema.md), resolved away
+    before the ledger ever sees it; only the *display* of the
+    `$computed` marker that ref legitimately resolves to borrows this
+    same terse dotted-address notation, for readability.
+- Summary block, each line BOLD (`forceBold`, style.go — a plain nested
+  `Bold(Green(...))` call doesn't compose correctly with this package's
+  single-reset-per-call color design; see its own doc comment), one
+  empty line between the delta line and the blast-radius/cost block:
+  ```
+  delta: +5 create(s), ~0 modify(ies), -0 destroy(s)
+
+  blast radius: +5 ~0 -0
+  cost delta: $0/mo
+  ```
+- `AI defaults — you are signing these:` header bold (`forceBold`,
+  keeping the existing purple "AI judgment" color, not replacing it);
+  ONE empty line after the header and between every entry (never a
+  trailing blank line after the last entry).
+- Footer, both lines green AND bold (`GreenBold`), no plan-path line:
+  ```
+  ubx-proposal: <shorthash>…
+  next: ubx ship <shorthash>
+  ```
+  Applies identically to `ubx terminate`'s own receipt (the same
+  `renderPlanReceipt`/footer convention) — `ubx promote`'s own separate
+  footer (which additionally names the written plan file's own path,
+  a real, pre-existing, UBI-63-unrelated divergence) is untouched.
+
+## ship — receipt: a real, resolved conflict with the founder's own note
+
+The founder's original markup ended: *"(Ship's receipt inherits the
+same format — it re-renders the plan.)"* This directly conflicts with
+UBI-63 bug 3's own fix, landed the same session: `ubx ship`'s
+confirmation step no longer re-renders the full receipt at all — a
+one-line summary (`renderShipConfirmSummary`, cli/ship.go: stack, plan
+age, blast radius) plus the typed-`yes` prompt, since the full receipt
+already rendered once, at `ubx plan`/`ubx scan --propose` time, and
+re-showing every resource/attribute a human already reviewed is noise,
+not review, especially now that a real multi-resource receipt can run
+to pages of formatted JSON under this exact v2 format. **Resolved
+(founder decision, this session): bug 3's one-line summary stands; this
+document's own note is the correction, not the code.** `ubx ship`'s
+live per-resource progress narration (transitions, reconcile attempts,
+the now-ticking elapsed-time display) is unaffected either way — that
+was never part of "the receipt."

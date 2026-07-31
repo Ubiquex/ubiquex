@@ -16,7 +16,7 @@ import (
 
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/tseval"
+	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
 // newPlanCmd is UBI-49's own terraform-shaped fusion of propose+resolve+
@@ -68,11 +68,15 @@ func newPlanCmd() *cobra.Command {
 terraform-shaped, two-step half of this project's own workflow (plan, then "ubx ship <hash>").
 
 Exactly one input is required: a hand-written ubx:intent/v1 file (the positional argument),
---from-code <entry>.ts (a TypeScript SDK program, evaluated through the same hermetic Deno
-evaluator "ubx resolve --from-code" uses), --from-doc <file>.md --stack <stack> (a markdown
-authoring document, transcribed via the configured [intent] provider adapter exactly like
-"ubx propose --from-doc"), or --from-diagram <file>.d2 --stack <stack> (a D2 diagram's own
-topology, parsed exactly like "ubx propose --from-diagram").
+--from-code <entry>.ts|.go|.py (a TypeScript, Go, or Python SDK program, dispatched by
+extension to the identical evaluator "ubx resolve --from-code" uses), --from-doc <file>.md
+--stack <stack> (a markdown authoring document, transcribed via the configured [intent]
+provider adapter exactly like "ubx propose --from-doc"), or --from-diagram <file>.d2 --stack
+<stack> (a D2 diagram's own topology, parsed exactly like "ubx propose --from-diagram").
+
+Bare "ubx plan" (no argument, no --from-*) auto-detects a single medium file in the working
+directory (an intent .md authoring doc, a .d2 diagram, or a .ts/.go/.py SDK program) and plans
+it automatically. Multiple candidates are listed, never guessed -- rerun naming one explicitly.
 
 The result resolves through the identical, unmodified core/resolver.Resolve every other entry
 point already uses -- same invariants, same orphan/pin checks, same failure modes. Its full
@@ -105,7 +109,31 @@ propose-time PR trailer hash, etc.).`,
 				return &ExitCodeError{Code: 2, Err: errors.New("plan: an intent-file argument, --from-code, --from-doc, and --from-diagram are mutually exclusive")}
 			}
 			if modes == 0 {
-				return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram")}
+				candidates, derr := autodetectMedium(ledgerDir)
+				if derr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram (auto-detection failed: %w)", derr)}
+				}
+				switch len(candidates) {
+				case 1:
+					switch candidates[0].flag {
+					case "--from-doc":
+						fromDoc = candidates[0].path
+					case "--from-diagram":
+						fromDiagram = candidates[0].path
+					case "--from-code":
+						fromCode = candidates[0].path
+					}
+				case 0:
+					return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram")}
+				default:
+					names := make([]string, len(candidates))
+					hints := make([]string, len(candidates))
+					for i, c := range candidates {
+						names[i] = c.path
+						hints[i] = fmt.Sprintf("ubx plan %s %s", c.flag, c.path)
+					}
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple mediums found: %s -- pick one: %s", strings.Join(names, ", "), strings.Join(hints, " | "))}
+				}
 			}
 
 			rc, err := LoadConfigResolved(cmd.ErrOrStderr())
@@ -117,18 +145,41 @@ propose-time PR trailer hash, etc.).`,
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
+			outWriter := cmd.OutOrStdout()
+
 			var intent resolver.IntentFile
 			var sourceLabel string
+			var showedDraftProgress bool
 			switch {
 			case fromDoc != "":
 				applyStackDefault(cmd, &stack, cfg)
 				if stack == "" {
 					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-doc", rc.Files)}
 				}
+				// docs/cli-output-spec.md §v2's own "plan -- progress" rule
+				// (UBI-63): the intent-provider call is seconds-long against
+				// a real API, so a bare receipt render with nothing printed
+				// in between reads as a hang, not a wait. Named here (not
+				// inside draftFromDoc itself, which `ubx propose --from-doc`
+				// also calls) so propose's own output is untouched --
+				// resolving, the second half of this line, is meaningless
+				// there, since propose never resolves.
+				adapterName := cfg.Intent.Adapter
+				if adapterName == "" {
+					adapterName = "claude"
+				}
+				model := cfg.Intent.Model
+				if model == "" {
+					model = claude.DefaultModel
+				}
+				fmt.Fprintf(outWriter, "drafting via %s:%s… ", adapterName, model)
+				showedDraftProgress = true
 				draft, err := draftFromDoc(cmd, cfg, fromDoc, stack, timeout)
 				if err != nil {
+					fmt.Fprintln(outWriter)
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
 				}
+				fmt.Fprint(outWriter, "✓ · resolving…")
 				intent = *draft
 				sourceLabel = fromDoc
 			case fromDiagram != "":
@@ -151,7 +202,7 @@ propose-time PR trailer hash, etc.).`,
 				intent = *draft
 				sourceLabel = fromDiagram
 			case fromCode != "":
-				canon, err := tseval.Evaluate(ctx, fromCode)
+				canon, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}
@@ -172,18 +223,30 @@ propose-time PR trailer hash, etc.).`,
 
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)
 			if err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 
 			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, intent.Stack, cfg)
 			if err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 			defer closeLedger()
 
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+			}
+			if showedDraftProgress {
+				fmt.Fprintln(outWriter)
 			}
 
 			hash, err := core.Hash(p)
@@ -206,16 +269,24 @@ propose-time PR trailer hash, etc.).`,
 				}
 			}
 
-			outWriter := cmd.OutOrStdout()
 			st := newStylerFull(cmd, fullHashes)
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(p.Stack, sourceLabel))
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel))
 			// UBI-49 polish: the hash IS the reference (docs/cli-output-
 			// spec.md principle 3) -- the plan file's own path on disk is
 			// an implementation detail nothing downstream ever needs (not
 			// even `ubx ship`, which resolves by hash through the plan
 			// store, never a path); dropped as pure noise a human had to
 			// visually skip past to find the two lines that matter.
-			fmt.Fprintf(outWriter, "\nubx-proposal: %s\nnext: %s\n", st.Hash(hash), nextShipHint([]string{hash}))
+			//
+			// docs/cli-output-spec.md §v2: both footer lines render green
+			// AND bold -- the plain displayHash text, not st.Hash's own
+			// Blue wrapping, since color()'s single-reset-at-the-end design
+			// means nesting one style inside another clobbers the outer one
+			// at the inner call's own reset (style.go's GreenBold doc
+			// comment).
+			fmt.Fprintf(outWriter, "\n%s\n%s\n",
+				st.GreenBold(fmt.Sprintf("ubx-proposal: %s", displayHash(hash, st.fullHashes))),
+				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}))))
 			return nil
 		},
 	}
@@ -228,7 +299,7 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition, drafting (--from-doc), and evaluation (--from-code) -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
-	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript SDK program (@ubx/sdk) instead of reading an intent file")
+	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file")
 	cmd.Flags().StringVar(&fromDoc, "from-doc", "", "path to a markdown authoring document -- transcribes it into an intent/v1 draft via the configured [intent] provider, then resolves it")
 	cmd.Flags().StringVar(&fromDiagram, "from-diagram", "", "path to a .d2 diagram -- transcribes its topology into an intent/v1 draft, then resolves it")
 	cmd.Flags().StringVar(&stack, "stack", "", "target stack name (required with --from-doc or --from-diagram; the intent-file and --from-code inputs already name their own stack)")
@@ -236,6 +307,84 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringArrayVar(&neighborLedgers, "neighbor-ledger", nil, "<stack>=<path> mapping a diagram's own cross-stack reference to a real ledger directory, overriding the \"../<stack>\" convention (repeatable, only with --from-diagram)")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
+}
+
+// nonAuthoringMarkdownBasenames is docs/cli-output-spec.md §v2's own
+// "README.md-class files must never false-positive" detection rule --
+// well-known project-meta markdown files that are never themselves an
+// authoring document for bare `ubx plan`'s auto-detection, checked
+// case-insensitively against the candidate's own basename (some of
+// these conventionally have no extension at all).
+var nonAuthoringMarkdownBasenames = map[string]bool{
+	"readme": true, "readme.md": true,
+	"changelog": true, "changelog.md": true,
+	"license": true, "license.md": true,
+	"contributing": true, "contributing.md": true,
+	"code_of_conduct": true, "code_of_conduct.md": true,
+	"security": true, "security.md": true,
+	"authors": true, "authors.md": true,
+	"notice": true, "notice.md": true,
+}
+
+// sdkImportMarkers is what distinguishes a real SDK authoring program
+// from an arbitrary .ts/.go/.py file that happens to sit in the working
+// directory (genuinely common, especially for .go -- this is itself a
+// Go module) -- content sniffing on the real import every SDK program
+// actually carries, never a bare extension match, per docs/cli-output-
+// spec.md §v2's own "extension + intent-marker sniffing" rule.
+var sdkImportMarkers = map[string]string{
+	".ts": `"@ubx/sdk"`,
+	".go": `"github.com/ubiquex/ubx-sdk-go/runtime"`,
+	".py": "import ubx_sdk",
+}
+
+// detectedMedium is one candidate file autodetectMedium found, paired
+// with the --from-* flag it corresponds to -- used both to auto-plan a
+// lone candidate and to build the "pick one" teaching error naming each
+// candidate's own correct flag.
+type detectedMedium struct {
+	path string
+	flag string // "--from-doc", "--from-diagram", or "--from-code"
+}
+
+// autodetectMedium implements docs/cli-output-spec.md §v2's own bare
+// "ubx plan" auto-detection: exactly one medium file in dir plans
+// automatically, no --from-* flag needed; multiple candidates are
+// listed and the caller must pick explicitly, never guessed. A single,
+// non-recursive directory listing -- bare `ubx plan` is a one-
+// directory-at-a-time convenience, matching every other relative-path
+// flag this command already has.
+func autodetectMedium(dir string) ([]detectedMedium, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var found []detectedMedium
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		path := filepath.Join(dir, name)
+		switch ext := strings.ToLower(filepath.Ext(name)); ext {
+		case ".md":
+			if nonAuthoringMarkdownBasenames[strings.ToLower(name)] {
+				continue
+			}
+			found = append(found, detectedMedium{path: path, flag: "--from-doc"})
+		case ".d2":
+			found = append(found, detectedMedium{path: path, flag: "--from-diagram"})
+		case ".ts", ".go", ".py":
+			marker := sdkImportMarkers[ext]
+			content, err := os.ReadFile(path)
+			if err != nil || !strings.Contains(string(content), marker) {
+				continue
+			}
+			found = append(found, detectedMedium{path: path, flag: "--from-code"})
+		}
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
+	return found, nil
 }
 
 // renderPlanReceipt is `ubx plan`'s own human-readable preview (also
@@ -255,10 +404,13 @@ propose-time PR trailer hash, etc.).`,
 // spec) and `ubx ship`'s own confirmation header names a plan age
 // instead of a source entirely.
 func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string) {
+	// docs/cli-output-spec.md §v2: "NO AI summary sentence under the
+	// header (remove it)" -- the founder's own markup against the real
+	// 5-resource platform.md case found this line pure noise once every
+	// resource block below it already renders in full; p.Intent.Summary
+	// still exists in the stored proposal (nothing here removes the
+	// field), it's simply not rendered a second time.
 	fmt.Fprintln(out, header)
-	if p.Intent.Summary != "" {
-		fmt.Fprintln(out, st.Dim(p.Intent.Summary))
-	}
 	fmt.Fprintln(out)
 
 	renderCreates(out, st, p.Delta.Creates, "  ")
@@ -268,16 +420,22 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 		fmt.Fprintln(out)
 	}
 
-	fmt.Fprintf(out, "delta: %s, %s, %s\n",
+	// docs/cli-output-spec.md §v2: every summary line bold, with one
+	// empty line between the delta line and the blast-radius/cost block.
+	// forceBold (not a naive nested st.Bold call, see its own doc
+	// comment) keeps the create/modify/destroy counts individually
+	// green/yellow/red while making the whole line bold throughout.
+	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("delta: %s, %s, %s",
 		st.Green(fmt.Sprintf("+%d create(s)", len(p.Delta.Creates))),
 		st.Yellow(fmt.Sprintf("~%d modify(ies)", len(p.Delta.Modifies))),
-		st.Red(fmt.Sprintf("-%d destroy(s)", len(p.Delta.Destroys))))
-	fmt.Fprintf(out, "blast radius: %s %s %s\n",
+		st.Red(fmt.Sprintf("-%d destroy(s)", len(p.Delta.Destroys))))))
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("blast radius: %s %s %s",
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
 		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),
-		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))
+		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))))
 	if len(p.CostDelta.MonthlyUSD) > 0 {
-		fmt.Fprintf(out, "cost delta: $%s/mo\n", p.CostDelta.MonthlyUSD)
+		fmt.Fprintln(out, st.Bold(fmt.Sprintf("cost delta: $%s/mo", p.CostDelta.MonthlyUSD)))
 	}
 
 	if len(p.Intent.Assumptions) == 0 && len(p.Intent.Defaults) == 0 && len(p.Intent.Questions) == 0 {
@@ -291,12 +449,16 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 // <source>" header line -- source is empty for a caller with no natural
 // authoring-document source (a hand-written intent file passed
 // positionally still names itself; `ubx terminate` passes "" since the
-// address IS the spec, no file involved at all).
-func planReceiptHeader(stack, source string) string {
+// address IS the spec, no file involved at all). The "from <source>"
+// segment renders dim (docs/cli-output-spec.md §v2's own worked
+// example) -- st is nil-safe (styler.Dim/color both tolerate a nil
+// receiver), so callers that render header text through some other
+// unstyled path are unaffected.
+func planReceiptHeader(st *styler, stack, source string) string {
 	if source == "" {
 		return fmt.Sprintf("Plan  %s", stack)
 	}
-	return fmt.Sprintf("Plan  %s · from %s", stack, source)
+	return fmt.Sprintf("Plan  %s · %s", stack, st.Dim(fmt.Sprintf("from %s", source)))
 }
 
 // planFilePath is where `ubx plan` saves a resolved-but-unaccepted

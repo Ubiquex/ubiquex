@@ -141,10 +141,14 @@ by design (docs/cli-output-spec.md principle 6).`,
 
 			outWriter := cmd.OutOrStdout()
 			st := newStylerFull(cmd, fullHashes)
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(stack, ""))
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, stack, ""))
 			// UBI-49 polish: the hash is the reference, the plan file's
 			// own path on disk is not -- see plan.go's identical fix.
-			fmt.Fprintf(outWriter, "\nubx-proposal: %s\nnext: %s\n", st.Hash(hash), nextShipHint([]string{hash}))
+			// docs/cli-output-spec.md §v2: both footer lines green AND
+			// bold, matching `ubx plan`'s own identical footer.
+			fmt.Fprintf(outWriter, "\n%s\n%s\n",
+				st.GreenBold(fmt.Sprintf("ubx-proposal: %s", displayHash(hash, st.fullHashes))),
+				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}))))
 			return nil
 		},
 	}

@@ -190,7 +190,9 @@ Refuses to overwrite an existing config unless --force is given.`,
 			}
 
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "wrote %s\n", path)
+			st := newStyler(cmd)
+			fmt.Fprintf(out, "%s\n", st.Green(fmt.Sprintf("+ %s has been generated successfully", path)))
+			fmt.Fprintf(out, "%s\n", st.Dim(fmt.Sprintf("    see %s", docsConfigRef)))
 			if !hasProvider(values) {
 				fmt.Fprintf(out, "next: add a provider (re-run with --source/--provider-version, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
 			} else {

@@ -187,7 +187,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			outWriter := cmd.OutOrStdout()
 			st := newStyler(cmd)
 			fmt.Fprintf(outWriter, "promoted %s -> %s (%s)\n", st.Hash(p.ID), targetStack, to)
-			renderPlanReceipt(outWriter, st, np, planReceiptHeader(np.Stack, ""))
+			renderPlanReceipt(outWriter, st, np, planReceiptHeader(st, np.Stack, ""))
 			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
 			return nil
 		},

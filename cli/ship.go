@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -248,7 +249,7 @@ consistency shows its own work instead of sitting silent.`,
 			// itself is the only new behavior, and it's purely additive
 			// stdout lines, never consulted for the sealed result itself).
 			if !jsonOut {
-				ctx = executor.WithProgress(ctx, newProgressPrinter(out, st))
+				ctx = executor.WithProgress(ctx, newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout())))
 			}
 
 			sealed, err := executor.Ship(ctx, ledger, pool, source, p)
@@ -341,13 +342,37 @@ func resolveAndValidatePlan(ledgerDir, hash string, confirmDestroys bool) (draft
 // errShipDeclined (not a real error) if the human types anything else --
 // the caller maps that to a clean exit 0, matching chat.go's own
 // abandoned-session precedent.
+// renderShipConfirmSummary is confirmAndAccept's own "just enough to
+// confirm this is still the plan being signed" line (UBI-63 bug 3) --
+// stack, plan age, and the blast radius, colored exactly like every
+// other blast-radius line in this codebase. Deliberately NOT the full
+// renderPlanReceipt: that already ran once, at `ubx plan`/`ubx scan
+// --propose` time, and re-running it here again in full is noise, not
+// review, for a plan a human has already read.
+func renderShipConfirmSummary(out io.Writer, st *styler, p *core.Proposal, age string) {
+	fmt.Fprintf(out, "Ship  %s · %s · %s %s %s\n",
+		p.Stack, age,
+		st.Green(fmt.Sprintf("+%d create(s)", p.BlastRadius.Creates)),
+		st.Yellow(fmt.Sprintf("~%d modify(ies)", p.BlastRadius.Modifies)),
+		st.Red(fmt.Sprintf("-%d destroy(s)", p.BlastRadius.Destroys)))
+}
+
 func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft *core.Proposal, yes bool) (*core.Proposal, error) {
 	out := cmd.OutOrStdout()
 	age := "unknown age"
 	if t, ok := parseResolvedAt(draft); ok {
 		age = humanAge(t)
 	}
-	renderPlanReceipt(out, st, draft, fmt.Sprintf("Ship  %s · %s", draft.Stack, age))
+	// UBI-63 bug 3: the full receipt already rendered once, at `ubx plan`/
+	// `ubx scan --propose` time -- that's the review. Re-rendering it
+	// again in full here (every resource, every attribute, every
+	// assumption) is pure noise for a plan a human has already read,
+	// especially now that a real multi-resource receipt can run to
+	// pages of formatted JSON (docs/cli-output-spec.md's own v2 receipt
+	// format). The signing moment needs just enough to confirm THIS is
+	// still the plan being signed -- stack, age, and the blast radius --
+	// not a second full copy of it.
+	renderShipConfirmSummary(out, st, draft, age)
 	warnIfRecentUnattributedAdopt(out, st, draft)
 
 	if !yes {
@@ -559,19 +584,105 @@ func reportLatest(out io.Writer, candidates []planCandidate) string {
 	return best.Hash
 }
 
+// tickInterval is how often the in-flight ticker (below) re-renders its
+// one live line -- frequent enough that a human watching never wonders
+// if the whole thing has hung, infrequent enough not to flood a
+// piped/logged run with near-duplicate lines.
+const tickInterval = 1 * time.Second
+
+// progressLineWidth is the fixed field width every progress line's own
+// glyph+text portion pads to (matching the pre-existing "%-50s"
+// convention) -- reused by the ticker's own in-place-overwrite padding
+// so a shrinking elapsed-time string (rare, but possible if a
+// double-digit minute count is somehow followed by a shorter render)
+// never leaves stale trailing characters on a real terminal.
+const progressLineWidth = 50
+
 // newProgressPrinter builds executor.ProgressEvent callback for `ubx
 // ship`'s own live narration (UBI-61, docs/cli-output-spec.md: "the
 // read-back verification line is mandatory"). Each event prints its own
 // line the moment it happens -- not buffered to the end -- with elapsed
-// time since the resource's own most recent in_flight transition. Not a
-// frame-animated spinner (no goroutine ticking a single line in place
-// during a sleep): a deliberate, lower-risk choice for a
-// correctness-critical apply path, still genuinely live since every
-// reconcile attempt's own line appears exactly when that attempt runs.
-func newProgressPrinter(out io.Writer, st *styler) func(executor.ProgressEvent) {
+// time since the resource's own most recent in_flight transition.
+//
+// UBI-63 bug 3: an ordinary create/modify with no reconcile loop of its
+// own (a single ApplyResourceChange call, which can genuinely take a
+// while against a slow real provider) used to show a permanently frozen
+// "0:00" -- the in_flight transition fires once, at elapsed=0 by
+// definition, and nothing re-rendered it until the terminal event
+// finally arrived with the real total. A background ticker now
+// re-renders that one line every tickInterval while nothing else is
+// happening, reversing UBI-61's own original "not a frame-animated
+// spinner" choice now that a real multi-resource ship proved a silent
+// frozen timer reads as hung, not calm. On a real terminal (tty=true)
+// the line updates in place via a carriage return, padded to
+// progressLineWidth so a shrinking render never leaves stale trailing
+// characters; on a non-TTY (piped/logged) run it prints fresh discrete
+// lines instead, since in-place overwrite is a terminal-only concept
+// and would otherwise scatter literal "\r" bytes through a log file --
+// either way, nothing sits silently frozen for more than tickInterval.
+// The ticker stops the instant a real event supersedes it (a terminal
+// transition, or a reconcile_attempt, which already narrates its own
+// elapsed time per attempt) -- at most one resource is ever in_flight
+// at a time (core/executor's own "one resource at a time" serial
+// execution, docs/executor.md), so this needs only one ticker, never a
+// per-address set of them.
+func newProgressPrinter(out io.Writer, st *styler, tty bool) func(executor.ProgressEvent) {
 	starts := map[string]time.Time{}
 	seen := map[string]bool{}
+
+	var mu sync.Mutex
+	var stopCh chan struct{}
+	var doneCh chan struct{}
+
+	stopTicker := func() {
+		if stopCh == nil {
+			return
+		}
+		close(stopCh)
+		<-doneCh
+		stopCh, doneCh = nil, nil
+	}
+
+	renderElapsed := func(d time.Duration) string {
+		return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+	}
+
+	printLine := func(glyph, text, elapsed string, overwrite bool) {
+		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
+		if !overwrite || !tty {
+			if elapsed != "" {
+				fmt.Fprintf(out, "  %s %s %s\n", glyph, padded, elapsed)
+			} else {
+				fmt.Fprintf(out, "  %s %s\n", glyph, text)
+			}
+			return
+		}
+		fmt.Fprintf(out, "\r  %s %s %-8s", glyph, padded, elapsed)
+	}
+
+	startTicker := func(address string, start time.Time) {
+		stopCh, doneCh = make(chan struct{}), make(chan struct{})
+		go func(stop chan struct{}, done chan struct{}) {
+			defer close(done)
+			ticker := time.NewTicker(tickInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-ticker.C:
+					mu.Lock()
+					printLine(st.Dim("·"), "in_flight", renderElapsed(time.Since(start)), true)
+					mu.Unlock()
+				}
+			}
+		}(stopCh, doneCh)
+	}
+
 	return func(ev executor.ProgressEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+
 		now := time.Now()
 		if ev.State == "in_flight" {
 			starts[ev.Address] = now
@@ -582,19 +693,21 @@ func newProgressPrinter(out io.Writer, st *styler) func(executor.ProgressEvent) 
 		}
 		elapsed := ""
 		if start, ok := starts[ev.Address]; ok {
-			d := now.Sub(start)
-			elapsed = fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+			elapsed = renderElapsed(now.Sub(start))
 		}
 
 		var glyph, text string
+		var terminal bool
 		switch ev.Kind {
 		case "transition":
 			glyph = st.Dim("·")
 			switch ev.State {
 			case "applied":
 				glyph = st.Green("✓")
+				terminal = true
 			case "failed":
 				glyph = st.Red("✗")
+				terminal = true
 			}
 			text = ev.State
 			if ev.Detail != "" {
@@ -606,10 +719,24 @@ func newProgressPrinter(out io.Writer, st *styler) func(executor.ProgressEvent) 
 		default:
 			return
 		}
-		if elapsed != "" {
-			fmt.Fprintf(out, "  %s %-50s %s\n", glyph, text, elapsed)
-		} else {
-			fmt.Fprintf(out, "  %s %s\n", glyph, text)
+
+		// Any real event -- terminal or not -- supersedes whatever the
+		// ticker was mid-rendering; stop it before printing the
+		// authoritative line so the two never interleave. It restarts
+		// below only for a fresh, non-terminal in_flight transition.
+		mu.Unlock()
+		stopTicker()
+		mu.Lock()
+
+		if tty && elapsed != "" {
+			// Clear the ticker's own last in-place line before printing
+			// a real, newline-terminated one in its place.
+			fmt.Fprint(out, "\r")
+		}
+		printLine(glyph, text, elapsed, false)
+
+		if ev.Kind == "transition" && ev.State == "in_flight" && !terminal {
+			startTicker(ev.Address, now)
 		}
 	}
 }

@@ -24,6 +24,34 @@ func loadConfigFrom(t *testing.T, dir string) *Config {
 	return cfg
 }
 
+// TestInit_SuccessLine_V2Format is docs/cli-output-spec.md §v2's own
+// init success shape (UBI-63): an affirmative "+ <path> has been
+// generated successfully" line, followed by a dim "see <docs>" line --
+// replacing the old bare "wrote <path>" -- with the pre-existing
+// concrete "next: ..." guidance line kept alongside it (a founder v2/
+// existing-guidance merge decision, not the founder's markup verbatim,
+// which showed only the two new lines and dropped "next:" entirely).
+func TestInit_SuccessLine_V2Format(t *testing.T) {
+	dir := t.TempDir()
+	out, err := runUbx(t, nil, "init", "--dir", dir)
+	if err != nil {
+		t.Fatalf("ubx init: %v\noutput: %s", err, out)
+	}
+	path := filepath.Join(dir, ".ubx", "config.hcl")
+	if !strings.Contains(out, "+ "+path+" has been generated successfully") {
+		t.Fatalf("expected the v2 success line naming %s, got:\n%s", path, out)
+	}
+	if !strings.Contains(out, "see "+docsConfigRef) {
+		t.Fatalf("expected a \"see %s\" line, got:\n%s", docsConfigRef, out)
+	}
+	if !strings.Contains(out, "next: add a provider") {
+		t.Fatalf("expected the existing \"next: add a provider...\" guidance line preserved, got:\n%s", out)
+	}
+	if strings.Contains(out, "wrote "+path) {
+		t.Fatalf("expected the old \"wrote %%s\" line to be replaced, got:\n%s", out)
+	}
+}
+
 // TestInit_NoFlagsGiven_MinimalRunnableTemplate is UBI-59's own default-
 // output test: even with nothing given, the stack still comes from the
 // directory's own name (never empty, never left to a human to fill in

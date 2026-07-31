@@ -44,6 +44,16 @@ func TestPlan_FromDoc_StackFromConfig_NoFlag(t *testing.T) {
 	if !strings.Contains(out, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected the resolved delta's own blast radius, got: %s", out)
 	}
+
+	wantProgress := "drafting via claude:claude-opus-4-8… ✓ · resolving…"
+	progressIdx := strings.Index(out, wantProgress)
+	receiptIdx := strings.Index(out, "Plan  playground")
+	if progressIdx < 0 {
+		t.Fatalf("expected docs/cli-output-spec.md §v2's own pre-receipt progress line %q, got: %s", wantProgress, out)
+	}
+	if receiptIdx < 0 || progressIdx > receiptIdx {
+		t.Fatalf("expected the progress line to render BEFORE the receipt, got: %s", out)
+	}
 }
 
 // TestPlan_FromDoc_NoStackAnywhere_TeachingError proves the upgraded
