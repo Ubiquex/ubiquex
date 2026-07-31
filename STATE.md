@@ -4,6 +4,120 @@
 
 ## Current phase
 
+**UBI-63 session 3 (2026-08-01) — reopened, real-diagnosed, fixed.** The
+founder reopened UBI-63 within hours of the prior session's close-out:
+a fresh, cleanly-shipped 5-resource apply (Sonnet-5-authored, via
+`ubx-playground-3`) still showed 4 of 5 resources drifting with zero
+real-world change.
+
+**Diff-check finding, reported before any new code was written (per the
+founder's own explicit sequencing ask): the prior session's "bug 4"
+(drift-comparator null-normalization) was never actually implemented as
+code — only worked around procedurally, live, via a manual scan-adopt-
+reship cycle per instance.** Confirmed by direct inspection, not
+assumption: `core.ObservedHash` (`core/observed.go`) was a pure,
+schema-unaware SHA-256 fingerprint with zero normalization logic;
+`core.DiffAttributes`/`diffObjects` (`core/state.go`) used plain
+`reflect.DeepEqual`, no null/zero-value collapsing anywhere; a
+`grep -rn "normaliz|semantic.equal|schema.default" core/*.go` returned
+zero hits. Not a regression — a fix that was never written, just
+described as an intent and worked around.
+
+**Fix 1 (the real "bug 4" fix): schema-driven semantic-equality
+normalization at the drift-verdict boundary, not at the hash.** A
+single-value hash (`ObservedHash`) can't encode "null matches this
+Computed attribute's real materialized value" — that's inherently a
+pairwise question, so the fix lives in `core.RunScan` (`core/scan.go`),
+which already has both the recorded (`foldedState`) and freshly observed
+state in hand before it ever hashes either. New `core.AttrComputedFlags`
+interface (`IsAttrComputed(attrName string) bool`) is an OPTIONAL
+capability a `StateReader`'s opaque `resourceSchema` handle may satisfy —
+`provider.Schema` now implements it via plain structural typing (new
+method in `provider/schema.go`), so `core` still never imports `provider`
+(the standing architectural boundary holds). New
+`core.explainedByNormalization` (only consulted on the rare
+hash-mismatch path, never overrides a hash match) applies two rules: (1)
+null ≡ the type's own zero-value literal (`false`/`0`/`""`/`[]`/`{}`) for
+any attribute, symmetric; (2) a Computed attribute's null baseline
+resolving to ANY concrete value (`region: null -> "eu-central-1"`) is
+materialization, not drift — wildcard, one-directional, gated on the
+schema's own `Computed` flag so it can never mask a real change to an
+already-resolved value. Hermetic: extended `fakeprovider`'s conformance
+mode with `FAKEPROVIDER_ATTR_TYPES` (bool/list/map per-attribute) and
+`FAKEPROVIDER_COMPUTED_ATTRS`, two new tests
+(`cli/scan_normalization_test.go`) proving all four repro shapes
+(bool default, empty list, null map, provider-materialized region) scan
+clean, and that a genuinely different value alongside them still drifts.
+
+**Fix 2 (a separate, new pattern — NOT normalization): a same-batch
+dependent's real, factual side effect on an earlier resource
+(`attachment_count`/`managed_policy_arns` changing when a
+`aws_iam_role_policy_attachment` — 5th/last in the chain — attaches to a
+role/policy created earlier in the SAME apply).** Founder's own framing
+confirmed and acted on: this is UBI-29's "intra-chain effects" class, not
+noise — the values genuinely changed and are worth recording, just not
+something a human needs to separately re-approve. Chose post-chain
+re-observation over fold-time prediction (no schema encodes "which later
+resource types mutate which earlier ones" — re-reading reality once the
+whole chain settles is robust regardless of what the effect turns out to
+be). New `reconcileSameBatchEffects` (`core/executor/ship.go`), called at
+the end of `shipChange` after the batch's own `ApplyRecord` is sealed:
+re-observes (via the existing `core.RunScan`, so Fix 1's own normalization
+applies here too) only resources at least one OTHER node in the SAME
+batch actually `depends_on` — an independent node can only be re-reading
+its own still-accurate snapshot, so it's skipped, avoiding an unneeded
+extra provider round trip for the common no-cross-effect case (this
+scoping was added after an initial "re-observe everything" version broke
+`TestShip_KillBetweenProviders_RerunLaunchesSecondProviderFresh`'s exact
+provider-call-count assertions). Any resulting difference is recorded via
+the SAME `core.GenerateProposal`/`core.Accept` mechanism `ubx scan
+--propose` already uses for drift_adopt — reusing one well-understood
+ledger concept rather than inventing a new one, folding forward through
+`core.Ledger.FoldState` exactly like any other adopted drift. Best-effort
+throughout: a reconciliation failure never fails (or even surfaces from)
+the ship itself, since the primary apply is already correct and durable
+by the time this runs. Hermetic: `core/executor/reconcile_test.go`,
+extending the shared `fakeApplier` test double with a `fake_attachment`
+type whose own create mutates a referenced role's `attachment_count` —
+proves the role's recorded ledger baseline (not just the live world)
+reflects the attachment's effect by the time `Ship` returns, and that the
+very next scan is clean.
+
+Full suite green (`go build ./...`, `go vet ./...`, `go test ./...`,
+`-count=1` re-run on the touched packages) throughout — zero regressions
+beyond the one caught and fixed above.
+
+**Not yet done, deliberately — the founder's own explicit "do not disturb
+until diagnosis is complete" held throughout this session:**
+- Live re-verification against the founder's real, still-live
+  `ubx-playground-3` stack (5 real AWS resources) is NOT done — no `ubx`
+  command was run against it, directly or otherwise, this session (only
+  read-only `find`/`ls` to locate its `.ubx/plans` directory for the
+  stale-proposal check below). Per this project's own live-verification
+  protocol, this needs the founder to run the next `ubx scan`/`status
+  --drift` themselves and relay the output back, now that the fix is
+  ready to verify against.
+- Noticed, not touched: `/Users/roozbeh/ubx-playground-3/.ubx/ledger.lock`
+  exists with a very recent mtime — worth the founder's own attention
+  (an interrupted process, or a stale lock) before their next `ubx`
+  invocation there; not investigated or removed here.
+- The two flagged stale noise-adopt proposals (`1c631b6f7524`,
+  `7121ed424cca`, founder's addendum comment) were NOT found in any local
+  plan store searched (`ubx-playground-3`, `ubx-playground`,
+  `ubx-playground-2`, `~/.ubx`, `demo/payments` — every `.ubx/plans/*`
+  present has a different full hash) — they appear to already be
+  pruned/consumed via the founder's own subsequent normal usage that
+  evening, not still sitting at risk of being shipped. Not confirmed
+  against whatever produced that comment directly; flagged honestly
+  rather than assumed either way.
+- UBI-63's own two tangential comments (`106e3d45` "why scoping +
+  verbosity", tagged "ride session 2" by the founder) remain untouched,
+  as scoped.
+- UBI-63 reopened to "In Progress" in Linear at the start of this
+  session; not yet re-closed — pending the live-verification leg above.
+
+## Current phase (previous)
+
 **UBI-63 + docs v2 session (2026-07-31) — closed. Two sessions in one
 sitting: the ticket's own three named bugs plus a real live finale on
 the founder's actual wounded `playground-3` AWS stack, and the full
