@@ -4,6 +4,167 @@
 
 ## Current phase
 
+**UBI-49 polish session (2026-07-31), following the founder's second
+playground test.** Not part of the original 3-session UX-fix arc's own
+count (that arc — UBI-49 correctness, UBI-61/UBI-62, UBI-59 — closed last
+session) — this addresses the founder's own residual comments left on
+UBI-49 across two more rounds (dated 2026-07-30 late evening / 2026-07-31
+early morning, read in full before starting: round 1's `bb51416b` three
+findings, round 2's `d9137af4` two findings, and `5d7edf1d`'s correction
+narrowing round 2 finding #5's actual scope) plus a visual-nits list.
+
+**1. Flag-free scan.** Investigated round 1 finding #1 ("scan still
+ignores config's stack") empirically before assuming the repro was still
+accurate: `applyStackDefault` was already wired into `scan.go`'s RunE as
+of session 1's own commit (`ef6126a`) — verified live
+(`ubx scan --propose both --provider ...` with `stack = "playground"` in
+config resolves the stack fine). The REAL remaining blocker was finding
+#2, fleet-scoped `--propose` never having been built: bare `ubx scan
+--propose <mode>` (stack resolved, no `--type`/`--name`) now walks
+`core.Ledger.Fleet` — the identical read `ubx status` already performs —
+via new `cli/scanfleet.go`. Per-drifted-address: same
+generate/attribute/save/render pipeline as single-resource scan
+(`generateProposeSaveAndRender`, factored out but NOT shared with the
+single-resource RunE body, deliberately — that path stays untouched and
+independently proven, at the cost of ~40 lines of duplication, rather than
+risk the well-tested path via a forced shared abstraction). `--json`/
+`--out`/`--out-dir`/`--surface-as` refuse with a teaching error in fleet
+mode (single-resource-only concerns). Aggregate summary line + exit code
+(2 unreadable > 1 drifted > 0 clean, matching `status`'s own precedent).
+`status --drift`'s own `next:` line simplifies to `ubx scan --propose
+both` (no more `--stack`/`--type`/`--name` spelled out — flag-free scan
+makes the bare form sufficient). 7 new tests (`cli/scanfleet_test.go`):
+multi-address walk, all-clean, empty-ledger, all three flag rejections,
+ship end-to-end, multi-provider config (`declaredProvidersForInference`/
+`resolver.InferProvider`, same mechanism `status.go`'s own multi-provider
+walk already uses).
+
+**2. Ship-of-adopt: success rendered as success, not failure.** Round 2
+finding #4: `ubx ship <adopt-hash>` correctly ACCEPTED a record-only
+`adoption`/`drift_adopt` (that acceptance IS the whole resolution) then
+errored "ship only executes drift_revert or change proposals" — a
+successful action rendered as a failure, after it had already fully
+committed. Fixed: new `isRecordOnlyKind` check runs before the
+kind-mismatch error (with the pre-existing `Acceptance == nil` defensive
+check reordered ahead of both, on reflection a cleaner sequence than
+before), reporting `"<hash> (<kind>) -- record-only, nothing to execute --
+✓ resolved"` and returning success instead. Applies identically whether
+`p` came from `ledger.Read` directly (already accepted, e.g. via a
+standalone `ubx accept`) or from a fresh inline accept via the plan-store
+fallback. Scan's own adopt/drift_adopt cards say "record-only · adopts
+into the ledger" / "record-only · records reality as signed" now, instead
+of a `+0 ~0 -0` blast-radius line that never meant anything for these
+kinds (task 4's own ask, folded in since it's the identical card
+`renderScanCard` change). 2 new tests (`cli/ship_recordonly_test.go`):
+the plan-store-fallback path and the already-accepted-in-ledger path.
+
+**3. Attribution surfacing — display-only, per `5d7edf1d`'s own
+correction narrowing the scope.** The wire layer already recorded a
+`cloudtrail_unattributed`/`audit_unattributed` intent source (complete
+with `Reason`) whenever attribution came back empty — the actual gap was
+that nothing ever rendered it. `core.BlameEntry` gained
+`UnattributedReason`/`UnattributedBackend`, populated in `core.Blame`
+alongside the pre-existing `AttributedActors` (a new `unattributedNote`
+helper, symmetric with the existing `attributedActors`); `ubx blame`
+renders `"unattributed (<reason in words>)"` on a group with no
+attributed actor, instead of silently omitting the line entirely. New
+shared `cli/attribution.go` helpers (`recordedAttributedActor`,
+`recordedUnattributedReason`, `attributionCardLine`) feed both `ubx
+blame`'s and scan's own card rendering from one source of truth. Scan's
+card gained an `attribution:`/`who:` line for `drift_adopt` entries,
+using the identical wording. The ONE behavioral addition (round 2's own
+"warn before accepting" idea, confirmed still in scope by the
+correction): `ubx ship`'s `confirmAndAccept` now warns (never blocks)
+before accepting a `drift_adopt`/`adoption` less than 10 minutes old
+(`resolution.resolved_at`) with no recorded attribution — CloudTrail's
+own delivery window is typically 2-5 minutes, so a re-scan shortly after
+may still attribute it for real; accepting locks the unattributed verdict
+in permanently (`blame`/`why` only ever replay history, never
+re-attempt). 3 new tests (`cli/attribution_surfacing_test.go`): the scan
+card, `ubx blame`, and the ship warning, all hermetic via the established
+AWS-credential-blanking pattern (`TestScan_AttributionDegradesGracefully_
+NoCredentials`'s own setup, reused rather than re-invented) — one test
+also surfaced a real, live `delivery_window` reason (this machine
+apparently carries just enough ambient AWS credential material to
+attempt a real, harmless, read-only CloudTrail lookup — matching the
+founder's own original repro's exact reason code, not the `not_logged`
+the credential-blanking tests produce).
+
+**4. Visual sweep, per docs/cli-output-spec.md.** Delta line
+(`renderPlanReceipt`) now colored green/yellow/red exactly like the
+blast-radius line beneath it (was plain text, an inconsistency the
+founder's own round-1 note caught). Short hashes swept through
+`plan.go`/`terminate.go`/`ship.go`'s own "accepted"/"ubx-proposal" lines
+(`st.Hash`, matching `docs/cli-output-spec.md` principle 3) — the
+`plan: .ubx/plans/<hash>.json` path line dropped entirely from both
+`ubx plan` and `ubx terminate`'s output (the hash is the reference; the
+path on disk is an implementation detail nothing downstream ever needs,
+confirmed by grepping every call site that consumes it — none do,
+`ubx ship` resolves by hash through the plan store, never a path).
+Scan cards regain real content (folded into item 2's own
+`renderScanCard` rewrite): the attribute-level diff (from
+`p.Delta.Modifies`, the same data `why.go`'s `renderModifies` already
+uses) plus the attribution line for `drift_adopt`. Section spacing/
+dim-bright hierarchy spot-checked live across plan/ship/scan/status/blame
+against the mockups in `docs/cli-output-spec.md` — already consistent
+from session 2's own work, no further changes needed there.
+
+**Hermetic tests, this session**: 12 new (`scanfleet_test.go` ×7,
+`ship_recordonly_test.go` ×2, `attribution_surfacing_test.go` ×3), plus
+existing tests updated for the new card/hash formats
+(`scan_propose_test.go`'s `countProposalLines` now matches by card-header
+pattern instead of the retired blast-radius substring;
+`plan_test.go`/`ship_confirm_test.go`/`ship_progress_test.go`/
+`terminate_test.go`/`accept_planstore_test.go`/`planhash_test.go`/
+`promote_test.go`'s shared `mustExtractPlanHash` helper now resolves the
+short hash it parses back to the real full one via `resolvePlanHash`,
+since the full hash is deliberately no longer printed anywhere in
+human-text output at all; `scanall_test.go` gained the fleet-walk's own
+sibling cases). `go build/vet/test ./...`, `gofmt -l .` clean.
+
+**Docs (`ubiquex-docs`), same session**: `cli/scan.mdx` (new "Flag-free
+scan" and "Attribution: when it comes back empty" sections, every
+existing card transcript re-captured — 9 total, including two requiring a
+throwaway local Python `http.server` mock for `--surface-as issue`/`pr`'s
+own GitHub API calls, matching the exact routes `cli/surface_test.go`'s
+own `httptest` mux already established), `cli/ship.mdx` (new "Shipping a
+record-only proposal" + "A warning before accepting a recent, unattributed
+drift_adopt" sections, the TTY-confirmation and destroy-confirmation
+transcripts re-captured with dropped plan-path lines), `cli/blame.mdx`
+(new "When attribution came back empty" section), `cli/status.mdx`
+(simplified `next:`, new recorded-attribution example — hand-seeding a
+real `cloudtrail` source into a drift draft before accepting it, the same
+technique used for the hermetic Go test), `cli/terminate.mdx`/
+`cli/plan.mdx`/`cli/init.mdx` (dropped plan-path lines, one real fabricated
+hash caught and fixed before commit — see "Verification" below). Every
+flag table cross-checked against the real built binary's own `--help`
+output (`scan.go`'s `--stack`/`--type`/`--name` descriptions also updated
+in-code to describe the new fleet mode, not just the docs). `mint
+validate` clean.
+
+**Verification, this session**: one real mistake caught before commit —
+while regenerating `ship.mdx`'s `ubx why` transcript, an initial draft
+used a hand-typed placeholder full hash instead of the real one (the
+short-hash-only `ubx ship` output doesn't print it); caught by re-reading
+the edit before moving on, fixed by querying the ledger directly
+(`ubx status --json`) for the real 64-char id and re-running `ubx why`
+for real. Named here deliberately, not silently corrected, per this
+project's own "verify before implementing, and record surprises" habit —
+the fabricated-hash risk is structural now that hashes are short-by-default
+everywhere, worth remembering for future doc sessions touching any of
+these commands.
+
+**Comment resolution**: replied to all three residual comment threads on
+UBI-49 (`bb51416b` round 1, `d9137af4` round 2, `5d7edf1d`'s correction)
+confirming what was fixed and pointing at the tests/docs.
+
+Both repos committed and pushed. No Linear ticket exists for this session
+specifically (a founder-comment-driven polish pass on the already-closed
+UBI-49, not a new ticket) — the comment replies above are this session's
+own closing record.
+
+## Current phase (previous)
+
 **UX-fix arc, session 3 (final) (2026-07-31): `ubx init` writes runnable
 config (UBI-59) — CLOSED. The whole 3-session UX-fix arc (UBI-49
 correctness, UBI-61/UBI-62 consent+visuals, UBI-59 this session) the
