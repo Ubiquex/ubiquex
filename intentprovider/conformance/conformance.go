@@ -16,6 +16,9 @@ package conformance
 import (
 	"context"
 	"embed"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core/resolver"
@@ -62,6 +65,12 @@ var Fixtures = []Fixture{
 		Stack:   "payments",
 		Check:   checkPaymentsLikeStagingButSmaller,
 	},
+	{
+		Name:    "platform-cross-ref-and-json-embedded-ref",
+		DocFile: "platform.md",
+		Stack:   "platform",
+		Check:   checkPlatformCrossRefAndJSONEmbeddedRef,
+	},
 }
 
 func checkPaymentsLikeStagingButSmaller(t *testing.T, draft *resolver.IntentFile) {
@@ -83,6 +92,90 @@ func checkPaymentsLikeStagingButSmaller(t *testing.T, draft *resolver.IntentFile
 	if len(draft.Intent.Assumptions) == 0 && len(draft.Intent.Questions) == 0 {
 		t.Error(`expected "like staging but smaller" to surface as an assumption or a question -- got neither, meaning the sizing choice was made silently`)
 	}
+}
+
+// checkPlatformCrossRefAndJSONEmbeddedRef is UBI-63 bug 1(c)'s own fix:
+// fixture #1 never exercised a real cross-resource reference at all, so
+// an adapter that transcribed "@<address>" mentions as the literal
+// string "$ref:<address>.<path>" instead of the real wire-shape object
+// (exactly what intentprovider/claude's own system prompt was found,
+// live, to instruct until this session) sailed through undetected. This
+// fixture's own doc names a role and an inline policy that must
+// reference it, including one level inside the policy's own
+// JSON-encoded string content (docs/schema.md's "JSON-embedded refs"
+// amendment) -- this check fails loudly on either of the two ways that
+// reference could still be wrong: a literal "$ref:" string anywhere in
+// the draft (the exact bug found live), or no real {"$ref": {"to":
+// "..."}} object anywhere at all (the reference silently dropped
+// instead of mis-encoded).
+func checkPlatformCrossRefAndJSONEmbeddedRef(t *testing.T, draft *resolver.IntentFile) {
+	t.Helper()
+
+	if len(draft.Resources) < 2 {
+		t.Fatalf("expected at least 2 resources (the role and something referencing it), got %d: %+v", len(draft.Resources), draft.Resources)
+	}
+
+	sawRealRefObject, sawBrokenRefString, err := scanForRefShapes(draft.Resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sawBrokenRefString {
+		t.Error(`found a literal "$ref:..." string in the draft -- references must be the real {"$ref": {"to": "..."}} object, never a string (UBI-63 bug 1)`)
+	}
+	if !sawRealRefObject {
+		t.Error(`expected a real {"$ref": {"to": "..."}} object referencing the queue somewhere in the draft (directly, or JSON-embedded inside a policy-shaped config string) -- found none`)
+	}
+}
+
+// scanForRefShapes is checkPlatformCrossRefAndJSONEmbeddedRef's own
+// plain, *testing.T-free scanning logic -- factored out so
+// harness_test.go's own TestCheck_RejectsLiteralRefString can assert
+// against its return values directly, rather than needing a fake/
+// manually-constructed *testing.T (which testing.T is not designed to
+// support outside the real test framework) just to observe whether a
+// check would have failed. Walks every resource's own decoded config
+// looking for the real {"$ref": {"to": "..."}} marker object (at any
+// depth, including one level inside a config-string attribute that
+// itself decodes as JSON -- the "JSON-embedded refs" case, walked
+// exactly like core/resolver's own scanRefEdges does) versus the broken
+// "$ref:<address>.<path>" string literal this ticket found live.
+func scanForRefShapes(resources []resolver.ResourceIntent) (sawRealRefObject, sawBrokenRefString bool, err error) {
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			if inner, ok := t["$ref"]; ok && len(t) == 1 {
+				if _, ok := inner.(map[string]interface{}); ok {
+					sawRealRefObject = true
+				}
+				return
+			}
+			for _, vv := range t {
+				walk(vv)
+			}
+		case []interface{}:
+			for _, vv := range t {
+				walk(vv)
+			}
+		case string:
+			if strings.HasPrefix(t, "$ref:") {
+				sawBrokenRefString = true
+				return
+			}
+			var decoded interface{}
+			if derr := json.Unmarshal([]byte(t), &decoded); derr == nil {
+				walk(decoded)
+			}
+		}
+	}
+	for _, r := range resources {
+		var cfg interface{}
+		if uerr := json.Unmarshal(r.Config, &cfg); uerr != nil {
+			return false, false, fmt.Errorf("resource %s.%s: config isn't valid JSON: %w", r.Type, r.Name, uerr)
+		}
+		walk(cfg)
+	}
+	return sawRealRefObject, sawBrokenRefString, nil
 }
 
 // Run drives a through every fixture in Fixtures via

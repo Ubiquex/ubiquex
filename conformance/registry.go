@@ -292,7 +292,22 @@ var Registry = []TypeSpec{
 			"is attached is a replace in AWS's own model, not an in-place " +
 			"modify, so there's no honest mutate step -- same shape as " +
 			"aws_route_table_association and aws_iam_group, discovered " +
-			"via schema inspection this time rather than a live API call.",
+			"via schema inspection this time rather than a live API call. " +
+			"UBI-63 session 2, confirmed live against a REAL account (not " +
+			"schema inspection this time): \"id\" existing in this type's " +
+			"own real schema does NOT mean it's sufficient on its own for " +
+			"a working re-read -- this type's own real ReadResource needs " +
+			"\"role\"/\"policy_arn\" present in current_state too, or a " +
+			"later destroy/scan read fails with a real, structured AWS " +
+			"error (\"roleName is invalid\") from an empty-string role " +
+			"name. Fixed generally, not just for this one type: " +
+			"core.DeriveLookupFromResult now captures every schema-" +
+			"Required attribute's own real value alongside \"id\", not " +
+			"\"id\" alone (cli/stateadapter.go's own ApplyResourceChange, " +
+			"the one place a concrete schema is in scope). Still no real " +
+			"conformance test backing this (Implemented stays false) -- " +
+			"this was found and fixed live, in the field, not through " +
+			"this harness.",
 	},
 	{
 		Type: "aws_iam_user", Source: "hashicorp/aws", Category: "iam", Safety: RealSafe,

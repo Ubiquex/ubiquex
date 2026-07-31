@@ -74,23 +74,36 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 // executor.TerminalError so core/executor's own state machine classifies
 // it correctly, and the result redacted through the identical
 // provider.Redact call ReadResource already uses.
-func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
+func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, json.RawMessage, error) {
 	rs, ok := resourceSchema.(*provider.Schema)
 	if !ok {
-		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+		return nil, nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
 	}
 	result, err := a.p.ApplyResourceChange(ctx, rs, typeName, priorState, plannedState, plannedState, plannedPrivate)
 	if err != nil {
 		var diag *provider.DiagnosticError
 		if errors.As(err, &diag) {
-			return nil, &executor.TerminalError{Err: err}
+			return nil, nil, &executor.TerminalError{Err: err}
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if len(result) == 0 {
-		return result, nil
+		return result, nil, nil
 	}
-	return provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+	redacted, err := provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+	if err != nil {
+		return nil, nil, err
+	}
+	// UBI-63 session 2: mirrors cli/stateadapter.go's own identical
+	// lookup-derivation exactly -- see that method's own doc comment.
+	var requiredAttrs []string
+	for _, attr := range rs.Block.Attributes {
+		if attr.Required {
+			requiredAttrs = append(requiredAttrs, attr.Name)
+		}
+	}
+	lookup := core.DeriveLookupFromResult(redacted, requiredAttrs)
+	return redacted, lookup, nil
 }
 
 // PlanResourceChange satisfies executor.Applier — mirrors

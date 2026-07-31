@@ -28,12 +28,28 @@ import (
 const DefaultModel = "claude-opus-4-8"
 
 // defaultEffort is the request-level reasoning effort this adapter
-// always sends -- not user-configurable in v1. docs/intent-provider.md's
-// own reasoning: this is a reasoning-shaped task, surfacing genuine
+// sends for any model that supports the parameter at all (effortSupported,
+// below) -- not user-configurable in v1. docs/intent-provider.md's own
+// reasoning: this is a reasoning-shaped task, surfacing genuine
 // ambiguity rather than performing bare classification/extraction, so a
 // lower effort risks under-thinking exactly the cases this arc's own
 // design center cares most about getting right.
 const defaultEffort = anthropic.OutputConfigEffortHigh
+
+// effortSupported reports whether model accepts the OutputConfig.Effort
+// parameter at all -- found live (UBI-63 session 2), not assumed from
+// documentation: a real request against a stack config explicitly
+// pinning "claude-haiku-4-5-20251001" returned a real, structured 400
+// invalid_request_error, "This model does not support the effort
+// parameter." Haiku-family models are the fast/cheap tier and don't
+// support extended reasoning effort at all; every other current model
+// family (Opus, Sonnet, Fable) does. A substring check on "haiku"
+// (case-insensitive), not an exhaustive model-name allowlist, so a
+// future Haiku point release (a new date suffix, say) stays correctly
+// excluded without this function ever needing an update for it.
+func effortSupported(model string) bool {
+	return !strings.Contains(strings.ToLower(model), "haiku")
+}
 
 // maxTokens bounds a single draft attempt's own response -- generous for
 // a structured JSON document describing a handful of resources plus
@@ -118,15 +134,19 @@ func (a *Adapter) Draft(ctx context.Context, req intentprovider.DraftRequest) (j
 		)
 	}
 
+	outputConfig := anthropic.OutputConfigParam{
+		Format: anthropic.JSONOutputFormatParam{Schema: intentprovider.IntentDraftJSONSchema()},
+	}
+	if effortSupported(a.model) {
+		outputConfig.Effort = defaultEffort
+	}
+
 	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     a.model,
-		MaxTokens: maxTokens,
-		System:    system,
-		Messages:  messages,
-		OutputConfig: anthropic.OutputConfigParam{
-			Effort: defaultEffort,
-			Format: anthropic.JSONOutputFormatParam{Schema: intentprovider.IntentDraftJSONSchema()},
-		},
+		Model:        a.model,
+		MaxTokens:    maxTokens,
+		System:       system,
+		Messages:     messages,
+		OutputConfig: outputConfig,
 	})
 	if err != nil {
 		return nil, classifyError(err)
@@ -252,12 +272,33 @@ specific number, size, or name? If yes, that conversion belongs in
 assumptions even if you're sure you got it right.
 
 An inline "@<address>" mention (e.g. "@payments.aws_vpc.main") names an
-existing resource by its canonical <stack>.<type>.<name> address --
-transcribe it into the relevant config value as the literal string
-"$ref:<address>.<path>" (a human-reviewed deterministic resolver
-substitutes the real value later; you never resolve it yourself). If an
-@-mention doesn't look like a real, resolvable address, record that as
-a question rather than guessing.
+existing resource by its canonical <stack>.<type>.<name> address. Where
+that reference belongs, write the real, nested JSON object
+{"$ref": {"to": "<address>.<path>"}} -- a human-reviewed deterministic
+resolver substitutes the real value later; you never resolve it
+yourself, and you never invent your own shorthand for it. This is NEVER
+the plain text "$ref:<address>.<path>" written as a string -- the
+resolver only recognizes the object shape above, and a string instead of
+that object will ship a broken, literal placeholder straight to a real
+cloud provider.
+
+Some resources need a reference INSIDE an attribute whose own value must
+be a JSON-encoded string rather than a plain field -- an IAM policy
+document is the common case, where "Resource"/"Principal" normally holds
+a literal ARN string. When that string-valued attribute itself needs to
+reference another resource, place the identical {"$ref": {"to": "..."}}
+object at that exact position inside the JSON text you encode into the
+string (never a "$ref:..." string fragment there either) -- the resolver
+decodes any config-string attribute that parses as JSON, resolves
+markers inside it the same way it would anywhere else, and re-encodes
+the result. Concretely, a policy statement referencing another
+resource's ARN is encoded as the config string
+"{\"Resource\":{\"$ref\":{\"to\":\"payments.aws_iam_role.ci-runner.arn\"}}}"
+-- NOT "{\"Resource\":\"$ref:payments.aws_iam_role.ci-runner.arn\"}",
+which is exactly the broken shape described above, one level deeper.
+
+If an @-mention doesn't look like a real, resolvable address, record
+that as a question rather than guessing.
 
 Never invent a resource type name you are not reasonably confident is
 real. If you are uncertain a type exists, still provide your best answer

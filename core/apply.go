@@ -98,18 +98,37 @@ func (ra *ResourceApply) LastState() (state ResourceState, ok bool) {
 	return ra.Transitions[len(ra.Transitions)-1].State, true
 }
 
-// DeriveLookupFromResult builds the universal {"id": ...} lookup key from
-// a resource's own applied/observed state (docs/schema.md's UBI-29
-// amendment) -- every real provider schema this codebase has touched
-// declares an "id" attribute as the resource's own primary identifier
-// (core/lookuphints' own stored table is about a MISLEADING alternative
-// key a user might reach for instead of "id", never about "id" itself
-// being insufficient -- see lookupHintText's own doc comment, core/scan.go).
-// Returns nil if result has no non-empty "id" at all -- an honest "can't
-// derive a lookup," never a guess. Used both going forward (shipCreate,
-// at the moment a create succeeds) and as a graceful read-time fallback
-// for an apply record that predates this field (shippedCreateFold).
-func DeriveLookupFromResult(result json.RawMessage) json.RawMessage {
+// DeriveLookupFromResult builds a lookup key from a resource's own
+// applied/observed state (docs/schema.md's UBI-29 amendment): "id" if
+// present and non-empty, plus every OTHER non-empty value named in
+// requiredAttrNames.
+//
+// UBI-63 session 2, found live: this used to assume "id" alone is
+// always sufficient to re-find a resource later -- true for every type
+// this codebase had touched until aws_iam_role_policy_attachment's own
+// real AWS Read implementation, confirmed live: even though this type's
+// real schema DOES declare an "id" attribute, its own ReadResource
+// needs "role"/"policy_arn" present in the current_state it's handed to
+// construct a valid API call at all, and a bare {"id": ...} lookup left
+// both blank, producing a real, structured API error ("roleName is
+// invalid") at the next destroy/scan read. requiredAttrNames names the
+// resource type's own real schema-Required attributes (never Optional/
+// Computed ones -- those can legitimately be absent or provider-
+// defaulted, so baking one in here would risk a stale value in what's
+// supposed to be a stable identity key, not a snapshot of observed
+// drift) -- core itself stays provider-import-free (core/scan.go), so
+// this never inspects a schema itself; the one caller with a concrete
+// schema in scope (cli/stateadapter.go's ApplyResourceChange, the same
+// place that already redacts Sensitive attributes for the identical
+// reason) computes the list and passes it in. nil is always a legal,
+// honest value (the shippedCreateFold legacy-fallback call site, below,
+// has no live schema to consult for an apply record that predates the
+// Lookup field at all) -- this degrades to the old id-only behavior,
+// never fails.
+//
+// Returns nil if nothing at all could be derived -- an honest "can't
+// derive a lookup," never a guess.
+func DeriveLookupFromResult(result json.RawMessage, requiredAttrNames []string) json.RawMessage {
 	if len(result) == 0 {
 		return nil
 	}
@@ -117,18 +136,31 @@ func DeriveLookupFromResult(result json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(result, &m); err != nil {
 		return nil
 	}
-	idRaw, ok := m["id"]
-	if !ok {
+	out := map[string]interface{}{}
+	if idRaw, ok := m["id"]; ok {
+		var id interface{}
+		if err := json.Unmarshal(idRaw, &id); err == nil && id != nil && id != "" {
+			out["id"] = id
+		}
+	}
+	for _, name := range requiredAttrNames {
+		raw, ok := m[name]
+		if !ok {
+			continue
+		}
+		var v interface{}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			continue
+		}
+		if v == nil || v == "" {
+			continue
+		}
+		out[name] = v
+	}
+	if len(out) == 0 {
 		return nil
 	}
-	var id interface{}
-	if err := json.Unmarshal(idRaw, &id); err != nil {
-		return nil
-	}
-	if id == nil || id == "" {
-		return nil
-	}
-	b, err := json.Marshal(map[string]interface{}{"id": id})
+	b, err := json.Marshal(out)
 	if err != nil {
 		return nil
 	}
@@ -184,7 +216,13 @@ func (l *Ledger) shippedCreateFold(proposalID string, addr Address) (result, loo
 		return nil, nil, "", false, nil
 	}
 	if len(lookup) == 0 {
-		lookup = DeriveLookupFromResult(result)
+		// No live schema to consult here -- an apply record old enough
+		// to predate the Lookup field at all has no concrete schema in
+		// scope to derive requiredAttrNames from; nil degrades to the
+		// original id-only behavior, an honest, accepted limitation for
+		// this specific legacy-data path (DeriveLookupFromResult's own
+		// doc comment).
+		lookup = DeriveLookupFromResult(result, nil)
 	}
 	return result, lookup, appliedAt, true, nil
 }

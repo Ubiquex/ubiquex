@@ -56,7 +56,7 @@ func shipChangeCreateWithProviderForTest(t *testing.T, l *Ledger, addr Address, 
 			{State: ResourceApplied, At: now},
 		},
 		ProviderResult: result,
-		Lookup:         DeriveLookupFromResult(result),
+		Lookup:         DeriveLookupFromResult(result, nil),
 	}
 	rec.Resources = append(rec.Resources, ra)
 	if err := l.SaveApplyProgress(rec); err != nil {

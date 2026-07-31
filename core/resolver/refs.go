@@ -22,6 +22,123 @@ const (
 	markerEphemeral = "$ephemeral"
 )
 
+// markerKeys is every recognized marker key (docs/schema.md's own
+// value-encoding vocabulary) -- used generically by isAnyMarkerShape/
+// containsMarker/the suspicious-string-literal check below, which don't
+// care WHICH specific marker they're looking for, only whether one is
+// present at all.
+var markerKeys = []string{markerRef, markerCross, markerSecret, markerComputed, markerEphemeral}
+
+// isAnyMarkerShape reports whether v is a single-key object whose one
+// key is a recognized marker key -- the shape-only check asMarker/
+// isComputedMarker/isEphemeralMarker each already perform for one
+// specific key, generalized to "is this ANY marker at all" for
+// containsMarker's own walk, which doesn't care which marker it finds.
+func isAnyMarkerShape(v interface{}) bool {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) != 1 {
+		return false
+	}
+	for _, k := range markerKeys {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// containsMarker reports whether v (an already-decoded JSON value)
+// carries a $ref/$cross/$secret/$computed/$ephemeral marker anywhere
+// within it, at any depth -- UBI-63's own "JSON-embedded refs"
+// amendment (bug 1): distinguishes a JSON-envelope string that needs
+// marker resolution (typically an IAM-policy-shaped document with a
+// $ref standing in for what would otherwise be a literal ARN) from an
+// ordinary string that merely happens to parse as JSON with nothing to
+// resolve at all (a hand-authored, already-concrete literal policy
+// document, say) -- the latter is left completely untouched, byte for
+// byte, exactly as before this amendment existed. Never descends INTO a
+// marker's own inner object once one is found -- a marker's own "to"/
+// "from" strings are never themselves further JSON-embedded refs; one
+// level of this convention is what's defined, not an arbitrarily
+// recursive one.
+func containsMarker(v interface{}) bool {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if isAnyMarkerShape(t) {
+			return true
+		}
+		for _, vv := range t {
+			if containsMarker(vv) {
+				return true
+			}
+		}
+		return false
+	case []interface{}:
+		for _, vv := range t {
+			if containsMarker(vv) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// unsafeToEmbedSecret reports whether v (a fully-resolved JSON value)
+// still carries an unresolved $secret marker anywhere -- no redaction
+// path exists for a marker buried inside an opaque string-typed
+// attribute's own content (core.Redact's own walk only ever inspects
+// attributes the provider's schema itself flags Sensitive, and a
+// JSON-embedding attribute like an IAM policy string essentially never
+// is, so a $secret reaching here would ship unredacted). $ref/$cross are
+// never returned unresolved by resolveRef/resolveCross (an error
+// surfaces well before this point if either can't resolve), and
+// $ephemeral is a terminal flag with no data to lose from being
+// embedded literally, so neither needs blocking here.
+//
+// $computed is deliberately NOT checked here (UBI-63 session 2's own
+// "deferred materialization" amendment, docs/resolver.md): this function
+// used to also refuse an unresolved $computed marker, on the reasoning
+// that there was no real value yet to write in its place. That refusal
+// made a real, common AWS pattern unusable -- same-batch resources
+// referencing each other's ARNs inside IAM policy JSON (a role's inline
+// policy naming a sibling queue's ARN, all created together) is the
+// flagship case, and the refusal forced a two-proposal workaround
+// (create the queue, ship it, THEN author the policy against its real
+// ARN) that was never an acceptable final answer for something this
+// common. A JSON-embedded $computed marker is instead allowed to persist
+// into the signed proposal as a template, substituted for a real value
+// at ship time by core/executor's substituteComputed (extended to walk
+// into a JSON-embedded string exactly like this package's own
+// containsMarker already does for resolve-time detection) -- the same
+// "outputs feed forward into dependents mid-walk" mechanism a top-level
+// $computed marker already relies on, now reaching one level into a
+// string attribute's own decoded interior too.
+func unsafeToEmbedSecret(v interface{}) bool {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if _, ok := asMarker(t, markerSecret); ok {
+			return true
+		}
+		for _, vv := range t {
+			if unsafeToEmbedSecret(vv) {
+				return true
+			}
+		}
+		return false
+	case []interface{}:
+		for _, vv := range t {
+			if unsafeToEmbedSecret(vv) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 // asMarker reports whether v is exactly {key: inner-object} -- one key,
 // mirroring core.RedactedMarkerKey's own "$redacted" recognition
 // convention (core/redacted.go's isRedactedMarker): any other shape
@@ -109,6 +226,14 @@ func dotGet(m map[string]interface{}, path string) (interface{}, bool) {
 // which needs every edge first). $cross never contributes an edge (a
 // neighbor stack's resources are never in this batch); $secret/$ephemeral
 // are atomic and never walked into.
+//
+// A string leaf is also checked for a JSON-embedded ref (UBI-63 bug 1):
+// without this, a $ref buried inside a JSON-encoded string attribute
+// (an IAM policy document referencing another resource's ARN, say)
+// would be invisible to edge-scanning even after resolveValue below
+// learned to resolve it -- the dependency graph would still miss the
+// edge, and the exact "arbitrary walk order" failure this ticket found
+// live would still happen, just one layer deeper than before.
 func scanRefEdges(v interface{}, batch map[string]*batchEntry) ([]string, error) {
 	seen := map[string]bool{}
 	var walk func(v interface{}) error
@@ -145,6 +270,11 @@ func scanRefEdges(v interface{}, batch map[string]*batchEntry) ([]string, error)
 				if err := walk(vv); err != nil {
 					return err
 				}
+			}
+		case string:
+			var decoded interface{}
+			if err := json.Unmarshal([]byte(t), &decoded); err == nil && containsMarker(decoded) {
+				return walk(decoded)
 			}
 		}
 		return nil
@@ -283,9 +413,71 @@ func resolveValue(v interface{}, path, typeName, from string, l *core.Ledger, sc
 			allInputs = append(allInputs, inputs...)
 		}
 		return out, allInputs, nil
+	case string:
+		return resolveStringValue(t, path, typeName, from, l, schema, batch, destroyAddrs)
 	default:
 		return v, nil, nil
 	}
+}
+
+// resolveStringValue handles a config leaf that arrived as a JSON
+// string -- UBI-63 bug 1's own two-part fix. First, a hard refusal for
+// a string that LOOKS like a mis-encoded marker attempt (starts with a
+// recognized marker key + ":", e.g. "$ref:payments.aws_iam_role.
+// ci-runner.arn") -- the exact shape an earlier version of this
+// project's own md-medium intent pipeline was (wrongly) instructed to
+// produce, confirmed live: this must never silently reach a real
+// provider as a broken literal, regardless of which upstream producer
+// made the mistake or whether intentprovider/claude's own system prompt
+// has since been fixed (docs/resolver-adversarial.md's own "hard
+// refusal, not a silent pass-through" standard). Second, the
+// "JSON-embedded refs" amendment: a string that parses as JSON AND
+// carries a marker somewhere within (typically an IAM policy document
+// with a $ref standing in for what would otherwise be a literal ARN,
+// since the provider's own schema still wants a single opaque string
+// for that attribute) gets decoded, resolved exactly like any other
+// config value, then re-serialized back into its own canonical JSON
+// string form -- Go's own encoding/json sorts object keys when
+// marshaling a map, so this round trip is already deterministic with no
+// extra canonicalization helper needed. An ordinary string that merely
+// happens to parse as JSON but carries no marker at all (a hand-
+// authored, already-concrete literal policy document, say) is left
+// completely untouched, byte for byte -- exactly today's behavior for
+// every string value that existed before this amendment.
+//
+// A resolved $computed marker is allowed to persist into the
+// re-serialized string as-is (UBI-63 session 2's own "deferred
+// materialization" amendment) -- the signed proposal then carries a
+// template, filled in for real at ship time by core/executor. Only
+// unsafeToEmbedSecret gates this re-encode now; see its own doc comment
+// for why $computed was removed from that check and $secret wasn't.
+func resolveStringValue(t, path, typeName, from string, l *core.Ledger, schema SchemaInspector, batch map[string]*batchEntry, destroyAddrs map[string]bool) (interface{}, []core.ResolutionInput, error) {
+	for _, key := range markerKeys {
+		prefix := key + ":"
+		if strings.HasPrefix(t, prefix) {
+			return nil, nil, fmt.Errorf("%w: %s.%s: %q -- wire markers are objects, e.g. {\"$ref\": {\"to\": \"...\"}}, never a string prefixed with %q",
+				ErrMarkerStringLiteral, typeName, path, t, prefix)
+		}
+	}
+
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(t), &decoded); err != nil || !containsMarker(decoded) {
+		return t, nil, nil
+	}
+
+	resolved, inputs, err := resolveValue(decoded, path, typeName, from, l, schema, batch, destroyAddrs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if unsafeToEmbedSecret(resolved) {
+		return nil, nil, fmt.Errorf("%w: %s.%s",
+			ErrSecretEmbeddedInString, typeName, path)
+	}
+	b, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s.%s: re-encode resolved JSON-embedded value: %w", typeName, path, err)
+	}
+	return string(b), inputs, nil
 }
 
 // resolveRef resolves one $ref marker's inner {"to": "..."} -- either to a

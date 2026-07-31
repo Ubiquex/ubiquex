@@ -58,11 +58,28 @@ const (
 	NestingGroup
 )
 
-// NestedBlock is one nested block type within a Block.
+// NestedBlock is one nested block type within a Block. MaxItems is
+// carried through from the wire (tfplugin's own Schema.NestedBlock.max_items
+// -- unlike the newer plugin-framework Schema.Object.max_items, which the
+// tfplugin6 proto itself documents as "never used in the protocol, and
+// have no effect on validation," the classic NestedBlock field is real,
+// SDKv2-era metadata, confirmed live against the real hashicorp/aws
+// provider). 0 means "not declared" (no real limit, or a provider that
+// never bothered setting it -- confirmed live, UBI-63 session 2: this
+// same resource's own aws_ecr_repository.encryption_configuration
+// reports max_items=0 despite AWS's own real API only ever allowing one,
+// so "not declared" genuinely happens even for a conventionally
+// single-instance block) -- never treated as "exactly zero items
+// allowed." Retained as real, informational schema metadata even though
+// ctyvalue.go's own bare-object-acceptance no longer branches on it
+// (see encodeNestedBlockValue's own doc comment for why: a bare object
+// is unconditionally valid shorthand for one instance regardless of
+// MaxItems, not just when MaxItems==1).
 type NestedBlock struct {
 	TypeName string
 	Nesting  NestingMode
 	Block    Block
+	MaxItems int64
 }
 
 func schemaFromV6(s *tfplugin6.Schema) *Schema {
@@ -92,6 +109,7 @@ func blockFromV6(b *tfplugin6.Schema_Block) Block {
 			TypeName: nb.TypeName,
 			Nesting:  nestingModeFromV6(nb.Nesting),
 			Block:    blockFromV6(nb.Block),
+			MaxItems: nb.MaxItems,
 		})
 	}
 	return out
@@ -152,6 +170,7 @@ func blockFromV5(b *tfplugin5.Schema_Block) Block {
 			TypeName: nb.TypeName,
 			Nesting:  nestingModeFromV5(nb.Nesting),
 			Block:    blockFromV5(nb.Block),
+			MaxItems: nb.MaxItems,
 		})
 	}
 	return out

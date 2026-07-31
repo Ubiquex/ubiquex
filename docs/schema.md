@@ -1735,6 +1735,159 @@ additive — same "no `schema_version` bump" reasoning as every prior
 amendment to this struct: a proposal recorded before this amendment
 simply has no `promotion`-kind source, never ambiguously.
 
+### Amendment: JSON-embedded `$ref`/`$cross`/etc. markers (2026-07-31, UBI-63)
+
+Found live: a config attribute whose value is itself a JSON-encoded
+**string** (an IAM policy document, a trust policy — any attribute a
+provider schema types as a plain string but that the resource actually
+treats as nested JSON) previously had no defined way to carry a
+`$ref`/`$cross` reference inside it. `intentprovider/claude`'s own
+system prompt papered over the gap by instructing the model to
+transcribe an `@<address>` mention as the literal string
+`"$ref:<address>.<path>"` wherever it appeared, including inside such a
+string — actively wrong: the real wire shape is an object
+(`{"$ref": {"to": "..."}}`), never a string prefixed with `$ref:`, and
+this exact literal shipped, unresolved, to a real `CreatePolicy` call
+(`MalformedPolicyDocument: Partition "playground-3.aws_ecr_repository...`
+is not valid`). Two fixes, both load-bearing:
+
+- **The system prompt is corrected** (no longer instructs the broken
+  shape) — but this alone isn't sufficient, since anything else that
+  ever produces an intent file (a future adapter, a hand-written file, a
+  bug in some other producer) is equally capable of the same mistake.
+- **`core/resolver` now hard-refuses any config string that looks like a
+  mis-encoded marker** — a plain string prefixed with `$ref:`/`$cross:`/
+  `$secret:`/`$computed:`/`$ephemeral:` is a resolve-time error
+  (`ErrMarkerStringLiteral`), never silently passed through. This is the
+  actual defense: correct regardless of which upstream producer emitted
+  the broken shape.
+
+**The new, defined convention**: a config string value is checked for
+JSON-embedded markers *before* being treated as an opaque literal — if
+the string parses as JSON **and** the decoded structure contains a real
+`{"$ref": {...}}`/`{"$cross": {...}}`/etc. marker object at any depth,
+the resolver decodes it, resolves the marker(s) exactly as it would at
+the top level (same dependency-edge computation, same topo-sort — a
+JSON-embedded ref contributes to the resource's dependency edges
+identically to a top-level one), then re-encodes the resolved structure
+back to a JSON string (Go's `encoding/json` already sorts map keys on
+marshal, so this re-encoding is canonical/deterministic with no new
+serialization convention needed). An ordinary string that merely
+happens to parse as JSON but contains no marker anywhere is left
+**completely untouched, byte-for-byte** — this mechanism only ever
+activates in the presence of an actual marker, never reformats or
+touches unrelated JSON-shaped string content.
+
+```json
+{
+  "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sqs:SendMessage\",\"Resource\":{\"$ref\":{\"to\":\"platform.aws_sqs_queue.ci-notifications.arn\"}}}]}"
+}
+```
+
+**Hard-refused for `$secret`; deferred-materialized for `$computed`
+(revised 2026-07-31, UBI-63 session 2 — see the amendment immediately
+below for the full reasoning)**: a resolved `$secret` value is never
+allowed to end up embedded inside a re-serialized JSON string this way —
+no redaction path exists for a marker buried inside an opaque string
+attribute the provider schema doesn't itself flag `Sensitive`
+(redaction operates on whole attribute values, docs/schema.md's own
+`$redacted` amendment above, not on substrings inside one) — this
+remains a hard resolve-time error. A resolved `$computed` value is, as
+of this revision, **allowed** to persist into the signed proposal as a
+template — the original design (below) refused it too, on the reasoning
+that there was no real value yet to write in its place; that turned out
+to make an extremely common, load-bearing AWS pattern unusable (see the
+amendment below).
+
+**No `schema_version` bump** — this changes only resolver-internal
+handling of an existing type (`config` values were always allowed to be
+arbitrary JSON strings; the wire shape of the proposal itself is
+unchanged), and adds a resolve-time error path, never a new stored
+field.
+
+Real code: `core/resolver/refs.go` (`containsMarker`,
+`resolveStringValue`, `unsafeToEmbedSecret`), `core/resolver/resolver.go`
+(`ErrMarkerStringLiteral`, `ErrSecretEmbeddedInString`),
+`intentprovider/claude/adapter.go` (system prompt correction),
+`intentprovider/schema.go` (`config` field description extended),
+`intentprovider/conformance/fixtures/platform.md` (new fixture
+exercising both a direct and a JSON-embedded ref).
+
+### Amendment: deferred materialization — a JSON-embedded `$computed` template, filled in at ship time (2026-07-31, UBI-63 session 2)
+
+The amendment immediately above originally hard-refused a JSON-embedded
+`$computed` value the same way it refuses `$secret` — reasoning that
+there was no real value yet to write in its place, so resolving it at
+all would be premature. Found live, the same session: this refusal made
+the **flagship** same-batch AWS pattern impossible to express in one
+proposal — an IAM role's own inline policy naming a sibling resource's
+ARN (a queue, a bucket) created in the very same batch, before that
+sibling has ever actually applied and so before its real ARN exists.
+The only workaround was two separate proposals (create the queue, ship
+it, THEN author the policy against its now-real ARN) — real, avoidable
+ceremony for something `ubx`'s own dependency-edge machinery (this same
+document's "Intra-stack refs" section, docs/resolver.md's own dependency
+graph) already computes correctly for the exact top-level `$computed`
+case; refusing the JSON-embedded case outright meant that machinery
+never got to do its job there.
+
+**The fix**: a JSON-embedded `$computed` marker is no longer refused —
+it persists into the signed proposal exactly as a top-level one already
+does, still nested inside its own re-serialized string. The signed
+content is genuinely a **template**: the string round-trips through
+`resolveStringValue` (decode → resolve → re-encode) with the
+`{"$computed": {"from": "..."}}` marker intact inside it, contributing
+the identical real dependency edge a top-level marker would (unchanged
+— `scanRefEdges`'s own JSON-embedded walk already handled this
+correctly; only the *value-resolution* half was refusing). At ship
+time, `core/executor`'s own existing "applied outputs feed into
+dependents' PlannedState, mid-walk" mechanism
+(`substituteComputed`, docs/executor.md) — which already replaces a
+top-level `$computed` marker with the dependency's real applied output
+once it has shipped — now also decodes a string leaf, recurses into it
+if (and only if) it still carries a `$computed` marker, substitutes,
+and re-encodes. An ordinary string that merely happens to parse as JSON
+but carries no marker is returned untouched, exactly like the
+resolve-time round trip's own discipline.
+
+```json
+{
+  "config": {
+    "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sqs:SendMessage\",\"Resource\":{\"$computed\":{\"from\":\"platform.aws_sqs_queue.ci-notifications.arn\"}}}]}"
+  }
+}
+```
+
+is exactly what the **signed** proposal carries when the queue hasn't
+applied yet at resolve time — a template, not an error. By the time
+`ubx ship` reaches the policy resource (never before the queue, per the
+existing dependency edge), the queue's own real ARN is available and
+gets substituted into the string in place, producing the concrete
+policy document `ApplyResourceChange` actually receives.
+
+**Why this is safe, unlike `$secret`**: `$computed`'s own value is
+never secret material — it's an ordinary attribute of a resource this
+same proposal is creating, always destined to become fully concrete the
+moment that resource ships; the ONLY thing being deferred is *when* the
+literal value gets written, never *whether* it will be, and the
+dependency edge guarantees the "when" is always before the template's
+own consumer is attempted. `$secret`, by contrast, names material that
+must NEVER appear in cleartext in the ledger at all — deferring it
+changes nothing about that risk, so it stays refused unconditionally.
+
+**No `schema_version` bump** — a signed proposal already permissibly
+carried a `$computed` marker (at the top level); this only extends
+where, structurally, that marker is allowed to sit.
+
+Real code: `core/resolver/refs.go` (`unsafeToEmbedSecret`, renamed from
+`unsafeToEmbedMarker` — now checks only `$secret`), `core/resolver/
+resolver.go` (`ErrSecretEmbeddedInString`, replacing the JSON-embedded
+half of `ErrComputedWhereConcreteRequired`'s old dual-purpose use — the
+non-embedded `$ref`-to-a-`$computed`-sibling-field check, refs.go's
+`resolveRef`, is untouched and still uses
+`ErrComputedWhereConcreteRequired`), `core/executor/ship.go`
+(`containsComputedMarker`, `substituteComputed`'s new `case string:`).
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

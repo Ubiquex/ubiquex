@@ -3,12 +3,30 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/zclconf/go-cty/cty"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 	ctymsgpack "github.com/zclconf/go-cty/cty/msgpack"
 )
+
+// ErrUnrecognizedConfigKey means a config object carried a key that
+// matches no real Attribute or NestedBlock name in the resource's own
+// schema (UBI-63 session 2, found live: a model wrote "repository_name"
+// for aws_ecr_repository, whose real schema only has "name") -- a hard
+// encode-time error instead of silently dropping the key and letting a
+// real Required attribute go missing without a trace.
+var ErrUnrecognizedConfigKey = errors.New("provider: config key does not match any real schema attribute or nested block")
+
+// ErrRequiredAttributeMissing means a schema attribute flagged Required
+// is genuinely absent from config -- never sent to a real provider as an
+// explicit null and never silently defaulted, since "Required" is
+// exactly the schema's own promise that a real provider needs a real
+// value here.
+var ErrRequiredAttributeMissing = errors.New("provider: a required attribute is missing from config")
 
 // Real provider binaries (both tfplugin5 and tfplugin6) decode Configure
 // and ReadResource request payloads as cty-msgpack, not the DynamicValue
@@ -173,9 +191,44 @@ func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, er
 // blockObjectType produces) -- the only way to know, per attribute,
 // whether it's Computed and therefore eligible for the absent-means-Unknown
 // treatment above.
+//
+// UBI-63 session 2's own real gap, found live: this used to silently
+// ignore any config key that didn't match a real Attribute/NestedBlock
+// name at all (a model/author typo -- "repository_name" instead of the
+// real "name", confirmed empirically against hashicorp/aws's own live
+// aws_ecr_repository schema, which has no "repository_name" attribute)
+// and silently sent an explicit `null` for a Required-but-absent
+// attribute (the same typo's other half: the real "name" was never
+// supplied at all, so it fell through the `!present` case above as
+// though it were legitimately Optional). Both reached a real provider as
+// a cryptic, generic rejection ("repositoryName ... must have length
+// >= 2") instead of a clear, immediate, ubx-side error naming the exact
+// problem. Both are now hard, encode-time errors: an unrecognized config
+// key, and a `Required` attribute genuinely absent from config (never
+// for one satisfied by a $computed marker -- that's a present key, just
+// not yet a concrete value, an entirely different, already-handled
+// case above).
 func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 	m, _ := generic.(map[string]interface{})
 	vals := make(map[string]cty.Value, len(block.Attributes)+len(block.NestedBlocks))
+
+	known := make(map[string]bool, len(block.Attributes)+len(block.NestedBlocks))
+	for _, a := range block.Attributes {
+		known[a.Name] = true
+	}
+	for _, nb := range block.NestedBlocks {
+		known[nb.TypeName] = true
+	}
+	unrecognized := make([]string, 0)
+	for k := range m {
+		if !known[k] {
+			unrecognized = append(unrecognized, k)
+		}
+	}
+	if len(unrecognized) > 0 {
+		sort.Strings(unrecognized)
+		return cty.NilVal, fmt.Errorf("%w: %s", ErrUnrecognizedConfigKey, strings.Join(unrecognized, ", "))
+	}
 
 	for _, a := range block.Attributes {
 		aty, err := ctyjson.UnmarshalType(a.Type)
@@ -186,6 +239,8 @@ func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 		switch {
 		case present && isComputedMarker(raw):
 			vals[a.Name] = cty.UnknownVal(aty)
+		case !present && a.Required:
+			return cty.NilVal, fmt.Errorf("%w: %q", ErrRequiredAttributeMissing, a.Name)
 		case !present && a.Computed:
 			vals[a.Name] = cty.UnknownVal(aty)
 		case !present:
@@ -235,7 +290,37 @@ func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.
 		}
 		arr, ok := raw.([]interface{})
 		if !ok {
-			return cty.NilVal, fmt.Errorf("array required, got %T", raw)
+			// UBI-63 bug 2 (revised, session 2 -- found live a second
+			// time against a DIFFERENT block on the same resource type):
+			// a bare object is unconditionally accepted as shorthand for
+			// a single-element list/set, for ANY List/Set-nested block,
+			// regardless of the schema's own declared MaxItems. HCL's
+			// own block syntax lets an author write one instance of a
+			// List/Set-nested block as a single bare `name { ... }`
+			// stanza no matter what MaxItems the schema declares -- the
+			// original fix here gated this on `MaxItems == 1`, reasoning
+			// (confirmed live against hashicorp/aws's own
+			// aws_ecr_repository.image_scanning_configuration, MaxItems=1)
+			// that MaxItems==1 was the signal a block was conventionally
+			// single. Found live, the same session: this resource's own
+			// sibling block, encryption_configuration, is ALSO always
+			// authored as a single bare block in practice (AWS ECR only
+			// ever has one encryption configuration per repository) but
+			// reports MaxItems=0 ("not declared") in the real schema --
+			// the provider's own schema simply never bothered declaring
+			// the limit its own API already enforces. A bare object is
+			// never ambiguous or lossy regardless of MaxItems: it always
+			// means exactly one instance, which is schema-legal for
+			// every List/Set block (0/unbounded or a declared max always
+			// permits at least 1) -- so gating acceptance on a specific
+			// MaxItems value was an unnecessarily narrow proxy for "is a
+			// bare object legitimate here," refusing the identical,
+			// equally-valid convention this live case needed.
+			if m, isMap := raw.(map[string]interface{}); isMap {
+				arr = []interface{}{m}
+			} else {
+				return cty.NilVal, fmt.Errorf("array required, got %T", raw)
+			}
 		}
 		vals := make([]cty.Value, 0, len(arr))
 		for i, item := range arr {

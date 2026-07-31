@@ -57,7 +57,23 @@ type Applier interface {
 	// classification: the provider gave a real, structured answer). Any
 	// other error is treated as "retryable" and triggers reconcile-by-query
 	// rather than an immediate failure.
-	ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (result json.RawMessage, err error)
+	//
+	// lookup is UBI-63 session 2's own addition: the resource's own
+	// lookup key (core.DeriveLookupFromResult's own {"id": ..., ...}
+	// shape), computed by the implementation, which has a concrete
+	// schema in scope here even though this interface's own
+	// resourceSchema parameter stays intentionally opaque (any) -- the
+	// same core/provider zero-import boundary result's own doc comment
+	// already established. A create whose real schema has an "id" that
+	// alone doesn't round-trip back into a working re-read (found live:
+	// aws_iam_role_policy_attachment, whose own ReadResource needs
+	// "role"/"policy_arn" present too) needs those extra fields captured
+	// here, at the one place a concrete schema is actually available --
+	// never re-derived later from an already-too-narrow stored value.
+	// May be nil (a legitimate "nothing beyond the default derivation"
+	// answer, or an implementation that hasn't been updated for this)
+	// -- callers fall back to their own default derivation in that case.
+	ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (result json.RawMessage, lookup json.RawMessage, err error)
 
 	// PlanResourceChange asks the provider to compute a real plan moving
 	// resourceType's state from priorState toward proposedNewState,
@@ -471,7 +487,7 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 			time.Sleep(debugDelayAfterInFlight)
 		}
 
-		result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
+		result, _, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
 
 		if applyErr == nil {
 			if debugDelayAfterApplySuccess > 0 {
@@ -991,6 +1007,40 @@ func topoSortAddresses(addrs []string, edgesOf func(addr string) []string) ([]st
 // "$redacted".
 const computedMarkerKey = "$computed"
 
+// containsComputedMarker reports whether v (an already-decoded JSON
+// value) carries a {"$computed": {...}} marker anywhere within it, at
+// any depth -- mirrors core/resolver's own containsMarker (refs.go),
+// scoped to $computed alone since that's the only marker
+// substituteComputed ever resolves. Gates substituteComputed's own
+// string-leaf handling, below: an ordinary string that merely happens to
+// parse as JSON but carries no marker is returned byte-for-byte
+// untouched, never re-serialized just because it happened to decode.
+func containsComputedMarker(v interface{}) bool {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if len(t) == 1 {
+			if _, ok := t[computedMarkerKey]; ok {
+				return true
+			}
+		}
+		for _, vv := range t {
+			if containsComputedMarker(vv) {
+				return true
+			}
+		}
+		return false
+	case []interface{}:
+		for _, vv := range t {
+			if containsComputedMarker(vv) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 // substituteComputed walks v's JSON tree (already decoded-generic) and
 // replaces every {"$computed": {"from": "<stack>.<type>.<name>.<path>"}}
 // marker with the concrete value read (via core.DotGet) from
@@ -1001,6 +1051,21 @@ const computedMarkerKey = "$computed"
 // resource ships ahead of its own depends_on" precondition guarantees
 // it) -- ErrDependencyNotApplied if not, never silently left as the
 // marker itself or guessed at.
+//
+// UBI-63 session 2's own "deferred materialization" amendment: a config
+// attribute the provider schema types as a plain string but treats as
+// nested JSON (an IAM policy document) can carry a $computed marker one
+// level down, inside that string's own decoded structure -- the signed
+// proposal carries this as a TEMPLATE (core/resolver's own
+// unsafeToEmbedSecret no longer refuses a JSON-embedded $computed, only
+// $secret, docs/resolver.md). The string case below decodes, recurses
+// through this same function (substitution reaches an embedded marker no
+// differently than a top-level one), and re-encodes -- symmetric with
+// core/resolver's own resolveStringValue/containsMarker round trip at
+// resolve time. A string that merely happens to parse as JSON but
+// carries no $computed marker anywhere is returned completely untouched,
+// byte for byte -- this is not a general "reformat every JSON-shaped
+// string" pass, only a template-fill one.
 func substituteComputed(v interface{}, resultsByAddr map[string]json.RawMessage) (interface{}, error) {
 	switch t := v.(type) {
 	case map[string]interface{}:
@@ -1048,6 +1113,20 @@ func substituteComputed(v interface{}, resultsByAddr map[string]json.RawMessage)
 			out[i] = rv
 		}
 		return out, nil
+	case string:
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(t), &decoded); err != nil || !containsComputedMarker(decoded) {
+			return t, nil
+		}
+		substituted, err := substituteComputed(decoded, resultsByAddr)
+		if err != nil {
+			return nil, err
+		}
+		b, err := json.Marshal(substituted)
+		if err != nil {
+			return nil, fmt.Errorf("re-encode JSON-embedded template: %w", err)
+		}
+		return string(b), nil
 	default:
 		return v, nil
 	}
@@ -1336,7 +1415,7 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
-	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned, nil)
+	result, lookup, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned, nil)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
@@ -1351,7 +1430,16 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		// the resource discoverable by core.Ledger.Fleet/FoldState/
 		// ProposalsForAddress/LastObservedHash afterward; core/executor
 		// itself needs to know nothing about any of those readers.
-		ra.Lookup = core.DeriveLookupFromResult(result)
+		//
+		// UBI-63 session 2: prefer the Applier's own lookup (computed
+		// with a real, concrete schema in scope -- see ApplyResourceChange's
+		// own doc comment) over the id-only default derivation here,
+		// which core/executor's own provider-import-free boundary means
+		// it can never do any better than on its own.
+		ra.Lookup = lookup
+		if len(ra.Lookup) == 0 {
+			ra.Lookup = core.DeriveLookupFromResult(result, nil)
+		}
 		recordTransition(ctx, ra, core.ResourceApplied, "")
 		*resourcesApplied++
 		return persist()
@@ -1477,7 +1565,7 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
-	result, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
+	result, _, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
@@ -1644,7 +1732,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 	// tfplugin signal for "destroy this," PriorState non-null (docs/executor.md's
 	// own amendment). plannedPrivate is threaded straight from the
 	// PlanResourceChange call above, opaque, never inspected here.
-	_, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"), plannedPrivate)
+	_, _, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[entry.Address.Type], entry.Address.Type, observed, json.RawMessage("null"), plannedPrivate)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {

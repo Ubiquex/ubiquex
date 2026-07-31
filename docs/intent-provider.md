@@ -252,6 +252,24 @@ itself to everywhere else):
   design center cares most about getting right); not user-configurable in
   v1, named as a future config knob if a real workload ever needs it
   tuned.
+
+  **Amendment (2026-07-31, UBI-63 session 2), found live**: `effort` is
+  NOT universally supported — a real request against `[intent].model`
+  explicitly pinned to `claude-haiku-4-5-20251001` (a real stack config,
+  not a hypothetical) returned a real, structured 400
+  `invalid_request_error`: "This model does not support the effort
+  parameter." Haiku-family models are the fast/cheap tier and don't
+  support extended reasoning effort at all; every other current model
+  family (Opus, Sonnet, Fable) does. Fixed: `effortSupported(model)` (a
+  substring check on "haiku", case-insensitive, deliberately not an
+  exhaustive model-name allowlist so a future Haiku point release stays
+  correctly excluded) gates whether `Draft` sets `OutputConfig.Effort` at
+  all — omitted (not sent as an empty/invalid value; the SDK's own
+  `omitzero` JSON tag drops it cleanly) for a Haiku-family model, sent as
+  `"high"` for everything else. `[intent].model` remains fully
+  user-configurable to any real model name, Haiku included — this fix
+  makes that configuration actually work, not something users need to
+  route around.
 - **Retry-round prompt caching**: within one `DraftWithRetry` loop, the
   system prompt (the intent/v1 JSON Schema + the doc-authoring convention
   guidance, below — large, and byte-identical across all three possible
@@ -967,6 +985,39 @@ rendered both turns verbatim, in order, with their timestamps --
 confirming the full chain, real end to end: conversation -> capture ->
 draft -> proposal -> acceptance -> `why` walking it back to the actual
 words typed.
+
+## Amendment: a live-found `@<address>` transcription bug, and the conformance gap that missed it (2026-07-31, UBI-63)
+
+The Claude adapter's own system prompt instructed the model to
+transcribe an `@<address>` mention as the literal string
+`"$ref:<address>.<path>"` — this was simply wrong: the real wire shape
+docs/schema.md/docs/resolver.md define is an object,
+`{"$ref": {"to": "<address>.<path>"}}`, never a string. Found live: a
+real `ubx propose --from-doc` run against a 5-resource platform doc
+produced exactly this broken string, the resolver of the day passed it
+through unresolved (no dependency edge computed, no hard error), and the
+executor shipped the literal text `"$ref:playground-3.aws_ecr_repository
+.ci-artifacts.arn"` to a real `CreatePolicy` call, which AWS correctly
+rejected as a malformed policy document. Fixed at the source (the system
+prompt now instructs the correct object shape, plus the JSON-embedded
+case — docs/resolver.md's own amendment, above) and defense-in-depth at
+the resolver (any producer emitting the broken string shape now hits a
+hard resolve-time error, `ErrMarkerStringLiteral`, regardless of which
+adapter or hand-written file produced it).
+
+**Why fixture #1 never caught this**: `payments.md` (the original,
+canonical fixture) never actually exercises a cross-resource reference
+at all — every attribute a real adapter fills in for that doc is a
+plain scalar. An adapter free to mis-encode `$ref` entirely could still
+pass the full suite. Fixed by adding fixture #2
+(`intentprovider/conformance/fixtures/platform.md`, an IAM role plus an
+inline policy that must reference both the role and a queue, including
+one reference JSON-embedded inside the policy's own string content) —
+its `Check` function (`checkPlatformCrossRefAndJSONEmbeddedRef`) fails
+loudly on either the exact broken shape found live, or a real ref
+silently dropped instead of mis-encoded, so a hermetic fake-adapter run
+now proves the harness itself would have caught this before it ever
+reached a real API call.
 
 ## Out of scope for v1, named so it isn't assumed covered
 

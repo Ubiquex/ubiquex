@@ -1015,3 +1015,24 @@ visible (a `defaults[]` note naming both ends), just not wired into
 SDK/md medium, remains the way to express a real `$cross` reference
 today — revisit only if a real, concrete design for "which attribute"
 emerges, not by inventing a synthetic one.
+
+**Amendment (2026-07-31, UBI-63 session 2): the "topology only" rule now
+surfaces as a clear error, not a silent wrong value, the moment it
+actually matters.** `diagram.Parse` always emits `config: {}` — this was
+always the documented, intentional lossy-medium rule (above), never a
+gap. Before this amendment, though, a real provider schema's own
+`Required` attribute silently absent from an empty config was sent to
+`ApplyResourceChange` as an explicit `null` (`provider/ctyvalue.go`'s own
+encode path never validated a config object's keys against the real
+schema at all) — a real `ubx ship` of a diagram-authored resource with
+ANY required attribute (true of nearly every real resource type)
+reached a real provider as a cryptic, generic rejection, never a clear
+ubx-side one. `provider/ctyvalue.go` now hard-refuses this at encode
+time (`ErrRequiredAttributeMissing`, naming the exact attribute) — which
+means a diagram-authored proposal for a resource type with a `Required`
+attribute now correctly refuses to ship at all until enriched some other
+way (a hand-edited plan file, `ubx accept`ing a differently-authored
+proposal for the same resource, etc.). This doesn't change what the
+diagram medium can express (still topology only, unchanged) — it changes
+what happens when someone tries to ship that topology directly without
+the enrichment step the medium's own design has always required.

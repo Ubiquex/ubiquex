@@ -303,6 +303,39 @@ var (
 	// precise error, beats producing a proposal core.Validate would reject
 	// anyway with a less specific message.
 	ErrDestroyTargetNoLookup = errors.New("resolve: destroy target has no recorded lookup key in ledger history")
+
+	// ErrMarkerStringLiteral means a config value is a plain string that
+	// LOOKS like an attempt at a $ref/$cross/$secret/$computed/$ephemeral
+	// marker (starts with the marker's own key + ":", e.g. "$ref:payments.
+	// aws_iam_role.ci-runner.arn") rather than the real wire-shape object
+	// ({"$ref": {"to": "..."}}) -- UBI-63's own bug 1: an upstream
+	// producer (the md-medium intent pipeline, confirmed live; anything
+	// else that ever produces an intent file is equally capable of the
+	// same mistake) that means to reference another resource but never
+	// reaches the actual marker encoding. A string shaped like this is
+	// never a plausible, intended literal value -- refused here,
+	// unconditionally, regardless of which upstream producer it came
+	// from, rather than trusted to reach a real provider as a broken,
+	// literal placeholder (docs/resolver-adversarial.md's own "hard
+	// refusal, not a silent pass-through" standard, applied to a failure
+	// mode found live rather than designed in from the start).
+	ErrMarkerStringLiteral = errors.New("resolve: config value looks like a mis-encoded marker string, not the real wire-shape object")
+
+	// ErrSecretEmbeddedInString means a $secret marker survived resolution
+	// (still unresolved -- $secret is input-preserved verbatim, never
+	// substituted with real material, docs/resolver.md's own "Secrets"
+	// section) somewhere inside a JSON-encoded string attribute (UBI-63
+	// session 2's own "deferred materialization" amendment, docs/
+	// resolver.md). Unlike $computed (which is now allowed to persist
+	// into the signed proposal as a template, substituted for real at
+	// ship time), $secret has no defined redaction path once buried
+	// inside an opaque string attribute the provider schema doesn't
+	// itself flag Sensitive -- core.Redact's own walk only ever inspects
+	// attributes the schema flags Sensitive directly, never a string's own
+	// decoded-JSON interior. Refused unconditionally, the same "hard
+	// refusal, not a silent pass-through" standard as every other marker
+	// safety check in this file.
+	ErrSecretEmbeddedInString = errors.New("resolve: a $secret value can't be embedded inside a JSON-encoded string attribute -- no redaction path exists for it there")
 )
 
 // VerifyPins re-derives every cross-stack pin recorded in p (every

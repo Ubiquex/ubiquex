@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,7 +93,7 @@ func (f *fakeApplier) PlanResourceChange(ctx context.Context, resourceSchema any
 	return proposedNewState, []byte("fake-planned-private"), nil
 }
 
-func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
+func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -104,11 +105,11 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 	// destroy's PlannedState has no "id" to extract at all.
 	if string(plannedState) == "null" {
 		if len(plannedPrivate) == 0 {
-			return nil, fmt.Errorf("fake: destroy called without plannedPrivate -- shipDestroyNode must call PlanResourceChange first (UBI-30)")
+			return nil, nil, fmt.Errorf("fake: destroy called without plannedPrivate -- shipDestroyNode must call PlanResourceChange first (UBI-30)")
 		}
 		id, ok := extractID(priorState)
 		if !ok {
-			return nil, fmt.Errorf("fake: destroy priorState has no id: %s", priorState)
+			return nil, nil, fmt.Errorf("fake: destroy priorState has no id: %s", priorState)
 		}
 		if steps, ok := f.scripts[id]; ok && len(steps) > 0 {
 			step := steps[0]
@@ -118,7 +119,7 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 				// genuine destroy produces (nil error, literal "null"
 				// NewState) but never actually removes the resource --
 				// the exact response the real google_pubsub_topic gave.
-				return json.RawMessage("null"), nil
+				return json.RawMessage("null"), nil, nil
 			}
 			if step.delayedAbsenceReads > 0 {
 				// UBI-42: a genuine destroy, eventually -- but resources[id]
@@ -130,17 +131,17 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 					f.readsRemaining = map[string]int{}
 				}
 				f.readsRemaining[id] = step.delayedAbsenceReads
-				return json.RawMessage("null"), nil
+				return json.RawMessage("null"), nil, nil
 			}
 			if step.destroyLanded {
 				delete(f.resources, id)
 			}
 			if step.err != nil {
-				return nil, step.err
+				return nil, nil, step.err
 			}
 		}
 		delete(f.resources, id)
-		return json.RawMessage("null"), nil
+		return json.RawMessage("null"), nil, nil
 	}
 
 	id, ok := extractID(plannedState)
@@ -155,18 +156,18 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 		// never for a modify, where a missing id is a real bug, not a
 		// create, hence the priorState check.
 		if string(priorState) != "null" {
-			return nil, fmt.Errorf("fake: plannedState has no id: %s", plannedState)
+			return nil, nil, fmt.Errorf("fake: plannedState has no id: %s", plannedState)
 		}
 		var m map[string]interface{}
 		if err := json.Unmarshal(plannedState, &m); err != nil {
-			return nil, fmt.Errorf("fake: decode plannedState: %w", err)
+			return nil, nil, fmt.Errorf("fake: decode plannedState: %w", err)
 		}
 		if v, _ := m["value"].(string); v != "" {
 			if steps, ok := f.createScripts[v]; ok && len(steps) > 0 {
 				step := steps[0]
 				f.createScripts[v] = steps[1:]
 				if step.err != nil {
-					return nil, step.err
+					return nil, nil, step.err
 				}
 			}
 		}
@@ -175,7 +176,7 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 		m["id"] = id
 		b, err := json.Marshal(m)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		plannedState = b
 	}
@@ -186,11 +187,11 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 			f.resources[id] = step.landsAs
 		}
 		if step.err != nil {
-			return nil, step.err
+			return nil, nil, step.err
 		}
 	}
 	f.resources[id] = plannedState
-	return plannedState, nil
+	return plannedState, nil, nil
 }
 
 func (f *fakeApplier) setState(id string, state json.RawMessage) {
@@ -1372,4 +1373,248 @@ func TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_Re
 	if mirrorResult.Value != "primary-real-id" {
 		t.Fatalf("mirror.value = %q, want primary's REAL recorded id %q (recovered from attempt 1's own history, not lost)", mirrorResult.Value, "primary-real-id")
 	}
+}
+
+// --- JSON-embedded $computed templates: deferred materialization (UBI-63 session 2) ---
+
+// TestShip_ChangeProposal_JSONEmbeddedTemplate_SingleComputed_SubstitutedCorrectly
+// is deferred materialization's own centerpiece happy path: "mirror"'s
+// own "value" attribute is a JSON-encoded STRING (an IAM-policy-shaped
+// document, the real repro's own scenario) carrying a $computed marker
+// one level down inside it, rather than as the attribute's own direct
+// value. Confirms substituteComputed's new string-leaf case decodes the
+// template, substitutes primary's REAL applied id in, and re-encodes --
+// the resource actually shipped (fake.resources) carries the fully
+// materialized JSON, never the marker text, never the raw template.
+func TestShip_ChangeProposal_JSONEmbeddedTemplate_SingleComputed_SubstitutedCorrectly(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	primary := core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"}
+	mirror := core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"}
+
+	template := `{"a":{"$computed":{"from":"payments.fake_widget.primary.id"}},"b":"literal"}`
+	creates := []json.RawMessage{
+		changeCreateJSON(t, primary, `{"value":"v1"}`),
+		changeCreateJSON(t, mirror, fmt.Sprintf(`{"value":%s}`, mustJSONString(t, template)), primary.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %s, want applied", sealed.Summary.Outcome)
+	}
+
+	var primaryRA, mirrorRA *core.ResourceApply
+	for _, ra := range sealed.Resources {
+		switch ra.Address.String() {
+		case primary.String():
+			primaryRA = ra
+		case mirror.String():
+			mirrorRA = ra
+		}
+	}
+	var primaryResult struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(primaryRA.ProviderResult, &primaryResult)
+	if primaryResult.ID == "" {
+		t.Fatal("primary's applied result has no id")
+	}
+
+	var mirrorResult struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(mirrorRA.ProviderResult, &mirrorResult); err != nil {
+		t.Fatalf("decode mirror result: %v", err)
+	}
+	var filled map[string]interface{}
+	if err := json.Unmarshal([]byte(mirrorResult.Value), &filled); err != nil {
+		t.Fatalf("mirror's own value isn't valid JSON: %v: %s", err, mirrorResult.Value)
+	}
+	if filled["a"] != primaryResult.ID {
+		t.Fatalf("template's own \"a\" field = %v, want primary's real applied id %q -- the JSON-embedded $computed marker was not correctly substituted", filled["a"], primaryResult.ID)
+	}
+	if filled["b"] != "literal" {
+		t.Fatalf("template's own \"b\" field = %v, want the untouched literal \"literal\" -- substitution must not disturb sibling keys", filled["b"])
+	}
+	if strings.Contains(mirrorResult.Value, "$computed") {
+		t.Fatalf("mirror's own shipped value still contains the literal marker text: %s", mirrorResult.Value)
+	}
+}
+
+// TestShip_ChangeProposal_JSONEmbeddedTemplate_TwoComputeds_BothSubstituted
+// proves the same mechanism handles TWO separate $computed markers
+// embedded in the same JSON template, each pointing at a different
+// dependency -- the real IAM-policy shape (a role's inline policy naming
+// both a queue's ARN and a bucket's ARN in the same Statement, say).
+// Both dependencies must ship before the dependent, and both markers
+// must resolve to their own correct real value, never cross-wired.
+func TestShip_ChangeProposal_JSONEmbeddedTemplate_TwoComputeds_BothSubstituted(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	queue := core.Address{Stack: "payments", Type: "fake_widget", Name: "queue"}
+	bucket := core.Address{Stack: "payments", Type: "fake_widget", Name: "bucket"}
+	policy := core.Address{Stack: "payments", Type: "fake_widget", Name: "policy"}
+
+	template := `{"Statement":[` +
+		`{"Resource":{"$computed":{"from":"payments.fake_widget.queue.id"}}},` +
+		`{"Resource":{"$computed":{"from":"payments.fake_widget.bucket.id"}}}` +
+		`]}`
+	creates := []json.RawMessage{
+		changeCreateJSON(t, queue, `{"value":"queue-v"}`),
+		changeCreateJSON(t, bucket, `{"value":"bucket-v"}`),
+		changeCreateJSON(t, policy, fmt.Sprintf(`{"value":%s}`, mustJSONString(t, template)), queue.String(), bucket.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %s, want applied", sealed.Summary.Outcome)
+	}
+
+	results := map[string]*core.ResourceApply{}
+	for _, ra := range sealed.Resources {
+		results[ra.Address.String()] = ra
+	}
+	var queueResult, bucketResult struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(results[queue.String()].ProviderResult, &queueResult)
+	json.Unmarshal(results[bucket.String()].ProviderResult, &bucketResult)
+	if queueResult.ID == "" || bucketResult.ID == "" {
+		t.Fatal("expected both dependencies to have real applied ids")
+	}
+
+	var policyResult struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(results[policy.String()].ProviderResult, &policyResult); err != nil {
+		t.Fatalf("decode policy result: %v", err)
+	}
+	var filled struct {
+		Statement []struct {
+			Resource string `json:"Resource"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(policyResult.Value), &filled); err != nil {
+		t.Fatalf("policy's own value isn't valid JSON: %v: %s", err, policyResult.Value)
+	}
+	if len(filled.Statement) != 2 {
+		t.Fatalf("expected 2 Statement entries, got %d: %s", len(filled.Statement), policyResult.Value)
+	}
+	if filled.Statement[0].Resource != queueResult.ID {
+		t.Fatalf("Statement[0].Resource = %q, want queue's real id %q", filled.Statement[0].Resource, queueResult.ID)
+	}
+	if filled.Statement[1].Resource != bucketResult.ID {
+		t.Fatalf("Statement[1].Resource = %q, want bucket's real id %q -- the two embedded markers must not cross-wire", filled.Statement[1].Resource, bucketResult.ID)
+	}
+}
+
+// TestShip_ChangeProposal_KillBetweenDependencyAppliedAndTemplateFill_RecoversRealOutputOnRerun
+// is the JSON-embedded-template twin of
+// TestShip_ChangeProposal_KillBetweenDependencyAppliedAndDependentStarting_RecoversRealOutputOnRerun,
+// above: a real `kill -9` between the dependency ("primary") applying
+// and the dependent ("mirror") ever starting its own turn. Attempt 1 is
+// hand-built to show primary already `applied`, with a real
+// ProviderResult, and left UNSEALED -- exactly what a process kill at
+// that exact point leaves on disk. A fresh Ship() call must recognize
+// primary as already applied (never re-applying it) and correctly
+// re-derive its real output to fill mirror's own JSON-embedded template
+// -- the template-fill step is no less correct after a crash than it is
+// on a single uninterrupted run.
+func TestShip_ChangeProposal_KillBetweenDependencyAppliedAndTemplateFill_RecoversRealOutputOnRerun(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+
+	primary := core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"}
+	mirror := core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"}
+
+	template := `{"a":{"$computed":{"from":"payments.fake_widget.primary.id"}}}`
+	creates := []json.RawMessage{
+		changeCreateJSON(t, primary, `{"value":"v1"}`),
+		changeCreateJSON(t, mirror, fmt.Sprintf(`{"value":%s}`, mustJSONString(t, template)), primary.String()),
+	}
+	p := acceptChange(t, l, "payments", creates)
+
+	rec, err := l.BeginApply(p.ID)
+	if err != nil {
+		t.Fatalf("begin apply: %v", err)
+	}
+	primaryResult := json.RawMessage(`{"id":"primary-real-id","value":"v1"}`)
+	ra := &core.ResourceApply{Address: primary}
+	rec.Resources = append(rec.Resources, ra)
+	recordTransition(context.Background(), ra, core.ResourcePending, "")
+	recordTransition(context.Background(), ra, core.ResourceInFlight, "")
+	ra.ProviderResult = primaryResult
+	recordTransition(context.Background(), ra, core.ResourceApplied, "")
+	if err := l.SaveApplyProgress(rec); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+	// Attempt 1 is never sealed -- the process died before mirror's own
+	// turn (the template-fill step) ever began.
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("re-run ship: %v", err)
+	}
+	if sealed.Attempt != 2 {
+		t.Fatalf("attempt = %d, want 2", sealed.Attempt)
+	}
+
+	var primaryRA, mirrorRA *core.ResourceApply
+	for _, ra := range sealed.Resources {
+		switch ra.Address.String() {
+		case primary.String():
+			primaryRA = ra
+		case mirror.String():
+			mirrorRA = ra
+		}
+	}
+	if st, _ := primaryRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("primary state = %s, want applied (recognized from attempt 1's own history, never re-applied)", st)
+	}
+	if _, exists := fake.resources["primary-real-id"]; exists {
+		t.Fatal("primary was re-applied for real against the fake provider -- it should have been recognized as already-applied from attempt 1's own history and skipped entirely")
+	}
+	if st, _ := mirrorRA.LastState(); st != core.ResourceApplied {
+		t.Fatalf("mirror state = %s, want applied", st)
+	}
+
+	var mirrorResult struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(mirrorRA.ProviderResult, &mirrorResult); err != nil {
+		t.Fatalf("decode mirror result: %v", err)
+	}
+	var filled map[string]interface{}
+	if err := json.Unmarshal([]byte(mirrorResult.Value), &filled); err != nil {
+		t.Fatalf("mirror's own value isn't valid JSON: %v: %s", err, mirrorResult.Value)
+	}
+	if filled["a"] != "primary-real-id" {
+		t.Fatalf("template's own \"a\" field = %v, want primary's REAL recorded id %q (recovered from attempt 1's own history, not lost)", filled["a"], "primary-real-id")
+	}
+}
+
+// mustJSONString marshals s as a JSON string literal (quoting/escaping),
+// for embedding a JSON-shaped template as a config string VALUE in a
+// larger hand-built JSON literal -- fmt.Sprintf(`{"value":%s}`,
+// mustJSONString(t, template)) is how changeCreateJSON's own config
+// string parameter gets a config[key] whose value is itself a
+// JSON-encoded string, exactly the JSON-embedded shape core/resolver's
+// own resolveStringValue produces.
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal embedded template string: %v", err)
+	}
+	return string(b)
 }

@@ -73,7 +73,15 @@ func IntentDraftJSONSchema() map[string]any {
 				"description": "A JSON-encoded object string -- the resource's full desired " +
 					"config, exactly as it would appear as a hand-written ubx:intent/v1 file's own " +
 					"resources[].config value, e.g. " +
-					"\"{\\\"instance_class\\\":\\\"db.t3.medium\\\"}\". Must decode as valid JSON.",
+					"\"{\\\"instance_class\\\":\\\"db.t3.medium\\\"}\". Must decode as valid JSON. " +
+					"A reference to another resource (an inline \"@<address>\" mention in the source " +
+					"document) is a real, nested JSON object at the position the referenced value " +
+					"itself would go -- {\"$ref\": {\"to\": \"<address>.<path>\"}} -- never the string " +
+					"\"$ref:<address>.<path>\". This applies even one level deeper, inside a " +
+					"string-valued attribute that must itself hold JSON text (an IAM policy document, " +
+					"say): place the identical {\"$ref\": {\"to\": \"...\"}} object at that position " +
+					"inside the JSON you encode into the string, e.g. " +
+					"\"{\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"payments.aws_iam_role.ci-runner.arn\\\"}}}\".",
 			},
 		},
 	}

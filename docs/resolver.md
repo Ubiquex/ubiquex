@@ -207,6 +207,53 @@ graph): a cycle is a hard resolve-time error naming the full cycle path
 (`aws_instance.a → aws_instance.b → aws_instance.a`), never silently
 broken or arbitrarily ordered.
 
+### Amendment: `$ref`/`$cross` embedded inside a JSON-encoded config string (2026-07-31, UBI-63)
+
+A config attribute the provider schema types as a plain string but that
+the resource itself treats as nested JSON (an IAM policy document, a
+trust policy) can carry a `$ref`/`$cross`/etc. marker one level down,
+inside that string's own decoded structure — full convention and
+rationale in docs/schema.md's own equivalent amendment. Mechanically,
+both resolver passes treat this identically to a top-level marker: the
+edge-scanning pass (`scanRefEdges`'s `walk`) attempts a JSON decode of
+every string value and recurses into it when the decoded structure
+contains a marker (`containsMarker`), so a JSON-embedded ref contributes
+the exact same dependency edge a top-level one would; the value-resolving
+pass (`resolveValue`'s new `case string`) does the same decode-resolve-
+re-encode round trip. A string that merely happens to parse as JSON but
+contains no marker is never touched — this is not a general "prettify
+every JSON-shaped string" pass, only a marker-resolution one.
+
+This same code path is also where the resolver now hard-refuses the
+broken shape found live in UBI-63 (a plain string like
+`"$ref:stack.type.name.attr"`, instead of the real `{"$ref": {"to":
+"..."}}` object) — `resolveStringValue` checks for the marker-key-plus-
+colon prefix *before* attempting any JSON decode, so this refusal fires
+for both a bare top-level string value and one nested inside a
+JSON-embedded attribute, symmetrically.
+
+### Amendment: a JSON-embedded `$ref` to a not-yet-applied `Computed` sibling is a template, not a refusal (2026-07-31, UBI-63 session 2)
+
+The amendment above originally hard-refused a JSON-embedded ref that
+resolved to an unresolved `$computed` marker — the same reasoning
+`unsafeToEmbedMarker` applied to `$secret`, generalized (wrongly, found
+live) to `$computed` too. Found live: this made the flagship same-batch
+AWS pattern (a role's inline policy naming a sibling queue's ARN,
+created in the same batch) impossible without a two-proposal
+workaround. Fixed: `unsafeToEmbedSecret` (renamed from
+`unsafeToEmbedMarker`) now checks only for `$secret` — a JSON-embedded
+`$computed` marker is allowed to persist into the re-encoded string,
+producing a genuine template in the signed proposal, still contributing
+the identical dependency edge `scanRefEdges` already computed for it
+(unchanged by this amendment). `core/executor`'s own `substituteComputed`
+fills the template in for real at ship time — see docs/schema.md's own
+"Amendment: deferred materialization" for the full design and the
+ship-time half, and docs/executor.md's equivalent note for
+`substituteComputed`'s own new string-leaf case. `$secret` is
+unaffected: still a hard resolve-time error, `ErrSecretEmbeddedInString`,
+for exactly the same reason as before (no redaction path for a marker
+buried inside an opaque string attribute).
+
 ## Cross-stack refs: pinned against a real ledger, for real
 
 A `$cross` marker names `{stack, ledger_dir, path}` — `ledger_dir` an

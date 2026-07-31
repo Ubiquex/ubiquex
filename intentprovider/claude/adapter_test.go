@@ -27,6 +27,33 @@ func TestNew_HonorsExplicitModel(t *testing.T) {
 	}
 }
 
+// TestEffortSupported_ExcludesHaikuFamily is UBI-63 session 2's own
+// regression test for a real bug found live: a stack config explicitly
+// pinning "claude-haiku-4-5-20251001" got a real, structured 400 back
+// from the real API -- "This model does not support the effort
+// parameter" -- since Draft used to send OutputConfig.Effort
+// unconditionally for every model. A substring check on "haiku"
+// (case-insensitive), not an exhaustive allowlist, so a future Haiku
+// point release is still correctly excluded.
+func TestEffortSupported_ExcludesHaikuFamily(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-haiku-4-5-20251001", false},
+		{"claude-3-5-haiku-20241022", false},
+		{"CLAUDE-HAIKU-4-5-20251001", false}, // case-insensitive
+		{"claude-opus-4-8", true},
+		{"claude-sonnet-5", true},
+		{"claude-fable-5", true},
+	}
+	for _, tt := range tests {
+		if got := effortSupported(tt.model); got != tt.want {
+			t.Errorf("effortSupported(%q) = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}
+
 func TestAdapter_ImplementsIntentproviderAdapter(t *testing.T) {
 	var _ intentprovider.Adapter = New(Config{})
 }

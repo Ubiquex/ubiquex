@@ -85,10 +85,10 @@ func (a stateReaderAdapter) ReadResource(ctx context.Context, resourceSchema any
 // error (a dropped connection, a context deadline, ...) is returned as-is,
 // since core/executor already treats "anything that isn't a TerminalError"
 // as retryable.
-func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, error) {
+func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, json.RawMessage, error) {
 	rs, ok := resourceSchema.(*provider.Schema)
 	if !ok {
-		return nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
+		return nil, nil, fmt.Errorf("stateReaderAdapter: unexpected resource schema type %T", resourceSchema)
 	}
 	// docs/executor.md -- "Constructing PlannedState without planning":
 	// config is set identically to plannedState, since a revert has no
@@ -99,14 +99,34 @@ func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSch
 	if err != nil {
 		var diag *provider.DiagnosticError
 		if errors.As(err, &diag) {
-			return nil, &executor.TerminalError{Err: err}
+			return nil, nil, &executor.TerminalError{Err: err}
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if len(result) == 0 {
-		return result, nil
+		return result, nil, nil
 	}
-	return provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+	redacted, err := provider.Redact(a.source, typeName, rs.Block, a.salt, result)
+	if err != nil {
+		return nil, nil, err
+	}
+	// UBI-63 session 2: this is the one place a concrete schema is
+	// actually in scope for a fresh create's own ApplyResourceChange
+	// call (executor.Applier's own resourceSchema parameter stays
+	// opaque, core/executor's provider-import-free boundary) -- so the
+	// lookup key is computed here, using the real schema's own Required
+	// attribute names, rather than left to core.DeriveLookupFromResult's
+	// own id-only default (core/apply.go's own doc comment: "id" alone
+	// doesn't round-trip back into a working re-read for every real
+	// resource type, aws_iam_role_policy_attachment confirmed live).
+	var requiredAttrs []string
+	for _, attr := range rs.Block.Attributes {
+		if attr.Required {
+			requiredAttrs = append(requiredAttrs, attr.Name)
+		}
+	}
+	lookup := core.DeriveLookupFromResult(redacted, requiredAttrs)
+	return redacted, lookup, nil
 }
 
 // PlanResourceChange satisfies executor.Applier (UBI-30, docs/executor.md's

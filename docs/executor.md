@@ -420,6 +420,81 @@ yet reached `applied` — the existing per-resource freshness/reconciliation
 machinery is unchanged; this only adds a new precondition (dependencies
 satisfied) before a resource's own attempt begins at all.
 
+### Amendment: a JSON-embedded `$computed` template, filled in mid-walk too (2026-07-31, UBI-63 session 2)
+
+`substituteComputed` (`core/executor/ship.go`) originally only handled a
+`$computed` marker sitting as the direct decoded value of some
+`config[key]` — its `switch` had cases for `map[string]interface{}`/
+`[]interface{}` only, and any `string` leaf returned untouched,
+unexamined. Found live, the same session: a config attribute the
+provider schema types as a plain string but that the resource itself
+treats as nested JSON (an IAM policy document) can carry a `$computed`
+marker one level down inside that string's own decoded structure — the
+resolver now allows this to persist into the signed proposal as a
+genuine template (docs/resolver.md's own equivalent amendment; the
+resolve-time refusal for this case was removed for `$computed`, kept for
+`$secret`), so the executor needs a matching ship-time fill-in step, or
+that template would ship to `ApplyResourceChange` still carrying the
+literal, un-substituted marker text.
+
+Fixed with a new `case string:` in `substituteComputed`'s own switch: it
+`json.Unmarshal`s the string, and — gated by a new `containsComputedMarker`
+helper (mirroring `core/resolver`'s own `containsMarker`, scoped to
+`$computed` alone) — only recurses into the decoded structure (through
+this same `substituteComputed` function; an embedded marker resolves no
+differently from a top-level one) and re-encodes if a `$computed` marker
+is actually present. A string that merely happens to parse as JSON but
+carries no marker is returned completely untouched, byte for byte —
+symmetric with `core/resolver`'s own resolve-time discipline for the
+identical reason (this is a template-fill step, not a general
+"reformat every JSON-shaped string" pass).
+
+Two same-batch dependencies feeding two separate embedded markers in the
+same string (a role's inline policy naming both a queue's ARN and a
+bucket's ARN) resolve independently and correctly — `substituteComputed`
+recurses uniformly through the whole decoded tree regardless of how many
+markers it contains or how they're nested. Crash recovery is unaffected
+by this amendment: `resultsByAddr`'s own seeding from durable apply-record
+history (this section, above) is exactly what a re-derived dependency's
+real output comes from on a killed-and-restarted `ubx ship`, whether the
+dependent's own marker sits at the top level or embedded inside a string
+template — the string-leaf case is just another node `substituteComputed`
+walks, reading from the identical `resultsByAddr` map every other case
+already does.
+
+### Amendment: a lookup key needs more than "id" sometimes (2026-07-31, UBI-63 session 2)
+
+`core.DeriveLookupFromResult` used to assume "id" alone is always
+sufficient to re-find a resource later — true for every type this
+codebase had touched, until confirmed otherwise live: `aws_iam_role_policy_attachment`
+really does declare an "id" attribute in its own real schema, but its
+own real AWS `ReadResource` implementation needs `role`/`policy_arn`
+present in the `current_state` it's handed to construct a valid API
+call at all. A bare `{"id": ...}` lookup left both blank on a
+subsequent destroy/scan read, producing a real, structured AWS error
+("roleName is invalid") — a resource that shipped correctly the first
+time became un-re-readable afterward.
+
+Fixed generally: `DeriveLookupFromResult(result, requiredAttrNames)`
+now also captures every schema-`Required` attribute's own real,
+non-empty value alongside "id" (never `Optional`/`Computed` ones —
+those can legitimately be absent or provider-defaulted, and baking one
+in here would risk a stale value in what's supposed to be a stable
+identity key). `core`/`core/executor` both stay provider-import-free
+(this section's own established boundary) — the one place a concrete
+schema is genuinely in scope is `cli/stateadapter.go`'s own
+`ApplyResourceChange` (already the one place that redacts `Sensitive`
+attributes for the identical reason), so `executor.Applier`'s own
+`ApplyResourceChange` method gained a new `lookup json.RawMessage`
+return value: the adapter computes it there, using the real schema's
+own `Required` attribute names, and `shipCreate` uses it directly,
+falling back to the old id-only derivation only if the Applier returns
+nothing (a legitimate answer, or an implementation that hasn't been
+updated for this). `shippedCreateFold`'s own legacy-record fallback
+(above) is unaffected — an apply record old enough to predate the
+`Lookup` field at all has no live schema in scope to consult, an
+honest, accepted narrowing for that one specific path.
+
 ### Apply records: `$computed` replaced by concrete results
 
 An apply record's `provider_result` (already real, redacted, UBI-26)

@@ -63,7 +63,7 @@ func shipFakeWidgetCreate(t *testing.T, l *core.Ledger, addr core.Address, id st
 			{State: core.ResourceApplied, At: now},
 		},
 		ProviderResult: result,
-		Lookup:         core.DeriveLookupFromResult(result),
+		Lookup:         core.DeriveLookupFromResult(result, nil),
 	}
 	rec.Resources = append(rec.Resources, ra)
 	if err := l.SaveApplyProgress(rec); err != nil {
@@ -99,7 +99,7 @@ func shipFakeWidgetDestroy(t *testing.T, l *core.Ledger, addr core.Address, stat
 		Resolution: core.Resolution{
 			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
 			Inputs: []core.ResolutionInput{
-				{Kind: "destroy_target", Resource: addr.String(), ObservedHash: "deadbeef", Lookup: core.DeriveLookupFromResult(state)},
+				{Kind: "destroy_target", Resource: addr.String(), ObservedHash: "deadbeef", Lookup: core.DeriveLookupFromResult(state, nil)},
 			},
 		},
 		CostDelta:   core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},
@@ -248,7 +248,7 @@ func adoptForTestCLI(t *testing.T, l *core.Ledger, addr core.Address, state json
 		Resolution: core.Resolution{
 			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
 			Inputs: []core.ResolutionInput{
-				{Kind: "live_state", Resource: addr.String(), ObservedHash: "deadbeef", Lookup: core.DeriveLookupFromResult(state)},
+				{Kind: "live_state", Resource: addr.String(), ObservedHash: "deadbeef", Lookup: core.DeriveLookupFromResult(state, nil)},
 			},
 		},
 		CostDelta: core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},

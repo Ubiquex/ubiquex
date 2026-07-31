@@ -65,7 +65,7 @@ func shipChangeCreateForTest(t *testing.T, l *Ledger, addr Address, result json.
 		ProviderResult: result,
 	}
 	if recordLookup {
-		ra.Lookup = DeriveLookupFromResult(result)
+		ra.Lookup = DeriveLookupFromResult(result, nil)
 	}
 	rec.Resources = append(rec.Resources, ra)
 	if err := l.SaveApplyProgress(rec); err != nil {
@@ -446,7 +446,7 @@ func TestUBI29_MixedAttempt_OnlyAppliedResourceDiscoverable(t *testing.T) {
 		Address:        primary,
 		Transitions:    []Transition{{State: ResourcePending, At: now}, {State: ResourceInFlight, At: now}, {State: ResourceApplied, At: now}},
 		ProviderResult: primaryResult,
-		Lookup:         DeriveLookupFromResult(primaryResult),
+		Lookup:         DeriveLookupFromResult(primaryResult, nil),
 	})
 	// mirror never got its own turn -- the process died right after primary.
 	if err := l.SaveApplyProgress(rec); err != nil {
