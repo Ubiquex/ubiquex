@@ -71,6 +71,20 @@
 //	                             with Sensitive: true (UBI-23) — lets a test exercise
 //	                             provider.Redact/core's $redacted handling end to end
 //	                             without a real Sensitive-bearing provider schema.
+//	FAKEPROVIDER_ATTR_TYPES      (UBI-63 session 3) comma-separated "name:kind" overrides
+//	                             for FAKEPROVIDER_ATTRS entries whose real shape isn't a
+//	                             plain string — kind one of "bool", "list" (list of
+//	                             string), "map" (map of string; "tags"/"tags_all" already
+//	                             default to this without needing an entry here). Lets a
+//	                             test model e.g. a bool-typed attribute with its own real
+//	                             zero value (false), not just strings/maps.
+//	FAKEPROVIDER_COMPUTED_ATTRS  (UBI-63 session 3) comma-separated FAKEPROVIDER_ATTRS
+//	                             names (beyond "id", always Computed) to advertise as
+//	                             Computed rather than plain Optional — models a real
+//	                             attribute the provider fills in itself (e.g. AWS's own
+//	                             per-resource "region"), whose null baseline resolving to
+//	                             a real value on a later read is expected materialization,
+//	                             not drift.
 //
 // See conformance/fake_test.go for how the harness drives this.
 package main
@@ -599,18 +613,61 @@ func conformanceAttrs() []string {
 	return append([]string{"id"}, attrs...)
 }
 
+// conformanceAttrTypes reads FAKEPROVIDER_ATTR_TYPES ("name:kind,..."): an
+// attribute name's non-default cty shape (UBI-63 session 3) — see the
+// package doc comment. Attributes not listed here keep conformanceCtyType's
+// original default (string, or map for "tags"/"tags_all").
+func conformanceAttrTypes() map[string]string {
+	raw := os.Getenv("FAKEPROVIDER_ATTR_TYPES")
+	if raw == "" {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		name, kind, ok := strings.Cut(pair, ":")
+		if ok {
+			m[name] = kind
+		}
+	}
+	return m
+}
+
+// conformanceComputedAttrs reads FAKEPROVIDER_COMPUTED_ATTRS (UBI-63
+// session 3): additional attribute names (beyond "id", always Computed) to
+// advertise as Computed rather than Optional — see the package doc comment.
+func conformanceComputedAttrs() map[string]bool {
+	raw := os.Getenv("FAKEPROVIDER_COMPUTED_ATTRS")
+	if raw == "" {
+		return nil
+	}
+	m := make(map[string]bool)
+	for _, name := range strings.Split(raw, ",") {
+		m[name] = true
+	}
+	return m
+}
+
 // conformanceCtyType builds the cty object type for conformanceAttrs():
 // "tags"/"tags_all" as string maps (matching every AWS resource that has
-// them), everything else as plain strings — see the package doc comment for
-// why scalar type-fidelity to AWS's real attribute types doesn't matter here
-// (ubx's own core layer treats Observed state as opaque JSON, never
-// type-checked against the schema).
+// them), FAKEPROVIDER_ATTR_TYPES overrides as declared, everything else as
+// plain strings — see the package doc comment for why scalar type-fidelity
+// to AWS's real attribute types doesn't matter beyond what a given test
+// actually needs to model (ubx's own core layer treats Observed state as
+// opaque JSON, never type-checked against the schema).
 func conformanceCtyType() cty.Type {
+	types := conformanceAttrTypes()
 	fields := make(map[string]cty.Type, len(conformanceAttrs()))
 	for _, name := range conformanceAttrs() {
-		if name == "tags" || name == "tags_all" {
+		switch {
+		case name == "tags" || name == "tags_all":
 			fields[name] = cty.Map(cty.String)
-		} else {
+		case types[name] == "bool":
+			fields[name] = cty.Bool
+		case types[name] == "list":
+			fields[name] = cty.List(cty.String)
+		case types[name] == "map":
+			fields[name] = cty.Map(cty.String)
+		default:
 			fields[name] = cty.String
 		}
 	}
@@ -684,13 +741,22 @@ func echoConformanceState(msgpackBytes []byte) ([]byte, error) {
 
 func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
 	sensitive := conformanceSensitiveAttrs()
+	computed := conformanceComputedAttrs()
+	types := conformanceAttrTypes()
 	var attrs []*tfplugin6.Schema_Attribute
 	for _, name := range conformanceAttrs() {
 		a := &tfplugin6.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
-		if name == "tags" || name == "tags_all" {
+		switch {
+		case name == "tags" || name == "tags_all":
+			a.Type = []byte(`["map","string"]`)
+		case types[name] == "bool":
+			a.Type = []byte(`"bool"`)
+		case types[name] == "list":
+			a.Type = []byte(`["list","string"]`)
+		case types[name] == "map":
 			a.Type = []byte(`["map","string"]`)
 		}
-		if name == "id" {
+		if name == "id" || computed[name] {
 			a.Computed, a.Optional = true, false
 		}
 		if sensitive[name] {
@@ -703,13 +769,22 @@ func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
 
 func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
 	sensitive := conformanceSensitiveAttrs()
+	computed := conformanceComputedAttrs()
+	types := conformanceAttrTypes()
 	var attrs []*tfplugin5.Schema_Attribute
 	for _, name := range conformanceAttrs() {
 		a := &tfplugin5.Schema_Attribute{Name: name, Type: []byte(`"string"`), Optional: true}
-		if name == "tags" || name == "tags_all" {
+		switch {
+		case name == "tags" || name == "tags_all":
+			a.Type = []byte(`["map","string"]`)
+		case types[name] == "bool":
+			a.Type = []byte(`"bool"`)
+		case types[name] == "list":
+			a.Type = []byte(`["list","string"]`)
+		case types[name] == "map":
 			a.Type = []byte(`["map","string"]`)
 		}
-		if name == "id" {
+		if name == "id" || computed[name] {
 			a.Computed, a.Optional = true, false
 		}
 		if sensitive[name] {

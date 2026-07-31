@@ -1335,7 +1335,114 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 		}
 	}
 
-	return sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, false)
+	sealed, err := sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, false)
+	if err != nil {
+		return nil, err
+	}
+	reconcileSameBatchEffects(ctx, l, pool, providerSource, p, nodes, sealed)
+	return sealed, nil
+}
+
+// reconcileSameBatchEffects re-observes every resource this same
+// shipChange batch just applied that at least one OTHER node in the same
+// batch actually depends_on -- an independent node nothing depends on can
+// only ever be re-reading its own still-accurate snapshot, so it's
+// skipped entirely rather than spending an unneeded extra pool.Get/
+// ReadResource round trip on the overwhelmingly common case (most
+// batches have no cross-effect at all). Once the whole dependency-
+// ordered walk has finished, this records any resulting difference on a
+// depended-on resource as an auto-accepted drift_adopt (UBI-63 session
+// 3): a real, live finding showed a LATER same-batch
+// dependent's own apply (an aws_iam_role_policy_attachment, last in a
+// 5-resource chain) has a real, factual effect on an EARLIER resource's
+// own observable state (attachment_count, managed_policy_arns) that the
+// earlier resource's own apply-time snapshot could never have captured,
+// since it was taken before the dependent even existed. Without this, the
+// very next `ubx scan` reports that effect as drift, even though nothing
+// outside this ship ever touched the resource.
+//
+// This is deliberately NOT normalization (core.explainedByNormalization,
+// UBI-63 session 3's other half): the values genuinely changed (0 -> 1,
+// [] -> [a real ARN]) and that change is worth recording -- just not
+// something a human needs to separately review and re-approve, since the
+// batch that caused it was already approved as one unit. Recording it as
+// drift_adopt (the same mechanism `ubx scan --propose` already uses for
+// "the world changed outside the ledger") reuses one well-understood
+// mechanism rather than inventing a new ledger concept -- it folds
+// forward through core.Ledger.FoldState exactly like any other adopted
+// drift, so the resource's own recorded baseline is what's actually true
+// by the time this ship call returns.
+//
+// Best-effort throughout: rec is already sealed and returned regardless
+// of what this finds, so a failure to re-observe or record any one
+// resource here never fails (or even surfaces from) the ship itself --
+// this is a self-healing addition to an already-correct, already-durable
+// outcome, not a correctness-critical step.
+func reconcileSameBatchEffects(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, p *core.Proposal, nodes []*changeNode, rec *core.ApplyRecord) {
+	byAddr := make(map[string]*core.ResourceApply, len(rec.Resources))
+	for _, ra := range rec.Resources {
+		byAddr[ra.Address.String()] = ra
+	}
+	// dependedOn: only a resource some OTHER node in this same batch
+	// actually declares depends_on can plausibly have been mutated by a
+	// same-batch sibling's own apply -- an independent node (nothing
+	// depends on it) can only ever be re-reading its own, still-accurate
+	// snapshot, so skipping it entirely avoids a wasted extra
+	// pool.Get/ReadResource round trip for the overwhelmingly common
+	// case (most batches have no such cross-effect at all).
+	dependedOn := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		for _, dep := range n.dependsOn {
+			dependedOn[dep] = true
+		}
+	}
+	for _, n := range nodes {
+		if n.destroy != nil {
+			continue // gone -- nothing left to re-observe
+		}
+		if !dependedOn[n.addr.String()] {
+			continue // nothing in this batch could have mutated it
+		}
+		ra, ok := byAddr[n.addr.String()]
+		if !ok {
+			continue
+		}
+		if st, ok := ra.LastState(); !ok || st != core.ResourceApplied {
+			continue
+		}
+		lookup := ra.Lookup
+		if len(lookup) == 0 {
+			lookup, _ = lookupFor(p, n.addr)
+		}
+		if len(lookup) == 0 {
+			continue // nothing to re-read this resource by
+		}
+		provSource, provVersion := providerSource, ""
+		if n.provider != nil {
+			provSource, provVersion = n.provider.Source, n.provider.Version
+		}
+		app, providerConfig, err := pool.Get(ctx, provSource, provVersion)
+		if err != nil {
+			continue
+		}
+		res, err := core.RunScan(ctx, app, l, core.ScanRequest{
+			Address:        n.addr,
+			ProviderConfig: providerConfig,
+			CurrentState:   lookup,
+			ProviderSource: provSource,
+		})
+		if err != nil || res.Outcome != core.ScanDrifted {
+			continue
+		}
+		reconcileProposal, err := core.GenerateProposal(l, p.Stack, res)
+		if err != nil {
+			continue
+		}
+		reconcileProposal.Intent.Summary = fmt.Sprintf(
+			"%s's own real, same-batch side effect from shipping %s (post-chain re-observation, UBI-63)",
+			n.addr, p.ID)
+		_, _ = core.Accept(l, reconcileProposal)
+	}
 }
 
 // shipCreate ships one delta.creates entry: PriorState is the literal

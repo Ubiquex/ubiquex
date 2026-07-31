@@ -55,6 +55,25 @@ type StateReader interface {
 	ReadResource(ctx context.Context, resourceSchema any, typeName string, currentState json.RawMessage) (json.RawMessage, error)
 }
 
+// AttrComputedFlags is an OPTIONAL capability a StateReader's own opaque
+// resourceSchema handle (the same `any` Schema() returns and ReadResource
+// receives back) may additionally satisfy, so RunScan's drift verdict can
+// tell a Computed attribute's null<->materialized-value transition (the
+// provider filling in something ubx never told it to be -- e.g. a region
+// only known after real creation) apart from an ordinary attribute simply
+// changing (UBI-63 session 3: the founder's own live repro against a real
+// AWS role reads region back as null immediately after create, then a
+// real value on the very next scan -- never a divergence from what ubx
+// told the world to be, since ubx was never in a position to know it).
+// core still never inspects the schema's concrete type -- it only ever
+// asks this one yes/no question through a type assertion on the same
+// `any` it already treated as opaque. A StateReader whose handle doesn't
+// implement this (the assertion fails) simply gets no Computed-wildcard
+// normalization, identical to before this existed.
+type AttrComputedFlags interface {
+	IsAttrComputed(attrName string) bool
+}
+
 // ScanOutcome classifies what a scan found for one resource address.
 type ScanOutcome int
 
@@ -131,7 +150,7 @@ type ScanRequest struct {
 // failed ("provider errors mid-scan" should be diagnosable, not just a bare
 // error).
 func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) (*ScanResult, error) {
-	observed, hash, err := readAndFingerprint(ctx, prov, req.Address, req.ProviderSource, req.ProviderConfig, req.CurrentState)
+	observed, hash, resourceSchema, err := readAndFingerprint(ctx, prov, req.Address, req.ProviderSource, req.ProviderConfig, req.CurrentState)
 	if err != nil {
 		return nil, fmt.Errorf("scan %s: %w", req.Address, err)
 	}
@@ -168,10 +187,96 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 		res.Outcome = ScanNew
 	case prevHash != hash:
 		res.Outcome = ScanDrifted
+		// UBI-63 session 3: a candidate drift may be fully explained by
+		// null<->zero-value/materialization noise rather than a real
+		// change -- see explainedByNormalization's own doc comment. Only
+		// consulted on this rare path (the fast hash-equality check
+		// above already handled the common "genuinely unchanged" case),
+		// and only ever downgrades a verdict, never upgrades one.
+		if before, after, derr := DiffAttributes(foldedState, observed); derr == nil {
+			computed, _ := resourceSchema.(AttrComputedFlags)
+			if explainedByNormalization(before, after, computed) {
+				res.Outcome = ScanUnchanged
+			}
+		}
 	default:
 		res.Outcome = ScanUnchanged
 	}
 	return res, nil
+}
+
+// explainedByNormalization reports whether every entry in a candidate
+// drift diff (before/after, dot-notation keyed -- DiffAttributes' own
+// output) is fully accounted for by one of two schema-driven
+// equivalences named in the founder's own UBI-63 diagnosis ("bug 4"):
+// real SDKv2-vintage providers don't round-trip a "no value" attribute
+// byte-for-byte, freely alternating between JSON null and the type's own
+// zero value (false/""/0/[]/{}) across separate reads of the exact same
+// semantic state; and a Computed attribute's null baseline (recorded
+// before the provider had actually resolved it) legitimately resolves to
+// ANY concrete value on a later read without that being a real
+// divergence from what ubx told the world to be. Neither equivalence
+// applies once both sides hold a non-null value that genuinely differs
+// -- a real change to an already-resolved value still reports as drift.
+//
+// computed is nil-safe: a StateReader whose schema handle doesn't
+// implement AttrComputedFlags simply never satisfies the
+// Computed-wildcard half, leaving the zero-value equivalence as the only
+// normalization applied.
+func explainedByNormalization(before, after map[string]json.RawMessage, computed AttrComputedFlags) bool {
+	keys := make(map[string]struct{}, len(before)+len(after))
+	for k := range before {
+		keys[k] = struct{}{}
+	}
+	for k := range after {
+		keys[k] = struct{}{}
+	}
+	for key := range keys {
+		bRaw, bHas := before[key]
+		aRaw, aHas := after[key]
+		if !bHas || !aHas {
+			return false // added/removed outright, not a null<->value shift
+		}
+		bNull := isJSONNull(bRaw)
+		aNull := isJSONNull(aRaw)
+		if !bNull && !aNull {
+			return false // both sides hold a real, differing value
+		}
+		topAttr := key
+		if i := strings.IndexByte(key, '.'); i >= 0 {
+			topAttr = key[:i]
+		}
+		if computed != nil && computed.IsAttrComputed(topAttr) {
+			continue // materialization: a Computed attribute's null baseline resolving is expected
+		}
+		nonNull := aRaw
+		if aNull {
+			nonNull = bRaw
+		}
+		if !isZeroishLiteral(nonNull) {
+			return false
+		}
+	}
+	return true
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
+}
+
+// isZeroishLiteral reports whether raw is one of the handful of JSON
+// literals every scalar/collection type's own "no value" naturally
+// canonicalizes to -- DiffAttributes' own values always come from
+// json.Marshal of a decoded generic (via diffObjects), so exact string
+// comparison against these canonical forms is safe; there's no
+// whitespace or key-ordering variance to account for.
+func isZeroishLiteral(raw json.RawMessage) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "false", "0", `""`, "[]", "{}":
+		return true
+	default:
+		return false
+	}
 }
 
 // ReadAndFingerprint exports readAndFingerprint's own read pipeline for
@@ -183,7 +288,8 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 // what RunScan/VerifyFreshness already do internally; this is a reuse, not
 // a second read pipeline.
 func ReadAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
-	return readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, currentState)
+	observed, hash, _, err = readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, currentState)
+	return observed, hash, err
 }
 
 // readAndFingerprint fetches the provider's schema, configures it, reads
@@ -191,31 +297,37 @@ func ReadAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 // VerifyFreshness so both apply the exact same read pipeline.
 // providerSource is used only for ErrResourceUnreadable's teaching-error
 // hint (see lookupHintText); it never affects the read itself and may be
-// empty.
-func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, err error) {
+// empty. resourceSchema is the same opaque handle passed into
+// ReadResource, returned back out so RunScan can type-assert it against
+// AttrComputedFlags (UBI-63 session 3) without a second Schema() round
+// trip -- ReadAndFingerprint's own exported signature is unchanged, so
+// core/executor's five call sites (a different concern, verifying
+// freshness before an apply, not classifying a drift verdict) need no
+// changes.
+func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig, currentState json.RawMessage) (observed json.RawMessage, hash string, resourceSchema any, err error) {
 	providerSchema, resourceSchemas, err := prov.Schema(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch schema: %w", err)
+		return nil, "", nil, fmt.Errorf("fetch schema: %w", err)
 	}
 	resourceSchema, ok := resourceSchemas[addr.Type]
 	if !ok {
-		return nil, "", fmt.Errorf("%w: %q", ErrUnknownResourceType, addr.Type)
+		return nil, "", nil, fmt.Errorf("%w: %q", ErrUnknownResourceType, addr.Type)
 	}
 	if err := prov.Configure(ctx, providerSchema, providerConfig); err != nil {
-		return nil, "", fmt.Errorf("configure provider: %w", err)
+		return nil, "", nil, fmt.Errorf("configure provider: %w", err)
 	}
 	observed, err = prov.ReadResource(ctx, resourceSchema, addr.Type, currentState)
 	if err != nil {
-		return nil, "", fmt.Errorf("read resource: %w", err)
+		return nil, "", nil, fmt.Errorf("read resource: %w", err)
 	}
 	if len(observed) == 0 || string(observed) == "null" {
-		return nil, "", fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(providerSource, addr.Type))
+		return nil, "", nil, fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(providerSource, addr.Type))
 	}
 	hash, err = ObservedHash(observed)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	return observed, hash, nil
+	return observed, hash, resourceSchema, nil
 }
 
 // lookupHintText builds ErrResourceUnreadable's teaching-error suffix
@@ -411,7 +523,7 @@ func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, provid
 		return fmt.Errorf("verify freshness: resolution.inputs entry for %s has no recorded lookup key", addr)
 	}
 
-	_, fresh, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, lookup)
+	_, fresh, _, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, lookup)
 	if err != nil {
 		return fmt.Errorf("verify freshness: %w", err)
 	}

@@ -44,7 +44,13 @@ func newFakeApplier() *fakeApplier {
 }
 
 func (f *fakeApplier) Schema(ctx context.Context) (any, map[string]any, error) {
-	return struct{}{}, map[string]any{"fake_widget": struct{}{}}, nil
+	// "fake_attachment" (UBI-63 session 3) exists solely to model a real,
+	// live finding: a same-batch dependent resource's own apply having a
+	// factual side effect on an earlier resource's observable state (a
+	// role_policy_attachment mutating its role/policy's own
+	// attachment_count/managed_policy_arns) -- see this type's own
+	// ApplyResourceChange handling below.
+	return struct{}{}, map[string]any{"fake_widget": struct{}{}, "fake_attachment": struct{}{}}, nil
 }
 
 func (f *fakeApplier) Configure(ctx context.Context, providerSchema any, config json.RawMessage) error {
@@ -191,6 +197,34 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 		}
 	}
 	f.resources[id] = plannedState
+
+	// UBI-63 session 3: fake_attachment models a real, live finding --
+	// this create's own apply has a factual side effect on ANOTHER
+	// resource in the same batch (a role_policy_attachment mutating its
+	// own role's attachment_count, read back on the role's NEXT
+	// ReadResource, even though the role's own apply-time snapshot was
+	// taken before this attachment ever existed). "role_id" is populated
+	// via the normal $computed substitution path (substituteComputed),
+	// exactly like a real IAM policy document naming a sibling's ARN --
+	// this fixture never needs to know that happened, only that
+	// plannedState now carries the referenced role's real id.
+	if typeName == "fake_attachment" {
+		var attach map[string]interface{}
+		if err := json.Unmarshal(plannedState, &attach); err == nil {
+			if roleID, _ := attach["role_id"].(string); roleID != "" {
+				if roleState, ok := f.resources[roleID]; ok {
+					var role map[string]interface{}
+					if err := json.Unmarshal(roleState, &role); err == nil {
+						role["attachment_count"] = 1
+						if b, err := json.Marshal(role); err == nil {
+							f.resources[roleID] = b
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return plannedState, nil, nil
 }
 

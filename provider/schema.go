@@ -82,6 +82,26 @@ type NestedBlock struct {
 	MaxItems int64
 }
 
+// IsAttrComputed reports whether attrName is a top-level attribute of s's
+// own Block, and marked Computed there -- satisfies core.AttrComputedFlags
+// (UBI-63 session 3) through plain structural typing: core.RunScan already
+// threads this same *Schema through as an opaque `any` (core deliberately
+// never imports this package, see core/scan.go's own StateReader doc
+// comment), so adding this method lets that opaque handle answer core's
+// one real question -- "is this attribute the provider's to decide, not
+// mine?" -- without core ever needing to know Schema's concrete shape.
+func (s *Schema) IsAttrComputed(attrName string) bool {
+	if s == nil {
+		return false
+	}
+	for _, a := range s.Block.Attributes {
+		if a.Name == attrName {
+			return a.Computed
+		}
+	}
+	return false
+}
+
 func schemaFromV6(s *tfplugin6.Schema) *Schema {
 	if s == nil {
 		return nil
