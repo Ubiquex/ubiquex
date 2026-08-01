@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,52 @@ func TestStyler_EnabledWrapsWithAnsiAndReset(t *testing.T) {
 	got := st.Green("x")
 	if got == "x" || got[len(got)-len(ansiReset):] != ansiReset {
 		t.Fatalf("enabled styler should wrap text in an ANSI code and reset, got %q", got)
+	}
+}
+
+func TestStyler_ForceDim_DisabledIsPassthrough(t *testing.T) {
+	st := &styler{enabled: false}
+	line := "kind " + st.Blue("hash") + " (accepted ts)"
+	if got := st.forceDim(line); got != line {
+		t.Fatalf("disabled styler's forceDim must return the line unchanged, got %q, want %q", got, line)
+	}
+}
+
+// TestStyler_ForceDim_ReassertsAfterEmbeddedResets is UBI-68's own core
+// primitive test: a line built from other color() calls (e.g. st.Hash's
+// own blue-then-reset) must stay dim across the WHOLE line once wrapped in
+// forceDim, not just up to the first embedded reset -- the same defect
+// forceBold's own doc comment describes for a naive Bold(text-with-
+// embedded-colors) call.
+func TestStyler_ForceDim_ReassertsAfterEmbeddedResets(t *testing.T) {
+	st := &styler{enabled: true}
+	line := "kind " + st.Blue("hash") + " (accepted ts)"
+	got := st.forceDim(line)
+
+	if !strings.HasPrefix(got, ansiDim) {
+		t.Fatalf("forceDim(%q) = %q, want it to start with the dim code", line, got)
+	}
+	if !strings.HasSuffix(got, ansiReset) {
+		t.Fatalf("forceDim(%q) = %q, want it to end with a reset", line, got)
+	}
+	// Every embedded reset (from st.Blue's own call) must be immediately
+	// followed by a fresh dim code, except the line's own final reset --
+	// otherwise dim would cut out right after "hash" instead of covering
+	// " (accepted ts)" too.
+	resets := strings.Count(got, ansiReset)
+	reassertions := strings.Count(got, ansiReset+ansiDim)
+	if reassertions != resets-1 {
+		t.Fatalf("forceDim(%q) = %q, want every reset but the last immediately followed by a dim reassertion (resets=%d, reassertions=%d)", line, got, resets, reassertions)
+	}
+	if !strings.Contains(got, "hash") || !strings.Contains(got, "(accepted ts)") {
+		t.Fatalf("forceDim(%q) = %q, want the original text content preserved", line, got)
+	}
+}
+
+func TestStyler_ForceDim_EmptyLine(t *testing.T) {
+	st := &styler{enabled: true}
+	if got := st.forceDim(""); got != "" {
+		t.Fatalf("forceDim(\"\") = %q, want an untouched empty string", got)
 	}
 }
 

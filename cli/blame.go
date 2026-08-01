@@ -195,18 +195,24 @@ func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showA
 			}
 		}
 
-		fmt.Fprintf(out, "%s %d attribute(s) · set by %s (%s) · %s",
+		// UBI-69: the whole group header renders bold -- built as a plain
+		// string first (still carrying its own embedded Dim "▸"/Hash
+		// segments) so forceBold can wrap the fully-composed line in one
+		// shot, the same technique plan.go's delta/blast-radius summary
+		// already uses (see forceBold's own doc comment for why a naive
+		// Bold(text-with-embedded-colors) call doesn't work).
+		header := fmt.Sprintf("%s %d attribute(s) · set by %s (%s) · %s",
 			st.Dim("▸"), len(g.Entries), st.Hash(g.ProposalID), g.Kind, g.SetAt)
 		switch g.AcceptanceMethod {
 		case "":
 			// no acceptance recorded -- shouldn't happen for anything
 			// reachable via ProposalsForAddress, but never crash over it.
 		case "pr_merge":
-			fmt.Fprintf(out, " · pr_merge (%s)", strings.Join(g.Approvers, ", "))
+			header += fmt.Sprintf(" · pr_merge (%s)", strings.Join(g.Approvers, ", "))
 		default:
-			fmt.Fprintf(out, " · %s", g.AcceptanceMethod)
+			header += fmt.Sprintf(" · %s", g.AcceptanceMethod)
 		}
-		fmt.Fprintln(out)
+		fmt.Fprintln(out, st.forceBold(header))
 		switch {
 		case len(g.AttributedActors) > 0:
 			fmt.Fprintf(out, "    %s %s\n", st.Purple("attributed to:"), strings.Join(g.AttributedActors, ", "))

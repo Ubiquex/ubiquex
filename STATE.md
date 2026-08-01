@@ -4,6 +4,104 @@
 
 ## Current phase
 
+**UBI-68 + UBI-69 (2026-08-01) — two display-only color-hierarchy fixes,
+done together in one session per the handoff's own framing. Fully
+hermetic; no live/real-cloud verification needed for correctness (the
+fixes are pure ANSI-escape composition), but manually verified against
+the real built binary + fakeprovider anyway per this project's own
+"verify before trusting" discipline.**
+
+**UBI-68 — `ubx status` dims everything after a resource line's own
+colon** (kind, short hash, "accepted <timestamp>") so the address itself
+reads brightest. New `(*styler).forceDim` (`cli/style.go`), `forceBold`'s
+own dim sibling: reasserts `ansiDim` after every embedded `ansiReset`
+(from `st.Hash`'s own blue) instead of a naive `Dim(text-with-embedded-
+colors)` call, which color()'s single-reset-at-the-end design would cut
+short at the hash's own reset. Applied to every per-resource-line shape
+in `cli/status.go`: the ledger-only (non-drift) line, both drift-path
+`classifyFleetEntry` lines (`clean:`/`drifted:` -- the status-word prefix
+itself untouched, still green/yellow, only the address's own trailing
+metadata dims), `classifyFleetEntry`'s own unreadable branches (RunScan
+error, and the `ScanNew`-with-no-reconstructable-state default case), and
+the two outer-walk unreadable helpers (`unreadableNoLookup`,
+`unreadableProviderUnavailable`) -- both previously took no `*styler` at
+all (always fully plain, even on a real TTY, an inconsistency with every
+other resource line once noticed); both now take one and get the same
+treatment, without inventing new blue hash-coloring where none existed
+before (`displayHash` kept, not upgraded to `st.Hash`, since that's a
+separate change UBI-68 didn't ask for). A line's trailing reason text
+(the `-- <reason>` suffix on an unreadable line) stays outside the dim
+span deliberately -- the ticket names exactly kind/hash/accepted-
+timestamp, nothing else.
+
+Checked `ubx addresses` and `ubx why`'s proposal-list lines for the same
+pattern, per the ticket's own instruction, and found neither applies:
+`cli/addresses.go`'s `renderAddressesHuman` never takes a `*styler` at
+all -- fully plain output today, no color anywhere to make consistent.
+`cli/why.go`'s `renderProposalCompact` (the resource-address chain view's
+own per-proposal line, `- <kind> <hash> (<resolvedAt>): <summary>`) has
+no per-line address at all -- the address is printed once, above the
+whole chain -- so there's no address-vs-metadata colon split on that line
+to dim in the first place. No changes made to either file; this finding
+is recorded here rather than silently assumed away.
+
+**UBI-69 — `ubx blame`'s group header line renders bold.** The
+"▸ N attribute(s) · set by <hash> (<kind>) · <timestamp> [· <tier>]"
+header (`cli/blame.go`, `renderBlameHuman`) is now composed into a plain
+string first (still carrying its own embedded `st.Dim("▸")`/`st.Hash`
+segments) and printed through `st.forceBold` in one shot -- the exact
+same technique `plan.go`'s delta/blast-radius summary and
+`intentrender.go`'s "AI defaults" header already established for this
+codebase, reused rather than reinvented.
+
+Hermetic tests, both tickets: `cli/style_test.go` gets three new direct
+`forceDim` unit tests (disabled passthrough, reassert-after-embedded-
+reset mechanics, empty-line no-op) mirroring the existing `forceBold`-
+adjacent coverage gap this session noticed (no direct `forceBold` unit
+test existed either, despite it being in production use already -- left
+alone, out of scope for this ticket, but worth flagging for a future
+session). `cli/status_test.go` gets three new TTY-forced (`runUbxTTY` +
+explicit `NO_COLOR=` clear, the same seam `ship_confirm_test.go`
+established) integration tests covering the ledger-only line, both
+drift-path lines, and the outer-walk unreadable-no-lookup line -- each
+asserts the address renders with no leading ANSI code at all, the
+metadata after the colon starts `ansiDim` and ends `ansiReset`, and (for
+the lines built from `st.Hash`) the hash's own blue survives inside the
+dimmed span. `cli/blame_test.go` gets one new TTY-forced test asserting
+the whole group header starts bold, ends with a single reset, and that
+every embedded reset but the last is immediately followed by a bold
+reassertion. Every existing non-TTY test (`runUbx`, always non-terminal)
+continues to assert byte-identical plain substrings -- unchanged, since
+`styler.enabled` is false there and every `force*`/color() call is a
+no-op, which is what "NO_COLOR/non-TTY stay plain" already meant before
+this session. `--json` output is untouched by construction (built and
+marshaled entirely separately from every styler-using render path, same
+as every other command).
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `go test
+./... -count=1`). Manually verified against the real built binary
+(`make build`, version-checked) piped through `script -q` to force a real
+TTY, fakeprovider standing in for the provider (`FAKEPROVIDER_MODE=ok-v6`,
+`FAKEPROVIDER_EXTRA_TAG=mutated=yes` for the drifted case) -- confirmed
+the actual escape-code structure for the ledger-only line, both drift
+lines, and the blame header matches exactly what the tests assert (`cat
+-v` transcripts, not just "tests pass"). No `ubx ship` or any real-
+provider call was ever made. `make install` was NOT run this session --
+it errors on this machine independent of this change (`/usr/local/bin/
+ubx` shadows `~/go/bin/ubx` on PATH, a pre-existing environment quirk,
+unrelated to UBI-68/69); `make build`'s own local `./ubx` was used for
+all live verification instead, version-checked before each check per
+this project's own standing discipline.
+
+No docs-debt: this is a pure TTY-only color-rendering change (docs/cli-
+output-spec.md principle 2 -- NO_COLOR and non-TTY get plain output, and
+ubiquex-docs transcripts are captured from the plain variant), so
+ubiquex-docs (which documents flags/behavior, not ANSI styling) needed no
+update. No new command, flag, or user-facing behavior beyond the color
+itself.
+
+## Current phase (previous)
+
 **UBI-64 (2026-08-01) — broken ledger head: teaching error + sanctioned
 fresh-start path, done in one session per the ticket's own "small
 session" framing. Fully hermetic; no live/real-cloud verification

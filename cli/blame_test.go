@@ -257,6 +257,68 @@ func TestBlame_JSON_Shape(t *testing.T) {
 	}
 }
 
+// TestBlame_TTY_GroupHeaderRendersBold is UBI-69's own acceptance test: on
+// a real (forced) terminal, the whole "▸ N attribute(s) · set by ..."
+// group header line renders bold throughout, including through the
+// embedded Dim "▸" and blue hash segments it's composed from -- not just
+// bold up to the first inner color()'s own reset (forceBold's own
+// documented reason for reasserting after every embedded reset).
+func TestBlame_TTY_GroupHeaderRendersBold(t *testing.T) {
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	addr := "payments.fake_widget.widget-blame-bold"
+
+	if _, err := runUbx(t, env, "scan",
+		"--provider", fakeProviderBinary,
+		"--stack", "payments",
+		"--type", "fake_widget",
+		"--name", "widget-blame-bold",
+		"--lookup", `{"name":"widget-blame-bold","tags":{"env":"prod"}}`,
+		"--ledger-dir", ledgerDir,
+		"--out", filepath.Join(ledgerDir, "adopt.json"),
+		"--no-attribution",
+	); exitCode(err) != 1 {
+		t.Fatalf("ubx scan (adopt): %v", err)
+	}
+	acceptOut, err := runUbx(t, env, "accept", filepath.Join(ledgerDir, "adopt.json"), "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx accept (adopt): %v\noutput: %s", err, acceptOut)
+	}
+
+	out, err := runUbxTTY(t, "", []string{"NO_COLOR="}, "blame", addr, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx blame: %v\noutput: %s", err, out)
+	}
+
+	line := lineContaining(out, "attribute(s) · set by")
+	if line == "" {
+		t.Fatalf("expected a group header line, got: %s", out)
+	}
+	if !strings.HasPrefix(line, ansiBold) {
+		t.Fatalf("expected the group header to start bold, got: %q", line)
+	}
+	if !strings.HasSuffix(line, ansiReset) {
+		t.Fatalf("expected the group header to end with a reset, got: %q", line)
+	}
+	// Every reset embedded from the inner Dim "▸"/blue hash segments must
+	// be immediately followed by a bold reassertion, except the line's own
+	// final reset -- otherwise bold would cut out right after the hash
+	// instead of covering "(kind) · timestamp" too.
+	resets := strings.Count(line, ansiReset)
+	reassertions := strings.Count(line, ansiReset+ansiBold)
+	if reassertions != resets-1 {
+		t.Fatalf("expected every reset but the last immediately followed by a bold reassertion (resets=%d, reassertions=%d), got: %q", resets, reassertions, line)
+	}
+	// forceBold adds bold on top -- it must not strip the semantic colors
+	// already embedded in the composed header.
+	if !strings.Contains(line, ansiDim) {
+		t.Fatalf("expected the \"▸\" glyph's own dim color preserved, got: %q", line)
+	}
+	if !strings.Contains(line, ansiBlue) {
+		t.Fatalf("expected the hash's own blue color preserved, got: %q", line)
+	}
+}
+
 // lineContaining returns the first line of out containing needle, or "".
 func lineContaining(out, needle string) string {
 	for _, line := range strings.Split(out, "\n") {

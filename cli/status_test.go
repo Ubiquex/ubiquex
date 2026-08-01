@@ -316,6 +316,148 @@ func TestStatus_ProviderLaunchFailure_ExitTwo(t *testing.T) {
 	}
 }
 
+// TestStatus_TTY_LedgerOnlyLine_AddressBrightMetadataDim is UBI-68's own
+// core acceptance test for the ledger-only (non-drift) resource line: on a
+// real (forced) terminal, everything after the address's own colon --
+// kind, hash, "(accepted <timestamp>)" -- renders as one dim block, while
+// the address itself (printed outside forceDim) carries no ANSI code of
+// its own at all, reading brightest by contrast.
+func TestStatus_TTY_LedgerOnlyLine_AddressBrightMetadataDim(t *testing.T) {
+	ledgerDir := t.TempDir()
+	adoptViaCLI(t, ledgerDir, "payments", "fake_widget", "widget-dim-1", `{"name":"widget-dim-1","tags":{"env":"prod"}}`, []string{"FAKEPROVIDER_MODE=ok-v6"})
+
+	addr := "payments.fake_widget.widget-dim-1"
+	out, err := runUbxTTY(t, "", []string{"NO_COLOR="}, "status", "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx status: %v\noutput: %s", err, out)
+	}
+
+	line := lineContaining(out, addr+": ")
+	if line == "" {
+		t.Fatalf("expected a line for %s, got: %q", addr, out)
+	}
+	prefix := addr + ": "
+	if !strings.HasPrefix(line, prefix) {
+		t.Fatalf("expected the address to render with no leading ANSI code (brightest), got line: %q", line)
+	}
+	rest := strings.TrimPrefix(line, prefix)
+	if !strings.HasPrefix(rest, ansiDim) {
+		t.Fatalf("expected the metadata after the colon to start dim, got: %q", line)
+	}
+	if !strings.HasSuffix(rest, ansiReset) {
+		t.Fatalf("expected the dimmed metadata to end with a reset, got: %q", line)
+	}
+	if !strings.Contains(rest, "adoption") || !strings.Contains(rest, "(accepted ") {
+		t.Fatalf("expected kind and accepted-timestamp text preserved inside the dimmed segment, got: %q", line)
+	}
+	// The hash keeps its own blue coloring (st.Hash), reasserted-dim
+	// around it rather than losing its color -- confirmed by the presence
+	// of both codes together, not just one or the other.
+	if !strings.Contains(rest, ansiBlue) {
+		t.Fatalf("expected the hash's own blue color preserved inside the dimmed segment, got: %q", line)
+	}
+}
+
+// TestStatus_TTY_DriftLines_AddressBrightMetadataDim covers both the
+// "clean:"/"drifted:" prefixed drift-path lines (classifyFleetEntry) --
+// the colored status prefix stays exactly as before, only the metadata
+// after the address's own colon gets dimmed.
+func TestStatus_TTY_DriftLines_AddressBrightMetadataDim(t *testing.T) {
+	ledgerDir := t.TempDir()
+	adoptEnv := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	adoptViaCLI(t, ledgerDir, "payments", "fake_widget", "widget-dim-clean", `{"name":"widget-dim-clean","tags":{"env":"prod"}}`, adoptEnv)
+
+	cleanOut, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR="}, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary)
+	if err != nil {
+		t.Fatalf("ubx status --drift (clean): %v\noutput: %s", err, cleanOut)
+	}
+	addr := "payments.fake_widget.widget-dim-clean"
+	cleanLine := lineContaining(cleanOut, addr+": ")
+	if cleanLine == "" {
+		t.Fatalf("expected a clean line for %s, got: %q", addr, cleanOut)
+	}
+	wantCleanPrefix := ansiGreen + "clean:" + ansiReset + " " + addr + ": "
+	if !strings.HasPrefix(cleanLine, wantCleanPrefix) {
+		t.Fatalf("expected %q as the undimmed prefix (green status word + bright address), got: %q", wantCleanPrefix, cleanLine)
+	}
+	cleanRest := strings.TrimPrefix(cleanLine, wantCleanPrefix)
+	if !strings.HasPrefix(cleanRest, ansiDim) || !strings.HasSuffix(cleanRest, ansiReset) {
+		t.Fatalf("expected the clean line's metadata dimmed end-to-end, got: %q", cleanLine)
+	}
+
+	ledgerDir2 := t.TempDir()
+	adoptViaCLI(t, ledgerDir2, "payments", "fake_widget", "widget-dim-drifted", `{"name":"widget-dim-drifted","tags":{"env":"prod"}}`, adoptEnv)
+	driftOut, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "FAKEPROVIDER_EXTRA_TAG=mutated=yes", "NO_COLOR="}, "status", "--ledger-dir", ledgerDir2, "--drift", "--provider", fakeProviderBinary)
+	if err == nil {
+		t.Fatal("expected exit code 1 for a drifted resource")
+	}
+	addr2 := "payments.fake_widget.widget-dim-drifted"
+	driftLine := lineContaining(driftOut, addr2+": ")
+	if driftLine == "" {
+		t.Fatalf("expected a drifted line for %s, got: %q", addr2, driftOut)
+	}
+	wantDriftPrefix := ansiYellow + "drifted:" + ansiReset + " " + addr2 + ": "
+	if !strings.HasPrefix(driftLine, wantDriftPrefix) {
+		t.Fatalf("expected %q as the undimmed prefix (yellow status word + bright address), got: %q", wantDriftPrefix, driftLine)
+	}
+	driftRest := strings.TrimPrefix(driftLine, wantDriftPrefix)
+	if !strings.HasPrefix(driftRest, ansiDim) || !strings.HasSuffix(driftRest, ansiReset) {
+		t.Fatalf("expected the drifted line's own metadata dimmed end-to-end, got: %q", driftLine)
+	}
+}
+
+// TestStatus_TTY_UnreadableNoLookupLine_AddressBrightMetadataDim covers
+// the outer-walk unreadableNoLookup helper -- called before any provider
+// is even reached, so it previously had no styler at all; UBI-68 threads
+// one through so this line follows the identical hierarchy as every other
+// resource line instead of staying an outlier.
+func TestStatus_TTY_UnreadableNoLookupLine_AddressBrightMetadataDim(t *testing.T) {
+	ledgerDir := t.TempDir()
+	ledger := core.Open(ledgerDir)
+	p := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		ID:            "3333333333333333333333333333333333333333333333333333333333333333",
+		Stack:         "payments",
+		Kind:          core.KindAdoption,
+		Intent:        core.Intent{Summary: "x"},
+		Resolution: core.Resolution{
+			ResolvedAt: "2026-07-16T00:00:00Z",
+			Inputs: []core.ResolutionInput{
+				{Kind: "live_state", Resource: "payments.fake_widget.widget-dim-nolookup", ObservedHash: "deadbeef"},
+			},
+		},
+		Acceptance: &core.Acceptance{Method: "local", Approvers: []string{"roozbeh"}, AcceptedAt: "2026-07-16T00:00:00Z"},
+		Status:     core.StatusAccepted,
+	}
+	if err := ledger.Append(p); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR="}, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary)
+	if err == nil {
+		t.Fatal("expected exit code 2 for an unreadable resource")
+	}
+	addr := "payments.fake_widget.widget-dim-nolookup"
+	line := lineContaining(out, addr+": ")
+	if line == "" {
+		t.Fatalf("expected an unreadable line for %s, got: %q", addr, out)
+	}
+	prefix := "unreadable: " + addr + ": "
+	if !strings.HasPrefix(line, prefix) {
+		t.Fatalf("expected the address to render undecorated, got: %q", line)
+	}
+	rest := strings.TrimPrefix(line, prefix)
+	if !strings.HasPrefix(rest, ansiDim) {
+		t.Fatalf("expected the metadata after the colon to start dim, got: %q", line)
+	}
+	// The reason text after " -- " is deliberately outside forceDim's
+	// span (only kind/hash/accepted-timestamp are named in the ticket) --
+	// its own reset must appear before that text, not after.
+	if idx := strings.Index(rest, " -- "); idx == -1 || !strings.Contains(rest[:idx], ansiReset) {
+		t.Fatalf("expected the dim span to close before \" -- <reason>\", got: %q", line)
+	}
+}
+
 func mustHead(t *testing.T, l *core.Ledger) string {
 	t.Helper()
 	head, err := l.Head()

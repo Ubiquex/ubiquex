@@ -167,6 +167,21 @@ func (s *styler) forceBold(line string) string {
 	return ansiBold + strings.ReplaceAll(line, ansiReset, ansiReset+ansiBold) + ansiReset
 }
 
+// forceDim is forceBold's own dim sibling (UBI-68): a per-resource line's
+// metadata segment (kind, hash, "accepted <timestamp>") should read as one
+// dim block -- including a hash that Hash() already colored blue -- with
+// the resource's own address, printed outside this call, left at full
+// brightness so it reads brightest. Same reassert-after-every-embedded-
+// reset technique as forceBold, for the same reason: color()'s single-
+// reset-at-the-end design means a naive Dim(text-with-embedded-colors)
+// call would have its dim effect cancelled by the first inner reset.
+func (s *styler) forceDim(line string) string {
+	if s == nil || !s.enabled || line == "" {
+		return line
+	}
+	return ansiDim + strings.ReplaceAll(line, ansiReset, ansiReset+ansiDim) + ansiReset
+}
+
 // displayHash is the one canonical hash-truncation convention for the
 // whole package (docs/cli-output-spec.md principle 3: "short hashes (12
 // chars) everywhere; --full-hashes opts into full") -- replaces the two
