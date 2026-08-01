@@ -26,6 +26,16 @@ var (
 	// between when the proposal was generated (scan) and now (accept).
 	// Accepting it would record a "before"/"after" that's no longer true.
 	ErrStaleObservation = errors.New("stale observation: reality changed since this proposal was generated")
+
+	// ErrNormalizationNoiseOnly means a ScanDrifted result's diff, once
+	// FilterNormalizationNoise strips null<->zero-value/materialization
+	// noise, has nothing real left to propose (UBI-63 session 4) --
+	// should not normally happen (RunScan's own verdict already applies
+	// the identical filter before ever calling this ScanDrifted), but
+	// guards GenerateProposal/GenerateRevertProposal against emitting a
+	// nonsensical empty-delta modification if a caller ever hands in a
+	// ScanResult computed some other way.
+	ErrNormalizationNoiseOnly = errors.New("generate proposal: drift is fully explained by normalization noise, nothing real to propose")
 )
 
 // StateReader is core's own, minimal view of "something that can fetch a
@@ -115,6 +125,19 @@ type ScanResult struct {
 	// UBI-8). Empty if the caller didn't supply one (e.g. scanning via a
 	// hand-picked --provider path rather than an acquired/verified one).
 	ProviderChecksum string
+
+	// ResourceSchema is the same opaque per-type schema handle
+	// readAndFingerprint already fetched and passed to ReadResource --
+	// carried onto the result (UBI-63 session 4) so a caller rendering or
+	// recording a diff from PreviousState/Observed (cli's live `status
+	// --drift`, GenerateProposal/GenerateRevertProposal) can pass it to
+	// FilterNormalizationNoise and get the SAME Computed-aware filtering
+	// RunScan's own verdict already applies, instead of recomputing a raw,
+	// unfiltered DiffAttributes that re-surfaces noise RunScan already
+	// determined wasn't real drift. core never inspects it beyond that one
+	// type assertion (AttrComputedFlags) -- still opaque, still no import
+	// of package provider.
+	ResourceSchema any
 }
 
 // ScanRequest describes one resource to scan.
@@ -181,21 +204,22 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 		PreviousState:    foldedState,
 		Lookup:           req.CurrentState,
 		ProviderChecksum: req.ProviderChecksum,
+		ResourceSchema:   resourceSchema,
 	}
 	switch {
 	case !found:
 		res.Outcome = ScanNew
 	case prevHash != hash:
 		res.Outcome = ScanDrifted
-		// UBI-63 session 3: a candidate drift may be fully explained by
+		// UBI-63 session 3/4: a candidate drift may be fully explained by
 		// null<->zero-value/materialization noise rather than a real
-		// change -- see explainedByNormalization's own doc comment. Only
+		// change -- see FilterNormalizationNoise's own doc comment. Only
 		// consulted on this rare path (the fast hash-equality check
 		// above already handled the common "genuinely unchanged" case),
 		// and only ever downgrades a verdict, never upgrades one.
 		if before, after, derr := DiffAttributes(foldedState, observed); derr == nil {
-			computed, _ := resourceSchema.(AttrComputedFlags)
-			if explainedByNormalization(before, after, computed) {
+			fb, fa := FilterNormalizationNoise(before, after, resourceSchema)
+			if len(fb) == 0 && len(fa) == 0 {
 				res.Outcome = ScanUnchanged
 			}
 		}
@@ -205,25 +229,36 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 	return res, nil
 }
 
-// explainedByNormalization reports whether every entry in a candidate
-// drift diff (before/after, dot-notation keyed -- DiffAttributes' own
-// output) is fully accounted for by one of two schema-driven
-// equivalences named in the founder's own UBI-63 diagnosis ("bug 4"):
-// real SDKv2-vintage providers don't round-trip a "no value" attribute
-// byte-for-byte, freely alternating between JSON null and the type's own
-// zero value (false/""/0/[]/{}) across separate reads of the exact same
-// semantic state; and a Computed attribute's null baseline (recorded
-// before the provider had actually resolved it) legitimately resolves to
-// ANY concrete value on a later read without that being a real
-// divergence from what ubx told the world to be. Neither equivalence
-// applies once both sides hold a non-null value that genuinely differs
-// -- a real change to an already-resolved value still reports as drift.
+// FilterNormalizationNoise strips every before/after entry (before/after,
+// dot-notation keyed -- DiffAttributes' own output shape) that's fully
+// accounted for by one of two schema-driven equivalences named in the
+// founder's own UBI-63 diagnosis ("bug 4"): real SDKv2-vintage providers
+// don't round-trip a "no value" attribute byte-for-byte, freely
+// alternating between JSON null and the type's own zero value
+// (false/""/0/[]/{}) across separate reads of the exact same semantic
+// state; and a Computed attribute's null baseline (recorded before the
+// provider had actually resolved it) legitimately resolves to ANY
+// concrete value on a later read without that being a real divergence
+// from what ubx told the world to be. Neither equivalence applies once
+// both sides hold a non-null value that genuinely differs -- a real
+// change to an already-resolved value always survives the filter.
 //
-// computed is nil-safe: a StateReader whose schema handle doesn't
-// implement AttrComputedFlags simply never satisfies the
-// Computed-wildcard half, leaving the zero-value equivalence as the only
-// normalization applied.
-func explainedByNormalization(before, after map[string]json.RawMessage, computed AttrComputedFlags) bool {
+// Exported and reused everywhere a diff is shown or recorded (UBI-63
+// session 4: found live -- a resource with exactly one genuinely-real
+// change alongside several individually-explainable ones had its ENTIRE
+// unfiltered diff rendered/embedded, because the original design only
+// ever downgraded RunScan's own overall verdict, never filtered what a
+// caller went on to display or persist): RunScan's own verdict above,
+// GenerateProposal/GenerateRevertProposal's embedded Delta.Modifies (so
+// `scan --propose`/`--revert` never records noise as if it were adopted
+// or reverted drift), and cli's own live `status --drift` rendering.
+//
+// resourceSchema is the same opaque handle ScanResult.ResourceSchema
+// carries; a StateReader whose handle doesn't implement
+// AttrComputedFlags simply never satisfies the Computed-wildcard half,
+// leaving the zero-value equivalence as the only normalization applied.
+func FilterNormalizationNoise(before, after map[string]json.RawMessage, resourceSchema any) (filteredBefore, filteredAfter map[string]json.RawMessage) {
+	computed, _ := resourceSchema.(AttrComputedFlags)
 	keys := make(map[string]struct{}, len(before)+len(after))
 	for k := range before {
 		keys[k] = struct{}{}
@@ -231,33 +266,45 @@ func explainedByNormalization(before, after map[string]json.RawMessage, computed
 	for k := range after {
 		keys[k] = struct{}{}
 	}
+	filteredBefore = make(map[string]json.RawMessage, len(before))
+	filteredAfter = make(map[string]json.RawMessage, len(after))
 	for key := range keys {
-		bRaw, bHas := before[key]
-		aRaw, aHas := after[key]
-		if !bHas || !aHas {
-			return false // added/removed outright, not a null<->value shift
+		if isNormalizationExplained(key, before, after, computed) {
+			continue
 		}
-		bNull := isJSONNull(bRaw)
-		aNull := isJSONNull(aRaw)
-		if !bNull && !aNull {
-			return false // both sides hold a real, differing value
+		if v, ok := before[key]; ok {
+			filteredBefore[key] = v
 		}
-		topAttr := key
-		if i := strings.IndexByte(key, '.'); i >= 0 {
-			topAttr = key[:i]
-		}
-		if computed != nil && computed.IsAttrComputed(topAttr) {
-			continue // materialization: a Computed attribute's null baseline resolving is expected
-		}
-		nonNull := aRaw
-		if aNull {
-			nonNull = bRaw
-		}
-		if !isZeroishLiteral(nonNull) {
-			return false
+		if v, ok := after[key]; ok {
+			filteredAfter[key] = v
 		}
 	}
-	return true
+	return filteredBefore, filteredAfter
+}
+
+func isNormalizationExplained(key string, before, after map[string]json.RawMessage, computed AttrComputedFlags) bool {
+	bRaw, bHas := before[key]
+	aRaw, aHas := after[key]
+	if !bHas || !aHas {
+		return false // added/removed outright, not a null<->value shift
+	}
+	bNull := isJSONNull(bRaw)
+	aNull := isJSONNull(aRaw)
+	if !bNull && !aNull {
+		return false // both sides hold a real, differing value
+	}
+	topAttr := key
+	if i := strings.IndexByte(key, '.'); i >= 0 {
+		topAttr = key[:i]
+	}
+	if computed != nil && computed.IsAttrComputed(topAttr) {
+		return true // materialization: a Computed attribute's null baseline resolving is expected
+	}
+	nonNull := aRaw
+	if aNull {
+		nonNull = bRaw
+	}
+	return isZeroishLiteral(nonNull)
 }
 
 func isJSONNull(raw json.RawMessage) bool {
@@ -425,6 +472,10 @@ func GenerateProposal(l *Ledger, stack string, res *ScanResult) (*Proposal, erro
 		if err != nil {
 			return nil, fmt.Errorf("generate proposal: %w", err)
 		}
+		before, after = FilterNormalizationNoise(before, after, res.ResourceSchema)
+		if len(before) == 0 && len(after) == 0 {
+			return nil, ErrNormalizationNoiseOnly
+		}
 		p.Delta = Delta{Modifies: []Modification{{Target: res.Address, Before: before, After: after}}}
 	}
 
@@ -466,6 +517,10 @@ func GenerateRevertProposal(l *Ledger, stack string, res *ScanResult) (*Proposal
 	before, after, err := DiffAttributes(res.Observed, prevState)
 	if err != nil {
 		return nil, fmt.Errorf("generate revert proposal: %w", err)
+	}
+	before, after = FilterNormalizationNoise(before, after, res.ResourceSchema)
+	if len(before) == 0 && len(after) == 0 {
+		return nil, ErrNormalizationNoiseOnly
 	}
 	modifies := []Modification{{Target: res.Address, Before: before, After: after}}
 

@@ -388,6 +388,17 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut 
 			// already exported) rather than waiting for `ubx scan
 			// --propose` to generate a proposal first.
 			if before, after, derr := core.DiffAttributes(res.PreviousState, res.Observed); derr == nil {
+				// UBI-63 session 4: filtered the SAME way RunScan's own
+				// verdict already was -- otherwise a resource with one
+				// genuinely-still-drifting attribute renders EVERY
+				// attribute that happens to differ, including several
+				// that are individually null<->zero-value/materialization
+				// noise, coexisting on the same resource (found live: a
+				// pre-fix-2 stack's real, unreconciled attachment_count
+				// drift dragged tags/force_detach_policies/inline_policy
+				// into the rendered diff even though those three were
+				// each, on their own, already explained).
+				before, after = core.FilterNormalizationNoise(before, after, res.ResourceSchema)
 				for _, path := range sortedAttributePaths(before, after) {
 					fmt.Fprintf(out, "    %s %s: %s -> %s\n", st.Yellow("~"), path, rawOrAbsent(before[path]), rawOrAbsent(after[path]))
 				}

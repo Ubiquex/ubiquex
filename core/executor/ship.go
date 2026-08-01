@@ -1361,7 +1361,7 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 // very next `ubx scan` reports that effect as drift, even though nothing
 // outside this ship ever touched the resource.
 //
-// This is deliberately NOT normalization (core.explainedByNormalization,
+// This is deliberately NOT normalization (core.FilterNormalizationNoise,
 // UBI-63 session 3's other half): the values genuinely changed (0 -> 1,
 // [] -> [a real ARN]) and that change is worth recording -- just not
 // something a human needs to separately review and re-approve, since the

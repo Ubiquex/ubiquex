@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // TestScan_NullVsZeroValue_NotDrift is UBI-63 session 3's own hermetic
@@ -19,7 +24,7 @@ import (
 // stack's own shape (region/labels null, force_detach_policies false,
 // inline_policy empty) and then scans it again with every one of those
 // four attributes flipped to the OTHER representation the founder's own
-// repro named -- proving core.explainedByNormalization (core/scan.go)
+// repro named -- proving core.FilterNormalizationNoise (core/scan.go)
 // downgrades the verdict to "no drift" rather than reporting it as a
 // change, across all four attribute shapes named in the diagnosis:
 // Computed materialization (region), null map (labels, standing in for
@@ -82,5 +87,66 @@ func TestScan_NullVsZeroValue_RealChangeStillDrifts(t *testing.T) {
 	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "force_detach_policies") {
 		t.Fatalf("expected the real force_detach_policies change to surface, got: %s", out)
+	}
+}
+
+// TestScan_GenerateProposal_FiltersNormalizationNoise_KeepsRealChangeVisible
+// is UBI-63 session 4's own hermetic repro of a masking bug found live: a
+// resource with attachment_count/managed_policy_arns-style real drift
+// (fix 2 not yet reconciled for a pre-fix ship) had its ENTIRE unfiltered
+// diff rendered/recorded, including several other attributes that were
+// each, individually, already explained by fix 1's own normalization --
+// because the original design only ever downgraded RunScan's overall
+// verdict, never filtered what a caller went on to display or persist.
+// This resource has both a genuine change (force_detach_policies false ->
+// true) and pure null<->zero-value/materialization noise (labels null ->
+// {}, inline_policy [] -> null, region null -> a real value) in the SAME
+// diff -- the generated drift_adopt proposal's own delta.modifies must
+// carry only the real one, not the noise alongside it.
+func TestScan_GenerateProposal_FiltersNormalizationNoise_KeepsRealChangeVisible(t *testing.T) {
+	ledgerDir := t.TempDir()
+	env := []string{
+		"FAKEPROVIDER_MODE=conformance-v6",
+		"FAKEPROVIDER_RESOURCE_TYPE=fake_iamlike_resource",
+		"FAKEPROVIDER_ATTRS=id,region,labels,force_detach_policies,inline_policy",
+		"FAKEPROVIDER_ATTR_TYPES=labels:map,force_detach_policies:bool,inline_policy:list",
+		"FAKEPROVIDER_COMPUTED_ATTRS=region",
+	}
+
+	adoptViaCLI(t, ledgerDir, "payments", "fake_iamlike_resource", "role-3",
+		`{"id":"role-3","region":null,"labels":null,"force_detach_policies":false,"inline_policy":[]}`, env)
+
+	proposalPath := filepath.Join(t.TempDir(), "drift.json")
+	scanOut, err := runUbx(t, env, "scan",
+		"--provider", fakeProviderBinary,
+		"--stack", "payments", "--type", "fake_iamlike_resource", "--name", "role-3",
+		"--lookup", `{"id":"role-3","region":"eu-central-1","labels":{},"force_detach_policies":true,"inline_policy":null}`,
+		"--ledger-dir", ledgerDir, "--no-attribution",
+		"--out", proposalPath,
+	)
+	requireExitCode(t, err, 1, scanOut)
+
+	raw, err := os.ReadFile(proposalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p core.Proposal
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Delta.Modifies) != 1 {
+		t.Fatalf("delta.modifies = %d entries, want exactly 1", len(p.Delta.Modifies))
+	}
+	mod := p.Delta.Modifies[0]
+	if _, ok := mod.After["force_detach_policies"]; !ok {
+		t.Fatalf("expected the real force_detach_policies change in delta.modifies, got: %+v", mod)
+	}
+	for _, noisy := range []string{"labels", "inline_policy", "region"} {
+		if _, ok := mod.After[noisy]; ok {
+			t.Fatalf("expected %q (normalization noise) filtered out of delta.modifies, got: %+v", noisy, mod)
+		}
+		if _, ok := mod.Before[noisy]; ok {
+			t.Fatalf("expected %q (normalization noise) filtered out of delta.modifies, got: %+v", noisy, mod)
+		}
 	}
 }
