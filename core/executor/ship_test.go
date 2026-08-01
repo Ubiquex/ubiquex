@@ -146,6 +146,33 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 				return nil, nil, step.err
 			}
 		}
+		// UBI-63 session 6: the destroy-side mirror of fake_attachment's
+		// own create-side cross-effect above -- destroying the
+		// attachment reverts the referenced role/policy's
+		// attachment_count back down, the real fallout
+		// shipDestroyNode's own sameBatchDependentsDestroyed exists to
+		// tolerate on whichever of them ships (and gets its own
+		// freshness precheck re-run) AFTER this attachment already did.
+		if typeName == "fake_attachment" {
+			var attach map[string]interface{}
+			if err := json.Unmarshal(priorState, &attach); err == nil {
+				for _, refField := range []string{"role_id", "policy_id"} {
+					refID, _ := attach[refField].(string)
+					if refID == "" {
+						continue
+					}
+					if refState, ok := f.resources[refID]; ok {
+						var ref map[string]interface{}
+						if err := json.Unmarshal(refState, &ref); err == nil {
+							ref["attachment_count"] = 0
+							if b, err := json.Marshal(ref); err == nil {
+								f.resources[refID] = b
+							}
+						}
+					}
+				}
+			}
+		}
 		delete(f.resources, id)
 		return json.RawMessage("null"), nil, nil
 	}
@@ -203,21 +230,28 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 	// resource in the same batch (a role_policy_attachment mutating its
 	// own role's attachment_count, read back on the role's NEXT
 	// ReadResource, even though the role's own apply-time snapshot was
-	// taken before this attachment ever existed). "role_id" is populated
-	// via the normal $computed substitution path (substituteComputed),
-	// exactly like a real IAM policy document naming a sibling's ARN --
-	// this fixture never needs to know that happened, only that
-	// plannedState now carries the referenced role's real id.
+	// taken before this attachment ever existed). "role_id"/"policy_id"
+	// (session 6: extended to the policy side too, mirroring a real
+	// aws_iam_role_policy_attachment's own effect on BOTH ends) are
+	// populated via the normal $computed substitution path
+	// (substituteComputed), exactly like a real IAM policy document
+	// naming a sibling's ARN -- this fixture never needs to know that
+	// happened, only that plannedState now carries the referenced
+	// role/policy's real id.
 	if typeName == "fake_attachment" {
 		var attach map[string]interface{}
 		if err := json.Unmarshal(plannedState, &attach); err == nil {
-			if roleID, _ := attach["role_id"].(string); roleID != "" {
-				if roleState, ok := f.resources[roleID]; ok {
-					var role map[string]interface{}
-					if err := json.Unmarshal(roleState, &role); err == nil {
-						role["attachment_count"] = 1
-						if b, err := json.Marshal(role); err == nil {
-							f.resources[roleID] = b
+			for _, refField := range []string{"role_id", "policy_id"} {
+				refID, _ := attach[refField].(string)
+				if refID == "" {
+					continue
+				}
+				if refState, ok := f.resources[refID]; ok {
+					var ref map[string]interface{}
+					if err := json.Unmarshal(refState, &ref); err == nil {
+						ref["attachment_count"] = 1
+						if b, err := json.Marshal(ref); err == nil {
+							f.resources[refID] = b
 						}
 					}
 				}

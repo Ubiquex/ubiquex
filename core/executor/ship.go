@@ -1320,7 +1320,16 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 		case n.create != nil:
 			stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		case n.destroy != nil:
-			stepErr = shipDestroyNode(ctx, app, provSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
+			// n.dependsOn for a destroy entry is docs/resolver.md's own
+			// orphan-protection reverse edge set -- other same-batch
+			// resources this destroy had to wait for. By this point in
+			// the walk, the missingDep check above already confirmed
+			// every one of them applied (i.e. was itself destroyed, for
+			// a destroy node) -- so a non-empty DependsOn here means a
+			// referencing resource was JUST destroyed as part of this
+			// exact batch, immediately before this node's own turn (see
+			// shipDestroyNode's own doc comment on the parameter).
+			stepErr = shipDestroyNode(ctx, app, provSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown, len(n.dependsOn) > 0)
 		default:
 			stepErr = shipModifyNode(ctx, app, provSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
 		}
@@ -1760,7 +1769,31 @@ func destroyDiffExplainedByNormalization(ctx context.Context, app Applier, entry
 //     (this attempt's own precheck, or a prior attempt's, folded via
 //     hist.lastReconciliationOutcome) confirmed the target was present and
 //     matching. See reconcileDestroyLoop.
-func shipDestroyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, entry core.DestroyEntry, ra *core.ResourceApply, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
+//
+// sameBatchDependentsDestroyed (UBI-63 session 6) is true when this
+// node's own DependsOn (docs/resolver.md's orphan-protection reverse
+// edge set) is non-empty -- meaning some OTHER resource in this SAME
+// batch, which referenced this one, was just destroyed immediately
+// before this node's own turn (shipChange's own missingDep check
+// already guarantees every dependency applied by the time this call
+// happens). Destroying that referencing resource can have a real,
+// factual, expected effect on THIS target's own observable state --
+// e.g. an aws_iam_role_policy_attachment's own destroy reverting its
+// role/policy's attachment_count/managed_policy_arns back down -- the
+// destroy-side mirror of reconcileSameBatchEffects' create-side case
+// (a same-batch dependent's apply mutating an earlier resource). The
+// two can't share a mechanism: reconcileSameBatchEffects runs AFTER the
+// whole walk finishes and records a correction asynchronously to the
+// ledger, but a destroy's own freshness precheck blocks SYNCHRONOUSLY,
+// mid-walk, before this resource's own destroy can even attempt --
+// there's no "after the chain settles" moment to defer to, the refusal
+// has to be resolved right here or the whole destroy batch stalls. When
+// true, a hash mismatch is treated as explained regardless of whether
+// FilterNormalizationNoise itself would have caught it -- the batch's
+// own accepted proposal already reviewed destroying the dependent,
+// which makes its real effects on this target expected fallout, not an
+// out-of-band change nobody signed off on.
+func shipDestroyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, entry core.DestroyEntry, ra *core.ResourceApply, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64, sameBatchDependentsDestroyed bool) error {
 	lookup, expectedHash, haveTarget := destroyTargetFor(p, entry.Address)
 
 	// Reconcile first if the last thing we know about this resource is
@@ -1814,7 +1847,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		recordError(ctx, ra, fmt.Sprintf("freshness recheck: %v", readErr), core.ErrorRetryable)
 		*resourcesFailed++
 		return persist()
-	case hash != expectedHash && !destroyDiffExplainedByNormalization(ctx, app, entry, observed):
+	case hash != expectedHash && !destroyDiffExplainedByNormalization(ctx, app, entry, observed) && !sameBatchDependentsDestroyed:
 		// Present, but drifted from what was signed away -- refused,
 		// exactly like "Stale detected mid-partial-apply," generalized:
 		// destroying state the operator never actually reviewed defeats
