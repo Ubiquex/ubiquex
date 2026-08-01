@@ -1702,6 +1702,40 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 	return persist()
 }
 
+// destroyDiffExplainedByNormalization reports whether a destroy target's
+// raw ObservedHash mismatch (entry.State's own recorded hash vs a fresh
+// read's) is fully accounted for by core.FilterNormalizationNoise -- the
+// SAME semantic-equality filter core.RunScan's own drift verdict already
+// applies -- rather than a real change (UBI-63 session 5: a real, live
+// divergence found blocking the founder's own cleanup of a wounded stack:
+// `ubx scan` on a role/policy reported clean seconds before `ubx
+// terminate` on the exact same, untouched resources refused with
+// "destroy target drifted since it was signed away." Root cause: this
+// precheck compared core.ReadAndFingerprint's raw ObservedHash directly
+// -- a pipeline that never applies fix 1's own normalization, which lives
+// entirely inside RunScan -- while `scan`'s own verdict did. Same real
+// resource, same real state, two different comparison rules disagreeing).
+//
+// entry.State (already carried on every DestroyEntry, docs/schema.md) is
+// the ONLY place the destroy target's full recorded state is available at
+// this precheck -- resolution.inputs[].observed_hash is hash-only, by
+// design, so a full DiffAttributes needs entry.State specifically, not
+// destroyTargetFor's own return. A DiffAttributes/Schema failure here
+// fails safe -- treated as NOT explained, same terminal refusal as
+// before this existed, never silently waved through.
+func destroyDiffExplainedByNormalization(ctx context.Context, app Applier, entry core.DestroyEntry, observed json.RawMessage) bool {
+	before, after, err := core.DiffAttributes(entry.State, observed)
+	if err != nil {
+		return false
+	}
+	_, resourceSchemas, err := app.Schema(ctx)
+	if err != nil {
+		return false
+	}
+	fb, fa := core.FilterNormalizationNoise(before, after, resourceSchemas[entry.Address.Type])
+	return len(fb) == 0 && len(fa) == 0
+}
+
 // shipDestroyNode ships one delta.destroys entry within a change proposal
 // -- docs/executor.md's "Amendment (UBI-30): shipping destroys." Three
 // things distinguish this from shipCreate/shipModifyNode, all reused
@@ -1780,7 +1814,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		recordError(ctx, ra, fmt.Sprintf("freshness recheck: %v", readErr), core.ErrorRetryable)
 		*resourcesFailed++
 		return persist()
-	case hash != expectedHash:
+	case hash != expectedHash && !destroyDiffExplainedByNormalization(ctx, app, entry, observed):
 		// Present, but drifted from what was signed away -- refused,
 		// exactly like "Stale detected mid-partial-apply," generalized:
 		// destroying state the operator never actually reviewed defeats

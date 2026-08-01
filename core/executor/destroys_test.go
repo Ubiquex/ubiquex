@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,6 +73,83 @@ func TestShipDestroy_TargetDriftedSinceAcceptance_Refused(t *testing.T) {
 	}
 	if _, exists := fake.resources[addr.String()]; !exists {
 		t.Fatal("resource must still exist -- a drifted destroy target is refused, never destroyed")
+	}
+}
+
+// TestShipDestroy_NormalizationNoise_NotRefused is UBI-63 session 5's own
+// hermetic repro of a real, live divergence blocking the founder's actual
+// cleanup: `ubx scan` on a role/policy reported clean seconds before `ubx
+// terminate` on the EXACT SAME, untouched resources refused with "destroy
+// target drifted since it was signed away" -- same resource, same real
+// state, back to back, nothing touched in between. Root cause: this
+// precheck compared core.ReadAndFingerprint's raw ObservedHash directly,
+// a pipeline that never applies fix 1's own normalization (which lives
+// entirely inside core.RunScan) -- so a pure null<->zero-value
+// representation flip (real SDKv2-vintage provider read
+// nondeterminism, the same "bug 4" shape as ever) that scan correctly
+// waves through as "no drift" tripped this raw comparison instead.
+// destroyDiffExplainedByNormalization now applies the SAME
+// core.FilterNormalizationNoise filter RunScan's own verdict already
+// does, so this reproduces the fix, not the bug.
+func TestShipDestroy_NormalizationNoise_NotRefused(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+	addr := core.Address{Stack: "payments", Type: "fake_widget", Name: "role-1"}
+
+	// Adopted with tags recorded as null -- a real provider's own
+	// create-time response can leave an unset Optional map attribute
+	// null rather than {}.
+	recorded := json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"role-1","tags":null}`, addr.String()))
+	fake.setState(addr.String(), recorded)
+	res, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil || res.Outcome != core.ScanNew {
+		t.Fatalf("adopt: scan = %+v, err = %v", res, err)
+	}
+	p, err := core.GenerateProposal(l, "payments", res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.Accept(l, p); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing touches this resource -- but a later, separate read
+	// returns tags:{} instead of null: pure read nondeterminism, not a
+	// real change.
+	fake.setState(addr.String(), json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"role-1","tags":{}}`, addr.String())))
+
+	// Confirm scan itself still says clean (fix 1) -- the baseline this
+	// whole repro depends on.
+	scanRes, err := core.RunScan(context.Background(), fake, l, core.ScanRequest{Address: addr, CurrentState: lookupJSON(addr)})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if scanRes.Outcome != core.ScanUnchanged {
+		t.Fatalf("scan outcome = %v, want ScanUnchanged -- this is pure normalization noise", scanRes.Outcome)
+	}
+
+	// THE divergence: terminate on the exact same, untouched resource
+	// must NOT be refused as drifted.
+	state, found, err := l.FoldState(addr)
+	if err != nil || !found {
+		t.Fatalf("fold state: found=%v err=%v", found, err)
+	}
+	entry := core.DestroyEntry{Address: addr, State: state}
+	destroyProposal := acceptDestroy(t, l, "payments", []core.DestroyEntry{entry}, []core.ResolutionInput{destroyTargetInput(t, addr, state)})
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", destroyProposal)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	if sealed.Summary.Outcome != "applied" {
+		t.Fatalf("outcome = %s, want applied -- scan already confirmed this is normalization noise, not real drift", sealed.Summary.Outcome)
+	}
+	ra := sealed.Resources[0]
+	if len(ra.Reconciliation) != 2 || ra.Reconciliation[0].Outcome != "present_matches" || ra.Reconciliation[1].Outcome != "destroyed" {
+		t.Fatalf("reconciliation = %+v, want present_matches then destroyed", ra.Reconciliation)
+	}
+	if _, exists := fake.resources[addr.String()]; exists {
+		t.Fatal("resource still present after what should have been a clean destroy")
 	}
 }
 
