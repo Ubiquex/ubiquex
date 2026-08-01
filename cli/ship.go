@@ -144,8 +144,16 @@ consistency shows its own work instead of sitting silent.`,
 				hashArg = resolved
 			}
 
-			p, err := ledger.Read(hashArg)
+			p, err := resolveAcceptedProposal(ledger, hashArg)
 			if err != nil {
+				// UBI-63 session 5: an ambiguous short hash is a real,
+				// actionable problem the user must resolve by typing more
+				// characters -- surfaced directly, never silently tried
+				// against the plan store too (which could coincidentally
+				// "resolve" it to the wrong thing entirely).
+				if !errors.Is(err, core.ErrProposalNotFound) {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+				}
 				// UBI-49: not yet an accepted proposal in this stack's ledger
 				// -- fall back to a plan "ubx plan" saved locally. UBI-62:
 				// unlike before, this is no longer silent -- the receipt

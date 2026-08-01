@@ -559,3 +559,62 @@ func resolvePlanHash(ledgerDir, ref string) (fullHash string, p *core.Proposal, 
 		return "", nil, fmt.Errorf("%s: %w (matches %s)", ref, ErrPlanAmbiguous, strings.Join(matches, ", "))
 	}
 }
+
+// ErrProposalAmbiguous is resolveAcceptedProposal's own sentinel for a
+// short hash prefix matching more than one already-accepted ledger
+// proposal -- the ledger-side counterpart to ErrPlanAmbiguous above. A
+// prefix matching NOTHING in the ledger is core.ErrProposalNotFound
+// (ledger.Read's own sentinel, reused rather than duplicated) so a
+// caller like ship.go's RunE can fall through to the plan store exactly
+// as before this existed, on the same condition it already checked.
+var ErrProposalAmbiguous = errors.New("ambiguous proposal hash prefix")
+
+// resolveAcceptedProposal resolves ref -- a full proposal ID, or any
+// unique prefix of one (docs/cli-output-spec.md principle 3, "short-form
+// input accepted wherever hashes are arguments") -- against ledger's own
+// already-accepted proposals (ledger.Chain), mirroring resolvePlanHash's
+// own exact-then-prefix resolution for the plan store.
+//
+// UBI-63 session 5: a real, live divergence found blocking the founder's
+// own cleanup -- `ubx ship <short-hash>` on an already-accepted destroy
+// proposal refused with "no matching plan in the plan store," even
+// though ship's own doc comment already promises "looked up two ways, in
+// order: first as an already-accepted proposal id... if not found there,
+// as a plan." Root cause: ledger.Read only ever did an exact-ID lookup,
+// so a short hash that resolved fine against the plan store (which
+// already had prefix matching) found nothing in the ledger and never got
+// a chance to. The exact-hash case here is still a single store read,
+// unchanged from before this existed -- prefix matching only walks the
+// chain when that fails, the same "cheap path first" posture
+// resolvePlanHash already has.
+func resolveAcceptedProposal(ledger *core.Ledger, ref string) (*core.Proposal, error) {
+	if p, err := ledger.Read(ref); err == nil {
+		return p, nil
+	} else if !errors.Is(err, core.ErrProposalNotFound) {
+		return nil, err
+	}
+
+	chain, err := ledger.Chain()
+	if err != nil {
+		return nil, err
+	}
+	var matches []*core.Proposal
+	for _, p := range chain {
+		if strings.HasPrefix(p.ID, ref) {
+			matches = append(matches, p)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("proposal %s: %w", ref, core.ErrProposalNotFound)
+	case 1:
+		return matches[0], nil
+	default:
+		ids := make([]string, len(matches))
+		for i, m := range matches {
+			ids[i] = m.ID
+		}
+		sort.Strings(ids)
+		return nil, fmt.Errorf("%s: %w (matches %s)", ref, ErrProposalAmbiguous, strings.Join(ids, ", "))
+	}
+}
