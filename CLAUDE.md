@@ -73,6 +73,14 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 - Tests accompany every slice; adversarial/failure-path tests are first-class
   (provider timeout, partial state, interrupted operations). Live tests are
   gated behind env vars; `go test ./...` stays hermetic.
+- Rebuild and reinstall (`make install`, or `make build`) before re-testing
+  any fix against a real stack, and confirm `ubx version`'s printed commit
+  actually matches the fix's own commit before trusting the result. (UBI-63
+  session 4: a founder re-test against real AWS got an identical,
+  pre-fix-looking result from a stale binary — caught only afterward via a
+  manual `which`/`version` check, not before. `make build`/`make install`
+  now print `ubx version` immediately after rebuilding so this is one
+  command, not a separately-remembered step.)
 - Never run `ubx ship` (or anything else that reaches a provider's own
   `ApplyResourceChange` — a real apply) against a real cloud provider for
   live verification, demos, or doc transcripts, even one already
