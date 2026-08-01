@@ -4,6 +4,128 @@
 
 ## Current phase
 
+**UBI-67 session 1 (2026-08-02) — parallel execution: INVESTIGATION ONLY,
+per the ticket's own explicit instruction and 3-5 session sizing. No
+scheduler code written; docs/executor.md gained a real go/no-go read and
+a scheduling sketch. Go, but not as originally scoped — a genuinely new,
+more severe risk was found and empirically proven, separate from the two
+risks the ticket named.**
+
+The founder's finding motivating this ticket: a 5-resource terminate
+where SQS's own deletion lag was ~79s while ECR/role/policy/attachment
+each took ~1s — total wall time ~80s, even though most of those
+resources share no dependency and could run concurrently. This session's
+job was exactly the ticket's own four numbered asks, investigation only
+— see docs/executor.md's new "Amendment (2026-08-02, UBI-67 session 1)"
+section for the full write-up; this entry is the summary.
+
+**1. Provider client concurrency — de-risked, empirically.** Traced the
+full stack (`cli.stateReaderAdapter` → `provider.v5Provider`/`v6Provider`
+→ `*grpc.ClientConn`) and found no shared mutable state anywhere in it —
+every layer is either a stateless pass-through or (`SensitiveOverrides`)
+a static, never-mutated table. **Verified directly, not assumed** with a
+throwaway test (`provider/zzz_concurrency_investigation_test.go`, deleted
+after use): 50 concurrent `ReadResource`/`ApplyResourceChange` calls
+against one real `fakeprovider` subprocess, `go test -race` clean, zero
+cross-contamination between concurrent calls' own results. `cli.
+providerPool.Get` (the ApplierPool implementation) was ALREADY
+mutex-protected end to end — nothing to fix there; one minor
+missed-parallelism note recorded (the lock is held for the whole lazy
+launch, so two different providers' first `Get` calls serialize behind
+whichever launches first — a future optimization, not a bug). Residual,
+named risk: real provider SERVER binaries' own concurrent-request
+handling wasn't independently re-verified against real cloud (would
+require real credentials/infrastructure, against CLAUDE.md's own
+standing rule) — rests on Terraform's own default-parallelism precedent
+instead.
+
+**2. `reconcileSameBatchEffects`/the destroy freshness precheck under
+concurrent completion — traced, and both are ALREADY correct**, provided
+the scheduler preserves two invariants any correct parallel topo-sort
+executor must already provide anyway: a barrier before
+`reconcileSameBatchEffects` runs (it already runs once, after the whole
+walk, never mid-walk), and "never start a node before every one of its
+declared dependencies has durably completed" (which is what makes
+`sameBatchDependentsDestroyed`'s own static `len(n.dependsOn) > 0` check
+still correct unchanged). Neither needs new logic — only a doc-comment
+wording fix ("a later dependent" → "a sibling in this same batch") once
+real scheduler code exists.
+
+**3. The REAL, previously-unnamed risk this session found: today's
+persistence path silently LOSES data under naive parallelization.**
+Every one of `shipCreate`/`shipModifyNode`/`shipDestroyNode` directly
+mutates shared state — `rec.Resources` (a plain slice append),
+`resultsByAddr` (a plain map write), and three `*int64` outcome counters
+— with an implicit single-writer contract that only holds because
+today's walk is one serial `for` loop. **Verified directly, not
+assumed**, with a second throwaway test
+(`core/executor/zzz_concurrency_investigation_test.go`, deleted after
+use): fanned 8 independent (no `depends_on`) real `shipCreate` calls into
+goroutines, sharing the same `rec`/`persist`/`resultsByAddr` the real
+`shipChange` loop already threads through today, zero other code
+changed. `go test -race` fired real, repeated data-race warnings — AND,
+more seriously, `len(rec.Resources)` came back **3, not 8**: 5 of 8
+concurrently-appended resource entries were silently lost (the classic
+lost-update shape of an unsynchronized concurrent slice append). This is
+not cosmetic — a resource genuinely applied against a real provider could
+vanish from its own `ApplyRecord` entirely, breaking THE invariant
+(durable-before-risky-call), `ubx why`/`status`, and the idempotency
+contract a resumed `ubx ship` depends on (a silently-dropped entry looks
+identical to "never attempted," inviting a duplicate apply against real
+infrastructure next run).
+
+**4. Scheduling sketch (design only)**: goroutines gated on a
+dependency-ready mechanism (in-degree + reverse-edge bookkeeping,
+computed once from `changeNodesOf`'s own graph), not a fixed worker pool
++ queue — the graph is fully known up front, so the dependency edges
+themselves are the natural gating mechanism. The fix for finding 3: every
+`shipCreate`/`shipModifyNode`/`shipDestroyNode` call returns its own
+isolated result instead of mutating shared state directly; exactly ONE
+aggregator (single goroutine or mutex-guarded funnel) is the only code
+that ever touches `rec.Resources`/`resultsByAddr`/the counters/
+`persist()` — this makes Finding 3's races structurally impossible rather
+than patched over with a lock bolted onto today's multi-writer shape.
+Concurrency limit: a counting-semaphore channel, config/flag-controlled,
+default value an open question for the implementation session (Terraform's
+own `-parallelism=10` default named as a defensible anchor, not decided
+here).
+
+**5. Progress UI**: `cli/ship.go`'s `newProgressPrinter` (UBI-70's own
+polish) is explicitly built on "at most one resource in flight at a
+time" — a single shared ticker, a `\r`-based single-line overwrite —
+neither survives N simultaneous updates. Not a novel design problem:
+real Terraform's own `apply` output already solves this identically
+(never overwrite in place; every line fully discrete, always prefixed
+with the resource's own address) — adopting that convention here is
+real, scoped future work, not a research question. The printer's own
+`mu`-protected maps were never the concurrency problem; the rendering
+MODEL was.
+
+**Go/no-go: go, but not as originally scoped.** Both risks the ticket
+named are resolved (provider client: safe; the two UBI-63 mechanisms:
+already correct under the right invariants). The real blocker this
+session surfaced is the persistence-layer rework (Finding 3) — a genuine
+refactor of `core/executor`'s internals (every ship*Node signature loses
+its direct-shared-state-mutation shape), not a wrapper added around
+today's functions. **Revised sizing: the founder's own 3-5 session
+estimate looks right, maybe still light.** Recommended next session:
+build the aggregator + scheduler core first, proven hermetically
+(existing adversarial program + new concurrent-specific rows), before
+touching the CLI progress printer — the printer rewrite only needs "N
+ProgressEvents for different addresses can arrive interleaved," provable
+against a scripted fake without the real scheduler existing yet.
+
+Both throwaway investigation test files were deleted before this
+session's own commit, per the ticket's own "sketch... not code yet"
+instruction — the only change this session actually commits is
+docs/executor.md's new amendment section (plus this entry). Full suite
+green throughout (`go build ./...`, `go vet ./...`, `gofmt -l .` clean,
+`go test ./... -count=1`) — no Go code touched at all. docs/executor.md's
+own "Out of scope for v1" line for parallel execution updated to
+cross-reference this investigation rather than left silently stale.
+
+## Current phase (previous)
+
 **UBI-65 (2026-08-02) — ambiguity-as-visible-content extended to
 resource-SHAPE choices, not just attribute values. Prompt fix,
 permanent conformance fixture, live-verified against the real Claude

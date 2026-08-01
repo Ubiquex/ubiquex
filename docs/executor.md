@@ -1682,6 +1682,420 @@ correctly excluded it from `ubx status` while treating the ledger's own
 chain as permanently accurate history, not something to rewrite), and a
 new, correctly-verified destroy proposal closes it for real.
 
+## Amendment (2026-08-02, UBI-67 session 1): parallel execution — investigation only, go/no-go read
+
+**Scope of this session, stated exactly as sized**: UBI-67 is a real
+executor-architecture change (the founder's own sizing: 3-5 sessions).
+This session is investigation and design ONLY, per the ticket's own
+explicit instruction — no scheduler code was written, and nothing in
+`core/executor` or `cli` changed. Two throwaway test files were written,
+run under `go test -race`, and deleted before this session's own commit;
+their results are recorded below as evidence, not as artifacts anyone can
+re-run today. The founder's own live finding motivating this ticket
+stands unchanged: a 5-resource terminate where SQS's own deletion lag was
+~79s while ECR/role/policy/attachment each took ~1s (total wall time
+~80s) is real, measured, and would genuinely improve under a correct
+parallel scheduler.
+
+### Finding 1 — the provider client stack is safe for concurrent calls (empirically confirmed)
+
+Traced every layer between `core/executor.Applier` and the real
+subprocess: `cli.stateReaderAdapter` (a plain, immutable value struct —
+`salt []byte`/`source string`/`p provider.Provider`, every method a pure
+pass-through, nothing mutated) → `provider.v5Provider`/`v6Provider` (same
+shape: one immutable gRPC stub field, every method builds and sends one
+request, no shared buffers, no cached state) → `*grpc.ClientConn`
+(grpc-go's own documented contract: a single `ClientConn` is safe for
+concurrent RPCs from multiple goroutines by design — this is the
+mechanism real Terraform itself already relies on, since Terraform's own
+default `-parallelism=10` calls a single provider server instance
+concurrently across independent resources every time anyone runs `terraform
+apply` without overriding it).
+
+**Verified directly, not assumed** (this session's own throwaway
+`provider/zzz_concurrency_investigation_test.go`, deleted after use):
+launched one real `fakeprovider` subprocess (`FAKEPROVIDER_MODE=ok-v6`),
+fired 50 concurrent goroutines each calling `ReadResource` with its own
+distinct resource identity, then a second run doing the same for
+`ApplyResourceChange` — both passed clean under `go test -race`
+(`TestZZZ_ConcurrentReadResource_SameClient`,
+`TestZZZ_ConcurrentApplyResourceChange_SameClient`), zero race-detector
+warnings, and every goroutine's own result decoded back to exactly the
+value IT requested (no cross-contamination between concurrent calls'
+responses — gRPC's own per-RPC stream framing keeps them correctly
+isolated).
+
+`provider.Redact`/`provider.OverridePathsFor` (the redaction path every
+`ReadResource`/`ApplyResourceChange` result already passes through,
+`cli/stateadapter.go`) touch only `SensitiveOverrides`, a package-level
+`var` that is a static, never-mutated-after-init table (`provider/
+overrides.go`) — safe for unlimited concurrent reads by construction, no
+lock needed or missing.
+
+**Residual risk, named honestly**: this confirms ubx's own CLIENT-side
+code is race-free. It does not independently re-verify that an arbitrary
+real provider SERVER binary (`terraform-provider-aws`, etc.) handles
+concurrent requests correctly on its own end — doing that meaningfully
+would need real credentials and a real `ApplyResourceChange` against
+live infrastructure, which CLAUDE.md's own standing rule forbids for
+verification purposes. This rests on Terraform's own well-established
+precedent (default parallelism already exercises exactly this shape
+against real provider binaries, at scale, for every user who has ever run
+plain `terraform apply`) rather than a fresh empirical check here — a
+real, if low-probability, gap, not a blocker.
+
+### Finding 2 — `ApplierPool.Get` is ALREADY safe for concurrent use (no change needed), with one minor lock-scope note
+
+`cli.providerPool` (`cli/providerpool.go`) already wraps its entire `Get`
+body in `p.mu sync.Mutex` — the lazy launch-and-cache map (`p.launched`)
+is already correctly protected against a concurrent double-launch race
+for the same `(source, version)` key. **Point 2 of the ticket's own ask
+("verify the pool... is safe for concurrent use, or serialize per-
+provider") is already satisfied by existing code, not something this
+arc needs to build.**
+
+One real, minor inefficiency worth naming for the scheduler design,
+below: the mutex is held for the ENTIRE `Get` call, including the actual
+subprocess launch + handshake (`p.launch(ctx, source, pinned)`, which can
+take up to `defaultHandshakeTimeout` = 10s). A scheduler that calls
+`pool.Get` from many worker goroutines at the very start of a multi-
+provider ship would have every OTHER provider's first `Get` call block
+behind whichever provider happens to launch first, even though they're
+completely independent processes — serializing exactly the "cold start"
+phase this ticket exists to parallelize away. Not a correctness bug, a
+missed-parallelism opportunity: a future fix could use a per-key lock
+(e.g. `sync.Map` of per-source mutexes, or launch every declared provider
+eagerly up front before the walk starts, rather than lazily on first
+`Get`) — named here so it isn't rediscovered as a surprise once real
+scheduler code exists.
+
+### Finding 3 — the REAL blocker: today's persistence path is not safe for concurrent access, and silently LOSES data under naive parallelization (empirically confirmed, severe)
+
+This is the load-bearing finding of this session. `shipChange`'s own
+per-node loop (`ship.go`) does three things after every single
+transition, not just once per resource:
+
+1. `rec.Resources = append(rec.Resources, ra)` — mutates a plain Go
+   slice header held on the shared `*core.ApplyRecord` passed into every
+   node's own step function.
+2. `persist()` → `l.SaveApplyProgress(rec)` → `writeApplyFile` →
+   `json.MarshalIndent(rec, ...)` then one atomic file write — this
+   marshals the ENTIRE `rec`, including every OTHER node's own
+   `*core.ResourceApply` entries already appended to `rec.Resources`,
+   and writes the whole record to the SAME on-disk attempt file every
+   time, from wherever `persist()` happens to be called (this is called
+   many times per resource — once per transition — not once at the end).
+3. `resultsByAddr[key] = ra.ProviderResult` — a plain
+   `map[string]json.RawMessage` write, read by both the dependency-ready
+   check (`missingDep`) and `substituteComputed`.
+
+None of these three is synchronized in any way today — correct only
+because today's whole walk is a single `for` loop, one node at a time.
+**Verified directly, not assumed** (this session's own throwaway
+`core/executor/zzz_concurrency_investigation_test.go`, deleted after
+use): took 8 independent `delta.creates` nodes (no `depends_on` between
+them — exactly the "these could obviously run concurrently" case this
+ticket's own SQS/ECR example names), fanned each one's existing,
+UNMODIFIED `shipCreate` call into its own goroutine, sharing the same
+`rec`/`persist`/`resultsByAddr` the real `shipChange` loop already
+threads through today, and ran under `go test -race`:
+
+- The race detector fired repeatedly and unambiguously: concurrent
+  reads/writes on `rec.Resources`'s slice header (including one
+  `runtime.growslice` race caught mid-append), and a concurrent read
+  inside `json.MarshalIndent` (walking one goroutine's own `ra.Transitions`)
+  racing against a DIFFERENT goroutine's write to `rec.Resources` itself.
+- **Worse than a race-detector-only finding: real data was silently
+  lost.** `len(rec.Resources)` came back **3, not 8** — 5 of 8
+  concurrently-appended `*core.ResourceApply` entries vanished
+  completely, the classic lost-update shape of an unsynchronized
+  concurrent slice append (multiple goroutines read the same slice
+  header, each appends to its own local copy, whichever write lands last
+  wins, the rest are silently overwritten). This is not a benign,
+  cosmetic race — a resource genuinely applied against a real provider
+  could disappear from its own `ApplyRecord` entirely under naive
+  parallelization, breaking `docs/executor.md`'s own THE invariant
+  (a transition must be durably on disk), `ubx why`/`ubx status`'s
+  ability to ever show that resource's outcome, and the idempotency
+  contract this whole package exists to guarantee (a resumed `ubx ship`
+  re-reads `ApplyAttempts` to decide what's already done — an entry that
+  was silently dropped looks exactly like a resource that was never
+  attempted at all, inviting a duplicate create/destroy against a real
+  provider on the next run).
+
+**This is the real go/no-go question this ticket's point 2 was
+investigating, and the honest answer is: parallelizing the walk is
+NOT safe as a "wrap today's per-node functions in goroutines" change.**
+Every one of `shipCreate`/`shipModifyNode`/`shipDestroyNode`'s own
+signatures was designed around an implicit single-writer contract —
+`rec.Resources`, `resultsByAddr`, and the three `*int64` outcome
+counters (`resourcesApplied`/`resourcesFailed`/`resourcesStillUnknown`,
+also unsynchronized non-atomic increments, the identical hazard class as
+`rec.Resources`) are all shared, directly-mutated state, threaded by
+pointer/closure into what would become N concurrent callers. A real fix
+needs an architectural change to this contract, not a mutex bolted onto
+the outside — see the scheduling sketch below.
+
+### Finding 4 — `resultsByAddr`/the dependency-ready check: correct in shape, needs a different mechanism under concurrency
+
+Today's `missingDep` check (`for _, dep := range n.dependsOn { if _,
+ok := resultsByAddr[dep]; !ok { ... } }`) is checked exactly ONCE per
+node, at the moment that node's own turn in the serial walk begins — this
+is only correct because the serial walk's own topo order already
+guarantees every dependency was fully processed (and, if applied,
+already written into `resultsByAddr`) before this node's turn ever
+starts. Under concurrency this same single-check-then-proceed shape is
+NOT sufficient on its own: a node's dependency may not have started yet,
+or may still be mid-flight, at the exact moment a naive scheduler
+launches this node's own goroutine — checking `resultsByAddr` once and
+either proceeding or refusing (today's binary outcome: proceed, or a
+terminal "blocked: dependency has not applied" failure) would incorrectly
+refuse perfectly-appliable resources just because their dependency
+hadn't finished YET, not because it never would.
+
+**What must replace it**: the check itself (comparing `n.dependsOn`
+against a set of already-completed addresses) stays exactly the same
+semantically — what changes is that a node must genuinely WAIT for its
+own dependencies' completion (a signal, not a single point-in-time
+poll) before starting, and only then treat a still-missing dependency as
+a real, terminal "blocked" failure (i.e., the dependency itself failed
+or was never eligible, not merely "hasn't gotten to it yet"). This is
+exactly what a parallel topo-sort scheduler's own "ready" set/channel
+mechanism is for (see the scheduling sketch below) — the missingDep
+check's own logic doesn't need to change, only WHEN it's evaluated
+relative to sibling completion.
+
+### Finding 5 — `reconcileSameBatchEffects` and the destroy freshness precheck: correct under concurrency, PROVIDED the scheduler preserves two specific invariants
+
+Traced both functions against a concurrent-completion scenario, per the
+ticket's own explicit ask.
+
+**`reconcileSameBatchEffects`** already runs strictly AFTER the entire
+walk finishes (`shipChange` calls it once, synchronously, right after
+`sealOutcome` — never mid-walk). This means it is unaffected by whether
+the WALK itself was serial or concurrent, **as long as the scheduler
+correctly joins/barriers every worker goroutine before calling it** — by
+the time it runs, `rec.Resources` and `resultsByAddr` are fully populated
+and stable either way. The one thing that changes, purely in wording,
+not mechanism: the function's own doc comment currently reasons about "a
+LATER same-batch dependent's own apply" mutating an earlier resource —
+under concurrent completion, "later" no longer names a single
+unambiguous point in a timeline (two dependents could complete in either
+order, or simultaneously). The underlying claim this function's whole
+mechanism depends on — "any observed diff on a depended-on resource is
+attributable to a sibling in THIS SAME BATCH, not something external" —
+does not actually depend on serial ordering at all; only the doc
+comment's own phrasing needs updating (to "a sibling in this same batch,
+completed at some point during the walk" rather than "a later" one) once
+real scheduler code lands.
+
+**The destroy freshness precheck** (`destroyDiffExplainedByNormalization`
++ `sameBatchDependentsDestroyed`, UBI-63 session 5's own fix) is called
+from `shipDestroyNode`, which — critically — is only ever reached AFTER
+the `missingDep` check has already confirmed every one of `n.dependsOn`'s
+addresses is present in `resultsByAddr` (i.e., already destroyed, for a
+destroy node's own reverse-edge dependency set). `sameBatchDependentsDestroyed
+:= len(n.dependsOn) > 0` is a STATIC property of the node (does this
+destroy have any declared reverse dependency at all in this proposal?),
+not something computed from real-time completion order — so this
+argument's own correctness transfers to a concurrent scheduler
+UNCHANGED, **provided that scheduler enforces the exact same
+"never start a node before every one of its declared dependencies has
+durably completed" invariant the serial walk gets for free from its own
+loop structure.** This is not a new invariant a concurrent scheduler
+would need to invent — it is the DEFINING correctness property any
+parallel topo-sort executor must already guarantee, or it isn't
+implementing dependency order at all. Named explicitly because it means
+this precheck needs zero logic changes once a correct scheduler exists —
+its correctness is inherited for free from the same property that makes
+the scheduler a correct topo-sort executor in the first place, not
+something that needs its own separate proof.
+
+**Conclusion for point 2's whole investigation**: neither
+`reconcileSameBatchEffects` nor the destroy freshness precheck is a
+reason to be MORE cautious about this ticket than Finding 3 already
+requires — both are already correct under concurrency, conditioned on
+invariants ("barrier before post-walk reconciliation," "never start a
+node ahead of its dependencies' durable completion") that a correct
+scheduler must provide anyway, for reasons unrelated to these two
+functions specifically.
+
+### Scheduling approach sketch (design only, no code this session)
+
+**Goroutines + a dependency-ready mechanism, not a fixed-size worker
+pool with a work queue.** The graph is already known in full up front
+(`changeNodesOf` decodes and topo-validates it before any node starts) —
+a worker-pool-plus-queue design (N long-lived workers pulling from a
+shared channel) is the right shape when work items arrive over time or
+are homogeneous; here, the *dependency edges themselves* are the
+scheduling constraint, which maps far more directly onto "launch a
+goroutine per node, gated on a channel/WaitGroup per dependency" than
+onto a generic queue a pool drains. Sketch:
+
+1. For every node, compute its in-degree (count of `dependsOn` entries)
+   and its dependents (reverse edges) — a one-time, cheap graph
+   transform over `changeNodesOf`'s own output, computed once before any
+   node starts.
+2. Every node with in-degree 0 is immediately eligible; launch its own
+   goroutine right away (bounded by the concurrency limit, below).
+3. Each node's own goroutine does exactly what `shipCreate`/
+   `shipModifyNode`/`shipDestroyNode` already do TODAY, with one
+   structural change: instead of directly mutating `rec.Resources`/
+   `resultsByAddr`/the three counters, it returns its own result (or
+   sends it down a single results channel) to be applied by exactly ONE
+   place.
+4. That one place — a single aggregator goroutine (or a mutex-guarded
+   funnel; a channel-fed single writer is the cleaner match for this
+   codebase's existing "durably persist, then proceed" sequencing, and
+   sidesteps needing a lock around the JSON-marshal-and-write itself) —
+   is the ONLY code that ever appends to `rec.Resources`, writes
+   `resultsByAddr`, increments the three counters, or calls `persist()`.
+   This directly fixes Finding 3: there is exactly one writer, so the
+   lost-append/torn-marshal races this session proved empirically simply
+   cannot occur, by construction, not by adding synchronization around
+   the existing multi-writer shape.
+5. When a node completes (successfully applied, in the sense that
+   satisfies a dependent — see Finding 4), the aggregator decrements the
+   in-degree of every one of its dependents; any dependent that reaches
+   0 is now eligible and gets its own goroutine launched (still gated by
+   the concurrency limit). A node whose dependency FAILED (terminal, not
+   merely slow) is what actually produces today's "blocked: dependency
+   has not applied" outcome — now a real, permanent decision (the
+   dependency will never complete), not a premature poll.
+6. The walk finishes when every node has reached a terminal state
+   (applied/failed/still_unknown/blocked). The aggregator's own
+   completion is the correct join point for `sealOutcome` and
+   `reconcileSameBatchEffects` (Finding 5's own barrier requirement).
+
+**Concurrency limit**: a config/flag-controlled max-parallel (the
+ticket's own point 6), enforced via a plain buffered channel used as a
+counting semaphore (acquire a slot before a node's goroutine starts real
+provider work, release when it completes) — never unbounded, since a
+real provider's own rate limits are real (this codebase already has a
+live-verified precedent for respecting a provider's own pace: the
+destroy reconcile backoff schedule's own escalating waits, UBI-42/44).
+Default value not decided this session — a real, deliberate open
+question for the implementation session, not silently assumed (a
+reasonable starting point mirroring Terraform's own long-standing
+`-parallelism=10` default is a defensible anchor, not a decision made
+here).
+
+**Error aggregation** (the ticket's own point 5): already correct in
+SHAPE today — an independent node's own failure doesn't currently stop
+unrelated siblings (`shipChange`'s own doc comment: "a blocked resource
+here only blocks its OWN dependents"). Under the aggregator design
+above, this property is preserved directly: a failed node still reports
+its own terminal outcome to the aggregator and still correctly
+propagates "blocked" to its OWN dependents' in-degree bookkeeping,
+exactly as it does serially today — no new design needed here beyond
+what Finding 4 already covers.
+
+### Progress UI: today's design assumes exactly one resource in flight at a time — must change, but there's a known-good reference design
+
+`cli/ship.go`'s `newProgressPrinter` (UBI-70's own polish) is EXPLICITLY
+built on "at most one resource is ever in_flight/verifying at a time" (its
+own doc comment says so directly): one shared ticker (not per-address),
+a single `\r`-based in-place-overwrite convention for the live "shipping"/
+"verifying via read-back" line, and an implicit assumption that a
+resource's own header line prints, then its transitions run to
+completion, before the next resource's header ever appears. None of this
+survives N genuinely simultaneous in-flight resources: multiple tickers
+would need to coexist, and a single-line `\r` overwrite has no way to
+represent more than one concurrently-updating line on a real terminal at
+once.
+
+**This is a well-understood problem with a well-known reference
+solution, not a novel design question**: real Terraform's own `apply`
+output, under its own default concurrent execution, solves this
+identically — it never uses in-place overwrite for anything. Every
+progress line is fully discrete, always prefixed with the resource's own
+address (`aws_instance.foo: Still creating... [10s elapsed]`), so N
+concurrent resources' own lines interleave in whatever real order they
+actually occur, and remain completely legible without any terminal
+cursor coordination at all. Adopting the identical convention here means:
+
+- Drop the single shared ticker in favor of either (a) one ticker per
+  currently in-flight resource, each independently emitting its own
+  fully-discrete, address-prefixed line per tick (not overwritten), or
+  (b) a single ticker that, once per interval, emits one discrete line
+  per CURRENTLY in-flight resource (closer to Terraform's own actual
+  behavior, and avoids a burst of N simultaneous lines at the same
+  instant looking like uncoordinated noise).
+- Keep the `mu sync.Mutex` this printer already has (already correctly
+  guards the shared `starts`/`seen` maps against concurrent
+  `ProgressEvent` delivery) — concurrency here was never the map-safety
+  problem, it's the RENDERING MODEL that assumed serial narration.
+- The one-blank-line-between-resources convention and the "print this
+  resource's own header exactly once, on first sight" logic both still
+  work unchanged under concurrent delivery (each keyed by `ev.Address`
+  already) — they don't assume serial completion, only that a given
+  address's OWN events arrive in that address's own internal order,
+  which any correct scheduler still guarantees per-node.
+- Non-TTY mode (already "discrete lines only, no ticker" today) needs
+  literally no change at all — it was already address-agnostic-safe
+  under concurrent delivery, since it never assumed a single shared
+  live-updating line to begin with.
+
+This is real, scoped implementation work for a future session (a
+`newProgressPrinter` rewrite + new adversarial rows for "5+ concurrent
+updates stay legible"), not a design risk — the reference solution
+already exists and is proven at scale (every `terraform apply` anyone
+has ever run with default parallelism).
+
+### Go/no-go read
+
+**Go, but not as originally scoped.** The two real risks this session
+was asked to resolve:
+
+1. **Provider client concurrency** — de-risked. Confirmed safe
+   empirically at the client layer; `ApplierPool.Get` already safe
+   (existing code, no change needed). Residual risk (real provider
+   SERVER-side concurrent-request handling) rests on Terraform's own
+   long-established precedent, not fresh verification here, and is a
+   low-probability, named gap rather than a blocker.
+2. **`reconcileSameBatchEffects`/destroy freshness precheck under
+   concurrent completion** — both ALREADY correct under concurrency,
+   conditioned on invariants (barrier before post-walk reconciliation;
+   never start a node ahead of its dependencies' durable completion) any
+   correct scheduler must provide regardless. Not a blocker, and needs no
+   new logic beyond a doc-comment wording update.
+
+**The real, previously-unnamed risk this session surfaced instead**:
+today's persistence path (`rec.Resources` append, `resultsByAddr`, the
+three outcome counters, `persist()`/`SaveApplyProgress` itself) has an
+implicit single-writer contract baked into `shipCreate`/`shipModifyNode`/
+`shipDestroyNode`'s own signatures, and naively parallelizing by wrapping
+today's functions in goroutines does not just risk a benign data race —
+it was empirically shown to silently DROP resource entries from the
+apply record (3 of 8 survived a concurrent fan-out in this session's own
+throwaway test). This is fixable — the single-aggregator-writer sketch
+above is a known, standard pattern, not a research problem — but it
+means the real scope of "the concurrency-safe walk" (the ticket's own
+point 1) is larger than "add goroutines to the existing loop": every
+`shipCreate`/`shipModifyNode`/`shipDestroyNode` signature needs to stop
+directly mutating shared state and instead return an isolated result for
+a single aggregator to apply, which touches every call site and every
+existing hermetic test in `core/executor/ship_test.go` that constructs
+one of these calls directly.
+
+**Revised sizing**: the founder's own 3-5 session estimate looks right,
+maybe still light — the aggregator rework (Finding 3) is a genuine
+refactor of `core/executor`'s own internals touching all three ship*Node
+functions and their shared-state parameters, not a wrapper added around
+them, and the progress-UI rewrite (while a known reference design, not a
+research question) is real, separate implementation work with its own
+adversarial program (5+ concurrent updates, provider pool
+exhaustion/contention, a resource whose dependency fails mid-flight
+rather than up front). Recommended next session: build the aggregator +
+scheduler core in `core/executor` first (Findings 3/4, the load-bearing
+correctness work), proven hermetically against the existing adversarial
+program PLUS new concurrent-specific rows, before touching the CLI
+progress printer at all — the printer rewrite has no correctness
+dependency on the scheduler's own internals beyond "N `ProgressEvent`s
+for different addresses can now arrive interleaved," so it can be
+verified against a scripted fake emitting exactly that shape without
+waiting for the real scheduler to exist.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**
@@ -1693,7 +2107,12 @@ new, correctly-verified destroy proposal closes it for real.
   <address>` afterward~~ — **fixed, UBI-29**: see this document's own
   "Amendment (2026-07-17, UBI-29)" section above.
 - Parallel execution — across resources within one proposal, or across
-  proposals/stacks. Serial, delta/dependency order, full stop.
+  proposals/stacks. Serial, delta/dependency order, still true as of this
+  writing — **UBI-67 session 1 (2026-08-02)** investigated the real
+  design/risk questions (see this document's own "Amendment (2026-08-02,
+  UBI-67 session 1)" section, above) and produced a go/no-go read plus a
+  scheduling sketch, but wrote no scheduler code — still fully serial
+  until a future implementation session lands.
 - ~~Multi-provider stacks (one `ubx ship` invocation, one `Applier`, no
   client pool; `providerConfig` one global value regardless of provider;
   no `.ubx/config` wiring) — executor + CLI code.~~ — **fixed, UBI-43
