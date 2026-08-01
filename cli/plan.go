@@ -45,20 +45,22 @@ import (
 // unchanged for teams who want that extra checkpoint as a separate step.
 func newPlanCmd() *cobra.Command {
 	var (
-		ledgerDir       string
-		providerPath    string
-		source          string
-		providerVersion string
-		out             string
-		timeout         time.Duration
-		knownDependents []string
-		fromCode        string
-		fromDoc         string
-		fromDiagram     string
-		stack           string
-		summary         string
-		neighborLedgers []string
-		fullHashes      bool
+		ledgerDir        string
+		providerPath     string
+		source           string
+		providerVersion  string
+		out              string
+		timeout          time.Duration
+		knownDependents  []string
+		fromCode         string
+		fromDoc          string
+		fromDiagram      string
+		stack            string
+		summary          string
+		neighborLedgers  []string
+		fullHashes       bool
+		showDefaultsFlag bool
+		hideDefaultsFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -141,6 +143,15 @@ propose-time PR trailer hash, etc.).`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 			cfg := rc.Config
+
+			// UBI-72: resolved up front, before any drafting/resolving
+			// work -- a --show-defaults/--hide-defaults conflict is a
+			// usage error, not something worth doing real work before
+			// discovering.
+			showDefaults, err := resolveShowDefaults(cmd, cfg)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -270,7 +281,7 @@ propose-time PR trailer hash, etc.).`,
 			}
 
 			st := newStylerFull(cmd, fullHashes)
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel))
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults)
 			// UBI-49 polish: the hash IS the reference (docs/cli-output-
 			// spec.md principle 3) -- the plan file's own path on disk is
 			// an implementation detail nothing downstream ever needs (not
@@ -306,6 +317,8 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringVar(&summary, "summary", "", "intent.summary for the draft (only with --from-diagram -- a diagram has no prose to derive one from; defaults to a generated summary naming the stack and resource count if omitted)")
 	cmd.Flags().StringArrayVar(&neighborLedgers, "neighbor-ledger", nil, "<stack>=<path> mapping a diagram's own cross-stack reference to a real ledger directory, overriding the \"../<stack>\" convention (repeatable, only with --from-diagram)")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
+	cmd.Flags().BoolVar(&showDefaultsFlag, "show-defaults", false, "render the full \"AI defaults\" block regardless of [intent] show_defaults (mutually exclusive with --hide-defaults)")
+	cmd.Flags().BoolVar(&hideDefaultsFlag, "hide-defaults", false, "collapse the \"AI defaults\" block to a one-line count regardless of [intent] show_defaults (mutually exclusive with --show-defaults) -- full detail is always in the saved plan file and the signed proposal either way")
 	return cmd
 }
 
@@ -403,7 +416,14 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 // one, nothing at all for `ubx terminate`, whose own address IS the
 // spec) and `ubx ship`'s own confirmation header names a plan age
 // instead of a source entirely.
-func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string) {
+//
+// showDefaults is UBI-72's own [intent] show_defaults resolution
+// (config.go's resolveShowDefaults) -- `ubx plan` passes its own resolved
+// value; `ubx terminate`/`ubx promote` pass true unconditionally, since
+// neither ever populates Intent.Assumptions/Defaults with real AI content
+// (no LLM in either path) -- there's nothing for false to ever collapse
+// there, so neither needs its own --show-defaults/--hide-defaults flags.
+func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool) {
 	// docs/cli-output-spec.md §v2: "NO AI summary sentence under the
 	// header (remove it)" -- the founder's own markup against the real
 	// 5-resource platform.md case found this line pure noise once every
@@ -442,7 +462,7 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 		return
 	}
 	fmt.Fprintln(out)
-	renderAmbiguityStyled(out, st, p.Intent.Assumptions, p.Intent.Defaults, p.Intent.Questions)
+	renderAmbiguityStyled(out, st, p.Intent.Assumptions, p.Intent.Defaults, p.Intent.Questions, showDefaults)
 }
 
 // planReceiptHeader builds renderPlanReceipt's own "Plan  <stack> · from

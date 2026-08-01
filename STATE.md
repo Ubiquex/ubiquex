@@ -4,6 +4,114 @@
 
 ## Current phase
 
+**UBI-72 (2026-08-01) — `[intent] show_defaults` config key: collapse
+the "AI defaults" block for repeat/experienced use, default `true`
+(shown). Fully hermetic; live-verified against the real built binary +
+fakeprovider anyway.**
+
+New `IntentConfig.ShowDefaults *bool` (`cli/config.go`) -- a pointer,
+deliberately, not a bare `bool`: the default is `true` (shown), and only
+a pointer distinguishes "never mentioned anywhere in the cascade" (nil)
+from "explicitly set to `false`" -- a bare bool's own zero value would
+otherwise silently flip the default the moment the struct decodes from a
+config that never mentions the key at all. New `resolveShowDefaults(cmd,
+cfg)` (`cli/config.go`): `--show-defaults`/`--hide-defaults` (both
+`Changed()`-checked, refused together) override config either direction;
+absent either flag, `cfg.Intent.ShowDefaults` wins if set, else `true`.
+
+Rendering side (`cli/intentrender.go`): `renderAmbiguityStyled` and
+`renderPlanReceipt` (`cli/plan.go`) both gained a `showDefaults bool`
+parameter. `false` replaces the purple "AI defaults — you are signing
+these:" block + bulleted list with one line (new `renderAIDefaultsCollapsed`):
+"N AI default(s) applied -- ubx plan --show-defaults to review, or see
+the saved plan file". **Display-only, verified structurally, not just by
+assertion**: the collapsed path never touches `p.Intent.Assumptions`/
+`Defaults` themselves, only how `renderAmbiguityStyled` renders them --
+the saved plan file (`writePlanFile`, already called before
+`renderPlanReceipt` in `ubx plan`'s own RunE) and the signed proposal
+carry the full text regardless, confirmed by a test that renders
+collapsed then reads the saved plan file back and checks the full
+`AmbiguityNote.Text` is still there. Questions (`renderQuestions`) are
+called unconditionally regardless of `showDefaults` -- never collapsed,
+per the ticket's own explicit carve-out (a blocking ambiguity is never
+merely informational the way an assumption/default is).
+
+Scope held to `ubx plan`'s own receipt specifically, matching the
+ticket's own message text ("ubx plan --show-defaults... or see the saved
+plan file") and Founder finding (repeat/experienced use of `ubx plan`):
+`--show-defaults`/`--hide-defaults` flags added ONLY to `ubx plan`.
+`renderAmbiguity` (`ubx propose --from-doc`/`--from-diagram`'s and `ubx
+chat`'s own pre-resolve draft review, `cli/propose.go`/`cli/chat.go`)
+keeps its old signature and hardcodes `showDefaults=true` internally --
+untouched, deliberately: that review step has no "saved plan file" yet
+(the draft may never even be written to disk, `--out` is optional), so
+the collapsed message's own wording wouldn't fit, and the founder's own
+finding named `ubx plan` specifically, not propose/chat. `renderPlanReceipt`'s
+other two callers (`ubx terminate`, `ubx promote`) both pass `true`
+unconditionally with a comment explaining why: neither path is ever
+LLM-authored (terminate builds its own intent directly from an address,
+promote re-resolves fresh against the target's own live state), so
+`Intent.Assumptions`/`Defaults` are always empty there and neither needed
+its own flags.
+
+**A real bug caught and fixed before it shipped, not by the ticket's own
+tests**: `configcascade.go`'s `warnUnknownKeys` walk maintains its own
+separate `knownIntentKeys` allowlist (docs/intent-provider.md's "Unknown-
+key checking, extended" -- a config typo warns, never fails, but only for
+keys this list doesn't already know), independent of `IntentConfig`'s own
+struct tags -- adding `ShowDefaults` to the struct was not enough on its
+own. First live-verification pass (`ubx plan` against a real `.ubx/config`
+with `intent = { show_defaults = false }`) showed the key **worked**
+(genuinely collapsed the block) while **also** spuriously warning
+`unknown config key "intent.show_defaults" (ignored)` -- caught only by
+actually running it against the real binary, since no existing test
+(before this session added one, below) exercised `warnUnknownKeys`
+against this specific new key. Fixed by adding `"show_defaults": true` to
+`knownIntentKeys`; a new
+`TestLoadConfig_IntentShowDefaults_ParsesAndNeverWarns` (`cli/config_test.go`)
+guards the regression directly, and `TestLoadConfig_IntentShowDefaults_AbsentIsNil`
+proves the nil-vs-false pointer distinction actually holds through a real
+parse, not just in the struct's own doc comment.
+
+Hermetic tests: `cli/plan_showdefaults_test.go` (new) -- default-true
+baseline, config-false collapses (plus the saved-plan-file full-detail
+check above), questions-never-collapse, both flag-override directions,
+both-flags-mutually-exclusive-errors, and a TTY/NO_COLOR pair proving the
+collapsed line is purple on a real terminal and plain under `NO_COLOR`
+(docs/cli-output-spec.md principle 2, unaffected by this ticket).
+`cli/config_test.go` gains six direct `resolveShowDefaults` precedence-
+matrix unit tests (neither/config-true/config-false/show-wins/hide-wins/
+both-error) plus the two `LoadConfig`-level tests above. Full suite green
+(`go build ./...`, `go vet ./...`, `go test ./... -count=1`).
+
+Live-verified against the real built binary (`make build`, version-
+checked) + fakeprovider: a hand-written intent file (assumptions +
+defaults + a blocking question) run through `ubx plan` four ways --
+default (full block), `--hide-defaults`, `[intent] show_defaults = false`
+in a real `.ubx/config` (cwd-relative, not `--ledger-dir`-relative --
+confirmed by first getting this wrong and seeing the config silently not
+apply until run from the right directory), and `--show-defaults`
+overriding that same config file -- each transcript byte-matched what the
+hermetic tests already asserted, and this same live pass is what caught
+the `knownIntentKeys` gap above. `ubx config` also confirmed to show
+correct provenance for the new key once the false-warning was fixed. No
+`ubx ship` or any command run against a real cloud provider.
+
+ubiquex-docs updated in the same session: `cli/config.mdx` gains a new
+`show_defaults` row in the `[intent]` table and its own subsection (real
+transcript, the `--show-defaults`/`--hide-defaults` override examples,
+and a `<Warning>` covering both required notes -- display-only/never-
+omitted, and WHY the default is `true`, the review/trust design center,
+so the option doesn't read as "safe to always turn off"). `cli/plan.mdx`
+gains the two flags in its own flags table and a `<Note>` on the existing
+"AI defaults render as their own titled block" example pointing at
+config.mdx's fuller treatment. `mint validate`/`mint broken-links` both
+clean. Committed and pushed to `ubiquex-docs` directly (`cli-ref:
+[intent] show_defaults config key -- collapse the AI defaults block
+(UBI-72)`).
+
+## Current phase (previous)
+
 **UBI-70 + UBI-71 + UBI-61's remaining comment findings (2026-08-01) —
 ship progress noise cut, status/scan redundancy cut, "shipping" label
 rename, general +/-/~ header coloring rule. Done together in one session

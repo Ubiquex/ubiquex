@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -79,6 +80,19 @@ type IntentConfig struct {
 	KeyRef  KeyRefConfig `toml:"key_ref" json:"key_ref"`
 	Auth    string       `toml:"auth" json:"auth"`
 	Vertex  VertexConfig `toml:"vertex" json:"vertex"`
+	// ShowDefaults is UBI-72's own [intent] key: whether `ubx plan`'s
+	// receipt renders the full "AI defaults — you are signing these:"
+	// block, or collapses it to a one-line count. A pointer, not a bare
+	// bool, specifically so "never set anywhere in the cascade" (nil) is
+	// distinguishable from "explicitly set to false" -- the default is
+	// true (shown), and a bare bool's own zero value (false) would
+	// otherwise be indistinguishable from an explicit opt-out, silently
+	// flipping the default the moment this struct decodes from a config
+	// that never mentions the key at all. This is the review/trust design
+	// center (docs/intent-provider.md's "ambiguity as visible content"):
+	// defaults must stay visible unless a human deliberately turns them
+	// off, never invisible by silent accident.
+	ShowDefaults *bool `toml:"show_defaults" json:"show_defaults"`
 }
 
 // KeyRefConfig is IntentConfig.KeyRef -- a reference to where a real key
@@ -314,4 +328,32 @@ func applyTFDirDefault(cmd *cobra.Command, tfDir *string, cfg *Config) {
 	if !cmd.Flags().Changed("tf-dir") && cfg.TFDir != "" {
 		*tfDir = cfg.TFDir
 	}
+}
+
+// resolveShowDefaults is UBI-72's own precedence resolution: --show-
+// defaults/--hide-defaults (a caller's own two BoolVar flags, both
+// defaulting false so "neither given" is the ordinary case) override
+// cfg.Intent.ShowDefaults either direction, which itself defaults to
+// true (shown) when the cascade never mentions `show_defaults` at all --
+// see IntentConfig.ShowDefaults's own doc comment for why that's a
+// pointer, not a bare bool. Giving both flags at once is refused outright
+// rather than silently picking one -- the same "never guess between two
+// explicit, conflicting signals" posture every other mutually-exclusive
+// flag pair in this codebase already takes.
+func resolveShowDefaults(cmd *cobra.Command, cfg *Config) (bool, error) {
+	show := cmd.Flags().Changed("show-defaults")
+	hide := cmd.Flags().Changed("hide-defaults")
+	if show && hide {
+		return false, errors.New("--show-defaults and --hide-defaults are mutually exclusive")
+	}
+	if show {
+		return true, nil
+	}
+	if hide {
+		return false, nil
+	}
+	if cfg.Intent.ShowDefaults != nil {
+		return *cfg.Intent.ShowDefaults, nil
+	}
+	return true, nil
 }

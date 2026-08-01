@@ -385,7 +385,7 @@ var knownLedgerKeys = map[string]bool{"store": true, "external": true}
 // check recurses further than its own immediate sub-keys either.
 var knownIntentKeys = map[string]bool{
 	"adapter": true, "model": true, "key_ref": true,
-	"auth": true, "vertex": true,
+	"auth": true, "vertex": true, "show_defaults": true,
 }
 
 // warnUnknownKeys checks one already-parsed layer against config's known

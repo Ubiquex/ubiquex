@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -70,6 +71,48 @@ totally_unknown_key = "surprise"
 	}
 	if !bytes.Contains(warnings.Bytes(), []byte("totally_unknown_key")) {
 		t.Fatalf("expected a warning naming the unknown key, got: %s", warnings.String())
+	}
+}
+
+// TestLoadConfig_IntentShowDefaults_ParsesAndNeverWarns is UBI-72's own
+// regression guard: `intent.show_defaults` is a known key (configcascade.go's
+// own knownIntentKeys), not a surprise -- caught live this session, where
+// the key parsed and took effect correctly but still spuriously warned
+// "unknown config key" until knownIntentKeys was updated alongside it.
+func TestLoadConfig_IntentShowDefaults_ParsesAndNeverWarns(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `intent = { show_defaults = false }`)
+	withConfigSearchDir(t, dir)
+
+	var warnings bytes.Buffer
+	cfg, err := LoadConfig(&warnings)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if warnings.Len() != 0 {
+		t.Fatalf("expected no unknown-key warning for intent.show_defaults, got: %s", warnings.String())
+	}
+	if cfg.Intent.ShowDefaults == nil || *cfg.Intent.ShowDefaults != false {
+		t.Fatalf("expected ShowDefaults to decode to a pointer to false, got: %v", cfg.Intent.ShowDefaults)
+	}
+}
+
+// TestLoadConfig_IntentShowDefaults_AbsentIsNil proves the nil-means-
+// "cascade never mentioned it" case IntentConfig.ShowDefaults' own doc
+// comment depends on -- absent from every config in the cascade decodes
+// to a nil pointer, not a bare false, so resolveShowDefaults' own default
+// of true is reachable at all.
+func TestLoadConfig_IntentShowDefaults_AbsentIsNil(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `stack = "payments"`)
+	withConfigSearchDir(t, dir)
+
+	cfg, err := LoadConfig(&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Intent.ShowDefaults != nil {
+		t.Fatalf("expected a nil ShowDefaults when show_defaults is never mentioned, got: %v", *cfg.Intent.ShowDefaults)
 	}
 }
 
@@ -398,5 +441,87 @@ func TestWarnIfLegacyProviderFlagsGiven_SourceGiven_WarnsNamingIt(t *testing.T) 
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("[providers]")) {
 		t.Fatalf("expected the warning to explain the [providers] table is the authority, got: %s", stderr.String())
+	}
+}
+
+// cmdWithBoolFlags builds a *cobra.Command carrying show-defaults/
+// hide-defaults bool flags, set (Changed) only for names listed in set --
+// resolveShowDefaults's own direct unit tests below don't need a full
+// `ubx plan` invocation, just the flag-precedence matrix itself.
+func cmdWithBoolFlags(t *testing.T, set ...string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{}
+	var show, hide bool
+	cmd.Flags().BoolVar(&show, "show-defaults", false, "")
+	cmd.Flags().BoolVar(&hide, "hide-defaults", false, "")
+	for _, name := range set {
+		if err := cmd.Flags().Set(name, "true"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cmd
+}
+
+func TestResolveShowDefaults_NeitherFlagNorConfig_DefaultsTrue(t *testing.T) {
+	got, err := resolveShowDefaults(cmdWithBoolFlags(t), &Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatalf("got %v, want true (the nil-config default)", got)
+	}
+}
+
+func TestResolveShowDefaults_ConfigFalse_NoFlags(t *testing.T) {
+	f := false
+	got, err := resolveShowDefaults(cmdWithBoolFlags(t), &Config{Intent: IntentConfig{ShowDefaults: &f}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Fatalf("got %v, want false (config's own explicit value)", got)
+	}
+}
+
+func TestResolveShowDefaults_ConfigTrue_NoFlags(t *testing.T) {
+	tr := true
+	got, err := resolveShowDefaults(cmdWithBoolFlags(t), &Config{Intent: IntentConfig{ShowDefaults: &tr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatalf("got %v, want true (config's own explicit value)", got)
+	}
+}
+
+func TestResolveShowDefaults_ShowFlag_OverridesConfigFalse(t *testing.T) {
+	f := false
+	got, err := resolveShowDefaults(cmdWithBoolFlags(t, "show-defaults"), &Config{Intent: IntentConfig{ShowDefaults: &f}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatalf("got %v, want true (--show-defaults overrides config)", got)
+	}
+}
+
+func TestResolveShowDefaults_HideFlag_OverridesConfigTrue(t *testing.T) {
+	tr := true
+	got, err := resolveShowDefaults(cmdWithBoolFlags(t, "hide-defaults"), &Config{Intent: IntentConfig{ShowDefaults: &tr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Fatalf("got %v, want false (--hide-defaults overrides config)", got)
+	}
+}
+
+func TestResolveShowDefaults_BothFlags_Errors(t *testing.T) {
+	_, err := resolveShowDefaults(cmdWithBoolFlags(t, "show-defaults", "hide-defaults"), &Config{})
+	if err == nil {
+		t.Fatal("expected an error when both --show-defaults and --hide-defaults are given")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a mutually-exclusive error, got: %v", err)
 	}
 }

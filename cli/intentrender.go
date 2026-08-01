@@ -27,21 +27,36 @@ import (
 // choice the human is being asked to sign off on, not two separate kinds
 // of content.
 func renderAmbiguity(w io.Writer, st *styler, draft *resolver.IntentFile) {
-	renderAmbiguityStyled(w, st, draft.Intent.Assumptions, draft.Intent.Defaults, draft.Intent.Questions)
+	// `ubx propose --from-doc`/`--from-diagram`'s own pre-resolve draft
+	// review is out of UBI-72's scope (that ticket is `ubx plan`'s own
+	// receipt specifically -- its collapsed one-liner names "the saved
+	// plan file," a concept this draft-only step doesn't have yet) --
+	// always the full block here, unaffected by [intent] show_defaults.
+	renderAmbiguityStyled(w, st, draft.Intent.Assumptions, draft.Intent.Defaults, draft.Intent.Questions, true)
 }
 
 // renderAmbiguityStyled is renderAmbiguity's own styled/reusable core --
 // renderPlanReceipt calls this directly (it already has a *styler and
 // the three slices in hand from a resolved proposal's own Intent, not a
 // draft IntentFile) rather than going through renderAmbiguity's
-// IntentFile-shaped wrapper.
-func renderAmbiguityStyled(w io.Writer, st *styler, assumptions, defaults []core.AmbiguityNote, questions []core.Question) {
+// IntentFile-shaped wrapper. showDefaults is UBI-72's own [intent]
+// show_defaults/--show-defaults/--hide-defaults resolution (config.go's
+// resolveShowDefaults) -- false collapses the AI-defaults block to a
+// one-line count; Questions are never affected by it (see renderQuestions'
+// own unconditional call below) -- a blocking ambiguity is never
+// informational the way an assumption/default is, so it never collapses,
+// regardless of this setting.
+func renderAmbiguityStyled(w io.Writer, st *styler, assumptions, defaults []core.AmbiguityNote, questions []core.Question, showDefaults bool) {
 	if len(assumptions) == 0 && len(defaults) == 0 && len(questions) == 0 {
 		fmt.Fprintln(w, "no assumptions, defaults, or open questions -- the document was unambiguous.")
 		return
 	}
 	renderQuestions(w, st, questions)
-	renderAIDefaults(w, st, assumptions, defaults)
+	if showDefaults {
+		renderAIDefaults(w, st, assumptions, defaults)
+		return
+	}
+	renderAIDefaultsCollapsed(w, st, assumptions, defaults)
 }
 
 // renderAIDefaults is docs/cli-output-spec.md principle 4's own titled
@@ -52,9 +67,7 @@ func renderAmbiguityStyled(w io.Writer, st *styler, assumptions, defaults []core
 // sections the way this codebase's own earlier "Assumptions (N):"/
 // "Defaults (N):" headers used to.
 func renderAIDefaults(w io.Writer, st *styler, assumptions, defaults []core.AmbiguityNote) {
-	all := make([]core.AmbiguityNote, 0, len(assumptions)+len(defaults))
-	all = append(all, assumptions...)
-	all = append(all, defaults...)
+	all := mergeAmbiguityNotes(assumptions, defaults)
 	if len(all) == 0 {
 		return
 	}
@@ -75,6 +88,32 @@ func renderAIDefaults(w io.Writer, st *styler, assumptions, defaults []core.Ambi
 			fmt.Fprintf(w, "    affects: %s\n", a)
 		}
 	}
+}
+
+// renderAIDefaultsCollapsed is UBI-72's own [intent] show_defaults=false
+// rendering: the same content renderAIDefaults would render, replaced
+// with a one-line count and a pointer to how to see it in full -- never
+// an omission (the full content is always in the saved plan file and the
+// signed proposal itself, this is a display toggle only, see
+// IntentConfig.ShowDefaults's own doc comment). Never called when the
+// merged list is empty, matching renderAIDefaults' own early return.
+func renderAIDefaultsCollapsed(w io.Writer, st *styler, assumptions, defaults []core.AmbiguityNote) {
+	n := len(assumptions) + len(defaults)
+	if n == 0 {
+		return
+	}
+	fmt.Fprintln(w, st.Purple(fmt.Sprintf("%d AI default(s) applied -- ubx plan --show-defaults to review, or see the saved plan file", n)))
+}
+
+// mergeAmbiguityNotes is renderAIDefaults/renderAIDefaultsCollapsed's own
+// shared "assumptions then defaults, one merged list" convention,
+// factored out so the collapsed count can never drift out of sync with
+// what the full block would actually enumerate.
+func mergeAmbiguityNotes(assumptions, defaults []core.AmbiguityNote) []core.AmbiguityNote {
+	all := make([]core.AmbiguityNote, 0, len(assumptions)+len(defaults))
+	all = append(all, assumptions...)
+	all = append(all, defaults...)
+	return all
 }
 
 // renderQuestions renders blocking-review questions in their own
