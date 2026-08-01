@@ -146,6 +146,22 @@ func TestScan_ProposeBoth_GeneratesBothProposals(t *testing.T) {
 	}
 }
 
+// TestScan_ProposeCard_CompactDiffSummary_NotFullDiff is UBI-71 part 2's
+// own acceptance test: a scan card's own diff renders as ONE compact
+// summary line (count + changed attribute names), never the full
+// before/after value diff `ubx status --drift` already shows for the same
+// address -- scan's card is about the proposal+attribution, not a second
+// copy of the diff.
+func TestScan_ProposeCard_CompactDiffSummary_NotFullDiff(t *testing.T) {
+	_, out := adoptThenDrift(t)
+	if !strings.Contains(out, "1 attribute(s) changed: tags.env") {
+		t.Fatalf("expected a compact one-line diff summary naming the changed attribute, got: %s", out)
+	}
+	if strings.Contains(out, "prod") || strings.Contains(out, "staging") {
+		t.Fatalf("expected the full before/after values NOT restated on the card, got: %s", out)
+	}
+}
+
 func TestScan_ProposeInvalidValue_Errors(t *testing.T) {
 	_, err := adoptThenDriftExpectErr(t, "--propose", "carrier-pigeon")
 	requireExitCode(t, err, 2, "")

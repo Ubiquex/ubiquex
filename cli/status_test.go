@@ -93,6 +93,11 @@ func TestStatus_MultiStack_FilterByStack(t *testing.T) {
 	}
 }
 
+// TestStatus_Drift_AllClean_ExitZero is UBI-71's own finding: a clean
+// resource's own detail line is noise on a mostly (or entirely) clean
+// fleet -- hidden by default, collapsed to a trailing "N clean (--all to
+// show)" count instead; --all reveals the exact pre-UBI-71 per-resource
+// line.
 func TestStatus_Drift_AllClean_ExitZero(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
@@ -102,11 +107,25 @@ func TestStatus_Drift_AllClean_ExitZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx status --drift: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "clean: payments.fake_widget.widget-clean") {
-		t.Fatalf("expected a clean classification, got: %s", out)
+	if strings.Contains(out, "clean: payments.fake_widget.widget-clean") {
+		t.Fatalf("expected the clean resource's own line hidden by default, got: %s", out)
+	}
+	if !strings.Contains(out, "1 clean (--all to show)") {
+		t.Fatalf("expected a clean-count hint naming --all, got: %s", out)
 	}
 	if !strings.Contains(out, "1 resource(s), 0 drifted, 0 unreadable") {
 		t.Fatalf("expected an all-clean summary, got: %s", out)
+	}
+
+	allOut, err := runUbx(t, env, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary, "--all")
+	if err != nil {
+		t.Fatalf("ubx status --drift --all: %v\noutput: %s", err, allOut)
+	}
+	if !strings.Contains(allOut, "clean: payments.fake_widget.widget-clean") {
+		t.Fatalf("expected --all to show the clean classification, got: %s", allOut)
+	}
+	if strings.Contains(allOut, "(--all to show)") {
+		t.Fatalf("--all must not itself print the hint suggesting --all, got: %s", allOut)
 	}
 }
 
@@ -212,7 +231,7 @@ func TestStatus_Drift_ProviderFailureMidFleet_ContinuesWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runUbx(t, env, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary)
+	out, err := runUbx(t, env, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary, "--all")
 	if err == nil {
 		t.Fatal("expected a non-nil error (exit code 2) -- one resource is unreadable")
 	}
@@ -221,7 +240,8 @@ func TestStatus_Drift_ProviderFailureMidFleet_ContinuesWalk(t *testing.T) {
 		t.Fatalf("expected exit code 2, got: %v", err)
 	}
 	// The walk must have continued past the failing resource -- both
-	// appear in the report, not just the one before the failure.
+	// appear in the report, not just the one before the failure. --all
+	// (UBI-71) so the clean resource's own line still renders here.
 	if !strings.Contains(out, "clean: payments.fake_widget.widget-ok") {
 		t.Fatalf("expected the good resource still reported clean, got: %s", out)
 	}
@@ -233,6 +253,59 @@ func TestStatus_Drift_ProviderFailureMidFleet_ContinuesWalk(t *testing.T) {
 	}
 	if !strings.Contains(out, "2 resource(s), 0 drifted, 1 unreadable") {
 		t.Fatalf("expected a mixed clean/unreadable summary, got: %s", out)
+	}
+}
+
+// TestStatus_Drift_CleanHiddenByDefault_UnreadableStillShown is UBI-71's
+// own default-mode companion to
+// TestStatus_Drift_ProviderFailureMidFleet_ContinuesWalk (which passes
+// --all): the exact same mixed clean+unreadable fleet, without --all --
+// the clean resource's own line must be gone, replaced by the "N clean
+// (--all to show)" hint, while the unreadable resource (never hidden,
+// it's actionable) still renders in full.
+func TestStatus_Drift_CleanHiddenByDefault_UnreadableStillShown(t *testing.T) {
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	adoptViaCLI(t, ledgerDir, "payments", "fake_widget", "widget-ok2", `{"name":"widget-ok2","tags":{"env":"prod"}}`, env)
+
+	ledger := core.Open(ledgerDir)
+	unknownAddr := core.Address{Stack: "payments", Type: "aws_totally_made_up", Name: "widget-unknown-type2"}
+	unknownProposal := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		ID:            "4444444444444444444444444444444444444444444444444444444444444444",
+		Stack:         "payments",
+		Parent:        mustHead(t, ledger),
+		Kind:          core.KindAdoption,
+		Intent:        core.Intent{Summary: "x"},
+		Resolution: core.Resolution{
+			ResolvedAt: "2026-07-16T00:00:00Z",
+			Inputs: []core.ResolutionInput{
+				{Kind: "live_state", Resource: unknownAddr.String(), ObservedHash: "deadbeef", Lookup: []byte(`{"id":"x"}`)},
+			},
+		},
+		Acceptance: &core.Acceptance{Method: "local", Approvers: []string{"roozbeh"}, AcceptedAt: "2026-07-16T00:00:00Z"},
+		Status:     core.StatusAccepted,
+	}
+	if err := ledger.Append(unknownProposal); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runUbx(t, env, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary)
+	if err == nil {
+		t.Fatal("expected a non-nil error (exit code 2) -- one resource is unreadable")
+	}
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("expected exit code 2, got: %v", err)
+	}
+	if strings.Contains(out, "clean: payments.fake_widget.widget-ok2") {
+		t.Fatalf("expected the clean resource's own line hidden by default, got: %s", out)
+	}
+	if !strings.Contains(out, "1 clean (--all to show)") {
+		t.Fatalf("expected a clean-count hint, got: %s", out)
+	}
+	if !strings.Contains(out, "unreadable: payments.aws_totally_made_up.widget-unknown-type2") {
+		t.Fatalf("expected the bad resource still reported unreadable (never hidden), got: %s", out)
 	}
 }
 
@@ -367,7 +440,9 @@ func TestStatus_TTY_DriftLines_AddressBrightMetadataDim(t *testing.T) {
 	adoptEnv := []string{"FAKEPROVIDER_MODE=ok-v6"}
 	adoptViaCLI(t, ledgerDir, "payments", "fake_widget", "widget-dim-clean", `{"name":"widget-dim-clean","tags":{"env":"prod"}}`, adoptEnv)
 
-	cleanOut, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR="}, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary)
+	// UBI-71: a clean resource's own line is hidden by default -- --all
+	// brings it back so this test can still inspect its dim styling.
+	cleanOut, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR="}, "status", "--ledger-dir", ledgerDir, "--drift", "--provider", fakeProviderBinary, "--all")
 	if err != nil {
 		t.Fatalf("ubx status --drift (clean): %v\noutput: %s", err, cleanOut)
 	}

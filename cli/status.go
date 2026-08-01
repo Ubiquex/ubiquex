@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,7 @@ func newStatusCmd() *cobra.Command {
 		providerConfig  string
 		timeout         time.Duration
 		jsonOut         bool
+		all             bool
 	)
 
 	cmd := &cobra.Command{
@@ -40,6 +42,11 @@ and reports its address and latest recorded state. Ledger-only by default -- fas
 credentials needed. With --drift, also reads each resource's live state (reusing its own recorded
 resolution.inputs lookup key, exactly like ubx scan would) and classifies it clean, drifted, or
 unreadable; a failure on one resource is recorded and the walk continues, never aborting the report.
+
+UBI-71: a clean resource's own detail line is hidden by default once --drift is given -- the signal
+(what drifted, what's unreadable) buried in noise otherwise on a mostly-clean fleet -- collapsing to a
+trailing "N clean (--all to show)" count instead. --all shows every resource's own line regardless of
+classification, the pre-UBI-71 behavior.
 
 Exit code is a CI contract: 0 if clean (or ledger-only, which has nothing to report drift on), 1 if
 anything drifted, 2 if anything was unreadable or the command failed outright. Whichever is worse
@@ -137,6 +144,23 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			var driftedCount, unreadableCount int
 			resources := make([]statusResourceJSON, 0, len(fleet))
 
+			// UBI-71: every per-resource line renders into this buffer
+			// during the walk, not directly to `out` -- the walk itself
+			// doesn't yet know the final drifted/unreadable counts the
+			// header names, and printing a clean resource's own line at
+			// all is conditional on --all (classifyFleetEntry/
+			// unreadableNoLookup/unreadableProviderUnavailable already
+			// skip printing entirely when jsonOut is true, so writing
+			// into a throwaway buffer in that case is harmless -- it's
+			// simply never flushed). Flushed once, after the walk
+			// completes, in the exact per-resource order the walk itself
+			// produced them.
+			var detail bytes.Buffer
+			var dw io.Writer = &detail
+			if jsonOut {
+				dw = io.Discard
+			}
+
 			// docs/executor.md's own "Scan/status/fleet" section: a real
 			// [providers] table means grouping the fleet by each
 			// resource's own recorded provider instead of one --source
@@ -159,7 +183,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 				for _, e := range fleet {
 					if len(e.Lookup) == 0 {
 						unreadableCount++
-						resources = append(resources, unreadableNoLookup(out, st, jsonOut, e))
+						resources = append(resources, unreadableNoLookup(dw, st, jsonOut, e))
 						continue
 					}
 
@@ -177,7 +201,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 						winner, ierr := resolver.InferProvider(declared, e.Address.Type, nil)
 						if ierr != nil {
 							unreadableCount++
-							resources = append(resources, unreadableProviderUnavailable(out, st, jsonOut, e, ierr))
+							resources = append(resources, unreadableProviderUnavailable(dw, st, jsonOut, e, ierr))
 							continue
 						}
 						provSource, provVersion = winner.Source, winner.Version
@@ -186,11 +210,11 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 					app, providerConfig, gerr := pool.Get(ctx, provSource, provVersion)
 					if gerr != nil {
 						unreadableCount++
-						resources = append(resources, unreadableProviderUnavailable(out, st, jsonOut, e, gerr))
+						resources = append(resources, unreadableProviderUnavailable(dw, st, jsonOut, e, gerr))
 						continue
 					}
 
-					entry, drifted, unreadable := classifyFleetEntry(ctx, out, st, jsonOut, ledger, app, providerConfig, provSource, e)
+					entry, drifted, unreadable := classifyFleetEntry(ctx, dw, st, jsonOut, all, ledger, app, providerConfig, provSource, e)
 					if drifted {
 						driftedCount++
 					}
@@ -214,10 +238,10 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 				for _, e := range fleet {
 					if len(e.Lookup) == 0 {
 						unreadableCount++
-						resources = append(resources, unreadableNoLookup(out, st, jsonOut, e))
+						resources = append(resources, unreadableNoLookup(dw, st, jsonOut, e))
 						continue
 					}
-					entry, drifted, unreadable := classifyFleetEntry(ctx, out, st, jsonOut, ledger, stateReader, json.RawMessage(providerConfig), source, e)
+					entry, drifted, unreadable := classifyFleetEntry(ctx, dw, st, jsonOut, all, ledger, stateReader, json.RawMessage(providerConfig), source, e)
 					if drifted {
 						driftedCount++
 					}
@@ -243,6 +267,22 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 				}
 			} else {
+				// UBI-71: header names the drifted count up front (the
+				// walk itself already ran, so this isn't a guess), then
+				// the buffered per-resource detail flushes in its own
+				// original order, then a clean-count hint when anything
+				// was hidden, then the pre-existing summary line
+				// (unchanged, several tests key off its exact wording).
+				if stack != "" {
+					fmt.Fprintf(out, "Drift  %s · %d of %d resource(s) drifted\n\n", stack, driftedCount, len(fleet))
+				} else {
+					fmt.Fprintf(out, "Drift  %d of %d resource(s) drifted\n\n", driftedCount, len(fleet))
+				}
+				out.Write(detail.Bytes())
+				cleanCount := len(fleet) - driftedCount - unreadableCount
+				if !all && cleanCount > 0 {
+					fmt.Fprintf(out, "%d clean (--all to show)\n", cleanCount)
+				}
 				fmt.Fprintf(out, "%d resource(s), %d drifted, %d unreadable\n", len(fleet), driftedCount, unreadableCount)
 			}
 
@@ -266,6 +306,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"} (only used with --drift)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the fleet walk (only used with --drift)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
+	cmd.Flags().BoolVar(&all, "all", false, "with --drift, also show each clean resource's own line (hidden by default, UBI-71); no effect without --drift or with --json")
 
 	return cmd
 }
@@ -355,7 +396,7 @@ func unreadableProviderUnavailable(out io.Writer, st *styler, jsonOut bool, e co
 // unreadableNoLookup, before ever reaching here, since that check is
 // identical in both walks and doesn't need app/providerConfig/
 // providerSource at all).
-func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut bool, ledger *core.Ledger, app core.StateReader, providerConfig json.RawMessage, providerSource string, e core.FleetEntry) (entry statusResourceJSON, drifted, unreadable bool) {
+func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut, all bool, ledger *core.Ledger, app core.StateReader, providerConfig json.RawMessage, providerSource string, e core.FleetEntry) (entry statusResourceJSON, drifted, unreadable bool) {
 	entry = statusResourceJSON{
 		Address:    addressToJSON(e.Address),
 		Kind:       string(e.Kind),
@@ -383,7 +424,12 @@ func classifyFleetEntry(ctx context.Context, out io.Writer, st *styler, jsonOut 
 	switch res.Outcome {
 	case core.ScanUnchanged:
 		entry.Status = "clean"
-		if !jsonOut {
+		if !jsonOut && all {
+			// UBI-71: hidden by default -- a clean resource's own detail
+			// line is exactly the noise this finding is about (buried
+			// signal on a mostly-clean fleet); the caller's own trailing
+			// "N clean (--all to show)" line already covers the count
+			// when this is suppressed.
 			fmt.Fprintf(out, "%s %s: %s\n", st.Green("clean:"), e.Address, st.forceDim(fmt.Sprintf("%s %s (accepted %s)", e.Kind, st.Hash(e.ProposalID), e.AcceptedAt)))
 		}
 		return entry, false, false

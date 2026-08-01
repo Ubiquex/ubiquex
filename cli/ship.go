@@ -257,7 +257,7 @@ consistency shows its own work instead of sitting silent.`,
 			// itself is the only new behavior, and it's purely additive
 			// stdout lines, never consulted for the sealed result itself).
 			if !jsonOut {
-				ctx = executor.WithProgress(ctx, newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout())))
+				ctx = executor.WithProgress(ctx, newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout()), addressOpKinds(p)))
 			}
 
 			sealed, err := executor.Ship(ctx, ledger, pool, source, p)
@@ -606,41 +606,99 @@ const tickInterval = 1 * time.Second
 // never leaves stale trailing characters on a real terminal.
 const progressLineWidth = 50
 
+// addressOpKinds maps every resource address named in p's own delta to
+// resourceOpKind (style.go) -- the same classification renderCreates/
+// renderModifies/renderDestroys already imply structurally (which Delta
+// slice a resource sits in), but ship's own live per-resource progress
+// narration needs an address->kind lookup instead of a slice to walk,
+// since it observes ProgressEvent.Address one at a time as executor.Ship
+// actually processes each resource (UBI-61 comment thread's "general
+// +/-/~ header rule", extended to ship's own per-resource header line).
+// Creates decode the same permissive {stack,type,name,config} node shape
+// renderCreates uses (unexported in core, so re-decoded here) -- a node
+// this can't make sense of is skipped silently, matching renderCreates'
+// own posture, since an uncolored fallback header is harmless, never a
+// panic or a missing line.
+func addressOpKinds(p *core.Proposal) map[string]resourceOpKind {
+	kinds := make(map[string]resourceOpKind, len(p.Delta.Creates)+len(p.Delta.Modifies)+len(p.Delta.Destroys))
+	for _, raw := range p.Delta.Creates {
+		var node struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &node); err != nil || node.Type == "" || node.Name == "" {
+			continue
+		}
+		kinds[core.Address{Stack: p.Stack, Type: node.Type, Name: node.Name}.String()] = opCreate
+	}
+	for _, m := range p.Delta.Modifies {
+		kinds[m.Target.String()] = opModify
+	}
+	for _, d := range p.Delta.Destroys {
+		kinds[d.Address.String()] = opDestroy
+	}
+	return kinds
+}
+
 // newProgressPrinter builds executor.ProgressEvent callback for `ubx
 // ship`'s own live narration (UBI-61, docs/cli-output-spec.md: "the
-// read-back verification line is mandatory"). Each event prints its own
-// line the moment it happens -- not buffered to the end -- with elapsed
-// time since the resource's own most recent in_flight transition.
+// read-back verification line is mandatory"). kinds (addressOpKinds)
+// colors+bolds each resource's own address header by its operation kind
+// (green create, red destroy, yellow modify) -- the UBI-61 comment
+// thread's second finding, since before this the header line rendered
+// fully plain regardless of what was actually happening to it.
 //
-// UBI-63 bug 3: an ordinary create/modify with no reconcile loop of its
-// own (a single ApplyResourceChange call, which can genuinely take a
-// while against a slow real provider) used to show a permanently frozen
-// "0:00" -- the in_flight transition fires once, at elapsed=0 by
-// definition, and nothing re-rendered it until the terminal event
-// finally arrived with the real total. A background ticker now
-// re-renders that one line every tickInterval while nothing else is
-// happening, reversing UBI-61's own original "not a frame-animated
-// spinner" choice now that a real multi-resource ship proved a silent
-// frozen timer reads as hung, not calm. On a real terminal (tty=true)
-// the line updates in place via a carriage return, padded to
-// progressLineWidth so a shrinking render never leaves stale trailing
-// characters; on a non-TTY (piped/logged) run it prints fresh discrete
-// lines instead, since in-place overwrite is a terminal-only concept
-// and would otherwise scatter literal "\r" bytes through a log file --
-// either way, nothing sits silently frozen for more than tickInterval.
-// The ticker stops the instant a real event supersedes it (a terminal
-// transition, or a reconcile_attempt, which already narrates its own
-// elapsed time per attempt) -- at most one resource is ever in_flight
-// at a time (core/executor's own "one resource at a time" serial
-// execution, docs/executor.md), so this needs only one ticker, never a
-// per-address set of them.
-func newProgressPrinter(out io.Writer, st *styler, tty bool) func(executor.ProgressEvent) {
+// UBI-70 (founder test, this session): the pre-UBI-70 version of this
+// printer rendered EVERY transition as its own full line -- pending,
+// in_flight, an ambiguous-result's own unknown_post_timeout, each
+// reconcile_attempt -- which on a real multi-attempt destroy meant a
+// "pending"/"in_flight" flash immediately followed by N nearly-identical
+// "verifying via read-back (attempt K/N)" lines duplicating each other's
+// own wording. Collapsed to the shape UBI-70 names: pending/in_flight/
+// unknown_post_timeout never get their own line at all (sub-second
+// scaffolding, or the pivot into verification the very next event
+// already narrates); the read-back verification phase is ONE live line,
+// refreshed in place as attempts increment, exactly like the raw
+// provider-call wait already was (UBI-63 bug 3's own ticker, generalized
+// here to both live phases instead of duplicated per phase); and exactly
+// one final checkmark/outcome line closes out the resource. An error
+// event (Kind=="error", previously silently dropped by this printer's own
+// switch -- recordError's own message was invisible until printShipReport
+// ran at the very end of the WHOLE ship, after every other resource too)
+// now gets its own permanent, never-overwritten line the moment it
+// happens, per UBI-70's own "errors still get their own visible line"
+// carve-out.
+//
+// The ticker mechanism itself (startTicker/stopTicker) is UBI-63 bug 3's:
+// a background goroutine re-renders one line every tickInterval so a
+// human watching a real, possibly slow provider call or reconcile-by-
+// query backoff never sees a frozen elapsed time and wonders if the
+// whole thing hung. TTY-only (previously unconditional, a pre-existing
+// gap this session also closes): a non-TTY/piped/logged run has no
+// concept of in-place overwrite, so ticking there would otherwise flood
+// a log file with a fresh, near-identical line every tickInterval for as
+// long as a slow call/backoff runs -- non-TTY instead shows only the
+// real, discrete transition/attempt events themselves, exactly the
+// "fresh discrete lines" convention this printer already established for
+// non-TTY elsewhere. At most one resource is ever in_flight/verifying at
+// a time (core/executor's own "one resource at a time" serial execution,
+// docs/executor.md), so one shared ticker, never a per-address set of
+// them, stays correct.
+func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]resourceOpKind) func(executor.ProgressEvent) {
 	starts := map[string]time.Time{}
 	seen := map[string]bool{}
 
 	var mu sync.Mutex
 	var stopCh chan struct{}
 	var doneCh chan struct{}
+
+	// release/reacquire around stopTicker: the ticker goroutine's own
+	// last in-flight tick needs mu to print, so holding it while waiting
+	// on doneCh would deadlock. Every call site below re-locks
+	// immediately after, so the enclosing mu.Lock()/defer mu.Unlock()
+	// pair for the whole event stays balanced.
+	release := func() { mu.Unlock() }
+	reacquire := func() { mu.Lock() }
 
 	stopTicker := func() {
 		if stopCh == nil {
@@ -658,17 +716,34 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool) func(executor.Progr
 	printLine := func(glyph, text, elapsed string, overwrite bool) {
 		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
 		if !overwrite || !tty {
+			// A real, newline-terminated line always leads with "\r" on a
+			// real terminal -- harmless if nothing preceded it on this
+			// line, but essential when the ticker's own last in-place
+			// tick left a shorter partial render at the cursor: without
+			// this, the real line would print AFTER those stray
+			// characters instead of cleanly overwriting them.
+			prefix := ""
+			if tty {
+				prefix = "\r"
+			}
 			if elapsed != "" {
-				fmt.Fprintf(out, "  %s %s %s\n", glyph, padded, elapsed)
+				fmt.Fprintf(out, "%s  %s %s %s\n", prefix, glyph, padded, elapsed)
 			} else {
-				fmt.Fprintf(out, "  %s %s\n", glyph, text)
+				fmt.Fprintf(out, "%s  %s %s\n", prefix, glyph, text)
 			}
 			return
 		}
 		fmt.Fprintf(out, "\r  %s %s %-8s", glyph, padded, elapsed)
 	}
 
-	startTicker := func(address string, start time.Time) {
+	// startTicker re-renders one live line in place every tickInterval
+	// until stopTicker -- shared by both live phases this printer
+	// narrates (the raw provider-call wait, and the read-back
+	// verification wait between attempts), TTY-only (see doc comment).
+	startTicker := func(address string, start time.Time, glyph, text string) {
+		if !tty {
+			return
+		}
 		stopCh, doneCh = make(chan struct{}), make(chan struct{})
 		go func(stop chan struct{}, done chan struct{}) {
 			defer close(done)
@@ -680,7 +755,7 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool) func(executor.Progr
 					return
 				case <-ticker.C:
 					mu.Lock()
-					printLine(st.Dim("·"), "in_flight", renderElapsed(time.Since(start)), true)
+					printLine(glyph, text, renderElapsed(time.Since(start)), true)
 					mu.Unlock()
 				}
 			}
@@ -692,59 +767,87 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool) func(executor.Progr
 		defer mu.Unlock()
 
 		now := time.Now()
-		if ev.State == "in_flight" {
-			starts[ev.Address] = now
+		if ev.Address != "" {
+			if _, ok := starts[ev.Address]; !ok {
+				starts[ev.Address] = now
+			}
+			if !seen[ev.Address] {
+				if len(seen) > 0 {
+					// UBI-61 comment thread's own second finding: a blank
+					// line between resources' own transition blocks --
+					// before this they ran together with no separation.
+					fmt.Fprintln(out)
+				}
+				seen[ev.Address] = true
+				fmt.Fprintf(out, "%s\n", st.OpHeader(kinds[ev.Address], ev.Address))
+			}
 		}
-		if ev.Address != "" && !seen[ev.Address] {
-			seen[ev.Address] = true
-			fmt.Fprintf(out, "%s\n", ev.Address)
-		}
-		elapsed := ""
-		if start, ok := starts[ev.Address]; ok {
-			elapsed = renderElapsed(now.Sub(start))
-		}
+		elapsed := renderElapsed(now.Sub(starts[ev.Address]))
 
-		var glyph, text string
-		var terminal bool
 		switch ev.Kind {
+		case "error":
+			// UBI-70: an error gets its own permanent, never-overwritten
+			// line the moment it happens -- never silently dropped (this
+			// printer's prior default case did exactly that), never
+			// folded into the one live-updating line the happy path uses.
+			release()
+			stopTicker()
+			reacquire()
+			printLine(st.Yellow("!"), ev.Detail, "", false)
+
 		case "transition":
-			glyph = st.Dim("·")
+			switch ev.State {
+			case "pending", "in_flight", "unknown_post_timeout":
+				// UBI-70's own target shape: sub-second scaffolding
+				// (pending/in_flight) or the pivot into verification
+				// (unknown_post_timeout, whose own detail -- when it has
+				// one -- is the exact wording the reconcile_attempt
+				// events immediately following it already narrate) never
+				// get their own line. in_flight alone starts the
+				// "shipping" ticker (UBI-61 comment thread's rename, this
+				// session: "in_flight" read as jargon) for a real,
+				// possibly slow raw provider call; the other two states
+				// only ever stop whatever ticker preceded them.
+				release()
+				stopTicker()
+				reacquire()
+				if ev.State == "in_flight" {
+					startTicker(ev.Address, starts[ev.Address], st.Dim("·"), "shipping")
+				}
+				return
+			}
+
+			glyph := st.Dim("·")
 			switch ev.State {
 			case "applied":
 				glyph = st.Green("✓")
-				terminal = true
 			case "failed":
 				glyph = st.Red("✗")
-				terminal = true
+			case "still_unknown":
+				glyph = st.Yellow("?")
 			}
-			text = ev.State
+			text := ev.State
 			if ev.Detail != "" {
-				text += " -- " + ev.Detail
+				text += " · " + ev.Detail
 			}
+			release()
+			stopTicker()
+			reacquire()
+			printLine(glyph, text, elapsed, false)
+
 		case "reconcile_attempt":
-			glyph = st.Yellow("⠧")
-			text = fmt.Sprintf("%s (attempt %d/%d)", ev.Detail, ev.Attempt, ev.Total)
-		default:
-			return
-		}
-
-		// Any real event -- terminal or not -- supersedes whatever the
-		// ticker was mid-rendering; stop it before printing the
-		// authoritative line so the two never interleave. It restarts
-		// below only for a fresh, non-terminal in_flight transition.
-		mu.Unlock()
-		stopTicker()
-		mu.Lock()
-
-		if tty && elapsed != "" {
-			// Clear the ticker's own last in-place line before printing
-			// a real, newline-terminated one in its place.
-			fmt.Fprint(out, "\r")
-		}
-		printLine(glyph, text, elapsed, false)
-
-		if ev.Kind == "transition" && ev.State == "in_flight" && !terminal {
-			startTicker(ev.Address, now)
+			// UBI-70: ONE live-updating verification line -- printed
+			// once immediately (so a non-TTY/logged run sees each real
+			// attempt as its own discrete line, same as before), then
+			// re-rendered in place by its own ticker between attempts
+			// (TTY only) so elapsed keeps advancing instead of sitting
+			// frozen through a real multi-second/minute backoff wait.
+			text := fmt.Sprintf("%s (attempt %d/%d)", ev.Detail, ev.Attempt, ev.Total)
+			release()
+			stopTicker()
+			reacquire()
+			printLine(st.Yellow("⠧"), text, elapsed, false)
+			startTicker(ev.Address, starts[ev.Address], st.Yellow("⠧"), text)
 		}
 	}
 }

@@ -343,12 +343,15 @@ func renderModifies(out io.Writer, st *styler, modifies []core.Modification, ind
 // were both invisible in `ubx why`'s output. showState controls whether
 // each attribute is printed too (the full single-proposal view) or just
 // the address (the terser per-entry chain view, matching
-// renderProposalCompact's own existing terseness elsewhere). A red "-"
-// leads each line (docs/cli-output-spec.md: red = destroys, "red-led"
-// full-state block).
+// renderProposalCompact's own existing terseness elsewhere). The whole
+// "- destroy: <address>" header renders red AND bold (st.RedBold, UBI-61
+// comment thread's "general +/-/~ header rule") -- docs/cli-output-
+// spec.md: red = destroys, "red-led" full-state block -- matching
+// renderCreates' own whole-line GreenBold treatment, not just the
+// leading "-" glyph colored on its own as this used to render.
 func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, indent string, showState bool) {
 	for _, d := range destroys {
-		fmt.Fprintf(out, "%s%s destroy: %s\n", indent, st.Red("-"), d.Address)
+		fmt.Fprintf(out, "%s%s\n", indent, st.RedBold(fmt.Sprintf("- destroy: %s", d.Address)))
 		if !showState {
 			continue
 		}

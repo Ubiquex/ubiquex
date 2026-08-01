@@ -4,6 +4,167 @@
 
 ## Current phase
 
+**UBI-70 + UBI-71 + UBI-61's remaining comment findings (2026-08-01) —
+ship progress noise cut, status/scan redundancy cut, "shipping" label
+rename, general +/-/~ header coloring rule. Done together in one session
+per the handoff's own framing (same rendering code). Hermetic tests plus
+live verification against the real built binary + fakeprovider via
+`script -q`.**
+
+**1. `in_flight` display label renamed "shipping"** (UBI-61 comment
+thread's own correction) — display-only, `core.ResourceState`'s wire
+value (`in_flight`) untouched. The label only ever surfaces now in
+`cli/ship.go`'s own live ticker (see #3 below), since the noise-cut
+suppresses the one-time transition line it used to also render on.
+
+**2. General +/-/~ header coloring rule** — every "+/-/~ &lt;address&gt;"
+style header colors AND bolds by its own operation kind (green create,
+red destroy, yellow modify), not just creates as before. `cli/style.go`
+gains `RedBold`/`YellowBold` (`GreenBold`'s own siblings) and a small
+`resourceOpKind`/`OpHeader` pair for the one caller that must classify an
+address dynamically per live event rather than by which `Delta` slice
+it's already sitting in. `why.go`'s `renderDestroys` ("- destroy:
+&lt;address&gt;" header, shared by `ubx plan`/`ubx terminate`/`ubx ship`'s
+inline-confirm receipt) now wraps the WHOLE header in `RedBold`, matching
+`renderCreates`' pre-existing whole-line `GreenBold` treatment — previously
+only the leading "-" glyph was red. `cli/ship.go`'s live per-resource
+progress header (the bare address line, printed once per resource) is now
+colored+bold by operation kind too, via a new `addressOpKinds(p)` helper
+that classifies every address in a proposal's `Delta.Creates/Modifies/
+Destroys` once, up front, and `newProgressPrinter` threading that map
+through to `st.OpHeader(kind, address)`.
+
+**3. UBI-70 — ship's progress output collapsed to the target shape.**
+`cli/ship.go`'s `newProgressPrinter` rewritten:
+- `pending`/`in_flight`/`unknown_post_timeout` transitions never render
+  their own line at all (sub-second scaffolding, or the exact wording the
+  very next reconcile_attempt event already narrates) — `in_flight` alone
+  starts a live "shipping" ticker line for a real, possibly slow raw
+  provider call.
+- The read-back verification phase is ONE live-updating line (spinner +
+  "verifying via read-back (attempt N/M)" + elapsed), refreshed in place
+  by its own ticker between attempts (not duplicated per attempt the way
+  a static "unknown_post_timeout" line + a separate spinner line used to).
+- Exactly one final checkmark/outcome line closes out each resource
+  (`still_unknown` now gets its own yellow `?` glyph too — previously fell
+  through to a generic dim `·`, unmarked as terminal).
+- **A real gap closed, not just noise removed**: `Kind == "error"`
+  progress events (`recordError`'s own emission) were previously silently
+  dropped by this printer's switch (`default: return`) — an error's actual
+  message was invisible live, visible only in `printShipReport`'s trailing
+  report after the ENTIRE ship run finished, every other resource
+  included. Now prints its own permanent, never-overwritten line
+  (`st.Yellow("!")`) the moment it happens, per the ticket's own "errors
+  still get their own visible line" carve-out.
+- A blank line now separates each resource's own progress block (UBI-61
+  comment's second finding) — previously ran together with no separation.
+- The ticker mechanism (`startTicker`/`stopTicker`, UBI-63 bug 3)
+  generalized to both live phases (shipping wait, verification wait)
+  instead of duplicated per phase, and made **TTY-only** — a real,
+  pre-existing gap this session also closed: the ticker previously ran
+  unconditionally, meaning a non-TTY/piped/logged run got a fresh
+  near-duplicate line flooding the log every `tickInterval` for as long as
+  a slow call/backoff ran (in-place overwrite being a terminal-only
+  concept a log file has no use for). Non-TTY now shows only the real,
+  discrete transition/attempt events themselves.
+
+**4. UBI-71 part 1 — `status --drift` hides clean resources by default.**
+New `--all` flag (`cli/status.go`). The `--drift` walk now buffers every
+per-resource detail line into a `bytes.Buffer` during the walk (instead of
+writing straight to `out`) so the final flush can lead with a
+`Drift  &lt;stack&gt; · N of M resource(s) drifted` header (computed only
+after the walk completes, since drift count isn't known up front) — the
+buffered detail (drifted/unreadable, never hidden) follows, then a
+trailing `N clean (--all to show)` hint when anything was hidden, then the
+pre-existing `%d resource(s), %d drifted, %d unreadable` summary line
+(kept verbatim — several tests key off its exact wording). `--all`
+restores every `clean:` line exactly as the pre-UBI-71 default always
+rendered them. `classifyFleetEntry` gained an `all bool` param gating only
+the `ScanUnchanged` print branch — `drifted`/`unreadable` print
+unconditionally, same as before. **Deliberately did NOT** redesign the
+`clean:`/`drifted:`/`unreadable:` word-prefix line shape itself into
+docs/cli-output-spec.md's original v1 "~ &lt;address&gt;" header mockup
+(a real, pre-existing divergence between that early design-room doc and
+what UBI-68 actually shipped last session, dimmed-metadata word-prefix
+lines) — that's a bigger, separate redesign this ticket didn't ask for and
+risked regressing UBI-68's own just-shipped, just-tested rendering.
+Flagged here per this project's own "never contradict a doc silently"
+rule rather than picked silently either way; a future session should
+decide whether to update the doc or the code.
+
+**5. UBI-71 part 2 — `scan --propose`'s card trims the restated diff.**
+`renderScanCard` (`cli/scan.go`, shared by single-resource and
+fleet-scoped scan) now renders one compact line per modification (`~ N
+attribute(s) changed: path1, path2`) instead of the full per-attribute
+before/after diff. Went with the founder's own explicitly-named "simpler
+alternative" (always compact) rather than conditioning on "did `status
+--drift` just run against this same resource" — infeasible to detect
+honestly anyway, since `scan` and `status` are separate process
+invocations with no shared session state to consult.
+
+**Companion finding explicitly OUT of scope this session** (named in
+UBI-70's own ticket as a "see companion finding," not asked for in this
+session's handoff): outcome words in the live progress line and
+`printShipReport`'s trailing report still print the raw `ResourceState`
+string (`applied`) verbatim for a destroy, not `destroyed` — docs/cli-
+output-spec.md's own ship mockup already shows `destroyed`, but no code
+anywhere implements that substitution yet. Not touched here; a future
+session's own separate finding.
+
+Hermetic tests: `cli/style_test.go`-adjacent coverage via existing
+`ship_progress_test.go` (updated: asserts `in_flight` is ABSENT now, adds
+a final-outcome-line assertion), `cli/progress_ticker_test.go` (rewritten:
+`TestNewProgressPrinter_TicksDuringLongShippingWait` for the TTY ticker
+path, new `TestNewProgressPrinter_NonTTY_NeverTicks` proving the TTY-only
+fix), `cli/status_test.go` (`TestStatus_Drift_AllClean_ExitZero` rewritten
+to check hidden-by-default + `--all` reveals; new
+`TestStatus_Drift_CleanHiddenByDefault_UnreadableStillShown` proving
+`unreadable` is never hidden alongside a hidden `clean`; TTY/live tests
+updated to pass `--all` where they specifically inspect a `clean:` line's
+own dim styling), `cli/scan_propose_test.go` (new
+`TestScan_ProposeCard_CompactDiffSummary_NotFullDiff`), `cli/
+scanfleet_test.go` (updated assertion for the new compact-diff wording).
+Full suite green (`go build ./...`, `go vet ./...`, `go test ./...
+-count=1`).
+
+Live-verified against the real built binary (`make build`, version-
+checked) + fakeprovider, both piped (`cli/status.go`'s new header/hint,
+`cli/scan.go`'s compact diff, ship's noise-cut on a `FAKEPROVIDER_APPLY_
+MODE` unset "lying" destroy that genuinely needs its full 10-attempt
+retry budget — real backoff timing, real growing elapsed, the new live
+error line, all confirmed byte-for-byte) and forced-TTY via `script -q`
+(`OpHeader` coloring on a create/destroy address line, `status --all`'s
+`clean:` lines still carrying their own UBI-68 dim/hash styling
+unaffected, `NO_COLOR` still stripping everything). No `ubx ship` or any
+other command was ever run against a real cloud provider.
+
+ubiquex-docs updated in the same session (session protocol rule 5):
+`cli/ship.mdx` (every live-narration transcript re-captured — bare ship,
+interactive 2-create confirm, destroy-confirm, clean-apply, the "elapsed
+ticks" note replaced with a real reproducible multi-attempt/error-line
+transcript since the old fabricated real-AWS discrete-tick illustration
+is no longer literally producible on a piped capture now that the ticker
+is TTY-only, provider-rejects, redacted-declined, create-chain, blocked-
+dependent, shipping-a-destroy's quick/JSON/drifted-refused/already-gone
+variants, multi-provider-unavailable), `cli/status.mdx` (`--all` flag
+documented, every `--drift` transcript re-captured with the new header/
+hint, `--all` variants added), `cli/scan.mdx` (every card diff line and
+its explanatory prose updated to the compact form), `cli/terminate.mdx`
++ `cli/promote.mdx` + `guides/plan-ship-flow.mdx` + `guides/promotion.
+mdx` (same noise-cut fix applied to their own embedded ship transcripts).
+One example (`ship.mdx`'s "redacted restore target declined" transcript)
+updated by source-tracing rather than a fresh live capture — the
+`fake_secret_resource` + `drift_revert` setup needed to reproduce it live
+didn't converge in-session; the *code path* (no terminal transition ever
+recorded for this specific decline, confirmed by reading `shipChange`'s
+own redacted-check branch directly) is what the edit is based on, flagged
+here rather than silently presented as re-verified. `mint validate` and
+`mint broken-links` both clean. Committed and pushed to `ubiquex-docs`
+directly (`cli-ref: ship progress noise cut, status --drift --all, scan
+compact diff (UBI-68/69/70/71)`).
+
+## Current phase (previous)
+
 **UBI-68 + UBI-69 (2026-08-01) — two display-only color-hierarchy fixes,
 done together in one session per the handoff's own framing. Fully
 hermetic; no live/real-cloud verification needed for correctness (the

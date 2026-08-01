@@ -13,7 +13,10 @@ import (
 // actually wires executor.WithProgress and prints the real text): a real
 // destroy that needs several reconcile-by-query retries narrates each
 // one live, including the exact "provider reported success" phrasing
-// when the provider already claimed success.
+// when the provider already claimed success. UBI-70 (this session):
+// pending/in_flight no longer get their own line at all -- "in_flight"
+// must never appear in this output -- and the final line reports the
+// real outcome, not a second copy of the read-back narration.
 func TestShip_Destroy_NarratesReadBackAttempts(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{
@@ -47,13 +50,16 @@ func TestShip_Destroy_NarratesReadBackAttempts(t *testing.T) {
 	if !strings.Contains(shipOut, "payments.fake_widget.narrated") {
 		t.Fatalf("expected the resource address narrated, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "in_flight") {
-		t.Fatalf("expected the in_flight transition narrated, got: %s", shipOut)
+	if strings.Contains(shipOut, "in_flight") {
+		t.Fatalf("UBI-70: pending/in_flight must never render their own line, got: %s", shipOut)
 	}
 	if !strings.Contains(shipOut, "provider reported success -- verifying via read-back") {
 		t.Fatalf("expected the MANDATORY read-back narration line, got: %s", shipOut)
 	}
 	if !strings.Contains(shipOut, "attempt 1/") {
 		t.Fatalf("expected an attempt N/M counter, got: %s", shipOut)
+	}
+	if !strings.Contains(shipOut, "✓ applied") {
+		t.Fatalf("expected exactly one final outcome line, got: %s", shipOut)
 	}
 }

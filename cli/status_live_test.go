@@ -86,9 +86,11 @@ func TestStatus_LiveEndToEnd(t *testing.T) {
 		t.Fatalf("expected a 2-resource ledger-only summary, got: %s", ledgerOnlyOut)
 	}
 
-	// --drift: both clean, nothing has changed since adoption.
+	// --drift: both clean, nothing has changed since adoption. --all
+	// (UBI-71: a clean resource's own line is hidden by default) so this
+	// still checks the per-resource clean classification directly.
 	cleanOut, err := runUbx(t, nil, "status",
-		"--ledger-dir", ledgerDir, "--drift",
+		"--ledger-dir", ledgerDir, "--drift", "--all",
 		"--provider", providerPath, "--provider-config", providerConfig,
 	)
 	if err != nil {
@@ -111,7 +113,7 @@ func TestStatus_LiveEndToEnd(t *testing.T) {
 		"--tagging", "TagSet=[{Key=Environment,Value=staging}]")
 
 	mixedOut, err := runUbx(t, nil, "status",
-		"--ledger-dir", ledgerDir, "--drift",
+		"--ledger-dir", ledgerDir, "--drift", "--all",
 		"--provider", providerPath, "--provider-config", providerConfig,
 	)
 	if err == nil {

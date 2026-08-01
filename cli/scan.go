@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -487,13 +488,25 @@ type scanJSON struct {
 // renderScanCard prints one generated proposal's own card entry --
 // kind, ship-able hash, a short description, then content (UBI-49
 // residual round 1's "scan cards regain content" polish,
-// docs/cli-output-spec.md's own worked example): the attribute-level
-// diff already sitting on Delta.Modifies (both drift_adopt and
-// drift_revert carry one; an adoption's own Delta.Creates has no prior
-// state to diff against, so nothing renders there), and, for drift_adopt
-// specifically, its own attribution outcome -- attributed (who:) or the
-// recorded reason it came back empty (attribution:, UBI-49 residual #5's
+// docs/cli-output-spec.md's own worked example): a compact one-line diff
+// summary (both drift_adopt and drift_revert carry a Delta.Modifies
+// entry; an adoption's own Delta.Creates has no prior state to diff
+// against, so nothing renders there), and, for drift_adopt specifically,
+// its own attribution outcome -- attributed (who:) or the recorded
+// reason it came back empty (attribution:, UBI-49 residual #5's
 // correction: this used to be silently omitted either way).
+//
+// UBI-71 part 2 (founder finding): this used to render the FULL
+// attribute-level before/after diff, one line per changed path -- the
+// exact same diff `ubx status --drift` already just showed for this
+// address, restated verbatim with nothing new beyond the proposal's own
+// kind/hash/attribution. Trimmed to a compact one-line summary (the
+// founder's own "simpler alternative," ridden here rather than
+// conditioning on whether a status check happened to run first: scan and
+// status are separate process invocations with no shared session state
+// to consult, so "was status just run" isn't a thing this command could
+// even ask) -- scan's real news is the proposal and its attribution, not
+// a second copy of the diff.
 func renderScanCard(out io.Writer, st *styler, p *core.Proposal, hash string) {
 	var desc string
 	switch p.Kind {
@@ -508,9 +521,11 @@ func renderScanCard(out io.Writer, st *styler, p *core.Proposal, hash string) {
 	}
 	fmt.Fprintf(out, "  %-14s%s     %s\n", p.Kind, st.Ref(hash), desc)
 	for _, m := range p.Delta.Modifies {
-		for _, path := range sortedAttributePaths(m.Before, m.After) {
-			fmt.Fprintf(out, "      %s %s: %s -> %s\n", st.Yellow("~"), path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+		paths := sortedAttributePaths(m.Before, m.After)
+		if len(paths) == 0 {
+			continue
 		}
+		fmt.Fprintf(out, "      %s %d attribute(s) changed: %s\n", st.Yellow("~"), len(paths), strings.Join(paths, ", "))
 	}
 	if p.Kind == core.KindDriftAdopt {
 		if line := attributionCardLine(st, p.Intent.Sources); line != "" {

@@ -149,6 +149,59 @@ func (s *styler) GreenBold(text string) string {
 	return ansiBold + ansiGreen + text + ansiReset
 }
 
+// RedBold and YellowBold are GreenBold's own destroy/modify siblings
+// (UBI-61 comment thread, the "general +/-/~ header rule": every
+// "+/-/~ <address>" style header, wherever it renders, colors AND bolds
+// by its own operation kind -- not just creates, which is all GreenBold
+// covered before this). Same one-escape-sequence composition, same
+// reasoning as GreenBold's own doc comment.
+func (s *styler) RedBold(text string) string {
+	if s == nil || !s.enabled || text == "" {
+		return text
+	}
+	return ansiBold + ansiRed + text + ansiReset
+}
+
+func (s *styler) YellowBold(text string) string {
+	if s == nil || !s.enabled || text == "" {
+		return text
+	}
+	return ansiBold + ansiYellow + text + ansiReset
+}
+
+// resourceOpKind is the shared create/modify/destroy classification the
+// general header rule keys off of -- factored into one small type so
+// ship.go's live per-resource progress header (the one caller that must
+// classify an address dynamically, one ProgressEvent at a time, rather
+// than simply walking Delta.Creates/Modifies/Destroys) shares the exact
+// three-way color+bold mapping every other header-rendering call site
+// already applies directly (renderCreates' GreenBold, renderDestroys'
+// RedBold, status.go's drift header YellowBold).
+type resourceOpKind int
+
+const (
+	opUnknown resourceOpKind = iota
+	opCreate
+	opModify
+	opDestroy
+)
+
+// OpHeader colors+bolds text per kind, or leaves it untouched for
+// opUnknown (an address this session's classification couldn't place --
+// a plain header is a harmless fallback, never a missing/blank line).
+func (s *styler) OpHeader(kind resourceOpKind, text string) string {
+	switch kind {
+	case opCreate:
+		return s.GreenBold(text)
+	case opModify:
+		return s.YellowBold(text)
+	case opDestroy:
+		return s.RedBold(text)
+	default:
+		return text
+	}
+}
+
 // forceBold makes an ALREADY-composed line bold throughout, including
 // through any other color() calls embedded inside it (docs/cli-output-
 // spec.md §v2: "each line BOLD," e.g. the delta/blast-radius summary,

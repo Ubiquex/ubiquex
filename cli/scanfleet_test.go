@@ -28,8 +28,12 @@ func TestScanFleet_WalksMultipleAddresses_EachGetsItsOwnCard(t *testing.T) {
 	if !strings.Contains(out, "payments.fake_widget.widget-a") || !strings.Contains(out, "payments.fake_widget.widget-b") {
 		t.Fatalf("expected a card for each drifted address, got: %s", out)
 	}
-	if strings.Count(out, `tags.drift: (absent) -> "byhand"`) != 2 {
-		t.Fatalf("expected the real attribute diff on each of the two cards, got: %s", out)
+	// UBI-71 part 2: scan's own card renders a compact one-line diff
+	// summary now, not the full before/after attribute diff restated
+	// verbatim (that's status --drift's own job) -- one summary line per
+	// drifted address here.
+	if strings.Count(out, "attribute(s) changed: tags.drift") != 2 {
+		t.Fatalf("expected the compact diff summary on each of the two cards, got: %s", out)
 	}
 	if !strings.Contains(out, "2 resource(s) scanned, 2 drifted, 2 proposal(s) saved") {
 		t.Fatalf("expected the aggregate summary line, got: %s", out)
