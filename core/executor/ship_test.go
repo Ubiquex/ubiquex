@@ -27,8 +27,9 @@ type fakeApplier struct {
 	resources      map[string]json.RawMessage
 	scripts        map[string][]applyStep
 	createCounter  int
-	createScripts  map[string][]applyStep // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
-	readsRemaining map[string]int         // UBI-44/42: id -> ReadResource calls remaining before it reports absent, for scriptDelayedAbsence
+	createScripts  map[string][]applyStep   // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
+	readsRemaining map[string]int           // UBI-44/42: id -> ReadResource calls remaining before it reports absent, for scriptDelayedAbsence
+	applyDelays    map[string]time.Duration // UBI-67: a create's own "value" field -> artificial delay, for scriptApplyDelay
 }
 
 type applyStep struct {
@@ -100,6 +101,27 @@ func (f *fakeApplier) PlanResourceChange(ctx context.Context, resourceSchema any
 }
 
 func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, json.RawMessage, error) {
+	// UBI-67: an artificial, scripted delay -- deliberately BEFORE the
+	// lock below (and before any of this fake's own internal state is
+	// touched), so N concurrent creates each carrying their own delay
+	// genuinely overlap in real wall-clock time rather than serializing
+	// behind this fixture's own bookkeeping mutex. Real provider I/O
+	// (a real gRPC ApplyResourceChange call) has exactly this shape --
+	// slow, but never holding any of ubx's own locks while slow.
+	if string(plannedState) != "null" {
+		var probe map[string]interface{}
+		if err := json.Unmarshal(plannedState, &probe); err == nil {
+			if v, _ := probe["value"].(string); v != "" {
+				f.mu.Lock()
+				d := f.applyDelays[v]
+				f.mu.Unlock()
+				if d > 0 {
+					time.Sleep(d)
+				}
+			}
+		}
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -338,6 +360,23 @@ func (f *fakeApplier) scriptCreateFailure(value string, err error) {
 		f.createScripts = map[string][]applyStep{}
 	}
 	f.createScripts[value] = append(f.createScripts[value], applyStep{err: err})
+}
+
+// scriptApplyDelay makes any create whose resolved config carries
+// {"value": value} sleep for d at the very start of its own
+// ApplyResourceChange call (UBI-67) -- used to force genuinely staggered
+// completion timing (some resources finish fast, some deliberately
+// slow, mirroring the founder's own SQS-vs-everything-else live finding)
+// so a stress test can prove the scheduler's own single-writer recorder
+// never loses or races a resource entry regardless of real completion
+// order.
+func (f *fakeApplier) scriptApplyDelay(value string, d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.applyDelays == nil {
+		f.applyDelays = map[string]time.Duration{}
+	}
+	f.applyDelays[value] = d
 }
 
 // scriptApplyTimeoutButLanded schedules the next ApplyResourceChange call

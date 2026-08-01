@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,4 +76,69 @@ func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 	if !strings.Contains(out, "applied") {
 		t.Fatalf("expected the terminal \"applied\" line to still print, got:\n%s", out)
 	}
+}
+
+// TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently is
+// UBI-67's own regression test for the printer's pre-UBI-67 assumption
+// ("at most one resource is ever in_flight/verifying at a time" -- its
+// own former doc comment said so directly): two DIFFERENT addresses'
+// own in_flight tickers now run concurrently, each emitting its own
+// discrete, address-prefixed line every tickInterval, and must never
+// collide, deadlock, or lose either address's own final "applied" line
+// -- the exact shape a real concurrent `ubx ship` batch (UBI-67's own
+// scheduler) produces. Drives the printer directly, from two goroutines,
+// mirroring how executor.WithProgress's own callback is genuinely
+// invoked from N concurrent node goroutines today.
+func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testing.T) {
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	printer := newProgressPrinter(&safeWriter{mu: &mu, w: &buf}, plainStyler(), true, nil)
+
+	addrA, addrB := "fake_widget.a", "fake_widget.b"
+
+	var wg sync.WaitGroup
+	for _, addr := range []string{addrA, addrB} {
+		addr := addr
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "in_flight"})
+			time.Sleep(tickInterval + 300*time.Millisecond)
+			printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "applied"})
+		}()
+	}
+	wg.Wait()
+
+	out := buf.String()
+	for _, addr := range []string{addrA, addrB} {
+		if !strings.Contains(out, addr+":") {
+			t.Errorf("expected every line for %s to be prefixed with its own address, got:\n%s", addr, out)
+		}
+	}
+	if strings.Count(out, "shipping") < 2 {
+		t.Errorf("expected both addresses' own ticker to have fired at least once (2+ \"shipping\" lines total), got:\n%s", out)
+	}
+	if strings.Count(out, "applied") != 2 {
+		t.Errorf("expected exactly one \"applied\" line per address (2 total), got %d:\n%s", strings.Count(out, "applied"), out)
+	}
+}
+
+// safeWriter serializes concurrent Write calls -- bytes.Buffer itself
+// is not safe for concurrent use, and this test's own two goroutines
+// both write through the same printer's own io.Writer (the printer
+// serializes its OWN internal state via its own mutex, but two
+// goroutines each holding that lock in turn still both reach this
+// io.Writer, one after another -- never truly concurrently, but go
+// test -race checks the underlying io.Writer implementation itself has
+// no assumption of single-goroutine use baked in, so this wrapper keeps
+// the test honestly race-clean without relying on that).
+type safeWriter struct {
+	mu *sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (s *safeWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

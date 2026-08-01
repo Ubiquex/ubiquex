@@ -16,7 +16,9 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ubiquex/ubiquex/core"
@@ -259,17 +261,44 @@ var (
 	debugDelayAfterInFlight     = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_INFLIGHT")
 	debugDelayAfterApplySuccess = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_AFTER_APPLY_SUCCESS")
 
-	// debugDelayBetweenChangeResources (UBI-27) sleeps in shipChange's own
-	// loop, after one resource's own processing is fully durably persisted
-	// (applied, failed, or blocked) and before the next resource in topo
-	// order is even looked at -- a reliable, reproducible window for a real
-	// `kill -9` to land exactly "between one resource applying for real and
-	// the next one starting," the multi-resource counterpart to
-	// debugDelayAfterInFlight/debugDelayAfterApplySuccess's own
-	// single-resource windows. UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES,
+	// debugDelayBetweenChangeResources (UBI-27) sleeps once a node's own
+	// real work is fully durably persisted (applied, failed, or blocked),
+	// before that node's own completion is reported back to shipChange's
+	// scheduler (UBI-67) -- a reliable, reproducible window for a real
+	// `kill -9` to land exactly "after one resource applies for real, before
+	// its own completion unblocks anything depending on it." Pre-UBI-67 this
+	// meant "between one resource and the next" under a single serial walk;
+	// under real concurrency there is no longer one single "next resource,"
+	// but the seam's own purpose (a reproducible kill point right after one
+	// node's own durable persistence) is unchanged. UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES,
 	// same convention (zero/unset -- no delay -- in every real `ubx ship`).
 	debugDelayBetweenChangeResources = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES")
 )
+
+// maxParallelShipNodes bounds how many delta.creates/.modifies/.destroys
+// nodes shipChange's own scheduler (UBI-67) runs concurrently -- never
+// unbounded, since a real provider's own rate limits are real (this
+// codebase already has a live-verified precedent for respecting a
+// provider's own pace: destroyReconcileBackoffSchedule's own escalating
+// waits, UBI-42/44). A package var, not a constant, so tests can shrink
+// it; overridable via UBX_SHIP_MAX_PARALLEL for a real run. Default (10)
+// mirrors Terraform's own long-standing `-parallelism=10` default --
+// docs/executor.md's own UBI-67 session 1 sketch named this as a
+// defensible anchor, not independently re-derived here. A first-class
+// `ubx ship --max-parallel` CLI flag is a small, explicitly named
+// follow-up, not built this session -- the env var is a real, working
+// knob in the meantime, the same seam class as every other UBX_*
+// override in this file.
+var maxParallelShipNodes = maxParallelFromEnv()
+
+func maxParallelFromEnv() int {
+	if v := os.Getenv("UBX_SHIP_MAX_PARALLEL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 10
+}
 
 func parseDebugDelay(envVar string) time.Duration {
 	d, _ := time.ParseDuration(os.Getenv(envVar))
@@ -338,15 +367,16 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 	}
 
 	startedAt := nowRFC3339()
-	var resourcesApplied, resourcesFailed, resourcesStillUnknown int64
 	halted := false
 
-	persist := func() error {
-		if err := l.SaveApplyProgress(rec); err != nil {
-			return fmt.Errorf("ship: %w", err)
-		}
-		return nil
-	}
+	// drift_revert stays fully serial (out of UBI-67's scope, one
+	// resource at a time, docs/executor.md's "Serial execution in delta
+	// order") -- rcd is constructed anyway so this loop shares the exact
+	// same recorder/reconcileLoop machinery shipChange's own concurrent
+	// walk uses, rather than a second, lock-free copy of the identical
+	// operations existing alongside it. An uncontended mutex here costs
+	// nothing observable.
+	rcd := newRecorder(l, rec, nil)
 
 	for _, m := range modifies {
 		ra := &core.ResourceApply{Address: m.Target}
@@ -354,19 +384,19 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 		hist := foldResourceHistory(attempts, m.Target)
 
 		if hist.hasState && hist.lastState == core.ResourceApplied {
-			recordTransition(ctx, ra, core.ResourceApplied, "already applied in a prior attempt")
-			resourcesApplied++
-			if err := persist(); err != nil {
+			rcd.transition(ctx, ra, core.ResourceApplied, "already applied in a prior attempt")
+			rcd.tally(core.ResourceApplied)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
 		}
 
 		if halted {
-			recordTransition(ctx, ra, core.ResourcePending, "")
-			recordError(ctx, ra, "a prior resource in this attempt failed freshness verification -- refusing remaining resources rather than proceeding past it", core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.transition(ctx, ra, core.ResourcePending, "")
+			rcd.recordErr(ctx, ra, "a prior resource in this attempt failed freshness verification -- refusing remaining resources rather than proceeding past it", core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -380,12 +410,12 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 		// non-redacted paths) -- ApplyResourceChange is a single whole-state
 		// operation, not an independent per-attribute one.
 		if paths := redactedAfterPaths(m); len(paths) > 0 {
-			recordTransition(ctx, ra, core.ResourcePending, "")
-			recordError(ctx, ra, fmt.Sprintf(
+			rcd.transition(ctx, ra, core.ResourcePending, "")
+			rcd.recordErr(ctx, ra, fmt.Sprintf(
 				"declined: after value(s) at %s are redacted -- the ledger holds a salted hash, not the real secret material, and ubx will never construct a live apply from it; use `ubx revert-plan` for this resource's manual reconciliation steps instead",
 				strings.Join(paths, ", ")), core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -398,29 +428,29 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 		// prior, possibly-crashed attempt) -- docs/executor.md's idempotency
 		// contract: never a blind re-apply on top of an unresolved unknown.
 		if hist.hasState && needsReconciliation(hist.lastState) {
-			recordTransition(ctx, ra, core.ResourcePending, "")
+			rcd.transition(ctx, ra, core.ResourcePending, "")
 			if !haveLookup {
-				recordError(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
-				resourcesFailed++
-				if err := persist(); err != nil {
+				rcd.recordErr(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+				rcd.tally(core.ResourceFailed)
+				if err := rcd.persist(); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			outcome := reconcileLoop(ctx, app, m.Target, lookup, m, providerSource, providerConfig, ra)
-			tallyOutcome(outcome, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
-			if err := persist(); err != nil {
+			outcome := reconcileLoop(ctx, app, m.Target, lookup, m, providerSource, providerConfig, rcd, ra)
+			rcd.tally(outcome)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
 		}
 
-		recordTransition(ctx, ra, core.ResourcePending, "")
+		rcd.transition(ctx, ra, core.ResourcePending, "")
 
 		if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
-			recordError(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -428,22 +458,22 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 
 		if err := core.VerifyFreshness(ctx, app, m.Target, providerSource, providerConfig, p); err != nil {
 			if errors.Is(err, core.ErrStaleObservation) {
-				recordError(ctx, ra, err.Error(), core.ErrorTerminal)
+				rcd.recordErr(ctx, ra, err.Error(), core.ErrorTerminal)
 				halted = true
 			} else {
-				recordError(ctx, ra, err.Error(), core.ErrorRetryable)
+				rcd.recordErr(ctx, ra, err.Error(), core.ErrorRetryable)
 			}
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
 		}
 
 		if !haveLookup {
-			recordError(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -451,27 +481,27 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 
 		observed, _, err := core.ReadAndFingerprint(ctx, app, m.Target, providerSource, providerConfig, lookup)
 		if err != nil {
-			recordError(ctx, ra, fmt.Sprintf("read prior state: %v", err), core.ErrorRetryable)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, fmt.Sprintf("read prior state: %v", err), core.ErrorRetryable)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		planned, err := core.ApplyAfter(observed, m)
 		if err != nil {
-			recordError(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		_, resourceSchemas, err := app.Schema(ctx)
 		if err != nil {
-			recordError(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -479,9 +509,9 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 
 		// THE invariant (docs/executor.md): in_flight is durably persisted
 		// before the risky ApplyResourceChange call, never after.
-		recordTransition(ctx, ra, core.ResourceInFlight, "")
-		if err := persist(); err != nil {
-			return nil, fmt.Errorf("ship: persist in_flight: %w", err)
+		rcd.transition(ctx, ra, core.ResourceInFlight, "")
+		if err := rcd.persist(); err != nil {
+			return nil, fmt.Errorf("persist in_flight: %w", err)
 		}
 		if debugDelayAfterInFlight > 0 {
 			time.Sleep(debugDelayAfterInFlight)
@@ -493,10 +523,10 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 			if debugDelayAfterApplySuccess > 0 {
 				time.Sleep(debugDelayAfterApplySuccess)
 			}
-			ra.ProviderResult = result
-			recordTransition(ctx, ra, core.ResourceApplied, "")
-			resourcesApplied++
-			if err := persist(); err != nil {
+			rcd.mutate(ra, func(ra *core.ResourceApply) { ra.ProviderResult = result })
+			rcd.transition(ctx, ra, core.ResourceApplied, "")
+			rcd.tally(core.ResourceApplied)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -504,10 +534,10 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 
 		var terminal *TerminalError
 		if errors.As(applyErr, &terminal) {
-			recordError(ctx, ra, terminal.Error(), core.ErrorTerminal)
-			recordTransition(ctx, ra, core.ResourceFailed, "")
-			resourcesFailed++
-			if err := persist(); err != nil {
+			rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
+			rcd.transition(ctx, ra, core.ResourceFailed, "")
+			rcd.tally(core.ResourceFailed)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
 			continue
@@ -516,18 +546,19 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 		// Retryable/ambiguous: the RPC didn't resolve into a clear answer
 		// (docs/executor.md -- ResourceUnknownPostTimeout, reality is asked,
 		// not assumed).
-		recordError(ctx, ra, applyErr.Error(), core.ErrorRetryable)
-		recordTransition(ctx, ra, core.ResourceUnknownPostTimeout, "")
-		if err := persist(); err != nil {
+		rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+		rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
+		if err := rcd.persist(); err != nil {
 			return nil, err
 		}
-		outcome := reconcileLoop(ctx, app, m.Target, lookup, m, providerSource, providerConfig, ra)
-		tallyOutcome(outcome, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
-		if err := persist(); err != nil {
+		outcome := reconcileLoop(ctx, app, m.Target, lookup, m, providerSource, providerConfig, rcd, ra)
+		rcd.tally(outcome)
+		if err := rcd.persist(); err != nil {
 			return nil, err
 		}
 	}
 
+	resourcesApplied, resourcesFailed, resourcesStillUnknown := rcd.counts()
 	return sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, halted)
 }
 
@@ -567,7 +598,7 @@ func sealOutcome(l *core.Ledger, rec *core.ApplyRecord, startedAt string, resour
 // answer resolves still_unknown. Every attempt -- conclusive or not -- is
 // appended to ra.Reconciliation; the final transition is always recorded
 // before returning.
-func reconcileLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, mod core.Modification, providerSource string, providerConfig json.RawMessage, ra *core.ResourceApply) core.ResourceState {
+func reconcileLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, mod core.Modification, providerSource string, providerConfig json.RawMessage, rcd *recorder, ra *core.ResourceApply) core.ResourceState {
 	for attempt := 0; attempt < maxReconcileAttempts; attempt++ {
 		emitProgress(ctx, ProgressEvent{
 			Address: addr.String(), Kind: "reconcile_attempt",
@@ -577,30 +608,36 @@ func reconcileLoop(ctx context.Context, app Applier, addr core.Address, lookup j
 		observed, _, err := core.ReadAndFingerprint(ctx, app, addr, providerSource, providerConfig, lookup)
 		at := nowRFC3339()
 		if err != nil {
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			})
 			time.Sleep(reconcileRetryInterval)
 			continue
 		}
 
 		verdict, err := reconciliationVerdict(observed, mod)
 		if err != nil {
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			})
 			time.Sleep(reconcileRetryInterval)
 			continue
 		}
-		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: verdict})
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: verdict})
+		})
 
 		switch verdict {
 		case "applied":
-			recordTransition(ctx, ra, core.ResourceApplied, "confirmed by reconciliation")
+			rcd.transition(ctx, ra, core.ResourceApplied, "confirmed by reconciliation")
 			return core.ResourceApplied
 		case "failed":
-			recordTransition(ctx, ra, core.ResourceFailed, "confirmed by reconciliation: change never landed")
+			rcd.transition(ctx, ra, core.ResourceFailed, "confirmed by reconciliation: change never landed")
 			return core.ResourceFailed
 		}
 		time.Sleep(reconcileRetryInterval)
 	}
-	recordTransition(ctx, ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
+	rcd.transition(ctx, ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
 	return core.ResourceStillUnknown
 }
 
@@ -1176,27 +1213,43 @@ func splitComputedFrom(s string) (addr, path string, err error) {
 }
 
 // shipChange executes an accepted kind:"change" proposal's delta.creates,
-// delta.modifies, and (UBI-30) delta.destroys together, in real dependency
-// order (changeNodesOf's own topo-sort) -- docs/executor.md's UBI-27
-// amendment, extended by its own "Amendment (UBI-30): shipping destroys."
-// A resource whose own depends_on names another resource in this same
-// proposal is never attempted until that dependency has reached applied
-// -- checked against both this invocation's own progress and every prior
-// attempt's durably recorded result, so a `ubx ship` killed between one
-// resource applying and the next starting recovers the completed one's
-// REAL output on re-run (foldResourceHistory's own lastProviderResult),
-// rather than re-creating it or losing the value a dependent needs. This
-// is what makes "creates forward, destroys reversed" one interleaved walk
-// rather than two: a destroy's own depends_on (docs/resolver.md's
-// orphan-protection walk, the reverse edge set) is followed by exactly
-// the same precondition check as a create's or modify's forward one.
+// delta.modifies, and (UBI-30) delta.destroys together, with real,
+// bounded CONCURRENCY (UBI-67) -- a resource whose own dependencies are
+// already satisfied starts as soon as a concurrency slot frees up,
+// rather than waiting for every earlier address in changeNodesOf's own
+// topo order to finish first. A resource whose own depends_on names
+// another resource in this same proposal is still never attempted until
+// that dependency has reached applied -- checked against both this
+// invocation's own progress and every prior attempt's durably recorded
+// result, so a `ubx ship` killed mid-walk recovers a completed
+// dependency's REAL output on re-run (foldResourceHistory's own
+// lastProviderResult), rather than re-creating it or losing the value a
+// dependent needs. This is what makes "creates forward, destroys
+// reversed" one interleaved scheduling problem rather than two: a
+// destroy's own depends_on (docs/resolver.md's orphan-protection walk,
+// the reverse edge set) is gated by exactly the same precondition check
+// as a create's or modify's forward one.
 //
-// Unlike shipDriftRevert's single "halted" flag (one stale resource blocks
-// every resource after it in a fixed canonical order), a blocked resource
-// here only blocks its OWN dependents -- an independent resource elsewhere
-// in the same proposal still proceeds. sealOutcome is always called with
-// halted=false for this reason; "partially_applied" still correctly
-// surfaces via resourcesFailed/resourcesStillUnknown alone.
+// A blocked resource here only blocks its OWN dependents -- an
+// independent resource elsewhere in the same proposal still proceeds
+// (unchanged from the pre-UBI-67 serial walk). sealOutcome is always
+// called with halted=false for this reason; "partially_applied" still
+// correctly surfaces via resourcesFailed/resourcesStillUnknown alone.
+//
+// docs/executor.md's own "Amendment (2026-08-02, UBI-67 session 1)"
+// section is this function's own design record -- session 1's
+// empirically-proven finding (a naive goroutine fan-out over today's
+// serial shape silently drops resource entries: unsynchronized
+// concurrent rec.Resources append/resultsByAddr writes/outcome-counter
+// increments) is why this function's own shared state now goes entirely
+// through recorder (recorder.go): rec.Resources is pre-allocated, one
+// slot per node, in changeNodesOf's own topo order, BEFORE any
+// concurrent work starts -- the slice itself is never appended to
+// during the walk, only each already-placed slot's own fields mutate
+// (always through rcd) -- which is what keeps rec.Resources' own final
+// order matching this document's pre-UBI-67 topo order byte-for-byte,
+// even though the underlying provider work below is genuinely
+// concurrent.
 func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerSource string, p *core.Proposal) (*core.ApplyRecord, error) {
 	if p.Acceptance == nil {
 		return nil, ErrNotAccepted
@@ -1226,124 +1279,248 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 	}
 
 	startedAt := nowRFC3339()
-	persist := func() error {
-		if err := l.SaveApplyProgress(rec); err != nil {
-			return fmt.Errorf("ship: %w", err)
-		}
-		return nil
-	}
 
-	// Seed resultsByAddr from every node already fully applied in a PRIOR
-	// attempt -- the recovery path a kill-and-restart depends on: a later
-	// attempt's own pass-through confirmation never re-records
-	// ProviderResult (see foldResourceHistory's own comment), so this must
-	// come from history, not from this invocation's own (so far empty)
-	// progress. Gated on hist.lastState alone, not on lastProviderResult
-	// being non-empty (UBI-30 fix): a destroy has no ProviderResult at
-	// all, by design (nothing to store once a resource is gone), but its
-	// completion must still satisfy anything depends_on-ing it (a same-batch
-	// mutual destroy, or a destroy of a destroy's own dependent's dependent)
-	// the exact same way a create/modify's completion does. Missing this
-	// case wrongly re-blocked a fully-destroyed dependency forever on
-	// every subsequent `ubx ship` re-run -- found by this session's own
-	// hermetic "re-ship after partial destroy" test, not assumed correct.
-	resultsByAddr := make(map[string]json.RawMessage, len(nodes))
-	for _, n := range nodes {
-		hist := foldResourceHistory(attempts, n.addr)
-		if hist.hasState && hist.lastState == core.ResourceApplied {
-			resultsByAddr[n.addr.String()] = hist.lastProviderResult
-		}
-	}
-
-	var resourcesApplied, resourcesFailed, resourcesStillUnknown int64
-
+	// hist is computed once per node up front -- foldResourceHistory is a
+	// pure read over the already-loaded, never-mutated `attempts` slice,
+	// safe to call from any goroutine or none.
+	hists := make(map[string]resourceHistory, len(nodes))
+	// seed: every node already fully applied in a PRIOR attempt -- the
+	// recovery path a kill-and-restart depends on (unchanged reasoning
+	// from the pre-UBI-67 serial walk): a later attempt's own pass-
+	// through confirmation never re-records ProviderResult (see
+	// foldResourceHistory's own comment), so this must come from
+	// history, not from this invocation's own (so far empty) progress.
+	// Gated on hist.lastState alone, not on lastProviderResult being
+	// non-empty (UBI-30 fix): a destroy has no ProviderResult at all, by
+	// design, but its completion must still satisfy anything
+	// depends_on-ing it the same way a create/modify's completion does.
+	seed := make(map[string]json.RawMessage, len(nodes))
 	for _, n := range nodes {
 		key := n.addr.String()
+		hist := foldResourceHistory(attempts, n.addr)
+		hists[key] = hist
+		if hist.hasState && hist.lastState == core.ResourceApplied {
+			seed[key] = hist.lastProviderResult
+		}
+	}
+
+	rcd := newRecorder(l, rec, seed)
+
+	// Pre-allocate every node's own *core.ResourceApply, in changeNodesOf's
+	// own topo order, before any concurrent work starts -- see this
+	// function's own doc comment.
+	raByAddr := make(map[string]*core.ResourceApply, len(nodes))
+	for _, n := range nodes {
 		ra := &core.ResourceApply{Address: n.addr}
 		rec.Resources = append(rec.Resources, ra)
-		hist := foldResourceHistory(attempts, n.addr)
+		raByAddr[n.addr.String()] = ra
+	}
 
+	// nodesByAddr/dependents/pending are the parallel scheduler's own
+	// bookkeeping (docs/executor.md's own scheduling sketch): pending
+	// counts only dependencies NOT already satisfied by a prior attempt
+	// (seed) -- one already satisfied before this walk even starts can
+	// never block anything, exactly like the pre-UBI-67 serial walk's
+	// own missingDep check already treated it. dependents is the reverse
+	// edge set: which OTHER nodes' own pending count to decrement once a
+	// given address resolves (success or failure) during this walk.
+	nodesByAddr := make(map[string]*changeNode, len(nodes))
+	pending := make(map[string]int, len(nodes))
+	dependents := make(map[string][]string, len(nodes))
+	for _, n := range nodes {
+		key := n.addr.String()
+		nodesByAddr[key] = n
+		count := 0
+		for _, dep := range n.dependsOn {
+			if _, already := seed[dep]; already {
+				continue
+			}
+			count++
+			dependents[dep] = append(dependents[dep], key)
+		}
+		pending[key] = count
+	}
+	// Deterministic dependent-processing order, the same alphabetical
+	// tie-break sortedModifies/changeNodesOf's own topoSortAddresses
+	// already use elsewhere in this file.
+	for dep := range dependents {
+		sort.Strings(dependents[dep])
+	}
+
+	// already-applied nodes resolve synchronously, right now, before the
+	// concurrent walk starts at all -- they need no dependency (their own
+	// completion was already folded into seed above) and their pass-
+	// through transition doesn't touch pending/dependents.
+	for _, n := range nodes {
+		key := n.addr.String()
+		hist := hists[key]
 		if hist.hasState && hist.lastState == core.ResourceApplied {
-			recordTransition(ctx, ra, core.ResourceApplied, "already applied in a prior attempt")
-			resourcesApplied++
-			if err := persist(); err != nil {
+			ra := raByAddr[key]
+			rcd.transition(ctx, ra, core.ResourceApplied, "already applied in a prior attempt")
+			rcd.tally(core.ResourceApplied)
+			if err := rcd.persist(); err != nil {
 				return nil, err
 			}
-			continue
 		}
+	}
+
+	type completion struct{ key string }
+
+	toProcess := 0
+	for _, n := range nodes {
+		hist := hists[n.addr.String()]
+		if !(hist.hasState && hist.lastState == core.ResourceApplied) {
+			toProcess++
+		}
+	}
+
+	doneCh := make(chan completion, len(nodes))
+	fatalCh := make(chan error, len(nodes))
+	sem := make(chan struct{}, maxParallelShipNodes)
+	var wg sync.WaitGroup
+
+	// resolveBlockedSync records key as a synchronous, non-provider-touching
+	// terminal failure (a missing dependency, or a provider pool.Get
+	// failure -- UBI-43's own "per-node terminal error, never a whole-walk
+	// abort" rule, unchanged) -- returns false if a persist failure itself
+	// makes this fatal to the whole walk (a real I/O error, distinct from
+	// an ordinary per-node outcome).
+	resolveFailedSync := func(key, message string) bool {
+		ra := raByAddr[key]
+		rcd.transition(ctx, ra, core.ResourcePending, "")
+		rcd.recordErr(ctx, ra, message, core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		if err := rcd.persist(); err != nil {
+			select {
+			case fatalCh <- err:
+			default:
+			}
+			return false
+		}
+		return true
+	}
+
+	var launch func(key string)
+	launch = func(key string) {
+		n := nodesByAddr[key]
+		ra := raByAddr[key]
 
 		var missingDep string
 		for _, dep := range n.dependsOn {
-			if _, ok := resultsByAddr[dep]; !ok {
+			if !rcd.hasResult(dep) {
 				missingDep = dep
 				break
 			}
 		}
 		if missingDep != "" {
-			recordTransition(ctx, ra, core.ResourcePending, "")
-			recordError(ctx, ra, fmt.Sprintf("blocked: dependency %s has not applied -- refusing to ship a resource ahead of what it depends on", missingDep), core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
-				return nil, err
+			if resolveFailedSync(key, fmt.Sprintf("blocked: dependency %s has not applied -- refusing to ship a resource ahead of what it depends on", missingDep)) {
+				doneCh <- completion{key: key}
 			}
-			continue
+			return
 		}
 
-		// Route this node to its own recorded provider's pool entry
-		// (docs/executor.md's own "Amendment (UBI-43): multi-provider
-		// stacks" client pool) -- nil (a proposal resolved before this
-		// amendment) falls back to the invocation's own providerSource,
-		// version "", exactly what SingleApplierPool's single entry
-		// already answers regardless of the pair asked for. A launch
-		// failure here is a per-node terminal error, never a whole-walk
-		// abort (docs/multi-provider-adversarial.md row 4): this node
-		// fails, `continue` lets every other node -- including ones
-		// against a different, already-launched-fine provider -- proceed
-		// in its own turn, unaffected.
-		provSource, provVersion := providerSource, ""
-		if n.provider != nil {
-			provSource, provVersion = n.provider.Source, n.provider.Version
-		}
-		app, providerConfig, err := pool.Get(ctx, provSource, provVersion)
-		if err != nil {
-			recordTransition(ctx, ra, core.ResourcePending, "")
-			recordError(ctx, ra, fmt.Sprintf("provider unavailable: %v", err), core.ErrorTerminal)
-			resourcesFailed++
-			if err := persist(); err != nil {
-				return nil, err
-			}
-			continue
-		}
+		hist := hists[key]
+		snapshot := rcd.snapshotResults()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		var stepErr error
-		switch {
-		case n.create != nil:
-			stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
-		case n.destroy != nil:
-			// n.dependsOn for a destroy entry is docs/resolver.md's own
-			// orphan-protection reverse edge set -- other same-batch
-			// resources this destroy had to wait for. By this point in
-			// the walk, the missingDep check above already confirmed
-			// every one of them applied (i.e. was itself destroyed, for
-			// a destroy node) -- so a non-empty DependsOn here means a
-			// referencing resource was JUST destroyed as part of this
-			// exact batch, immediately before this node's own turn (see
-			// shipDestroyNode's own doc comment on the parameter).
-			stepErr = shipDestroyNode(ctx, app, provSource, providerConfig, p, *n.destroy, ra, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown, len(n.dependsOn) > 0)
-		default:
-			stepErr = shipModifyNode(ctx, app, provSource, providerConfig, p, *n.modify, ra, resultsByAddr, hist, persist, &resourcesApplied, &resourcesFailed, &resourcesStillUnknown)
-		}
-		if stepErr != nil {
-			return nil, stepErr
-		}
-		if st, ok := ra.LastState(); ok && st == core.ResourceApplied {
-			resultsByAddr[key] = ra.ProviderResult
-		}
-		if debugDelayBetweenChangeResources > 0 {
-			time.Sleep(debugDelayBetweenChangeResources)
-		}
+			// Route this node to its own recorded provider's pool entry
+			// (docs/executor.md's own "Amendment (UBI-43): multi-provider
+			// stacks" client pool) -- nil (a proposal resolved before that
+			// amendment) falls back to this invocation's own
+			// providerSource, version "", exactly what SingleApplierPool's
+			// single entry already answers regardless of the pair asked
+			// for. providerPool.Get (cli/providerpool.go) is already
+			// mutex-protected end to end (docs/executor.md's own UBI-67
+			// session 1 finding) -- safe to call from many concurrent
+			// goroutines without any locking of our own.
+			provSource, provVersion := providerSource, ""
+			if n.provider != nil {
+				provSource, provVersion = n.provider.Source, n.provider.Version
+			}
+			app, providerConfig, err := pool.Get(ctx, provSource, provVersion)
+			if err != nil {
+				if resolveFailedSync(key, fmt.Sprintf("provider unavailable: %v", err)) {
+					doneCh <- completion{key: key}
+				}
+				return
+			}
+
+			var stepErr error
+			switch {
+			case n.create != nil:
+				stepErr = shipCreate(ctx, app, providerConfig, n.create, ra, snapshot, hist, rcd)
+			case n.destroy != nil:
+				// n.dependsOn for a destroy entry is docs/resolver.md's own
+				// orphan-protection reverse edge set -- other same-batch
+				// resources this destroy had to wait for. By this point,
+				// the missingDep check above already confirmed every one of
+				// them applied (i.e. was itself destroyed, for a destroy
+				// node) -- so a non-empty DependsOn here means a
+				// referencing resource was destroyed as part of this exact
+				// batch (see shipDestroyNode's own doc comment).
+				stepErr = shipDestroyNode(ctx, app, provSource, providerConfig, p, *n.destroy, ra, hist, rcd, len(n.dependsOn) > 0)
+			default:
+				stepErr = shipModifyNode(ctx, app, provSource, providerConfig, p, *n.modify, ra, snapshot, hist, rcd)
+			}
+			if stepErr != nil {
+				select {
+				case fatalCh <- stepErr:
+				default:
+				}
+				return
+			}
+			if st, ok := ra.LastState(); ok && st == core.ResourceApplied {
+				rcd.setResult(key, ra.ProviderResult)
+			}
+			if debugDelayBetweenChangeResources > 0 {
+				time.Sleep(debugDelayBetweenChangeResources)
+			}
+			doneCh <- completion{key: key}
+		}()
 	}
 
+	var ready []string
+	for key, n := range pending {
+		if n == 0 {
+			ready = append(ready, key)
+		}
+	}
+	sort.Strings(ready)
+	for _, key := range ready {
+		// Only nodes that still need real processing at all (not already
+		// resolved above) ever reach launch -- an already-applied node's
+		// own address was never given a pending entry with dependents to
+		// chase, but guard here too in case a future edit changes that.
+		hist := hists[key]
+		if hist.hasState && hist.lastState == core.ResourceApplied {
+			continue
+		}
+		launch(key)
+	}
+
+	processed := 0
+	for processed < toProcess {
+		select {
+		case c := <-doneCh:
+			processed++
+			for _, depKey := range dependents[c.key] {
+				pending[depKey]--
+				if pending[depKey] == 0 {
+					launch(depKey)
+				}
+			}
+		case err := <-fatalCh:
+			wg.Wait()
+			return nil, err
+		}
+	}
+	wg.Wait()
+
+	resourcesApplied, resourcesFailed, resourcesStillUnknown := rcd.counts()
 	sealed, err := sealOutcome(l, rec, startedAt, resourcesApplied, resourcesFailed, resourcesStillUnknown, false)
 	if err != nil {
 		return nil, err
@@ -1481,50 +1658,50 @@ func reconcileSameBatchEffects(ctx context.Context, l *core.Ledger, pool Applier
 // core.readAndFingerprint's own callers already establish for modify
 // (VerifyFreshness and ReadAndFingerprint each call it again), confirmed
 // safe there against a real provider across UBI-26's own live sessions.
-func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage, cn *createNode, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
-	recordTransition(ctx, ra, core.ResourcePending, "")
+func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage, cn *createNode, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, rcd *recorder) error {
+	rcd.transition(ctx, ra, core.ResourcePending, "")
 
 	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
-		recordError(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	var raw interface{}
 	if err := json.Unmarshal(cn.Config, &raw); err != nil {
-		recordError(ctx, ra, fmt.Sprintf("decode config: %v", err), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("decode config: %v", err), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 	substituted, err := substituteComputed(raw, resultsByAddr)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 	planned, err := json.Marshal(substituted)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	providerSchema, resourceSchemas, err := app.Schema(ctx)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 	if err := app.Configure(ctx, providerSchema, providerConfig); err != nil {
-		recordError(ctx, ra, fmt.Sprintf("configure provider: %v", err), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("configure provider: %v", err), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	// THE invariant (docs/executor.md): in_flight is durably persisted
 	// before the risky ApplyResourceChange call, never after.
-	recordTransition(ctx, ra, core.ResourceInFlight, "")
-	if err := persist(); err != nil {
+	rcd.transition(ctx, ra, core.ResourceInFlight, "")
+	if err := rcd.persist(); err != nil {
 		return fmt.Errorf("ship: persist in_flight: %w", err)
 	}
 	if debugDelayAfterInFlight > 0 {
@@ -1537,7 +1714,6 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		if debugDelayAfterApplySuccess > 0 {
 			time.Sleep(debugDelayAfterApplySuccess)
 		}
-		ra.ProviderResult = result
 		// UBI-29 (docs/schema.md's own amendment): recorded explicitly,
 		// right here, the moment this create is real -- never left for a
 		// future reader to derive on demand (the same "persist a lookup
@@ -1552,21 +1728,24 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		// own doc comment) over the id-only default derivation here,
 		// which core/executor's own provider-import-free boundary means
 		// it can never do any better than on its own.
-		ra.Lookup = lookup
-		if len(ra.Lookup) == 0 {
-			ra.Lookup = core.DeriveLookupFromResult(result, nil)
-		}
-		recordTransition(ctx, ra, core.ResourceApplied, "")
-		*resourcesApplied++
-		return persist()
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.ProviderResult = result
+			ra.Lookup = lookup
+			if len(ra.Lookup) == 0 {
+				ra.Lookup = core.DeriveLookupFromResult(result, nil)
+			}
+		})
+		rcd.transition(ctx, ra, core.ResourceApplied, "")
+		rcd.tally(core.ResourceApplied)
+		return rcd.persist()
 	}
 
 	var terminal *TerminalError
 	if errors.As(applyErr, &terminal) {
-		recordError(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		recordTransition(ctx, ra, core.ResourceFailed, "")
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
+		rcd.transition(ctx, ra, core.ResourceFailed, "")
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	// Retryable/ambiguous: unlike a modify (which can reconcile-by-query
@@ -1580,10 +1759,10 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 	// proceed past it. core/resolver's own $computed dependents downstream
 	// of this resource stay correctly blocked (shipChange's own
 	// missing-dependency check) until that happens.
-	recordError(ctx, ra, applyErr.Error(), core.ErrorRetryable)
-	recordTransition(ctx, ra, core.ResourceUnknownPostTimeout, "")
-	*resourcesStillUnknown++
-	return persist()
+	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
+	rcd.tally(core.ResourceStillUnknown)
+	return rcd.persist()
 }
 
 // shipModifyNode ships one delta.modifies entry within a change proposal
@@ -1592,90 +1771,90 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 // $computed marker in m.After before core.ApplyAfter/reconciliation ever
 // see it (m itself, and the proposal's own recorded content, are never
 // mutated -- substituteModificationComputed returns a copy).
-func shipModifyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, m core.Modification, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64) error {
+func shipModifyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, m core.Modification, ra *core.ResourceApply, resultsByAddr map[string]json.RawMessage, hist resourceHistory, rcd *recorder) error {
 	if paths := redactedAfterPaths(m); len(paths) > 0 {
-		recordTransition(ctx, ra, core.ResourcePending, "")
-		recordError(ctx, ra, fmt.Sprintf(
+		rcd.transition(ctx, ra, core.ResourcePending, "")
+		rcd.recordErr(ctx, ra, fmt.Sprintf(
 			"declined: after value(s) at %s are redacted -- the ledger holds a salted hash, not the real secret material, and ubx will never construct a live apply from it; use `ubx revert-plan` for this resource's manual reconciliation steps instead",
 			strings.Join(paths, ", ")), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	lookup, haveLookup := lookupFor(p, m.Target)
 
 	if hist.hasState && needsReconciliation(hist.lastState) {
-		recordTransition(ctx, ra, core.ResourcePending, "")
+		rcd.transition(ctx, ra, core.ResourcePending, "")
 		if !haveLookup {
-			recordError(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
-			*resourcesFailed++
-			return persist()
+			rcd.recordErr(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			return rcd.persist()
 		}
 		substitutedMod, err := substituteModificationComputed(m, resultsByAddr)
 		if err != nil {
-			recordError(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
-			*resourcesFailed++
-			return persist()
+			rcd.recordErr(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			return rcd.persist()
 		}
-		outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, ra)
-		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
-		return persist()
+		outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, rcd, ra)
+		rcd.tally(outcome)
+		return rcd.persist()
 	}
 
-	recordTransition(ctx, ra, core.ResourcePending, "")
+	rcd.transition(ctx, ra, core.ResourcePending, "")
 
 	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
-		recordError(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	if err := core.VerifyFreshness(ctx, app, m.Target, providerSource, providerConfig, p); err != nil {
 		if errors.Is(err, core.ErrStaleObservation) {
-			recordError(ctx, ra, err.Error(), core.ErrorTerminal)
+			rcd.recordErr(ctx, ra, err.Error(), core.ErrorTerminal)
 		} else {
-			recordError(ctx, ra, err.Error(), core.ErrorRetryable)
+			rcd.recordErr(ctx, ra, err.Error(), core.ErrorRetryable)
 		}
-		*resourcesFailed++
-		return persist()
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	if !haveLookup {
-		recordError(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, "no resolution.inputs lookup key recorded for this resource", core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	observed, _, err := core.ReadAndFingerprint(ctx, app, m.Target, providerSource, providerConfig, lookup)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("read prior state: %v", err), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("read prior state: %v", err), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	substitutedMod, err := substituteModificationComputed(m, resultsByAddr)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("resolve dependency output: %v", err), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	planned, err := core.ApplyAfter(observed, substitutedMod)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("construct planned state: %v", err), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 	_, resourceSchemas, err := app.Schema(ctx)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
-	recordTransition(ctx, ra, core.ResourceInFlight, "")
-	if err := persist(); err != nil {
-		return fmt.Errorf("ship: persist in_flight: %w", err)
+	rcd.transition(ctx, ra, core.ResourceInFlight, "")
+	if err := rcd.persist(); err != nil {
+		return fmt.Errorf("persist in_flight: %w", err)
 	}
 	if debugDelayAfterInFlight > 0 {
 		time.Sleep(debugDelayAfterInFlight)
@@ -1687,28 +1866,28 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		if debugDelayAfterApplySuccess > 0 {
 			time.Sleep(debugDelayAfterApplySuccess)
 		}
-		ra.ProviderResult = result
-		recordTransition(ctx, ra, core.ResourceApplied, "")
-		*resourcesApplied++
-		return persist()
+		rcd.mutate(ra, func(ra *core.ResourceApply) { ra.ProviderResult = result })
+		rcd.transition(ctx, ra, core.ResourceApplied, "")
+		rcd.tally(core.ResourceApplied)
+		return rcd.persist()
 	}
 
 	var terminal *TerminalError
 	if errors.As(applyErr, &terminal) {
-		recordError(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		recordTransition(ctx, ra, core.ResourceFailed, "")
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
+		rcd.transition(ctx, ra, core.ResourceFailed, "")
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
-	recordError(ctx, ra, applyErr.Error(), core.ErrorRetryable)
-	recordTransition(ctx, ra, core.ResourceUnknownPostTimeout, "")
-	if err := persist(); err != nil {
+	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
+	if err := rcd.persist(); err != nil {
 		return err
 	}
-	outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, ra)
-	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
-	return persist()
+	outcome := reconcileLoop(ctx, app, m.Target, lookup, substitutedMod, providerSource, providerConfig, rcd, ra)
+	rcd.tally(outcome)
+	return rcd.persist()
 }
 
 // destroyDiffExplainedByNormalization reports whether a destroy target's
@@ -1793,7 +1972,7 @@ func destroyDiffExplainedByNormalization(ctx context.Context, app Applier, entry
 // own accepted proposal already reviewed destroying the dependent,
 // which makes its real effects on this target expected fallout, not an
 // out-of-band change nobody signed off on.
-func shipDestroyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, entry core.DestroyEntry, ra *core.ResourceApply, hist resourceHistory, persist func() error, resourcesApplied, resourcesFailed, resourcesStillUnknown *int64, sameBatchDependentsDestroyed bool) error {
+func shipDestroyNode(ctx context.Context, app Applier, providerSource string, providerConfig json.RawMessage, p *core.Proposal, entry core.DestroyEntry, ra *core.ResourceApply, hist resourceHistory, rcd *recorder, sameBatchDependentsDestroyed bool) error {
 	lookup, expectedHash, haveTarget := destroyTargetFor(p, entry.Address)
 
 	// Reconcile first if the last thing we know about this resource is
@@ -1805,30 +1984,30 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 	// hist.lastReconciliationOutcome (folded across that prior attempt)
 	// is what still lets reconcileDestroyLoop disambiguate correctly.
 	if hist.hasState && needsReconciliation(hist.lastState) {
-		recordTransition(ctx, ra, core.ResourcePending, "")
+		rcd.transition(ctx, ra, core.ResourcePending, "")
 		if !haveTarget {
-			recordError(ctx, ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
-			*resourcesFailed++
-			return persist()
+			rcd.recordErr(ctx, ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
+			rcd.tally(core.ResourceFailed)
+			return rcd.persist()
 		}
 		priorPresentMatches := hist.lastReconciliationOutcome == "present_matches"
-		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, priorPresentMatches, hist.lastApplyClaimedSuccess, ra)
-		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
-		return persist()
+		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, priorPresentMatches, hist.lastApplyClaimedSuccess, rcd, ra)
+		rcd.tally(outcome)
+		return rcd.persist()
 	}
 
-	recordTransition(ctx, ra, core.ResourcePending, "")
+	rcd.transition(ctx, ra, core.ResourcePending, "")
 
 	if hist.attemptsInFlight >= maxApplyAttemptsPerResource {
-		recordError(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("retry budget exhausted after %d attempt(s)", hist.attemptsInFlight), core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	if !haveTarget {
-		recordError(ctx, ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, "no resolution.inputs destroy_target lookup recorded for this resource", core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	observed, hash, readErr := core.ReadAndFingerprint(ctx, app, entry.Address, providerSource, providerConfig, lookup)
@@ -1839,32 +2018,38 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		// never a refusal: there is nothing left to lose that the operator
 		// didn't already implicitly ask to lose. Never reaches in_flight,
 		// never calls ApplyResourceChange.
-		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "already_absent"})
-		recordTransition(ctx, ra, core.ResourceApplied, "already absent before this attempt")
-		*resourcesApplied++
-		return persist()
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "already_absent"})
+		})
+		rcd.transition(ctx, ra, core.ResourceApplied, "already absent before this attempt")
+		rcd.tally(core.ResourceApplied)
+		return rcd.persist()
 	case readErr != nil:
-		recordError(ctx, ra, fmt.Sprintf("freshness recheck: %v", readErr), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("freshness recheck: %v", readErr), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	case hash != expectedHash && !destroyDiffExplainedByNormalization(ctx, app, entry, observed) && !sameBatchDependentsDestroyed:
 		// Present, but drifted from what was signed away -- refused,
 		// exactly like "Stale detected mid-partial-apply," generalized:
 		// destroying state the operator never actually reviewed defeats
 		// the whole reason delta.destroys[].state is carried inline in the
 		// proposal at all.
-		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_drifted"})
-		recordError(ctx, ra, "destroy target drifted since it was signed away -- refusing to destroy state that was never reviewed", core.ErrorTerminal)
-		*resourcesFailed++
-		return persist()
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_drifted"})
+		})
+		rcd.recordErr(ctx, ra, "destroy target drifted since it was signed away -- refusing to destroy state that was never reviewed", core.ErrorTerminal)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
-	ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_matches"})
+	rcd.mutate(ra, func(ra *core.ResourceApply) {
+		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "present_matches"})
+	})
 
 	_, resourceSchemas, err := app.Schema(ctx)
 	if err != nil {
-		recordError(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, fmt.Sprintf("fetch schema: %v", err), core.ErrorRetryable)
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	// A real PlanResourceChange call, unconditionally, before the risky
@@ -1883,19 +2068,19 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 	if planErr != nil {
 		var terminal *TerminalError
 		if errors.As(planErr, &terminal) {
-			recordError(ctx, ra, terminal.Error(), core.ErrorTerminal)
+			rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
 		} else {
-			recordError(ctx, ra, planErr.Error(), core.ErrorRetryable)
+			rcd.recordErr(ctx, ra, planErr.Error(), core.ErrorRetryable)
 		}
-		*resourcesFailed++
-		return persist()
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	// THE invariant (docs/executor.md): in_flight is durably persisted
 	// before the risky ApplyResourceChange call, never after.
-	recordTransition(ctx, ra, core.ResourceInFlight, "")
-	if err := persist(); err != nil {
-		return fmt.Errorf("ship: persist in_flight: %w", err)
+	rcd.transition(ctx, ra, core.ResourceInFlight, "")
+	if err := rcd.persist(); err != nil {
+		return fmt.Errorf("persist in_flight: %w", err)
 	}
 	if debugDelayAfterInFlight > 0 {
 		time.Sleep(debugDelayAfterInFlight)
@@ -1923,13 +2108,13 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		// success never does, by itself. applyClaimedSuccess=true lets
 		// reconcileDestroyLoop distinguish "the provider actively lied"
 		// from "the RPC itself was merely ambiguous" in what it records.
-		recordTransition(ctx, ra, core.ResourceUnknownPostTimeout, "provider reported a successful destroy -- verifying via a post-destroy read-back before recording it as destroyed")
-		if err := persist(); err != nil {
+		rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "provider reported a successful destroy -- verifying via a post-destroy read-back before recording it as destroyed")
+		if err := rcd.persist(); err != nil {
 			return err
 		}
-		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, true, ra)
-		tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
-		return persist()
+		outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, true, rcd, ra)
+		rcd.tally(outcome)
+		return rcd.persist()
 	}
 
 	var terminal *TerminalError
@@ -1939,21 +2124,21 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		// it without a read-back (docs/executor.md's UBI-44 amendment: the
 		// asymmetry is specifically about trusting a rosy answer, not a
 		// downbeat one). No reconciliation needed here.
-		recordError(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		recordTransition(ctx, ra, core.ResourceFailed, "")
-		*resourcesFailed++
-		return persist()
+		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
+		rcd.transition(ctx, ra, core.ResourceFailed, "")
+		rcd.tally(core.ResourceFailed)
+		return rcd.persist()
 	}
 
 	// Retryable/ambiguous: the RPC didn't resolve into a clear answer.
-	recordError(ctx, ra, applyErr.Error(), core.ErrorRetryable)
-	recordTransition(ctx, ra, core.ResourceUnknownPostTimeout, "")
-	if err := persist(); err != nil {
+	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
+	if err := rcd.persist(); err != nil {
 		return err
 	}
-	outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, false, ra)
-	tallyOutcome(outcome, resourcesApplied, resourcesFailed, resourcesStillUnknown)
-	return persist()
+	outcome := reconcileDestroyLoop(ctx, app, entry.Address, lookup, providerSource, providerConfig, true, false, rcd, ra)
+	rcd.tally(outcome)
+	return rcd.persist()
 }
 
 // reconcileDestroyLoop repeatedly reads addr's live state (reconcile-by-query)
@@ -1994,7 +2179,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 // exhausted budget (still_unknown) -- only the "still present" case's own
 // wording differs, since "the provider actively lied" is a materially more
 // serious finding than "the RPC hiccuped and we're not sure."
-func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches, applyClaimedSuccess bool, ra *core.ResourceApply) core.ResourceState {
+func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches, applyClaimedSuccess bool, rcd *recorder, ra *core.ResourceApply) core.ResourceState {
 	for attempt := 0; attempt < len(destroyReconcileBackoffSchedule); attempt++ {
 		// docs/cli-output-spec.md's own mandatory narration line: a
 		// provider that already claimed success (the common, honest case
@@ -2016,23 +2201,31 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 		switch {
 		case err != nil && errors.Is(err, core.ErrResourceUnreadable):
 			if priorPresentMatches {
-				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "destroyed"})
-				recordTransition(ctx, ra, core.ResourceApplied, "confirmed by reconciliation")
+				rcd.mutate(ra, func(ra *core.ResourceApply) {
+					ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "destroyed"})
+				})
+				rcd.transition(ctx, ra, core.ResourceApplied, "confirmed by reconciliation")
 				return core.ResourceApplied
 			}
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
-				At: at, Outcome: "inconclusive",
-				Detail: "target unreadable, but no prior confirmed-present observation to attribute it to this attempt",
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+					At: at, Outcome: "inconclusive",
+					Detail: "target unreadable, but no prior confirmed-present observation to attribute it to this attempt",
+				})
 			})
 		case err != nil:
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "inconclusive", Detail: err.Error()})
+			})
 		default:
 			if !applyClaimedSuccess {
 				// Unchanged: an ambiguous RPC result plus a present read is
 				// immediately conclusive -- presence itself proves the call
 				// never landed, no reason to wait further.
-				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "failed"})
-				recordTransition(ctx, ra, core.ResourceFailed, "confirmed by reconciliation: destroy never landed")
+				rcd.mutate(ra, func(ra *core.ResourceApply) {
+					ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: at, Outcome: "failed"})
+				})
+				rcd.transition(ctx, ra, core.ResourceFailed, "confirmed by reconciliation: destroy never landed")
 				return core.ResourceFailed
 			}
 			// UBI-42/44: the provider itself claimed success, so a present
@@ -2043,27 +2236,31 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 			// "the provider lied" verdict; every earlier one just retries.
 			if attempt == len(destroyReconcileBackoffSchedule)-1 {
 				detail := "the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened"
-				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
-					At: at, Outcome: "provider_reported_success_but_present",
-					Detail: detail,
+				rcd.mutate(ra, func(ra *core.ResourceApply) {
+					ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+						At: at, Outcome: "provider_reported_success_but_present",
+						Detail: detail,
+					})
 				})
 				// Unlike the ambiguous-RPC path (whose own recordError already
 				// ran in shipDestroyNode before this loop), Apply itself
 				// reported no error here -- record one now, so ubx ship's
 				// human report (printShipReport) shows *why*, not just "failed"
 				// with nothing underneath it.
-				recordError(ctx, ra, detail, core.ErrorTerminal)
-				recordTransition(ctx, ra, core.ResourceFailed, "provider reported success but a post-destroy read-back found the resource still present")
+				rcd.recordErr(ctx, ra, detail, core.ErrorTerminal)
+				rcd.transition(ctx, ra, core.ResourceFailed, "provider reported success but a post-destroy read-back found the resource still present")
 				return core.ResourceFailed
 			}
-			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
-				At: at, Outcome: "inconclusive",
-				Detail: "still present after a reported successful destroy -- retrying to allow for real propagation lag before concluding the provider's claim was false",
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+					At: at, Outcome: "inconclusive",
+					Detail: "still present after a reported successful destroy -- retrying to allow for real propagation lag before concluding the provider's claim was false",
+				})
 			})
 		}
 		time.Sleep(destroyReconcileBackoffSchedule[attempt])
 	}
-	recordTransition(ctx, ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
+	rcd.transition(ctx, ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
 	return core.ResourceStillUnknown
 }
 
@@ -2116,17 +2313,6 @@ func recordTransition(ctx context.Context, ra *core.ResourceApply, state core.Re
 func recordError(ctx context.Context, ra *core.ResourceApply, message string, class core.ErrorClassification) {
 	ra.Errors = append(ra.Errors, core.ErrorRecord{At: nowRFC3339(), Message: message, Classification: class})
 	emitProgress(ctx, ProgressEvent{Address: ra.Address.String(), Kind: "error", Detail: message})
-}
-
-func tallyOutcome(state core.ResourceState, applied, failed, stillUnknown *int64) {
-	switch state {
-	case core.ResourceApplied:
-		*applied++
-	case core.ResourceFailed:
-		*failed++
-	case core.ResourceStillUnknown:
-		*stillUnknown++
-	}
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
