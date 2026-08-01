@@ -77,3 +77,32 @@ func TestAdapter_Conformance_RealAPI(t *testing.T) {
 
 	conformance.Run(t, claude.New(claude.Config{}))
 }
+
+// rosterModels is UBI-65's own per-model roster -- the models this
+// project already has wired (claude.go's own DefaultModel plus the two
+// models named explicitly in the ticket's own acceptance bar: a cheaper
+// model's IAM-shape competence must be MEASURED, not assumed, so this
+// runs the full fixture suite -- not just fixture #3 -- once per model,
+// each its own named subtest.
+var rosterModels = map[string]string{
+	"opus":     claude.DefaultModel,
+	"sonnet-5": "claude-sonnet-5",
+	"haiku":    "claude-haiku-4-5-20251001",
+}
+
+// TestAdapter_Conformance_RealAPI_PerModel is UBI-65's own live
+// acceptance test: the full conformance suite (including fixture #3,
+// platform-iam-policy-attach-shape) run against every wired model by
+// name, not just the adapter's own default. This is the mechanism that
+// produces docs/intent-provider-conformance-report.md's own per-model
+// table for this fixture -- run manually against a real credential (see
+// STATE.md for the honest, dated account of when/whether it was run).
+func TestAdapter_Conformance_RealAPI_PerModel(t *testing.T) {
+	requireSlowLive(t)
+
+	for name, model := range rosterModels {
+		t.Run(name, func(t *testing.T) {
+			conformance.Run(t, claude.New(claude.Config{Model: model}))
+		})
+	}
+}

@@ -300,6 +300,50 @@ which is exactly the broken shape described above, one level deeper.
 If an @-mention doesn't look like a real, resolvable address, record
 that as a question rather than guessing.
 
+A common, well-known IAM phrasing pattern deserves its own explicit
+rule, not just general judgment: when the document describes a policy
+that is CREATED and then ATTACHED to a role/user/group -- "a custom IAM
+policy that allows X; attach this policy to the ci-runner role,"
+"create a policy and attach it to...", or any phrasing naming an attach
+step as its own separate action -- this means a STANDALONE managed
+policy resource (aws_iam_policy) plus a SEPARATE attachment resource
+(aws_iam_role_policy_attachment, aws_iam_user_policy_attachment, or
+aws_iam_group_policy_attachment, matching whichever kind of principal is
+named) -- NEVER an inline policy resource (aws_iam_role_policy,
+aws_iam_user_policy, aws_iam_group_policy). Use an inline policy
+resource ONLY when the document explicitly uses the word "inline." For
+example: "A custom IAM policy called ci-runner-access that allows Y.
+Attach this policy to the ci-runner role." must produce an aws_iam_policy
+resource named ci-runner-access plus an aws_iam_role_policy_attachment
+resource naming both ci-runner-access and ci-runner -- never a single
+aws_iam_role_policy resource, even though an inline policy would also
+technically grant the same permissions. This is a real-world,
+frequently-seen phrasing convention, not a guess -- do not let the
+inline shape's smaller resource count make it seem like the simpler or
+more obviously correct reading.
+
+The "ambiguity is visible content" rule above is not limited to
+attribute VALUES -- it applies just as much to a resource's own SHAPE
+whenever the document leaves genuine room for more than one valid
+resource structure (the IAM inline-vs-standalone-policy choice above is
+the most common instance of this, but the same reasoning applies to,
+for example, a single security-group resource carrying inline
+ingress/egress rules vs. separate rule resources, or one combined
+resource vs. several smaller ones). When the document's own wording
+resolves the shape choice for you (as with the attach-language rule
+above), follow it silently -- that is a correct transcription, not an
+ambiguity. But when two structurally different, equally valid resource
+shapes would both satisfy what the document actually says, and the
+document does not specify which, record that choice as a real
+intent.assumptions or intent.defaults entry (whichever fits per the
+definitions above) naming the shape you picked, the alternative you
+didn't, and why -- e.g. "used a standalone policy rather than inline,
+since the document didn't specify whether this policy is reused
+elsewhere; affects: the resource shape of ci-runner-access." A
+resource-shape choice is exactly as consequential as a value choice, and
+must never be implied silently by which resource type happens to appear
+in the output.
+
 Never invent a resource type name you are not reasonably confident is
 real. If you are uncertain a type exists, still provide your best answer
 in "type", but record the uncertainty as a question.

@@ -65,6 +65,41 @@ enough apparent confidence that it sometimes didn't flag the conversion
 as worth recording at all, even though the source document was genuinely
 comparative, not concrete. All 5 passing runs since are consecutive.
 
+## Fixture #3, per model (UBI-65): `platform-iam-policy-attach-shape`
+
+UBI-65's own founder finding: the SAME document (`platform-iam-attach.md`,
+copied byte-for-byte from the founder's own real repro) produced two
+structurally different, individually valid plans across models — Opus
+correctly read "a custom IAM policy... attach this policy to the
+ci-runner role" as the create-then-attach pattern (a standalone
+`aws_iam_policy` + a separate `aws_iam_role_policy_attachment`); Haiku
+read the same document as an inline policy (`aws_iam_role_policy`,
+folding the attach step into the policy resource itself) — both are real,
+valid AWS patterns, but only the standalone shape is a correct
+transcription of what this specific document actually says. The
+founder's own acceptance bar: a cheaper model's IAM-shape competence must
+be **measured, per model, by name** — never assumed from Opus's own
+result — so this fixture is run against every wired model individually
+(`TestAdapter_Conformance_RealAPI_PerModel`,
+`intentprovider/claude/adapter_live_test.go`), not just once against the
+adapter's own default.
+
+**Real run, 2026-08-02**, `TestAdapter_Conformance_RealAPI_PerModel`, against the fixed prompt (this ticket's own teaching-example
+change to `intentprovider/claude/adapter.go`'s `systemPromptText`):
+
+| Model | Result | Notes |
+| --- | --- | --- |
+| `claude-opus-4-8` (opus) | **FAIL, then PASS on immediate retry** | First run: `DraftWithRetry` failed all 3 attempts with a validation error unrelated to resource shape (`resources[0].config: must not be empty`, attempt 2 also produced zero resources) — genuine LLM nondeterminism, recorded honestly, not discarded from the count, same standing discipline as fixture #1's own run-1 failure above. Re-run immediately after: PASS, all 3 fixtures, `platform-iam-policy-attach-shape` in 21.94s, standalone `aws_iam_policy` + `aws_iam_role_policy_attachment` shape produced correctly. |
+| `claude-sonnet-5` (sonnet-5) | **PASS** | First run, all 3 fixtures, `platform-iam-policy-attach-shape` in 57.93s — standalone shape produced correctly. |
+| `claude-haiku-4-5-20251001` (haiku) | **PASS** | First run, all 3 fixtures, `platform-iam-policy-attach-shape` in 23.83s — standalone shape produced correctly. **This is the ticket's own hard acceptance bar**: the cheapest wired model, on the founder's exact repro document, on the first attempt, after the prompt fix — matching opus/sonnet-5, not just flagging the ambiguity for a human to catch. |
+
+Opus's own first-run failure is a real, checked data point about this
+specific prompt/fixture combination's reliability under retry, not a
+regression this ticket introduced — the SAME model, SAME prompt, SAME
+document passed cleanly on an immediate re-run with no code change in
+between. Recorded here rather than silently re-run-until-green and
+forgotten.
+
 ## Real findings from this arc's own live verification work
 
 Three, all from actually running against the real API — none assumed,

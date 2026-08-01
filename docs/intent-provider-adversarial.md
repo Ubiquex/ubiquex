@@ -47,6 +47,8 @@ design or implementation bug, not an acceptable gap — this table has no
 | 11 | Abandoned session (`ubx chat`, UBI-46) | A chat session receives one or more turns, then ends without `/save` — tested as two independent sub-cases: an explicit `/quit`, and a bare EOF (closed stdin, simulating a killed terminal or interrupted process). | Zero files exist under `dialogues/` after the session ends, in both sub-cases — confirmed by listing the directory's contents, not by trusting an exit code or message. This holds structurally, not by a cleanup step: `runChat` holds the whole session in memory and the only code path that calls `os.WriteFile` is inside `finalizeChat`, reachable only from `/save` — `/quit` and EOF both return before that call is ever reached, so there is no orphan file to clean up in the first place. `TestChat_AbandonedSession_EOF_NoFileWritten`, `TestChat_QuitCommand_NoFileWritten` (`cli/chat_test.go`). |
 | 12 | Dialogue tampering post-pin (`ubx chat` / `ubx why --dialogue`, UBI-46) | A `dialogues/<hash>.dlg.json` file already referenced by an accepted proposal's `intent.sources` is modified on disk after the fact (e.g. a turn's text is edited to say something different than what was actually typed). | Re-computing the file's content hash (the same `HashDocument` scheme used at write time) over the tampered bytes produces a DIFFERENT hash than the one pinned in the referencing proposal's `intent.sources[].content_hash` — the mismatch is detectable by comparing the two, proving tampering is caught by the existing content-addressing mechanism with no new verification command required. This reuses row 3's own hash-integrity guarantee (`document`'s `content_hash` covers the raw file) unchanged for the `dialogue` source kind — the same mechanism, a new source kind pointed at it. `TestDialogue_TamperingChangesHash` (`intentprovider/dialogue_test.go`). |
 
+| 13 | Structural/resource-shape ambiguity, IAM attach-language pattern (UBI-65) | A doc describes a policy that is created and then explicitly attached to a role ("a custom IAM policy... attach this policy to the ci-runner role") — a real, well-known IAM phrasing pattern where the create-then-attach shape (a standalone `aws_iam_policy` + a separate `aws_iam_role_policy_attachment`) and an inline shape (`aws_iam_role_policy`) are both technically capable of granting the same permissions. | The draft always produces the standalone-plus-attachment shape for this phrasing — never the inline shape — regardless of which model drafted it, including the cheapest wired model. This is treated as a resolvable phrasing pattern, not a genuine ambiguity: no `assumptions`/`defaults` entry is required for THIS specific case, since the document's own wording already specifies the shape (the inline shape is reserved for a document that explicitly says "inline"). `intentprovider/conformance/fixtures/platform-iam-attach.md` (copied byte-for-byte from the founder's own real repro), `checkPlatformIAMPolicyAttachShape`, run per model (`TestAdapter_Conformance_RealAPI_PerModel`). |
+
 ## What this table doesn't yet cover
 
 - **Distinguishing "a type the intent provider invented" from "a real type
@@ -65,6 +67,21 @@ design or implementation bug, not an acceptable gap — this table has no
   than one `.md` file in one `ubx propose --from-doc` invocation) — v1's
   own scope is one document, one draft, matching docs/intent-provider.md's
   own "Scope" section.
+- **A genuinely-undetermined resource-shape choice** (row 13's own
+  companion case, UBI-65) — a document where two structurally different
+  resource shapes are BOTH defensible and nothing in the wording favors
+  either (unlike row 13, where the create-then-attach phrasing itself
+  resolves the choice). The system prompt instruction exists
+  (docs/intent-provider.md's own "ambiguity-as-visible-content extended
+  to resource SHAPE" amendment: record the shape picked, the alternative
+  not picked, and why, in `assumptions`/`defaults`), but no fixture doc
+  in this program actually exercises a case with no wording-level
+  resolution at all — every doc-authoring convention encouraged so far
+  (see "Doc authoring conventions," docs/intent-provider.md) tends to
+  produce documents specific enough that a real create-then-attach-style
+  phrasing resolves the shape rather than leaving it open. A future
+  fixture deliberately constructing a no-signal-either-way case is a
+  named, explicit gap, not silently claimed covered by row 13.
 - **A claimed-complete secret-detection guarantee** (row 3's own scanner
   is explicitly pattern-based and best-effort — a genuinely novel secret
   format the pattern set doesn't recognize is not caught by this

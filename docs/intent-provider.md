@@ -1019,6 +1019,76 @@ silently dropped instead of mis-encoded, so a hermetic fake-adapter run
 now proves the harness itself would have caught this before it ever
 reached a real API call.
 
+## Amendment: ambiguity-as-visible-content extended to resource SHAPE, not just values (2026-08-02, UBI-65)
+
+**Founder finding**: the identical prose document produced two
+structurally different, individually valid plans across models — Opus
+read "a custom IAM policy... attach this policy to the ci-runner role"
+as the create-then-attach pattern (a standalone `aws_iam_policy` + a
+separate `aws_iam_role_policy_attachment`, 5 resources); Haiku, on the
+exact same document, produced an inline policy (`aws_iam_role_policy`,
+folding the attach step into the policy resource itself, 4 resources).
+Both are real, valid, real-world AWS patterns — neither is a bug on its
+own. The actual gap: "Component 3 — ambiguity as visible content,"
+above, was written, and had always been read, as a design for VALUE
+choices (an instance class, a storage size) — a resource-*type* choice
+between two equally valid structures is exactly as consequential a
+silent decision, and it was falling through completely unflagged, one
+level up from where the existing design already looked.
+
+**Two distinct things needed fixing, not one:**
+
+1. **The specific miss.** "A policy that is created and then attached to
+   a role" is a common, well-known IAM phrasing pattern — not a genuine
+   coin-flip ambiguity at all once named explicitly. The Claude adapter's
+   own system prompt (`intentprovider/claude/adapter.go`) gained an
+   explicit, worked-example rule: create-then-attach language names the
+   standalone-policy-plus-attachment shape, unconditionally, unless the
+   document says the word "inline." This is a teaching fix, not an
+   ambiguity-surfacing fix — the founder's own bar was "haiku must get
+   this right too, not flag it and hope a human catches it."
+2. **The general case.** A genuinely ambiguous resource-shape choice
+   (two structurally different, equally valid resource sets, with
+   nothing in the document favoring either — the same "single security
+   group with inline rules vs. separate rule resources" class of
+   decision) still needs the SAME treatment component 3 already gives a
+   value choice: a real `intent.assumptions`/`intent.defaults` entry
+   naming the shape chosen, the alternative not chosen, and why, with
+   `affects` pointing at the resource's own address — never left
+   implicit in which resource `type` happens to appear in the output.
+   The system prompt gained a second, general paragraph for this,
+   immediately following the specific IAM rule, generalizing the
+   existing "ambiguity is visible content" instruction explicitly to
+   resource shape.
+
+**Conformance**: the founder's own exact repro document
+(`~/ubx-playground-3/platform.md` / `~/ubx-playground-4/platform.md` —
+copied byte-for-byte, not paraphrased) is now a permanent fixture
+(`intentprovider/conformance/fixtures/platform-iam-attach.md`,
+`checkPlatformIAMPolicyAttachShape`) — fixture #3 in file order (UBI-63
+had already claimed "fixture #2" for an unrelated cross-ref case by the
+time this ticket's own comment thread was written; the founder's own
+acceptance bar — every wired model, including the cheapest, must produce
+the standalone shape on this exact document — is unchanged by the
+number). Run per model, by name, not just once against the adapter's own
+default (`TestAdapter_Conformance_RealAPI_PerModel`,
+`intentprovider/claude/adapter_live_test.go`) — see
+docs/intent-provider-conformance-report.md's own new per-model table for
+this fixture, and STATE.md for the honest, dated account of the live
+haiku re-run this ticket's own acceptance bar required.
+
+**What this does NOT do**: it does not add a resolver-side or post-draft
+structural lint (the ticket's own comment thread named this as a
+fallback "if the prompt fix alone can't close the gap reliably" — the
+fallback is only warranted if the prompt fix's own live re-verification,
+below, fails to hold; see STATE.md for whether that fallback ended up
+needed). It also does not change `intentprovider/validate.go`'s own
+ledger/provider-independent boundary — resource-shape correctness is
+checked by the conformance suite's own per-fixture assertions, the same
+discipline every other structural/semantic property in this suite
+already uses, never by a new hard-coded rule inside the always-run
+validation layer.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Diagrams, SDK — see "Scope," above (chat is no longer out of scope,

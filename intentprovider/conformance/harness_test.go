@@ -28,8 +28,9 @@ func (f *fakeAdapter) Model() string { return "fake-model" }
 // rather than every fixture getting the same single draft back
 // regardless of its own doc.
 var scriptedDrafts = map[string]string{
-	"payments": goodPaymentsDraft,
-	"platform": goodPlatformDraft,
+	"payments":            goodPaymentsDraft,
+	"platform":            goodPlatformDraft,
+	"platform-iam-attach": goodPlatformIAMAttachDraft,
 }
 
 func (f *fakeAdapter) Draft(_ context.Context, req intentprovider.DraftRequest) (json.RawMessage, error) {
@@ -90,6 +91,35 @@ const goodPlatformDraft = `{
   "destroys": []
 }`
 
+// goodPlatformIAMAttachDraft is the THIRD fixture's own scripted
+// response (UBI-65) -- the standalone-policy shape the founder's
+// exact platform-iam-attach.md doc requires: a separate aws_iam_policy
+// resource plus a separate aws_iam_role_policy_attachment resource,
+// never a single aws_iam_role_policy (inline) resource. Proves the
+// harness accepts the CORRECT shape;
+// TestScanForIAMPolicyShape_RejectsInlinePolicy (below) proves it also
+// rejects the exact miss a real live Haiku run produced before UBI-65's
+// prompt fix existed.
+const goodPlatformIAMAttachDraft = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "platform-iam-attach",
+  "intent": {
+    "summary": "CI platform: ECR repo, SQS queue, IAM role, a standalone policy attached to that role",
+    "assumptions": [],
+    "defaults": [],
+    "questions": []
+  },
+  "resources": [
+    {"type": "aws_ecr_repository", "name": "ci-artifacts", "op": "create", "config": "{\"name\":\"ci-artifacts\",\"image_tag_mutability\":\"IMMUTABLE\",\"image_scanning_configuration\":{\"scan_on_push\":true}}"},
+    {"type": "aws_sqs_queue", "name": "ci-notifications", "op": "create", "config": "{\"name\":\"ci-notifications\",\"message_retention_seconds\":86400}"},
+    {"type": "aws_iam_role", "name": "ci-runner", "op": "create", "config": "{\"name\":\"ci-runner\",\"assume_role_policy\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\",\\\"Principal\\\":{\\\"Service\\\":\\\"ec2.amazonaws.com\\\"},\\\"Action\\\":\\\"sts:AssumeRole\\\"}]}\"}"},
+    {"type": "aws_iam_policy", "name": "ci-runner-access", "op": "create", "config": "{\"name\":\"ci-runner-access\",\"policy\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\",\\\"Action\\\":[\\\"ecr:BatchCheckLayerAvailability\\\",\\\"ecr:GetDownloadUrlForLayer\\\",\\\"ecr:BatchGetImage\\\",\\\"ecr:PutImage\\\",\\\"ecr:InitiateLayerUpload\\\",\\\"ecr:UploadLayerPart\\\",\\\"ecr:CompleteLayerUpload\\\"],\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"platform-iam-attach.aws_ecr_repository.ci-artifacts.arn\\\"}}},{\\\"Effect\\\":\\\"Allow\\\",\\\"Action\\\":\\\"sqs:SendMessage\\\",\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"platform-iam-attach.aws_sqs_queue.ci-notifications.arn\\\"}}}]}\"}"},
+    {"type": "aws_iam_role_policy_attachment", "name": "ci-runner-access-attach", "op": "create", "config": "{\"role\":{\"$ref\":{\"to\":\"platform-iam-attach.aws_iam_role.ci-runner.name\"}},\"policy_arn\":{\"$ref\":{\"to\":\"platform-iam-attach.aws_iam_policy.ci-runner-access.arn\"}}}"}
+  ],
+  "destroys": []
+}`
+
 func TestRun_FakeAdapterPasses(t *testing.T) {
 	Run(t, &fakeAdapter{})
 }
@@ -141,6 +171,74 @@ func TestScanForRefShapes_AcceptsRealRefObjects(t *testing.T) {
 	}
 	if !sawReal {
 		t.Error("expected a real {\"$ref\": {\"to\": \"...\"}} object in goodPlatformDraft, found none")
+	}
+}
+
+// badPlatformIAMAttachDraft mirrors the EXACT inline-policy shape a real
+// live Claude Haiku run produced against this fixture's own doc before
+// UBI-65's prompt fix existed -- 4 resources, an aws_iam_role_policy
+// (inline) instead of a standalone aws_iam_policy + a separate
+// aws_iam_role_policy_attachment.
+const badPlatformIAMAttachDraft = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "platform-iam-attach",
+  "intent": {
+    "summary": "CI platform: ECR repo, SQS queue, IAM role with an inline policy",
+    "assumptions": [],
+    "defaults": [],
+    "questions": []
+  },
+  "resources": [
+    {"type": "aws_ecr_repository", "name": "ci-artifacts", "op": "create", "config": "{\"name\":\"ci-artifacts\"}"},
+    {"type": "aws_sqs_queue", "name": "ci-notifications", "op": "create", "config": "{\"name\":\"ci-notifications\"}"},
+    {"type": "aws_iam_role", "name": "ci-runner", "op": "create", "config": "{\"name\":\"ci-runner\"}"},
+    {"type": "aws_iam_role_policy", "name": "ci-runner-access", "op": "create", "config": "{\"role\":{\"$ref\":{\"to\":\"platform-iam-attach.aws_iam_role.ci-runner.name\"}},\"policy\":\"{}\"}"}
+  ],
+  "destroys": []
+}`
+
+// TestScanForIAMPolicyShape_RejectsInlinePolicy is UBI-65's own
+// regression test for the conformance gap itself: given the exact
+// inline-shape draft a real live Haiku run produced, the check must flag
+// the missing standalone policy, the missing attachment, AND the
+// presence of the inline resource -- proving the harness would have
+// caught this miss, not just that a fixed model now passes it.
+func TestScanForIAMPolicyShape_RejectsInlinePolicy(t *testing.T) {
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: badPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"))
+	if err != nil {
+		t.Fatalf("DraftWithRetry: %v", err)
+	}
+	sawStandalone, sawAttachment, sawInline := scanForIAMPolicyShape(draft.Resources)
+	if sawStandalone {
+		t.Error("expected no standalone aws_iam_policy in the deliberately-inline draft, found one")
+	}
+	if sawAttachment {
+		t.Error("expected no aws_iam_role_policy_attachment in the deliberately-inline draft, found one")
+	}
+	if !sawInline {
+		t.Error("expected scanForIAMPolicyShape to flag the inline aws_iam_role_policy, found none")
+	}
+}
+
+// TestScanForIAMPolicyShape_AcceptsStandaloneShape is the positive twin,
+// proving the same scanning logic recognizes the correct, standalone
+// shape as real -- goodPlatformIAMAttachDraft's own exact content,
+// decoded, rather than re-declared here.
+func TestScanForIAMPolicyShape_AcceptsStandaloneShape(t *testing.T) {
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: goodPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"))
+	if err != nil {
+		t.Fatalf("DraftWithRetry: %v", err)
+	}
+	sawStandalone, sawAttachment, sawInline := scanForIAMPolicyShape(draft.Resources)
+	if !sawStandalone {
+		t.Error("expected a standalone aws_iam_policy in goodPlatformIAMAttachDraft, found none")
+	}
+	if !sawAttachment {
+		t.Error("expected an aws_iam_role_policy_attachment in goodPlatformIAMAttachDraft, found none")
+	}
+	if sawInline {
+		t.Error("expected no inline aws_iam_role_policy in goodPlatformIAMAttachDraft, found one")
 	}
 }
 

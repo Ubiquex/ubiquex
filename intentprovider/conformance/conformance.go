@@ -71,6 +71,12 @@ var Fixtures = []Fixture{
 		Stack:   "platform",
 		Check:   checkPlatformCrossRefAndJSONEmbeddedRef,
 	},
+	{
+		Name:    "platform-iam-policy-attach-shape",
+		DocFile: "platform-iam-attach.md",
+		Stack:   "platform-iam-attach",
+		Check:   checkPlatformIAMPolicyAttachShape,
+	},
 }
 
 func checkPaymentsLikeStagingButSmaller(t *testing.T, draft *resolver.IntentFile) {
@@ -125,6 +131,59 @@ func checkPlatformCrossRefAndJSONEmbeddedRef(t *testing.T, draft *resolver.Inten
 	if !sawRealRefObject {
 		t.Error(`expected a real {"$ref": {"to": "..."}} object referencing the queue somewhere in the draft (directly, or JSON-embedded inside a policy-shaped config string) -- found none`)
 	}
+}
+
+// checkPlatformIAMPolicyAttachShape is UBI-65's own permanent conformance
+// fixture. fixtures/platform-iam-attach.md is NOT a paraphrase -- it is
+// copied byte-for-byte from the founder's own real repro
+// (~/ubx-playground-3/platform.md, ~/ubx-playground-4/platform.md), the
+// exact document a real live Claude Haiku run misread as an inline
+// policy (aws_iam_role_policy, 4 resources) where Opus, on the same
+// document, correctly produced a standalone managed policy plus a
+// separate attachment (aws_iam_policy + aws_iam_role_policy_attachment,
+// 5 resources) -- both are valid, real-world AWS patterns, but the
+// doc's own governing sentence ("A custom IAM policy called
+// \"ci-runner-access\" that allows... Attach this policy to the
+// ci-runner role") names the create-then-attach pattern specifically,
+// never the word "inline" -- so only the standalone shape is a correct
+// transcription here. This is fixture #3 in file order (payments is #1,
+// the cross-ref/JSON-embedded-ref platform.md is #2, claimed by UBI-63
+// before this ticket's own "fixture #2" framing was written) -- the
+// founder's own acceptance bar (every wired model, including the
+// cheapest, must get this right) is unchanged by the number.
+func checkPlatformIAMPolicyAttachShape(t *testing.T, draft *resolver.IntentFile) {
+	t.Helper()
+
+	sawStandalonePolicy, sawAttachment, sawInlinePolicy := scanForIAMPolicyShape(draft.Resources)
+	if sawInlinePolicy {
+		t.Error(`found an inline aws_iam_role_policy resource -- expected a standalone aws_iam_policy + aws_iam_role_policy_attachment pair instead (UBI-65: the doc's "a custom IAM policy... attach this policy to the role" phrasing names the create-then-attach pattern, never inline)`)
+	}
+	if !sawStandalonePolicy {
+		t.Error("expected a standalone aws_iam_policy resource (the custom \"ci-runner-access\" policy), found none")
+	}
+	if !sawAttachment {
+		t.Error("expected a separate aws_iam_role_policy_attachment resource attaching the policy to the role, found none")
+	}
+}
+
+// scanForIAMPolicyShape is checkPlatformIAMPolicyAttachShape's own
+// *testing.T-free scanning logic -- factored out for the same reason
+// scanForRefShapes is (below): harness_test.go's own
+// TestScanForIAMPolicyShape_RejectsInlinePolicy asserts against its
+// return values directly, rather than needing a fake *testing.T just to
+// observe whether a check would have failed.
+func scanForIAMPolicyShape(resources []resolver.ResourceIntent) (sawStandalonePolicy, sawAttachment, sawInlinePolicy bool) {
+	for _, r := range resources {
+		switch r.Type {
+		case "aws_iam_policy":
+			sawStandalonePolicy = true
+		case "aws_iam_role_policy_attachment":
+			sawAttachment = true
+		case "aws_iam_role_policy":
+			sawInlinePolicy = true
+		}
+	}
+	return sawStandalonePolicy, sawAttachment, sawInlinePolicy
 }
 
 // scanForRefShapes is checkPlatformCrossRefAndJSONEmbeddedRef's own
