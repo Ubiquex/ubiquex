@@ -4,6 +4,94 @@
 
 ## Current phase
 
+**UBI-63 session 4 (2026-08-01) — priority question answered by tracing
+code, a real masking bug found and fixed, build-staleness guard added.**
+The founder's own post-rebuild re-test (having caught a stale-binary false
+alarm first, via `which`/version) found fix 1 genuinely working on ECR/SQS
+but fix 2 not firing on the IAM role/policy, plus tags/force_detach_policies/
+inline_policy still drifting on those same two resources.
+
+**Priority question, answered by tracing the code, not guessing: fix 2
+(post-chain re-observation) is ship-time-only, never retroactive.**
+`grep -rn "reconcileSameBatchEffects"` across the whole repo shows exactly
+one call site — inside `shipChange` (`core/executor/ship.go`), invoked
+once, right after that specific ship's own `ApplyRecord` is sealed. There
+is no other caller: `cli/status.go`/`cli/scan.go`'s own `RunScan` call
+never invokes it. This means the founder's own test (`status`/`scan`
+against `ubx-playground-3`, shipped in the PREVIOUS session, before this
+code existed) is structurally incapable of ever exercising fix 2 — it's
+not a bug in fix 2 not firing, it's the wrong repro shape entirely. The
+only valid test is a FRESH `ubx ship` of a new multi-resource change (a
+new stack, or new resources with a real depends_on edge), run with a
+binary built from a commit that has fix 2 in it.
+
+**The tags/force_detach_policies/inline_policy "still drifting" report
+was NOT a per-type Computed-flag gap in fix 1 — it was fix 1 working
+correctly but a SEPARATE masking bug in how the result got rendered/
+recorded.** `core.explainedByNormalization` (session 3) was all-or-nothing
+at the VERDICT level only: if even one attribute in a resource's diff
+was genuinely unexplainable, the whole `ScanResult.Outcome` stayed
+`ScanDrifted` — correct — but `cli/status.go`'s own rendering (and
+`GenerateProposal`/`GenerateRevertProposal`'s embedded `Delta.Modifies`)
+called `core.DiffAttributes` directly on the RAW, unfiltered before/after
+states, showing/recording every changed attribute, not just the
+genuinely-unexplained ones. Since `attachment_count`/`managed_policy_arns`
+on this exact pre-fix-2 stack are real, still-unreconciled drift (see the
+priority-question finding above), the role/policy's overall verdict
+correctly stays `ScanDrifted` — but that dragged tags/force_detach_policies/
+inline_policy along into the SAME rendered diff even though each of them,
+individually, was already null-normalization-explained. This is also
+exactly the session-2 addendum's own finding ("scan --propose generates
+adopt proposals from the same normalization noise") — same root cause,
+now actually fixed rather than just flagged.
+
+**Fix: refactored the all-or-nothing check into an exported, reusable
+filter.** `core.FilterNormalizationNoise(before, after, resourceSchema)`
+(`core/scan.go`) strips only the individually-explained entries, keeping
+whatever's genuinely real — used consistently in all three places that
+used to disagree: `RunScan`'s own verdict (unchanged behavior, just
+refactored), `GenerateProposal`/`GenerateRevertProposal`'s embedded delta
+(so an adopted/reverted drift proposal never carries noise alongside a
+real change), and `cli/status.go`'s live `status --drift` rendering (so
+the displayed diff matches what the verdict already determined was real).
+`ScanResult` gained a new `ResourceSchema any` field (the same opaque
+handle `readAndFingerprint` already fetches) so downstream callers can
+reuse the identical Computed-aware filtering without re-fetching schema.
+Hermetic: `cli/scan_normalization_test.go` gained a new test proving a
+resource with BOTH a genuine change (`force_detach_policies` false ->
+true) and coexisting noise (`labels`/`inline_policy`/`region`) in the
+SAME diff produces a generated proposal whose `delta.modifies` carries
+only the real change.
+
+**Build-commit-mismatch guard, per the founder's own "which/version"
+debugging step becoming institutional.** New root `Makefile`: `make
+build`/`make install` both print `ubx version` immediately after
+rebuilding, so verifying the binary is fresh is one command, not a
+separately-remembered manual step. `CLAUDE.md`'s "Code conventions"
+gained an explicit line codifying this. Deliberately did NOT touch `ubx
+ship`'s own receipt format to add a version trailer there — that's a
+carefully-specified, documented UX surface (`docs/cli-output-spec.md`)
+that would need its own docs+transcript pass; the Makefile fix addresses
+the actual root cause (forgetting to rebuild) without that scope.
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `go test
+./... -count=1`).
+
+**Not yet done:**
+- The founder's own next step: run a FRESH `ubx ship` (new stack or new
+  resources with a real dependency edge) against a rebuilt binary, to
+  actually exercise fix 2 for the first time — the only valid test per
+  the priority-question finding above.
+- Re-running `status`/`scan` against the EXISTING, still-live
+  `ubx-playground-3` stack should now show tags/force_detach_policies/
+  inline_policy filtered out of the rendered diff (the masking fix), but
+  `attachment_count`/`managed_policy_arns` will keep showing as real,
+  genuine drift until either that stack gets a fresh ship of its own
+  (unlikely — it's the same pre-fix-2 apply) or it's retired.
+- UBI-63 remains "In Progress" in Linear; diagnosis posted as a comment.
+
+## Current phase (previous)
+
 **UBI-63 session 3 (2026-08-01) — reopened, real-diagnosed, fixed.** The
 founder reopened UBI-63 within hours of the prior session's close-out:
 a fresh, cleanly-shipped 5-resource apply (Sonnet-5-authored, via
