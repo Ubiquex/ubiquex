@@ -61,6 +61,13 @@ func (f *fakeSchema) HasType(t string) bool           { return f.types[t] }
 func (f *fakeSchema) IsComputed(t, path string) bool  { return false }
 func (f *fakeSchema) IsSensitive(t, path string) bool { return false }
 
+// UnknownConfigKeys is an always-nil stub (UBI-66) -- this suite covers
+// the parse direction only (see the package doc comment), which never
+// resolves a resource's own config values at all.
+func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) []resolver.ConfigKeyIssue {
+	return nil
+}
+
 func fakeWidgetProvider() resolver.DeclaredProvider {
 	return resolver.DeclaredProvider{
 		Source:  "fake/widget",

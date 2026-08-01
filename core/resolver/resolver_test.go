@@ -3,6 +3,8 @@ package resolver
 import (
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,16 @@ type fakeSchema struct {
 	types     map[string]bool
 	computed  map[string]bool
 	sensitive map[string]bool
+	// badKeys is UnknownConfigKeys' own opt-in fake (UBI-66): typeName ->
+	// {bad config key -> suggestion to report}. A type/key never listed
+	// here is never flagged -- deliberately, so every pre-existing test
+	// in this file (none of which cares about schema-key validation) is
+	// completely unaffected. The real fuzzy-match algorithm itself
+	// (substring containment, edit-distance fallback) is unit-tested
+	// once, directly, in provider/schemakeys_test.go -- this fake only
+	// needs to prove resolveOnce's own wiring/aggregation, not
+	// re-implement that logic.
+	badKeys map[string]map[string]string
 }
 
 func newFakeSchema() *fakeSchema {
@@ -40,6 +52,25 @@ func newFakeSchema() *fakeSchema {
 func (f *fakeSchema) HasType(t string) bool           { return f.types[t] }
 func (f *fakeSchema) IsComputed(t, path string) bool  { return f.computed[t+"."+path] }
 func (f *fakeSchema) IsSensitive(t, path string) bool { return f.sensitive[t+"."+path] }
+
+func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) []ConfigKeyIssue {
+	bad := f.badKeys[t]
+	if len(bad) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(config))
+	for k := range config {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var issues []ConfigKeyIssue
+	for _, k := range keys {
+		if suggestion, isBad := bad[k]; isBad {
+			issues = append(issues, ConfigKeyIssue{Path: k, Suggestion: suggestion})
+		}
+	}
+	return issues
+}
 
 // flakySchema wraps a real SchemaInspector, injecting nondeterminism into
 // IsComputed on purpose -- docs/resolver-adversarial.md row 1's own
@@ -623,3 +654,155 @@ func TestResolve_EphemeralMarker_PassesThroughAtomically(t *testing.T) {
 // See destroys_test.go for docs/resolver.md's own "Amendment (UBI-30):
 // destroys" coverage -- change proposals may now legally carry destroys,
 // superseding this file's own former TestValidate_ChangeProposalWithDestroys_Rejected.
+
+// --- schema-key validation (UBI-66) ----------------------------------------
+
+// TestResolve_UnknownConfigKey_ResourceWithThreeWrongKeys is UBI-66's own
+// hermetic acceptance criterion, verbatim: "a drafted resource with 3
+// wrong keys refused with 3 distinct teaching errors."
+func TestResolve_UnknownConfigKey_ResourceWithThreeWrongKeys(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.badKeys = map[string]map[string]string{
+		"aws_db_instance": {
+			"instance_id":   "id",
+			"instance_arn":  "arn",
+			"instance_size": "instance_class",
+		},
+	}
+	intent := intentFile("payments",
+		ri("aws_db_instance", "db", OpCreate, `{"instance_id":"x","instance_arn":"y","instance_size":"z"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if err == nil {
+		t.Fatal("resolve: expected refusal, got nil error")
+	}
+	if !errors.Is(err, ErrUnknownConfigKey) {
+		t.Fatalf("err = %v, want errors.Is ErrUnknownConfigKey", err)
+	}
+	// errors.Join separates each wrapped error's own Error() text with a
+	// newline -- three distinct lines, not one merged message.
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatalf("err = %T, want an errors.Join result (Unwrap() []error)", err)
+	}
+	errs := joined.Unwrap()
+	if len(errs) != 3 {
+		t.Fatalf("joined errors = %d, want exactly 3: %v", len(errs), errs)
+	}
+	for _, want := range []string{
+		`"instance_id" does not exist on aws_db_instance (did you mean "id"?)`,
+		`"instance_arn" does not exist on aws_db_instance (did you mean "arn"?)`,
+		`"instance_size" does not exist on aws_db_instance (did you mean "instance_class"?)`,
+	} {
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Error(), want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected one error to contain %q, got: %v", want, errs)
+		}
+	}
+}
+
+// TestResolve_UnknownConfigKey_AggregatesAcrossWholeBatch reproduces the
+// exact live incident UBI-66 was filed against, structurally: multiple
+// DIFFERENT resources, each with its own hallucinated attribute name,
+// resolved together in one intent file -- every mistake reported in one
+// refusal, not just the first resource's.
+func TestResolve_UnknownConfigKey_AggregatesAcrossWholeBatch(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.types["aws_ecr_repository"] = true
+	schema.badKeys = map[string]map[string]string{
+		"aws_ecr_repository": {"repository_name": "name"},
+		"aws_db_instance":    {"instance_class_name": "instance_class"},
+	}
+	intent := intentFile("payments",
+		ri("aws_ecr_repository", "repo", OpCreate, `{"repository_name":"my-repo"}`),
+		ri("aws_db_instance", "db", OpCreate, `{"instance_class_name":"db.t3.small"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrUnknownConfigKey) {
+		t.Fatalf("err = %v, want errors.Is ErrUnknownConfigKey", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"repository_name" does not exist on aws_ecr_repository (did you mean "name"?)`) {
+		t.Errorf("missing ecr repository issue in: %s", msg)
+	}
+	if !strings.Contains(msg, `"instance_class_name" does not exist on aws_db_instance (did you mean "instance_class"?)`) {
+		t.Errorf("missing db instance issue in: %s", msg)
+	}
+}
+
+// TestResolve_UnknownConfigKey_NoSuggestion proves the joined error's own
+// text omits the "(did you mean ...)" clause entirely when the fake
+// schema reports no close match -- never a dangling/empty suggestion.
+func TestResolve_UnknownConfigKey_NoSuggestion(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.badKeys = map[string]map[string]string{
+		"aws_vpc": {"totally_unrelated_xyz": ""},
+	}
+	intent := intentFile("payments",
+		ri("aws_vpc", "main", OpCreate, `{"totally_unrelated_xyz":"z"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrUnknownConfigKey) {
+		t.Fatalf("err = %v, want errors.Is ErrUnknownConfigKey", err)
+	}
+	if strings.Contains(err.Error(), "did you mean") {
+		t.Errorf("expected no suggestion clause, got: %s", err.Error())
+	}
+}
+
+// TestResolve_UnknownConfigKey_ModelAgnostic proves the check has no
+// awareness of, or special case for, WHERE a ResourceIntent came from --
+// resolveOnce's own loop calls SchemaInspector.UnknownConfigKeys for
+// every batch entry uniformly, with no branch on provenance at all. This
+// intent file is built exactly the way a hand-authored ubx:intent/v1
+// file would be (the same `ri`/`intentFile` helpers every other resolver
+// test in this file uses for a plain hand-authored case) -- proving the
+// SAME refusal applies to a hand-typed file, not just an
+// intentprovider.Adapter-produced draft (see also
+// intentprovider/conformance's own live-repro regression test, which
+// proves the adapter-produced-draft side of this same claim).
+func TestResolve_UnknownConfigKey_ModelAgnostic_HandAuthoredFile(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.badKeys = map[string]map[string]string{
+		"aws_vpc": {"vpc_cidr": "cidr_block"},
+	}
+	intent := intentFile("payments",
+		ri("aws_vpc", "main", OpCreate, `{"vpc_cidr":"10.0.0.0/16"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrUnknownConfigKey) {
+		t.Fatalf("hand-authored intent file: err = %v, want errors.Is ErrUnknownConfigKey", err)
+	}
+}
+
+// TestResolve_RecognizedConfigKeys_NoRefusal is the positive twin: a
+// resource using only real keys resolves cleanly, even against a schema
+// with badKeys configured for OTHER keys on the same type.
+func TestResolve_RecognizedConfigKeys_NoRefusal(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.badKeys = map[string]map[string]string{
+		"aws_vpc": {"vpc_cidr": "cidr_block"},
+	}
+	intent := intentFile("payments",
+		ri("aws_vpc", "main", OpCreate, `{"cidr_block":"10.0.0.0/16"}`),
+	)
+
+	if _, err := Resolve(l, singleProvider(schema), intent, nil); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+}

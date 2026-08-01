@@ -20,6 +20,13 @@ func (f *fakeSchema) HasType(t string) bool           { return f.types[t] }
 func (f *fakeSchema) IsComputed(t, path string) bool  { return false }
 func (f *fakeSchema) IsSensitive(t, path string) bool { return false }
 
+// UnknownConfigKeys is an always-nil stub (UBI-66) -- this package's own
+// tests are about diagram parsing/type inference, never schema-key
+// validation, which core/resolver's own fakeSchema already covers.
+func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) []resolver.ConfigKeyIssue {
+	return nil
+}
+
 func awsProvider() resolver.DeclaredProvider {
 	return resolver.DeclaredProvider{
 		Source:  "hashicorp/aws",

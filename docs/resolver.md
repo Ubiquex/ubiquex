@@ -137,13 +137,14 @@ same shape, not a new pattern:
 
 ```go
 // SchemaInspector is core/resolver's own minimal view of "something that
-// knows a provider's schema" -- exactly the three questions resolving a
+// knows a provider's schema" -- exactly the questions resolving a
 // change proposal ever needs answered, never the concrete *provider.Schema
 // itself.
 type SchemaInspector interface {
     HasType(typeName string) bool
     IsComputed(typeName, attrPath string) bool
     IsSensitive(typeName, attrPath string) bool
+    UnknownConfigKeys(typeName string, config map[string]interface{}) []ConfigKeyIssue
 }
 ```
 
@@ -151,6 +152,82 @@ A concrete adapter (`cli`, alongside `stateReaderAdapter`) implements this
 against a real `*provider.Schemas` dump. `core/resolver`'s own hermetic
 tests implement it against a small fake — no real provider binary needed
 to test type rules, graph logic, or determinism.
+
+### Amendment (2026-08-01, UBI-66): schema-key validation at resolve time
+
+`SchemaInspector.UnknownConfigKeys` is a later addition (the interface above
+already shows it in place, not as a diff) — added because a real live run
+(Claude Haiku) drafted plausible-sounding, entirely fictional attribute
+names (`repository_name` for `aws_ecr_repository`'s real `name`; `role_name`
+and `assume_role_policy_document` for `aws_iam_role`'s real `name` and
+`assume_role_policy`; `queue_name` for `aws_sqs_queue`'s real `name`), and
+**nothing in the pipeline caught any of them before a real
+`ApplyResourceChange` call**.
+
+**Confirmed empirically, not assumed, why the two existing validation
+layers upstream of resolve never had a chance to catch this**
+(`intentprovider/schema.go`/`validate.go`, docs/intent-provider.md's own
+"Structured-output validation" section): a resource's own `config` is typed
+as an opaque JSON-encoded **string** in the structured-output JSON Schema
+handed to an adapter (`IntentDraftJSONSchema`) — deliberately, since a
+JSON-Schema object node must declare a closed shape, and `config`'s real
+shape is different per resource *type*, unknowable to that schema. So the
+API-level constraint has no way to see inside `config` at all, let alone
+check per-type attribute names against a real provider schema. `ubx`'s own
+second validation layer (`parseAndValidate`) is deliberately
+ledger/provider-independent (only structural checks: well-formed addresses,
+`op` in `{create, modify}`, valid JSON) — attribute-key correctness needs a
+real provider schema, which that function was never given and never should
+be (see its own doc comment). Neither layer was ever positioned to catch
+this; **resolve is the first point in the whole pipeline that has both a
+concrete provider schema (already fetched, for type inference) and a
+decoded config to check it against.**
+
+`provider.UnknownConfigKeys` (`provider/schemakeys.go`) walks a resource's
+config against its schema `Block` recursively — attributes and nested
+blocks alike, the identical recognition rules `encodeBlockValue`
+(`provider/ctyvalue.go`, UBI-63 session 2's own `ErrUnrecognizedConfigKey`)
+already enforces at *encode* time — and collects **every** unrecognized key
+in one pass, each with a fuzzy-match suggestion (`closestKey`: substring
+containment first, e.g. `"repository_name"` → `"name"`, a large edit
+distance but an unambiguous real-world signal; a Levenshtein-based typo
+check only as a fallback when no candidate has that relationship at all —
+see the file's own doc comments for why a blended score gets this
+backwards). `cli/schemainspector.go`'s `schemaInspectorAdapter` is the one
+place `provider.UnknownConfigKeys`'s real result gets translated into this
+package's own `ConfigKeyIssue` shape; `resourceTypeSchemaInspector`
+(`cli/status.go`'s/`cli/scanall.go`'s multi-provider fleet-grouping adapter)
+stubs it to `nil`, matching its existing `IsComputed`/`IsSensitive` stubs —
+`InferProvider` is the only thing that adapter is ever used for.
+
+`resolveOnce` calls `UnknownConfigKeys` once per resource, in the same pass
+that decodes each resource's raw config for `$ref` edge-scanning — **before
+topo-sort**, and collecting issues across the **whole batch** (every wrong
+key, on every resource) before returning, joined into one refusal via
+`errors.Join` (`ErrUnknownConfigKey`, wrapping one `configKeyError` per
+issue: `"<addr>: config key "<path>" does not exist on <type> (did you
+mean "<suggestion>"?)"`, suggestion clause omitted when none is close
+enough) — a drafted resource with 3 wrong keys is refused with 3 distinct
+teaching errors, not a one-at-a-time whack-a-mole. `ship` time's own
+`ErrUnrecognizedConfigKey` (`provider/ctyvalue.go`) is unchanged and stays
+in place as encode-time's own defense-in-depth backstop for any input that
+somehow bypasses resolve — the two checks now share exactly one "what
+counts as a known key at this level" implementation (`knownKeySet`,
+`provider/schemakeys.go`), so they can never silently diverge on what's
+recognized.
+
+Model-agnostic by construction, not by intent: `resolveOnce` has no
+provenance information about a `ResourceIntent` at all (a hand-written
+file, an evaluated SDK program, and any `intentprovider.Adapter`'s own
+draft all arrive as the identical `resolver.IntentFile` shape) — there is
+no branch to add or forget. `intentprovider/conformance/regression_test.go`
+keeps the original haiku + `platform.md` repro runnable forever as a
+hermetic regression case, alongside a `core/resolver` hermetic suite
+(`resolver_test.go`) and a `cli/resolve_test.go` end-to-end test against
+the real `fakeprovider` binary (`FAKEPROVIDER_MODE=conformance-v6`,
+configured with `aws_iam_role`'s real attribute names) proving the actual
+`schemaInspectorAdapter` wiring, not just an in-process fake.
+See docs/resolver-adversarial.md row 14.
 
 ## Intra-stack refs: the dependency graph comes home, with a fix
 

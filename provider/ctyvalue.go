@@ -212,13 +212,13 @@ func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 	m, _ := generic.(map[string]interface{})
 	vals := make(map[string]cty.Value, len(block.Attributes)+len(block.NestedBlocks))
 
-	known := make(map[string]bool, len(block.Attributes)+len(block.NestedBlocks))
-	for _, a := range block.Attributes {
-		known[a.Name] = true
-	}
-	for _, nb := range block.NestedBlocks {
-		known[nb.TypeName] = true
-	}
+	// knownKeySet (schemakeys.go) is the SAME "what counts as a known key
+	// at this level" logic UnknownConfigKeys' resolve-time walk uses
+	// (UBI-66) -- one implementation, so the two checks (this one, a
+	// fail-fast single-error encode-time backstop; that one, an
+	// exhaustive, suggestion-carrying resolve-time check) can never
+	// silently diverge on what's recognized.
+	known := knownKeySet(block)
 	unrecognized := make([]string, 0)
 	for k := range m {
 		if !known[k] {

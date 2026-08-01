@@ -117,6 +117,58 @@ func TestResolve_UnknownType(t *testing.T) {
 	}
 }
 
+// TestResolve_HallucinatedAttributeNames_Refused is UBI-66's own
+// end-to-end proof, run against a REAL fakeprovider process (not an
+// in-process fake SchemaInspector, core/resolver's own hermetic tests
+// already cover that) -- exercising the real wiring all the way through
+// cli/schemainspector.go's schemaInspectorAdapter: `ubx resolve` given an
+// intent file using exactly the two hallucinated attribute names a real
+// live run (Claude Haiku) produced for a real aws_iam_role
+// (role_name/assume_role_policy_document instead of the real
+// name/assume_role_policy) must refuse, naming both, each with the
+// correct real-key suggestion -- never reaching ApplyResourceChange at
+// all, let alone partway through a real ship.
+func TestResolve_HallucinatedAttributeNames_Refused(t *testing.T) {
+	ledgerDir := t.TempDir()
+	env := []string{
+		"FAKEPROVIDER_MODE=conformance-v6",
+		"FAKEPROVIDER_RESOURCE_TYPE=aws_iam_role",
+		"FAKEPROVIDER_ATTRS=id,name,assume_role_policy,arn",
+	}
+
+	intentPath := filepath.Join(ledgerDir, "intent.json")
+	writeIntentFile(t, intentPath, map[string]interface{}{
+		"schema_version": 1,
+		"kind":           "ubx:intent/v1",
+		"stack":          "platform",
+		"intent":         map[string]interface{}{"summary": "CI role"},
+		"resources": []map[string]interface{}{
+			{
+				"type": "aws_iam_role",
+				"name": "ci-runner",
+				"op":   "create",
+				"config": map[string]interface{}{
+					"role_name":                   "ci-runner",
+					"assume_role_policy_document": "{}",
+				},
+			},
+		},
+	})
+
+	_, err := runUbx(t, env, "resolve", intentPath,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+	)
+	requireExitCode(t, err, 2, "")
+	msg := err.Error()
+	if !strings.Contains(msg, `"role_name" does not exist on aws_iam_role (did you mean "name"?)`) {
+		t.Errorf("missing role_name teaching error: %s", msg)
+	}
+	if !strings.Contains(msg, `"assume_role_policy_document" does not exist on aws_iam_role (did you mean "assume_role_policy"?)`) {
+		t.Errorf("missing assume_role_policy_document teaching error: %s", msg)
+	}
+}
+
 // TestResolveAccept_CrossStackPin_StaleBlocksAccept is the CLI-level
 // version of docs/resolver-adversarial.md row 5: a proposal resolved with
 // a $cross reference pins the neighbor ledger's head at resolve time; if

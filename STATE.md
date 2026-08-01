@@ -4,6 +4,127 @@
 
 ## Current phase
 
+**UBI-66 (2026-08-02) — P1: no schema-key validation before ship. Fixed
+at resolve time, model-agnostic, fully hermetic (fakeprovider only, no
+real cloud, no founder involvement).**
+
+The founder found this live: a real Claude Haiku draft used plausible-
+sounding, entirely fictional attribute names (`repository_name` for
+`aws_ecr_repository`'s real `name`; `role_name`/
+`assume_role_policy_document` for `aws_iam_role`'s real `name`/
+`assume_role_policy`; `queue_name` for `aws_sqs_queue`'s real `name`) —
+nothing in the pipeline caught any of them before a real
+`ApplyResourceChange` call failed. UBI-63 session 2 had already added
+`ErrUnrecognizedConfigKey` (`provider/ctyvalue.go`), but only as an
+encode-time check inside `ubx ship`'s own apply loop — arbitrarily late,
+one resource at a time, first-error-wins, no suggestions, and reachable
+only after other resources in the same batch may have already applied.
+This ticket's ask: catch it at `ubx resolve` time instead, against the
+schema `loadResolveProviders` already fetches for type inference, with a
+teaching error naming the bad key and a fuzzy-match suggestion.
+
+**Point 4 confirmed empirically, not assumed, before writing any fix**:
+why doesn't structured output's own JSON-schema constraint already catch
+this? `intentprovider/schema.go`'s `IntentDraftJSONSchema` types a
+resource's own `config` as an opaque JSON-encoded **string** (a
+structured-output schema must declare a closed object shape, and a
+resource's real attribute set differs per type — unknowable to that
+schema), so no per-type attribute-key constraint is even expressible at
+that layer. `intentprovider/validate.go`'s `parseAndValidate` (the second,
+always-run layer) is deliberately ledger/provider-independent — only
+structural checks, never inspecting `config`'s own decoded keys. Proved
+directly, not just read from source: a new hermetic test
+(`intentprovider/conformance/regression_test.go`) runs the exact
+role_name/assume_role_policy_document draft through the real
+`DraftWithRetry` two-layer pipeline and confirms it validates cleanly —
+resolve is the first point in the whole pipeline with both a real
+provider schema and a decoded config to check it against.
+
+**The fix, in three layers, one shared implementation:**
+
+- `provider/schemakeys.go` (new): `UnknownConfigKeys(block, config)` walks
+  a resource's config against its schema `Block` recursively (attributes
+  AND nested blocks, the identical recognition rules `encodeBlockValue`
+  already enforces at encode time) and collects **every** unrecognized
+  key in one pass — never just the first — each paired with a fuzzy-match
+  suggestion (`closestKey`). Two strict tiers, not one blended score: a
+  substring-containment check first (`"repository_name"` contains
+  `"name"` — a *large* edit distance relative to string length, 11 of 15
+  characters, so edit distance alone would have missed it), falling back
+  to a plain Levenshtein-ratio typo check only when no candidate has a
+  substring relationship at all. Found and fixed a real scoring bug
+  before it shipped: an early one-formula version let an unrelated
+  similar-length candidate (`"repository_url"`, same 11-character shared
+  prefix as `"repository_name"`) outscore the genuinely-intended `"name"`
+  suggestion purely on raw edit distance — caught by a dedicated test
+  (`TestClosestKey_SubstringBeatsSimilarLengthTypo`) before trusting the
+  algorithm anywhere else. `provider/ctyvalue.go`'s own
+  `ErrUnrecognizedConfigKey` (ship time's encode-time backstop, unchanged
+  in behavior) now shares `knownKeySet` with this new walker — one "what
+  counts as a known key at this level" implementation, not two that could
+  silently diverge.
+- `core/resolver`: `SchemaInspector` gained
+  `UnknownConfigKeys(typeName, config) []ConfigKeyIssue`. New
+  `ErrUnknownConfigKey` sentinel + `configKeyError` (Error():
+  `"<addr>: config key \"<path>\" does not exist on <type> (did you mean
+  \"<suggestion>\"?)"`, suggestion clause omitted when none is close
+  enough). `resolveOnce` calls it once per resource in the same pass that
+  already decodes each resource's raw config for `$ref` edge-scanning —
+  before topo-sort — collecting issues across the **whole batch** before
+  returning a single `errors.Join`'d refusal: a drafted resource with 3
+  wrong keys is refused with 3 distinct teaching errors in one pass, not
+  a one-at-a-time whack-a-mole, and multiple resources' own mistakes
+  aggregate into the same refusal too. Every existing `SchemaInspector`
+  implementer updated: `cli/schemainspector.go`'s
+  `schemaInspectorAdapter` (delegates to `provider.UnknownConfigKeys`
+  against the real schema `Block`) and `resourceTypeSchemaInspector`
+  (always-nil stub, matching its existing `IsComputed`/`IsSensitive`
+  stubs — `InferProvider` is the only thing it's ever used for); the
+  test-only fakes in `diagram/parse_test.go` and
+  `diagram/conformance/runner/runner_test.go` (stubs, out of scope for
+  those suites); `core/resolver/resolver_test.go`'s own `fakeSchema`
+  (a real opt-in fake, `badKeys map[typeName]map[key]suggestion`, default
+  nil so every pre-existing test in that file is completely unaffected).
+- `cli/resolve_test.go`: a genuine end-to-end test against the **real**
+  `fakeprovider` binary (`FAKEPROVIDER_MODE=conformance-v6`, configured
+  with `aws_iam_role`'s real attribute names via
+  `FAKEPROVIDER_RESOURCE_TYPE`/`FAKEPROVIDER_ATTRS`) — proves
+  `cli/schemainspector.go`'s real adapter wiring end to end through the
+  actual tfplugin wire protocol, not just an in-process fake.
+
+**Hermetic tests, all new, all green**: `provider/schemakeys_test.go`
+(the 4 real repro pairs by name, the 3-wrong-keys-on-one-resource case,
+deterministic ordering, nested-block paths incl. the bare-object
+shorthand, map-typed attributes correctly never recursed into, the
+substring-vs-typo scoring fix); `core/resolver/resolver_test.go` (3 wrong
+keys → 3 distinct errors, cross-resource aggregation reproducing the
+original incident's shape, no-suggestion case, a hand-authored-file test
+proving model-agnosticism structurally, a positive "recognized keys never
+refused" twin); `cli/resolve_test.go`'s real-fakeprovider end-to-end case;
+`intentprovider/conformance/regression_test.go`'s permanent regression
+case (point 6: the original haiku + `platform.md` repro, kept runnable
+forever — proves both the "structured output can't catch this" claim and
+the "resolve now refuses it" fix, in one test). Full suite green
+(`go build ./...`, `go vet ./...`, `gofmt -l .` clean, `go test ./...
+-count=1`), `make build`'s own version check run before and after.
+Nothing here touched real cloud or asked the founder to run anything —
+every verification, including the CLI-level and doc-transcript ones, ran
+against the hermetic `fakeprovider` binary.
+
+docs/resolver.md gained a new "Amendment (2026-08-01, UBI-66): schema-key
+validation at resolve time" section (the `SchemaInspector` code block
+updated in place to show `UnknownConfigKeys`, not left as a stale diff);
+docs/resolver-adversarial.md gained row 14. ubiquex-docs: `cli/resolve.mdx`
+gained a new "A resource's config uses a key that doesn't exist on its
+real type" subsection under "When resolution fails," with a real
+transcript captured against the actual built binary + fakeprovider
+(`conformance-v6` mode) — not written from memory. `mint validate`/`mint
+broken-links` both clean; committed and pushed to `ubiquex-docs` directly
+(`cli-ref: resolve-time schema-key validation, teaching error +
+suggestion (UBI-66)`).
+
+## Current phase (previous)
+
 **UBI-72 (2026-08-01) — `[intent] show_defaults` config key: collapse
 the "AI defaults" block for repeat/experienced use, default `true`
 (shown). Fully hermetic; live-verified against the real built binary +

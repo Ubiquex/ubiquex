@@ -33,6 +33,35 @@ type SchemaInspector interface {
 	HasType(typeName string) bool
 	IsComputed(typeName, attrPath string) bool
 	IsSensitive(typeName, attrPath string) bool
+
+	// UnknownConfigKeys reports every config key -- checked recursively
+	// through nested blocks, the identical recognition rules a real
+	// provider encode enforces at ship time -- that matches no real
+	// attribute or nested-block name in typeName's own schema (UBI-66:
+	// found live, a model drafted repository_name/role_name/
+	// assume_role_policy_document/queue_name, none of them real). config
+	// is a resource's raw, not-yet-resolved top-level config object; nil
+	// or a non-object config reports no issues here -- resolveOnce's own
+	// later "config must be a JSON object" check is where that shape
+	// mismatch is caught instead, this method is never asked to make
+	// that call itself.
+	UnknownConfigKeys(typeName string, config map[string]interface{}) []ConfigKeyIssue
+}
+
+// ConfigKeyIssue is one SchemaInspector.UnknownConfigKeys finding -- a
+// config key that matches no real attribute or nested-block name at its
+// own level in the resource type's schema, paired with the closest
+// same-level real key name when one is close enough to be worth
+// suggesting (empty otherwise). UBI-66.
+type ConfigKeyIssue struct {
+	// Path is the dot-notation path to the offending key, from the
+	// resource's own top-level config (e.g.
+	// "encryption_configuration.repository_name" for a key nested one
+	// level inside a NestedBlock).
+	Path string
+	// Suggestion is the closest real key at the same level, "" if none
+	// is close enough.
+	Suggestion string
 }
 
 // DeclaredProvider is one provider a stack declares (docs/architecture.md
@@ -336,7 +365,47 @@ var (
 	// refusal, not a silent pass-through" standard as every other marker
 	// safety check in this file.
 	ErrSecretEmbeddedInString = errors.New("resolve: a $secret value can't be embedded inside a JSON-encoded string attribute -- no redaction path exists for it there")
+
+	// ErrUnknownConfigKey means a resource intent's config carries a key
+	// that matches no real attribute or nested-block name in its type's
+	// own provider schema at the pinned version (UBI-66, docs/resolver-
+	// adversarial.md row 14). Checked here, at resolve time, against the
+	// exact schema InferProvider already fetched for type inference --
+	// never left to surface first as a cryptic, generic rejection from a
+	// real ApplyResourceChange call partway through a real ship,
+	// potentially after other resources in the same batch have already
+	// applied (provider.ErrUnrecognizedConfigKey, UBI-63 session 2,
+	// remains unchanged as ship time's own defense-in-depth backstop for
+	// any input that somehow bypasses resolve). Model-agnostic:
+	// resolveOnce has no way to tell, and doesn't need to, whether a
+	// ResourceIntent came from a hand-written file, an evaluated SDK
+	// program, or any intentprovider.Adapter's own draft -- the same
+	// check runs over all of them.
+	ErrUnknownConfigKey = errors.New("resolve: unrecognized config key")
 )
+
+// configKeyError is one ErrUnknownConfigKey occurrence. resolveOnce
+// collects every issue found across the WHOLE batch (every wrong key, on
+// every resource) and joins them into a single refusal via errors.Join,
+// rather than surfacing only the first mistake and making a drafter
+// fix-and-resubmit one key at a time -- UBI-66's own hermetic bar: "a
+// drafted resource with 3 wrong keys refused with 3 distinct teaching
+// errors."
+type configKeyError struct {
+	addr     core.Address
+	typeName string
+	issue    ConfigKeyIssue
+}
+
+func (e configKeyError) Error() string {
+	base := fmt.Sprintf("%s: %s: config key %q does not exist on %s", ErrUnknownConfigKey, e.addr, e.issue.Path, e.typeName)
+	if e.issue.Suggestion != "" {
+		return fmt.Sprintf("%s (did you mean %q?)", base, e.issue.Suggestion)
+	}
+	return base
+}
+
+func (e configKeyError) Unwrap() error { return ErrUnknownConfigKey }
 
 // VerifyPins re-derives every cross-stack pin recorded in p (every
 // resolution.inputs entry with kind "cross_stack_pin") and confirms its
@@ -489,11 +558,23 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 	}
 	destroySet := destroyAddrSet(destroyByKey)
 
+	var keyErrs []error
 	for _, key := range order {
 		e := batch[key]
 		var raw interface{}
 		if err := json.Unmarshal(e.ri.Config, &raw); err != nil {
 			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
+		}
+		// UBI-66: schema-key validation runs here, at resolve time,
+		// against the exact schema InferProvider already resolved this
+		// resource's own provider from -- collected across the WHOLE
+		// batch (every wrong key, on every resource) before any of it is
+		// returned, so a single refusal names every mistake at once
+		// rather than one-at-a-time.
+		if configMap, ok := raw.(map[string]interface{}); ok {
+			for _, issue := range e.provider.Schema.UnknownConfigKeys(e.ri.Type, configMap) {
+				keyErrs = append(keyErrs, configKeyError{addr: e.addr, typeName: e.ri.Type, issue: issue})
+			}
 		}
 		edges, err := scanRefEdges(raw, batch)
 		if err != nil {
@@ -504,6 +585,9 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}
 		e.rawEdges = edges
+	}
+	if len(keyErrs) > 0 {
+		return nil, errors.Join(keyErrs...)
 	}
 
 	topoOrder, err := topoSort(order, func(key string) []string { return batch[key].rawEdges })

@@ -43,6 +43,29 @@ func (s schemaInspectorAdapter) IsSensitive(typeName, attrPath string) bool {
 	return ok && a.Sensitive
 }
 
+// UnknownConfigKeys delegates to provider.UnknownConfigKeys (UBI-66)
+// against typeName's own real schema Block -- the same recursive,
+// suggestion-carrying walk provider/schemakeys.go implements once, not
+// reimplemented here. An unknown type or a nil config reports no issues:
+// resolver.InferProvider's own ErrUnknownType already refuses the former
+// before this is ever asked, and resolveOnce's later "config must be a
+// JSON object" check is where the latter is caught instead.
+func (s schemaInspectorAdapter) UnknownConfigKeys(typeName string, config map[string]interface{}) []resolver.ConfigKeyIssue {
+	rs, ok := s.schemas.Resources[typeName]
+	if !ok || config == nil {
+		return nil
+	}
+	issues := provider.UnknownConfigKeys(rs.Block, config)
+	if len(issues) == 0 {
+		return nil
+	}
+	out := make([]resolver.ConfigKeyIssue, len(issues))
+	for i, iss := range issues {
+		out[i] = resolver.ConfigKeyIssue{Path: iss.Path, Suggestion: iss.Suggestion}
+	}
+	return out
+}
+
 // resourceTypeSchemaInspector implements resolver.SchemaInspector against
 // the type-erased resourceSchemas map executor.Applier.Schema returns
 // (map[string]any, each value a concrete *provider.Schema boxed as any --
@@ -67,6 +90,15 @@ func (s resourceTypeSchemaInspector) HasType(typeName string) bool {
 func (s resourceTypeSchemaInspector) IsComputed(typeName, attrPath string) bool { return false }
 
 func (s resourceTypeSchemaInspector) IsSensitive(typeName, attrPath string) bool { return false }
+
+// UnknownConfigKeys is an always-nil stub, matching IsComputed/
+// IsSensitive above: resolver.InferProvider -- the only caller this
+// adapter is ever used for (cli/status.go's/cli/scanall.go's own
+// multi-provider fleet-grouping, never a real resolver.Resolve call) --
+// never calls it.
+func (s resourceTypeSchemaInspector) UnknownConfigKeys(typeName string, config map[string]interface{}) []resolver.ConfigKeyIssue {
+	return nil
+}
 
 // attributeAt walks a dot-notation path into a schema Block, recursing
 // into NestedBlocks the same way provider.Redact/blockObjectType already
