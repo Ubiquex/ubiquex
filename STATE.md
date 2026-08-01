@@ -4,6 +4,79 @@
 
 ## Current phase
 
+**UBI-63 session 6 (2026-08-01) — same-batch-dependent destroy fix,
+applied directly per the founder's own exact diagnosis (not re-derived
+this session), hermetically proven at 3- and 5-resource scale, then
+live-verified on a second real wounded stack, `ubx-playground-5`.**
+
+Session 5's own `destroyDiffExplainedByNormalization` fix covers real
+provider read-nondeterminism (null vs zero-value), but not a genuinely
+different, real value change caused by a SAME-BATCH sibling's own
+destroy -- e.g. an `aws_iam_role_policy_attachment`'s destroy reverting
+its role/policy's `attachment_count` back down, while the accepted
+destroy proposal's own recorded `entry.State` still shows it at 1 (from
+before the attachment's destroy, earlier in the SAME batch). This is a
+real, non-normalization-explainable difference -- `FilterNormalizationNoise`
+correctly does NOT explain it away, and the previous fix alone still
+refused. This is the destroy-side mirror of `reconcileSameBatchEffects`
+(the create-side case), but can't share its mechanism: that runs AFTER
+the whole walk finishes and records a correction asynchronously; a
+destroy's own freshness precheck blocks SYNCHRONOUSLY, mid-walk, before
+that resource can even attempt its own destroy -- there's no "after the
+chain settles" moment to defer to.
+
+**Fix, applied exactly as specified:** `shipDestroyNode` gained a new
+`sameBatchDependentsDestroyed bool` parameter; `shipChange`'s dispatch
+passes `len(n.dependsOn) > 0` for a destroy node (a destroy entry's own
+`DependsOn` is docs/resolver.md's orphan-protection reverse edge set --
+by the time this call happens, the missingDep check already confirmed
+every dependency applied, so non-empty here means a referencing
+resource was JUST destroyed as part of this exact batch). The freshness
+check's refusal condition gained `&& !sameBatchDependentsDestroyed`,
+alongside the existing normalization check -- when true, a hash
+mismatch is treated as explained regardless of whether
+`FilterNormalizationNoise` itself would have caught it, since the
+batch's own accepted proposal already reviewed destroying the
+dependent, making its real effects on this target expected fallout.
+
+**Verified before any claim of success, at increasing scale:**
+- Reverted just the new `&& !sameBatchDependentsDestroyed` condition and
+  confirmed the new hermetic test (`TestShipDestroy_SameBatchDependentDestroyed_NotRefused`,
+  `core/executor`: role + policy + attachment referencing both, one
+  destroy proposal) fails exactly as expected (2 of 3 refused as
+  drifted), then restored the fix and confirmed it passes.
+- `TestShipDestroy_FiveResourcePlatformShape_NotRefused`: the founder's
+  own platform.md topology (role + policy + attachment + 2 fully
+  independent resources standing in for ECR/SQS) proves the fix scales
+  to the real shape AND doesn't overreach -- the two unrelated resources
+  (`sameBatchDependentsDestroyed=false`) still go through the ordinary
+  present-and-matching path, not the bypass.
+- `fakeApplier` (session 3's own in-process test double, extended here)
+  gained a destroy-side cross-effect mirroring its existing create-side
+  one: destroying a `fake_attachment` now reverts its referenced
+  role/policy's `attachment_count` back to 0, and the create-side effect
+  itself was extended from role-only to role+policy (both ends of a
+  real attachment).
+- Full suite green throughout (`go build`, `go vet`, `go test -count=1`).
+
+**Live re-verification, on a SECOND real wounded stack the founder hit
+this exact bug on independently, `ubx-playground-5` (5 real AWS
+resources, the identical platform.md shape): re-shipping the already-
+accepted destroy proposal from a prior, pre-fix, partially-failed
+attempt (attachment destroyed, policy/role/ECR/SQS stuck behind it)
+now applies cleanly -- 5 resources, 5 applied, 0 failed.** Confirmed via
+real `aws iam get-policy`/`get-role`, `ecr describe-repositories`, `sqs
+get-queue-url` (every one: NoSuchEntity/RepositoryNotFoundException/
+NonExistentQueue), plus the same broader `list-roles`/`list-policies`/
+`describe-repositories`/`list-queues` sweep session 5 established,
+confirming nothing matching this stack's names remains anywhere in the
+account.
+
+UBI-63 remains closed in Linear (session 5's own closure stands); this
+session's comment documents the additional fix and its own live proof.
+
+## Current phase (previous)
+
 **UBI-63 session 5 (2026-08-01) — scan-vs-terminate divergence found,
 proven, and fixed; live-verified end to end on the founder's real,
 wounded `ubx-playground-3` stack. UBI-63 closed.**
