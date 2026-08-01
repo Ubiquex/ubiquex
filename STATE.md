@@ -4,6 +4,117 @@
 
 ## Current phase
 
+**UBI-63 session 5 (2026-08-01) — scan-vs-terminate divergence found,
+proven, and fixed; live-verified end to end on the founder's real,
+wounded `ubx-playground-3` stack. UBI-63 closed.**
+
+The founder's own next real attempt (after session 4's fixes) hit a NEW
+divergence blocking actual cleanup: `ubx scan` reported a role/policy
+pair clean seconds before `ubx terminate` + `ubx ship` on the exact same,
+untouched resources refused with "destroy target drifted since it was
+signed away." Per the founder's own explicit process requirement this
+session ("do not report back until you have PROVEN the fix yourself"):
+reproduced first, in a controlled fixture, before writing any code;
+traced the root cause; fixed it; verified via the SAME fixture, reverted
+and re-applied to confirm the divergence tracked the fix exactly; only
+then used the real AWS stack as final proof.
+
+**Root cause, confirmed by tracing (not guessing): `shipDestroyNode`'s
+freshness precheck (`core/executor/ship.go`) compared a raw
+`core.ReadAndFingerprint` hash directly, a pipeline that never applies
+session 3's own normalization (which lives entirely inside
+`core.RunScan`) -- so a pure null<->zero-value representation flip that
+`scan` correctly waves through as "no drift" tripped this separate, unfiltered
+comparison instead.** Reproduced twice, independently, before any fix: a
+Go-level `core/executor` test (`core.RunScan` + `executor.Ship` directly)
+and a real CLI-level test (`ubx scan` -> `ubx terminate` -> `ubx ship`,
+hand-seeding the ledger to get past `ok-v6`'s own auto-normalizing echo)
+-- both produced the founder's exact error message byte-for-byte.
+Reverting just the fix on either fixture reproduces the bug again;
+reapplying it fixes both. Fix: new `destroyDiffExplainedByNormalization`
+reuses `core.FilterNormalizationNoise` (the same filter `RunScan`'s own
+verdict already applies) against `entry.State` (the destroy target's
+full recorded state, already carried on every `DestroyEntry`) vs the
+fresh read, instead of a bare hash comparison -- the adversarial case (a
+REAL, non-normalization-explainable drift) is still correctly refused,
+confirmed by the pre-existing `TestShipDestroy_TargetDriftedSinceAcceptance_Refused`
+continuing to pass unchanged. New regression tests:
+`TestShipDestroy_NormalizationNoise_NotRefused` (`core/executor`) and
+`TestTerminate_ScanCleanButShipRefused_NormalizationNoise` (`cli`, real
+`ubx` commands).
+
+**Live verification surfaced two MORE real bugs, both found only by
+actually running the real scenario, not stopping at "tests pass":**
+
+1. **A rebuild that silently updated a binary nothing actually runs.**
+   The founder's own rebuild (per session 4's `make install`) wrote to
+   `$(go env GOPATH)/bin/ubx`, but the `ubx` that PATH actually resolves
+   to was a separate, older copy at `/usr/local/bin/ubx` that `go
+   install` never touches -- so the real destroy attempt ran the
+   pre-fix binary the whole time, `ubx version` right after `make
+   install` giving no signal anything was wrong (it printed the OTHER,
+   stale binary's own unrelated version). Worse than session 4's own
+   stale-binary finding, not the same one -- a genuinely different way
+   for "did you actually rebuild what you're about to run" to fail.
+   Fixed generally, not just patched around this once: `make install`
+   now verifies `command -v ubx` resolves to the SAME path `go install`
+   just wrote, failing loudly with the exact fix (add
+   `$GOPATH/bin` to PATH, or copy the binary) instead of silently
+   succeeding. `cli/version.go`'s `versionString()` also gained a
+   "-dirty" suffix (Go's own `vcs.modified` build-info stamp) so a build
+   with uncommitted changes on top of its last commit is never
+   indistinguishable from a clean one -- confirmed live: `make build`
+   from this session's own uncommitted working tree correctly printed
+   `dev+fc75cda-dirty`. New tests: `TestVersionCmd_DirtyBuild_AppendsDirtySuffix`
+   plus `noBuildInfoDirty` stubs added to the existing exact-match
+   version tests for determinism.
+
+2. **`ubx ship <short-hash>` refused an already-accepted proposal with
+   "no matching plan in the plan store."** Found live, immediately after
+   the divergence fix's own real destroy succeeded via the full hash --
+   the founder's own short-hash retry failed. Root cause: `ship.go`'s
+   own doc comment already promised a hash is "looked up two ways, in
+   order: first as an already-accepted proposal id... if not found
+   there, as a plan," but `ledger.Read` (the first lookup) only ever did
+   an EXACT-ID match -- no prefix support at all -- unlike the plan
+   store's own `resolvePlanHash`, which already had it. An already-
+   accepted proposal's plan file is pruned at accept time (by design),
+   so a short hash for one had nowhere left to resolve. Fixed: new
+   `resolveAcceptedProposal` (`cli/plan.go`) mirrors `resolvePlanHash`'s
+   own exact-then-prefix resolution against `ledger.Chain()`, with its
+   own `ErrProposalAmbiguous` sentinel (a genuinely ambiguous short hash
+   is surfaced directly, never silently retried against the plan store
+   too). New regression test:
+   `TestShip_ShortHash_AlreadyAcceptedProposal_ResolvesAgainstLedger` --
+   confirmed to reproduce the founder's exact error message when
+   reverted, pass when fixed.
+
+**Final live proof, on the founder's real, wounded `ubx-playground-3`
+AWS account (5 real resources from the whole UBI-63 arc): all 4
+remaining stuck resources (`aws_iam_policy.ci-runner-access`,
+`aws_iam_role.ci-runner`, `aws_ecr_repository.ci-artifacts`,
+`aws_sqs_queue.ci-notifications` -- the attachment was already destroyed
+in an earlier, pre-fix attempt) destroyed for real, confirmed gone via
+real `aws iam get-policy`/`get-role`, `aws ecr describe-repositories`,
+`aws sqs get-queue-url` (every one: NoSuchEntity/RepositoryNotFoundException/
+NonExistentQueue), and a broader `list-roles`/`list-policies`/
+`describe-repositories`/`list-queues` sweep confirms nothing matching
+this stack's own resource names remains anywhere in the account.**
+Account genuinely clean, not just "the specific 4 addresses looked
+gone."
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `go test
+./... -count=1`), including every fix's own before/after reproduction on
+its own fixture, not just a final "tests pass."
+
+UBI-63 closed in Linear -- the ticket's original three bugs, session 3's
+two real fixes, session 4's masking-bug fix, and this session's two more
+real bugs (destroy-precheck divergence, short-hash ledger resolution)
+plus the build-staleness guard, are all live-verified against real AWS,
+not just hermetically.
+
+## Current phase (previous)
+
 **UBI-63 session 4 (2026-08-01) — priority question answered by tracing
 code, a real masking bug found and fixed, build-staleness guard added.**
 The founder's own post-rebuild re-test (having caught a stale-binary false
