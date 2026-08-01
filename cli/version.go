@@ -39,11 +39,35 @@ var buildInfoRevision = func() string {
 	return ""
 }
 
+// buildInfoDirty reports whether Go's toolchain stamped this binary as
+// built from a working tree with uncommitted changes on top of
+// buildInfoRevision's own commit ("vcs.modified" == "true") -- false if
+// unknown or clean. UBI-63 session 5: a real, live confusion this would
+// have caught immediately -- a fix existed only as an uncommitted
+// change, and the commit suffix alone can't distinguish "built from
+// exactly that commit" from "built from that commit plus whatever's
+// currently sitting uncommitted on top of it," which is precisely what
+// a rebuild-before-retesting workflow needs to know. A package var for
+// the same override-in-tests reason as buildInfoRevision.
+var buildInfoDirty = func() bool {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return false
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.modified" {
+			return s.Value == "true"
+		}
+	}
+	return false
+}
+
 // versionString is what `ubx version` prints: Version alone if no commit
-// is known from either source, otherwise "<Version>+<commit>" -- the same
-// shape whether Version is a released tag ("0.1.0+abcdef1") or "dev"
-// ("dev+abcdef1"), so a local build is never ambiguous about exactly what
-// it was built from.
+// is known from either source, otherwise "<Version>+<commit>" (with a
+// "-dirty" suffix when the build has uncommitted changes on top of that
+// commit) -- the same shape whether Version is a released tag
+// ("0.1.0+abcdef1") or "dev" ("dev+abcdef1"), so a local build is never
+// ambiguous about exactly what it was built from.
 func versionString() string {
 	commit := Commit
 	if commit == "" {
@@ -52,7 +76,11 @@ func versionString() string {
 	if commit == "" {
 		return Version
 	}
-	return Version + "+" + commit
+	v := Version + "+" + commit
+	if buildInfoDirty() {
+		v += "-dirty"
+	}
+	return v
 }
 
 func newVersionCmd() *cobra.Command {

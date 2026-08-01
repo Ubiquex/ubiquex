@@ -16,6 +16,17 @@ func noBuildInfoRevision(t *testing.T) {
 	t.Cleanup(func() { buildInfoRevision = orig })
 }
 
+// noBuildInfoDirty stubs out buildInfoDirty for tests asserting an exact
+// "+commit" string with no "-dirty" suffix, so they stay deterministic
+// regardless of whether the real working tree this test binary was
+// compiled from happens to have uncommitted changes.
+func noBuildInfoDirty(t *testing.T) {
+	t.Helper()
+	orig := buildInfoDirty
+	buildInfoDirty = func() bool { return false }
+	t.Cleanup(func() { buildInfoDirty = orig })
+}
+
 func runVersion(t *testing.T) string {
 	t.Helper()
 	root := NewRootCmd()
@@ -50,6 +61,7 @@ func TestVersionCmd_Overridden(t *testing.T) {
 
 func TestVersionCmd_WithCommit(t *testing.T) {
 	noBuildInfoRevision(t)
+	noBuildInfoDirty(t)
 	origVersion, origCommit := Version, Commit
 	Version, Commit = "1.2.3", "abc1234"
 	t.Cleanup(func() { Version, Commit = origVersion, origCommit })
@@ -60,6 +72,7 @@ func TestVersionCmd_WithCommit(t *testing.T) {
 }
 
 func TestVersionCmd_FallsBackToBuildInfoRevisionWhenCommitUnset(t *testing.T) {
+	noBuildInfoDirty(t)
 	origCommit := Commit
 	Commit = ""
 	t.Cleanup(func() { Commit = origCommit })
@@ -77,6 +90,7 @@ func TestVersionCmd_FallsBackToBuildInfoRevisionWhenCommitUnset(t *testing.T) {
 }
 
 func TestVersionCmd_ExplicitCommitTakesPrecedenceOverBuildInfo(t *testing.T) {
+	noBuildInfoDirty(t)
 	origFn := buildInfoRevision
 	buildInfoRevision = func() string { return "shouldnotbeused" }
 	t.Cleanup(func() { buildInfoRevision = origFn })
@@ -86,6 +100,25 @@ func TestVersionCmd_ExplicitCommitTakesPrecedenceOverBuildInfo(t *testing.T) {
 	t.Cleanup(func() { Version, Commit = origVersion, origCommit })
 
 	if got, want := runVersion(t), "1.2.3+abc1234"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestVersionCmd_DirtyBuild_AppendsDirtySuffix is UBI-63 session 5's own
+// coverage for the new "-dirty" indicator: a real, live confusion this
+// would have caught immediately -- a fix landed only as an uncommitted
+// change, and a rebuild's own version string gave no signal that
+// uncommitted work was baked in on top of the last commit.
+func TestVersionCmd_DirtyBuild_AppendsDirtySuffix(t *testing.T) {
+	noBuildInfoRevision(t)
+	origVersion, origCommit := Version, Commit
+	Version, Commit = "1.2.3", "abc1234"
+	t.Cleanup(func() { Version, Commit = origVersion, origCommit })
+	origDirty := buildInfoDirty
+	buildInfoDirty = func() bool { return true }
+	t.Cleanup(func() { buildInfoDirty = origDirty })
+
+	if got, want := runVersion(t), "1.2.3+abc1234-dirty"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
