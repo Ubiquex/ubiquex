@@ -333,6 +333,59 @@ func TestStore_CorruptedHeadEdge(t *testing.T) {
 	}
 }
 
+// --- row 9 (UBI-64): well-formed head naming a proposal that isn't there --
+//
+// Distinct from TestStore_CorruptedHeadEdge above (garbage bytes -- not
+// even a hash) and from TestStore_CorruptedProposalObject (a proposal
+// object that exists but won't parse): this is a perfectly well-formed
+// 64-hex head edge whose target proposal object was never written at all
+// -- the remote-store mirror of the git-directory ".ubx/ledger.lock names
+// a proposal ledger/proposals/ doesn't have" scenario the whole ticket is
+// about ("head object present, proposal objects missing").
+func TestStore_HeadResolvesButProposalMissing_TeachingError(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	missing := strings.Repeat("a", 64)
+	if err := store.bucket.WriteAll(ctx, headEdgeKey(""), []byte(missing), nil); err != nil {
+		t.Fatalf("seed dangling head edge: %v", err)
+	}
+
+	l := core.OpenStore(store)
+	head, err := l.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if head != missing {
+		t.Fatalf("head = %q, want %q", head, missing)
+	}
+
+	_, err = l.Chain()
+	if !errors.Is(err, core.ErrBrokenLedgerHead) {
+		t.Fatalf("Chain: got %v, want ErrBrokenLedgerHead", err)
+	}
+	if strings.Contains(err.Error(), "ledger.lock") {
+		t.Fatalf("a remote store's teaching error shouldn't mention the git-local ledger.lock file: %v", err)
+	}
+	if !strings.Contains(err.Error(), "head object") {
+		t.Fatalf("expected remote-store phrasing (\"head object\") in error, got: %v", err)
+	}
+
+	result, verr := core.VerifyChain(l)
+	if verr != nil {
+		t.Fatalf("VerifyChain: %v", verr)
+	}
+	if result.ChainIntact {
+		t.Fatal("ChainIntact = true, want false")
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Kind != core.FindingMissingParent {
+		t.Fatalf("findings = %+v, want exactly one missing_parent finding", result.Findings)
+	}
+	if strings.Contains(result.Findings[0].Detail, "ledger.lock") {
+		t.Fatalf("verify finding detail shouldn't mention ledger.lock for a remote store: %s", result.Findings[0].Detail)
+	}
+}
+
 // --- row 8: corrupted apply record --------------------------------------
 
 func TestStore_CorruptedApplyRecord_OthersUnaffected(t *testing.T) {

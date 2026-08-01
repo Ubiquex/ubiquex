@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // docsConfigRef is the one place this file names where the full,
@@ -57,6 +59,7 @@ func newInitCmd() *cobra.Command {
 		region          string
 		githubRepo      string
 		tfDir           string
+		resetLedger     bool
 	)
 
 	cmd := &cobra.Command{
@@ -80,6 +83,9 @@ Refuses to overwrite an existing config unless --force is given.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if resetLedger {
+				return runResetLedger(cmd, dir, force)
+			}
 			if providerPath != "" && source != "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --provider and --source are mutually exclusive")}
 			}
@@ -214,8 +220,77 @@ Refuses to overwrite an existing config unless --force is given.`,
 	cmd.Flags().StringVar(&region, "region", "", "shorthand for --provider-config's most common key -- equivalent to --provider-config '{\"region\":\"<region>\"}'")
 	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "default GitHub repository, e.g. acme/infra")
 	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "default .tf directory")
+	cmd.Flags().BoolVar(&resetLedger, "reset-ledger", false, "sanctioned fresh start for a broken git-directory ledger: clears the head pointer (.ubx/ledger.lock) and any stale plan drafts (.ubx/plans/), preserves the redaction salt untouched, never deletes ledger/proposals or ledger/applies. Ignores every other flag above. Refuses on a ledger whose head still resolves to a real proposal unless --force is also given (that head is healthy, not broken -- resetting it would orphan real history)")
 
 	return cmd
+}
+
+// runResetLedger is UBI-64's own sanctioned fresh-start path: the founder-
+// test finding was that deleting ledger/ by hand while leaving .ubx/ in
+// place leaves .ubx/ledger.lock pointing at a proposal that no longer
+// exists, and every fold-touching command (status/scan/resolve/ship/plan
+// short-hash lookup, ...) then fails with a raw chain error. Rather than
+// teaching users to hand-delete .ubx internals to recover (which also
+// destroys .ubx/salt -- see below), this gives them one sanctioned command.
+//
+// Scoped deliberately narrow, decided at build time per the ticket's own
+// "consider... decide at build": git-directory ledgers only, not remote
+// LedgerStore-backed ones -- a remote store is a shared bucket nobody
+// "hand-deletes" the internals of the way a local .ubx/ directory invites;
+// its equivalent fix is restoring the missing proposal objects from
+// wherever the store's own backups live, not a local CLI command. Clears
+// exactly two things -- the head pointer and any stale plan drafts (parked
+// under .ubx/plans/, each one pinned to a Parent this reset is about to
+// make stale) -- and deliberately leaves three untouched:
+//   - .ubx/salt: still needed to keep any $redacted markers in whatever
+//     ledger/proposals files remain on disk meaningful, and losing it
+//     gains nothing a reset needs (core/salt.go's own "never part of any
+//     hashed content" already means it's harmless to keep).
+//   - ledger/proposals, ledger/applies: real accepted history. Not
+//     deleted -- only orphaned (unreachable once the head is genesis) --
+//     since deleting genuine ledger content is a materially bigger, more
+//     dangerous decision than this ticket's own "start fresh" need, and
+//     the motivating scenario already has these gone by the time anyone
+//     would reach for this flag.
+func runResetLedger(cmd *cobra.Command, dir string, force bool) error {
+	out := cmd.OutOrStdout()
+	ledger := core.Open(dir)
+
+	head, headErr := ledger.Head()
+	healthy := false
+	if headErr == nil && head != "" {
+		if _, rerr := ledger.Read(head); rerr == nil {
+			healthy = true
+		}
+	}
+	if healthy && !force {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf(
+			"init --reset-ledger: the ledger head resolves to a real, readable proposal -- this looks like a healthy ledger, not a broken one; resetting it would orphan its real history (the proposal files themselves aren't deleted, but nothing will chain to them from a fresh head again). Re-run with --force if you really mean to start over, or run `ubx verify` first to confirm whether the chain is actually broken")}
+	}
+
+	headPath := filepath.Join(dir, ".ubx", "ledger.lock")
+	hadHead := headErr != nil || head != ""
+	if err := os.Remove(headPath); err != nil && !os.IsNotExist(err) {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("init --reset-ledger: %w", err)}
+	}
+
+	plansDir := filepath.Join(dir, ".ubx", "plans")
+	nPlans := 0
+	if entries, err := os.ReadDir(plansDir); err == nil {
+		nPlans = len(entries)
+	} else if !os.IsNotExist(err) {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("init --reset-ledger: %w", err)}
+	}
+	if err := os.RemoveAll(plansDir); err != nil {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("init --reset-ledger: %w", err)}
+	}
+
+	if !hadHead && nPlans == 0 {
+		fmt.Fprintf(out, "no ledger head or plan drafts found at %s -- nothing to reset (salt, if any, left untouched)\n", dir)
+		return nil
+	}
+	fmt.Fprintf(out, "ledger head cleared, %d stale plan draft(s) removed at %s -- salt preserved untouched\n", nPlans, dir)
+	return nil
 }
 
 // promptForProvider is UBI-59's own "short TTY prompt" -- three lines,

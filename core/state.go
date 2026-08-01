@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -21,6 +22,9 @@ func (l *Ledger) Chain() ([]*Proposal, error) {
 	for id := head; id != ""; {
 		p, err := l.Read(id)
 		if err != nil {
+			if len(reversed) == 0 && errors.Is(err, ErrProposalNotFound) {
+				return nil, fmt.Errorf("chain: %w: %s", ErrBrokenLedgerHead, l.brokenHeadDetail(id, true))
+			}
 			return nil, fmt.Errorf("chain: %w", err)
 		}
 		reversed = append(reversed, p)

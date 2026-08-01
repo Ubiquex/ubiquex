@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -187,6 +188,35 @@ func TestLedger_CorruptedHeadFile(t *testing.T) {
 	_, err := l.Head()
 	if !errors.Is(err, ErrCorruptLedgerHead) {
 		t.Fatalf("got %v, want ErrCorruptLedgerHead", err)
+	}
+}
+
+// TestLedger_Chain_HeadPointsToMissingProposal_TeachingError is UBI-64's own
+// founder-test finding, reproduced exactly: the head file is well-formed (a
+// real 64-hex hash, unlike TestLedger_CorruptedHeadFile above) but no
+// proposal exists for it -- e.g. because ledger/ was deleted by hand while
+// .ubx/ was left in place. Every fold-touching command routes through
+// Chain(), so this is the one chokepoint fix that reaches all of them.
+func TestLedger_Chain_HeadPointsToMissingProposal_TeachingError(t *testing.T) {
+	dir := t.TempDir()
+	l := Open(dir)
+
+	missing := strings.Repeat("3", 64)
+	if err := os.MkdirAll(filepath.Join(dir, ".ubx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ubx", "ledger.lock"), []byte(missing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := l.Chain()
+	if !errors.Is(err, ErrBrokenLedgerHead) {
+		t.Fatalf("Chain: got %v, want ErrBrokenLedgerHead", err)
+	}
+	for _, want := range []string{".ubx/ledger.lock", "ubx init --reset-ledger", "ubx verify", "deleted or moved"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing teaching text %q", err.Error(), want)
+		}
 	}
 }
 

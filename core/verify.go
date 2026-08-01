@@ -100,13 +100,20 @@ func VerifyChain(l *Ledger) (*VerifyResult, error) {
 		p, rerr := l.Read(id)
 		if rerr != nil {
 			kind := FindingCorruptEntry
+			detail := rerr.Error()
 			if errors.Is(rerr, ErrProposalNotFound) {
 				kind = FindingMissingParent
+				if len(steps) == 0 {
+					// This is the head itself, not some deeper parent link
+					// found mid-history -- the UBI-64 teaching diagnosis
+					// applies directly, not just "some proposal is missing."
+					detail = l.brokenHeadDetail(id, false)
+				}
 			}
 			result.Findings = append(result.Findings, ChainFinding{
 				ProposalID: id,
 				Kind:       kind,
-				Detail:     rerr.Error(),
+				Detail:     detail,
 			})
 			result.ChainIntact = false
 			break

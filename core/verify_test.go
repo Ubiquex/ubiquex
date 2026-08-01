@@ -187,6 +187,49 @@ func TestVerifyChain_MissingParent(t *testing.T) {
 	}
 }
 
+// row (UBI-64): the head ITSELF is dangling -- zero levels removed, unlike
+// TestVerifyChain_MissingParent above (an orphan whose own Parent is
+// missing, one level removed from head). This is exactly the founder-test
+// finding's shape: ledger/ deleted by hand, .ubx/ left in place, head still
+// names a proposal that's now gone. Confirms ubx verify's own finding gets
+// the richer UBI-64 teaching detail, not just the raw "proposal not found"
+// wrap every other missing-parent case gets.
+func TestVerifyChain_HeadItselfMissing_TeachingDetail(t *testing.T) {
+	dir := t.TempDir()
+	l := Open(dir)
+
+	missing := strings.Repeat("2", 64)
+	if err := os.MkdirAll(filepath.Join(dir, ".ubx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ubx", "ledger.lock"), []byte(missing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := VerifyChain(l)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if result.ChainIntact {
+		t.Fatal("ChainIntact = true, want false")
+	}
+	if result.ProposalsChecked != 0 {
+		t.Fatalf("ProposalsChecked = %d, want 0 -- nothing readable at all", result.ProposalsChecked)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Kind != FindingMissingParent || result.Findings[0].ProposalID != missing {
+		t.Fatalf("findings = %+v, want exactly one missing_parent finding naming %s", result.Findings, missing)
+	}
+	detail := result.Findings[0].Detail
+	for _, want := range []string{".ubx/ledger.lock", "ubx init --reset-ledger", "deleted or moved"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("detail %q missing teaching text %q", detail, want)
+		}
+	}
+	if strings.Contains(detail, "ubx verify") {
+		t.Fatalf("detail is embedded inside ubx verify's own output -- shouldn't tell the user to run ubx verify: %q", detail)
+	}
+}
+
 // row: truncated apply record.
 func TestVerifyChain_TruncatedApplyRecord(t *testing.T) {
 	dir := t.TempDir()

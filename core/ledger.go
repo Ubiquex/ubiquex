@@ -112,6 +112,18 @@ var (
 	// ErrDuplicateProposal means a proposal with this ID already exists in
 	// the ledger. Ledger entries are immutable once written.
 	ErrDuplicateProposal = errors.New("proposal already exists in ledger")
+
+	// ErrBrokenLedgerHead means Head() resolved a well-formed hash, but no
+	// proposal exists for it -- the ledger's own entry point is dangling,
+	// as opposed to ErrProposalNotFound's broader "some proposal is
+	// missing," which also covers a deeper broken parent link found mid-
+	// history (UBI-64: deleting ledger/ while leaving .ubx/ in place
+	// produces exactly this shape). Distinguished from that broader case
+	// because it's immediately, specifically actionable: there is no
+	// chain to walk at all yet, so Chain's every caller hits this first,
+	// before any "which proposal in the history is bad" question even
+	// applies.
+	ErrBrokenLedgerHead = errors.New("ledger head references a proposal that no longer exists")
 )
 
 // ledgerLockTTL is the TTL a remote LedgerStore's own distributed lock
@@ -234,4 +246,31 @@ func (l *Ledger) Read(id string) (*Proposal, error) {
 		return nil, fmt.Errorf("proposal %s: %w: %v", id, ErrCorruptLedgerEntry, err)
 	}
 	return &p, nil
+}
+
+// brokenHeadDetail builds the UBI-64 teaching diagnostic for a head that
+// resolves to a well-formed hash naming no proposal that actually exists --
+// phrased differently for the git-directory store (which names the exact
+// local file to remove) than for a remote store (no local file exists to
+// point at; the fix, if any, is resetting the store's own head object).
+// suggestVerify is false when this text is embedded inside ubx verify's own
+// output, where telling the user to run verify would be circular.
+func (l *Ledger) brokenHeadDetail(head string, suggestVerify bool) string {
+	short := head
+	if len(short) > 12 {
+		short = short[:12] + "…"
+	}
+	var where, remedy string
+	if l.dir != "" {
+		where = fmt.Sprintf("the ledger head (.ubx/ledger.lock) references proposal %s", short)
+		remedy = "the ledger directory may have been deleted or moved -- if this is intentional (starting fresh), remove .ubx/ledger.lock (or run `ubx init --reset-ledger`); if not, restore the ledger files"
+	} else {
+		where = fmt.Sprintf("the ledger's head object references proposal %s", short)
+		remedy = "the store's proposal objects may have been partially wiped or restored from an incomplete backup -- if this is intentional (starting fresh), reset the store's head; if not, restore the missing proposal objects"
+	}
+	detail := fmt.Sprintf("%s, which does not exist in the ledger store -- %s.", where, remedy)
+	if suggestVerify {
+		detail += " `ubx verify` can assess the damage."
+	}
+	return detail
 }
