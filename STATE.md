@@ -4,6 +4,133 @@
 
 ## Current phase
 
+**UBI-64 (2026-08-01) — broken ledger head: teaching error + sanctioned
+fresh-start path, done in one session per the ticket's own "small
+session" framing. Fully hermetic; no live/real-cloud verification
+needed or attempted (this ticket never touches a provider).**
+
+Founder-test finding: deleting `ledger/` by hand while leaving `.ubx/` in
+place leaves `.ubx/ledger.lock` pointing at a proposal that no longer
+exists -- every fold-touching command (`status`/`scan`/`ship`/`plan`
+short-hash resolution/...) then crashed with the raw, generic
+`chain: proposal <id>: proposal not found in ledger` error. `ubx verify`
+already turned the identical condition into a clean `missing_parent`
+finding (`core/verify.go`'s own dedicated, non-`Chain()`-reusing walk) --
+the gap was everything else, which routes through `Ledger.Chain()`
+instead.
+
+**Fix 1 -- teaching error at the chokepoint, not per call site.** New
+`core.ErrBrokenLedgerHead` sentinel + `Ledger.brokenHeadDetail(head,
+suggestVerify bool)` (`core/ledger.go`), store-aware: names
+`.ubx/ledger.lock` and suggests `ubx init --reset-ledger` for a
+git-directory ledger (`l.dir != ""`); says "the ledger's head object"
+and "reset the store's head" for a remote store, never mentioning a
+local file that doesn't exist there. `Ledger.Chain()` (`core/state.go`)
+detects the specific case -- `Read(head)` failing on the very FIRST
+walk step (`len(reversed)==0`), as opposed to a deeper broken parent
+link found mid-history, which keeps its existing generic wrap -- and
+returns the rich error instead. Every one of `Chain()`'s ~9 existing
+call sites (`Fleet`, `stats`, `FoldState`, `LastObservedHash`,
+`ProposalsForAddress`, `addresses.go`, `resolver/destroys.go` incl. the
+cross-stack `neighbor.Chain()` case, `cli/plan.go`'s
+`resolveAcceptedProposal`) gets this for free -- confirmed by grepping
+every call site first, not assumed.
+
+**Fix 2 -- `ubx verify`'s own finding gets the same rich text, not just
+confirmed as already-clear.** `core.VerifyChain` (`core/verify.go`)
+already produced a `FindingMissingParent` for this exact condition
+(`core/verify_test.go`'s pre-existing `TestVerifyChain_MissingParent`,
+one level removed -- an orphan whose own `Parent` is missing). This
+session's own new `TestVerifyChain_HeadItselfMissing_TeachingDetail`
+covers the zero-levels-removed case (the head itself dangling, this
+ticket's actual shape) and confirms the `Detail` field now carries the
+same `brokenHeadDetail` text (with `suggestVerify=false`, since telling
+a user embedded in `ubx verify`'s own output to run `ubx verify` would
+be circular) instead of the bare wrapped error string every other
+`missing_parent` finding still gets.
+
+**Fix 3 -- `ubx init --reset-ledger`, decided at build per the ticket's
+own "consider... decide at build."** Scoped deliberately narrow:
+git-directory ledgers only, not a remote `LedgerStore` -- a remote store
+is a shared bucket nobody hand-deletes the internals of the way a local
+`.ubx/` invites; its own recovery is restoring missing proposal objects
+from wherever that store's backups live, not a local CLI command (the
+`LedgerStore` interface has no delete-based head-reset primitive either,
+and adding one was judged out of scope for a "small session"). Clears
+exactly two things -- `.ubx/ledger.lock` (the head) and `.ubx/plans/`
+(stale drafts, each pinned to a `parent` the reset is about to make
+stale) -- and deliberately leaves three untouched: `.ubx/salt` (still
+needed to keep any `$redacted` markers in whatever `ledger/proposals`
+files remain on disk meaningful; nothing about a reset needs it gone),
+plus `ledger/proposals`/`ledger/applies` themselves -- real accepted
+history is orphaned (unreachable from a fresh, empty head), never
+deleted, since actually destroying genuine ledger content is a
+materially bigger, different decision than this ticket's own "start
+fresh" need. Refuses on a **healthy** ledger (head resolves to a real,
+readable proposal) unless `--force` is also given, reusing `--force`'s
+existing "overwrite an existing config" semantics rather than adding a
+second flag for the same "you're sure, proceed anyway" meaning --
+prevents an accidental `--reset-ledger` from silently orphaning real
+history. `runResetLedger` (`cli/init.go`) is an early-return branch in
+`newInitCmd`'s `RunE`, entirely bypassing the config-writing logic when
+given.
+
+**Hermetic tests, all four named rows plus the CLI-level integration
+the ticket didn't name but the fix touches:**
+- `core/ledger_test.go`:
+  `TestLedger_Chain_HeadPointsToMissingProposal_TeachingError` --
+  head->missing proposal at the `Ledger.Chain()` chokepoint (git store).
+- `core/verify_test.go`:
+  `TestVerifyChain_HeadItselfMissing_TeachingDetail` -- the same
+  condition at the `VerifyChain` level, proving the richer `Detail`.
+- `ledgerstore/store_test.go`:
+  `TestStore_HeadResolvesButProposalMissing_TeachingError` -- the
+  remote-store mirror (a well-formed `heads/genesis` edge naming a
+  proposal object that was never written), proving the phrasing split
+  (no "ledger.lock" text, "head object" text instead) and that
+  `Chain()`/`VerifyChain` both work identically against a `LedgerStore`
+  that isn't the git-directory implementation.
+- `cli/resetledger_test.go` (new file), five tests:
+  `TestInit_ResetLedger_HeadPointsToMissingProposal_GitStore` (the full
+  loop: dangling head -> `status` teaching error -> `verify` finding ->
+  `init --reset-ledger` -> both clean afterward),
+  `TestInit_ResetLedger_RefusesHealthyLedgerWithoutForce` (+ `--force`
+  override), `TestInit_ResetLedger_StalePlansCleared` (the "stale plans
+  referencing a wiped ledger" row -- proves the file is actually removed
+  AND that a later `ubx ship` on the cleared hash fails clean, never a
+  crash), `TestInit_ResetLedger_SaltSurvives` (the "salt-only survival"
+  row -- byte-identical salt content across a reset), and
+  `TestVerify_RemoteStore_HeadResolvesButProposalMissing` (the same
+  full-loop proof, remote store, via the existing `remoteStoreFixture`/
+  `remoteConfigDir` memblob test seam).
+
+**Verified against the real built binary, not just `go test`** (still
+zero live/cloud risk -- this is pure ledger/filesystem manipulation, no
+provider involved at any point): manually reproduced the dangling-head
+scenario, real `ubx status`/`ubx verify` output confirmed matching the
+teaching text exactly, real `ubx init --reset-ledger` confirmed clearing
+`.ubx/ledger.lock` and leaving a genesis ledger `ubx verify` reports
+intact; separately confirmed the healthy-ledger refusal and its
+`--force` override against a real `ubx accept`-built chain. Transcripts
+from these same manual runs became the docs examples below, not
+separately hand-typed.
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `go test
+./... -count=1`).
+
+**Docs (ubiquex-docs), same session, per CLAUDE.md's "user-visible
+changes update ubiquex-docs in the SAME session" rule** -- `--reset-ledger`
+is a new, user-visible flag: `cli/init.mdx` (flags table + new
+"`--reset-ledger`: recovering a broken ledger head" section, real
+transcripts re-captured against the rebuilt binary, both the recovery
+path and the healthy-ledger refusal), `cli/verify.mdx` (new "a broken
+ledger head" example showing the richer `missing_parent` detail,
+cross-linked to `ubx init --reset-ledger`), both pages' "Related"
+sections cross-linked to each other. `mint validate`/`mint broken-links`
+clean. Committed and pushed (`1a8b92e`).
+
+## Current phase (previous)
+
 **UBI-63 session 6 (2026-08-01) — same-batch-dependent destroy fix,
 applied directly per the founder's own exact diagnosis (not re-derived
 this session), hermetically proven at 3- and 5-resource scale, then
@@ -10272,6 +10399,14 @@ forgotten, not because anything is blocked on it.
    `ParseSource` would parse one. See prior entries for full detail.
 
 ## Docs debt
+
+**UBI-64's ubiquex-docs work was done in this same session, per
+protocol**: `cli/init.mdx` (flags table + new "--reset-ledger:
+recovering a broken ledger head" section) and `cli/verify.mdx` (new "a
+broken ledger head" example), both cross-linked, transcripts
+re-captured against the rebuilt binary. `mint validate`/`mint
+broken-links` both pass clean. See ubiquex-docs' own STATE.md for the
+full writeup. No debt carried.
 
 **UBI-21's ubiquex-docs work was done in this same session, per protocol,
 both stages**: `getting-started/installation.mdx` mentions `--source
