@@ -4,6 +4,170 @@
 
 ## Current phase
 
+**UBI-93 (2026-08-02, P1) — UBI-92's own diagnosis was wrong: the retry
+fix is real and worth keeping, but the true root cause of BOTH live
+repros was a permanent identity mismatch, never eventual consistency.
+Plus: retry false economy fixed, and a real (non-lock) output-corruption
+bug confirmed and fixed.**
+
+Founder found live a SECOND time (`ubx-playground-15`, a fresh
+5-resource `platform.d2` stack): the same `AttachRolePolicy` 404
+NoSuchEntity UBI-92 (previous session) diagnosed and "fixed" — except
+this time the retry fired correctly (narrated "dependency just shipped
+-- retrying... attempt 10/10") and still exhausted its full ~64s budget.
+Direct `aws iam get-role --role-name ci-runner-v15` confirms: the role
+GENUINELY DOES NOT EXIST under that name.
+
+**Root cause, confirmed via the exact CloudTrail check UBI-92 skipped
+(`aws cloudtrail lookup-events`, run in `us-east-1` — IAM is global, its
+events land there regardless of the stack's configured region):**
+`CreateRole` WAS called and succeeded — `requestParameters.roleName` /
+`responseElements.role.roleName` both show `"terraform-c6f2a8e7195d77006645ad7d4f"`,
+never `"ci-runner-v15"`. `aws_iam_role.name` is Optional (not Required)
+on the real `hashicorp/aws` schema, so UBI-91's own `ubx_required`
+scope-discipline check REFUSES `ubx_required.name` on this type
+outright ("not a required attribute") — there is no sanctioned way to
+set it from a diagram. Left unset, AWS auto-generates a `terraform-<hash>`
+name, unknowable at diagram-authoring time. The diagram's `attach`
+resource then references the role via `ubx_required.role:
+"ci-runner-v15"` — a plain LITERAL string (UBI-91's own design: read
+verbatim from the diagram label, zero `$ref`/`$computed` reference
+resolution) — which can never match. Re-checked `ubx-playground-14`'s
+own original ledger (UBI-92's repro, still on disk): IDENTICAL shape —
+role shipped as `terraform-ac5c5dc9d67cfff9ac3478a4e7`, `attach`
+referenced literal `"ci-runner-v14"`. **UBI-92's own "AWS IAM's own
+well-documented eventual-consistency lag... is the real mechanism"
+claim was never actually verified against CloudTrail and was wrong on
+both live incidents** — this was always a permanent identity mismatch,
+not lag. `docs/executor.md`'s own new "Amendment (2026-08-02, UBI-93)"
+section has the full mechanism, both fixes, and the isolation tests
+proving `ubx_required`'s JSON block-string encoding is NOT implicated
+(a plain scalar literal reproduces the identical failure with zero
+JSON involved).
+
+**Fix 1 (retry false economy, `core/executor/ship.go`)**:
+`noProgressBailoutThreshold` (10s) stops
+`retryCreateOnDependencyNotVisible`'s own loop once elapsed backoff time
+clearly exceeds realistic propagation lag with zero change in outcome,
+returning an honest `"...does not appear to exist and may never have
+been created..."` terminal error (wrapping the original diagnostic, not
+discarding it) instead of grinding out the full ~64s budget. Real-wire
+timing confirmed: ~19s now, not ~64s
+(`cli/ship_create_dependency_retry_test.go`, `UBX_TEST_SLOW=1`).
+
+**Fix 2 (output corruption)**: the ticket's own hypothesis was a missing
+lock. Investigated directly — a `-race` stress test (dozens of
+concurrently-erroring/ticking resources) came back CLEAN, `mu` already
+serializes every write correctly. A real `pty` repro (Python `pty` +
+`pyte`, a real ANSI terminal emulator, replaying captured raw bytes)
+found the ACTUAL mechanism instead: a row's own content (a long
+provider diagnostic, now even longer with Fix 1's own more-verbose
+message) wider than the terminal's real column count WRAPS onto a
+second physical row, silently breaking `newProgressPrinter`'s own
+"one `updateRow` call = one physical row" invariant every existing-row
+redraw's cursor-relative math depends on — the NEXT redraw's own "up N"
+distance undercounts, lands on the wrapped continuation instead of the
+intended row, and leaves orphaned garbled text behind. Reproduced the
+EXACT live shape hermetically before fixing (a real pty, an 8-line
+terminal, 27 resources, one retrying) — confirmed clean after. Fixed at
+the source (`cli/ship.go`, `cli/style.go`): `terminalWidth` (new,
+`golang.org/x/term.GetSize`) threads the terminal's real column count
+into `newProgressPrinter`; `renderContent` truncates any row's own free
+text (rune-safe, never splits UTF-8 or an ANSI escape) to fit a single
+physical row. Non-TTY output was never affected (no cursor math there at
+all). The full untruncated message is never lost -- still in the
+ledger, always visible via `ubx why`.
+
+**Deeper root cause, flagged, NOT fixed this session (explicit scope
+discipline — the ticket asked for a confirmed diagnosis plus the two
+fixes above, not a `ubx_required` redesign)**: there is currently no
+sanctioned way, from a diagram, to correctly reference a sibling
+resource's real assigned identity when that identity comes from an
+Optional attribute the sibling never set. `ubx_required` correctly
+refuses to let you set Optional attributes (UBI-91's own discipline,
+correct on its own terms) — but the resource that NEEDS to reference
+that identity (`aws_iam_role_policy_attachment.role`/`.policy_arn`, both
+genuinely Required) has no `$ref`-equivalent within `ubx_required` to
+point at "whatever name the sibling ends up getting." This has now
+caused two separate live incidents on the identical
+`aws_iam_role`/`aws_iam_policy` → `aws_iam_role_policy_attachment`
+shape. **Filed as UBI-94** ("Diagram medium: ubx_required has no
+reference-resolution mechanism for sibling identities that come from
+Optional attributes") — verified against the board at filing time, per
+this project's own "never infer an issue ID" rule.
+
+**Hermetic** (full mechanism list in `docs/executor.md`'s own amendment):
+`core/executor/create_dependency_retry_test.go`'s new
+`TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly`;
+`cli/ship_create_dependency_retry_test.go`'s existing budget-exhausted
+test updated for the new ~19s timing and honest wording;
+`cli/diagram_ubx_required_reference_test.go` (new): JSON block-string
+round-trip proof + literal-value-mismatch reproduction, both through the
+real diagram → `ubx_required` → fakeprovider wire protocol;
+`cli/progress_ticker_test.go`'s new
+`TestNewProgressPrinter_LongErrorText_TruncatedToOneRow_NeverWraps`
+(confirmed to fail without the fix — a temporarily neutralized
+`maxRowTextWidth` reproduced a 359-rune overflow — pass with it).
+
+**Verification**: `go test ./...` (whole repo, default) green. `UBX_TEST_SLOW=1
+go test ./cli/... ./core/executor/...` green (~19s tests included).
+`UBX_TEST_SLOW=1 go test ./...` (whole repo): same pre-existing
+`intentprovider/claude` live-API environmental failure UBI-92 already
+documented (real network/credential, unrelated to this session's diff),
+otherwise green. `gofmt -l .` clean.
+
+**Live recovery** (`ubx-playground-15`, real AWS, `.ubx` config at
+`~/ubx-playground-15`): unlike UBI-92, this is NOT "rebuild and reship
+the same config" — the config itself is wrong and retrying it, honest
+bailout or not, will never succeed. Role/policy/repo/queue are already
+shipped and correct; `attach` needs its own `ubx_required.role`/
+`ubx_required.policy_arn` corrected to the REAL, already-confirmed
+identities (`aws iam get-role`/`get-policy` re-confirmed both still
+live at session's end):
+
+```
+attach: "attach" {
+  class: aws_iam_role_policy_attachment
+  ubx_required.role: "terraform-c6f2a8e7195d77006645ad7d4f"
+  ubx_required.policy_arn: "arn:aws:iam::839333509514:policy/terraform-92d4cfb3751334bdee2d20daba"
+}
+```
+
+Then, once `make install` has rebuilt and `ubx version` confirms this
+session's own commit (not `8bfbd63`):
+
+```
+cd ~/ubx-playground-15
+ubx plan --from-diagram platform.d2 --stack ubx-playground-15
+ubx ship <the hash plan prints>
+```
+
+Only `attach` will actually apply (the other four are already-shipped,
+idempotent no-ops). Not run by this session — the founder's own next
+action, per CLAUDE.md's standing rule against the agent ever running
+`ubx ship` against real AWS.
+
+**Docs**: `docs/executor.md` gets the full "Amendment (2026-08-02,
+UBI-93)" section (corrects UBI-92's own record rather than silently
+leaving it wrong). `ubiquex-docs/cli/ship.mdx`'s own "A dependent create
+outrunning its own dependency's visibility" section (added last session,
+UBI-92) had a now-stale closing claim ("fails terminally... after the
+full retry budget") — updated with a real transcript (captured against
+this session's own locally-built `./ubx`/`./fakeprovider`, not
+hand-written) of the new ~19s honest-bailout behavior; `mint
+validate`/`mint broken-links` both clean; committed and pushed
+(`240ae3d`). The output-corruption fix has no user-visible behavior
+worth documenting beyond "long error lines no longer corrupt the
+terminal" (an invisible-when-working bug fix, not a new behavior to
+teach) — judged out of scope for a docs addition, flagged here rather
+than silently assumed.
+
+**Next**: UBI-94 (the `ubx_required` reference-resolution gap, above) is
+open for a future session. Founder's own live recovery command (above)
+is the only other open item.
+
+## Current phase (previous)
+
 **UBI-92 (2026-08-02) — AWS IAM eventual-consistency: create-side retry, the
 mirror image of destroy's own post-destroy read-back (UBI-42/44).**
 

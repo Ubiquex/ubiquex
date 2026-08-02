@@ -2297,6 +2297,184 @@ real AWS): see STATE.md for the founder's own exact recovery command and
 outcome — this document records the mechanism, not the one-off incident
 resolution.
 
+## Amendment (2026-08-02, UBI-93): the UBI-92 retry was treating a symptom — the real mechanism was never eventual consistency at all
+
+**This corrects UBI-92's own diagnosis above**, not just extends it. UBI-92
+asserted "AWS IAM's own well-documented eventual-consistency lag... is the
+real mechanism" — that claim was never actually verified against a real
+`CreateRole` request/response (CloudTrail), only inferred from the error
+SHAPE (a `404 NoSuchEntity` immediately after a same-batch dependency
+shipped). UBI-93 (`ubx-playground-15`, a second live repro of the
+identical symptom) demanded the CloudTrail check UBI-92 skipped, and it
+falsified the original diagnosis outright.
+
+**Confirmed mechanism, CloudTrail event body, not a theory:**
+`ubx-playground-15`'s `aws_iam_role.ci-runner-v15` — authored via a
+diagram with `ubx_required.assume_role_policy` set, but NO
+`ubx_required.name` — shipped successfully. `aws iam get-role
+--role-name ci-runner-v15` returns `NoSuchEntity` even after the retry
+budget fully exhausts, exactly like UBI-92's own original repro.
+`aws cloudtrail lookup-events --lookup-attributes
+AttributeKey=EventName,AttributeValue=CreateRole` (run in `us-east-1` —
+IAM is a global service, CloudTrail records its events there regardless
+of the stack's own configured region) shows the REAL request:
+
+```
+requestParameters.roleName: "terraform-c6f2a8e7195d77006645ad7d4f"
+responseElements.role.roleName: "terraform-c6f2a8e7195d77006645ad7d4f"
+```
+
+`CreateRole` was called and succeeded cleanly — but under a
+provider-auto-generated name, never `ci-runner-v15`. Because
+`aws_iam_role.name` is Optional (not Required) on the real
+`hashicorp/aws` schema, `ubx_required`'s own scope-discipline check
+(UBI-91: "an attribute is not required... use --from-doc or an SDK
+program") REFUSES `ubx_required.name` on this type outright — there is
+no sanctioned way to set it from a diagram at all. Terraform/AWS's own
+established behavior for an omitted `name`/`name_prefix` is to
+auto-generate one (`terraform-<hash>`), unknown to ubx or the diagram
+author at authoring time. The diagram's own `attach` resource then
+references the role via `ubx_required.role: "ci-runner-v15"` — a plain
+LITERAL string (UBI-91's own design: read verbatim from the diagram
+label, zero `$ref`/`$computed` reference resolution) — which can never
+match the real, only-known-after-creation name. Re-checking
+`ubx-playground-14`'s own original ledger (UBI-92's repro) confirms the
+IDENTICAL shape: `aws_iam_role.ci-runner-v14` shipped as
+`terraform-ac5c5dc9d67cfff9ac3478a4e7`, `attach` referenced literal
+`"ci-runner-v14"`. **UBI-92's diagnosis was wrong on both live
+incidents** — this was never propagation lag, it was a permanent
+identity mismatch that would fail identically no matter how long
+anything waited.
+
+`retryCreateOnDependencyNotVisible`'s own narrow-scope guard
+(`hasShippedDependency`) checks only whether the FAILING create's
+`dependsOn` includes an address that shipped — never whether the
+not-found diagnostic's own named identity actually matches that shipped
+dependency's real assigned name/id. A topology edge (`attach -> role`)
+satisfies this regardless of whether the actual reference used
+literal-value guesswork or a real `$computed` substitution, so the retry
+fired — correctly, per its own narrow contract — against a resource that
+would never, ever become visible.
+
+**The retry mechanism itself is still real and worth keeping** (defense
+in depth for genuine propagation lag, which does exist as a documented
+AWS behavior) — the bug is that it had no way to distinguish "still
+propagating" from "permanently misnamed," and paid the full ~64s budget
+finding out empirically either way.
+
+**Fix 1 — honest fast failure** (`core/executor/ship.go`):
+`noProgressBailoutThreshold` (10s, a package var so tests can shrink it)
+bounds `retryCreateOnDependencyNotVisible`'s own loop — once cumulative
+elapsed backoff time reaches it with every attempt still returning the
+IDENTICAL not-found shape (zero progress, not slow progress — real AWS
+IAM propagation lag resolves in low single-digit seconds per its own
+documentation), the loop stops and returns an honest `*TerminalError`:
+"`<elapsed>` of retrying produced zero change in outcome... this does not
+appear to exist and may never have been created under the identity
+referenced; verify the reference actually matches the shipped
+dependency's real assigned name/id, not an assumed one" — wrapping the
+original provider diagnostic (`%w`), never discarding it. Against the
+real, unshrunk `eventualConsistencyBackoffSchedule`, this bails after
+~18.75s (7 of the 10 steps) instead of the full ~63.75s.
+
+**Fix 2 — output corruption, confirmed mechanism**: the ticket's own
+hypothesis was "a missing lock/serialization point between error-line
+emission and scheduled redraws" — investigated directly (a `-race`
+stress test spawning dozens of concurrently-erroring/ticking resources
+against the printer's real callback) and found CLEAN: `mu` already
+serializes every write correctly; this was never a race. A real `pty`
+repro (Python `pty` + a captured raw byte transcript replayed through a
+real ANSI terminal emulator, `pyte`) isolated the actual mechanism: a
+row's own content (most commonly a real provider's own diagnostic error
+text — now even longer with Fix 1's own more-verbose honest message)
+longer than the terminal's real column width WRAPS onto a second
+physical terminal row. Every row-tracking invariant `newProgressPrinter`
+depends on (`cursorRow`/`rowOf`, the "cursor up N / redraw / cursor down
+N" math every existing-row redraw uses, UBI-83) assumes one `updateRow`
+call consumes exactly ONE physical row — a wrapped line silently breaks
+that: `cursorRow` under-counts the true number of physical rows just
+consumed, so the NEXT row's own redraw computes the wrong "up N"
+distance and lands on the WRAPPED CONTINUATION of the previous line
+instead of the row it means to redraw, clearing and overwriting only
+PART of it and leaving the rest behind as orphaned, garbled leftover
+text — exactly the "error text and the following line's content
+interleaved mid-word" shape from the live transcript.
+
+Fixed at the source (`cli/ship.go`, `cli/style.go`): `terminalWidth`
+(new, `golang.org/x/term.GetSize`, the same real ioctl mechanism
+`isTerminal` already uses for `IsTerminal`) is threaded into
+`newProgressPrinter` as a new `termWidth int` parameter. `renderContent`
+now truncates any row's own free text (`truncateForRow`, rune-based —
+never splits a multi-byte UTF-8 character or an ANSI escape sequence,
+since it always runs on plain text BEFORE `st.*` color-wraps it) to fit
+within a single physical row, computed against the real detected width
+minus the row's own fixed overhead (glyph, padded address prefix,
+elapsed column). `termWidth <= 0` (undeterminable — every hermetic
+test's `bytes.Buffer`, or any non-`*os.File` writer) disables truncation
+entirely, matching prior behavior; non-TTY output was never affected in
+the first place (`updateRow`'s own `!tty` branch is a plain sequential
+append with no cursor math depending on row count at all). The full,
+untruncated message is never lost — it's already durably recorded in the
+ledger (`core.ResourceApply.Errors`/`Reconciliation`) and always
+available via `ubx why`; this only bounds what the LIVE ticking display
+shows.
+
+**Also confirmed NOT the cause, isolated directly (the ticket's own item
+3 request)**: `ubx_required`'s `|md ... |` JSON block-string encoding.
+A real diagram-authored `ubx_required` value written as a JSON
+block-string round-trips byte-for-byte to a real fakeprovider
+`ApplyResourceChange` call
+(`cli/diagram_ubx_required_reference_test.go`'s
+`TestPlanShip_FromDiagram_UbxRequired_JSONBlockStringValue_RoundTripsVerbatim_UBI93`)
+— matching what the real playground-14/15 CloudTrail events already
+showed independently (the real `assumeRolePolicyDocument` request field
+carried the exact JSON the diagram authored, no corruption). A
+companion test
+(`TestPlanShip_FromDiagram_UbxRequired_LiteralValueMismatch_NeverResolves_UBI93`)
+reproduces the identical retry-then-honest-bailout shape using a PLAIN
+scalar literal — zero JSON involved — proving the failure is about
+`ubx_required`'s own literal-value, zero-reference-resolution design
+(UBI-91), never about block-string encoding specifically.
+
+**Deeper root cause, flagged, NOT fixed this session (scope discipline —
+the ticket asked for retry-economy + output-corruption fixes and a
+confirmed diagnosis, not a `ubx_required` redesign):** there is currently
+NO sanctioned way, from a diagram, to correctly reference a sibling
+resource's real assigned identity when that identity comes from an
+Optional (not Required) attribute the sibling never set — `ubx_required`
+refuses to let you set it (out of scope, UBI-91's own discipline, correct
+on its own terms), and the referencing resource's own `ubx_required.<ref
+attr>` has no way to point at "whatever name/ARN the sibling ends up
+getting" the way a real `$ref`/`$computed` substitution would. This is a
+real, load-bearing gap in the diagram medium specifically for exactly the
+`aws_iam_role`/`aws_iam_policy` → `aws_iam_role_policy_attachment` shape
+that has now caused two separate live incidents. Tracked as UBI-94
+rather than redesigned here.
+
+**Hermetic**: `core/executor/create_dependency_retry_test.go`'s new
+`TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly`
+(shrunk schedule AND shrunk threshold, proves the bailout fires before
+the full budget, with the honest wording). `cli/ship_create_dependency_retry_test.go`'s
+existing budget-exhausted real-wire-protocol test updated (now ~19s, not
+~64s) and asserts the new honest wording too.
+`cli/diagram_ubx_required_reference_test.go` (new): the two isolation
+tests above, both through the real diagram → `ubx_required` → fakeprovider
+wire-protocol pipeline. `cli/progress_ticker_test.go`'s new
+`TestNewProgressPrinter_LongErrorText_TruncatedToOneRow_NeverWraps`
+reproduces the exact corruption shape (a resource with an existing row
+from an earlier retry, then a long error, then its own "failed"
+transition) and asserts no rendered row segment ever exceeds the
+terminal's own width — confirmed to fail without the fix (a temporarily
+neutralized `maxRowTextWidth` reproduces a 359-rune overflow), pass with
+it.
+
+**Live recovery**: see STATE.md for the founder's own exact recovery
+command for `ubx-playground-15` and the honest caveat that the
+UNDERLYING config (the diagram's own `attach -> role`/`attach -> policy`
+literal references) needs correcting by hand first — no amount of
+`ubx ship` retrying, honest-bailout or not, can make a permanently
+mismatched literal reference resolve.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**

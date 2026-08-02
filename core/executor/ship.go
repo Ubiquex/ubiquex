@@ -249,6 +249,26 @@ var (
 	maxApplyAttemptsPerResource = 3
 )
 
+// noProgressBailoutThreshold (UBI-93) bounds how long
+// retryCreateOnDependencyNotVisible keeps paying eventualConsistencyBackoffSchedule's
+// own escalating waits against an IDENTICAL not-found diagnostic before
+// concluding this isn't propagation lag at all. Real AWS IAM propagation
+// lag resolves in low single-digit seconds (eventualConsistencyBackoffSchedule's
+// own ~64s total is a safety margin for the slow tail, not the common
+// case). A live repro (UBI-93, playground-15) ground out the FULL budget
+// (~64s, all 10 attempts) against a role that had genuinely never been
+// created under the identity this create referenced -- confirmed via
+// CloudTrail: CreateRole succeeded, but under a provider-auto-generated
+// name, because the referencing resource's own ubx_required value was a
+// literal string that never matched it (docs/executor.md's UBI-93
+// amendment has the full mechanism). No amount of waiting fixes a
+// permanent identity mismatch, so past this threshold, with zero
+// attempts having done anything but repeat the same failure, ubx stops
+// spending the user's time and reports an honest "this does not appear
+// to exist" instead. A package var, not a constant, so tests can shrink
+// it the same way eventualConsistencyBackoffSchedule already is.
+var noProgressBailoutThreshold = 10 * time.Second
+
 // debugDelayAfterInFlight/debugDelayAfterApplySuccess, when non-zero, sleep
 // for that long at two distinct points bracketing the one risky call this
 // whole package exists to make safe: immediately after in_flight is
@@ -1747,6 +1767,7 @@ func retryCreateOnDependencyNotVisible(ctx context.Context, app Applier, addr co
 	})
 
 	lastErr := error(terminal)
+	var elapsed time.Duration
 	for attempt := 0; attempt < len(eventualConsistencyBackoffSchedule); attempt++ {
 		emitProgress(ctx, ProgressEvent{
 			Address: addr.String(), Kind: "reconcile_attempt",
@@ -1754,6 +1775,7 @@ func retryCreateOnDependencyNotVisible(ctx context.Context, app Applier, addr co
 			Detail: "dependency just shipped -- retrying to allow for provider propagation lag",
 		})
 		time.Sleep(eventualConsistencyBackoffSchedule[attempt])
+		elapsed += eventualConsistencyBackoffSchedule[attempt]
 
 		res, lu, applyErr := app.ApplyResourceChange(ctx, resourceSchema, typeName, json.RawMessage("null"), plannedState, nil)
 		if applyErr == nil {
@@ -1771,6 +1793,22 @@ func retryCreateOnDependencyNotVisible(ctx context.Context, app Applier, addr co
 			})
 			return nil, nil, lastErr
 		}
+
+		// UBI-93: elapsed already clearly exceeds realistic propagation
+		// lag (noProgressBailoutThreshold's own doc comment) and every
+		// attempt so far has produced the IDENTICAL not-found shape --
+		// zero progress, not slow progress. Grinding out the remaining
+		// budget only delays an honest answer; stop here instead.
+		if elapsed >= noProgressBailoutThreshold {
+			honest := &TerminalError{Err: fmt.Errorf(
+				"%s of retrying produced zero change in outcome (real provider propagation lag resolves in low single-digit seconds) -- this does not appear to exist and may never have been created under the identity referenced; verify the reference actually matches the shipped dependency's real assigned name/id, not an assumed one: %w",
+				elapsed.Round(time.Millisecond), t)}
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "inconclusive", Detail: fmt.Sprintf("giving up early after %s with zero progress -- this doesn't look like propagation lag: %s", elapsed.Round(time.Millisecond), t.Error())})
+			})
+			return nil, nil, honest
+		}
+
 		rcd.mutate(ra, func(ra *core.ResourceApply) {
 			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "inconclusive", Detail: t.Error()})
 		})

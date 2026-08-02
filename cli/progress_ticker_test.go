@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ import (
 // own internal ticker is what's under test, not the executor around it.
 func TestNewProgressPrinter_TicksDuringLongShippingWait(t *testing.T) {
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&buf, plainStyler(), true, nil)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 0, nil)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
 
@@ -62,7 +63,7 @@ func TestNewProgressPrinter_TicksDuringLongShippingWait(t *testing.T) {
 // eventual terminal transition.
 func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&buf, plainStyler(), false, nil)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), false, 0, nil)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
 
@@ -96,7 +97,7 @@ func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 // an actual count of 5+ and fail loudly.
 func TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick(t *testing.T) {
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&buf, plainStyler(), true, nil)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 0, nil)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
 	time.Sleep(5*tickInterval + 300*time.Millisecond)
@@ -138,7 +139,7 @@ func TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick(t *testing.T) 
 func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testing.T) {
 	var mu sync.Mutex
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&safeWriter{mu: &mu, w: &buf}, plainStyler(), true, nil)
+	printer, finish := newProgressPrinter(&safeWriter{mu: &mu, w: &buf}, plainStyler(), true, 0, nil)
 
 	addrA, addrB := "fake_widget.a", "fake_widget.b"
 
@@ -201,7 +202,7 @@ func TestNewProgressPrinter_UBI84_NoBlankLinesColumnsAligned(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&buf, plainStyler(), true, kinds)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 0, kinds)
 	for _, a := range addrs {
 		printer(executor.ProgressEvent{Address: a, Kind: "transition", State: "applied"})
 	}
@@ -234,6 +235,87 @@ func TestNewProgressPrinter_UBI84_NoBlankLinesColumnsAligned(t *testing.T) {
 		} else if idx != wantColon {
 			t.Fatalf("UBI-84: expected every row's \": \" column to align at rune index %d (set by the longest address), line %d has it at %d instead:\n%q", wantColon, i, idx, out)
 		}
+	}
+}
+
+// ansiEscapeRE strips ANSI escape codes so a captured progress-printer
+// transcript can be measured for its own real VISIBLE width -- the same
+// stripping a real terminal effectively does before deciding whether a
+// row wraps.
+var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+
+// TestNewProgressPrinter_LongErrorText_TruncatedToOneRow_NeverWraps is
+// UBI-93's own regression test for a REAL, confirmed corruption
+// mechanism -- NOT a locking/race issue (mu already serializes every
+// write correctly, confirmed both via `go test -race` under heavy
+// concurrent contention and via a real pty repro in this session's own
+// investigation). A long piece of row content (most commonly a real
+// provider's own diagnostic error text -- exactly what a live incident's
+// own transcript showed, playground-15) wrapping past the terminal's
+// real column width silently breaks EVERY row-tracking invariant this
+// printer's own in-place-redraw mechanism depends on (cursorRow/rowOf,
+// the "cursor up N / redraw / cursor down N" math): cursorRow undercounts
+// the true number of physical rows the wrapped content actually consumed,
+// so the NEXT row's own redraw computes the wrong "up N" distance and
+// lands on the WRAPPED CONTINUATION of the previous line instead of the
+// row it means to redraw -- clearing and overwriting only PART of it,
+// leaving the rest behind as orphaned, garbled leftover text. Reproduces
+// the exact shape hermetically: a resource with an EXISTING row (from an
+// earlier reconcile_attempt, exactly like the live incident's own
+// "attach" resource, which had already been retrying) gets a long error
+// followed by its own "failed" transition -- the transition's own redraw
+// must land cleanly on ITS row, never smeared across the error's own
+// wrapped continuation.
+func TestNewProgressPrinter_LongErrorText_TruncatedToOneRow_NeverWraps(t *testing.T) {
+	const termWidth = 80
+	kinds := map[string]resourceOpKind{"stack.type.victim": opCreate}
+
+	var buf bytes.Buffer
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, termWidth, kinds)
+
+	// An existing row for "victim" (a retry attempt, same as the live
+	// incident's own "attach" resource mid-retry) BEFORE the long error --
+	// this is what puts the SUBSEQUENT "failed" redraw on the
+	// existing-row (cursor-relative) code path, not the simpler
+	// append-a-new-row path.
+	printer(executor.ProgressEvent{Address: "stack.type.victim", Kind: "reconcile_attempt", Detail: "dependency just shipped -- retrying", Attempt: 1, Total: 10})
+
+	longError := "provider returned 1 diagnostic error(s): attaching IAM Policy (arn:aws:iam::839333509514:policy/ci-runner-access-v99) to IAM Role (ci-runner-v99): operation error IAM: AttachRolePolicy, https response error StatusCode: 404, RequestID: 21ce2308-6459-4949-b621-d50c71c8892e, NoSuchEntity: The role with name ci-runner-v99 cannot be found."
+	if len(longError) <= termWidth {
+		t.Fatalf("test setup bug: longError (%d chars) must exceed termWidth (%d) to exercise truncation at all", len(longError), termWidth)
+	}
+	printer(executor.ProgressEvent{Address: "stack.type.victim", Kind: "error", Detail: longError})
+	printer(executor.ProgressEvent{Address: "stack.type.victim", Kind: "transition", State: "failed"})
+	finish()
+
+	out := buf.String()
+	stripped := ansiEscapeRE.ReplaceAllString(out, "")
+
+	// The load-bearing assertion: no row this printer ever wrote (split
+	// on \r/\n, the two markers this printer's own row-tracking uses --
+	// see updateRow) is wider than the terminal itself. If ANY segment
+	// exceeds termWidth, a real terminal would wrap it, and this whole
+	// class of bug reproduces again.
+	for _, seg := range strings.FieldsFunc(stripped, func(r rune) bool { return r == '\r' || r == '\n' }) {
+		if n := len([]rune(seg)); n > termWidth {
+			t.Fatalf("row segment is %d runes wide, exceeds the %d-column terminal -- this WILL wrap on a real terminal and break the redraw math (UBI-93): %q", n, termWidth, seg)
+		}
+	}
+
+	// The error's own long text must have been truncated (not silently
+	// dropped -- the prefix is still there, ending in the truncation
+	// marker) rather than either wrapping OR vanishing entirely.
+	if !strings.Contains(stripped, "provider returned 1 diagnostic error") {
+		t.Fatalf("expected the truncated error's own recognizable prefix to still be present, got:\n%s", stripped)
+	}
+	if !strings.Contains(stripped, "…") {
+		t.Fatalf("expected a truncation marker (…) somewhere in the output, got:\n%s", stripped)
+	}
+
+	// The resource's own final "failed" row must render cleanly -- never
+	// smeared across the error's own (now-truncated, single-row) content.
+	if !strings.Contains(stripped, "failed") {
+		t.Fatalf("expected a clean \"failed\" transition row, got:\n%s", stripped)
 	}
 }
 

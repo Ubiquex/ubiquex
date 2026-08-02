@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +272,92 @@ func TestShip_CreateFailsNotFound_DifferentErrorSurfacesOnRetry_StopsEarly(t *te
 	// genuinely-different failure -- never retried further.
 	if len(attach.Reconciliation) != 2 {
 		t.Fatalf("reconciliation = %+v, want exactly 2 entries (the not-found retry, then the early stop)", attach.Reconciliation)
+	}
+}
+
+// TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly
+// is UBI-93's own hermetic repro of the founder's live finding
+// (playground-15): a same-batch dependency that NEVER becomes visible --
+// not because it's slow, but because it was created under a different
+// identity than the one this create referenced (confirmed live via
+// CloudTrail: CreateRole succeeded under a provider-auto-generated name,
+// never the name ubx_required's literal value assumed -- docs/executor.md's
+// UBI-93 amendment) -- must not grind out the full retry budget. Once
+// elapsed retry time clearly exceeds noProgressBailoutThreshold with every
+// attempt returning the IDENTICAL not-found shape (zero progress, not slow
+// progress), ubx gives up early with an honest "does not appear to exist"
+// message instead of spending the user's time on the remaining budget.
+func TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+	origSchedule := eventualConsistencyBackoffSchedule
+	origThreshold := noProgressBailoutThreshold
+	// A schedule long enough to have entries both before and after the
+	// threshold -- proves this bails EARLY (fewer reconciliation entries
+	// than the full schedule), not just eventually.
+	eventualConsistencyBackoffSchedule = []time.Duration{
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+		time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+	}
+	noProgressBailoutThreshold = 4 * time.Millisecond
+	t.Cleanup(func() {
+		eventualConsistencyBackoffSchedule = origSchedule
+		noProgressBailoutThreshold = origThreshold
+	})
+
+	roleAddr := core.Address{Stack: "playground", Type: "fake_widget", Name: "role"}
+	attachAddr := core.Address{Stack: "playground", Type: "fake_attachment", Name: "attach"}
+
+	notFoundErr := &TerminalError{Err: errors.New("NoSuchEntity: The role with name ci-runner-v15 cannot be found")}
+	// Enough scripted failures to cover the whole schedule -- if the
+	// bailout doesn't fire, the test would exhaust fake's own script
+	// queue and fail loudly rather than silently passing.
+	for i := 0; i < len(eventualConsistencyBackoffSchedule); i++ {
+		fake.scriptCreateFailure("attach", notFoundErr)
+	}
+
+	roleCreate := changeCreateJSON(t, roleAddr, `{"name":"role","attachment_count":0}`)
+	attachCreate := changeCreateJSON(t, attachAddr,
+		`{"value":"attach","role_id":{"$computed":{"from":"playground.fake_widget.role.id"}}}`,
+		roleAddr.String())
+
+	p := acceptChange(t, l, "playground", []json.RawMessage{roleCreate, attachCreate})
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	var attach *core.ResourceApply
+	for i := range sealed.Resources {
+		if sealed.Resources[i].Address == attachAddr {
+			attach = sealed.Resources[i]
+		}
+	}
+	if attach == nil {
+		t.Fatalf("attach resource missing from sealed apply record")
+	}
+	if st, _ := attach.LastState(); st != core.ResourceFailed {
+		t.Fatalf("last state = %s, want failed", st)
+	}
+	// 4ms threshold / 1ms steps: bails after the 4th attempt, well short
+	// of all 10 -- the whole point being it doesn't grind out the budget.
+	if len(attach.Reconciliation) >= len(eventualConsistencyBackoffSchedule) {
+		t.Fatalf("reconciliation = %+v (%d entries), want fewer than the full %d-step budget -- the bailout should stop early, not exhaust it",
+			attach.Reconciliation, len(attach.Reconciliation), len(eventualConsistencyBackoffSchedule))
+	}
+	if len(attach.Errors) != 1 {
+		t.Fatalf("errors = %+v, want exactly one terminal error", attach.Errors)
+	}
+	got := attach.Errors[0].Message
+	if !strings.Contains(got, "does not appear to exist") {
+		t.Fatalf("error message = %q, want the honest UBI-93 bailout wording (\"does not appear to exist\")", got)
+	}
+	if !strings.Contains(got, "cannot be found") {
+		t.Fatalf("error message = %q, want the original provider diagnostic still present (wrapped, not discarded)", got)
+	}
+	last := attach.Reconciliation[len(attach.Reconciliation)-1]
+	if !strings.Contains(last.Detail, "giving up early") {
+		t.Fatalf("last reconciliation entry = %+v, want a \"giving up early\" detail marking the bailout", last)
 	}
 }
 

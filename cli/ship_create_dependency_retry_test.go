@@ -110,17 +110,22 @@ func TestShip_CreateFailsNotFoundReferencingShippedDependency_RealFakeProvider(t
 // proves the OTHER half of UBI-92's own narrow scoping through the real
 // wire protocol: a same-batch dependency that never becomes visible within
 // the retry budget must still fail terminally, not hang or silently
-// succeed. Deliberately gated behind UBX_TEST_SLOW=1, skipped by default:
-// exhausting core/executor's own eventualConsistencyBackoffSchedule (real
-// production sizing, ~64s, unexported and not overridable from this
-// package) is genuinely slow, same reasoning as
-// cli/ship_lying_destroy_test.go's own gate. core/executor's own hermetic
-// suite (create_dependency_retry_test.go, shrunk schedule) is the fast,
-// always-run regression guard for the same logic; this test's own job is
-// proving the identical behavior survives the real wire protocol.
+// succeed. Since UBI-93, this no longer grinds out the full ~64s budget:
+// noProgressBailoutThreshold (core/executor/ship.go) gives up early, after
+// ~19s, once elapsed retry time clearly exceeds realistic propagation lag
+// with zero change in outcome -- a live repro (playground-15) found the
+// full budget grinding to completion against a dependency that had
+// genuinely never been created under the identity referenced, no amount
+// of waiting would have helped. Still gated behind UBX_TEST_SLOW=1
+// (~19s is still slow relative to this package's normal suite), same
+// reasoning as cli/ship_lying_destroy_test.go's own gate. core/executor's
+// own hermetic suite (create_dependency_retry_test.go, shrunk schedule
+// AND shrunk threshold) is the fast, always-run regression guard for the
+// same logic; this test's own job is proving the identical behavior
+// survives the real wire protocol.
 func TestShip_CreateFailsNotFoundReferencingShippedDependency_BudgetExhausted_RealFakeProvider(t *testing.T) {
 	if os.Getenv("UBX_TEST_SLOW") == "" {
-		t.Skip("set UBX_TEST_SLOW=1 to run this real-wire-protocol test -- it takes about a minute (core/executor's own eventualConsistencyBackoffSchedule is real production sizing, ~64s, and isn't overridable from this package)")
+		t.Skip("set UBX_TEST_SLOW=1 to run this real-wire-protocol test -- it takes about ~19s (core/executor's own noProgressBailoutThreshold, UBI-93, now bails out well before eventualConsistencyBackoffSchedule's own full ~64s budget)")
 	}
 
 	ledgerDir := t.TempDir()
@@ -201,5 +206,8 @@ func TestShip_CreateFailsNotFoundReferencingShippedDependency_BudgetExhausted_Re
 	}
 	if !strings.Contains(whyOut, "cannot be found") {
 		t.Fatalf("expected the original not-found diagnostic to still be the surfaced error, got: %s", whyOut)
+	}
+	if !strings.Contains(whyOut, "does not appear to exist") {
+		t.Fatalf("expected UBI-93's own honest early-bailout wording, got: %s", whyOut)
 	}
 }

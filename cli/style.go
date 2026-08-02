@@ -55,6 +55,29 @@ var isTerminal = func(v any) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// terminalWidth returns v's own real column width via the same
+// TIOCGWINSZ-style ioctl golang.org/x/term already provides for
+// IsTerminal (term.GetSize) -- 0 if v isn't a real *os.File or the ioctl
+// fails (a hermetic test's bytes.Buffer, or any other non-terminal
+// writer). UBI-93 (docs/executor.md's own amendment): newProgressPrinter
+// uses this to bound how much of a single row's own content it will ever
+// render, so a long line (most commonly a real provider's own diagnostic
+// error text) can never wrap onto a second physical terminal row and
+// silently break the in-place-redraw row-counting invariant every other
+// row's own cursor math depends on. A package var, same test-swappable
+// convention as isTerminal.
+var terminalWidth = func(v any) int {
+	f, ok := v.(*os.File)
+	if !ok {
+		return 0
+	}
+	w, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return w
+}
+
 // colorEnabled implements docs/cli-output-spec.md principle 2 exactly:
 // NO_COLOR (https://no-color.org) and non-TTY both mean plain output --
 // --json is never affected since JSON payloads are built and marshaled

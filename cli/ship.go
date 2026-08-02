@@ -260,7 +260,7 @@ consistency shows its own work instead of sitting silent.`,
 			// stdout lines, never consulted for the sealed result itself).
 			progressFinish := func() {}
 			if !jsonOut {
-				progressFn, pf := newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout()), addressOpKinds(p))
+				progressFn, pf := newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout()), terminalWidth(cmd.OutOrStdout()), addressOpKinds(p))
 				progressFinish = pf
 				ctx = executor.WithProgress(ctx, progressFn)
 			}
@@ -762,7 +762,29 @@ func addressOpKinds(p *core.Proposal) map[string]resourceOpKind {
 // as its own permanent, appended line (no ANSI codes, no redraw) exactly
 // as before UBI-83 -- a log file has no use for "redraw in place," and
 // ticks never fire there at all (startTicker's own tty check).
-func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]resourceOpKind) (fn func(executor.ProgressEvent), finish func()) {
+//
+// truncateForRow (UBI-93) truncates s to at most maxLen runes, appending
+// a trailing "…" when it does -- rune-based (not byte-based) so this
+// never splits a multi-byte UTF-8 character mid-sequence, and always
+// called on PLAIN text before renderContent ever wraps it in ANSI color
+// codes, so it never risks splitting an escape sequence either. maxLen
+// <= 0 is a no-op (the "truncation disabled" case maxRowTextWidth's own
+// 0 return represents).
+func truncateForRow(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
+	}
+	if maxLen <= 1 {
+		return string(r[:maxLen])
+	}
+	return string(r[:maxLen-1]) + "…"
+}
+
+func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kinds map[string]resourceOpKind) (fn func(executor.ProgressEvent), finish func()) {
 	starts := map[string]time.Time{}
 	seenAddr := map[string]bool{}
 	spin := map[string]int{}
@@ -782,6 +804,73 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		if len(addr) > maxAddrLen {
 			maxAddrLen = len(addr)
 		}
+	}
+
+	// UBI-93: maxRowTextWidth bounds how much of a row's own free-text
+	// content (glyph text or a real provider's own diagnostic error,
+	// ev.Detail, unbounded in length) this printer will ever render --
+	// the load-bearing fix for a real, confirmed corruption mechanism, NOT
+	// a locking/serialization issue (mu already serializes every write
+	// correctly; verified directly, both via a hermetic stress test with
+	// -race across many concurrently-erroring/ticking resources, clean,
+	// AND via a real pty repro that reproduced the exact live shape).
+	// Every row-tracking invariant above (cursorRow/rowOf, the "cursor up
+	// N / redraw / cursor down N" math every existing-row redraw uses)
+	// assumes one updateRow call consumes exactly ONE physical terminal
+	// row. A row whose own content is longer than the terminal's real
+	// column width WRAPS onto a second physical row -- silently breaking
+	// that invariant: cursorRow under-counts the true number of physical
+	// rows just consumed, so the NEXT row's own redraw computes the wrong
+	// "up N" distance and lands on the WRAPPED CONTINUATION of the
+	// previous line instead of the row it actually means to redraw,
+	// clearing and overwriting only PART of it and leaving the rest
+	// behind as orphaned, garbled leftover text -- exactly the "error
+	// text and the following line's content interleaved mid-word" shape
+	// found live (playground-15) and reproduced hermetically
+	// (cli/progress_ticker_test.go's own
+	// TestNewProgressPrinter_LongErrorText_TruncatedToOneRow_NeverWraps,
+	// plus a real-pty repro in this session's own investigation notes
+	// that isolated the exact mechanism before this fix was written).
+	// Bounded at the source instead: text is truncated (with a trailing
+	// "…") to fit within a single physical row before it's ever
+	// rendered, so "one write, one row" always holds regardless of how
+	// long the underlying message is. Nothing is lost PERMANENTLY -- the
+	// full, untruncated text is already durably recorded in the ledger
+	// (core.ResourceApply.Errors/Reconciliation) and always available via
+	// `ubx why`; this only bounds what the LIVE ticking display shows.
+	// termWidth <= 0 (undeterminable, e.g. every hermetic test's
+	// bytes.Buffer) disables truncation entirely -- the pre-UBI-93
+	// behavior -- since non-TTY output never uses this row-tracking
+	// mechanism in the first place (updateRow's own !tty branch is a
+	// plain sequential append, where a wrapped line is harmless: no
+	// cursor math ever depends on its row count).
+	maxRowTextWidth := func(hasElapsed bool) int {
+		if !tty || termWidth <= 0 {
+			return 0
+		}
+		// "  " + glyph(1) + " " + prefix(maxAddrLen+1) + " " -- the fixed
+		// overhead every row pays regardless of content, plus a 1-column
+		// safety margin (some terminals auto-wrap the instant the LAST
+		// column is written, even without a following character, so this
+		// stays strictly under the real width rather than landing exactly
+		// on it).
+		overhead := 2 + 1 + 1 + (maxAddrLen + 1) + 1 + 1
+		if hasElapsed {
+			// " " + a generous elapsed column (e.g. "12:34") -- this
+			// printer's own renderElapsed never exceeds this in practice
+			// (a real `ubx ship` finishing in 100+ minutes is not a
+			// realistic case to budget column space for).
+			overhead += 1 + 6
+		}
+		w := termWidth - overhead
+		if w < 20 {
+			// Never truncate to something so small it stops being a
+			// useful line at all -- an unusually narrow real terminal
+			// still gets a readable (if generously truncated) row rather
+			// than a degenerate one.
+			w = 20
+		}
+		return w
 	}
 
 	// Row-tracking state (TTY only) -- UBI-83's own in-place-redraw
@@ -830,7 +919,18 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 	}
 
 	renderContent := func(address string, kind resourceOpKind, glyph, text, elapsed string) string {
-		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
+		// UBI-93: truncate BEFORE padding -- padding a truncated string
+		// back out to progressLineWidth would silently re-introduce the
+		// exact overflow this whole mechanism exists to prevent, on any
+		// terminal narrower than progressLineWidth's own fixed 50 columns.
+		padWidth := progressLineWidth
+		if w := maxRowTextWidth(elapsed != ""); w > 0 {
+			text = truncateForRow(text, w)
+			if w < padWidth {
+				padWidth = w
+			}
+		}
+		padded := fmt.Sprintf("%-*s", padWidth, text)
 		prefix := address
 		if prefix != "" {
 			// UBI-84: pad the address itself, inside the colored span, to
