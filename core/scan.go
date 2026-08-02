@@ -588,7 +588,30 @@ func GenerateRevertProposal(l *Ledger, stack string, res *ScanResult) (*Proposal
 // generate the proposal in the first place. providerSource is passed
 // straight through to the teaching-error hint path (see
 // ScanRequest.ProviderSource); may be empty.
-func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, providerSource string, providerConfig json.RawMessage, p *Proposal) error {
+//
+// UBI-89 P1: a raw hash mismatch here used to always mean "stale," full
+// stop -- unlike RunScan's own drift verdict, which already downgrades a
+// candidate mismatch fully explained by null<->zero-value/materialization
+// noise (FilterNormalizationNoise, UBI-63) before ever calling it real
+// drift. This was a real, confirmed gap (hermetic repro:
+// TestVerifyFreshness_FalseStaleOnNormalizationNoise), not a UBI-88
+// regression -- UBI-88 never touched ObservedHash/resolution.inputs at
+// all. For a core/resolver-produced modify specifically, "recorded" is
+// the hash of the LEDGER's own reconstructed truth at resolve time
+// (ObservedHash(FoldState(addr)), core/resolver.go's OpModify case) --
+// not a fresh read the way an adoption/drift_adopt's recorded hash is
+// (GenerateProposal's own res.ObservedHash, already fresh at generation
+// time). A real SDKv2-vintage provider not round-tripping a "no value"
+// attribute byte-for-byte between the resource's own last-recorded state
+// and a later live read (the founder's own live AWS repro shape) can
+// therefore raw-hash-mismatch on a genuinely UNTOUCHED resource. l is now
+// used to re-derive that same raw recorded state (FoldState(addr) again
+// -- the exact deterministic input that produced recorded's own hash,
+// same pattern RunScan already uses) as a fallback ONLY when the raw
+// hashes differ: a real, non-noise difference still refuses as stale
+// (TestVerifyFreshness_RealChangeStillBlocksAlongsideNoise) -- this only
+// ever downgrades a false positive, never masks a real one.
+func VerifyFreshness(ctx context.Context, prov StateReader, l *Ledger, addr Address, providerSource string, providerConfig json.RawMessage, p *Proposal) error {
 	target := addr.String()
 	var recorded string
 	var lookup json.RawMessage
@@ -608,12 +631,20 @@ func VerifyFreshness(ctx context.Context, prov StateReader, addr Address, provid
 		return fmt.Errorf("verify freshness: resolution.inputs entry for %s has no recorded lookup key", addr)
 	}
 
-	_, fresh, _, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, lookup)
+	observed, fresh, resourceSchema, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, lookup)
 	if err != nil {
 		return fmt.Errorf("verify freshness: %w", err)
 	}
-	if fresh != recorded {
-		return fmt.Errorf("%w: %s recorded %s, now %s", ErrStaleObservation, addr, recorded, fresh)
+	if fresh == recorded {
+		return nil
 	}
-	return nil
+	if foldedState, ffound, ferr := l.FoldState(addr); ferr == nil && ffound {
+		if before, after, derr := DiffAttributes(foldedState, observed); derr == nil {
+			fb, fa := FilterNormalizationNoise(before, after, resourceSchema)
+			if len(fb) == 0 && len(fa) == 0 {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s recorded %s, now %s", ErrStaleObservation, addr, recorded, fresh)
 }

@@ -4,6 +4,143 @@
 
 ## Current phase
 
+**UBI-89 (2026-08-02, P1) — "the ledger can lie": a modify proposal
+ACCEPTED into the ledger, its real `ubx ship` apply FAILED (stale
+observation), yet the ledger kept claiming the change happened. Founder
+repro (playground-12, real AWS): SQS retention 1 day -> 3 days, `ubx plan`
+drafted it correctly, `ubx ship` ~55s later refused as stale, but the
+acceptance stuck -- `status --drift` afterward: ledger says 259200, real
+AWS still 86400. The ticket's own framing: "the most serious finding of
+the day... this is about the LEDGER LYING about what happened."**
+
+**Two questions diagnosed empirically, not assumed — both confirmed real,
+but NOT the ones the ticket's own candidate theories predicted:**
+
+**Q1 (why did the hash differ ~55s later on an untouched resource?):**
+NOT a UBI-88 regression -- traced every call site: UBI-88's own
+`FilterNormalizationNoise` wiring touches `Modification.Before/After`
+only; the "live_state" `resolution.inputs[].observed_hash` a `kind:change`
+modify records (`core/resolver.go`'s own `ObservedHash(FoldState(addr))`)
+was never touched by that session at all. The REAL bug, confirmed via a
+failing-then-passing hermetic test
+(`TestVerifyFreshness_FalseStaleOnNormalizationNoise`,
+core/scan_test.go): `core.VerifyFreshness` compares two hashes with ZERO
+normalization awareness -- a bare `if fresh != recorded` -- unlike
+`RunScan`'s own drift verdict, which already downgrades a mismatch fully
+explained by UBI-63's own null<->zero-value/materialization noise before
+ever calling it real drift. This is a PRE-EXISTING gap UBI-63's own
+rollout never reached (`VerifyFreshness` only ever had a hash string to
+compare, never the raw state `DiffAttributes` needs) -- a real, documented
+SDKv2-vintage AWS quirk (an SQS queue's own attribute not round-tripping
+byte-for-byte between the ledger's last-recorded state and a fresh read)
+is exactly the shape that trips this.
+**Fix:** `VerifyFreshness` now takes `l *Ledger`; on a raw hash mismatch,
+it re-derives the ledger's own recorded raw state via `l.FoldState(addr)`
+(the same deterministic input that produced `recorded`'s hash) and runs
+the identical `DiffAttributes`+`FilterNormalizationNoise` downgrade
+`RunScan` already uses -- only a genuinely non-noise difference still
+refuses as stale
+(`TestVerifyFreshness_RealChangeStillBlocksAlongsideNoise` proves this
+isn't a blanket "always pass").
+
+**Q2 (why did acceptance persist when the apply never ran?):** The
+ticket's own candidate ("reorder accept after the freshness check") is
+NOT the right fix -- confirmed by reading `ubx ship`'s own actual
+accept-then-execute sequencing: accept-before-per-resource-freshness-check
+is BY DESIGN, required by the documented idempotent/resumable multi-
+resource ship contract (a killed-and-restarted ship must recover ALREADY-
+accepted state; "already separately accepted via `ubx accept`" is an
+explicitly supported, distinct path). Reordering would break that.
+**The REAL, decisive, confirmed bug:** `core.Ledger.FoldState`'s own
+modify-folding loop applied `Delta.Modifies[].after` UNCONDITIONALLY --
+the one asymmetry among the three `Delta` kinds. Create and destroy BOTH
+already gate on "did this resource's own apply record actually reach
+`ResourceApplied`" (`shippedCreateFold`/`shippedDestroyFold`) before
+trusting a Delta as real; modify had no equivalent gate, confirmed via two
+failing-then-passing hermetic tests
+(`TestFoldState_UnshippedModify_DoesNotFoldIntoCurrent`,
+`TestFoldState_FailedModify_DoesNotFoldIntoCurrent`, core/
+modify_fold_test.go) that reproduce the founder's own exact repro shape.
+**Fix:** new `shippedModifyFold` (core/apply.go), gating `FoldState`'s
+modify fold -- but ONLY for `kind:"change"` proposals, not `drift_adopt`
+(record-only, trusted on accept, matching create's own "state"-shaped
+create) or `drift_revert` (deliberately, per docs/architecture.md's own
+"Revert path": accepting a drift_revert IS the decision, independent of
+execution -- gating it would have broken
+`TestRunScan_AfterRevertAccepted_ManualCorrection_ScanClean`'s own
+documented contract; found this the hard way, an initial unscoped gate
+broke two pre-existing tests before the Kind-scoping was added).
+**Independently found the identical bug in `core/blame.go`** (`ubx
+blame`'s own per-attribute provenance fold) -- its own doc comment already
+claimed to mirror `FoldState` "mechanically" but had no shipped-gate on
+its modify loop either; fixed with the same `shippedModifyFold`, same
+Kind-scoping, own hermetic tests
+(`TestBlame_UnshippedModify_AttributesNothingNew`,
+`TestBlame_FailedModify_AttributesNothingNew`,
+`TestBlame_ShippedModify_AttributesCorrectly`).
+
+**End-to-end live proof** (not just isolated unit tests): a real `ubx
+plan` -> `ubx ship` sequence against a real fakeprovider subprocess,
+staleness deterministically forced via `FAKEPROVIDER_EXTRA_TAG` injected
+only at ship time, reproduces the founder's exact sequence -- ship fails,
+acceptance sticks, and (pre-fix) a follow-up `ubx plan` targeting the same
+attribute would have shown the lied-about value as its own "before."
+Post-fix: `ubx why` honestly shows `outcome=failed`, a follow-up `ubx
+plan` correctly shows the ORIGINAL value as "before," and — the founder's
+own immediate-resolution question — **re-running `ubx ship` on the SAME
+already-accepted proposal ID, with reality no longer moving a second
+time, succeeds cleanly with no further action** (`cli/
+ship_modify_staleness_test.go`
+`TestShip_ModifyRefusedAsStale_LedgerNeverLies`, plus a hand-run live
+walkthrough confirming the retry-succeeds path explicitly).
+
+**Founder's stuck resource (`ubx-playground-12`,
+`aws_sqs_queue.ci-notifications-v12`) — explicit recovery path, confirmed
+correct, not guessed:**
+1. Rebuild `ubx` with this fix (`make build`/`make install`).
+2. No action needed for the ledger's own honesty -- `FoldState` is always
+   recomputed live, never cached, so `ubx why
+   ubx-playground-12.aws_sqs_queue.ci-notifications-v12` / `ubx status
+   --drift` immediately, retroactively self-correct to show 86400 (the
+   TRUE current value), not 259200.
+3. Find the accepted-but-failed modify's own proposal ID from that same
+   `ubx why` output (the newest of the two entries, `outcome=failed`).
+4. Run `ubx ship <that-proposal-id>` (same `--provider`/`--source` flags
+   originally used) -- **NOT** `scan --propose adopt`: the proposal is
+   already accepted, `ubx ship` is idempotent-by-contract and safe to
+   re-run, and the resource's own `ResourceFailed` state is well under the
+   3-attempt retry budget (a `ResourceFailed` VerifyFreshness refusal
+   never reaches `ResourceInFlight`, so `attemptsInFlight` stayed 0 -- no
+   "retry budget exhausted" block). `scan --propose adopt` would instead
+   SURRENDER the founder's own real intent (3-day retention) by recording
+   1-day as newly-correct — wrong unless reality has ALSO genuinely,
+   non-noise diverged a second time, which nothing in the founder's own
+   report suggests.
+5. If it now ships clean (expected, per the Q1 diagnosis above): done. If
+   it refuses AGAIN with `ErrStaleObservation`: that means reality
+   genuinely moved a second time (real drift, not noise) -- THEN, and only
+   then, `scan --propose adopt|revert` is the right next call.
+Not run by me -- CLAUDE.md forbids ever running `ubx ship` against real
+cloud; these are the founder's own exact commands to run himself.
+
+**Verification:** full suite green (`go test ./...`). Six new hermetic
+tests (`core/modify_fold_test.go`, `core/blame_test.go`,
+`core/scan_test.go` x2) proving both root causes fail-then-pass against
+before/after code, plus one full CLI-level end-to-end test
+(`cli/ship_modify_staleness_test.go`) against a real fakeprovider
+subprocess, plus a hand-run live walkthrough (script -q style) covering
+the exact repro-then-recover sequence.
+
+**Docs debt:** none — docs/architecture.md's own "Revert path" section
+gets a new subsection documenting the fix and its own Kind-scoping
+reasoning (why drift_revert is deliberately excluded), right where the
+directly-related "A necessary correction" passage already lives.
+
+**Next:** none open on UBI-89's own diagnosis/fix. Founder to run the
+5-step recovery above against the real playground-12 stack and confirm.
+
+## Current phase (previous)
+
 **UBI-88 (2026-08-02) — receipt polish: modify block header+indent format,
 op vocabulary (change/terminate). Founder finding (playground-11, first
 real modify test through UBI-85's fix): the modify block never got the

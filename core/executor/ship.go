@@ -456,7 +456,7 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 			continue
 		}
 
-		if err := core.VerifyFreshness(ctx, app, m.Target, providerSource, providerConfig, p); err != nil {
+		if err := core.VerifyFreshness(ctx, app, l, m.Target, providerSource, providerConfig, p); err != nil {
 			if errors.Is(err, core.ErrStaleObservation) {
 				rcd.recordErr(ctx, ra, err.Error(), core.ErrorTerminal)
 				halted = true
@@ -1809,7 +1809,7 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		return rcd.persist()
 	}
 
-	if err := core.VerifyFreshness(ctx, app, m.Target, providerSource, providerConfig, p); err != nil {
+	if err := core.VerifyFreshness(ctx, app, rcd.l, m.Target, providerSource, providerConfig, p); err != nil {
 		if errors.Is(err, core.ErrStaleObservation) {
 			rcd.recordErr(ctx, ra, err.Error(), core.ErrorTerminal)
 		} else {

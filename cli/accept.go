@@ -120,7 +120,7 @@ func newAcceptCmd() *cobra.Command {
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 				}
-				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider, salt, reverifySource), addr, reverifySource,
+				if err := core.VerifyFreshness(ctx, newStateReader(client.Provider, salt, reverifySource), ledger, addr, reverifySource,
 					json.RawMessage(providerConfig), p); err != nil {
 					return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 				}

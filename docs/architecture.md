@@ -464,6 +464,38 @@ outside of ubx, the next `ubx scan` reads reality matching `FoldState`'s
 already-restored truth and correctly reports no drift — not a phantom
 "drifted away from the last thing we happened to see."
 
+### A second necessary correction: a `kind:change` modify only folds once shipped (UBI-89 P1)
+
+Found live: an accepted `kind:change` modify (`ubx plan`/`ubx resolve`/`ubx
+propose`'s own forward-looking "make this happen" proposal, core/resolver's
+own `OpModify`) whose real apply then FAILED (most commonly
+`core.VerifyFreshness`'s own `ErrStaleObservation` refusal, mid-`ubx ship`)
+still had its own `delta.modifies[].after` folded into `FoldState`'s
+"current truth" — the ledger claimed a change (e.g. an SQS queue's
+retention period) that never actually reached the real resource. The root
+mechanism: `FoldState`'s own create/destroy folds were ALREADY gated on the
+resource's own real apply-record outcome (`shippedCreateFold`/
+`shippedDestroyFold`, both above) — a create/destroy only counts as
+"happened" once its own most recent transition is `ResourceApplied`. The
+modify fold had no equivalent gate at all, the one asymmetry among the
+three `Delta` kinds.
+
+Fixed with `shippedModifyFold`, the modify-side sibling of the two folds
+above, applied ONLY to `kind:"change"` proposals (`core.KindChange`) — not
+`drift_revert`. This split is deliberate, not an oversight: a
+`drift_revert`'s own fold semantics are exactly what "A necessary
+correction," just above, describes and depends on — accepting it already
+IS the ledger's own decision, independent of whether/when a real cloud
+apply (`ubx ship`, or a human's own manual correction) ever actually
+lands; gating it here would silently break
+`TestRunScan_AfterRevertAccepted_ManualCorrection_ScanClean`'s own
+documented contract. A `kind:"change"` modify has no such "acceptance IS
+the decision, independent of execution" framing anywhere in this
+project's own design — it's a real, prospective, to-be-executed change
+from the start, so `FoldState` (and `Blame`, `core/blame.go`, which
+independently had the exact same gap in its own per-attribute provenance
+fold) now only trust it once it actually, successfully shipped.
+
 ### `ubx revert-plan`: emits, never applies
 
 Takes an *accepted* `drift_revert` proposal and produces the reconciliation

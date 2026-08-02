@@ -287,6 +287,103 @@ func TestBlame_UnshippedCreate_NotFound(t *testing.T) {
 	}
 }
 
+// TestBlame_UnshippedModify_AttributesNothingNew is UBI-89 P1's own
+// regression test for Blame's own independent instance of the exact same
+// bug FoldState just got fixed for: Blame's own doc comment already
+// claimed to mirror FoldState "mechanically," but its own modify loop had
+// no shipped-gate at all before this session -- an accepted-but-never-
+// attempted kind:change modify would attribute its own attempted value to
+// "who set this," exactly the same trust-boundary lie, just surfaced via
+// `ubx blame` instead of `ubx why`/`ubx status --drift`.
+func TestBlame_UnshippedModify_AttributesNothingNew(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := Address{Stack: "payments", Type: "fake_widget", Name: "main"}
+	genesis := shipChangeCreateForTest(t, l, addr, json.RawMessage(`{"id":"computed-id","name":"main","tags":{"team":"payments"}}`), true, true)
+
+	before := map[string]json.RawMessage{"tags.team": json.RawMessage(`"payments"`)}
+	after := map[string]json.RawMessage{"tags.team": json.RawMessage(`"platform"`)}
+	shipChangeModifyForTest(t, l, addr, before, after, false, false)
+
+	result, err := Blame(l, addr)
+	if err != nil {
+		t.Fatalf("Blame: %v", err)
+	}
+	byPath := entriesByPath(result.Entries)
+	e, ok := byPath["tags.team"]
+	if !ok {
+		t.Fatalf("no entry for tags.team: %+v", result.Entries)
+	}
+	if e.ProposalID != genesis.ID {
+		t.Errorf("tags.team.ProposalID = %q, want %q (the genesis create -- the never-attempted modify must not be attributed)", e.ProposalID, genesis.ID)
+	}
+	var val string
+	if err := json.Unmarshal(e.Value, &val); err != nil || val != "payments" {
+		t.Errorf("tags.team value = %s, want \"payments\" (the modify never actually shipped)", e.Value)
+	}
+}
+
+// TestBlame_FailedModify_AttributesNothingNew is the exact UBI-89 repro
+// shape: a modify WAS attempted (VerifyFreshness's own ErrStaleObservation
+// refusal, core/executor transitioning straight to ResourceFailed) but
+// never reached ResourceApplied -- Blame must still attribute the genesis
+// create, never the failed modify's own attempted value.
+func TestBlame_FailedModify_AttributesNothingNew(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := Address{Stack: "payments", Type: "fake_widget", Name: "main"}
+	genesis := shipChangeCreateForTest(t, l, addr, json.RawMessage(`{"id":"computed-id","name":"main","tags":{"team":"payments"}}`), true, true)
+
+	before := map[string]json.RawMessage{"tags.team": json.RawMessage(`"payments"`)}
+	after := map[string]json.RawMessage{"tags.team": json.RawMessage(`"platform"`)}
+	shipChangeModifyForTest(t, l, addr, before, after, true, false)
+
+	result, err := Blame(l, addr)
+	if err != nil {
+		t.Fatalf("Blame: %v", err)
+	}
+	byPath := entriesByPath(result.Entries)
+	e, ok := byPath["tags.team"]
+	if !ok {
+		t.Fatalf("no entry for tags.team: %+v", result.Entries)
+	}
+	if e.ProposalID != genesis.ID {
+		t.Errorf("tags.team.ProposalID = %q, want %q (the genesis create -- the FAILED modify must not be attributed)", e.ProposalID, genesis.ID)
+	}
+	var val string
+	if err := json.Unmarshal(e.Value, &val); err != nil || val != "payments" {
+		t.Errorf("tags.team value = %s, want \"payments\" (the modify failed to ship)", e.Value)
+	}
+}
+
+// TestBlame_ShippedModify_AttributesCorrectly is the positive baseline: a
+// genuinely shipped modify must still be attributed correctly -- the
+// shipped-gate this session adds must never suppress a REAL attribution.
+func TestBlame_ShippedModify_AttributesCorrectly(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := Address{Stack: "payments", Type: "fake_widget", Name: "main"}
+	shipChangeCreateForTest(t, l, addr, json.RawMessage(`{"id":"computed-id","name":"main","tags":{"team":"payments"}}`), true, true)
+
+	before := map[string]json.RawMessage{"tags.team": json.RawMessage(`"payments"`)}
+	after := map[string]json.RawMessage{"tags.team": json.RawMessage(`"platform"`)}
+	modified := shipChangeModifyForTest(t, l, addr, before, after, true, true)
+
+	result, err := Blame(l, addr)
+	if err != nil {
+		t.Fatalf("Blame: %v", err)
+	}
+	byPath := entriesByPath(result.Entries)
+	e, ok := byPath["tags.team"]
+	if !ok {
+		t.Fatalf("no entry for tags.team: %+v", result.Entries)
+	}
+	if e.ProposalID != modified.ID {
+		t.Errorf("tags.team.ProposalID = %q, want %q (the shipped modify)", e.ProposalID, modified.ID)
+	}
+	var val string
+	if err := json.Unmarshal(e.Value, &val); err != nil || val != "platform" {
+		t.Errorf("tags.team value = %s, want \"platform\"", e.Value)
+	}
+}
+
 func TestBlame_DestroyedAddress_BlamesFinalPreDestroyState(t *testing.T) {
 	l := Open(t.TempDir())
 	addr := Address{Stack: "payments", Type: "aws_db_instance", Name: "old-db"}

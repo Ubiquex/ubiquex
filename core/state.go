@@ -319,6 +319,44 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 			if mod.Target != addr || current == nil {
 				continue
 			}
+			// UBI-89 P1: mirrors the create case's own "state" (trust
+			// immediately) vs "config" (gate on shippedCreateFold) split
+			// immediately above -- a drift_adopt's own Modifies entry is
+			// record-only, exactly like an adoption's own "state"-shaped
+			// create: Accept alone IS its complete lifecycle, no separate
+			// `ubx ship` ever follows (cli/ship.go's own isRecordOnlyKind),
+			// so it's trusted the moment it's accepted, same as always.
+			// drift_revert is ALSO deliberately excluded here -- confirmed
+			// via docs/architecture.md's own "Revert path" section, load-
+			// bearing, not incidental: "accepting a drift_revert is a
+			// decision to change cloud... ubx itself never applies it" --
+			// FoldState folding a drift_revert's own `after` (the ledger's
+			// restore target) immediately upon acceptance, independent of
+			// whether/when it's ever actually shipped, IS the documented
+			// design (TestRunScan_AfterRevertAccepted_ManualCorrection_
+			// ScanClean's own explicit contract: accept declares the
+			// ledger's truth, a real cloud apply is a separate, optional,
+			// later act). Gating it here would silently break that.
+			//
+			// Only a kind:change modify (core/resolver's own OpModify,
+			// `ubx plan`/`ubx resolve`/`ubx propose`'s own forward-looking
+			// "make this happen" proposals -- the founder's own exact
+			// UBI-89 repro shape) is gated: a modify only counts as
+			// "current truth" once it actually, successfully shipped
+			// (shippedModifyFold's own doc comment has the full incident
+			// this fixes). Not yet shipped, or shipped-but-failed (e.g. a
+			// VerifyFreshness refusal): current stays exactly as it was,
+			// mirroring the create case's own "Not yet shipped... leave
+			// found as it was -- exactly like 'not yet adopted.'"
+			if p.Kind == KindChange {
+				shipped, ferr := l.shippedModifyFold(p.ID, addr)
+				if ferr != nil {
+					return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+				}
+				if !shipped {
+					continue
+				}
+			}
 			for path, raw := range mod.After {
 				var v interface{}
 				if err := json.Unmarshal(raw, &v); err != nil {

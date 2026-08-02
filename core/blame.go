@@ -173,6 +173,27 @@ func Blame(l *Ledger, addr Address) (*BlameResult, error) {
 			if mod.Target != addr || current == nil {
 				continue
 			}
+			// UBI-89 P1: the exact same shipped-gate FoldState's own
+			// modify loop just got, for the exact same reason -- Blame's
+			// own doc comment already claimed to mirror FoldState
+			// "mechanically" (shipped-create/shipped-destroy), but this
+			// loop had no shipped check at all until now, an independently
+			// confirmed instance of the identical bug: an accepted-but-
+			// never-shipped (or shipped-but-failed) kind:change modify
+			// would attribute its own attempted value to "who set this"
+			// as if it had actually landed. drift_adopt/drift_revert stay
+			// unconditional -- same load-bearing distinction as FoldState
+			// (docs/architecture.md's own "Revert path": accepting either
+			// one IS the decision, independent of any later real apply).
+			if p.Kind == KindChange {
+				shipped, ferr := l.shippedModifyFold(p.ID, addr)
+				if ferr != nil {
+					return nil, fmt.Errorf("blame: %s: %w", addr, ferr)
+				}
+				if !shipped {
+					continue
+				}
+			}
 			for path, raw := range mod.After {
 				var v interface{}
 				if err := json.Unmarshal(raw, &v); err != nil {

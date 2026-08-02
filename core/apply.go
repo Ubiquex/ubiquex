@@ -268,6 +268,49 @@ func (l *Ledger) shippedDestroyFold(proposalID string, addr Address) (outcome st
 	return outcome, true, nil
 }
 
+// shippedModifyFold is shippedCreateFold/shippedDestroyFold's own modify-
+// side counterpart (UBI-89 P1): folds proposalID's own apply records for a
+// Delta.Modifies entry at addr, exactly the same per-resource "was this
+// address's own most recent transition ResourceApplied" gate the create
+// and destroy sides already had -- found is true only then. Before this
+// existed, FoldState's own modify-folding loop had NO equivalent gate at
+// all (the one asymmetry among the three Delta kinds): an ACCEPTED
+// Delta.Modifies entry was folded into "current truth" unconditionally,
+// regardless of whether it was ever actually shipped, still pending, or
+// had FAILED mid-ship (core.VerifyFreshness's own ErrStaleObservation
+// refusal, core/executor's shipModifyNode/shipDriftRevert transition
+// straight to ResourceFailed on that path, never reaching ResourceApplied
+// and never recording a ProviderResult) -- confirmed live, the founder's
+// own repro: a modify accepted into the ledger while the real resource
+// never actually changed, every reader of ledger truth (`ubx why`, `ubx
+// status --drift`, a future `ubx plan`/`resolve` against this stack)
+// lied about it. Only found is returned -- unlike shippedCreateFold, a
+// modify's own resulting state is reconstructed by FoldState's existing
+// dotSet(mod.After) walk, not substituted wholesale from ProviderResult
+// (the minimal, surgical fix: gate the existing mechanism, don't replace
+// it).
+func (l *Ledger) shippedModifyFold(proposalID string, addr Address) (found bool, err error) {
+	attempts, err := l.ApplyAttempts(proposalID)
+	if err != nil {
+		return false, fmt.Errorf("shipped modify fold: %w", err)
+	}
+	target := addr.String()
+	var lastState ResourceState
+	var hasState bool
+	for _, a := range attempts {
+		for _, ra := range a.Resources {
+			if ra.Address.String() != target {
+				continue
+			}
+			if st, ok := ra.LastState(); ok {
+				lastState = st
+				hasState = true
+			}
+		}
+	}
+	return hasState && lastState == ResourceApplied, nil
+}
+
 // ApplySummary is ApplyRecord.Summary -- populated only once an attempt is
 // sealed (docs/schema.md's "sealed vs. live" note). Reflects the full,
 // cumulative per-resource accounting for the proposal as of the end of

@@ -285,7 +285,7 @@ func TestVerifyFreshness_PassesWhenUnchanged(t *testing.T) {
 		t.Fatalf("GenerateProposal: %v", err)
 	}
 
-	if err := VerifyFreshness(context.Background(), fp, addr, "", nil, proposal); err != nil {
+	if err := VerifyFreshness(context.Background(), fp, l, addr, "", nil, proposal); err != nil {
 		t.Fatalf("VerifyFreshness: %v", err)
 	}
 }
@@ -311,8 +311,97 @@ func TestVerifyFreshness_BlocksStaleAcceptance(t *testing.T) {
 	// it's accepted.
 	fp.state = json.RawMessage(`{"id":"ubx-states","tags":{"env":"staging"}}`)
 
-	err = VerifyFreshness(context.Background(), fp, addr, "", nil, proposal)
+	err = VerifyFreshness(context.Background(), fp, l, addr, "", nil, proposal)
 	if !errors.Is(err, ErrStaleObservation) {
 		t.Fatalf("got %v, want ErrStaleObservation", err)
+	}
+}
+
+// TestVerifyFreshness_FalseStaleOnNormalizationNoise is UBI-89's own
+// regression test for the P1's first confirmed root cause: VerifyFreshness
+// compares recorded/fresh via a RAW hash-equality check, with ZERO
+// normalization awareness -- unlike RunScan's own drift verdict (this
+// same file, TestRunScan_*), which already downgrades a candidate
+// mismatch fully explained by null<->zero-value/materialization noise
+// (FilterNormalizationNoise, UBI-63) before ever calling it real drift.
+// This gap isn't a UBI-88 regression (UBI-88 never touched ObservedHash/
+// VerifyFreshness/resolution.inputs.ObservedHash computation at all,
+// confirmed by reading every call site) -- it's a PRE-EXISTING hole
+// UBI-63's own fix never reached, because VerifyFreshness's own
+// "recorded" value is a bare hash string (ResolutionInput.ObservedHash),
+// never the raw state DiffAttributes would need; this fix re-derives the
+// raw recorded state from the ledger's own FoldState (the exact same
+// value that produced `recorded`'s hash at resolve time for a
+// core/resolver-produced modify) as a fallback, mirroring RunScan's own
+// established downgrade pattern exactly.
+//
+// A real SDKv2-vintage provider (an SQS queue's own force_detach_policies-
+// shaped attribute, matching the founder's own real repro against AWS)
+// doesn't round-trip a "no value" attribute byte-for-byte -- recorded as
+// an explicit null (the ledger's own FoldState, ultimately traced back to
+// whatever the resource's own last successful apply returned), a LATER
+// fresh read of the exact SAME, genuinely-untouched resource reads back
+// its own zero value instead. Nothing about the real resource changed.
+func TestVerifyFreshness_FalseStaleOnNormalizationNoise(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := testAddr()
+
+	recordedState := json.RawMessage(`{"id":"ubx-states","tags":{"env":"prod"},"force_detach_policies":null}`)
+	adoptForTest(t, l, addr, recordedState)
+	recordedHash, err := ObservedHash(recordedState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "live_state", Resource: addr.String(), ObservedHash: recordedHash, Lookup: json.RawMessage(`{"id":"ubx-states"}`)},
+		}},
+	}
+
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"ubx-states","tags":{"env":"prod"},"force_detach_policies":false}`)}
+
+	if err := VerifyFreshness(context.Background(), fp, l, addr, "", nil, proposal); err != nil {
+		t.Fatalf("VerifyFreshness incorrectly refused as stale on pure null<->zero-value normalization noise (no real change to the resource): %v", err)
+	}
+}
+
+// TestVerifyFreshness_RealChangeStillBlocksAlongsideNoise proves the fix
+// only ever DOWNGRADES a false positive -- a genuine change hiding
+// alongside pure normalization noise on another attribute must still
+// refuse as stale, the same "only ever downgrades, never upgrades"
+// discipline FilterNormalizationNoise's own doc comment already commits
+// to for every other caller.
+func TestVerifyFreshness_RealChangeStillBlocksAlongsideNoise(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := testAddr()
+
+	recordedState := json.RawMessage(`{"id":"ubx-states","tags":{"env":"prod"},"force_detach_policies":null}`)
+	adoptForTest(t, l, addr, recordedState)
+	recordedHash, err := ObservedHash(recordedState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "live_state", Resource: addr.String(), ObservedHash: recordedHash, Lookup: json.RawMessage(`{"id":"ubx-states"}`)},
+		}},
+	}
+
+	// force_detach_policies: null -> false is pure noise, BUT tags.env
+	// also genuinely changed out of band -- a real divergence must still
+	// surface.
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"ubx-states","tags":{"env":"staging"},"force_detach_policies":false}`)}
+
+	err = VerifyFreshness(context.Background(), fp, l, addr, "", nil, proposal)
+	if !errors.Is(err, ErrStaleObservation) {
+		t.Fatalf("got %v, want ErrStaleObservation -- a real change must still block even alongside pure normalization noise on another attribute", err)
 	}
 }
