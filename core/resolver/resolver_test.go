@@ -141,6 +141,7 @@ func seedLedger(t *testing.T, l *core.Ledger, addr core.Address, state string) {
 	if err != nil {
 		t.Fatalf("seed ledger: observed hash: %v", err)
 	}
+	lookup := core.DeriveLookupFromResult(json.RawMessage(state), nil)
 	p := &core.Proposal{
 		SchemaVersion: core.SchemaVersion,
 		Stack:         addr.Stack,
@@ -151,7 +152,7 @@ func seedLedger(t *testing.T, l *core.Ledger, addr core.Address, state string) {
 		Resolution: core.Resolution{
 			ResolvedAt: time.Now().UTC().Format(time.RFC3339),
 			Inputs: []core.ResolutionInput{
-				{Kind: "live_state", Resource: addr.String(), ObservedHash: hash},
+				{Kind: "live_state", Resource: addr.String(), ObservedHash: hash, Lookup: lookup},
 			},
 		},
 		CostDelta: core.CostDelta{MonthlyUSD: json.RawMessage(`0`)},
@@ -301,6 +302,63 @@ func TestResolve_Modify_DiffsAgainstFoldState(t *testing.T) {
 	}
 	if _, ok := mod.Before["tags.env"]; ok {
 		t.Fatalf("unchanged tags.env must not appear in the diff, got %+v", mod.Before)
+	}
+	if err := core.Validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+// TestResolve_Modify_OmittedComputedAttribute_AutoPreserved is UBI-85's
+// own regression test for a real gap found LIVE, not assumed away: an
+// intent provider's own system prompt now instructs a drafted modify to
+// reproduce every currently-recorded attribute unchanged (full-state
+// config, matching create's own convention) -- but a real Claude response,
+// confirmed running this session's own live finale, correctly detected
+// and changed the one attribute that actually differed while genuinely
+// omitting an unrelated schema-Computed "id" attribute from its own
+// modify config anyway, despite that explicit instruction. Without this
+// fix, DiffAttributes would read the omission as "id: removed" -- a
+// spurious diff entry, not the clean before/after diff UBI-85 requires.
+// A Computed attribute is never something a caller is expected to set in
+// the first place, so Resolve now auto-fills one back in from the
+// ledger's own current recorded value whenever a modify's own resolved
+// config omits it entirely -- deterministic code guaranteeing what
+// prompt-engineering alone couldn't. Two Computed attributes (id, arn)
+// omitted at once, proving this isn't special-cased to a single key.
+func TestResolve_Modify_OmittedComputedAttribute_AutoPreserved(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_db_instance", Name: "db"}
+	seedLedger(t, l, addr, `{"id":"db-1","arn":"arn:aws:rds:us-east-1:1:db:db-1","instance_class":"db.t3.medium","tags":{"env":"prod"}}`)
+
+	schema := newFakeSchema()
+	// Deliberately omits "id" and "arn" entirely -- exactly the real,
+	// live-observed shape an imperfectly-compliant model produced.
+	intent := intentFile("payments",
+		ri("aws_db_instance", "db", OpModify, `{"instance_class":"db.t3.large","tags":{"env":"prod"}}`),
+	)
+
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(p.Delta.Modifies) != 1 {
+		t.Fatalf("delta = %+v", p.Delta)
+	}
+	mod := p.Delta.Modifies[0]
+	if string(mod.Before["instance_class"]) != `"db.t3.medium"` || string(mod.After["instance_class"]) != `"db.t3.large"` {
+		t.Fatalf("mod = %+v", mod)
+	}
+	if _, ok := mod.Before["id"]; ok {
+		t.Fatalf("omitted Computed \"id\" must be auto-preserved (never shown as removed), got Before=%+v", mod.Before)
+	}
+	if _, ok := mod.After["id"]; ok {
+		t.Fatalf("omitted Computed \"id\" must be auto-preserved (never shown as newly-set either), got After=%+v", mod.After)
+	}
+	if _, ok := mod.Before["arn"]; ok {
+		t.Fatalf("omitted Computed \"arn\" must be auto-preserved (never shown as removed), got Before=%+v", mod.Before)
+	}
+	if _, ok := mod.Before["tags.env"]; ok {
+		t.Fatalf("unchanged tags.env must still not appear in the diff, got %+v", mod.Before)
 	}
 	if err := core.Validate(p); err != nil {
 		t.Fatalf("validate: %v", err)

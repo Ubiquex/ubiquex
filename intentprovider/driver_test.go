@@ -64,7 +64,7 @@ func TestDraftWithRetry_SucceedsFirstAttempt(t *testing.T) {
 		{raw: json.RawMessage(validPaymentsDraft)},
 	}}
 
-	draft, raw, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"))
+	draft, raw, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"), nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestDraftWithRetry_RecoversOnSecondAttempt(t *testing.T) {
 		{raw: json.RawMessage(validPaymentsDraft)},
 	}}
 
-	draft, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"))
+	draft, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"), nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestDraftWithRetry_HardFailsAfterThreeInvalidAttempts(t *testing.T) {
 		{raw: invalid}, {raw: invalid}, {raw: invalid},
 	}}
 
-	draft, raw, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"))
+	draft, raw, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"), nil)
 	if err == nil {
 		t.Fatal("expected a hard failure after three invalid attempts, got nil error")
 	}
@@ -184,7 +184,7 @@ func TestDraftWithRetry_AdapterErrorAbortsImmediately(t *testing.T) {
 		{raw: json.RawMessage(validPaymentsDraft)}, // must never be reached
 	}}
 
-	_, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"))
+	_, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("some doc"), nil)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -208,7 +208,7 @@ func TestDraftWithRetry_DuplicateResourceAddressRejected(t *testing.T) {
   }`)
 	a := &scriptedAdapter{responses: []scriptedResponse{{raw: dup}, {raw: dup}, {raw: dup}}}
 
-	_, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("doc"))
+	_, _, err := DraftWithRetry(context.Background(), a, "payments", []byte("doc"), nil)
 	if err == nil {
 		t.Fatal("expected a hard failure, got nil")
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseAndValidate_Valid(t *testing.T) {
-	draft, errs := parseAndValidate(json.RawMessage(validPaymentsDraft), "payments")
+	draft, errs := parseAndValidate(json.RawMessage(validPaymentsDraft), "payments", false)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected validation errors: %v", errs)
 	}
@@ -98,7 +98,14 @@ func TestParseAndValidate_RejectsCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			draft, errs := parseAndValidate(json.RawMessage(tt.raw), "payments")
+			// allowEmptyDraft=false throughout this table -- every case
+			// here represents drafting with NO known-resources context
+			// (the pre-UBI-85 default), where an empty resources+destroys
+			// draft is still always the original "forgot to declare it"
+			// bug, never a legitimate outcome. See
+			// TestParseAndValidate_EmptyDraftAllowedWithKnownContext for
+			// the new, opposite case.
+			draft, errs := parseAndValidate(json.RawMessage(tt.raw), "payments", false)
 			if draft != nil {
 				t.Error("expected a nil draft on validation failure")
 			}
@@ -110,5 +117,27 @@ func TestParseAndValidate_RejectsCases(t *testing.T) {
 				t.Errorf("errors = %v, want one containing %q", errs, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestParseAndValidate_EmptyDraftAllowedWithKnownContext is UBI-85's own
+// regression test for the validation relaxation: the exact same
+// empty-resources-and-destroys shape TestParseAndValidate_RejectsCases's
+// own "empty resources and empty destroys" case still rejects when
+// allowEmptyDraft is false is now VALID when true -- the target stack's
+// own existing state was actually given as context, so "everything
+// already matches" is a legitimate, correct outcome, not the original
+// forgot-to-declare-it bug.
+func TestParseAndValidate_EmptyDraftAllowedWithKnownContext(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"No changes: all resources already match their recorded state","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[]}`
+	draft, errs := parseAndValidate(json.RawMessage(raw), "payments", true)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors with allowEmptyDraft=true: %v", errs)
+	}
+	if draft == nil {
+		t.Fatal("expected a non-nil draft")
+	}
+	if len(draft.Resources) != 0 || len(draft.Destroys) != 0 {
+		t.Fatalf("expected an empty no-op draft, got resources=%+v destroys=%+v", draft.Resources, draft.Destroys)
 	}
 }

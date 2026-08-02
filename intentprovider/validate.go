@@ -78,7 +78,14 @@ type wireResourceIntent struct {
 // "resources[1].op: ...") so DraftWithRetry can feed it back to an
 // Adapter verbatim as PriorErrors, and a human reading a hard-fail's own
 // error can find exactly what was wrong.
-func parseAndValidate(raw json.RawMessage, stack string) (*resolver.IntentFile, []string) {
+//
+// allowEmptyDraft (UBI-85) is DraftWithRetry's own len(knownResources) >
+// 0 -- see that function's own doc comment for why real existing-state
+// context makes an all-empty resources+destroys draft a legitimate
+// outcome (everything already matches) rather than the original "model
+// reasoned about a change and forgot to declare it" bug the check below
+// exists to catch.
+func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (*resolver.IntentFile, []string) {
 	var wire wireIntentFile
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -109,9 +116,18 @@ func parseAndValidate(raw json.RawMessage, stack string) (*resolver.IntentFile, 
 	// aws_db_instance.payments.instance_class while resources[] was
 	// simply []. Nothing else in this function catches "described but
 	// never declared" -- a totally empty draft that changes nothing is
-	// never a valid change proposal, so this is a hard, real requirement,
-	// not a stylistic nicety.
-	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 {
+	// never a valid change proposal in THAT scenario, so this stayed a
+	// hard requirement.
+	//
+	// UBI-85: allowEmptyDraft carves out the one legitimate exception --
+	// a re-plan against a stack whose existing state was actually given
+	// as context, where the document genuinely describes nothing that
+	// differs from what's already recorded. That's a real, correct "no
+	// changes" outcome (the whole point of feeding known-resources
+	// context in the first place), not the original bug -- rejecting it
+	// would just reintroduce, one layer up, the exact "every unchanged
+	// resource drafts as a fresh create" defect UBI-85 exists to fix.
+	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 && !allowEmptyDraft {
 		errs = append(errs, "draft has no resources and no destroys -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[]")
 	}
 

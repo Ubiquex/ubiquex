@@ -333,6 +333,18 @@ var (
 	// anyway with a less specific message.
 	ErrDestroyTargetNoLookup = errors.New("resolve: destroy target has no recorded lookup key in ledger history")
 
+	// ErrModifyTargetNoLookup is ErrDestroyTargetNoLookup's own twin for a
+	// modify target (UBI-85 live finale: shipping ANY modify failed ship-time
+	// freshness verification -- "resolution.inputs entry ... has no recorded
+	// lookup key" -- because this resolutionInputs' own "live_state" entry
+	// never set Lookup at all, unlike destroys.go's "destroy_target" entry a
+	// few lines below, which already does via the same core.Ledger.LastLookup
+	// this case now also calls). A modify target is, by construction,
+	// already-ledgered (same precondition as a destroy target), so its
+	// lookup key was already recorded when it was first observed/adopted/
+	// shipped -- never derived new here.
+	ErrModifyTargetNoLookup = errors.New("resolve: modify target has no recorded lookup key in ledger history")
+
 	// ErrMarkerStringLiteral means a config value is a plain string that
 	// LOOKS like an attempt at a $ref/$cross/$secret/$computed/$ephemeral
 	// marker (starts with the marker's own key + ":", e.g. "$ref:payments.
@@ -644,6 +656,49 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 			}
+			// UBI-85: a modify's own config is expected to reproduce every
+			// currently-recorded attribute unchanged unless the intent
+			// actually changes it (an intent provider's own system prompt
+			// now instructs this explicitly for a drafted modify) -- but an
+			// LLM's own compliance with that instruction isn't 100%
+			// reliable, confirmed LIVE: a real Claude response correctly
+			// detected and changed the one attribute that actually
+			// differed, but genuinely omitted an unrelated, schema-
+			// Computed "id" attribute from its own modify config anyway,
+			// despite the explicit instruction to reproduce it -- which
+			// DiffAttributes would otherwise read as "id: removed," a
+			// spurious diff entry, not the clean before/after diff this
+			// feature exists to produce. A schema-Computed attribute is
+			// never something a human OR a model is expected to set in the
+			// first place (a real provider computes it, nothing else may),
+			// so silently auto-filling one back in from the ledger's own
+			// current recorded value whenever a modify's resolved config
+			// omits it entirely is always safe -- it can never mask a
+			// genuine, intentional change, since there is no such thing as
+			// intentionally "changing" a computed attribute by naming a
+			// value for it. This is deterministic Go code guaranteeing
+			// what prompt-engineering alone can't fully guarantee, matching
+			// this project's own standing "the LLM reasons about intent,
+			// deterministic code guarantees mechanical correctness" split
+			// -- never applied to CREATE, which legitimately omits
+			// computed attributes since they don't exist yet, and never
+			// applied to a non-Computed attribute a modify's config omits,
+			// which stays exactly as drafted (an intentional decision, or
+			// the model's own responsibility per its own instructions --
+			// not this resolver's to silently second-guess).
+			if len(current) > 0 {
+				var currentMap map[string]interface{}
+				if err := json.Unmarshal(current, &currentMap); err == nil {
+					for k, v := range currentMap {
+						if _, present := e.resolvedConfig[k]; present {
+							continue
+						}
+						if e.provider.Schema.IsComputed(e.ri.Type, k) {
+							e.resolvedConfig[k] = v
+						}
+					}
+				}
+			}
 			resolvedBytes, err := json.Marshal(e.resolvedConfig)
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
@@ -656,6 +711,13 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 			}
+			lookup, found, err := l.LastLookup(e.addr)
+			if err != nil {
+				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+			}
+			if !found {
+				return nil, fmt.Errorf("%w: %s", ErrModifyTargetNoLookup, e.addr)
+			}
 			modifies = append(modifies, core.Modification{
 				Target:    e.addr,
 				Before:    before,
@@ -667,6 +729,7 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 				Kind:         "live_state",
 				Resource:     e.addr.String(),
 				ObservedHash: observedHash,
+				Lookup:       lookup,
 			})
 		}
 	}

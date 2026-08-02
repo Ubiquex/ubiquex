@@ -91,7 +91,7 @@ func TestResolve_TwoProviders_TypeInference_RecordsWinner(t *testing.T) {
 func TestResolve_Modify_RecordsProvider(t *testing.T) {
 	l := core.Open(t.TempDir())
 	addr := core.Address{Stack: "payments", Type: "aws_db_instance", Name: "main"}
-	seedLedger(t, l, addr, `{"instance_class":"db.t3.small"}`)
+	seedLedger(t, l, addr, `{"id":"main-1","instance_class":"db.t3.small"}`)
 
 	intent := intentFile("payments",
 		ri("aws_db_instance", "main", OpModify, `{"instance_class":"db.t3.large"}`),

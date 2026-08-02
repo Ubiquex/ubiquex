@@ -85,4 +85,37 @@ type DraftRequest struct {
 	Attempt     int
 	PriorOutput json.RawMessage
 	PriorErrors []string
+
+	// KnownResources is the target stack's own currently-recorded state,
+	// keyed by "<type>.<name>" (matching how a resources[] entry itself
+	// is addressed) -- UBI-85: fed in so a re-plan against an EXISTING
+	// stack can distinguish "this doc still matches what's already
+	// shipped" (correctly omit from resources[] entirely) from "this doc
+	// now describes something different" (op=modify) from "this doc
+	// describes something the ledger has never seen" (op=create,
+	// unchanged from pre-UBI-85 behavior). Each value is that address's
+	// full recorded state (core.Ledger.FoldState's own output) -- every
+	// attribute, including provider-computed ones the document itself
+	// never mentions (an id, an ARN), since an Adapter drafting a modify
+	// must reproduce them unchanged rather than omit them (see
+	// intentprovider/claude's own system prompt for why an omitted
+	// attribute reads as REMOVED, not preserved).
+	//
+	// Nil or empty for a fresh/never-seen stack, or for a caller with no
+	// ledger context to offer (ubx propose --from-doc and ubx chat both
+	// deliberately never open a ledger at all, UBI-85 session's own
+	// scope decision -- preserving their existing "never touches a
+	// ledger" boundary) -- an Adapter must then treat every resource as
+	// if the stack were empty, matching this package's entire pre-UBI-85
+	// behavior exactly.
+	//
+	// Still just plain, pre-computed DATA -- the caller's own already-
+	// read Fleet/FoldState result -- never a live ledger handle or query
+	// capability. This does not weaken this struct's own founding
+	// boundary (no ledger handle, no provider schema, no filesystem
+	// access): an Adapter still cannot reach the ledger itself, ask a new
+	// question of it, or see anything beyond the fixed snapshot the
+	// caller decided to hand over, the identical relationship Content
+	// already has to the source document's own file.
+	KnownResources map[string]json.RawMessage
 }

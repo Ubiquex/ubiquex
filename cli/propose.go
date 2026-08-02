@@ -133,7 +133,10 @@ func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout t
 		return &ExitCodeError{Code: 2, Err: stackRequiredError("propose --from-doc", rc.Files)}
 	}
 
-	draft, err := draftFromDoc(cmd, cfg, docPath, stack, timeout)
+	// UBI-85: nil knownResources -- `ubx propose --from-doc` keeps its
+	// existing, deliberate "never touches a ledger" boundary; every
+	// resource still drafts as op=create, exactly as before this ticket.
+	draft, err := draftFromDoc(cmd, cfg, docPath, stack, timeout, nil)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("propose --from-doc: %w", err)}
 	}
@@ -165,7 +168,15 @@ func runProposeFromDoc(cmd *cobra.Command, docPath, stack, out string, timeout t
 // the identical drafting step before resolving it in the same command,
 // rather than a second copy of this logic -- the resolve step itself
 // stays a separate, explicit call in each caller, never folded in here.
-func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeout time.Duration) (*resolver.IntentFile, error) {
+//
+// knownResources (UBI-85) is the target stack's own currently-recorded
+// state (knownResourcesForStack, below), threaded straight through to
+// DraftWithRetry -- nil from runProposeFromDoc (this session's own
+// deliberate scope decision: `ubx propose --from-doc` keeps its existing
+// "never touches a ledger" boundary untouched), non-nil from `ubx plan
+// --from-doc` (plan.go), which already opens a ledger for its own later
+// resolve step and can afford to read it slightly earlier instead.
+func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeout time.Duration, knownResources map[string]json.RawMessage) (*resolver.IntentFile, error) {
 	if stack == "" {
 		return nil, errors.New("--stack is required")
 	}
@@ -189,7 +200,7 @@ func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeou
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
-	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted)
+	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted, knownResources)
 	if err != nil {
 		return nil, err
 	}

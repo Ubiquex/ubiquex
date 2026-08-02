@@ -4,6 +4,99 @@
 
 ## Current phase
 
+**UBI-85 (2026-08-02, P1) — re-plan against an existing stack: known-resources
+context feeding, so `ubx plan --from-doc`/`ubx promote` distinguish
+"unchanged" from "modify" from "create" from "ledger has it, doc dropped
+it." Founder repro: a 5-resource `platform.md` shipped once, then
+re-planned with only one line (SQS-style `retention_days`) changed, used
+to draft all 5 as fresh creates — zero ledger awareness.**
+
+**Root cause, confirmed empirically before fixing (not assumed):** traced
+the actual draft-construction path — `intentprovider.DraftRequest` carried
+no ledger context at all; `Draft`/`DraftWithRetry` never received
+anything about the target stack's current fleet/state. Not a mishandled
+signal, a genuinely absent one.
+
+**Fix:** `DraftRequest.KnownResources map[string]json.RawMessage` (keyed
+`"<type>.<name>"`, from `ledger.Fleet(stack)` + `FoldState` per address) —
+fed to the Claude adapter, which now includes it in the user prompt and
+follows a new "Re-planning against an existing stack" system-prompt
+section: unchanged → omit from `resources[]` entirely (no create/modify);
+changed → `op=modify` with a clean before/after diff; unseen → `op=create`
+as before; ledger has an address the doc no longer mentions → a visible
+Question/warning, never an auto-destroy (destroys stay explicit, per the
+founding design). Empty-draft validation relaxed only when known-context
+was actually given (an all-unchanged doc legitimately produces zero
+resources/destroys). Wired into `ubx plan --from-doc` and `ubx promote`
+(same `draftFromDoc` re-plan-against-existing-target-stack risk, found and
+fixed proactively) — `ubx propose --from-doc` and `ubx chat` deliberately
+left unchanged (they never open a ledger; preserved on purpose).
+
+**Two pre-existing bugs found and fixed live, both blocking the P1's own
+required live finale ("ship it, confirm drift is zero, confirm `ubx why`
+shows two proposals") — neither introduced by this ticket, both genuinely
+blocked ANY modify shipment before today, confirmed via hand-written
+intent files that bypass the LLM entirely:**
+
+1. **`core/resolver/resolver.go`'s `OpModify` case never set
+   `ResolutionInput.Lookup`** — only `destroys.go`'s destroy-target path
+   did. Ship-time `VerifyFreshness` needs it; every modify failed with
+   "no recorded lookup key," always, regardless of what changed. Fixed by
+   calling `l.LastLookup(e.addr)` (the same helper `destroys.go:210`
+   already used) and threading it into the modify's own
+   `resolution.inputs` entry, plus a new `ErrModifyTargetNoLookup` mirroring
+   `ErrDestroyTargetNoLookup`. Test-seeding helpers (`seedLedger` et al.)
+   updated to record a derivable lookup too, since they'd never needed one
+   before.
+
+2. **`fakeprovider` had no cross-process state persistence** —
+   `ReadResource` was "fully stateless, a pure function of whatever
+   current_state it's given" (deliberate, documented design). Ship-time
+   freshness verification correctly passes only the resource's minimal
+   lookup key (real-provider semantics), so any attribute absent from that
+   key (e.g. `tags`) always read back as gone — confirmed this wasn't
+   modify-specific: `ubx status --drift` showed 5/5 "drifted" immediately
+   after a clean create, zero doc changes. Fixed with an opt-in
+   `FAKEPROVIDER_STATE_DIR` env var: `ApplyResourceChange` persists each
+   `fake_widget`'s full applied state to disk, `ReadResource` loads it back
+   — unset by every existing test, so nothing else changed behavior.
+   **Found and fixed a bug in that same fix on the first live rerun**:
+   keyed persisted state by `id`, but `fake_widget`'s schema-Computed `id`
+   is deterministically the same literal `"computed-id"` for every
+   instance — every resource's state collided into one file. Re-keyed by
+   `name` instead (unique per resource, and already present in a real
+   ship's own recorded `Lookup` for this type, confirmed from the apply
+   record, since `name` is schema-Required).
+
+**Live verification:** round 1 (create) and round 2 (re-plan with only
+`retention_days` changed) both drafted correctly against real Claude +
+real fakeprovider — round 2 produced the exact required
+`+0 create(s) ~1 modify(ies) -0 destroy(s)` with a clean
+`tags.retention_days: "1" -> "3"` diff, no spurious `id` entry (the
+existing UBI-85 auto-preserve-computed-attributes resolver fix already
+handled that). The full ship+drift+`ubx why` leg was re-verified
+**hermetically** (hand-written intent files through `ubx resolve` →
+`ubx accept` → `ubx ship`, same code paths, same fakeprovider binary) after
+the real Claude API ran out of credit balance mid-session (external,
+billing — not a code issue): 5 creates ship clean, 0/5 drift immediately
+after; the modify then ships clean with the exact clean diff, drift stays
+0/5 after, and `ubx why platform.fake_widget.ci-notifications` shows
+exactly 2 proposals (create, then modify), newest first. All four
+ticket-specified adversarial rows (unchanged/one-changed/new-sixth/
+dropped) covered by hermetic fake-adapter tests in
+`cli/plan_from_doc_existing_state_test.go`, all passing.
+
+**Docs debt:** none — no user-visible new commands/flags; `plan --from-doc`
+and `promote`'s existing behavior is now smarter, not different in shape.
+
+**Next:** re-run the full live finale end-to-end through real Claude (not
+just hermetically) once API credit balance is restored, to close the loop
+on the exact founder repro in one continuous invocation. Live finale
+scratch artifacts (docs, ledgers, transcripts) live under this session's
+job tmp dir, not committed.
+
+## Current phase (previous)
+
 **UBI-84 (2026-08-02) — ship progress polish, post-UBI-83 (playground-9
 re-test): drop the redundant closing summary list, remove blank lines
 between resource rows, align columns across the whole batch. Same

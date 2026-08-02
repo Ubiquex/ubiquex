@@ -131,10 +131,31 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 				targetStack = toStack
 			}
 
+			// UBI-85: same fix as `ubx plan --from-doc` -- a promote that
+			// re-drafts from the source document against a TARGET stack
+			// that already has some or all of these resources (a repeat
+			// promotion, most commonly) has the identical bug otherwise:
+			// re-declaring already-promoted resources as fresh creates.
+			// Read-only, closed immediately; the later openLedgerForStack
+			// call below (unchanged) opens its own separate handle for
+			// the real resolve step.
+			var knownResources map[string]json.RawMessage
+			{
+				preLedger, closePreLedger, kerr := openLedgerForStack(ctx, to, targetStack, targetCfg)
+				if kerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", kerr)}
+				}
+				knownResources, kerr = knownResourcesForStack(preLedger, targetStack)
+				closePreLedger()
+				if kerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", kerr)}
+				}
+			}
+
 			var intent *resolver.IntentFile
 			switch ext := strings.ToLower(filepath.Ext(authSource.Ref)); ext {
 			case ".md":
-				intent, err = draftFromDoc(cmd, targetCfg, authSource.Ref, targetStack, timeout)
+				intent, err = draftFromDoc(cmd, targetCfg, authSource.Ref, targetStack, timeout, knownResources)
 			case ".d2":
 				intent, err = draftFromDiagram(cmd, targetCfg, authSource.Ref, targetStack, summary, neighborLedgers, timeout)
 			default:

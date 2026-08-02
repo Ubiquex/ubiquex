@@ -167,6 +167,31 @@ propose-time PR trailer hash, etc.).`,
 				if stack == "" {
 					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-doc", rc.Files)}
 				}
+				// UBI-85: read the target stack's own currently-recorded
+				// state BEFORE drafting, not after -- the root cause this
+				// ticket fixes was exactly that `ubx plan --from-doc` used
+				// to open a ledger only for its own later resolve step,
+				// leaving the drafting step itself with zero awareness of
+				// what's already shipped, so every resource redrafted as a
+				// fresh create even when unchanged. This ledger handle is
+				// closed immediately after computing knownResources -- the
+				// LATER openLedgerForStack call below (unchanged) opens its
+				// own separate handle for the real resolve step; core.Open's
+				// own git-local path is a lightweight struct with no
+				// persistent lock to conflict with itself over, so opening
+				// it twice here is harmless, not a double-lock hazard.
+				var knownResources map[string]json.RawMessage
+				{
+					preLedger, closePreLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
+					}
+					knownResources, err = knownResourcesForStack(preLedger, stack)
+					closePreLedger()
+					if err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
+					}
+				}
 				// docs/cli-output-spec.md §v2's own "plan -- progress" rule
 				// (UBI-63): the intent-provider call is seconds-long against
 				// a real API, so a bare receipt render with nothing printed
@@ -185,7 +210,7 @@ propose-time PR trailer hash, etc.).`,
 				}
 				fmt.Fprintf(outWriter, "drafting via %s:%s… ", adapterName, model)
 				showedDraftProgress = true
-				draft, err := draftFromDoc(cmd, cfg, fromDoc, stack, timeout)
+				draft, err := draftFromDoc(cmd, cfg, fromDoc, stack, timeout, knownResources)
 				if err != nil {
 					fmt.Fprintln(outWriter)
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}

@@ -117,7 +117,11 @@ func runChat(cmd *cobra.Command, ledgerDir, stack, out string, timeout time.Dura
 			dlg.Turns = append(dlg.Turns, intentprovider.Turn{Text: string(redacted), At: nowRFC3339()})
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-			draft, raw, err := intentprovider.DraftWithRetry(ctx, adapter, stack, dlg.Transcript())
+			// UBI-85: nil knownResources -- ubx chat, like ubx propose
+			// --from-doc, deliberately never opens a ledger (this
+			// session's own scope decision, documented in STATE.md);
+			// every resource still drafts as op=create as before.
+			draft, raw, err := intentprovider.DraftWithRetry(ctx, adapter, stack, dlg.Transcript(), nil)
 			cancel()
 			if err != nil {
 				// A single bad turn doesn't lose the conversation --

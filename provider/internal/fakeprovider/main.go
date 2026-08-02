@@ -26,6 +26,21 @@
 // ok-v5/ok-v6's ReadResource response regardless of current_state — see
 // echoWidgetState.
 //
+// FAKEPROVIDER_STATE_DIR (UBI-85 live finale, ok-v5/ok-v6 only), if set,
+// makes ApplyResourceChange persist each fake_widget's full applied state
+// to "<dir>/<id>.json" and ReadResource load it back by the id in its own
+// current_state — opt-in cross-process persistence, since a bare create in
+// one `ubx` invocation and a later modify/drift-check's freshness read in a
+// SEPARATE invocation each launch a fresh fakeprovider process, and this
+// fixture is otherwise fully stateless (see echoWidgetState): without this,
+// ReadResource can only echo back whatever current_state it was actually
+// given, and ship-time freshness verification deliberately passes just the
+// resource's own minimal lookup key (real-provider semantics — a real
+// Read only needs an id to fetch full state from the cloud's own
+// database), so any attribute absent from that lookup key (e.g. tags)
+// reads back as spuriously gone. Unset by every existing test, so every
+// existing test keeps today's pure-echo behavior unchanged.
+//
 // FAKEPROVIDER_APPLY_MODE (UBI-26, ok-v5/ok-v6 only) selects
 // ApplyResourceChange's behavior:
 //
@@ -104,7 +119,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -332,6 +349,7 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 		// wire protocol, not just an in-process interface mock.
 		if ok && os.Getenv("FAKEPROVIDER_APPLY_MODE") != "lying-destroy" {
 			markDestroyed(id)
+			removePersistedState(req.PriorState.GetMsgpack())
 		}
 		return &tfplugin6.ApplyResourceChange_Response{}, nil
 	}
@@ -450,6 +468,7 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 		// reachable on the next ReadResource.
 		if ok && os.Getenv("FAKEPROVIDER_APPLY_MODE") != "lying-destroy" {
 			markDestroyed(id)
+			removePersistedState(req.PriorState.GetMsgpack())
 		}
 		return &tfplugin5.ApplyResourceChange_Response{}, nil
 	}
@@ -515,6 +534,11 @@ var fakeWidgetType = cty.Object(map[string]cty.Type{
 // 3) to tell "ubx correctly reverted this" apart from "the fixture
 // re-injected the drift into its own apply response regardless."
 func echoWidgetState(msgpackBytes []byte) ([]byte, error) {
+	if name, ok := currentStateName(msgpackBytes); ok {
+		if persisted, found := loadPersistedWidgetState(name); found {
+			msgpackBytes = persisted
+		}
+	}
 	vals, err := decodeWidgetState(msgpackBytes)
 	if err != nil {
 		return nil, err
@@ -542,7 +566,83 @@ func echoAppliedState(msgpackBytes []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
+	out, err := ctymsgpack.Marshal(cty.ObjectVal(vals), fakeWidgetType)
+	if err != nil {
+		return nil, err
+	}
+	if name := vals["name"]; !name.IsNull() && name.IsKnown() && name.AsString() != "" {
+		if err := persistWidgetState(name.AsString(), out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// fakeProviderStateDir returns FAKEPROVIDER_STATE_DIR, empty if unset (see
+// the package doc comment).
+func fakeProviderStateDir() string {
+	return os.Getenv("FAKEPROVIDER_STATE_DIR")
+}
+
+// persistedStatePath is keyed by the widget's own "name", not "id" --
+// fake_widget's schema-Computed "id" is deterministically the SAME literal
+// "computed-id" for every instance (see decodeWidgetState), so it can never
+// disambiguate between two different fake_widget resources; "name" is the
+// one attribute this fixture's own callers always supply distinctly per
+// resource (its own address name), and — for this exact reason — is
+// already what a real ship's own Lookup carries alongside "id" for this
+// type (fake_widget's schema marks "name" Required, so
+// cli/stateadapter.go's own required-attr computation already includes it;
+// confirmed via a live apply record during the UBI-85 finale).
+func persistedStatePath(dir, name string) string {
+	return filepath.Join(dir, url.PathEscape(name)+".msgpack")
+}
+
+// persistWidgetState is echoAppliedState's own write side — a no-op
+// whenever FAKEPROVIDER_STATE_DIR isn't set, preserving every existing
+// test's pure-echo behavior exactly.
+func persistWidgetState(name string, msgpackBytes []byte) error {
+	dir := fakeProviderStateDir()
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("fakeprovider: persist state: %w", err)
+	}
+	if err := os.WriteFile(persistedStatePath(dir, name), msgpackBytes, 0o644); err != nil {
+		return fmt.Errorf("fakeprovider: persist state: %w", err)
+	}
+	return nil
+}
+
+// loadPersistedWidgetState is echoWidgetState's own read side — found is
+// false whenever FAKEPROVIDER_STATE_DIR isn't set or name was never
+// persisted, in which case the caller falls back to its original
+// echo-the-request behavior.
+func loadPersistedWidgetState(name string) (msgpackBytes []byte, found bool) {
+	dir := fakeProviderStateDir()
+	if dir == "" {
+		return nil, false
+	}
+	b, err := os.ReadFile(persistedStatePath(dir, name))
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// removePersistedState is a destroy's own cleanup — a no-op whenever
+// FAKEPROVIDER_STATE_DIR isn't set or priorMsgpackBytes carries no "name"
+// (best-effort, mirroring markDestroyed's own id-based tracking, which
+// this is independent of).
+func removePersistedState(priorMsgpackBytes []byte) {
+	dir := fakeProviderStateDir()
+	if dir == "" {
+		return
+	}
+	if name, ok := currentStateName(priorMsgpackBytes); ok {
+		os.Remove(persistedStatePath(dir, name))
+	}
 }
 
 // decodeWidgetState is echoWidgetState/echoAppliedState's shared decode +
@@ -593,6 +693,20 @@ func isDestroyed(id string) bool {
 	destroyedMu.Lock()
 	defer destroyedMu.Unlock()
 	return destroyedIDs[id]
+}
+
+// currentStateName is currentStateID's own twin for "name" -- the
+// persistence key (see persistedStatePath) -- best-effort in the same way.
+func currentStateName(msgpackBytes []byte) (name string, ok bool) {
+	val, err := ctymsgpack.Unmarshal(msgpackBytes, fakeWidgetType)
+	if err != nil || val.IsNull() {
+		return "", false
+	}
+	nameVal := val.GetAttr("name")
+	if nameVal.IsNull() || !nameVal.IsKnown() || nameVal.AsString() == "" {
+		return "", false
+	}
+	return nameVal.AsString(), true
 }
 
 // currentStateID extracts "id" from a ReadResource request's current_state

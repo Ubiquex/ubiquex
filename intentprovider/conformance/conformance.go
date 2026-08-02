@@ -248,7 +248,9 @@ func Run(t *testing.T, a intentprovider.Adapter) {
 	for _, f := range Fixtures {
 		f := f
 		t.Run(f.Name, func(t *testing.T) {
-			draft, _, err := intentprovider.DraftWithRetry(context.Background(), a, f.Stack, f.Doc(t))
+			// UBI-85: nil knownResources -- every conformance fixture
+			// drafts against a fresh, never-seen stack.
+			draft, _, err := intentprovider.DraftWithRetry(context.Background(), a, f.Stack, f.Doc(t), nil)
 			if err != nil {
 				t.Fatalf("DraftWithRetry: %v", err)
 			}

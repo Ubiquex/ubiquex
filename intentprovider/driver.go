@@ -70,24 +70,38 @@ func (e *DraftError) Error() string {
 // (sources.go's PopulateSources) -- DraftWithRetry's job ends at "a
 // valid draft"; provenance is the caller's own next step, since only the
 // caller knows the source document's real content_hash.
-func DraftWithRetry(ctx context.Context, a Adapter, stack string, content []byte) (*resolver.IntentFile, json.RawMessage, error) {
+//
+// knownResources (UBI-85) is the target stack's own currently-recorded
+// state, threaded verbatim into every DraftRequest.KnownResources this
+// call makes (see that field's own doc comment) -- nil/empty from a
+// caller with no ledger context to offer (ubx propose --from-doc, ubx
+// chat), which is exactly this function's own pre-UBI-85 behavior.
+// Non-empty unlocks one validation relaxation below: a draft whose
+// resources AND destroys are BOTH empty is normally rejected (a real bug
+// found live, see parseAndValidate's own doc comment) -- but once real
+// existing-state context was actually given, "everything already
+// matches, nothing to propose" becomes a legitimate, correct outcome
+// rather than a sign the model forgot to declare something.
+func DraftWithRetry(ctx context.Context, a Adapter, stack string, content []byte, knownResources map[string]json.RawMessage) (*resolver.IntentFile, json.RawMessage, error) {
 	var attempts []AttemptError
 	var priorOutput json.RawMessage
 	var priorErrors []string
+	allowEmptyDraft := len(knownResources) > 0
 
 	for attempt := 1; attempt <= MaxAttempts; attempt++ {
 		raw, err := a.Draft(ctx, DraftRequest{
-			Stack:       stack,
-			Content:     content,
-			Attempt:     attempt,
-			PriorOutput: priorOutput,
-			PriorErrors: priorErrors,
+			Stack:          stack,
+			Content:        content,
+			KnownResources: knownResources,
+			Attempt:        attempt,
+			PriorOutput:    priorOutput,
+			PriorErrors:    priorErrors,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("intentprovider: adapter %q attempt %d: %w", a.Name(), attempt, err)
 		}
 
-		file, validationErrs := parseAndValidate(raw, stack)
+		file, validationErrs := parseAndValidate(raw, stack, allowEmptyDraft)
 		if len(validationErrs) == 0 {
 			return file, raw, nil
 		}

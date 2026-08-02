@@ -123,9 +123,7 @@ func (a *Adapter) Draft(ctx context.Context, req intentprovider.DraftRequest) (j
 	// Draft itself never needed to change to support the second caller --
 	// Content is already just bytes, whichever caller built them.
 	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(fmt.Sprintf(
-			"Stack: %s\n\nDocument or conversation transcript:\n\n%s", req.Stack, string(req.Content),
-		))),
+		anthropic.NewUserMessage(anthropic.NewTextBlock(buildUserPrompt(req))),
 	}
 	if req.Attempt > 1 {
 		messages = append(messages,
@@ -204,6 +202,31 @@ func classifyError(err error) error {
 	return fmt.Errorf("claude adapter: request failed (network/connection): %w", err)
 }
 
+// buildUserPrompt is Draft's own first-turn text -- the stack name
+// (unchanged), UBI-85's own "Resources already recorded" section when
+// req.KnownResources carries any (see the system prompt's own
+// "Re-planning against an existing stack" section for exactly how the
+// model is instructed to use it), and the document/transcript content
+// (unchanged). json.MarshalIndent on a map[string]json.RawMessage
+// indents the outer key structure; each already-compact RawMessage value
+// is spliced in verbatim rather than re-indented -- fine here, the model
+// needs to parse it correctly, not admire its formatting.
+func buildUserPrompt(req intentprovider.DraftRequest) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Stack: %s\n\n", req.Stack)
+	if len(req.KnownResources) > 0 {
+		known, err := json.MarshalIndent(req.KnownResources, "", "  ")
+		if err == nil {
+			fmt.Fprintf(&b, "Resources already recorded in this stack's ledger, keyed by \"<type>.<name>\" "+
+				"(see the system prompt's own \"Re-planning against an existing stack\" section):\n\n%s\n\n", known)
+		}
+	} else {
+		b.WriteString("No resources are currently recorded for this stack -- treat every resource the document describes as new.\n\n")
+	}
+	fmt.Fprintf(&b, "Document or conversation transcript:\n\n%s", string(req.Content))
+	return b.String()
+}
+
 func retryPrompt(errs []string) string {
 	s := "The previous draft failed validation:\n"
 	for _, e := range errs {
@@ -244,12 +267,69 @@ draft -- never refuse, never leave a field blank because you're unsure,
 and never produce two competing drafts.
 
 The "resources" array is the actual change -- every resource you reason
-about in assumptions/defaults/questions MUST also appear as a real
-entry in "resources", with a real "config". Before you finish, check:
-does every address you named in an "affects" list correspond to an
-entry that actually exists in "resources"? A draft whose reasoning
-describes a resource but whose "resources" array is empty or missing
-that resource is wrong, even if every other field looks complete.
+about in assumptions/defaults/questions as something being CREATED or
+MODIFIED MUST also appear as a real entry in "resources", with a real
+"config". Before you finish, check: does every address you named in an
+"affects" list correspond to an entry that actually exists in
+"resources"? A draft whose reasoning describes a change to a resource
+but whose "resources" array is empty or missing that resource is wrong,
+even if every other field looks complete. (The one exception: a resource
+you recognize as already matching what's currently recorded needs no
+entry at all -- see "Re-planning against an existing stack" below.)
+
+Re-planning against an existing stack (UBI-85): the user turn may include
+a "Resources already recorded in this stack's ledger" section, listing
+every resource this stack already has, keyed by "<type>.<name>", each
+with its own full currently-recorded state (including provider-computed
+attributes you have no other way to know, like a generated id or ARN).
+When this section is present, treat it as ground truth for what already
+exists. For every resource you identify in the document:
+
+- If it clearly describes the SAME real-world resource as an entry in
+  that list (matching what it represents, not just superficial wording),
+  and you include it at all, you MUST reuse that entry's EXACT "type"
+  and "name" -- never invent a slightly different name for something
+  that already has one recorded; a renamed duplicate would draft as an
+  unwanted second resource, not a recognized match.
+- If every attribute the document specifies for it is already consistent
+  with that entry's own recorded state, DO NOT include it in "resources"
+  at all. It is unchanged; correctly omitting it is the right answer,
+  not an oversight.
+- If the document now describes it differently (any attribute value that
+  doesn't match), include it with "op": "modify". Its "config" must be
+  the resource's COMPLETE current desired state -- every attribute
+  already recorded for it, reproduced UNCHANGED, plus whatever the
+  document now says differently. Never omit an attribute just because it
+  isn't changing, and never omit one you don't see mentioned in the
+  document at all (a provider-computed id/arn, say) -- an attribute
+  missing from your "config" is read as REMOVED, not preserved, so
+  dropping it would silently destroy real, already-existing state that
+  was never actually asked to change.
+- If nothing in the known-resources list matches, it's genuinely new --
+  "op": "create", exactly as you would without this section present.
+
+If an entry in the known-resources list has a "<type>.<name>" the
+CURRENT document text does not describe anywhere at all, this is a real,
+visible tension, not something to resolve silently either way. Do NOT
+add it to "destroys" -- destroys are never inferred from a resource's
+absence (see the "destroys" field's own description; that rule applies
+here just as much as anywhere else). Instead, add an intent.questions
+entry with blocking: true, naming the exact address, stating plainly
+that the ledger still tracks it but the current document no longer
+describes it, and that an explicit "ubx terminate" is the only way to
+actually remove it if that is truly what's intended.
+
+It is entirely correct -- not a failure, not something to avoid -- for a
+draft to end up with a completely empty "resources" array (and empty
+"destroys") when literally everything the document describes already
+matches what's recorded. Say so plainly in intent.summary (e.g. "No
+changes: all 5 resources already match their currently recorded state")
+rather than inventing a change that isn't there.
+
+If no "Resources already recorded" section is present in the user turn at
+all, there is no known existing state to compare against -- draft every
+resource exactly as you would without this capability, "op": "create"
+for everything the document describes.
 
 Every entry you write in assumptions, defaults, or questions must
 describe a real, specific interpretation tied to an actual value in
