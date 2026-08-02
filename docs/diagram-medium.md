@@ -1036,3 +1036,52 @@ proposal for the same resource, etc.). This doesn't change what the
 diagram medium can express (still topology only, unchanged) — it changes
 what happens when someone tries to ship that topology directly without
 the enrichment step the medium's own design has always required.
+
+**Amendment (2026-08-02, UBI-90): the same refusal now happens at
+RESOLVE time, not just at ship-time encode — found live, the founder's
+own playground-13 incident, the exact gap this session's own amendment
+above left open.** The 2026-07-31 fix (immediately above) hard-refused a
+missing-Required-attribute at `provider/ctyvalue.go`'s own encode step —
+correct in intent, but arbitrarily late: a real multi-resource `ubx ship`
+had already applied one resource (a type with few enough required
+attributes that topology alone happened to satisfy it) before the SECOND
+resource's own encode failure ever fired, leaving a real,
+partially-shipped stack with no way to have caught the problem any
+earlier. `core/resolver`'s own `MissingRequiredKeys` check
+(`ErrMissingRequiredAttribute`, docs/resolver-adversarial.md row 15) now
+runs at the SAME resolve-time chokepoint UBI-66's own `UnknownConfigKeys`
+already established — before a proposal is even saved as a plan, let
+alone shipped. `provider/ctyvalue.go`'s own encode-time check is
+unchanged, kept as ship-time defense-in-depth for any proposal that
+somehow bypassed resolve (an old plan file resolved before this fix
+existed, say) — but it is no longer the first, or only, place this is
+caught.
+
+**The root design question this amendment also answers, confirmed
+against this document's own founding text, not assumed:** should a
+diagram-authored resource's own required-but-inexpressible attribute
+render as a blocking `core.Question` instead of a hard resolve-time
+refusal? No — confirmed via two independent lines of evidence in this
+project's own existing design record. First, `Question.Blocking` is
+explicitly documented (docs/intent-provider.md's "Component 3" section)
+as carrying **zero resolver-side enforcement**, a deliberate,
+considered-and-rejected alternative ("auto-refusing resolve on a
+blocking question... would hand [it] veto power over what a human is
+allowed to review and sign") — using it here would not actually satisfy
+"never reaches ship," the whole point of this fix. Second, Component 3's
+own boundary is explicit: a Question exists for a genuine *interpretive*
+ambiguity (a "plausible, valid, schema-conforming, wrong-guess concrete
+value" nothing mechanical could catch) — explicitly contrasted, in that
+same passage, against "a wrong resource type... a wrong reference... a
+wrong operation," all of which the SAME text says are already caught by
+resolve's own "deterministic, schema-checked, hard-erroring pipeline." A
+missing Required attribute is mechanically checkable with zero legitimate
+interpretation — squarely in that hard-erroring bucket (the same one
+UBI-66's own wrong-key check already lives in), never the Question one.
+This project's own founding lossy-medium rule (UBI-47, above) already
+pointed the same direction: diagrams author topology only, BY DESIGN, and
+a resource needing more than topology has always required a separate
+enrichment step before it's real (this document's own "Live finale" and
+every conformance fixture converge on real, complete stacks; nothing in
+UBI-47's original scope ever proposed silently defaulting or
+Question-ing a required attribute into existence).

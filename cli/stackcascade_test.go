@@ -86,7 +86,16 @@ func TestPlan_FromDoc_NoStackAnywhere_TeachingError(t *testing.T) {
 }
 
 // TestPlan_FromDiagram_StackFromConfig_NoFlag mirrors the --from-doc case
-// above for --from-diagram's own identical bug/fix.
+// above for --from-diagram's own identical bug/fix. UBI-90: fake_widget's
+// own schema-Required "name" (topology-only, so the diagram can never
+// supply it) now makes plan's own resolve step refuse -- still exactly
+// what this test needs to prove, since the refusal error names the
+// address "playground.fake_widget.main-widget": the ONLY way that address
+// carries "playground" is if the stack really did cascade from config with
+// no --stack flag given. A resolve failure for the wrong reason (e.g. "no
+// stack" or a ledger opened under the wrong directory) would name a
+// different stack, or no address at all -- this still fails the assertion
+// below exactly as before.
 func TestPlan_FromDiagram_StackFromConfig_NoFlag(t *testing.T) {
 	dir := t.TempDir()
 	mirrorDir := t.TempDir()
@@ -114,11 +123,11 @@ playground: {
 
 	env := []string{"FAKEPROVIDER_MODE=ok-v6", "UBX_PROVIDER_MIRROR=" + mirrorDir}
 	out, err := runUbx(t, env, "plan", "--from-diagram", diagramPath, "--ledger-dir", dir)
-	if err != nil {
-		t.Fatalf("ubx plan --from-diagram with config-supplied stack, no --stack flag: %v\noutput: %s", err, out)
+	if err == nil {
+		t.Fatalf("ubx plan --from-diagram with config-supplied stack, no --stack flag: expected a required-attribute refusal, got success: %s", out)
 	}
-	if !strings.Contains(out, "blast radius: +1 ~0 -0") {
-		t.Fatalf("expected the resolved delta's own blast radius, got: %s", out)
+	if !strings.Contains(err.Error(), "playground.fake_widget.main-widget") {
+		t.Fatalf("expected the refusal to name playground.fake_widget.main-widget (proving the stack cascaded from config), got: %v\noutput: %s", err, out)
 	}
 }
 

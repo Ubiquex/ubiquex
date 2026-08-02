@@ -66,6 +66,27 @@ func (s schemaInspectorAdapter) UnknownConfigKeys(typeName string, config map[st
 	return out
 }
 
+// MissingRequiredKeys delegates to provider.MissingRequiredKeys (UBI-90)
+// against typeName's own real schema Block -- the same recursive walk
+// provider/schemakeys.go implements once, not reimplemented here. An
+// unknown type or a nil config reports no issues, same reasoning as
+// UnknownConfigKeys immediately above.
+func (s schemaInspectorAdapter) MissingRequiredKeys(typeName string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
+	rs, ok := s.schemas.Resources[typeName]
+	if !ok || config == nil {
+		return nil
+	}
+	issues := provider.MissingRequiredKeys(rs.Block, config)
+	if len(issues) == 0 {
+		return nil
+	}
+	out := make([]resolver.RequiredAttributeIssue, len(issues))
+	for i, iss := range issues {
+		out[i] = resolver.RequiredAttributeIssue{Path: iss.Path}
+	}
+	return out
+}
+
 // resourceTypeSchemaInspector implements resolver.SchemaInspector against
 // the type-erased resourceSchemas map executor.Applier.Schema returns
 // (map[string]any, each value a concrete *provider.Schema boxed as any --
@@ -97,6 +118,13 @@ func (s resourceTypeSchemaInspector) IsSensitive(typeName, attrPath string) bool
 // multi-provider fleet-grouping, never a real resolver.Resolve call) --
 // never calls it.
 func (s resourceTypeSchemaInspector) UnknownConfigKeys(typeName string, config map[string]interface{}) []resolver.ConfigKeyIssue {
+	return nil
+}
+
+// MissingRequiredKeys is an always-nil stub, matching UnknownConfigKeys
+// immediately above -- resolver.InferProvider, the only caller this
+// adapter is ever used for, never calls it either.
+func (s resourceTypeSchemaInspector) MissingRequiredKeys(typeName string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
 	return nil
 }
 

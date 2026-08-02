@@ -426,7 +426,103 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 // pre-existing diagram-medium limitation this validation surfaced, not
 // a regression from it -- see docs/diagram-medium.md's own "topology
 // only" scope note.
-func TestPlanShip_FromDiagram_Resolves(t *testing.T) {
+// TestProposeFromDiagram_EnrichThenResolve_Succeeds is UBI-90's own
+// positive counterpart to the refusal case below -- proving the diagram
+// medium's own documented recovery path (docs/diagram-medium.md's UBI-63
+// session 2 amendment: "a hand-edited plan file... etc.") really does work
+// end to end, not just in prose: `ubx propose --from-diagram` (draft-only,
+// never resolves, so a resource with a Required attribute the diagram
+// can't express drafts cleanly regardless) writes an intent/v1 draft with
+// `config: {}`; a human enriches it by hand, adding the one value no
+// diagram could ever author; `ubx resolve` on the ENRICHED file then
+// succeeds. Before UBI-90, `ubx plan --from-diagram` on the SAME bare
+// diagram (no enrichment step) would have silently "resolved" too --
+// producing an incomplete, shippable-looking proposal that only failed at
+// a real ApplyResourceChange call, potentially after sibling resources in
+// the same batch had already applied (the founder's own live incident,
+// playground-13). That silent path no longer exists; this test proves the
+// REAL, intended one still does.
+func TestProposeFromDiagram_EnrichThenResolve_Succeeds(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[providers]
+"fake/widget" = "0.1.0"
+`)
+
+	diagramPath := filepath.Join(dir, "topo.d2")
+	writeFile(t, diagramPath, `
+classes: {
+  fake_widget: {}
+}
+payments: {
+  primary: main-widget {
+    class: fake_widget
+  }
+}
+`)
+
+	env := []string{"FAKEPROVIDER_MODE=ok-v6", "UBX_PROVIDER_MIRROR=" + mirrorDir}
+	draftPath := filepath.Join(dir, "draft.json")
+	proposeOut, err := runUbx(t, env, "propose", "--from-diagram", diagramPath, "--stack", "payments", "--out", draftPath)
+	if err != nil {
+		t.Fatalf("ubx propose --from-diagram: %v\noutput: %s", err, proposeOut)
+	}
+
+	raw, err := os.ReadFile(draftPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var draft map[string]interface{}
+	if err := json.Unmarshal(raw, &draft); err != nil {
+		t.Fatal(err)
+	}
+	resources, ok := draft["resources"].([]interface{})
+	if !ok || len(resources) != 1 {
+		t.Fatalf("draft resources = %+v, want exactly 1", draft["resources"])
+	}
+	resource, ok := resources[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("draft resource[0] = %+v, want an object", resources[0])
+	}
+	if config, ok := resource["config"].(map[string]interface{}); !ok || len(config) != 0 {
+		t.Fatalf("draft config = %+v, want an empty object (topology-only, per the lossy-medium rule)", resource["config"])
+	}
+	// The real enrichment step: a human adds the one value no diagram
+	// could ever author.
+	resource["config"] = map[string]interface{}{"name": "main-widget"}
+	enriched, err := json.MarshalIndent(draft, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrichedPath := filepath.Join(dir, "draft-enriched.json")
+	if err := os.WriteFile(enrichedPath, enriched, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolveOut, err := runUbx(t, env, "resolve", enrichedPath, "--ledger-dir", dir)
+	if err != nil {
+		t.Fatalf("ubx resolve (enriched): %v\noutput: %s", err, resolveOut)
+	}
+	if !strings.Contains(resolveOut, "1 create(s)") {
+		t.Fatalf("expected a 1-create summary, got: %s", resolveOut)
+	}
+}
+
+// TestPlanFromDiagram_RequiredAttributeMissing_ResolveRefusesClearly is
+// UBI-90's own regression test: a diagram-authored resource missing a
+// schema-Required attribute now refuses at `ubx plan --from-diagram`'s own
+// resolve step -- a clear, actionable, resolve-time error naming the exact
+// missing attribute, never reaching ship at all. Before UBI-90, this exact
+// diagram silently resolved and only failed later, at a real
+// ApplyResourceChange call during `ubx ship` (this test's own prior name,
+// "...ShipRefusesClearly," captured that old, too-late behavior -- kept as
+// ship-time defense-in-depth, provider.ErrRequiredAttributeMissing,
+// unchanged, but no longer the FIRST or only place this is caught).
+func TestPlanFromDiagram_RequiredAttributeMissing_ResolveRefusesClearly(t *testing.T) {
 	dir := t.TempDir()
 	mirrorDir := t.TempDir()
 
@@ -451,58 +547,16 @@ payments: {
 
 	env := []string{"FAKEPROVIDER_MODE=ok-v6", "UBX_PROVIDER_MIRROR=" + mirrorDir}
 	planOut, err := runUbx(t, env, "plan", "--from-diagram", diagramPath, "--stack", "payments", "--ledger-dir", dir)
-	if err != nil {
-		t.Fatalf("ubx plan --from-diagram: %v\noutput: %s", err, planOut)
+	if err == nil {
+		t.Fatalf("ubx plan --from-diagram: expected a resolve-time refusal, got success: %s", planOut)
 	}
-	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
-		t.Fatalf("expected a 1-create blast radius, got: %s", planOut)
+	if !strings.Contains(err.Error(), `config has no value for required attribute "name"`) {
+		t.Fatalf("expected a clear, actionable required-attribute error naming \"name\", got: %v\noutput: %s", err, planOut)
 	}
-}
-
-// TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly
-// is the negative twin, above: shipping the identical diagram-authored
-// proposal now fails with a clear, actionable error naming the exact
-// missing attribute -- never the old cryptic remote rejection a real
-// provider would have returned for a silently-nulled required field.
-func TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly(t *testing.T) {
-	dir := t.TempDir()
-	mirrorDir := t.TempDir()
-
-	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
-	withConfigSearchDir(t, dir)
-	writeConfig(t, dir, `
-[providers]
-"fake/widget" = "0.1.0"
-`)
-
-	diagramPath := filepath.Join(dir, "topo.d2")
-	writeFile(t, diagramPath, `
-classes: {
-  fake_widget: {}
-}
-payments: {
-  primary: main-widget {
-    class: fake_widget
-  }
-}
-`)
-
-	env := []string{"FAKEPROVIDER_MODE=ok-v6", "UBX_PROVIDER_MIRROR=" + mirrorDir}
-	planOut, err := runUbx(t, env, "plan", "--from-diagram", diagramPath, "--stack", "payments", "--ledger-dir", dir)
-	if err != nil {
-		t.Fatalf("ubx plan --from-diagram: %v\noutput: %s", err, planOut)
-	}
-	hash := mustExtractPlanHash(t, dir, planOut)
-
-	// A "failed" outcome is the expected, correct result here -- ubx
-	// ship's own non-zero exit for it surfaces as a non-nil err, not a
-	// test failure.
-	shipOut, _ := runUbx(t, env, "ship", hash, "--ledger-dir", dir, "--yes")
-	if !strings.Contains(shipOut, `a required attribute is missing from config: "name"`) {
-		t.Fatalf("expected a clear, actionable required-attribute error naming \"name\", got: %s", shipOut)
-	}
-	if !strings.Contains(shipOut, "outcome: failed") {
-		t.Fatalf("expected outcome: failed, got: %s", shipOut)
+	// Never reached ship at all -- no plan file was ever saved to resolve
+	// into (a failed `ubx plan` writes nothing to .ubx/plans/).
+	if _, statErr := os.Stat(filepath.Join(dir, ".ubx", "plans")); !os.IsNotExist(statErr) {
+		t.Fatalf(".ubx/plans/ exists after a refused plan -- nothing should have been saved")
 	}
 }
 

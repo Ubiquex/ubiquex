@@ -68,6 +68,13 @@ func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) 
 	return nil
 }
 
+// MissingRequiredKeys is an always-nil stub, matching UnknownConfigKeys
+// immediately above (UBI-90) -- same reasoning: this suite covers the
+// parse direction only, never resolve.
+func (f *fakeSchema) MissingRequiredKeys(t string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
+	return nil
+}
+
 func fakeWidgetProvider() resolver.DeclaredProvider {
 	return resolver.DeclaredProvider{
 		Source:  "fake/widget",

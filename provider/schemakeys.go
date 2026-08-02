@@ -156,6 +156,110 @@ func unknownConfigKeysWithinNested(nb NestedBlock, raw interface{}, path string)
 	}
 }
 
+// RequiredAttributeIssue is one schema Attribute marked Required with no
+// value present anywhere in config -- UBI-90's own sibling to
+// ConfigKeyIssue: that struct is "a key that shouldn't be there," this one
+// is "a key that MUST be there and isn't." No Suggestion field -- there is
+// nothing to suggest for a missing attribute the way a fuzzy-matched typo
+// has a most-likely-intended real key.
+type RequiredAttributeIssue struct {
+	// Path is the dot-notation path to the missing attribute, from the
+	// resource's own top-level config -- same convention ConfigKeyIssue's
+	// own Path uses.
+	Path string
+	// Key is the attribute's own bare name -- Path's own last segment.
+	Key string
+}
+
+// MissingRequiredKeys walks config against block recursively, collecting
+// every schema-Required Attribute with no key present in config at all --
+// the exact same "does the key exist" question encodeBlockValue's own
+// `!present && a.Required` branch already asks at encode time (ctyvalue.go,
+// UBI-63 session 2's own ErrRequiredAttributeMissing), just far earlier
+// (resolve time, UBI-90: found live -- a diagram-authored aws_iam_role/
+// aws_ecr_repository shipped with no assume_role_policy/name at all,
+// nothing caught it until a real ApplyResourceChange rejected the
+// incomplete config partway through a real ship, after other resources in
+// the same batch had already applied). A $computed marker, or any other
+// value shape, counts as present regardless of its own content -- this is
+// a presence check only, identical to encodeBlockValue's own `present`
+// bool.
+//
+// Only a PRESENT nested block's own contents are recursed into -- an
+// ABSENT nested block is never itself flagged, mirroring
+// encodeNestedBlockValue's own leniency there (an absent List/Set nested
+// block encodes as an empty collection, no error; NestedBlock has no
+// MinItems modeled in this codebase at all, a real, accepted, pre-existing
+// limitation this check doesn't expand scope to cover).
+func MissingRequiredKeys(block Block, config map[string]interface{}) []RequiredAttributeIssue {
+	return missingRequiredKeysAt(block, config, "")
+}
+
+func missingRequiredKeysAt(block Block, raw interface{}, prefix string) []RequiredAttributeIssue {
+	m, _ := raw.(map[string]interface{})
+	var issues []RequiredAttributeIssue
+	for _, a := range block.Attributes {
+		if !a.Required {
+			continue
+		}
+		if _, present := m[a.Name]; present {
+			continue
+		}
+		path := a.Name
+		if prefix != "" {
+			path = prefix + "." + a.Name
+		}
+		issues = append(issues, RequiredAttributeIssue{Path: path, Key: a.Name})
+	}
+	for _, nb := range block.NestedBlocks {
+		v, present := m[nb.TypeName]
+		if !present {
+			continue
+		}
+		path := nb.TypeName
+		if prefix != "" {
+			path = prefix + "." + nb.TypeName
+		}
+		issues = append(issues, missingRequiredKeysWithinNested(nb, v, path)...)
+	}
+	return issues
+}
+
+// missingRequiredKeysWithinNested mirrors unknownConfigKeysWithinNested's
+// own Single/List/Set/Map nesting shapes exactly (including the same bare-
+// object-shorthand convention), recursing missingRequiredKeysAt per element
+// so a Required attribute missing two or more levels deep is found too.
+func missingRequiredKeysWithinNested(nb NestedBlock, raw interface{}, path string) []RequiredAttributeIssue {
+	switch nb.Nesting {
+	case NestingList, NestingSet:
+		if arr, ok := raw.([]interface{}); ok {
+			var issues []RequiredAttributeIssue
+			for _, item := range arr {
+				issues = append(issues, missingRequiredKeysAt(nb.Block, item, path)...)
+			}
+			return issues
+		}
+		return missingRequiredKeysAt(nb.Block, raw, path)
+	case NestingMap:
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var issues []RequiredAttributeIssue
+		for _, k := range keys {
+			issues = append(issues, missingRequiredKeysAt(nb.Block, m[k], path+"."+k)...)
+		}
+		return issues
+	default: // Single, Group
+		return missingRequiredKeysAt(nb.Block, raw, path)
+	}
+}
+
 // closestKey returns the candidate in candidates most likely to be what
 // key actually meant, or "" if nothing is close enough to be worth
 // suggesting -- a wrong suggestion is worse than none. candidates is

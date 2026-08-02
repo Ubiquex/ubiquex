@@ -178,6 +178,39 @@ func TestResolveFromCode_Go_SimpleCreate(t *testing.T) {
 	}
 }
 
+// TestResolveFromCode_Go_MissingRequiredAttribute_Refused is UBI-90's own
+// confirmation that the SDK medium hits the identical gap the diagram
+// medium does, not assumed: a real, buggy Go SDK program that simply never
+// sets Name (fake_widget's own schema-Required attribute) -- sdk/go/
+// runtime's own serializeOpaque omits a zero-value `any` field from the
+// wire config entirely, producing the exact same "key entirely absent"
+// shape a diagram-authored resource's always-empty config does. Proven
+// through the real evaluator + real resolve, not a synthetic fake --
+// core/resolver's own check is medium-agnostic (the same resolveOnce loop
+// every ResourceIntent funnels through, regardless of provenance), so this
+// is the SDK medium's own live confirmation of that claim, not a
+// restatement of the diagram-medium test.
+func TestResolveFromCode_Go_MissingRequiredAttribute_Refused(t *testing.T) {
+	requireHermeticSandbox(t)
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	entryPath := filepath.Join("testdata", "sdk_resolve_go_missing_required", "create_widget_missing_required.go")
+
+	resolveOut, err := runUbx(t, env, "resolve",
+		"--from-code", entryPath,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--timeout", "60s",
+	)
+	if err == nil {
+		t.Fatalf("ubx resolve --from-code: expected a refusal, got success: %s", resolveOut)
+	}
+	if !strings.Contains(err.Error(), "missing required attribute") || !strings.Contains(err.Error(), "name") {
+		t.Fatalf("expected a missing-required-attribute refusal naming \"name\", got err: %v, output: %s", err, resolveOut)
+	}
+}
+
 // requireWasmtime skips a test when the real wasmtime binary isn't on
 // PATH -- same reasoning as requireDeno/requireHermeticSandbox: a new,
 // genuinely hard dependency this arc introduces.

@@ -90,6 +90,14 @@ func (roleSchema) UnknownConfigKeys(t string, config map[string]interface{}) []r
 	return issues
 }
 
+// MissingRequiredKeys is an always-nil stub (UBI-90) -- this suite's own
+// fixed drafts already carry every real attribute their own fixtures need;
+// required-attribute validation is proven separately, hermetically, in
+// core/resolver's own tests and diagram's own conformance suite.
+func (roleSchema) MissingRequiredKeys(t string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
+	return nil
+}
+
 // TestPlatform_HallucinatedAttributeNames_PassesDraftValidation_ButRefusedByResolve
 // is UBI-66's own permanent conformance regression case -- the original
 // haiku + platform.md repro, kept runnable forever, hermetically (no

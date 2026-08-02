@@ -3,6 +3,7 @@ package diagram
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -14,6 +15,13 @@ import (
 // package needs its own).
 type fakeSchema struct {
 	types map[string]bool
+	// required is MissingRequiredKeys' own opt-in fake (UBI-90), mirroring
+	// core/resolver's own fakeSchema exactly: typeName -> set of attribute
+	// names Required in that type's own (fake) schema. A type never
+	// listed here is never flagged, so every pre-existing test in this
+	// package (none of which cares about required-attribute validation)
+	// stays completely unaffected.
+	required map[string]map[string]bool
 }
 
 func (f *fakeSchema) HasType(t string) bool           { return f.types[t] }
@@ -27,11 +35,57 @@ func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) 
 	return nil
 }
 
+// MissingRequiredKeys reports every attribute name listed in f.required[t]
+// that config has no key for at all -- UBI-90's own opt-in fake, mirroring
+// core/resolver's own fakeSchema.MissingRequiredKeys exactly. A type never
+// listed in f.required (every pre-existing fixture in this package) always
+// reports no issues, same "existing tests stay unaffected" discipline
+// UnknownConfigKeys' own fake already established.
+func (f *fakeSchema) MissingRequiredKeys(t string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
+	req := f.required[t]
+	if len(req) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(req))
+	for name := range req {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var issues []resolver.RequiredAttributeIssue
+	for _, name := range names {
+		if _, present := config[name]; !present {
+			issues = append(issues, resolver.RequiredAttributeIssue{Path: name})
+		}
+	}
+	return issues
+}
+
 func awsProvider() resolver.DeclaredProvider {
 	return resolver.DeclaredProvider{
 		Source:  "hashicorp/aws",
 		Version: "6.54.0",
 		Schema:  &fakeSchema{types: map[string]bool{"aws_db_instance": true, "aws_vpc": true, "aws_ecs_service": true}},
+	}
+}
+
+// awsIAMRoleProvider is UBI-90's own dedicated fixture: aws_iam_role,
+// schema-Required "assume_role_policy" -- the founder's own exact live
+// repro type (playground-13), a real AWS attribute a diagram's own
+// topology-only design structurally cannot express (it isn't a topology
+// signal at all -- no node/container/edge could ever author it). A
+// separate provider fixture from awsProvider() on purpose: aws_vpc/
+// aws_db_instance/aws_ecs_service there stay required-attribute-free so
+// every pre-existing happy-path test (which never supplies config, by the
+// lossy-medium rule) keeps resolving cleanly -- only this one type, used
+// only by the new adversarial case, carries a Required attribute at all.
+func awsIAMRoleProvider() resolver.DeclaredProvider {
+	return resolver.DeclaredProvider{
+		Source:  "hashicorp/aws",
+		Version: "6.54.0",
+		Schema: &fakeSchema{
+			types:    map[string]bool{"aws_iam_role": true},
+			required: map[string]map[string]bool{"aws_iam_role": {"assume_role_policy": true}},
+		},
 	}
 }
 

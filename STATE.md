@@ -4,6 +4,162 @@
 
 ## Current phase
 
+**UBI-90 (2026-08-02, P1-adjacent) — no required-attribute validation
+before ship: the diagram medium (topology-only by design, UBI-47)
+produced a plan that shipped 3/5 resources with MISSING REQUIRED
+ATTRIBUTES (`aws_iam_role` needs `assume_role_policy`, `aws_ecr_repository`
+needs `name`) — nothing caught it until a real `ApplyResourceChange`
+rejected the incomplete config mid-ship. Founder repro (playground-13):
+SQS shipped (few required attrs beyond what topology implies), role/repo
+failed, policy/attachment correctly blocked as their own dependents.
+`outcome: partially_shipped`.**
+
+**Root design question, confirmed against the actual design record before
+building anything (not assumed) — and the confirmed answer REFUTES the
+ticket's own suggested framing:** should this render as a blocking
+`core.Question` (the ticket's own phrasing) rather than a hard resolve-time
+refusal? **No.** Two independent lines of evidence in this project's own
+existing docs: (1) `Question.Blocking` is explicitly documented
+(`core/proposal.go`, docs/intent-provider.md's "Component 3") as carrying
+**zero resolver-side enforcement** — a deliberate, considered-and-rejected
+alternative ("auto-refusing resolve on a blocking question... would hand
+[it] veto power over what a human is allowed to review and sign") — using
+it here would NOT satisfy "never reaches ship," this ticket's own core
+requirement. (2) Component 3's own boundary is explicit: a Question exists
+for genuine *interpretive* ambiguity (a "plausible, valid, schema-
+conforming, wrong-guess concrete value"), explicitly contrasted against "a
+wrong resource type... a wrong reference... a wrong operation" — all
+already caught by resolve's own hard-erroring pipeline. A missing Required
+attribute is mechanically checkable, zero legitimate interpretation —
+squarely the hard-erroring bucket (UBI-66's own bucket), never the
+Question one. docs/diagram-medium.md's own UBI-63 session 2 amendment
+(already shipped, previous session) independently confirms the same
+answer: it already chose hard refusal (`ErrRequiredAttributeMissing`) for
+this exact scenario, just at the wrong (encode/ship) time — this session
+moves it earlier, doesn't invent a new answer.
+
+**Fix:** `provider/schemakeys.go`'s new `MissingRequiredKeys` (UnknownConfigKeys'
+own sibling, UBI-66's mirror image) walks a schema Block recursively,
+collecting every Required attribute with no key present anywhere in a
+drafted config — a presence check only, a `$computed` marker counts as
+present regardless of content. Wired into `core/resolver.SchemaInspector`
+and `resolveOnce`'s own batch loop, the SAME chokepoint/collect-then-
+`errors.Join` discipline `UnknownConfigKeys` (UBI-66) already established
+— `ErrMissingRequiredAttribute`, medium-agnostic (no branch on
+provenance), applies to both create and modify (a modify's own drafted
+config is expected to reproduce every currently-recorded attribute
+unchanged, UBI-85's "full-state config" convention — Required and
+Computed are never the same attribute in a real schema, so this never
+conflicts with modify's own Computed-attribute auto-fill). New
+docs/resolver-adversarial.md row 15.
+
+**SDK medium confirmed to hit the identical gap, not assumed:** a real,
+buggy Go SDK program that simply never sets `Name` — `sdk/go/runtime`'s
+own `serializeOpaque` deliberately omits a zero-value `any` field from the
+wire config entirely ("not set -- omitted, matching TS's 'key not present
+at all'") — produces the exact same "key entirely absent" shape a
+diagram-authored resource's always-empty config does. Proven live through
+the real evaluator + real resolve
+(`cli/testdata/sdk_resolve_go_missing_required/`,
+`TestResolveFromCode_Go_MissingRequiredAttribute_Refused`), not just
+architecturally reasoned.
+
+**Three PRE-EXISTING diagram-medium CLI tests broke** (`go test ./...`
+caught them immediately, not discovered later): all three had been
+silently relying on the very gap this session closes (a diagram-authored
+`fake_widget` with no `name` used to "resolve" anyway). Fixed by
+confronting what each was ACTUALLY testing, not just patching the
+assertion: `TestPlanShip_FromDiagram_Resolves` → repurposed into
+`TestProposeFromDiagram_EnrichThenResolve_Succeeds`, proving the real,
+intended recovery workflow end to end (propose --from-diagram → hand-edit
+the draft's `config: {}` → resolve the enriched file → succeeds) rather
+than a smoke test that happened to work by accident;
+`TestPlanShip_FromDiagram_RequiredAttributeMissing_ShipRefusesClearly` →
+renamed `..._ResolveRefusesClearly`, now asserting the refusal at
+`ubx plan`'s own resolve step, not ship;
+`TestPlan_FromDiagram_StackFromConfig_NoFlag` → same diagram, now asserts
+the (still-refused) error names the CORRECTLY-cascaded stack address,
+proving the stack-cascade logic this test exists for still works, without
+needing a required-attribute-free fixture that doesn't exist.
+
+**Hermetic, permanent conformance coverage added:** `diagram/parse_test.go`'s
+own `fakeSchema` gets an opt-in `required` field (mirroring
+`core/resolver`'s own fake) plus a new `awsIAMRoleProvider()` fixture
+(the founder's own exact live repro type) — kept separate from the shared
+`awsProvider()` fixture so no pre-existing happy-path test regresses.
+`diagram/integration_test.go`'s new
+`TestParseThenResolve_MissingRequiredAttribute_Refused` joins the cycle/
+containment adversarial rows as a permanent regression case. Plus direct
+unit coverage in `provider/schemakeys_test.go` (real-live-repro,
+multiple-missing, Computed/Optional-never-flagged, present-but-null stays
+present, nested-block path-prefixed, absent-nested-block-never-flagged,
+array-shape, nil/non-object config) and `core/resolver/resolver_test.go`
+(single resource, whole-batch aggregation, `$computed`-marker-counts-as-
+present, modify path, positive twin).
+
+**Live recovery for the founder's playground-13 stack — diagnosed and
+hermetically PROVEN via a faithful, real repro against fakeprovider (a
+hand-built 5-resource proposal mimicking his exact shape — 1 succeeds,
+2 fail missing-required, 2 blocked as dependents — accepted+shipped
+against the pre-fix behavior, then recovered against the NEW binary),
+not guessed:**
+1. **Targeted fix-forward is correct — terminating the succeeded resource
+   is NOT needed and would be pure waste.** SQS matches intent and
+   shipped cleanly; nothing about it is wrong. Confirmed live: after this
+   session's fix, `core.Ledger.FoldState`/`ProposalsForAddress` (UBI-89's
+   own shipped-gating, previous session) correctly report role/repo as
+   NOT existing (their own create never reached `ResourceApplied`) — so a
+   FRESH `ubx plan`/`ubx resolve` for just the failed resources, with
+   corrected config, resolves as clean NEW creates with zero "already
+   exists" conflict, and ships successfully without ever mentioning SQS.
+2. **The exact commands (generalized from the live hermetic proof, real
+   addresses substituted):**
+   - Rebuild `ubx` (`make build`) — confirm via `ubx version`'s commit.
+   - `ubx why <the original accepted proposal's own ID>` — shows SQS
+     shipped, role/repo failed (naming the exact missing attribute),
+     policy/attachment blocked as dependents. (`ubx why
+     <role-or-repo-address>` directly will honestly say "no proposals
+     found" — that's correct, not a bug: they never actually shipped, so
+     `ProposalsForAddress`'s own shipped-gating, UBI-89, correctly
+     excludes the failed attempt from their history.)
+   - Leave the SQS resource alone entirely — no `ubx terminate` needed.
+   - Author a NEW, complete intent naming ONLY the resources that never
+     actually shipped (role, repo, policy, attachment) — corrected
+     config this time (the diagram's own enrichment step: `ubx propose
+     --from-diagram` on a version of the diagram with the SQS node
+     removed → hand-edit the draft to add `assume_role_policy`/`name` →
+     `ubx resolve` the enriched file — or a hand-written intent/v1 JSON
+     directly, equally valid). **Sharp edge flagged explicitly**: do NOT
+     re-run the ORIGINAL, unmodified 5-node diagram as-is — the diagram
+     medium always drafts every node as a fresh `create`, so re-including
+     the SQS node would collide with its own already-shipped address
+     ("already exists") — trim it from the diagram (or the resulting
+     draft) first.
+   - `ubx accept` + `ubx ship` the new, corrected 4-resource proposal.
+3. **This exact failure mode cannot recur, for missing-required-attribute
+   specifically**: resolve now refuses the WHOLE batch atomically before
+   ANY resource ships, so a future stack can never again reach a
+   `partially_shipped` outcome for this particular reason.
+
+**Verification:** full suite green (`go test ./...`), `gofmt -l .` clean.
+Live end-to-end proof against a real fakeprovider subprocess for both the
+new refusal (real `ubx plan --from-diagram`) and the full recovery
+sequence (hand-built pre-fix-shaped damage → `ubx accept`/`ubx ship`
+reproducing `outcome: partially_shipped` exactly → targeted 4-resource
+recovery ships clean, SQS-equivalent never touched, confirmed via `ubx
+why` on every address afterward).
+
+**Docs debt:** none — docs/resolver-adversarial.md gets row 15;
+docs/diagram-medium.md gets a new amendment (2026-08-02) documenting the
+resolve-time move and the full root-design-question reasoning, right
+after the encode-time amendment it supersedes as "first line of defense."
+
+**Next:** none open on UBI-90's own diagnosis/fix. Founder to run the
+recovery commands above against the real playground-13 stack (adjusting
+resource names/diagram to his own real topology) and confirm.
+
+## Current phase (previous)
+
 **UBI-89 (2026-08-02, P1) — "the ledger can lie": a modify proposal
 ACCEPTED into the ledger, its real `ubx ship` apply FAILED (stale
 observation), yet the ledger kept claiming the change happened. Founder

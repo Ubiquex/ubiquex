@@ -63,6 +63,40 @@ replica: {
 	}
 }
 
+// TestParseThenResolve_MissingRequiredAttribute_Refused is UBI-90's own
+// permanent conformance case, added alongside the cycle/containment rows
+// above (docs/diagram-medium.md's own adversarial table gets a new row):
+// a diagram-authored aws_iam_role -- topology only, config always `{}` per
+// the medium's own founding "lossy-medium rule" (UBI-47) -- has no way to
+// ever supply the real schema's own Required "assume_role_policy". Parse()
+// itself doesn't and can't know this (no schema-completeness check lives
+// there, only type inference); resolve must refuse it, confirmed here end
+// to end through the real, unmodified pipeline, never discoverable only at
+// a real ApplyResourceChange call (the founder's own live incident,
+// playground-13: aws_iam_role/aws_ecr_repository shipped with the gap
+// silently present, failed mid-ship instead).
+func TestParseThenResolve_MissingRequiredAttribute_Refused(t *testing.T) {
+	src := `
+classes: {
+  aws_iam_role: {}
+}
+role: my-role { class: aws_iam_role }
+`
+	intent := mustParse(t, src, "payments", []resolver.DeclaredProvider{awsIAMRoleProvider()}, Options{})
+	if len(intent.Resources) != 1 {
+		t.Fatalf("resources = %+v, want 1 (Parse itself never checks schema completeness)", intent.Resources)
+	}
+
+	l := core.Open(t.TempDir())
+	_, err := resolver.Resolve(l, []resolver.DeclaredProvider{awsIAMRoleProvider()}, intent, nil)
+	if !errors.Is(err, resolver.ErrMissingRequiredAttribute) {
+		t.Fatalf("resolve err = %v, want ErrMissingRequiredAttribute", err)
+	}
+	if !strings.Contains(err.Error(), "assume_role_policy") {
+		t.Fatalf("resolve err = %v, want it to name assume_role_policy", err)
+	}
+}
+
 func TestParseThenResolve_HappyPath_FullDraftResolvesCleanly(t *testing.T) {
 	src := `
 classes: {

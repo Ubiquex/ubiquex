@@ -46,6 +46,22 @@ type SchemaInspector interface {
 	// mismatch is caught instead, this method is never asked to make
 	// that call itself.
 	UnknownConfigKeys(typeName string, config map[string]interface{}) []ConfigKeyIssue
+
+	// MissingRequiredKeys reports every attribute typeName's own schema
+	// marks Required with no value present anywhere in config -- checked
+	// recursively through nested blocks, the identical presence rule a
+	// real provider encode already enforces at ship time (UBI-90: found
+	// live, a diagram-authored aws_iam_role/aws_ecr_repository -- the
+	// diagram medium's own topology-only design structurally can't
+	// express a non-topology attribute like assume_role_policy/name at
+	// all -- shipped with the gap silently present, caught only by a real
+	// ApplyResourceChange rejection partway through a real ship, after
+	// other resources in the same batch had already applied). config is a
+	// resource's raw, not-yet-resolved top-level config object; nil or a
+	// non-object config reports no issues here, same "later 'config must
+	// be a JSON object' check catches that shape mismatch instead"
+	// convention UnknownConfigKeys' own doc comment already states.
+	MissingRequiredKeys(typeName string, config map[string]interface{}) []RequiredAttributeIssue
 }
 
 // ConfigKeyIssue is one SchemaInspector.UnknownConfigKeys finding -- a
@@ -62,6 +78,17 @@ type ConfigKeyIssue struct {
 	// Suggestion is the closest real key at the same level, "" if none
 	// is close enough.
 	Suggestion string
+}
+
+// RequiredAttributeIssue is one SchemaInspector.MissingRequiredKeys
+// finding -- a schema-Required attribute with no value present anywhere
+// in a resource's drafted config. UBI-90. No Suggestion field: unlike an
+// unrecognized key (which might be a typo of a real one), there is
+// nothing to suggest for a value that's simply, genuinely absent.
+type RequiredAttributeIssue struct {
+	// Path is the dot-notation path to the missing attribute, matching
+	// ConfigKeyIssue's own Path convention.
+	Path string
 }
 
 // DeclaredProvider is one provider a stack declares (docs/architecture.md
@@ -409,6 +436,33 @@ var (
 	// program, or any intentprovider.Adapter's own draft -- the same
 	// check runs over all of them.
 	ErrUnknownConfigKey = errors.New("resolve: unrecognized config key")
+
+	// ErrMissingRequiredAttribute means a resource intent's config omits
+	// a value for an attribute its type's own provider schema marks
+	// Required (UBI-90, docs/resolver-adversarial.md's own new row).
+	// Checked here, at resolve time, the exact same chokepoint
+	// ErrUnknownConfigKey already uses, against the exact schema
+	// InferProvider already fetched -- never left to surface first as a
+	// cryptic, generic rejection from a real ApplyResourceChange call
+	// partway through a real ship, potentially after other resources in
+	// the same batch have already applied
+	// (provider.ErrRequiredAttributeMissing, UBI-63 session 2, remains
+	// unchanged as ship time's own defense-in-depth backstop). Model-
+	// agnostic, same as ErrUnknownConfigKey: resolveOnce has no way to
+	// tell, and doesn't need to, whether a ResourceIntent came from a
+	// hand-written file, an evaluated SDK program, or a diagram/md/
+	// intentprovider.Adapter's own draft -- the same check runs over all
+	// of them. Confirmed as the correct design (UBI-90's own "root design
+	// question," not assumed): this is a hard, mechanical, resolve-time
+	// refusal, deliberately NOT routed through Intent.Questions -- a
+	// Question's own Blocking field carries zero resolver-side
+	// enforcement by explicit, considered design (Question's own doc
+	// comment, docs/intent-provider.md's "Component 3" section: reserved
+	// for a genuine interpretive ambiguity a human must judge, never for
+	// a mechanically-checkable schema defect -- the same bucket as a
+	// wrong resource type or a dangling $ref, both of which already hard-
+	// refuse here, never render as a Question).
+	ErrMissingRequiredAttribute = errors.New("resolve: missing required attribute")
 )
 
 // configKeyError is one ErrUnknownConfigKey occurrence. resolveOnce
@@ -433,6 +487,22 @@ func (e configKeyError) Error() string {
 }
 
 func (e configKeyError) Unwrap() error { return ErrUnknownConfigKey }
+
+// requiredAttributeError is one ErrMissingRequiredAttribute occurrence --
+// configKeyError's own sibling, same "collect every issue across the WHOLE
+// batch, join into one refusal" discipline (UBI-90).
+type requiredAttributeError struct {
+	addr     core.Address
+	typeName string
+	issue    RequiredAttributeIssue
+}
+
+func (e requiredAttributeError) Error() string {
+	return fmt.Sprintf("%s: %s: config has no value for required attribute %q on %s -- a medium that structurally can't express this attribute (e.g. the diagram medium's own topology-only design) needs it filled in some other way: a hand-edited plan file, or authoring this resource via a different medium (--from-doc, an SDK program, or a hand-written intent file) instead",
+		ErrMissingRequiredAttribute, e.addr, e.issue.Path, e.typeName)
+}
+
+func (e requiredAttributeError) Unwrap() error { return ErrMissingRequiredAttribute }
 
 // VerifyPins re-derives every cross-stack pin recorded in p (every
 // resolution.inputs entry with kind "cross_stack_pin") and confirms its
@@ -601,6 +671,20 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		if configMap, ok := raw.(map[string]interface{}); ok {
 			for _, issue := range e.provider.Schema.UnknownConfigKeys(e.ri.Type, configMap) {
 				keyErrs = append(keyErrs, configKeyError{addr: e.addr, typeName: e.ri.Type, issue: issue})
+			}
+			// UBI-90: the same batch, the same schema, the same "collect
+			// everything, join into one refusal" discipline -- confirms
+			// EVERY Required attribute actually has a value, not just that
+			// every present key is a real one. Runs for both create and
+			// modify (a modify's own drafted config is expected to
+			// reproduce every currently-recorded attribute unchanged
+			// unless intentionally changed, UBI-85's own "full-state
+			// config, matching create's own convention" -- a Required
+			// attribute is never also Computed in a real schema, so this
+			// never conflicts with the modify-only Computed-attribute
+			// auto-fill below).
+			for _, issue := range e.provider.Schema.MissingRequiredKeys(e.ri.Type, configMap) {
+				keyErrs = append(keyErrs, requiredAttributeError{addr: e.addr, typeName: e.ri.Type, issue: issue})
 			}
 		}
 		edges, err := scanRefEdges(raw, batch)

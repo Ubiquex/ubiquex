@@ -29,6 +29,15 @@ type fakeSchema struct {
 	// needs to prove resolveOnce's own wiring/aggregation, not
 	// re-implement that logic.
 	badKeys map[string]map[string]string
+	// required is MissingRequiredKeys' own opt-in fake (UBI-90): typeName
+	// -> set of attribute names Required in that type's own (fake)
+	// schema. A type/key never listed here is never flagged -- same
+	// "existing tests stay unaffected" discipline badKeys already
+	// established. The real recursive nested-block walk is unit-tested
+	// once, directly, in provider/schemakeys_test.go -- this fake only
+	// proves resolveOnce's own wiring/aggregation of a flat, top-level
+	// Required set, not re-implement that walk.
+	required map[string]map[string]bool
 }
 
 func newFakeSchema() *fakeSchema {
@@ -67,6 +76,25 @@ func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) 
 	for _, k := range keys {
 		if suggestion, isBad := bad[k]; isBad {
 			issues = append(issues, ConfigKeyIssue{Path: k, Suggestion: suggestion})
+		}
+	}
+	return issues
+}
+
+func (f *fakeSchema) MissingRequiredKeys(t string, config map[string]interface{}) []RequiredAttributeIssue {
+	req := f.required[t]
+	if len(req) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(req))
+	for name := range req {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var issues []RequiredAttributeIssue
+	for _, name := range names {
+		if _, present := config[name]; !present {
+			issues = append(issues, RequiredAttributeIssue{Path: name})
 		}
 	}
 	return issues
@@ -905,6 +933,131 @@ func TestResolve_RecognizedConfigKeys_NoRefusal(t *testing.T) {
 	}
 	intent := intentFile("payments",
 		ri("aws_vpc", "main", OpCreate, `{"cidr_block":"10.0.0.0/16"}`),
+	)
+
+	if _, err := Resolve(l, singleProvider(schema), intent, nil); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+}
+
+// TestResolve_MissingRequiredAttribute_SingleResource is UBI-90's own
+// UnknownConfigKeys-mirror-image regression case: a resource whose
+// drafted config omits an attribute the schema marks Required refuses at
+// resolve time, never reaching ship (the founder's own live repro,
+// playground-13: a diagram-authored aws_iam_role/aws_ecr_repository
+// shipped with no assume_role_policy/name at all, caught only by a real
+// ApplyResourceChange rejection, after other resources in the same batch
+// had already applied).
+func TestResolve_MissingRequiredAttribute_SingleResource(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.types["aws_iam_role"] = true
+	schema.required = map[string]map[string]bool{
+		"aws_iam_role": {"assume_role_policy": true},
+	}
+	intent := intentFile("payments",
+		ri("aws_iam_role", "role", OpCreate, `{"name":"my-role"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrMissingRequiredAttribute) {
+		t.Fatalf("err = %v, want errors.Is ErrMissingRequiredAttribute", err)
+	}
+	if !strings.Contains(err.Error(), `config has no value for required attribute "assume_role_policy" on aws_iam_role`) {
+		t.Fatalf("err = %v, want it to name assume_role_policy", err)
+	}
+}
+
+// TestResolve_MissingRequiredAttribute_AggregatesAcrossWholeBatch mirrors
+// TestResolve_UnknownConfigKey_AggregatesAcrossWholeBatch exactly: multiple
+// different resources, each missing a different Required attribute,
+// refused together in ONE resolve call, every mistake named at once.
+func TestResolve_MissingRequiredAttribute_AggregatesAcrossWholeBatch(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.types["aws_iam_role"] = true
+	schema.types["aws_ecr_repository"] = true
+	schema.required = map[string]map[string]bool{
+		"aws_iam_role":       {"assume_role_policy": true},
+		"aws_ecr_repository": {"name": true},
+	}
+	intent := intentFile("payments",
+		ri("aws_iam_role", "role", OpCreate, `{}`),
+		ri("aws_ecr_repository", "repo", OpCreate, `{}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrMissingRequiredAttribute) {
+		t.Fatalf("err = %v, want errors.Is ErrMissingRequiredAttribute", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"assume_role_policy" on aws_iam_role`) {
+		t.Errorf("missing aws_iam_role issue in: %s", msg)
+	}
+	if !strings.Contains(msg, `"name" on aws_ecr_repository`) {
+		t.Errorf("missing aws_ecr_repository issue in: %s", msg)
+	}
+}
+
+// TestResolve_MissingRequiredAttribute_ComputedMarkerCountsAsPresent
+// proves presence, not concreteness, is the whole check: a Required
+// attribute referencing a not-yet-concrete $computed marker (a real,
+// legitimate cross-resource reference, resolved later in the pipeline)
+// must never be flagged missing -- it IS present, just not a literal value
+// yet.
+func TestResolve_MissingRequiredAttribute_ComputedMarkerCountsAsPresent(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.required = map[string]map[string]bool{
+		"aws_db_instance": {"identifier": true},
+	}
+	intent := intentFile("payments",
+		ri("aws_vpc", "main", OpCreate, `{}`),
+		ri("aws_db_instance", "db", OpCreate, `{"identifier":{"$computed":{"from":"payments.aws_vpc.main.id"}}}`),
+	)
+
+	if _, err := Resolve(l, singleProvider(schema), intent, nil); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+}
+
+// TestResolve_MissingRequiredAttribute_Modify proves the check applies to
+// a modify's own drafted config too, not just create -- a hand-authored
+// (or SDK/diagram-authored) modify that omits a Required attribute is the
+// identical gap, not a create-only concern.
+func TestResolve_MissingRequiredAttribute_Modify(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_iam_role", Name: "role"}
+	seedLedger(t, l, addr, `{"id":"role-1","assume_role_policy":"{\"Version\":\"2012-10-17\"}"}`)
+
+	schema := newFakeSchema()
+	schema.types["aws_iam_role"] = true
+	schema.required = map[string]map[string]bool{
+		"aws_iam_role": {"assume_role_policy": true},
+	}
+	intent := intentFile("payments",
+		ri("aws_iam_role", "role", OpModify, `{"id":"role-1"}`),
+	)
+
+	_, err := Resolve(l, singleProvider(schema), intent, nil)
+	if !errors.Is(err, ErrMissingRequiredAttribute) {
+		t.Fatalf("err = %v, want errors.Is ErrMissingRequiredAttribute", err)
+	}
+}
+
+// TestResolve_PresentRequiredAttribute_NoRefusal is the positive twin: a
+// resource carrying a real value for every Required attribute resolves
+// cleanly, even against a schema with `required` configured for that
+// exact type.
+func TestResolve_PresentRequiredAttribute_NoRefusal(t *testing.T) {
+	l := core.Open(t.TempDir())
+	schema := newFakeSchema()
+	schema.types["aws_iam_role"] = true
+	schema.required = map[string]map[string]bool{
+		"aws_iam_role": {"assume_role_policy": true},
+	}
+	intent := intentFile("payments",
+		ri("aws_iam_role", "role", OpCreate, `{"name":"my-role","assume_role_policy":"{\"Version\":\"2012-10-17\"}"}`),
 	)
 
 	if _, err := Resolve(l, singleProvider(schema), intent, nil); err != nil {
