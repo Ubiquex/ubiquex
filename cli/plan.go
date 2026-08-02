@@ -468,12 +468,17 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	// docs/cli-output-spec.md §v2: every summary line bold, with one
 	// empty line between the delta line and the blast-radius/cost block.
 	// forceBold (not a naive nested st.Bold call, see its own doc
-	// comment) keeps the create/modify/destroy counts individually
+	// comment) keeps the create/change/terminate counts individually
 	// green/yellow/red while making the whole line bold throughout.
+	// UBI-88: "change(s)"/"terminate(s)", not "modify(ies)"/"destroy(s)" --
+	// matching the change/terminate vocabulary the op headers above
+	// already use (renderModifies' "~ <address> change", renderDestroys'
+	// "- destroy: <address>" notwithstanding -- see this ticket's own
+	// report on the wider vocabulary sweep before renaming anything else).
 	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("delta: %s, %s, %s",
 		st.Green(fmt.Sprintf("+%d create(s)", len(p.Delta.Creates))),
-		st.Yellow(fmt.Sprintf("~%d modify(ies)", len(p.Delta.Modifies))),
-		st.Red(fmt.Sprintf("-%d destroy(s)", len(p.Delta.Destroys))))))
+		st.Yellow(fmt.Sprintf("~%d change(s)", len(p.Delta.Modifies))),
+		st.Red(fmt.Sprintf("-%d terminate(s)", len(p.Delta.Destroys))))))
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("blast radius: %s %s %s",
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),

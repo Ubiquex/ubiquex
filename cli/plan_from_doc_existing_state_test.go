@@ -49,7 +49,7 @@ func shipFiveFakeWidgets(t *testing.T) string {
 }
 
 // planFromDocDeltaLine extracts plan's own "delta: +N create(s), ~N
-// modify(ies), -N destroy(s)" line for exact assertions -- substring
+// change(s), -N terminate(s)" line for exact assertions -- substring
 // checks on the whole receipt would also match, e.g., an unrelated "1"
 // somewhere else in the output.
 func planFromDocDeltaLine(t *testing.T, out string) string {
@@ -95,7 +95,7 @@ func TestPlanFromDoc_UBI85_UnchangedDoc_EmptyDelta(t *testing.T) {
 		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
 	}
 
-	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~0 modify(ies), -0 destroy(s)" {
+	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~0 change(s), -0 terminate(s)" {
 		t.Fatalf("delta = %q, want a genuine empty no-op", got)
 	}
 
@@ -146,7 +146,7 @@ func TestPlanFromDoc_UBI85_OneOfFiveChanged_ExactlyOneModify(t *testing.T) {
 		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
 	}
 
-	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~1 modify(ies), -0 destroy(s)" {
+	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~1 change(s), -0 terminate(s)" {
 		t.Fatalf("delta = %q, want exactly +0~1-0", got)
 	}
 	if !strings.Contains(out, `tags.env: "prod" -> "staging"`) {
@@ -195,7 +195,7 @@ func TestPlanFromDoc_UBI85_GenuineNewSixthResource_OnlyOneCreate(t *testing.T) {
 		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
 	}
 
-	if got := planFromDocDeltaLine(t, out); got != "delta: +1 create(s), ~0 modify(ies), -0 destroy(s)" {
+	if got := planFromDocDeltaLine(t, out); got != "delta: +1 create(s), ~0 change(s), -0 terminate(s)" {
 		t.Fatalf("delta = %q, want exactly +1~0-0", got)
 	}
 	if !strings.Contains(out, "widget6") {
@@ -237,7 +237,7 @@ func TestPlanFromDoc_UBI85_DocDropsAResource_BlockingQuestionNeverDestroy(t *tes
 		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
 	}
 
-	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~0 modify(ies), -0 destroy(s)" {
+	if got := planFromDocDeltaLine(t, out); got != "delta: +0 create(s), ~0 change(s), -0 terminate(s)" {
 		t.Fatalf("delta = %q, want zero destroys -- a dropped description must never auto-destroy", got)
 	}
 	if !strings.Contains(out, "Questions") || !strings.Contains(out, "widget5") {

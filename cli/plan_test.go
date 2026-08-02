@@ -49,7 +49,7 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
 	}
-	if !strings.Contains(planOut, "delta: +1 create(s), ~0 modify(ies), -0 destroy(s)") {
+	if !strings.Contains(planOut, "delta: +1 create(s), ~0 change(s), -0 terminate(s)") {
 		t.Fatalf("expected a delta line in the receipt, got: %s", planOut)
 	}
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {

@@ -4,6 +4,95 @@
 
 ## Current phase
 
+**UBI-88 (2026-08-02) — receipt polish: modify block header+indent format,
+op vocabulary (change/terminate). Founder finding (playground-11, first
+real modify test through UBI-85's fix): the modify block never got the
+header/body treatment create/destroy already have — flat
+"~ change: `<address>`: attr: old -> new" per-attribute lines, no
+address-as-header structure.**
+
+**1. Modify block header+body, matching create/destroy's own shape:**
+`renderModifies` (cli/why.go, shared by `ubx plan`/`ubx why`/`ubx
+terminate`'s own receipt renderer) now prints ONE header line —
+`~ <address> change`, yellow AND bold (`st.YellowBold`, the same general
+"+/~/- `<address>` `<op>`" header rule renderCreates' GreenBold and
+renderDestroys' RedBold already apply) — with `<path>: <before> ->
+<after>` attribute lines indented beneath it, one blank line between
+consecutive modify blocks (the same i>0 convention create/destroy already
+use).
+
+**null-vs-absent noise, confirmed leaking from an unfixed code path (not
+assumed) and fixed at the source, not just suppressed in rendering:**
+core/resolver's own `OpModify` diff (`core.DiffAttributes(current,
+resolvedBytes)`, current = full ledger state, resolvedBytes = a partial
+drafted config that legitimately omits an attribute nobody touched) never
+called `core.FilterNormalizationNoise` at all — the exact null<->zero-
+value/materialization equivalence UBI-63 already suppressed for drift
+comparison, just never wired into this diff. Fixed by calling it there
+too (`schemaComputedAdapter`, curries `SchemaInspector.IsComputed` to
+`AttrComputedFlags.IsAttrComputed` for the one resource type in play).
+**A live rerun caught the first, narrower fix (null-literal-only) still
+missing the real repro**: fakeprovider's own `decodeWidgetState` echoes
+an unset Optional map attribute back as `{}`, not literal `null` — so
+`core.FilterNormalizationNoise`'s own `isNormalizationExplained` needed
+extending twice, not once: first for "key present as null on one side,
+missing entirely on the other," then broadened again to "key present as
+null OR the type's own zero-value literal on one side, missing entirely
+on the other" once the live transcript showed `tags: {} -> (absent)`
+surviving the narrower fix. Both extensions are gated the same way the
+pre-existing null<->zero-value equivalence already is: only a genuinely
+absent/zero/null "no value" side is ever filtered, a real value going
+fully missing always stays a visible add/remove.
+
+**2. Consistent indentation, all three op renderers:** `renderCreates`
+already used a 4-space extra indent under its header; `renderDestroys`
+only used 2 — the one op-renderer left inconsistent. Now all three
+(create/change/terminate) share the identical 4-space `attrIndent`.
+
+**3. Delta line vocabulary:** `renderPlanReceipt`'s own "delta:" line
+(cli/plan.go) now reads `+N create(s), ~N change(s), -N terminate(s)`,
+matching the change/terminate wording the op headers already use — was
+`~N modify(ies), -N destroy(s)`. Scoped to the delta line only, per the
+ticket's own explicit ask not to unilaterally rename beyond it.
+
+**Vocabulary sweep (item 3's own open question) — reported, not acted
+on:** "modify(ies)"/"destroy(s)"/"destroy" (bare) still appear in:
+`renderDestroys`' own `- destroy: <address>` per-resource header (never
+"- terminate:" — this ticket's own required modify shape mirrors create's
+"<symbol> <address> <op>" order, destroy's header keeps its pre-existing
+"<symbol> <op>: <address>" order, unchanged since that wasn't in scope
+either); `cli/scan.go`'s `renderScanCard` blast-radius-style description
+("+%d create(s) ~%d modify(ies) -%d destroy(s)"); `cli/resolve.go`'s
+"resolved: `<stack>`: %d create(s), %d modify(ies), %d destroy(s)" line;
+`cli/ship.go`'s `renderShipConfirmSummary` ("+N create(s) ~N modify(ies)
+-N destroy(s)", the `ubx ship` confirmation's own blast-radius-with-words
+line — NOT a symbol-only line, so it's a real instance of the same
+inconsistency, not covered by the "blast radius stays symbol-only"
+carve-out). None of these touched — founder decision needed on whether to
+align them too, or leave delta-line-only.
+
+**Verification:** full suite green (`go test ./...`). New regression
+coverage: `core/resolver/resolver_test.go`
+`TestResolve_Modify_NullVsAbsentAttribute_FilteredAsNoise` (unit-level,
+hermetic fakeSchema) and `cli/receipt_modify_v2_test.go`
+`TestPlan_ModifyReceipt_HeaderIndentFormat` (end-to-end against a real
+fakeprovider subprocess). Live-verified via `script -q` real-terminal
+transcripts (`ubx plan`/`ubx why`/`ubx terminate` against a real
+fakeprovider subprocess, FAKEPROVIDER_MODE=ok-v6, rebuilt binary
+confirmed via `ubx version`'s dirty-commit suffix): header colors
+correctly (bold yellow), attribute diff indented 4 extra columns matching
+create/terminate, blank line between consecutive modify blocks, delta
+line reads the new vocabulary, and the live `tags: {} -> (absent)` noise
+this session's own fix targets is confirmed gone from the real receipt.
+
+**Docs debt:** none — docs/cli-output-spec.md's own "plan — receipt
+format (exact...)" section updated in-session to match (modify header+
+body shape, consistent indent, delta vocabulary + the sweep note above).
+
+**Next:** founder decision on the vocabulary-sweep question above.
+
+## Current phase (previous)
+
 **UBI-85 (2026-08-02, P1) — re-plan against an existing stack: known-resources
 context feeding, so `ubx plan --from-doc`/`ubx promote` distinguish
 "unchanged" from "modify" from "create" from "ledger has it, doc dropped

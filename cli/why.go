@@ -311,23 +311,33 @@ func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent 
 	}
 }
 
-// renderModifies prints each Delta.Modifies entry's changed attributes,
-// current -> new (drift_adopt's before/after convention, or
+// renderModifies prints each Delta.Modifies entry as ONE header line --
+// "~ <address> change", yellow AND bold (YellowBold, the same general
+// "+/~/- <address> <op>" header rule renderCreates' GreenBold and
+// renderDestroys' RedBold already apply, UBI-88) -- with its changed
+// attributes (current -> new; drift_adopt's before/after convention, or
 // drift_revert's own reversed one -- Kind already prints verbatim above,
-// so this needs no kind-specific branching). A $redacted value (UBI-23)
-// renders "(redacted)" via rawOrAbsent, the same rule revert-plan's own
-// printPlan uses -- so a proposal involving a sensitive attribute change
-// is visibly a change without ever surfacing the salted hash next to a
-// human-readable attribute name. A yellow "~" leads each line
-// (docs/cli-output-spec.md: yellow = modifies/drift) -- the existing
-// "change: <target>: <path>: <before> -> <after>" wording is otherwise
-// unchanged, so every reader (human or an existing test's own substring
-// assertion) still finds the identical content, just with color layered
-// on top when a TTY is actually watching.
+// so this needs no kind-specific branching) indented beneath it, one
+// shared indent level subordinate to the header, matching renderCreates'
+// own attrIndent. Before this, a modify rendered as a flat "~ change:
+// <address>: <path>: <before> -> <after>" line per changed attribute,
+// with no header/body structure at all -- the one asymmetry left once
+// create/destroy both got their own header+body shape (UBI-27/30/78). A
+// $redacted value (UBI-23) renders "(redacted)" via rawOrAbsent, the same
+// rule revert-plan's own printPlan uses -- so a proposal involving a
+// sensitive attribute change is visibly a change without ever surfacing
+// the salted hash next to a human-readable attribute name. One empty line
+// separates consecutive modify blocks, the same i>0 convention
+// renderCreates/renderDestroys already use.
 func renderModifies(out io.Writer, st *styler, modifies []core.Modification, indent string) {
-	for _, m := range modifies {
+	for i, m := range modifies {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "%s%s\n", indent, st.YellowBold(fmt.Sprintf("~ %s change", m.Target)))
+		attrIndent := indent + "    "
 		for _, path := range sortedAttributePaths(m.Before, m.After) {
-			fmt.Fprintf(out, "%s%s change: %s: %s: %s -> %s\n", indent, st.Yellow("~"), m.Target, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+			fmt.Fprintf(out, "%s%s: %s -> %s\n", attrIndent, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
 		}
 	}
 }
@@ -377,7 +387,13 @@ func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, ind
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		attrIndent := indent + "  "
+		// UBI-88: 4-space extra indent, matching renderCreates/
+		// renderModifies' own attrIndent -- every attribute/diff line under
+		// a "+/~/- <address> <op>" header shares ONE indent level now,
+		// visually subordinate to its header (this used to be only 2
+		// spaces here, the one op-renderer left inconsistent with the
+		// other two).
+		attrIndent := indent + "    "
 		for _, k := range keys {
 			// UBI-78: the same formatted-JSON-block treatment renderCreates
 			// already gives Delta.Creates' own config values -- before this,

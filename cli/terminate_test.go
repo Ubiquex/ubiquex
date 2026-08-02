@@ -38,7 +38,7 @@ func TestTerminate_HappyPath_ShipsAndTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx terminate: %v\noutput: %s", err, termOut)
 	}
-	if !strings.Contains(termOut, "delta: +0 create(s), ~0 modify(ies), -1 destroy(s)") {
+	if !strings.Contains(termOut, "delta: +0 create(s), ~0 change(s), -1 terminate(s)") {
 		t.Fatalf("expected a 1-destroy receipt, got: %s", termOut)
 	}
 	hash := mustExtractPlanHash(t, ledgerDir, termOut)

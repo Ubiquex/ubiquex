@@ -231,7 +231,7 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 
 // FilterNormalizationNoise strips every before/after entry (before/after,
 // dot-notation keyed -- DiffAttributes' own output shape) that's fully
-// accounted for by one of two schema-driven equivalences named in the
+// accounted for by one of the schema-driven equivalences named in the
 // founder's own UBI-63 diagnosis ("bug 4"): real SDKv2-vintage providers
 // don't round-trip a "no value" attribute byte-for-byte, freely
 // alternating between JSON null and the type's own zero value
@@ -239,9 +239,14 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 // state; and a Computed attribute's null baseline (recorded before the
 // provider had actually resolved it) legitimately resolves to ANY
 // concrete value on a later read without that being a real divergence
-// from what ubx told the world to be. Neither equivalence applies once
-// both sides hold a non-null value that genuinely differs -- a real
-// change to an already-resolved value always survives the filter.
+// from what ubx told the world to be. A third equivalence (UBI-88, found
+// live in core/resolver's modify diff -- a full ledger-state "before"
+// against a partial drafted-config "after"): an explicit JSON null on one
+// side and the key missing outright on the other are the same "no value"
+// state under two different representations. None of these equivalences
+// apply once both sides hold a non-null, genuinely-present value that
+// differs -- a real change to an already-resolved value always survives
+// the filter.
 //
 // Exported and reused everywhere a diff is shown or recorded (UBI-63
 // session 4: found live -- a resource with exactly one genuinely-real
@@ -251,7 +256,9 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 // caller went on to display or persist): RunScan's own verdict above,
 // GenerateProposal/GenerateRevertProposal's embedded Delta.Modifies (so
 // `scan --propose`/`--revert` never records noise as if it were adopted
-// or reverted drift), and cli's own live `status --drift` rendering.
+// or reverted drift), cli's own live `status --drift` rendering, and
+// (UBI-88) core/resolver's own OpModify diff, so an ordinary `ubx plan`/
+// `ubx why` modify receipt never shows a "null -> (absent)" line either.
 //
 // resourceSchema is the same opaque handle ScanResult.ResourceSchema
 // carries; a StateReader whose handle doesn't implement
@@ -285,17 +292,40 @@ func FilterNormalizationNoise(before, after map[string]json.RawMessage, resource
 func isNormalizationExplained(key string, before, after map[string]json.RawMessage, computed AttrComputedFlags) bool {
 	bRaw, bHas := before[key]
 	aRaw, aHas := after[key]
-	if !bHas || !aHas {
-		return false // added/removed outright, not a null<->value shift
+	topAttr := key
+	if i := strings.IndexByte(key, '.'); i >= 0 {
+		topAttr = key[:i]
+	}
+	if bHas != aHas {
+		// UBI-88: a key entirely missing on one side is the SAME "no
+		// value" state as an explicit null OR the type's own zero value on
+		// the other -- confirmed live, not assumed: a real SDKv2-style
+		// null<->zero-value round-trip quirk (fakeprovider's own
+		// decodeWidgetState, modeling a real map-typed attribute) produces
+		// current="tags: {}" for an attribute a modify's own drafted
+		// config simply never mentions (bHas=true/"{}", aHas=false), the
+		// exact same equivalence class as the null<->zero-value case
+		// below, just with the "no value" side spelled as a missing key
+		// instead of an explicit literal. A full-state object (this
+		// function's usual before/after) always carries every schema key;
+		// a partial document (e.g. core/resolver's modify diff, comparing
+		// full ledger state against a drafted config that legitimately
+		// omits an attribute it never touched) omits the key outright
+		// instead. Only a REAL, non-null, non-zero value on the present
+		// side still counts as a genuine add/remove.
+		present := bRaw
+		if aHas {
+			present = aRaw
+		}
+		if computed != nil && computed.IsAttrComputed(topAttr) {
+			return true // materialization: a Computed attribute's null baseline resolving is expected
+		}
+		return isJSONNull(present) || isZeroishLiteral(present)
 	}
 	bNull := isJSONNull(bRaw)
 	aNull := isJSONNull(aRaw)
 	if !bNull && !aNull {
 		return false // both sides hold a real, differing value
-	}
-	topAttr := key
-	if i := strings.IndexByte(key, '.'); i >= 0 {
-		topAttr = key[:i]
 	}
 	if computed != nil && computed.IsAttrComputed(topAttr) {
 		return true // materialization: a Computed attribute's null baseline resolving is expected

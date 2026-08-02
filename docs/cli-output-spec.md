@@ -257,10 +257,24 @@ never resolves, so "· resolving…" would be a lie there; this keeps
   (`Intent.Summary`) is untouched in the stored proposal; only the
   render was dropped, once every resource block below it already shows
   the real content in full.
-- Each resource block:
-  - `+ <type>.<name> create` — green AND bold.
-  - attributes indented beneath, then ONE empty line before the next
-    resource (never a trailing blank line after the last one).
+- Each resource block is ONE header line, colored+bolded by its own op
+  (the general "+/~/- `<address>` `<op>`" header rule, UBI-88): green
+  `+ <type>.<name> create`, yellow/orange `~ <address> change`, red
+  `- destroy: <address>`. Attributes/diffs render indented beneath the
+  header, one shared indent level (4 extra columns beyond the header's
+  own indent) across all three ops — create, change, and terminate alike
+  — then ONE empty line before the next resource block (never a trailing
+  blank line after the last one).
+  - A modify's attribute lines are `<path>: <before> -> <after>`, no
+    per-line "~"/"change:" repetition (the header already carries both).
+    An attribute a modify's own drafted config never mentions, when the
+    ledger's own recorded value for it is null or the type's own zero
+    value, is filtered out of the diff entirely (UBI-88, the same
+    null<->zero-value/materialization normalization noise UBI-63 already
+    suppressed for drift comparison, extended to core/resolver's own
+    modify diff and to the "key entirely absent" shape a partial drafted
+    config produces, not just an explicit `null` literal) — never shown
+    as a spurious `<attr>: null -> (absent)` line alongside a real change.
   - JSON-valued attributes (IAM policies, trust policies — a config
     string whose own content decodes as JSON) render as FORMATTED,
     readable, indented JSON blocks — never an escaped single-line
@@ -284,11 +298,20 @@ never resolves, so "· resolving…" would be a lie there; this keeps
   single-reset-per-call color design; see its own doc comment), one
   empty line between the delta line and the blast-radius/cost block:
   ```
-  delta: +5 create(s), ~0 modify(ies), -0 destroy(s)
+  delta: +5 create(s), ~0 change(s), -0 terminate(s)
 
   blast radius: +5 ~0 -0
   cost delta: $0/mo
   ```
+  The delta line's own vocabulary is "change(s)"/"terminate(s)" (UBI-88),
+  matching the change/terminate wording the op headers above already use
+  — not "modify(ies)"/"destroy(s)". This rename is scoped to the delta
+  line alone for now; the same wording still appears elsewhere (the
+  per-resource `- destroy: <address>` header itself, `ubx scan`'s own
+  card description, `ubx resolve`'s "resolved: ..." summary, `ubx ship`'s
+  confirmation blast-radius line) — left as-is pending a founder decision
+  on a wider sweep, not silently inconsistent by omission. blast radius'
+  own `+N ~N -N` stays symbol-only, no wording either way.
 - `AI defaults — you are signing these:` header bold (`forceBold`,
   keeping the existing purple "AI judgment" color, not replacing it);
   ONE empty line after the header and between every entry (never a

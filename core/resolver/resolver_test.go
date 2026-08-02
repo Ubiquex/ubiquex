@@ -308,6 +308,53 @@ func TestResolve_Modify_DiffsAgainstFoldState(t *testing.T) {
 	}
 }
 
+// TestResolve_Modify_NullVsAbsentAttribute_FilteredAsNoise is UBI-88's own
+// regression test for a real gap found LIVE, not assumed away: this
+// package's OpModify diff (before this fix) called core.DiffAttributes
+// directly with no core.FilterNormalizationNoise pass at all -- so an
+// attribute the ledger recorded as null/its own zero value, that a
+// modify's own drafted config simply never mentions (an ordinary,
+// legitimate omission -- the config is a partial document, not full
+// state), rendered as spurious "null -> (absent)"/"{} -> (absent)" noise
+// alongside any real change, exactly the null<->zero-value/materialization
+// noise class UBI-63 already suppressed for drift comparison, just never
+// wired into this diff. "labels" here stands in for a real live repro
+// (fakeprovider's own "tags" map attribute, confirmed empirically to
+// record as "{}" rather than null for an unset Optional map -- the SAME
+// equivalence class, just spelled as a zero-value literal instead of a
+// bare null) -- covering the broader zero-value shape, not only literal
+// null, since a live rerun caught the narrower null-only fix missing it.
+func TestResolve_Modify_NullVsAbsentAttribute_FilteredAsNoise(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_db_instance", Name: "db"}
+	seedLedger(t, l, addr, `{"id":"db-1","instance_class":"db.t3.medium","tags":{"env":"prod"},"labels":{}}`)
+
+	schema := newFakeSchema()
+	// Deliberately omits "labels" entirely -- never mentioned by the
+	// drafted config, exactly like an attribute nobody touched.
+	intent := intentFile("payments",
+		ri("aws_db_instance", "db", OpModify, `{"id":"db-1","instance_class":"db.t3.large","tags":{"env":"prod"}}`),
+	)
+
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(p.Delta.Modifies) != 1 {
+		t.Fatalf("delta = %+v", p.Delta)
+	}
+	mod := p.Delta.Modifies[0]
+	if string(mod.Before["instance_class"]) != `"db.t3.medium"` || string(mod.After["instance_class"]) != `"db.t3.large"` {
+		t.Fatalf("real change must still survive the filter, mod = %+v", mod)
+	}
+	if _, ok := mod.Before["labels"]; ok {
+		t.Fatalf("labels: {} -> (absent) must be filtered as normalization noise, got Before=%+v After=%+v", mod.Before, mod.After)
+	}
+	if _, ok := mod.After["labels"]; ok {
+		t.Fatalf("labels: {} -> (absent) must be filtered as normalization noise, got Before=%+v After=%+v", mod.Before, mod.After)
+	}
+}
+
 // TestResolve_Modify_OmittedComputedAttribute_AutoPreserved is UBI-85's
 // own regression test for a real gap found LIVE, not assumed away: an
 // intent provider's own system prompt now instructs a drafted modify to

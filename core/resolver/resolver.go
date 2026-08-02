@@ -80,6 +80,21 @@ type DeclaredProvider struct {
 	Schema  SchemaInspector
 }
 
+// schemaComputedAdapter curries a SchemaInspector to one resource type,
+// adapting it to core.FilterNormalizationNoise's own AttrComputedFlags
+// (single-arg IsAttrComputed(attrName)) via a plain duck-typed method --
+// core.FilterNormalizationNoise takes resourceSchema as `any` and type-
+// asserts it itself, so this package never needs to import core's
+// interface to satisfy it (UBI-88).
+type schemaComputedAdapter struct {
+	schema   SchemaInspector
+	typeName string
+}
+
+func (a schemaComputedAdapter) IsAttrComputed(attrName string) bool {
+	return a.schema.IsComputed(a.typeName, attrName)
+}
+
 // ProviderHint is ResourceIntent's own narrow escape hatch (docs/schema.md's
 // "Amendment: the provider field returns", UBI-43): consulted ONLY to
 // break a genuine type-ownership ambiguity between two or more declared
@@ -707,6 +722,17 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 			}
+			// UBI-88: current is full ledger state (every schema key
+			// present, possibly null); resolvedBytes is a partial drafted
+			// config that legitimately omits an attribute nobody touched.
+			// Without this, an attribute the ledger recorded as explicit
+			// null renders as "<attr>: null -> (absent)" -- representation
+			// noise, the SAME null<->absent equivalence class UBI-63 fixed
+			// for drift comparison, just never applied to a modify's own
+			// diff before now. Also strips the identical null<->zero-value/
+			// materialization noise `ubx status --drift` already never
+			// shows.
+			before, after = core.FilterNormalizationNoise(before, after, schemaComputedAdapter{schema: e.provider.Schema, typeName: e.ri.Type})
 			observedHash, err := core.ObservedHash(current)
 			if err != nil {
 				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
