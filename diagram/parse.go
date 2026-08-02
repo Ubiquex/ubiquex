@@ -100,6 +100,21 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 	refAddress := make(map[string]string, len(objs))   // AbsID -> the "@stack.type.name" address a reference node names
 	resourceIndex := make(map[string]int, len(objs))   // AbsID -> index into intent.Resources, for depends_on backfill
 
+	// pending holds every resource node's own d2graph.Object + resolved
+	// type + provider, keyed by absID -- ubx_required config-building
+	// (below) is deferred out of this pass entirely (UBI-95): a $ref
+	// value inside one node's own ubx_required block may name ANOTHER
+	// node not yet reached here, since objs is sorted by absID, not by
+	// declaration or topological order. pendingOrder preserves objs' own
+	// deterministic order for the second pass below -- ranging over the
+	// pending map directly would make config-building order (and this
+	// package's own error-ordering, on a multi-node failure) depend on
+	// Go's deliberately-randomized map iteration, which this project's
+	// own determinism discipline never allows anywhere near resolved
+	// output.
+	pending := make(map[string]pendingResource, len(objs))
+	var pendingOrder []string
+
 	var questions []core.Question
 	var defaults []core.AmbiguityNote
 
@@ -148,11 +163,6 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			continue
 		}
 
-		config, err := ubxRequiredConfig(obj, typeClass, dp)
-		if err != nil {
-			return nil, fmt.Errorf("diagram: %s: %w", absID, err)
-		}
-
 		name := label
 		if name == "" {
 			name = obj.ID
@@ -160,15 +170,59 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 		kind[absID] = nodeKindResource
 		resourceName[absID] = name
 		resourceIndex[absID] = len(intent.Resources)
+		pending[absID] = pendingResource{obj: obj, typeClass: typeClass, dp: dp}
+		pendingOrder = append(pendingOrder, absID)
 		intent.Resources = append(intent.Resources, resolver.ResourceIntent{
-			Type:   typeClass,
-			Name:   name,
-			Op:     resolver.OpCreate,
-			Config: config,
+			Type: typeClass,
+			Name: name,
+			Op:   resolver.OpCreate,
+			// Config is filled in below, once every resource in this
+			// diagram (not just the ones already seen) has a known
+			// type+name a ubx_required $ref value could target.
 		})
 	}
 
-	// Second pass: edges -> DependsOn (docs/schema.md's UBI-47
+	// byBareID lets a ubx_required $ref name a top-level node by its
+	// own bare D2 identifier (the common case -- e.g. "role", matching
+	// how every other node reference already reads in a diagram this
+	// size) rather than requiring its full absID, while still accepting
+	// the full absID directly for a node nested inside a container.
+	byBareID := make(map[string]string, len(pending))
+	for absID, pr := range pending {
+		if pr.obj.ID != absID {
+			byBareID[pr.obj.ID] = absID
+		}
+	}
+	resolveRefTarget := func(identifier string) (targetType, targetName string, ok bool) {
+		targetAbsID := identifier
+		if _, direct := pending[identifier]; !direct {
+			if viaBareID, found := byBareID[identifier]; found {
+				targetAbsID = viaBareID
+			}
+		}
+		idx, found := resourceIndex[targetAbsID]
+		if !found {
+			return "", "", false
+		}
+		return intent.Resources[idx].Type, intent.Resources[idx].Name, true
+	}
+
+	// Second pass (of what UBI-91 originally treated as one): build
+	// every resource's own ubx_required config now, in objs' own
+	// deterministic order -- the only point where a ubx_required $ref
+	// value can be resolved against a sibling node, since every
+	// resource's own type+name is finally known regardless of where in
+	// the diagram it was declared.
+	for _, absID := range pendingOrder {
+		pr := pending[absID]
+		config, err := ubxRequiredConfig(pr.obj, pr.typeClass, pr.dp, stack, resolveRefTarget)
+		if err != nil {
+			return nil, fmt.Errorf("diagram: %s: %w", absID, err)
+		}
+		intent.Resources[resourceIndex[absID]].Config = config
+	}
+
+	// Third pass: edges -> DependsOn (docs/schema.md's UBI-47
 	// amendment) for a resource-to-resource edge, or a visible,
 	// non-blocking note for a resource-to-reference edge (see
 	// "Cross-stack edges," below).
@@ -233,6 +287,18 @@ const (
 	nodeKindReference
 	nodeKindUnresolved
 )
+
+// pendingResource carries what Parse's first pass already knows about a
+// resource node -- its own d2graph.Object, resolved type, and resolved
+// provider -- through to the second pass, where its ubx_required config
+// (including any $ref value naming a sibling node, UBI-95) actually gets
+// built. See Parse's own "pending" doc comment for why config-building
+// is deferred out of the first pass entirely.
+type pendingResource struct {
+	obj       *d2graph.Object
+	typeClass string
+	dp        resolver.DeclaredProvider
+}
 
 // sortedLeaves returns every non-container object in g, sorted by its
 // own absolute ID path -- determinism is this package's own
@@ -355,7 +421,7 @@ func firstNonExternalClass(classes []string) (string, bool) {
 // -- this is deliberately NOT a general attribute-authoring mechanism;
 // topology-only stays the rule for everything else UBI-47 already
 // established.
-func ubxRequiredConfig(obj *d2graph.Object, typeClass string, dp resolver.DeclaredProvider) (json.RawMessage, error) {
+func ubxRequiredConfig(obj *d2graph.Object, typeClass string, dp resolver.DeclaredProvider, stack string, resolveTarget func(identifier string) (targetType, targetName string, ok bool)) (json.RawMessage, error) {
 	var required *d2graph.Object
 	for _, child := range obj.ChildrenArray {
 		if child.ID == ubxRequiredKey {
@@ -377,15 +443,91 @@ func ubxRequiredConfig(obj *d2graph.Object, typeClass string, dp resolver.Declar
 		if !requiredNames[attr.ID] {
 			return nil, fmt.Errorf("ubx_required.%s: %q is not a required attribute on %s -- use --from-doc or an SDK program to set optional attributes", attr.ID, attr.ID, typeClass)
 		}
-		raw, err := json.Marshal(attr.Label.Value)
+		raw, err := ubxRequiredAttrValue(attr.Label.Value, attr.ID, stack, resolveTarget)
 		if err != nil {
-			return nil, fmt.Errorf("ubx_required.%s: %w", attr.ID, err)
+			return nil, err
 		}
 		config[attr.ID] = raw
 	}
 	b, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ubx_required config: %w", err)
+	}
+	return b, nil
+}
+
+// ubxRequiredRefPrefix is UBI-95's own extension to the ubx_required
+// escape hatch (UBI-91): a value of the shape "ref:<node-identifier>.
+// <attr-path>" names another node IN THIS SAME DIAGRAM by its own D2
+// identifier (or full absolute dotted path, for a node nested inside a
+// container) plus a real attribute on that node's own resolved provider
+// schema -- resolved into a genuine wire {"$ref": {"to": "<stack>.
+// <type>.<name>.<attr-path>"}} object, the exact shape core/resolver's
+// own resolveRef already consumes for every other medium (core/resolver/
+// refs.go), never a new resolution mechanism of this package's own.
+//
+// Deliberately spelled without a leading "$" -- confirmed live (twice,
+// identically) that D2's own compiler reserves "$" for its own variable-
+// substitution grammar UNCONDITIONALLY, even inside an otherwise-plain
+// quoted string ("substitutions must begin on {"): a "$ref:..." value,
+// quoted or not, never reaches this package's own parsing at all --
+// d2compiler.Compile itself refuses it first. "ref:" (no sigil) is the
+// only shape confirmed to survive D2's own lexer intact as a plain
+// string.
+//
+// This exists because a Required attribute is sometimes only knowable
+// AFTER a sibling resource is actually created -- a provider-auto-
+// generated IAM role name, confirmed live (UBI-92/93's own founder
+// repro): a literal value in that case is either impossible to know in
+// advance, or worse, silently WRONG on every subsequent re-plan once the
+// referenced resource is re-created with a brand new generated identity,
+// since a diagram's own re-authoring is otherwise idempotent but a
+// hardcoded guess at another resource's generated name never is.
+//
+// Deliberately narrow, matching ubx_required's own scope discipline
+// exactly: still only legal for an attribute the real schema marks
+// Required (the same requiredNames check above applies whether the value
+// is a literal or a ref) -- this only changes WHERE the value comes
+// from, never WHICH attributes may be set this way. Still never a
+// general attribute-authoring mechanism; topology-only stays the rule
+// for everything else UBI-47 already established.
+const ubxRequiredRefPrefix = "ref:"
+
+// ubxRequiredAttrValue resolves one ubx_required attribute's own raw D2
+// label text into the json.RawMessage that belongs in the resource's
+// Config -- either an ordinary JSON-encoded string literal (today's
+// unchanged behavior), or, when raw carries ubxRequiredRefPrefix, a real
+// wire $ref object built from resolveTarget's own lookup of the named
+// sibling node.
+func ubxRequiredAttrValue(raw, attrName, stack string, resolveTarget func(identifier string) (targetType, targetName string, ok bool)) (json.RawMessage, error) {
+	if !strings.HasPrefix(raw, ubxRequiredRefPrefix) {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("ubx_required.%s: %w", attrName, err)
+		}
+		return b, nil
+	}
+
+	rest := strings.TrimPrefix(raw, ubxRequiredRefPrefix)
+	dotIdx := strings.Index(rest, ".")
+	if dotIdx <= 0 || dotIdx == len(rest)-1 {
+		return nil, fmt.Errorf("ubx_required.%s: %q is not a well-formed \"ref:<node>.<attr-path>\" reference", attrName, raw)
+	}
+	identifier := rest[:dotIdx]
+	attrPath := rest[dotIdx+1:]
+
+	targetType, targetName, found := resolveTarget(identifier)
+	if !found {
+		return nil, fmt.Errorf("ubx_required.%s: %q references node %q, which is not a resource node in this same diagram (a reference must name another topology node's own D2 identifier, resolved as a real resource)", attrName, raw, identifier)
+	}
+
+	to := stack + "." + targetType + "." + targetName + "." + attrPath
+	obj := map[string]interface{}{
+		"$ref": map[string]interface{}{"to": to},
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("ubx_required.%s: marshal $ref: %w", attrName, err)
 	}
 	return b, nil
 }
