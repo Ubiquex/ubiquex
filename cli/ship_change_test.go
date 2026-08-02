@@ -82,11 +82,17 @@ func TestResolveAcceptShip_CreateChain_RealFakeProvider(t *testing.T) {
 	if !strings.Contains(shipOut, "outcome: shipped") {
 		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "shipped: payments.fake_widget.primary") {
+	// UBI-84: the live row's own natural word order is "<address>:
+	// shipped" (not the removed summary block's "shipped: <address>") --
+	// "mirror" gets one extra padding space before its own colon here
+	// since "primary" (this run's only other address) is one character
+	// longer, itself a regression check for UBI-84's own column-alignment
+	// fix (every address padded to the shared batch-wide max length).
+	if !strings.Contains(shipOut, "payments.fake_widget.primary: shipped") {
 		t.Fatalf("expected primary to show shipped, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "shipped: payments.fake_widget.mirror") {
-		t.Fatalf("expected mirror to show shipped, got: %s", shipOut)
+	if !strings.Contains(shipOut, "payments.fake_widget.mirror : shipped") {
+		t.Fatalf("expected mirror to show shipped (aligned with a trailing pad space), got: %s", shipOut)
 	}
 
 	whyOut, err := runUbx(t, env, "why", changeID, "--ledger-dir", ledgerDir)

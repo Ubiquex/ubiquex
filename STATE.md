@@ -4,6 +4,121 @@
 
 ## Current phase
 
+**UBI-84 (2026-08-02) — ship progress polish, post-UBI-83 (playground-9
+re-test): drop the redundant closing summary list, remove blank lines
+between resource rows, align columns across the whole batch. Same
+rendering pass (`cli/ship.go`'s `newProgressPrinter`/`printShipReport`)
+as UBI-75/83. Hermetic suite green, live-verified against the real built
+binary + fakeprovider via `script -q`, alignment/spacing confirmed with a
+real terminal-emulation reconstruction of the raw captured bytes (cursor
+movement/clear codes actually interpreted, not just eyeballed or
+`\n`-split) for BOTH `ubx ship` (create) and `ubx ship --confirm-
+terminate` (destroy, genuinely through terminate's own ship path).**
+
+**1. Dropped `printShipReport`'s per-resource repeat block.** The
+trailing `"✓ shipped: <address>"` loop (plus each resource's own error
+detail lines) duplicated exactly what UBI-83's own in-place row already
+showed live -- and, for the error lines specifically, confirmed this was
+genuinely redundant, not lossy: UBI-70's error handling is unconditional
+(not TTY-gated), so a resource's own error detail already gets its own
+permanent line the moment it happens regardless of TTY/non-TTY/piped-log
+mode. `ubx why` remains the authoritative place for full per-resource
+history after the fact. Only the genuine summary (the count/outcome
+line, never shown live, UBI-75's own styling untouched) survives.
+
+**2. Removed the blank-line spacer between DIFFERENT resources' own
+first row (TTY only).** UBI-61/UBI-75's own convention existed to
+disambiguate interleaved lines from concurrent resources sharing one
+scrolling stream -- a problem UBI-83's stable, non-interleaving
+one-row-per-resource design already solved structurally, making the
+blank line pure leftover noise. Scoped to TTY specifically: the ticket's
+own stated reasoning ("no longer needed now that UBI-83 gives each
+resource its own stable, non-interleaving row") is about UBI-83's
+in-place-row mechanism, which only exists for TTY -- non-TTY's own
+blank-line-before-a-new-resource spacing (a flat scrolling log, never
+row-tracked or interleaving-prone in the first place, unaffected by
+UBI-83 either way) is left exactly as it was; the ticket's own
+verification instruction only checks TTY (`script -q`) output too.
+Recorded here as an explicit scope decision, not a silent omission.
+
+**3. Column alignment: pad the address, not just the status text.**
+Root cause: `progressLineWidth`'s existing fixed-width padding was
+already applied to the STATUS TEXT ("shipping", "shipped · confirmed by
+reconciliation") on every line, which is why the elapsed-time column
+already looked consistent regardless of WHICH status text a row showed
+-- but the ADDRESS itself was never padded at all, so two rows with
+different-length addresses had their `":"` (and everything after it)
+start at different columns. Fixed: `maxAddrLen`, the longest address
+across the WHOLE batch, computed once up front from `kinds`
+(`addressOpKinds`'s own per-proposal map, already covering every
+`Delta.Creates`/`Modifies`/`Destroys` address before `executor.Ship` ever
+starts -- no new plumbing needed, the full batch was already known at
+this point). Every row's own address is padded to `maxAddrLen` INSIDE
+the colored/bold span before the colon is appended, so `st.OpHeader`'s
+own color wraps the padding spaces too (invisible, harmless) and the
+colon lands at the identical column on every row regardless of that
+row's own address length.
+
+**Hermetic tests**: all three pre-existing `progress_ticker_test.go`
+tests updated for the new behavior (`TestNewProgressPrinter_
+ConcurrentResources_EachTicksIndependently`'s own newline-count
+assertion recomputed by hand: 3 → 2, since the removed spacer was one of
+the three newlines that test's own comment worked out previously). New
+`TestNewProgressPrinter_UBI84_NoBlankLinesColumnsAligned`: four
+addresses of deliberately varying length (1/2/9/23 chars), asserts zero
+`"\n\n"` occurrences AND that every row's own `": "` substring lands at
+the identical rune index. `cli/ship_change_test.go`/`cli/
+ship_progress_test.go`'s own assertions (previously checking the now-
+removed summary block's own `"shipped: <address>"` word order) rewritten
+against the live row's own real `"<address>: shipped"` order --
+`ship_change_test.go`'s own fix incidentally doubles as its own
+alignment regression check (`"...primary: shipped"` vs `"...mirror :
+shipped"`, the shorter address getting its own expected single pad
+space, since `"primary"` is one character longer than `"mirror"` and
+that's the only other address in that proposal).
+
+**Live verification, against the real built binary (`make build`,
+version-checked: `dev+eed8aef-dirty`) + a freshly-built `fakeprovider`,
+`script -q`-captured -- a genuine 5-resource batch, address lengths
+deliberately varying from 1 character (`"a"`) to 88 characters (an
+`iam-role-policy-attachment`-shaped name), so misalignment would
+actually be visible if the fix were wrong, per the ticket's own
+instruction:**
+
+- **Create path** (`ubx ship`, 5 independent `fake_widget` creates): raw
+  capture (after stripping a `script -q`-specific leading pty artifact --
+  the literal two-character `"^D"` plus two backspaces, confirmed via a
+  raw-byte dump to be `script`'s own echo of the Ctrl-D/EOF this Bash-
+  tool-driven session's stdin sends before the child command's own output
+  begins, present identically at the start of every `script -q` capture
+  this whole UBI-75/83/84 arc has made, not something this program
+  prints) shows exactly 5 resource rows, zero blank lines between them,
+  and -- measured precisely, not eyeballed -- every row's own `": "`
+  column lands at the identical index (91) regardless of that row's own
+  address length. No `"✓ shipped: <address>"` block anywhere in the
+  output; the closing summary (bold, per-count colored) follows directly
+  after one blank line.
+- **Destroy path** (`ubx ship --confirm-terminate`, the same 5 resources,
+  a real concurrent multi-attempt read-back verification): the raw
+  captured bytes needed an actual small terminal emulator (interpreting
+  `\x1b[nA`/`\x1b[nB`/`\x1b[2K`/`\r`/`\n`, not a naive newline-split,
+  since several of the 5 rows finish out of creation order and get
+  redrawn via cursor-up/down through rows that never received a real
+  newline between them) to reconstruct the FINAL visual state a real
+  terminal would show -- confirmed via that reconstruction: exactly 5
+  resource rows (in original creation order, each correctly redrawn back
+  at its own row regardless of finishing order), zero blank rows between
+  them, every row's own `": "` column again at index 91 (identical to
+  the create path's own number), no redundant summary block, one blank
+  row then the closing summary.
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `gofmt -l
+.` clean, `go test ./... -race -count=1`). No `ubx ship` or any other
+command was ever run against a real cloud provider -- `fakeprovider`
+exclusively, per CLAUDE.md's standing rule.
+
+## Current phase (previous)
+
 **UBI-83 (2026-08-02) — the in-progress/verifying line must update IN
 PLACE with an animated spinner, not reprint per tick. Founder re-test after
 UBI-75: that fix landed self-identification, grouping, and vocabulary, but

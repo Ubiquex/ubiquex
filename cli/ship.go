@@ -762,16 +762,33 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 	seenAddr := map[string]bool{}
 	spin := map[string]int{}
 
+	// UBI-84 (third finding): the max address length across the WHOLE
+	// batch, computed once, up front -- the full set of resources this
+	// run will ever process is already known (kinds, addressOpKinds' own
+	// per-proposal map, covers every Delta.Creates/Modifies/Destroys
+	// address before executor.Ship ever starts). Every row's own address
+	// is padded to this shared width (renderContent, below) so the
+	// ": shipped"/"· confirmed by..."/elapsed-time columns all start at
+	// the identical column across every row, matching plan's own
+	// attribute-block alignment, regardless of how much any one
+	// resource's own address length differs from its neighbors'.
+	maxAddrLen := 0
+	for addr := range kinds {
+		if len(addr) > maxAddrLen {
+			maxAddrLen = len(addr)
+		}
+	}
+
 	// Row-tracking state (TTY only) -- UBI-83's own in-place-redraw
 	// mechanism. order/rowOf record which physical terminal row (a real
-	// newline-delimited line, counting blank spacer lines too) each row
-	// key -- a resource's own address, or a uniquely-suffixed key for a
-	// permanent error line, see updateRow -- was written to. cursorRow is
-	// the row the cursor is CURRENTLY parked at (always at column 0,
-	// invariant maintained by every write below); sealed reports whether
-	// that current row already carries its own trailing "\n" (true
-	// trivially before anything is printed, and again immediately after
-	// any row's own final write).
+	// newline-delimited line) each row key -- a resource's own address,
+	// or a uniquely-suffixed key for a permanent error line, see
+	// updateRow -- was written to. cursorRow is the row the cursor is
+	// CURRENTLY parked at (always at column 0, invariant maintained by
+	// every write below); sealed reports whether that current row
+	// already carries its own trailing "\n" (true trivially before
+	// anything is printed, and again immediately after any row's own
+	// final write).
 	order := []string{}
 	rowOf := map[string]int{}
 	cursorRow := 0
@@ -811,7 +828,11 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
 		prefix := address
 		if prefix != "" {
-			prefix = st.OpHeader(kind, address) + ":"
+			// UBI-84: pad the address itself, inside the colored span, to
+			// the shared maxAddrLen -- the colon (and everything after
+			// it) then starts at the identical column on every row,
+			// regardless of this row's own address length.
+			prefix = st.OpHeader(kind, fmt.Sprintf("%-*s", maxAddrLen, address)) + ":"
 		}
 		if elapsed != "" {
 			return fmt.Sprintf("  %s %s %s %s", glyph, prefix, padded, elapsed)
@@ -850,23 +871,18 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 
 		row, exists := rowOf[rowKey]
 		if !exists {
-			if len(order) > 0 {
-				if !sealed {
-					// Whatever currently sits at the bottom (this resource's
-					// own still-open row, or a different resource's) stops
-					// being redrawable the moment a new row exists below it
-					// -- seal it in place first.
-					fmt.Fprint(out, "\n")
-					cursorRow++
-				}
-				if newAddr {
-					// UBI-61/UBI-75's own blank-line-between-resources
-					// convention -- only between DIFFERENT resources' own
-					// first row, never before e.g. an error row that
-					// follows the same resource's own already-open row.
-					fmt.Fprint(out, "\n")
-					cursorRow++
-				}
+			// UBI-84 (second finding): UBI-61/UBI-75's own blank-line-
+			// between-resources spacer is gone here -- it existed to
+			// disambiguate interleaved lines from concurrent resources
+			// sharing one scrolling stream, a problem UBI-83's own
+			// stable, non-interleaving one-row-per-resource design
+			// already solved structurally. A blank line between rows now
+			// reads as leftover noise, not disambiguation. Still seal
+			// whatever's currently at the bottom before starting a new
+			// row immediately below it, zero blank lines apart.
+			if len(order) > 0 && !sealed {
+				fmt.Fprint(out, "\n")
+				cursorRow++
 			}
 			row = cursorRow
 			rowOf[rowKey] = row
@@ -1067,17 +1083,16 @@ func reportAlreadyApplied(out io.Writer, ledger *core.Ledger, p *core.Proposal, 
 // destroys/failures) -- the underlying "<state>: <address>" wording is
 // unchanged, so an existing substring assertion still finds it.
 func printShipReport(out io.Writer, st *styler, rec *core.ApplyRecord) {
-	for _, ra := range rec.Resources {
-		state, _ := ra.LastState()
-		glyph := st.Green("✓")
-		if state == core.ResourceFailed || state == core.ResourceStillUnknown {
-			glyph = st.Red("✗")
-		}
-		fmt.Fprintf(out, "%s %s: %s\n", glyph, displayResourceState(string(state)), ra.Address)
-		for _, e := range ra.Errors {
-			fmt.Fprintf(out, "  %s: %s\n", e.Classification, e.Message)
-		}
-	}
+	// UBI-84: no per-resource repeat block here -- UBI-83's own in-place
+	// row already showed every resource's own final state ("✓ <address>:
+	// shipped · confirmed by reconciliation  0:03"), live, and (UBI-70,
+	// unconditionally, TTY or not) any error's own detail already got its
+	// own permanent line the moment it happened. Reprinting "✓ shipped:
+	// <address>" and each error's classification/message again here was
+	// pure duplication of what's already on screen -- `ubx why` remains
+	// the authoritative place for full per-resource history after the
+	// fact. Only the genuine summary (never shown live) survives below.
+	//
 	// UBI-75 (third finding): blank line before the closing summary, bold
 	// throughout, per-count colored (green shipped, red failed, dim
 	// still-unknown -- this package's 7-code palette has no true gray,

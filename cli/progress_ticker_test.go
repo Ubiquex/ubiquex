@@ -168,18 +168,72 @@ func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testin
 	if strings.Count(out, "shipped") != 2 {
 		t.Errorf("expected exactly one final \"shipped\" appearance per address (2 total -- each address's own terminal state is written exactly once, never redrawn again), got %d:\n%s", strings.Count(out, "shipped"), out)
 	}
-	// UBI-83: total real newlines must stay small and INDEPENDENT of tick
-	// count (3 ticks/address here vs. TestNewProgressPrinter_
-	// TicksUpdateInPlace_NotAppendedPerTick's 5 -- same 2-row shape,
-	// same newline count either way) -- exactly one row transition each
-	// for: A's row created, B's row created (sealing whichever of A/B was
-	// still open plus its own blank-line spacer), and B's own final seal
-	// once it's the bottom row (whichever address finishes last is the
-	// one that self-seals; the other was already implicitly sealed the
-	// moment the second row was created). 3 newlines total, regardless of
-	// which goroutine wins the race to create/finish first.
-	if got := strings.Count(out, "\n"); got != 3 {
-		t.Errorf("UBI-83: expected exactly 3 real newlines for this 2-resource run (row-transition count, not tick count), got %d in:\n%q", got, out)
+	// UBI-83/UBI-84: total real newlines must stay small and INDEPENDENT
+	// of tick count (3 ticks/address here vs. TestNewProgressPrinter_
+	// TicksUpdateInPlace_NotAppendedPerTick's 5 -- same 2-row shape, same
+	// newline count either way) -- exactly one row transition each for:
+	// B's row created (sealing whichever of A/B was still open -- UBI-84
+	// dropped the blank-line spacer between DIFFERENT resources' own
+	// rows that used to add a second newline here), and B's own final
+	// seal once it's the bottom row (whichever address finishes last is
+	// the one that self-seals; the other was already implicitly sealed
+	// the moment the second row was created). 2 newlines total,
+	// regardless of which goroutine wins the race to create/finish first.
+	if got := strings.Count(out, "\n"); got != 2 {
+		t.Errorf("UBI-83/UBI-84: expected exactly 2 real newlines for this 2-resource run (row-transition count, not tick count, zero blank-line spacers), got %d in:\n%q", got, out)
+	}
+}
+
+// TestNewProgressPrinter_UBI84_NoBlankLinesColumnsAligned is UBI-84's own
+// regression test for its second and third findings, driven directly
+// (sequential, no concurrency -- that's TestNewProgressPrinter_
+// ConcurrentResources_EachTicksIndependently's own job) against a batch
+// of deliberately VARYING-length addresses, matching the ticket's own
+// verification instruction ("a 5-resource batch with varying address
+// lengths, confirming visual alignment, not just correct values"): four
+// resources, address lengths 1/2/9/23, colors disabled (plainStyler) so
+// the raw column math is directly comparable across rows.
+func TestNewProgressPrinter_UBI84_NoBlankLinesColumnsAligned(t *testing.T) {
+	addrs := []string{"a", "bb", "ccccccccc", "dddddddddddddddddddddd"}
+	kinds := map[string]resourceOpKind{}
+	for _, a := range addrs {
+		kinds[a] = opCreate
+	}
+
+	var buf bytes.Buffer
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, kinds)
+	for _, a := range addrs {
+		printer(executor.ProgressEvent{Address: a, Kind: "transition", State: "applied"})
+	}
+	finish()
+
+	out := buf.String()
+
+	// Finding 2: zero blank lines between resource rows -- a blank line
+	// would show up as two consecutive newlines with nothing between.
+	if strings.Contains(out, "\n\n") {
+		t.Fatalf("UBI-84: expected zero blank lines between resource rows, got:\n%q", out)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != len(addrs) {
+		t.Fatalf("expected exactly %d lines (one per resource, no extras), got %d:\n%q", len(addrs), len(lines), out)
+	}
+
+	// Finding 3: every row's own ": " (ending the padded address column)
+	// starts at the IDENTICAL rune index -- the longest address (23
+	// chars) sets the shared column width every shorter address must be
+	// padded out to.
+	wantColon := -1
+	for i, line := range lines {
+		idx := strings.Index(line, ": ")
+		if idx < 0 {
+			t.Fatalf("line %d has no \": \" column at all: %q", i, line)
+		}
+		if wantColon == -1 {
+			wantColon = idx
+		} else if idx != wantColon {
+			t.Fatalf("UBI-84: expected every row's \": \" column to align at rune index %d (set by the longest address), line %d has it at %d instead:\n%q", wantColon, i, idx, out)
+		}
 	}
 }
 
