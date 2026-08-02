@@ -4,6 +4,155 @@
 
 ## Current phase
 
+**UBI-83 (2026-08-02) — the in-progress/verifying line must update IN
+PLACE with an animated spinner, not reprint per tick. Founder re-test after
+UBI-75: that fix landed self-identification, grouping, and vocabulary, but
+never touched the actual print-vs-redraw MECHANISM UBI-70 originally asked
+for -- a real 26s SQS create was still producing 20+ near-duplicate
+"shipping" lines, a 45s pre-verification destroy wait 12+ near-duplicate
+"verifying" lines. Fixed with real ANSI cursor addressing. Hermetic suite
+green, live-verified against the real built binary + fakeprovider via
+`script -q`, raw output COUNTED (not eyeballed) per the ticket's own
+explicit instruction.**
+
+**Root cause, found precisely, not guessed at.** `newProgressPrinter`'s
+own `printLine` (the function every tick and every real event funneled
+through) always wrote a trailing `"\n"` -- there was no code path
+anywhere in this printer that distinguished "append a new line" from
+"redraw the current line in place." UBI-67 (same day, earlier) had
+deliberately moved AWAY from the pre-UBI-67 `\r`-only single-line
+overwrite specifically because it couldn't represent N concurrently-
+ticking resources on a real terminal -- and nothing since had revisited
+that call once real in-place redraw was needed again, now with the added
+constraint of staying correct under genuine concurrency.
+
+**Fix: real ANSI cursor addressing, not just `\r`.** Each resource
+address (or a uniquely-keyed error line) owns exactly one physical
+terminal row, tracked by its own row index against a shared `cursorRow`
+counter (`cli/ship.go`'s `newProgressPrinter`, `updateRow`). Redrawing an
+existing row moves the cursor up to it (`\x1b[<n>A`), clears it
+(`\x1b[2K`), writes the new content, and returns to the bottom
+(`\x1b[<n>B`) if it wasn't already there -- so N concurrently-ticking
+resources each redraw their OWN row without touching any other resource's
+own row, exactly like `docker compose up`'s own multi-line live display.
+A row's content becomes permanent (a real trailing `"\n"`) the moment it
+stops being the bottom-most row -- either a NEW row is about to be
+created below it, or it reaches its own terminal state while still at
+the bottom. `newProgressPrinter` now returns `(fn, finish)`; `finish`
+(called unconditionally by `ship.go`'s `RunE`, right after
+`executor.Ship` returns -- success, `ErrAlreadyApplied`, or a real error
+alike) seals whatever row is still open when the run ends mid-phase (a
+context timeout, say), so the caller's own next write never silently
+overwrites a still-open row's own last content. Non-TTY is completely
+unaffected -- no row tracking, no ANSI codes, every real event still its
+own permanent appended line, exactly as before UBI-83 (a log file has no
+use for "redraw in place," and the ticker never fires there at all).
+
+**Named-phase question, resolved**: does "shipping" transitioning to
+"verifying via read-back" mean one continuously-updating line across both
+phases, or two separate lines? Resolved as ONE ROW PER RESOURCE, its own
+text swapped in place on every phase transition -- `updateRow`'s rowKey
+is the bare address for both the ticker-driven "shipping" phase and the
+`reconcile_attempt`-driven "verifying" phase, so the second phase simply
+redraws the SAME row the first phase was using, never creates a second
+row for the same resource's own sequential phases. An error event is the
+one deliberate exception (UBI-70's own "errors still get their own
+permanent, never-redrawn line" rule, preserved exactly): it's given a
+unique, never-reused row key (`address#error#<n>`) specifically so it
+can't ever be redrawn over, landing as its own new row below whatever the
+resource's own main row was showing at that moment -- confirmed live (see
+below): the resource's own main row later redraws correctly IN PLACE
+above that error line via the `n>0` cursor-up branch, `\x1b[2A`/`\x1b[2B`
+in the real captured transcript, never disturbing the error line sitting
+below it.
+
+**An actual animated spinner, not the old static glyphs.** The founder's
+own exact spec named "an actual animated spinner," not `st.Dim("·")`
+(shipping's own old static dot) or a fixed single `"⠧"` (verifying's own
+old unmoving frame). `spinnerFrames` is the classic braille "dots"
+10-frame sequence (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` -- `"⠧"` was already frame 7 of this exact
+set, so the visual language doesn't change, it just starts moving);
+`nextSpinner(address)` advances one frame per redraw, called both by each
+tick and by the real `reconcile_attempt` event itself, colored by the
+same per-phase convention as before (dim for shipping, yellow for
+verifying).
+
+**Hermetic tests** (`cli/progress_ticker_test.go`): all three pre-
+existing tests updated for the new `(fn, finish)` signature. New
+`TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick`: 5 real
+ticks (5.3s), then asserts `strings.Count(out, "\n") == 1` (not ~5) and
+`strings.Count(out, "\x1b[2K") >= 5` (proving genuine in-place redraws
+happened, not that they were silently dropped) plus at least 2 distinct
+spinner frames appeared. `TestNewProgressPrinter_ConcurrentResources_
+EachTicksIndependently` extended to 3 ticks/address and gained an
+order-invariant `strings.Count(out, "\n") == 3` assertion -- worked out
+by hand to be the same total regardless of which of the two racing
+goroutines' events land first (1 seal-of-whichever-was-open + 1
+UBI-75-convention spacer + 1 final self-seal of whichever finishes while
+still at the bottom), proving the newline count is a function of ROW
+TRANSITIONS, not tick count, matching the live-verification numbers
+below almost exactly in miniature.
+
+**Fault-injection addition** (`provider/internal/fakeprovider/main.go`):
+new `FAKEPROVIDER_APPLY_MODE=slow` -- sleeps `fakeProviderSlowApplyDelay`
+(10s, context-aware) before falling through to the ordinary clean-success
+path, for both v5 and v6's own `ApplyResourceChange` (create/modify's own
+call, not `PlanResourceChange`, which real providers -- and this fixture
+-- never make wait). Exists specifically because no existing fixture mode
+introduces real elapsed delay on a plain create/modify's own "shipping"
+wait (`lying-destroy` only ever delays the read-back-verification phase,
+since a lying destroy's own Apply call still returns immediately) -- the
+ticket's own suggestion ("a fault-injection mode... or similar from prior
+sessions") pointed at exactly this gap.
+
+**Live verification, against the real built binary (`make build`,
+version-checked: `dev+ccf4540-dirty`) + a freshly-built `fakeprovider`,
+`script -q`-captured, raw output COUNTED via a small Python byte-count
+script -- not eyeballed, per the ticket's own explicit instruction:**
+
+- **Plain "shipping" wait** (`FAKEPROVIDER_APPLY_MODE=slow`, a real
+  10-second create): 10 real ticks fired (confirmed: 10 occurrences of
+  `\x1b[2K`), yet the whole captured transcript is **4 real lines**
+  (`wc -l` and a literal `\n`-byte count both agree) -- not 10, not 11.
+  The resource's own address string appears 12 times in the raw byte
+  stream (11 redraws of the main row + 1 in the trailing summary), which
+  is expected and correct -- a real terminal emulator collapses those 11
+  redraws into what a human watching sees as one continuously-updating
+  line; the raw byte stream necessarily still contains every redraw's
+  own bytes, since that's what `\x1b[2K`-based in-place update means at
+  the byte level. Real transcript, full run:
+  ```
+    ⠋ ubx-playground-8.fake_widget.ci-notifications-v8: shipping    0:01
+    ⠙ ubx-playground-8.fake_widget.ci-notifications-v8: shipping    0:02
+    ... (8 more redraws, same row, spinner advancing, elapsed advancing) ...
+    ✓ ubx-playground-8.fake_widget.ci-notifications-v8: shipped     0:10
+  ```
+  (shown here as separate lines for readability; the real terminal shows
+  one line whose content changes)
+- **Read-back verification wait** (`FAKEPROVIDER_APPLY_MODE=lying-
+  destroy`, `ubx ship --confirm-terminate` -- i.e. genuinely through
+  `ubx terminate`'s own ship path, not just plain `ubx ship`, per the
+  ticket's own "verify both" instruction): ran the FULL real
+  `destroyReconcileBackoffSchedule` to exhaustion (~48.8s wall-clock, 10
+  real `reconcile_attempt` events, 47 additional ticker-driven redraws
+  between them -- 57 total, confirmed: 57 occurrences of both `\x1b[2K`
+  and the literal text "attempt "). Total real lines in the whole
+  transcript: **9** (header, accepted-line, the main row's own eventual
+  redraw-in-place-above-the-error-line via `\x1b[2A`/`\x1b[2K`/`\x1b[2B`,
+  the error line itself, the trailing per-resource/summary lines) -- not
+  57, not 60. This is the exact scenario the ticket named directly ("the
+  second transcript shows the same over-printing bug... 12 duplicate
+  lines before it finally updates") and it no longer over-prints at all,
+  proven by count, at nearly 6x the duplicate-line volume the ticket's
+  own founder observation named.
+
+Full suite green throughout (`go build ./...`, `go vet ./...`, `gofmt -l
+.` clean, `go test ./... -race -count=1`). No `ubx ship` or any other
+command was ever run against a real cloud provider -- both slow scenarios
+used `fakeprovider` exclusively, per CLAUDE.md's standing rule.
+
+## Current phase (previous)
+
 **UBI-75 + UBI-76 + UBI-77 + UBI-78 + UBI-79 (2026-08-02) — the rendering-
 layer arc: ship progress grouping, status/scan closing summaries, terminate
 spacing + `--confirm-terminate`, destroy-receipt JSON formatting, and the

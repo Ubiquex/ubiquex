@@ -51,6 +51,17 @@
 //	                  next ReadResource still finds it, exactly like the
 //	                  real google_pubsub_topic destroy that lied. Exercises
 //	                  shipDestroyNode's own universal post-destroy read-back.
+//	"slow"            (UBI-83) sleeps fakeProviderSlowApplyDelay (context-
+//	                  aware -- a shorter --timeout still cancels cleanly)
+//	                  before falling through to the ordinary "ok" success
+//	                  path -- a genuinely slow-but-clean apply, real
+//	                  elapsed wall-clock time, no real cloud provider
+//	                  needed. Exercises the live "shipping" ticker's own
+//	                  multi-tick in-place redraw for a create/modify
+//	                  specifically (as opposed to "lying-destroy," which
+//	                  only ever exercises the read-back-verification
+//	                  ticker, since a lying destroy still returns
+//	                  immediately itself).
 //
 // conformance-v5/conformance-v6 are driven by:
 //
@@ -202,6 +213,18 @@ func serveV5() {
 // one resource type (fake_widget) with a handful of scalar attributes,
 // enough to exercise a real schema dump and a real ReadResource round trip.
 
+// fakeProviderSlowApplyDelay is FAKEPROVIDER_APPLY_MODE=slow's own real
+// elapsed wait (UBI-83) -- long enough to observe several real
+// tickInterval-spaced redraws (ubx's own live "shipping" ticker) before
+// the call finally returns, short enough not to make a `script -q`
+// verification pass tediously slow. The in-place-redraw property this
+// mode exists to prove (one line changing, not N appended) is provably
+// independent of how many ticks fire -- see cli's own
+// TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick -- so this
+// doesn't need to match a real SQS create's own ~25s+ lag to be a
+// faithful proof, just to be genuinely real, multi-tick elapsed time.
+const fakeProviderSlowApplyDelay = 10 * time.Second
+
 type fakeProviderServerV6 struct {
 	tfplugin6.UnimplementedProviderServer
 }
@@ -262,6 +285,12 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 	case "hang":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	case "slow":
+		select {
+		case <-time.After(fakeProviderSlowApplyDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState
@@ -394,6 +423,12 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 	case "hang":
 		<-ctx.Done()
 		return nil, ctx.Err()
+	case "slow":
+		select {
+		case <-time.After(fakeProviderSlowApplyDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// See fakeProviderServerV6.ApplyResourceChange's matching comment

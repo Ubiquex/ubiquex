@@ -258,11 +258,20 @@ consistency shows its own work instead of sitting silent.`,
 			// silent-until-done behavior as before (the progress printer
 			// itself is the only new behavior, and it's purely additive
 			// stdout lines, never consulted for the sealed result itself).
+			progressFinish := func() {}
 			if !jsonOut {
-				ctx = executor.WithProgress(ctx, newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout()), addressOpKinds(p)))
+				progressFn, pf := newProgressPrinter(out, st, isTerminal(cmd.OutOrStdout()), addressOpKinds(p))
+				progressFinish = pf
+				ctx = executor.WithProgress(ctx, progressFn)
 			}
 
 			sealed, err := executor.Ship(ctx, ledger, pool, source, p)
+			// UBI-83: finish unconditionally, before ANY subsequent write --
+			// success, ErrAlreadyApplied, a real error, all alike -- so a
+			// still-open in-place-redrawn row (the run ending mid-phase,
+			// e.g. a context timeout) never gets silently overwritten by
+			// whatever prints next.
+			progressFinish()
 			if errors.Is(err, executor.ErrAlreadyApplied) {
 				return reportAlreadyApplied(out, ledger, p, jsonOut)
 			}
@@ -603,11 +612,22 @@ const tickInterval = 1 * time.Second
 
 // progressLineWidth is the fixed field width every progress line's own
 // glyph+text portion pads to (matching the pre-existing "%-50s"
-// convention) -- reused by the ticker's own in-place-overwrite padding
-// so a shrinking elapsed-time string (rare, but possible if a
-// double-digit minute count is somehow followed by a shorter render)
-// never leaves stale trailing characters on a real terminal.
+// convention). UBI-83's own real ANSI line-clear (`\x1b[2K`) means a
+// shrinking elapsed-time string can no longer leave stale trailing
+// characters on a real terminal regardless of padding -- kept anyway for
+// stable column alignment of the trailing elapsed field, and because a
+// non-TTY line (never cleared, just appended) still benefits from it.
 const progressLineWidth = 50
+
+// spinnerFrames is the shared animated-spinner glyph sequence for both
+// live in-progress phases this printer narrates (the raw provider-call
+// wait, and the read-back verification wait) -- UBI-83's own exact spec:
+// an ANIMATED spinner, not the static "·" (shipping) or fixed single
+// frame "⠧" (verifying) this printer used before. The classic braille
+// "dots" spinner (cli-spinners' own "dots" set) -- "⠧" was simply frame 7
+// of this same 10-frame sequence, so the visual language doesn't change,
+// it just starts moving, one frame per redraw.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // addressOpKinds maps every resource address named in p's own delta to
 // resourceOpKind (style.go) -- the same classification renderCreates/
@@ -651,6 +671,11 @@ func addressOpKinds(p *core.Proposal) map[string]resourceOpKind {
 // thread's second finding, since before this the header line rendered
 // fully plain regardless of what was actually happening to it.
 //
+// Returns the callback itself plus finish, which the caller MUST invoke
+// exactly once, unconditionally, immediately after the executor.Ship call
+// this callback was wired into returns (success, failure, or a context
+// timeout alike -- see UBI-83 below for why).
+//
 // UBI-70 (founder test): the pre-UBI-70 version of this printer
 // rendered EVERY transition as its own full line -- pending, in_flight,
 // an ambiguous-result's own unknown_post_timeout, each reconcile_attempt
@@ -677,41 +702,80 @@ func addressOpKinds(p *core.Proposal) map[string]resourceOpKind {
 //
 // UBI-75 (founder test, same day, post-UBI-67): the UBI-67 fix above
 // wasn't enough on its own. It kept a SEPARATE, un-prefixed header line
-// (`st.OpHeader(kind, address)`, printed once, flush-left, no address
-// convention applied to it at all) announcing each resource, with every
-// SUBSEQUENT line for that resource indented and dim-address-prefixed
-// underneath it. Confirmed live (four real concurrent resources, SQS's
-// own 26s creation lag overlapping everything else finishing in ~1s):
-// a resource's own bare header line, being the one line in this whole
-// design that DOESN'T carry the indented/prefixed convention, reads as
-// its own distinct kind of content -- so when a DIFFERENT resource's
-// still-ticking, indented line lands directly under it (pure bad luck
-// of concurrent timing, exactly what real concurrency guarantees will
-// eventually happen), it reads as "nested under the header above,"
-// not "an unrelated resource's own line, interleaved." The header
-// itself was the structural inconsistency, not the interleaving.
+// announcing each resource, with every SUBSEQUENT line for that resource
+// indented and dim-address-prefixed underneath it -- a DIFFERENT
+// resource's own still-ticking line landing directly under another
+// resource's bare header read as "nested under that header," not "an
+// unrelated resource's own line, interleaved." Fixed by dropping the
+// separate header line entirely: every line this printer ever prints
+// carries that resource's own address, bold+colored by operation kind,
+// inline, every time -- so however real concurrency interleaves DISCRETE
+// lines, each is legible in isolation.
 //
-// Fixed by dropping the separate header line entirely: every line this
-// printer ever prints -- the first for a resource, same as the last --
-// carries that resource's own address, bold+colored by operation kind
-// (st.OpHeader, previously reserved for the one-time header only), inline,
-// every time (the ticket's own "[sqs] shipping 0:14" prefix-style
-// suggestion). There is no longer a "different-looking" line for any
-// resource to be mistaken as; every line is self-identifying on its own,
-// so however real concurrency interleaves them, each is legible in
-// isolation. A blank line still separates a resource's own first printed
-// line from whatever preceded it (unchanged from UBI-67), purely for
-// visual breathing room, not for grouping correctness -- correctness now
-// comes entirely from each line naming its own resource, never from
-// position.
+// UBI-83 (founder re-test, same day, post-UBI-75): UBI-75 fixed
+// self-identification, never the actual defect UBI-70 was originally
+// meant to fix -- every tick of the "shipping" ticker (and every tick
+// between real reconcile_attempt events) still called an APPEND-only
+// print, so a real 26s SQS create produced 20+ near-duplicate "shipping"
+// lines instead of ONE line ticking in place with an animated spinner,
+// and a 45s pre-verification destroy wait produced 12+ near-duplicate
+// "verifying via read-back" lines the same way. Root cause: nothing in
+// this printer had ever distinguished "append a new line" from "redraw
+// the current line in place" -- UBI-67's own discrete-line convention
+// was a deliberate move AWAY from in-place redraw (a `\r`-only overwrite
+// can't represent N concurrently-updating lines), and nothing since had
+// revisited that call once concurrency demanded it.
 //
-// The ticker (startTicker/stopTicker, UBI-63 bug 3's own mechanism) stays
-// keyed per-address, TTY-only, exactly as UBI-67 left it -- multiple
-// resources' own tickers run concurrently, each emitting its own
-// discrete, self-identifying line every tickInterval, never colliding.
-func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]resourceOpKind) func(executor.ProgressEvent) {
+// Fixed with real ANSI cursor addressing (not just `\r`, which UBI-67
+// already correctly ruled out as insufficient for N concurrent
+// resources): each resource address owns exactly one terminal ROW,
+// tracked by its own physical row index (updateRow's own `rowOf`/
+// `cursorRow`); redrawing that row moves the cursor up to it
+// (`\x1b[<n>A`), clears it (`\x1b[2K`), writes the new content, and
+// returns to the bottom (`\x1b[<n>B`) -- so N concurrently-ticking
+// resources each redraw their OWN row in place without touching any
+// other resource's own row, and a real terminal shows physically ONE
+// line per resource changing in place, an actual animated spinner frame
+// advancing each tick (spinnerFrames, not the old static "·"/fixed
+// single "⠧"), never N appended lines. Named phases (the plain
+// "shipping" wait, then read-back "verifying") share the SAME row when
+// they're the same resource's own sequential phases -- the second phase
+// simply redraws in place over the first's own last frame, exactly the
+// founder's own spec ("each named phase gets exactly one line, updated
+// in place while that phase runs, replaced by the next phase's own
+// single line, or by shipped/failed as the final line"). A row's content
+// becomes permanent (a real trailing "\n") the moment it stops being the
+// bottom-most row -- either because a NEW row is about to be created
+// below it, or because IT reaches its own terminal state while still at
+// the bottom; `finish` covers the one remaining case, the run ending
+// (success, failure, or timeout) while the last row is still open --
+// without it, whatever prints next (the trailing report, or an error
+// message) would silently overwrite that row's own final content instead
+// of appending after it.
+//
+// Non-TTY is unaffected by any of this: every real event still renders
+// as its own permanent, appended line (no ANSI codes, no redraw) exactly
+// as before UBI-83 -- a log file has no use for "redraw in place," and
+// ticks never fire there at all (startTicker's own tty check).
+func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]resourceOpKind) (fn func(executor.ProgressEvent), finish func()) {
 	starts := map[string]time.Time{}
-	seen := map[string]bool{}
+	seenAddr := map[string]bool{}
+	spin := map[string]int{}
+
+	// Row-tracking state (TTY only) -- UBI-83's own in-place-redraw
+	// mechanism. order/rowOf record which physical terminal row (a real
+	// newline-delimited line, counting blank spacer lines too) each row
+	// key -- a resource's own address, or a uniquely-suffixed key for a
+	// permanent error line, see updateRow -- was written to. cursorRow is
+	// the row the cursor is CURRENTLY parked at (always at column 0,
+	// invariant maintained by every write below); sealed reports whether
+	// that current row already carries its own trailing "\n" (true
+	// trivially before anything is printed, and again immediately after
+	// any row's own final write).
+	order := []string{}
+	rowOf := map[string]int{}
+	cursorRow := 0
+	sealed := true
 
 	var mu sync.Mutex
 	stopChs := map[string]chan struct{}{}
@@ -743,32 +807,112 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
 	}
 
-	// printLine renders every single line this printer ever emits --
-	// UBI-75: the resource's own address, bold+colored by operation kind
-	// (st.OpHeader), is part of EVERY line now, not a one-time separate
-	// header -- so a reader can identify which resource any one line
-	// belongs to without relying on its position relative to other lines.
-	printLine := func(address string, kind resourceOpKind, glyph, text, elapsed string) {
+	renderContent := func(address string, kind resourceOpKind, glyph, text, elapsed string) string {
 		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
 		prefix := address
 		if prefix != "" {
 			prefix = st.OpHeader(kind, address) + ":"
 		}
 		if elapsed != "" {
-			fmt.Fprintf(out, "  %s %s %s %s\n", glyph, prefix, padded, elapsed)
+			return fmt.Sprintf("  %s %s %s %s", glyph, prefix, padded, elapsed)
+		}
+		return fmt.Sprintf("  %s %s %s", glyph, prefix, text)
+	}
+
+	// updateRow is the ONE place this printer ever writes a resource's own
+	// row -- UBI-83's core fix. rowKey lets an error line (which must stay
+	// its own permanent, never-redrawn line, UBI-70) opt out of sharing a
+	// row with the resource's own main ticking/terminal line by passing a
+	// unique key instead of the bare address; every other caller passes
+	// address for both. final marks a row that will never be redrawn
+	// again (a terminal transition, or an error) -- sealed immediately
+	// (a real trailing "\n") if it's still the bottom-most row.
+	//
+	// Non-TTY: no row tracking, no ANSI codes -- every call is its own
+	// permanent appended line, exactly the pre-UBI-83 behavior, with the
+	// identical blank-line-before-a-new-resource spacing UBI-61/UBI-75
+	// already established.
+	updateRow := func(rowKey, address string, kind resourceOpKind, glyph, text, elapsed string, final bool) {
+		content := renderContent(address, kind, glyph, text, elapsed)
+
+		newAddr := address != "" && !seenAddr[address]
+		if newAddr {
+			seenAddr[address] = true
+		}
+
+		if !tty {
+			if newAddr && len(seenAddr) > 1 {
+				fmt.Fprintln(out)
+			}
+			fmt.Fprintln(out, content)
+			return
+		}
+
+		row, exists := rowOf[rowKey]
+		if !exists {
+			if len(order) > 0 {
+				if !sealed {
+					// Whatever currently sits at the bottom (this resource's
+					// own still-open row, or a different resource's) stops
+					// being redrawable the moment a new row exists below it
+					// -- seal it in place first.
+					fmt.Fprint(out, "\n")
+					cursorRow++
+				}
+				if newAddr {
+					// UBI-61/UBI-75's own blank-line-between-resources
+					// convention -- only between DIFFERENT resources' own
+					// first row, never before e.g. an error row that
+					// follows the same resource's own already-open row.
+					fmt.Fprint(out, "\n")
+					cursorRow++
+				}
+			}
+			row = cursorRow
+			rowOf[rowKey] = row
+			order = append(order, rowKey)
+			fmt.Fprint(out, content)
+			sealed = false
 		} else {
-			fmt.Fprintf(out, "  %s %s %s\n", glyph, prefix, text)
+			n := cursorRow - row
+			if n > 0 {
+				fmt.Fprintf(out, "\x1b[%dA", n)
+			}
+			fmt.Fprint(out, "\r\x1b[2K")
+			fmt.Fprint(out, content)
+			if n > 0 {
+				fmt.Fprint(out, "\r")
+				fmt.Fprintf(out, "\x1b[%dB", n)
+			}
+		}
+		if final && row == cursorRow {
+			fmt.Fprint(out, "\n")
+			cursorRow++
+			sealed = true
 		}
 	}
 
-	// startTicker emits one discrete, self-identifying line every
+	// nextSpinner advances address's own animation by one frame and
+	// returns it raw (uncolored) -- callers wrap it in whichever color
+	// this phase uses (shipping dim, verifying yellow), matching the
+	// pre-UBI-83 per-phase color convention exactly; only the glyph
+	// itself now moves.
+	nextSpinner := func(address string) string {
+		i := spin[address]
+		spin[address] = i + 1
+		return spinnerFrames[i%len(spinnerFrames)]
+	}
+
+	// startTicker redraws one resource's own row in place every
 	// tickInterval until stopTicker(address) -- shared by both live
 	// phases this printer narrates (the raw provider-call wait, and the
 	// read-back verification wait between attempts), TTY-only (see doc
-	// comment). Per-address (UBI-67): N concurrently in-flight
-	// resources each get their own independent ticker goroutine, none
-	// sharing state with any other.
-	startTicker := func(address string, kind resourceOpKind, start time.Time, glyph, text string) {
+	// comment). Per-address (UBI-67): N concurrently in-flight resources
+	// each get their own independent ticker goroutine, none sharing state
+	// with any other; each redraws only its OWN row (UBI-83), never
+	// another's. color is applied fresh each tick (not captured once at
+	// start), since the spinner frame itself changes every tick.
+	startTicker := func(address string, kind resourceOpKind, start time.Time, color func(string) string, text string) {
 		if !tty {
 			return
 		}
@@ -784,14 +928,14 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 					return
 				case <-ticker.C:
 					mu.Lock()
-					printLine(address, kind, glyph, text, renderElapsed(time.Since(start)))
+					updateRow(address, address, kind, color(nextSpinner(address)), text, renderElapsed(time.Since(start)), false)
 					mu.Unlock()
 				}
 			}
 		}()
 	}
 
-	return func(ev executor.ProgressEvent) {
+	fn = func(ev executor.ProgressEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -801,18 +945,6 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 			if _, ok := starts[ev.Address]; !ok {
 				starts[ev.Address] = now
 			}
-			if !seen[ev.Address] {
-				if len(seen) > 0 {
-					// UBI-61 comment thread's own second finding, kept by
-					// UBI-75: a blank line ahead of a new resource's own
-					// first printed line -- breathing room only, every
-					// line (this one included) is self-identifying now, so
-					// nothing downstream depends on this blank line for
-					// correctness the way the old separate-header design did.
-					fmt.Fprintln(out)
-				}
-				seen[ev.Address] = true
-			}
 		}
 		elapsed := renderElapsed(now.Sub(starts[ev.Address]))
 
@@ -820,9 +952,13 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		case "error":
 			// UBI-70: an error gets its own permanent line the moment it
 			// happens -- never silently dropped, never folded into the
-			// one live-updating line the happy path uses.
+			// one live-updating line the happy path uses. A unique row
+			// key (never reused) keeps it from ever being redrawn over --
+			// UBI-83's redraw mechanism only ever targets a row key a
+			// caller reuses on purpose.
 			stopTicker(ev.Address)
-			printLine(ev.Address, kind, st.Yellow("!"), ev.Detail, "")
+			errKey := fmt.Sprintf("%s#error#%d", ev.Address, len(order))
+			updateRow(errKey, ev.Address, kind, st.Yellow("!"), ev.Detail, "", true)
 
 		case "transition":
 			switch ev.State {
@@ -839,7 +975,7 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 				// whatever ticker preceded them for THIS address.
 				stopTicker(ev.Address)
 				if ev.State == "in_flight" {
-					startTicker(ev.Address, kind, starts[ev.Address], st.Dim("·"), "shipping")
+					startTicker(ev.Address, kind, starts[ev.Address], st.Dim, "shipping")
 				}
 				return
 			}
@@ -858,20 +994,42 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 				text += " · " + ev.Detail
 			}
 			stopTicker(ev.Address)
-			printLine(ev.Address, kind, glyph, text, elapsed)
+			updateRow(ev.Address, ev.Address, kind, glyph, text, elapsed, true)
 
 		case "reconcile_attempt":
-			// UBI-70: ONE discrete verification line per real attempt,
-			// plus (TTY only) that same address's own ticker re-emitting
-			// a fresh discrete line every tickInterval between attempts
-			// so elapsed keeps advancing instead of looking frozen
-			// through a real multi-second/minute backoff wait.
+			// UBI-70: ONE row-owning update per real attempt, plus (TTY
+			// only) that same address's own ticker redrawing that SAME
+			// row in place every tickInterval between attempts (UBI-83)
+			// so elapsed and the spinner frame both keep advancing
+			// instead of looking frozen through a real multi-second/
+			// minute backoff wait -- never a new appended line either
+			// way.
 			text := fmt.Sprintf("%s (attempt %d/%d)", ev.Detail, ev.Attempt, ev.Total)
 			stopTicker(ev.Address)
-			printLine(ev.Address, kind, st.Yellow("⠧"), text, elapsed)
-			startTicker(ev.Address, kind, starts[ev.Address], st.Yellow("⠧"), text)
+			updateRow(ev.Address, ev.Address, kind, st.Yellow(nextSpinner(ev.Address)), text, elapsed, false)
+			startTicker(ev.Address, kind, starts[ev.Address], st.Yellow, text)
 		}
 	}
+
+	// finish seals whatever row is still open (the run ended -- success,
+	// failure, or a context timeout -- while its own resource was still
+	// mid-phase) so the caller's own next write (the trailing report, or
+	// an error message) starts on a fresh line instead of overwriting
+	// this row's own last content. A no-op if everything already reached
+	// its own terminal state (the common case) or nothing was ever
+	// printed (--json/non-TTY, or a run that failed before any progress
+	// event arrived).
+	finish = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if tty && len(order) > 0 && !sealed {
+			fmt.Fprint(out, "\n")
+			cursorRow++
+			sealed = true
+		}
+	}
+
+	return fn, finish
 }
 
 // reportAlreadyApplied handles executor.Ship's simplest idempotency case

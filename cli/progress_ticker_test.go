@@ -25,13 +25,14 @@ import (
 // own internal ticker is what's under test, not the executor around it.
 func TestNewProgressPrinter_TicksDuringLongShippingWait(t *testing.T) {
 	var buf bytes.Buffer
-	printer := newProgressPrinter(&buf, plainStyler(), true, nil)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, nil)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
 
 	time.Sleep(tickInterval + 300*time.Millisecond)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "applied"})
+	finish()
 
 	out := buf.String()
 
@@ -61,13 +62,14 @@ func TestNewProgressPrinter_TicksDuringLongShippingWait(t *testing.T) {
 // eventual terminal transition.
 func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 	var buf bytes.Buffer
-	printer := newProgressPrinter(&buf, plainStyler(), false, nil)
+	printer, finish := newProgressPrinter(&buf, plainStyler(), false, nil)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
 
 	time.Sleep(tickInterval + 300*time.Millisecond)
 
 	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "applied"})
+	finish()
 
 	out := buf.String()
 	if strings.Contains(out, "in_flight") || strings.Contains(out, "shipping") {
@@ -78,21 +80,65 @@ func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 	}
 }
 
+// TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick is UBI-83's
+// own regression test for the CORE noise-reduction defect UBI-75's fix
+// left unaddressed: every tick of a live "shipping" wait must redraw ONE
+// terminal row in place (real ANSI cursor-clear-and-rewrite bytes), never
+// append a brand-new line -- a real 26s SQS create was producing 20+
+// near-duplicate lines before this fix. The proof is a raw newline COUNT,
+// per the ticket's own explicit instruction ("count actual printed
+// newlines, don't just eyeball it") -- NOT a substring check, since every
+// redraw's own bytes necessarily still appear in the raw captured stream
+// (that's what makes a real terminal emulator able to render them in
+// place at all); what must NOT appear is an extra literal "\n" between
+// ticks. Five real ticks fire in this run (5.3s); if the fix regressed
+// back to one Fprintln per tick, this would assert a count of ~1 against
+// an actual count of 5+ and fail loudly.
+func TestNewProgressPrinter_TicksUpdateInPlace_NotAppendedPerTick(t *testing.T) {
+	var buf bytes.Buffer
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, nil)
+
+	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "in_flight"})
+	time.Sleep(5*tickInterval + 300*time.Millisecond)
+	printer(executor.ProgressEvent{Address: "fake_widget.widget1", Kind: "transition", State: "applied"})
+	finish()
+
+	out := buf.String()
+	if got := strings.Count(out, "\n"); got != 1 {
+		t.Fatalf("UBI-83: expected exactly 1 real newline for a single resource's whole shipping->shipped lifecycle (every tick redraws in place, only the terminal state seals the row), got %d newlines in:\n%q", got, out)
+	}
+	if got := strings.Count(out, "\x1b[2K"); got < 5 {
+		t.Fatalf("UBI-83: expected at least 5 in-place line-clear redraws (one per real tick), got %d -- the ticker isn't redrawing in place at all:\n%q", got, out)
+	}
+	// The spinner must actually animate (UBI-83's own exact spec: "an
+	// actual animated spinner", not the old static "·") -- at least two
+	// DISTINCT frames from spinnerFrames must appear across the 5 ticks.
+	distinct := map[string]bool{}
+	for _, f := range spinnerFrames {
+		if strings.Contains(out, f) {
+			distinct[f] = true
+		}
+	}
+	if len(distinct) < 2 {
+		t.Fatalf("UBI-83: expected the spinner to animate across multiple distinct frames, got only %d distinct frame(s) in:\n%q", len(distinct), out)
+	}
+}
+
 // TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently is
 // UBI-67's own regression test for the printer's pre-UBI-67 assumption
 // ("at most one resource is ever in_flight/verifying at a time" -- its
 // own former doc comment said so directly): two DIFFERENT addresses'
-// own in_flight tickers now run concurrently, each emitting its own
-// discrete, address-prefixed line every tickInterval, and must never
-// collide, deadlock, or lose either address's own final "applied" line
-// -- the exact shape a real concurrent `ubx ship` batch (UBI-67's own
-// scheduler) produces. Drives the printer directly, from two goroutines,
-// mirroring how executor.WithProgress's own callback is genuinely
-// invoked from N concurrent node goroutines today.
+// own in_flight tickers now run concurrently, each redrawing its OWN row
+// in place (UBI-83) every tickInterval, and must never collide, deadlock,
+// corrupt each other's own row, or lose either address's own final
+// "applied" line -- the exact shape a real concurrent `ubx ship` batch
+// (UBI-67's own scheduler) produces. Drives the printer directly, from
+// two goroutines, mirroring how executor.WithProgress's own callback is
+// genuinely invoked from N concurrent node goroutines today.
 func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testing.T) {
 	var mu sync.Mutex
 	var buf bytes.Buffer
-	printer := newProgressPrinter(&safeWriter{mu: &mu, w: &buf}, plainStyler(), true, nil)
+	printer, finish := newProgressPrinter(&safeWriter{mu: &mu, w: &buf}, plainStyler(), true, nil)
 
 	addrA, addrB := "fake_widget.a", "fake_widget.b"
 
@@ -103,11 +149,12 @@ func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testin
 		go func() {
 			defer wg.Done()
 			printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "in_flight"})
-			time.Sleep(tickInterval + 300*time.Millisecond)
+			time.Sleep(3*tickInterval + 300*time.Millisecond)
 			printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "applied"})
 		}()
 	}
 	wg.Wait()
+	finish()
 
 	out := buf.String()
 	for _, addr := range []string{addrA, addrB} {
@@ -116,10 +163,23 @@ func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testin
 		}
 	}
 	if strings.Count(out, "shipping") < 2 {
-		t.Errorf("expected both addresses' own ticker to have fired at least once (2+ \"shipping\" lines total), got:\n%s", out)
+		t.Errorf("expected both addresses' own ticker to have fired at least once (2+ \"shipping\" appearances total across every redraw), got:\n%s", out)
 	}
 	if strings.Count(out, "shipped") != 2 {
-		t.Errorf("expected exactly one \"shipped\" line per address (2 total), got %d:\n%s", strings.Count(out, "shipped"), out)
+		t.Errorf("expected exactly one final \"shipped\" appearance per address (2 total -- each address's own terminal state is written exactly once, never redrawn again), got %d:\n%s", strings.Count(out, "shipped"), out)
+	}
+	// UBI-83: total real newlines must stay small and INDEPENDENT of tick
+	// count (3 ticks/address here vs. TestNewProgressPrinter_
+	// TicksUpdateInPlace_NotAppendedPerTick's 5 -- same 2-row shape,
+	// same newline count either way) -- exactly one row transition each
+	// for: A's row created, B's row created (sealing whichever of A/B was
+	// still open plus its own blank-line spacer), and B's own final seal
+	// once it's the bottom row (whichever address finishes last is the
+	// one that self-seals; the other was already implicitly sealed the
+	// moment the second row was created). 3 newlines total, regardless of
+	// which goroutine wins the race to create/finish first.
+	if got := strings.Count(out, "\n"); got != 3 {
+		t.Errorf("UBI-83: expected exactly 3 real newlines for this 2-resource run (row-transition count, not tick count), got %d in:\n%q", got, out)
 	}
 }
 
