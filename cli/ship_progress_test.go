@@ -59,7 +59,7 @@ func TestShip_Destroy_NarratesReadBackAttempts(t *testing.T) {
 	if !strings.Contains(shipOut, "attempt 1/") {
 		t.Fatalf("expected an attempt N/M counter, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "✓ applied") {
+	if !strings.Contains(shipOut, "✓ shipped") {
 		t.Fatalf("expected exactly one final outcome line, got: %s", shipOut)
 	}
 }

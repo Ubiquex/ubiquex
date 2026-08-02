@@ -136,15 +136,22 @@ func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.L
 		}
 	}
 
+	// UBI-76: same closing-summary treatment as status --drift -- blank
+	// line before, bold throughout, whole line green (affirmative-success,
+	// matching ubx init) only for the fully-clean case, yellow/red
+	// per-count otherwise.
+	fmt.Fprintln(out)
 	switch {
 	case unreadableCount > 0:
-		fmt.Fprintf(out, "%d resource(s) scanned, %d drifted, %d proposal(s) saved, %d unreadable\n", len(fleet), driftedCount, proposalCount, unreadableCount)
+		fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s) scanned, %s, %d proposal(s) saved, %s",
+			len(fleet), st.Yellow(fmt.Sprintf("%d drifted", driftedCount)), proposalCount, st.Red(fmt.Sprintf("%d unreadable", unreadableCount)))))
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %d resource(s) unreadable (see above)", stack, unreadableCount)}
 	case driftedCount > 0:
-		fmt.Fprintf(out, "%d resource(s) scanned, %d drifted, %d proposal(s) saved\n", len(fleet), driftedCount, proposalCount)
+		fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s) scanned, %s, %d proposal(s) saved",
+			len(fleet), st.Yellow(fmt.Sprintf("%d drifted", driftedCount)), proposalCount)))
 		return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan --stack %s: %d resource(s) drifted, %q proposal(s) generated (see above)", stack, driftedCount, propose)}
 	default:
-		fmt.Fprintf(out, "no drift: all %d resource(s) in stack %s match the ledger\n", len(fleet), stack)
+		fmt.Fprintln(out, st.GreenBold(fmt.Sprintf("no drift: all %d resource(s) in stack %s match the ledger", len(fleet), stack)))
 		return nil
 	}
 }
@@ -217,6 +224,7 @@ func generateProposeSaveAndRender(ctx context.Context, out io.Writer, st *styler
 	fmt.Fprintf(out, "%s  %s\n\n", header, addr)
 
 	hashes := make([]string, 0, len(proposals))
+	needsConfirm := false
 	for _, p := range proposals {
 		b, err := json.MarshalIndent(p, "", "  ")
 		if err != nil {
@@ -230,8 +238,11 @@ func generateProposeSaveAndRender(ctx context.Context, out io.Writer, st *styler
 			return nil, fmt.Errorf("scan %s: %w", addr, err)
 		}
 		hashes = append(hashes, hash)
+		if p.BlastRadius.Destroys > 0 {
+			needsConfirm = true
+		}
 		renderScanCard(out, st, p, hash)
 	}
-	fmt.Fprintf(out, "\n  saved to plan store            next: %s\n\n", nextShipHint(hashes))
+	fmt.Fprintf(out, "\n  saved to plan store            next: %s\n\n", nextShipHint(hashes, needsConfirm))
 	return hashes, nil
 }

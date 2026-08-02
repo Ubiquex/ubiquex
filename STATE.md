@@ -4,6 +4,236 @@
 
 ## Current phase
 
+**UBI-75 + UBI-76 + UBI-77 + UBI-78 + UBI-79 (2026-08-02) — the rendering-
+layer arc: ship progress grouping, status/scan closing summaries, terminate
+spacing + `--confirm-terminate`, destroy-receipt JSON formatting, and the
+global apply→ship vocabulary sweep. Done together in one session (all five
+share progress.go/the ship-terminate-status-scan printers), UBI-79 first per
+the handoff's own "widest surface first" ordering. Full suite green, live-
+verified against the real built binary + fakeprovider via `script -q`.**
+
+**UBI-79 — global apply/applied/application sweep, display-layer only.**
+Swept every non-test `cli/*.go` file (grepped case-insensitively, judged
+each hit individually rather than blind find/replace, since "apply" has
+ordinary-English senses -- "these flags don't apply to X," "if more than
+one condition applies" -- that have nothing to do with shipping
+infrastructure and would read as actively wrong translated to "ship").
+Fixed: `ship.go`'s Short/Long text and every rendered string (confirm/
+decline/already-shipped messages), `terminate.go`/`plan.go`'s matching
+Long text, `why.go`'s "apply history:" → "ship history:" plus its
+per-transition/outcome text, `addresses.go`'s "known after apply" →
+"known after ship", `intentrender.go`'s "N AI default(s) applied" →
+"in effect" (a resolve-time AI-defaults concept, not a ship outcome --
+translating it to "shipped" would have been wrong, not just off-tone),
+`revertplan.go`'s "apply this correction"/"ubx never applies it" →
+"make this correction"/"ubx never makes it for you", `mcp.go`'s
+`ubx_scan` tool description, two `don't apply to` flag-conflict errors in
+`scan.go` → "aren't relevant to", two flag-description "applied once
+per..." → "measured once per..." (`addresses.go`/`sdk.go`).
+**Deliberately NOT touched** (per the ticket's own scope + this session's
+own judgment call, recorded here since the ticket didn't enumerate every
+case by name): `writeback.go`/`revertplan.go`'s `report.Applied`/
+`Declined` -- a **different** domain concept (which attribute writes to a
+local `.tf` file succeeded), unrelated to shipping infrastructure to
+cloud; the *displayed* text there changed ("applied:" → "written:",
+matching the sibling "wrote %s" wording already used a few lines below)
+but the Go field name itself (`writeback.Report.Applied`) was left alone,
+same posture as leaving `core.ApplyRecord`'s own Go identifier alone.
+`core.ApplyRecord`/`core.ResourceState`'s enum values, the real
+`ApplyResourceChange` RPC name, `shipJSON`/`whyJSON`'s own `--json`
+field names (`apply_record`, `already_applied`, `applies`), and
+`ledger/applies/`'s directory name are all explicitly out of scope per
+the ticket and untouched -- confirmed via `./ubx <cmd> --help` dumped for
+every subcommand of the real built binary and grepped, the only two
+remaining hits being cobra's own built-in `help` command boilerplate
+("...for any command in the **application**") and the `--reset-ledger`
+flag's own mention of the `ledger/applies/` directory name, both
+correctly out of scope.
+
+Two internal Go helpers carry the actual translation, shared by every
+caller: `displayResourceState`/`displayOutcome` (`cli/style.go`) map a
+`core.ResourceState`/`ApplyRecord.Summary.Outcome`'s own **stored** value
+("applied"/"partially_applied") to its display form ("shipped"/
+"partially_shipped") purely for human-text rendering -- `--json` output
+(`shipJSON`/`whyJSON`, which wrap `core.ApplyRecord` directly) is never
+touched by either helper, since that's the real, hashed/sealed apply
+record and rewriting it would misrepresent what was actually recorded.
+
+**Permanent regression test** (`cli/vocabulary_apply_test.go`,
+`TestNoApplyVocabulary_AcrossRenderedOutput`): drives two independent
+real fakeprovider flows (adopt→drift→revert→ship; adopt→terminate→ship
+via `--confirm-terminate`) plus status/why/fleet-scan, captures every
+line of rendered stdout, and fails if any of `apply`/`applied`/
+`applies`/`applying`/`application` appear anywhere in it. **A real bug
+in this test's own first draft, caught before trusting it**: the initial
+check was `strings.Contains(strings.ToLower(out), "apply")`, on the
+assumption "apply" is a prefix of every banned form -- false for
+"applied" specifically, since the past tense drops the "y" for "-ied"
+rather than appending to "apply" ("appl-ied", not "apply-ed"). This
+version of the test PASSED even with `ship.go`'s own summary line
+deliberately sabotaged back to literal `"outcome: applied"` -- caught
+only by deliberately reintroducing that exact string and confirming the
+test failed to catch it (twice, once before and once after fixing the
+substring check, per this project's own "verify before trusting"
+discipline). Fixed by checking each banned form explicitly rather than
+relying on one prefix assumption; re-confirmed the corrected test both
+passes on the real fix and fails on the reintroduced regression.
+
+**UBI-75 — ship progress grouping, "shipped" label, styled summary.**
+Root-caused before picking a fix, per the handoff's own instruction:
+UBI-67 session 2 (same day, a few hours earlier) had already made every
+progress LINE address-prefixed and discrete (Terraform's own real
+convention) specifically to fix concurrent interleaving -- and it still
+wasn't enough. The actual defect: `newProgressPrinter` kept a SEPARATE,
+one-time, un-prefixed header line (`st.OpHeader(kind, address)`, printed
+flush-left, no address-prefix convention applied to it at all) announcing
+each resource, with every SUBSEQUENT line for that resource indented and
+dim-address-prefixed underneath it. Confirmed live (a genuine 3-create +
+1-slow-destroy concurrent `ubx ship`, `FAKEPROVIDER_APPLY_MODE=lying-
+destroy` forcing the destroy through real multi-attempt backoff while the
+three creates finished in the same tick window, `script -q`-captured):
+a DIFFERENT resource's own still-ticking, indented line landing directly
+under another resource's bare header reads as "nested under that header,"
+not "an unrelated resource's own line, interleaved" -- the header itself
+was the structural inconsistency, not the interleaving. Fixed by
+dropping the separate header line entirely: every line this printer ever
+prints now carries that resource's own address, bold+colored by
+operation kind (`st.OpHeader`, previously reserved for the one-time
+header only), inline, every time -- the ticket's own "[sqs] shipping
+0:14" prefix-style suggestion, option (b) from the ticket ("cheaper given
+the current terminal-writing approach"), not option (a)'s full ANSI-
+cursor-addressed fixed-position redraw (a materially larger, higher-risk
+rewrite this session judged not to be the right cost/benefit call given
+(b) fully resolves the actual root cause).
+
+**The handoff's own "frozen-attempt-counter root cause" was investigated
+and found NOT to be a separate bug.** The ticker's own captured-closure
+design (an attempt's own text, e.g. "attempt 3/8," stays fixed while its
+elapsed keeps advancing every tick, until the NEXT real
+`reconcile_attempt` event replaces both) is correct by design -- a real
+backoff wait genuinely means "still on attempt 3, more time has passed,"
+not "stuck." What actually read as "frozen" was the same header-line
+defect above: interleaved output from other resources buried a specific
+resource's own elapsed-only ticks, making it hard to see time advancing
+for that one resource specifically. The header fix (every line self-
+identifying) resolves this as a side effect; no change was needed to the
+ticker's own attempt/elapsed mechanics themselves.
+
+Terminal-state label is "shipped" for create/modify/destroy alike
+(`displayResourceState`, UBI-79's own helper) -- `printShipReport`'s
+per-resource line and the live progress printer's own terminal-state
+line both go through it. **Deliberately NOT changed**: a destroy's own
+terminal state still renders "shipped," not "destroyed" -- UBI-70's own
+session (2026-08-01) already flagged this exact wording gap as an
+explicit out-of-scope "companion finding, a future session's own" (docs/
+cli-output-spec.md's ship mockup already shows "destroyed" for a
+destroy's own terminal glyph text, no code implements the substitution
+yet) -- UBI-75/79 only asked for the word "apply"/"applied" to disappear,
+not for this separate semantic distinction; still open, still deferred,
+now doubly on record.
+
+Closing summary (`printShipReport`): blank line before it, bold
+throughout (`st.forceBold`), counts colored per verb -- green "N
+shipped," red "N failed," dim "N still unknown" (this package's 7-code
+palette has no true gray; dim already carries "neither a pass nor a
+verdict" elsewhere, e.g. `forceDim`'s own metadata use) -- "outcome:
+shipped"/"outcome: partially_shipped" via `displayOutcome`.
+
+**UBI-76 — status --drift and scan's closing summaries.** Same treatment
+both places: blank line before, bold throughout, the WHOLE line green
+(affirmative-success, matching `ubx init`/UBI-59) when the run is fully
+clean (`status`: 0 drifted AND 0 unreadable; `scan --stack`: the
+pre-existing "no drift" branch), yellow/red per-count otherwise (yellow
+drifted, red unreadable/failed) -- the same per-count convention UBI-75
+established for ship. `scan`'s own equivalent closing line turned out to
+be `scanfleet.go`'s (`ubx scan --stack`, the fleet-scoped walk) three-way
+switch at the end of `runScanFleet` -- found by grepping for scan's own
+"resource(s)...unreadable" pattern, not guessed. Two new TTY-forced
+tests (`cli/closingsummary_style_test.go`) assert the real ANSI codes for
+both the clean and drifted/unreadable branches, both files -- there was
+no existing coverage exercising either summary's own styling at the byte
+level before this session (manual live verification alone couldn't
+reach the clean branch reliably: fakeprovider's `ReadResource` is a pure
+stateless echo of whatever `--lookup`/env the CLI invocation is given,
+so a resource "shipped" in one process has no way to read back as
+matching in the next, separate CLI invocation's own live check without
+deliberately matching lookups -- these two tests use
+`FAKEPROVIDER_EXTRA_TAG` for a reliably genuine drift, the same knob
+`TestStatus_TTY_DriftLines_AddressBrightMetadataDim` already
+established, and a plain adopt-with-no-mutation for the clean case).
+
+**UBI-77 — terminate block spacing + `--confirm-terminate`.** `why.go`'s
+`renderDestroys` (shared by `ubx plan`/`ubx terminate`/`ubx ship`'s
+inline-confirm receipt/`ubx why`) gained the identical `i>0` blank-line-
+between-blocks convention `renderCreates` already had -- confirmed
+empirically (a throwaway 2-destroy repro) that this was genuinely the
+whole gap: a single destroy already reads fine (the section header above
+and the delta-summary spacer below already bound it), but two or more
+destroy blocks ran completely together with zero separation before this.
+`ubx ship` gained a real `--confirm-terminate` flag (not just display
+text) -- a true alias for `--confirm-destroys`, either satisfies
+`checkDestroysConfirmed`, both documented on both flags. **The missing-
+flag bug in the "next:" hint was broader than just terminate**:
+`nextShipHint` (shared by `plan.go`/`promote.go`/`scan.go` ×2/
+`scanfleet.go`/`terminate.go`) never appended ANY confirm flag
+regardless of `blast_radius.destroys`, so `ubx plan`'s own hint for a
+destroy-carrying hand-authored intent had the identical latent gap --
+found while fixing terminate's copy of the same call, fixed at every
+call site rather than leaving a known-identical bug in five sibling
+callers. Founder's own "decide at build" resolution taken: `--confirm-
+terminate` is now the one human-facing spelling shown in every "next:"
+hint that needs it, regardless of whether the proposal originated from
+`ubx terminate` or a hand-authored `destroys[]` intent -- one vocabulary,
+not two names for the same wire-level flag, matching UBI-79's own
+governing principle.
+
+**UBI-78 — terminate/destroy full-state JSON formatting.** Root cause:
+`renderDestroys`'s `showState` branch used `rawOrAbsent` (a deliberately
+COMPACTED single-line renderer, correct for `renderModifies`'s own
+before→after diff lines, docs/cli-output-spec.md) instead of
+`formatConfigValueV2` (the multi-line formatted-block renderer
+`renderCreates` already used for its own config values) -- confirmed via
+a throwaway repro with a JSON-embedded `policy` string attribute before
+fixing, reproducing the raw-escaped-string bug byte for byte. One shared
+function, one fix -- covers `ubx plan`, `ubx terminate`, and `ubx why`'s
+single-proposal view all at once, since all three call `renderDestroys`
+with `showState=true`. Checked ship's own destroy-time display for the
+identical gap per the ticket's own instruction: `printShipReport` (the
+live-ship trailing report) never renders full per-attribute state at
+all, only a one-line-per-resource summary -- no gap to fix there.
+
+Hermetic: `go build ./...`, `go vet ./...`, `gofmt -l .` clean, `go test
+./... -race -count=1` green throughout, including the two new closing-
+summary-styling tests and the new global vocabulary regression test.
+Live-verified against the real built binary (`make build`, version-
+checked: `dev+f917e9b-dirty`) + a manually-built fakeprovider, `script
+-q`-captured (`cat -v`'d, not just eyeballed) for: the 3-create+1-
+slow-destroy concurrent ship (grouping fix, real interleaving, real
+multi-attempt backoff ticking); a fast 3-create+1-destroy ship (styled
+closing summary, byte-confirmed bold/green/red/dim codes); a 2-address
+`ubx terminate` (block spacing between destroy entries, JSON-formatted
+`tags` attribute, the `--confirm-terminate` hint); shipping that
+terminate plan via `--confirm-terminate` end to end (confirmed it
+satisfies the confirm gate -- the run's own subsequent "destroy target
+drifted" failure is a fakeprovider-statelessness artifact of this
+session's own manual multi-invocation test setup, not a code defect, and
+not touched); `status --drift`'s drifted-case summary; `ubx scan
+--stack`'s drifted-case summary. Every command run against `fakeprovider`
+only -- no `ubx ship` or any other command was ever run against a real
+cloud provider.
+
+docs/cli-output-spec.md updated in-repo: the `ship` mockup (no more
+un-prefixed header line, "shipped" vocabulary, the new styled summary
+shape), the `why` section ("ship history," not "apply history"), the
+`terminate` section (JSON-formatted receipt blocks, inter-block spacing,
+`--confirm-terminate`). The doc's own pre-existing, already-flagged
+`status --drift` v1-mockup-vs-v2-implementation divergence (UBI-71's own
+finding, `~ <address>` vs the real `drifted:`/`clean:` word-prefix shape)
+is untouched -- a different, already-recorded gap, not this session's to
+silently resolve either way.
+
+## Current phase (previous)
+
 **UBI-67 session 2 (2026-08-02) — parallel execution BUILT, per session 1's own
 design sketch, and hermetically proven under `-race`. Live AWS verification
 (the ticket's own acceptance bar) explicitly deferred at the founder's own
@@ -11236,6 +11466,53 @@ forgotten, not because anything is blocked on it.
    `ParseSource` would parse one. See prior entries for full detail.
 
 ## Docs debt
+
+**UBI-75/76/77/78/79's ubiquex-docs work was NOT done this session --
+recorded here as the explicit exception, not skipped silently.** Surveyed
+precisely rather than left vague: `cli/ship.mdx` (64 apply/applied hits,
+~30 distinct transcripts -- the single biggest page, and the one that
+matters most since it's the command every one of these five tickets
+touches), `cli/why.mdx` (11), `guides/create-flow.mdx` (12),
+`guides/destroy-flow.mdx` (11), `guides/plan-ship-flow.mdx` (10),
+`guides/multi-provider-flow.mdx` (10), `cli/promote.mdx` (8),
+`cli/terminate.mdx` (6, plus the new `--confirm-terminate` flag/spacing
+fix), `guides/promotion.mdx` (8), `cli/status.mdx` (3), `cli/writeback.mdx`
+(2), `cli/scan.mdx` (2), `cli/plan.mdx` (1), `cli/revert-plan.mdx` (1) --
+149 hits total across 14 pages.
+
+Genuinely infeasible in-session, not just large: several of `ship.mdx`'s
+own transcripts explicitly claim real-AWS/GCP provenance ("Live-verified
+against real AWS, not just the fixture above," the UBI-27/UBI-44 create-
+chain/lying-destroy investigations) that this session has no way to
+honestly re-produce -- CLAUDE.md's own standing rule forbids `ubx ship`
+against real cloud for exactly this kind of routine verification, and
+silently rewriting a transcript LABELED as real-AWS-verified into
+something re-derived from fakeprovider (or worse, hand-edited to just
+swap words without re-running anything) would misrepresent it as
+re-verified when it wasn't -- a worse outcome than honestly carrying the
+debt forward. This session's own new terminal-output shape (no separate
+un-prefixed header line, UBI-75) also means every existing multi-resource
+progress transcript on these pages needs a structural re-capture, not a
+word-for-word find/replace -- "applied" → "shipped" alone would leave the
+OLD (pre-UBI-75) line shape in the docs, silently wrong twice over.
+
+**What a future session doing this needs to do, precisely** (so it
+doesn't have to re-derive scope from scratch): rebuild `./ubx` + a fresh
+`fakeprovider` binary, re-capture every fakeprovider-sourced transcript
+on all 14 pages above against the real rebuilt binary (`cat -v`'d/
+byte-checked, not eyeballed) reflecting: "shipped" not "applied"
+everywhere (UBI-79); every progress line's own inline bold-colored
+address, no separate header line (UBI-75); the new closing-summary shape
+-- blank line before, bold, per-count colored, green-affirmative when
+fully clean (UBI-75/76); `terminate.mdx`'s new `--confirm-terminate`
+flag documented and its receipt's inter-block spacing + JSON-formatted
+attribute blocks re-captured (UBI-77/78). The real-AWS/GCP-labeled
+transcripts in `ship.mdx` (UBI-27 create-chain, UBI-44 lying-destroy)
+should be either left exactly as they are with a note that their own
+underlying wording predates this vocabulary sweep, or re-verified for
+real against real AWS/GCP by the founder directly (never by an agent,
+per CLAUDE.md) -- not silently hand-edited. `mint validate`/`mint
+broken-links` clean, committed and pushed, before closing this debt out.
 
 **UBI-64's ubiquex-docs work was done in this same session, per
 protocol**: `cli/init.mdx` (flags table + new "--reset-ledger:

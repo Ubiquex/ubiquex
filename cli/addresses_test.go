@@ -170,7 +170,7 @@ func TestAddresses_ActiveInventory_AttributesAndCrossForms(t *testing.T) {
 	if !strings.Contains(out, "provider: fake/widget@0.1.0") {
 		t.Fatalf("expected the provider line, got: %s", out)
 	}
-	if !strings.Contains(out, "@payments.fake_widget.widget-1.id (computed, known after apply)") {
+	if !strings.Contains(out, "@payments.fake_widget.widget-1.id (computed, known after ship)") {
 		t.Fatalf("expected id marked computed, got: %s", out)
 	}
 	if !strings.Contains(out, "@payments.fake_widget.widget-1.name (always present)") {

@@ -64,8 +64,8 @@ func TestWriteback_DryRun_PrintsDiffLeavesFileUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx writeback: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "applied: instance_type") {
-		t.Errorf("expected instance_type reported applied, got: %s", out)
+	if !strings.Contains(out, "written: instance_type") {
+		t.Errorf("expected instance_type reported written, got: %s", out)
 	}
 	if !strings.Contains(out, "-  instance_type = \"t3.medium\"") || !strings.Contains(out, "+  instance_type = \"t3.large\"") {
 		t.Errorf("expected a unified diff showing the change, got: %s", out)

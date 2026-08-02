@@ -50,26 +50,27 @@ var errShipDeclined = errors.New("ship: declined")
 // unwanted ceremony on top of a decision already made deliberately.
 func newShipCmd() *cobra.Command {
 	var (
-		ledgerDir       string
-		stack           string
-		providerPath    string
-		source          string
-		providerVersion string
-		providerConfig  string
-		timeout         time.Duration
-		jsonOut         bool
-		confirmDestroys bool
-		yes             bool
-		fullHashes      bool
+		ledgerDir        string
+		stack            string
+		providerPath     string
+		source           string
+		providerVersion  string
+		providerConfig   string
+		timeout          time.Duration
+		jsonOut          bool
+		confirmDestroys  bool
+		confirmTerminate bool
+		yes              bool
+		fullHashes       bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "ship [hash]",
-		Short: "Accept (local tier, if needed) and execute a drift_revert or change proposal against live cloud -- the only command that applies",
+		Short: "Accept (local tier, if needed) and execute a drift_revert or change proposal against live cloud -- the only command that ships",
 		Long: `Executes a drift_revert or change proposal: for a drift_revert, restores the
 resource's live state to match the ledger's recorded truth; for a change ("ubx resolve"'s own
 output, or "ubx plan"'s fused equivalent), creates and modifies resources for real, in real
-dependency order, feeding each resource's real applied output into any sibling still carrying a
+dependency order, feeding each resource's real shipped output into any sibling still carrying a
 $computed marker pointing at it. This is the one ubx command that changes real infrastructure --
 accept/why/status/scan/revert-plan/resolve/plan only ever read or record.
 
@@ -81,22 +82,23 @@ list as a teaching error.
 
 <hash>, given or resolved, is looked up two ways, in order: first as an already-accepted proposal
 id in this stack's ledger (the four-verb ceremony's own path -- "ubx accept" ran separately,
-including PR-merge acceptance) -- applied immediately, no further confirmation, since that
+including PR-merge acceptance) -- shipped immediately, no further confirmation, since that
 acceptance already was the consent moment; if not found there, as a plan "ubx plan" saved at
 .ubx/plans/<hash>.json. For THAT path only, the full receipt renders again and a typed "yes" is
-required before anything is accepted or applied -- the prompt IS the local-tier signing moment.
+required before anything is accepted or shipped -- the prompt IS the local-tier signing moment.
 --yes skips the prompt (for CI/scripts) but never the receipt render; a non-TTY without --yes
-refuses outright rather than hang or silently proceed. --confirm-destroys is still required,
-additively, for any plan with blast_radius.destroys > 0 -- two distinct consents for the
+refuses outright rather than hang or silently proceed. --confirm-terminate (or its unchanged
+wire-level name, --confirm-destroys -- both flags set the identical bool, UBI-77) is still
+required, additively, for any plan with blast_radius.destroys > 0 -- two distinct consents for the
 irreversible class, checked before the prompt even renders. A plan consumed this way (accepted,
 whether shipped cleanly or not) is pruned from .ubx/plans/ so it never reappears as "latest".
 
-Safe to re-run: ubx ship is idempotent by contract (docs/executor.md). A resource already applied in a
-prior attempt is skipped -- including, for a change proposal, recovering its real applied output from
+Safe to re-run: ubx ship is idempotent by contract (docs/executor.md). A resource already shipped in a
+prior attempt is skipped -- including, for a change proposal, recovering its real shipped output from
 the ledger so a still-pending dependent can proceed correctly even after a crash between the two; a
 resource left in an unresolved state (a crash, a timeout) is reconciled against live reality before
 anything new is attempted where a lookup key exists; a resource whose restore target is itself a
-redacted ($redacted) value is declined every time -- ubx never constructs a live apply from a salted
+redacted ($redacted) value is declined every time -- ubx never ships from a salted
 hash, use "ubx revert-plan" for that resource's manual reconciliation steps instead.
 
 Freshness is re-verified for every modified resource, immediately before its own attempt -- not just
@@ -159,7 +161,7 @@ consistency shows its own work instead of sitting silent.`,
 				// unlike before, this is no longer silent -- the receipt
 				// renders again and a typed "yes" is the real signing
 				// moment (or --yes, for automation).
-				draft, fullHash, verr := resolveAndValidatePlan(ledgerDir, hashArg, confirmDestroys)
+				draft, fullHash, verr := resolveAndValidatePlan(ledgerDir, hashArg, confirmDestroys || confirmTerminate)
 				if verr != nil {
 					return &ExitCodeError{Code: acceptErrorCode(verr), Err: fmt.Errorf("ship: %w", verr)}
 				}
@@ -293,7 +295,8 @@ consistency shows its own work instead of sitting silent.`,
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"}")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "overall timeout for the ship run")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
-	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required for inline local-tier acceptance of any plan with blast_radius.destroys > 0 (docs/schema.md); unused when <hash> is already an accepted proposal, since that confirmation already happened at its own accept time")
+	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required for inline local-tier acceptance of any plan with blast_radius.destroys > 0 (docs/schema.md); unused when <hash> is already an accepted proposal, since that confirmation already happened at its own accept time -- --confirm-terminate is the identical flag under \"ubx terminate\"'s own human-facing name (UBI-77), either spelling satisfies the other")
+	cmd.Flags().BoolVar(&confirmTerminate, "confirm-terminate", false, "alias for --confirm-destroys (UBI-77) -- the name \"ubx terminate\"'s own \"next:\" hint shows, since that's the verb a human actually typed; sets the identical requirement, either flag satisfies both")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the interactive \"type yes\" confirmation for inline local-tier acceptance (for CI/scripts) -- the receipt still renders; required on a non-TTY, which never prompts")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 
@@ -385,7 +388,7 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 
 	if !yes {
 		if !isTerminal(cmd.InOrStdin()) {
-			return nil, errors.New("refusing to apply without confirmation: not an interactive terminal -- pass --yes to confirm non-interactively (e.g. in CI/scripts)")
+			return nil, errors.New("refusing to ship without confirmation: not an interactive terminal -- pass --yes to confirm non-interactively (e.g. in CI/scripts)")
 		}
 		fmt.Fprintf(out, "\nShip this to %s? Only 'yes' accepted: ", draft.Stack)
 		scanner := bufio.NewScanner(cmd.InOrStdin())
@@ -394,7 +397,7 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 			typed = scanner.Text()
 		}
 		if typed != "yes" {
-			fmt.Fprintln(out, "ship aborted -- nothing accepted or applied")
+			fmt.Fprintln(out, "ship aborted -- nothing accepted or shipped")
 			return nil, errShipDeclined
 		}
 	}
@@ -662,29 +665,50 @@ func addressOpKinds(p *core.Proposal) map[string]resourceOpKind {
 // permanent line the moment it happens, per UBI-70's own "errors still
 // get their own visible line" carve-out.
 //
-// UBI-67 (this session): core/executor's own walk is now genuinely
+// UBI-67 (2026-08-02): core/executor's own walk is now genuinely
 // concurrent -- N resources can be in_flight/verifying at once, which
 // this printer's own pre-UBI-67 design assumed could never happen (its
 // own doc comment said so directly): one SHARED ticker, and a `\r`
 // -based single-line in-place overwrite that has no way to represent
-// more than one concurrently-updating line on a real terminal. Fixed by
-// adopting the identical convention real Terraform's own `apply` output
-// already uses for exactly this problem (docs/executor.md's own UBI-67
-// session 1 sketch names this as the reference design, not a novel
-// question): every line is now fully discrete -- printed once, never
-// overwritten in place -- and every line after a resource's own header
-// is prefixed with that resource's own address, so N concurrent
-// resources' own lines interleave in whatever real order they actually
-// occur and stay completely legible without any terminal cursor
-// coordination. The ticker (startTicker/stopTicker, UBI-63 bug 3's own
-// mechanism, generalized here) is now keyed per-address -- multiple
+// more than one concurrently-updating line on a real terminal. That
+// session's own fix adopted real Terraform's own `apply` convention:
+// every line fully discrete, never overwritten in place, prefixed with
+// its own resource's address.
+//
+// UBI-75 (founder test, same day, post-UBI-67): the UBI-67 fix above
+// wasn't enough on its own. It kept a SEPARATE, un-prefixed header line
+// (`st.OpHeader(kind, address)`, printed once, flush-left, no address
+// convention applied to it at all) announcing each resource, with every
+// SUBSEQUENT line for that resource indented and dim-address-prefixed
+// underneath it. Confirmed live (four real concurrent resources, SQS's
+// own 26s creation lag overlapping everything else finishing in ~1s):
+// a resource's own bare header line, being the one line in this whole
+// design that DOESN'T carry the indented/prefixed convention, reads as
+// its own distinct kind of content -- so when a DIFFERENT resource's
+// still-ticking, indented line lands directly under it (pure bad luck
+// of concurrent timing, exactly what real concurrency guarantees will
+// eventually happen), it reads as "nested under the header above,"
+// not "an unrelated resource's own line, interleaved." The header
+// itself was the structural inconsistency, not the interleaving.
+//
+// Fixed by dropping the separate header line entirely: every line this
+// printer ever prints -- the first for a resource, same as the last --
+// carries that resource's own address, bold+colored by operation kind
+// (st.OpHeader, previously reserved for the one-time header only), inline,
+// every time (the ticket's own "[sqs] shipping 0:14" prefix-style
+// suggestion). There is no longer a "different-looking" line for any
+// resource to be mistaken as; every line is self-identifying on its own,
+// so however real concurrency interleaves them, each is legible in
+// isolation. A blank line still separates a resource's own first printed
+// line from whatever preceded it (unchanged from UBI-67), purely for
+// visual breathing room, not for grouping correctness -- correctness now
+// comes entirely from each line naming its own resource, never from
+// position.
+//
+// The ticker (startTicker/stopTicker, UBI-63 bug 3's own mechanism) stays
+// keyed per-address, TTY-only, exactly as UBI-67 left it -- multiple
 // resources' own tickers run concurrently, each emitting its own
-// discrete, address-prefixed line every tickInterval, never colliding.
-// TTY-only, same as before UBI-67 (a piped/logged run shows only the
-// real, discrete transition/attempt events themselves, never a
-// synthetic per-tick line) -- this is now the ONLY TTY-vs-non-TTY
-// distinction the printer makes; overwrite-vs-discrete is gone entirely
-// since there is no longer any overwriting at all.
+// discrete, self-identifying line every tickInterval, never colliding.
 func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]resourceOpKind) func(executor.ProgressEvent) {
 	starts := map[string]time.Time{}
 	seen := map[string]bool{}
@@ -719,11 +743,16 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
 	}
 
-	printLine := func(address, glyph, text, elapsed string) {
+	// printLine renders every single line this printer ever emits --
+	// UBI-75: the resource's own address, bold+colored by operation kind
+	// (st.OpHeader), is part of EVERY line now, not a one-time separate
+	// header -- so a reader can identify which resource any one line
+	// belongs to without relying on its position relative to other lines.
+	printLine := func(address string, kind resourceOpKind, glyph, text, elapsed string) {
 		padded := fmt.Sprintf("%-*s", progressLineWidth, text)
 		prefix := address
 		if prefix != "" {
-			prefix = st.Dim(address) + ":"
+			prefix = st.OpHeader(kind, address) + ":"
 		}
 		if elapsed != "" {
 			fmt.Fprintf(out, "  %s %s %s %s\n", glyph, prefix, padded, elapsed)
@@ -732,14 +761,14 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		}
 	}
 
-	// startTicker emits one discrete, address-prefixed line every
+	// startTicker emits one discrete, self-identifying line every
 	// tickInterval until stopTicker(address) -- shared by both live
 	// phases this printer narrates (the raw provider-call wait, and the
 	// read-back verification wait between attempts), TTY-only (see doc
 	// comment). Per-address (UBI-67): N concurrently in-flight
 	// resources each get their own independent ticker goroutine, none
 	// sharing state with any other.
-	startTicker := func(address string, start time.Time, glyph, text string) {
+	startTicker := func(address string, kind resourceOpKind, start time.Time, glyph, text string) {
 		if !tty {
 			return
 		}
@@ -755,7 +784,7 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 					return
 				case <-ticker.C:
 					mu.Lock()
-					printLine(address, glyph, text, renderElapsed(time.Since(start)))
+					printLine(address, kind, glyph, text, renderElapsed(time.Since(start)))
 					mu.Unlock()
 				}
 			}
@@ -767,24 +796,22 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 		defer mu.Unlock()
 
 		now := time.Now()
+		kind := kinds[ev.Address]
 		if ev.Address != "" {
 			if _, ok := starts[ev.Address]; !ok {
 				starts[ev.Address] = now
 			}
 			if !seen[ev.Address] {
 				if len(seen) > 0 {
-					// UBI-61 comment thread's own second finding: a blank
-					// line between resources' own transition blocks --
-					// before this they ran together with no separation.
-					// Under UBI-67's own real concurrency, this now marks
-					// "a new resource started reporting," not "the
-					// previous resource's whole block just ended" -- still
-					// legible, since every subsequent line names its own
-					// address explicitly.
+					// UBI-61 comment thread's own second finding, kept by
+					// UBI-75: a blank line ahead of a new resource's own
+					// first printed line -- breathing room only, every
+					// line (this one included) is self-identifying now, so
+					// nothing downstream depends on this blank line for
+					// correctness the way the old separate-header design did.
 					fmt.Fprintln(out)
 				}
 				seen[ev.Address] = true
-				fmt.Fprintf(out, "%s\n", st.OpHeader(kinds[ev.Address], ev.Address))
 			}
 		}
 		elapsed := renderElapsed(now.Sub(starts[ev.Address]))
@@ -795,7 +822,7 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 			// happens -- never silently dropped, never folded into the
 			// one live-updating line the happy path uses.
 			stopTicker(ev.Address)
-			printLine(ev.Address, st.Yellow("!"), ev.Detail, "")
+			printLine(ev.Address, kind, st.Yellow("!"), ev.Detail, "")
 
 		case "transition":
 			switch ev.State {
@@ -812,7 +839,7 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 				// whatever ticker preceded them for THIS address.
 				stopTicker(ev.Address)
 				if ev.State == "in_flight" {
-					startTicker(ev.Address, starts[ev.Address], st.Dim("·"), "shipping")
+					startTicker(ev.Address, kind, starts[ev.Address], st.Dim("·"), "shipping")
 				}
 				return
 			}
@@ -826,12 +853,12 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 			case "still_unknown":
 				glyph = st.Yellow("?")
 			}
-			text := ev.State
+			text := displayResourceState(ev.State)
 			if ev.Detail != "" {
 				text += " · " + ev.Detail
 			}
 			stopTicker(ev.Address)
-			printLine(ev.Address, glyph, text, elapsed)
+			printLine(ev.Address, kind, glyph, text, elapsed)
 
 		case "reconcile_attempt":
 			// UBI-70: ONE discrete verification line per real attempt,
@@ -841,8 +868,8 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, kinds map[string]re
 			// through a real multi-second/minute backoff wait.
 			text := fmt.Sprintf("%s (attempt %d/%d)", ev.Detail, ev.Attempt, ev.Total)
 			stopTicker(ev.Address)
-			printLine(ev.Address, st.Yellow("⠧"), text, elapsed)
-			startTicker(ev.Address, starts[ev.Address], st.Yellow("⠧"), text)
+			printLine(ev.Address, kind, st.Yellow("⠧"), text, elapsed)
+			startTicker(ev.Address, kind, starts[ev.Address], st.Yellow("⠧"), text)
 		}
 	}
 }
@@ -870,7 +897,7 @@ func reportAlreadyApplied(out io.Writer, ledger *core.Ledger, p *core.Proposal, 
 		}
 		return nil
 	}
-	fmt.Fprintf(out, "%s: already fully applied -- nothing to do\n", p.ID)
+	fmt.Fprintf(out, "%s: already fully shipped -- nothing to do\n", p.ID)
 	return nil
 }
 
@@ -888,14 +915,25 @@ func printShipReport(out io.Writer, st *styler, rec *core.ApplyRecord) {
 		if state == core.ResourceFailed || state == core.ResourceStillUnknown {
 			glyph = st.Red("✗")
 		}
-		fmt.Fprintf(out, "%s %s: %s\n", glyph, state, ra.Address)
+		fmt.Fprintf(out, "%s %s: %s\n", glyph, displayResourceState(string(state)), ra.Address)
 		for _, e := range ra.Errors {
 			fmt.Fprintf(out, "  %s: %s\n", e.Classification, e.Message)
 		}
 	}
-	fmt.Fprintf(out, "%d resource(s), %d applied, %d failed, %d still unknown -- outcome: %s\n",
-		len(rec.Resources), rec.Summary.ResourcesApplied, rec.Summary.ResourcesFailed,
-		rec.Summary.ResourcesStillUnknown, rec.Summary.Outcome)
+	// UBI-75 (third finding): blank line before the closing summary, bold
+	// throughout, per-count colored (green shipped, red failed, dim
+	// still-unknown -- this package's 7-code palette has no true gray,
+	// and dim already carries "neither a pass nor a verdict" elsewhere,
+	// e.g. forceDim's own metadata use). "shipped"/"outcome: shipped,"
+	// never "applied" (UBI-79) -- displayOutcome only ever touches this
+	// rendered text, never rec.Summary.Outcome's own stored/hashed value.
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s), %s, %s, %s -- outcome: %s",
+		len(rec.Resources),
+		st.Green(fmt.Sprintf("%d shipped", rec.Summary.ResourcesApplied)),
+		st.Red(fmt.Sprintf("%d failed", rec.Summary.ResourcesFailed)),
+		st.Dim(fmt.Sprintf("%d still unknown", rec.Summary.ResourcesStillUnknown)),
+		displayOutcome(rec.Summary.Outcome))))
 }
 
 // shipJSON is `ubx ship --json`'s payload -- format:1, the same contract

@@ -254,6 +254,38 @@ func displayHash(id string, full bool) string {
 	return id[:shortLen] + "…"
 }
 
+// displayResourceState translates a core.ResourceState (or an
+// executor.ProgressEvent.State, the identical wire vocabulary) into ship's
+// own display vocabulary for any HUMAN-rendered, non-JSON line (UBI-75/
+// UBI-79): "shipped," never "applied," anywhere a person reads it. The
+// stored/hashed value itself -- core.ResourceState's own enum, an
+// ApplyRecord's own JSON -- is completely untouched by this; it's a
+// display-layer mapping over an already-computed string, the same posture
+// "shipping" (over the unchanged in_flight value) already established.
+func displayResourceState(s string) string {
+	if s == "applied" {
+		return "shipped"
+	}
+	return s
+}
+
+// displayOutcome is displayResourceState's own core.ApplyRecord.Summary.
+// Outcome sibling (UBI-75/UBI-79): applied/partially_applied -> shipped/
+// partially_shipped for human text only -- failed already carries no
+// apply-family word and passes through unchanged. --json output keeps the
+// real, unmangled stored value (shipJSON/whyJSON wrap core.ApplyRecord
+// directly) -- this helper is never called from a JSON-encoding path.
+func displayOutcome(s string) string {
+	switch s {
+	case "applied":
+		return "shipped"
+	case "partially_applied":
+		return "partially_shipped"
+	default:
+		return s
+	}
+}
+
 // shortRef is displayHash's own marker-free sibling, for the one context
 // where truncation must stay directly reusable as a real command
 // argument: a "next: ubx ship <hash>" handoff (or any other hint meant to

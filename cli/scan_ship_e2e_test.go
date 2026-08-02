@@ -53,7 +53,7 @@ func TestScanPropose_Revert_ShipShortHash_AppliesAgainstLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship %s (plan-store short hash from scan --propose): %v\noutput: %s", hash, err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }

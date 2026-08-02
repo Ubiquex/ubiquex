@@ -50,7 +50,7 @@ classification, the pre-UBI-71 behavior.
 
 Exit code is a CI contract: 0 if clean (or ledger-only, which has nothing to report drift on), 1 if
 anything drifted, 2 if anything was unreadable or the command failed outright. Whichever is worse
-always wins if more than one applies.
+always wins if more than one condition holds.
 
 "All stacks by default" is a git-local-only capability: a remote .ubx/config [ledger] store addresses
 one chain per stack, so there is no "every stack" to enumerate there -- --stack becomes required.`,
@@ -283,7 +283,21 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 				if !all && cleanCount > 0 {
 					fmt.Fprintf(out, "%d clean (--all to show)\n", cleanCount)
 				}
-				fmt.Fprintf(out, "%d resource(s), %d drifted, %d unreadable\n", len(fleet), driftedCount, unreadableCount)
+				// UBI-76: blank line before the closing summary, bold
+				// throughout, whole line green when the run is fully clean
+				// (the same affirmative-success convention `ubx init`
+				// already established) -- yellow/red per-count otherwise,
+				// matching UBI-75's own per-count color scheme for ship's
+				// closing summary.
+				fmt.Fprintln(out)
+				if driftedCount == 0 && unreadableCount == 0 {
+					fmt.Fprintln(out, st.GreenBold(fmt.Sprintf("%d resource(s), %d drifted, %d unreadable", len(fleet), driftedCount, unreadableCount)))
+				} else {
+					fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s), %s, %s",
+						len(fleet),
+						st.Yellow(fmt.Sprintf("%d drifted", driftedCount)),
+						st.Red(fmt.Sprintf("%d unreadable", unreadableCount)))))
+				}
 			}
 
 			switch {

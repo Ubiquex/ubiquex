@@ -79,24 +79,24 @@ func TestResolveAcceptShip_CreateChain_RealFakeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "applied: payments.fake_widget.primary") {
-		t.Fatalf("expected primary to show applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "shipped: payments.fake_widget.primary") {
+		t.Fatalf("expected primary to show shipped, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "applied: payments.fake_widget.mirror") {
-		t.Fatalf("expected mirror to show applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "shipped: payments.fake_widget.mirror") {
+		t.Fatalf("expected mirror to show shipped, got: %s", shipOut)
 	}
 
 	whyOut, err := runUbx(t, env, "why", changeID, "--ledger-dir", ledgerDir)
 	if err != nil {
 		t.Fatalf("ubx why: %v\noutput: %s", err, whyOut)
 	}
-	if !strings.Contains(whyOut, "apply history:") {
-		t.Fatalf("expected why to render apply history for a change proposal, got: %s", whyOut)
+	if !strings.Contains(whyOut, "ship history:") {
+		t.Fatalf("expected why to render ship history for a change proposal, got: %s", whyOut)
 	}
 	if !strings.Contains(whyOut, "payments.fake_widget.mirror") {
-		t.Fatalf("expected why's apply history to mention mirror, got: %s", whyOut)
+		t.Fatalf("expected why's ship history to mention mirror, got: %s", whyOut)
 	}
 }

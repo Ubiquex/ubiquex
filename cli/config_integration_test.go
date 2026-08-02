@@ -136,7 +136,7 @@ func TestWriteback_HonorsConfigTFDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx writeback (no --tf-dir, config supplies one): %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "applied: instance_type") {
+	if !strings.Contains(out, "written: instance_type") {
 		t.Fatalf("expected writeback to have found and used config's tf_dir, got: %s", out)
 	}
 }

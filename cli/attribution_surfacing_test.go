@@ -120,7 +120,7 @@ func TestShip_WarnsBeforeAcceptingRecentUnattributedAdopt(t *testing.T) {
 	// A drift_adopt is record-only (UBI-49 residual round 2 finding #4) --
 	// the warning is advisory only, never blocking, so acceptance still
 	// goes through to the same record-only success this session's other
-	// fix reports (not "outcome: applied," which only ever prints for a
+	// fix reports (not "outcome: shipped," which only ever prints for a
 	// real executor.Ship run of a drift_revert/change proposal).
 	if !strings.Contains(shipOut, "record-only, nothing to execute") {
 		t.Fatalf("expected the warning to be advisory only -- still accepted, got: %s", shipOut)

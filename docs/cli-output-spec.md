@@ -58,22 +58,29 @@ Ship  playground · plan 0509dd5d · 2m old
 
   Destroys 1 resource. Type yes to continue: yes
 
-  aws_sqs_queue.playground-test
-    ✓ in_flight                                    0:01
-    ⠧ provider reported success — verifying
+  ⠧ aws_sqs_queue.playground-test: provider reported success -- verifying
       via read-back (attempt 3/8)                  0:41
-    ✓ destroyed · confirmed by read-back           1:20
+  ✓ aws_sqs_queue.playground-test: shipped · confirmed by reconciliation  1:20
 
-  Σ  1 applied · 0 failed · outcome: applied
+  1 resource(s), 1 shipped, 0 failed, 0 still unknown -- outcome: shipped
 ```
 - Interactive confirmation (UBI-62): receipt summary re-rendered, typed `yes`
   (terraform's pattern), acceptance recorded only after consent. `--yes` for
   automation; non-TTY without `--yes` refuses with a teaching error.
-- `--confirm-destroys` stays additive on top (double consent for destroys).
+- `--confirm-terminate`/`--confirm-destroys` (the same flag, two accepted
+  spellings, UBI-77) stays additive on top (double consent for destroys).
 - Bare `ubx ship` = latest plan for current stack, shown explicitly in the
   confirmation; multiple candidates → list + prompt, never guess.
 - Per-resource live transitions with elapsed; spinner during provider calls
-  and reconcile loops.
+  and reconcile loops. Every line carries its own bold, operation-colored
+  address inline (UBI-75) -- there is no separate un-prefixed header line to
+  be mistaken for a different, concurrently-reporting resource's own content
+  under real concurrent scheduling (UBI-67).
+- "Shipped," never "applied," anywhere a human reads it (UBI-75/UBI-79) --
+  `core.ResourceState`/`ApplyRecord`'s own stored values are unchanged, this
+  is display-only. The closing summary: blank line before it, bold
+  throughout, counts colored per verb (green shipped, red failed, dim still
+  unknown).
 
 ### status --drift
 ```
@@ -122,17 +129,24 @@ Blame  playground.aws_sqs_queue.playground-test
 ```
 
 ### why
-Timeline as styled cards, newest first; sources / acceptance / apply-trace as
-distinct indented blocks; the apply trace keeps its transition lines (they are
+Timeline as styled cards, newest first; sources / acceptance / ship history as
+distinct indented blocks; the ship history keeps its transition lines (they are
 the reliability story) with the read-back confirmation highlighted; hashes
-short; `--dialogue` unchanged.
+short; `--dialogue` unchanged. "Ship history:", never "apply history:"
+(UBI-79).
 
 ### terminate (new verb, UBI-49 finding #7)
 `ubx terminate <address>…` — ledger-state-derived destroy proposal (no AI, the
-address is the spec), plan-style red-led receipt with full last-known state,
-saved to plan store, standard double consent at ship. Schema vocabulary stays
-destroys[]/tombstone; docs state the pairing once. Bare `ubx destroy` teaches
-toward terminate (or aliases — decide at build).
+address is the spec), plan-style red-led receipt with full last-known state
+(JSON-valued attributes formatted, readable blocks -- the same renderer
+`ubx plan`'s own create blocks use, UBI-78), saved to plan store, standard
+double consent at ship. A blank line separates each `- destroy: <address>`
+block from its neighbors (UBI-77). Schema vocabulary stays destroys[]/
+tombstone; docs state the pairing once. The saved plan's own "next:" hint
+shows `--confirm-terminate` -- `ubx ship`'s own human-facing name for the
+unchanged wire-level `--confirm-destroys` flag (UBI-77), either spelling
+satisfies the other. Bare `ubx destroy` teaches toward terminate (or aliases —
+decide at build).
 
 ### config
 Provenance table gains alignment + dimmed file paths + the cascade-ceiling line

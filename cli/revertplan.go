@@ -30,12 +30,12 @@ func newRevertPlanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "revert-plan <proposal-id>",
-		Short: "Emit the reconciliation plan for an accepted drift_revert proposal -- never applies anything",
+		Short: "Emit the reconciliation plan for an accepted drift_revert proposal -- never makes any change",
 		Long: `Emit the reconciliation plan for an accepted drift_revert proposal: a human-readable
 list of what changed and what restoring it requires, plus (with --tf-dir) a corrective .tf diff for
 whatever attributes are safely rewritable and a manual-steps section for whatever isn't.
 
-ubx revert-plan NEVER writes a file and NEVER touches cloud. Applying the correction -- to .tf source,
+ubx revert-plan NEVER writes a file and NEVER touches cloud. Making the correction -- to .tf source,
 or to the live resource -- is the operator's own tooling to run (docs/plan.md's M3-4: "revert emits
 plan"; executor trust comes later).`,
 		Args: cobra.ExactArgs(1),
@@ -69,7 +69,7 @@ plan"; executor trust comes later).`,
 				return &ExitCodeError{Code: 2, Err: err}
 			}
 			if p.Kind != core.KindDriftRevert {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: proposal %s is kind %q, not drift_revert -- revert-plan only applies to a proposed revert", p.ID, p.Kind)}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: proposal %s is kind %q, not drift_revert -- revert-plan only works on a proposed revert", p.ID, p.Kind)}
 			}
 			if p.Status != core.StatusAccepted {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: proposal %s is not accepted (status %q)", p.ID, p.Status)}
@@ -83,7 +83,7 @@ plan"; executor trust comes later).`,
 			printPlan(out, p.Delta.Modifies)
 
 			if tfDir == "" {
-				fmt.Fprintln(out, "\nno --tf-dir given -- apply the correction above to cloud via your own tooling; ubx never applies it")
+				fmt.Fprintln(out, "\nno --tf-dir given -- make the correction above in cloud via your own tooling; ubx never makes it for you")
 				return nil
 			}
 			manualSteps, err := printTFDiffAndManualSteps(out, tfDir, p.Delta.Modifies)
@@ -99,7 +99,7 @@ plan"; executor trust comes later).`,
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open -- required only when .ubx/config's [ledger] store is a remote store; unused for the default git store")
-	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory containing .tf files to compute a corrective diff against (optional) -- never written to, ubx never applies anything")
+	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory containing .tf files to compute a corrective diff against (optional) -- never written to, ubx never makes any change here")
 	return cmd
 }
 
@@ -157,14 +157,14 @@ func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modi
 	if len(declined) > 0 || len(notFound) > 0 {
 		fmt.Fprintln(out, "\n--- manual steps ---")
 		for _, nf := range notFound {
-			fmt.Fprintf(out, "%s -- apply this correction manually\n", nf)
+			fmt.Fprintf(out, "%s -- make this correction manually\n", nf)
 		}
 		for _, d := range declined {
 			fmt.Fprintf(out, "%s -- %s", d.Path, d.Reason)
 			if d.Expression != "" {
 				fmt.Fprintf(out, " (current value: %s)", d.Expression)
 			}
-			fmt.Fprintln(out, " -- apply this correction manually")
+			fmt.Fprintln(out, " -- make this correction manually")
 		}
 	}
 	return len(declined) + len(notFound), nil

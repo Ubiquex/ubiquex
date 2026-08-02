@@ -72,8 +72,8 @@ func shipTwoWidgetChain(t *testing.T, ledgerDir string) {
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }
 

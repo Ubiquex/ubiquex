@@ -60,8 +60,8 @@ func TestShip_TTY_TypedYes_Accepts(t *testing.T) {
 	if !strings.Contains(shipOut, "Ship this to payments? Only 'yes' accepted:") {
 		t.Fatalf("expected the exact confirmation prompt, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestShip_TTY_TypedSomethingElse_DeclinesCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a clean exit 0 on decline, got: %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "ship aborted -- nothing accepted or applied") {
+	if !strings.Contains(shipOut, "ship aborted -- nothing accepted or shipped") {
 		t.Fatalf("expected the abort message, got: %s", shipOut)
 	}
 	if got := readLedgerHead(t, ledgerDir); got != ledgerHeadBefore {
@@ -165,8 +165,8 @@ func TestShip_Bare_ResolvesLatestPlanForStack(t *testing.T) {
 	if !strings.Contains(shipOut, "latest plan for stack payments: "+shortRef(hash)) {
 		t.Fatalf("expected the resolved 'latest plan' to be shown explicitly, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 
 	// Shipped plan must be pruned -- "latest" never re-offers a

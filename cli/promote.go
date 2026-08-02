@@ -192,7 +192,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			// state/providers, never through an LLM, so Intent.Assumptions/
 			// Defaults are always empty.
 			renderPlanReceipt(outWriter, st, np, planReceiptHeader(st, np.Stack, ""), true)
-			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}))
+			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}, np.BlastRadius.Destroys > 0))
 			return nil
 		},
 	}

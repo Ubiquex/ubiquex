@@ -65,7 +65,7 @@ func newWritebackCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
 			if p.Kind != core.KindDriftAdopt {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: proposal %s is kind %q, not drift_adopt -- write-back only applies to recorded drift", p.ID, p.Kind)}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: proposal %s is kind %q, not drift_adopt -- write-back only works on recorded drift", p.ID, p.Kind)}
 			}
 			if p.Status != core.StatusAccepted {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("writeback: proposal %s is not accepted (status %q)", p.ID, p.Status)}
@@ -88,7 +88,7 @@ func newWritebackCmd() *cobra.Command {
 
 				fmt.Fprintf(out, "%s (%s):\n", m.Target, path)
 				for _, a := range report.Applied {
-					fmt.Fprintf(out, "  applied: %s\n", a)
+					fmt.Fprintf(out, "  written: %s\n", a)
 				}
 				declinedCount += len(report.Declined)
 				for _, d := range report.Declined {

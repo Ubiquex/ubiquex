@@ -256,7 +256,7 @@ func registerScanTool(server *mcp.Server) {
 		Description: "Read one resource's LIVE state from its real provider (cloud API or cluster) and compare it " +
 			"against what the ledger last recorded, classifying it new/drifted/unchanged. This is the one tool that " +
 			"makes a real network read against live infrastructure -- it is still entirely read-only: it never " +
-			"applies, accepts, or writes anything to the ledger. On a new or drifted resource it returns the " +
+			"ships, accepts, or writes anything to the ledger. On a new or drifted resource it returns the " +
 			"generated proposal inline (the exact JSON ubx accept would later sign, if a human decides to) -- " +
 			"reach for this to answer \"has this resource changed\", \"what would ubx propose if I scanned this " +
 			"right now\", or to onboard a resource ubx has never seen. A Sensitive-flagged attribute (a password, " +

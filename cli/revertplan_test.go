@@ -75,8 +75,8 @@ func TestRevertPlan_PrintsHumanReadablePlan_NoTFDir(t *testing.T) {
 	if strings.Contains(out, ".tf diff") {
 		t.Fatalf("no --tf-dir given -- must not print a .tf diff section, got: %s", out)
 	}
-	if !strings.Contains(out, "ubx never applies it") {
-		t.Fatalf("expected the never-applies reminder, got: %s", out)
+	if !strings.Contains(out, "ubx never makes it for you") {
+		t.Fatalf("expected the never-makes-it-for-you reminder, got: %s", out)
 	}
 }
 

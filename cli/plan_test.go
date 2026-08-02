@@ -79,8 +79,8 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if !strings.Contains(shipOut, "accepted "+displayHash(hash, false)+" (stack payments) via local plan") {
 		t.Fatalf("expected ship to report inline local-tier acceptance, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 
 	whyOut, err := runUbx(t, env, "why", hash, "--ledger-dir", ledgerDir)
@@ -90,8 +90,8 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if !strings.Contains(whyOut, "via local at") {
 		t.Fatalf("expected why to show local acceptance method, got: %s", whyOut)
 	}
-	if !strings.Contains(whyOut, "apply history:") {
-		t.Fatalf("expected why to show apply history, got: %s", whyOut)
+	if !strings.Contains(whyOut, "ship history:") {
+		t.Fatalf("expected why to show ship history, got: %s", whyOut)
 	}
 }
 
@@ -154,8 +154,8 @@ func TestPlanShip_DestroysRequireConfirmFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship --confirm-destroys: %v\noutput: %s", err, shipOut2)
 	}
-	if !strings.Contains(shipOut2, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut2)
+	if !strings.Contains(shipOut2, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut2)
 	}
 }
 
@@ -345,8 +345,8 @@ func TestPlan_FromCode_SimpleCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }
 
@@ -400,8 +400,8 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }
 

@@ -268,7 +268,7 @@ func TestScanAll_RejectsSingleResourceFlags(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when --all is combined with --type")
 	}
-	if !strings.Contains(err.Error(), "don't apply to bulk onboarding") {
+	if !strings.Contains(err.Error(), "aren't relevant to bulk onboarding") {
 		t.Fatalf("expected a clear incompatible-flags error, got: %v", err)
 	}
 }

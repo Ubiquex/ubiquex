@@ -51,13 +51,13 @@ func TestWhy_ShippedDriftRevert_ShowsApplyHistory(t *testing.T) {
 	}
 	revertID := mustExtractID(t, acceptOut)
 
-	// Before shipping: no apply history at all.
+	// Before shipping: no ship history at all.
 	beforeShip, err := runUbx(t, env, "why", revertID, "--ledger-dir", ledgerDir)
 	if err != nil {
 		t.Fatalf("ubx why (before ship): %v", err)
 	}
-	if strings.Contains(beforeShip, "apply history") {
-		t.Fatalf("expected no apply history before shipping, got: %s", beforeShip)
+	if strings.Contains(beforeShip, "ship history") {
+		t.Fatalf("expected no ship history before shipping, got: %s", beforeShip)
 	}
 
 	if _, err := runUbx(t, env, "ship", revertID, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir); err != nil {
@@ -68,7 +68,7 @@ func TestWhy_ShippedDriftRevert_ShowsApplyHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why (after ship): %v", err)
 	}
-	for _, want := range []string{"apply history:", "attempt 1: outcome=applied", "payments.fake_widget.widget-why-ship", "applied at"} {
+	for _, want := range []string{"ship history:", "attempt 1: outcome=shipped", "payments.fake_widget.widget-why-ship", "shipped at"} {
 		if !strings.Contains(afterShip, want) {
 			t.Fatalf("expected why output to contain %q, got: %s", want, afterShip)
 		}

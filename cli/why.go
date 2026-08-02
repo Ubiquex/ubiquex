@@ -220,24 +220,24 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 	if len(attempts) == 0 {
 		return
 	}
-	fmt.Fprintln(out, "apply history:")
+	fmt.Fprintln(out, "ship history:")
 	for _, a := range attempts {
 		status := "unsealed (interrupted or still in progress)"
 		if a.Sealed() {
-			status = fmt.Sprintf("outcome=%s", a.Summary.Outcome)
+			status = fmt.Sprintf("outcome=%s", displayOutcome(a.Summary.Outcome))
 		}
 		fmt.Fprintf(out, "  attempt %d: %s\n", a.Attempt, status)
 		for _, ra := range a.Resources {
 			fmt.Fprintf(out, "    %s:\n", ra.Address)
-			// UBI-30: a destroy's own terminal "applied" transition means
-			// either "destroyed" or "already_absent" -- neither of which
-			// reads as a create/modify's own plain "applied" at all, so
-			// this is called out explicitly on that exact line rather than
-			// leaving a reader to notice and interpret the reconcile:
+			// UBI-30: a destroy's own terminal "applied"/"shipped" transition
+			// means either "destroyed" or "already_absent" -- neither of
+			// which reads as a create/modify's own plain "shipped" at all,
+			// so this is called out explicitly on that exact line rather
+			// than leaving a reader to notice and interpret the reconcile:
 			// lines below on their own.
 			outcome := destroyOutcome(ra.Reconciliation)
 			for i, t := range ra.Transitions {
-				fmt.Fprintf(out, "      %s at %s", t.State, t.At)
+				fmt.Fprintf(out, "      %s at %s", displayResourceState(string(t.State)), t.At)
 				if t.Detail != "" {
 					fmt.Fprintf(out, " -- %s", t.Detail)
 				}
@@ -350,7 +350,20 @@ func renderModifies(out io.Writer, st *styler, modifies []core.Modification, ind
 // renderCreates' own whole-line GreenBold treatment, not just the
 // leading "-" glyph colored on its own as this used to render.
 func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, indent string, showState bool) {
-	for _, d := range destroys {
+	// UBI-77: one blank line between consecutive destroy blocks -- the
+	// identical i>0 convention renderCreates already uses (its own doc
+	// comment: "one empty line separates resource blocks"). Before this,
+	// nothing separated a multi-address `ubx terminate` receipt's own
+	// destroy entries at all: the first block's own leading blank comes
+	// from the section header above it, the last block's own trailing
+	// blank comes from renderPlanReceipt's post-delta spacer below it, but
+	// every block in between had neither -- confirmed empirically (a
+	// throwaway 2-address repro) to run straight into the next block's
+	// own "- destroy:" header with zero separation.
+	for i, d := range destroys {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
 		fmt.Fprintf(out, "%s%s\n", indent, st.RedBold(fmt.Sprintf("- destroy: %s", d.Address)))
 		if !showState {
 			continue
@@ -364,8 +377,22 @@ func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, ind
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+		attrIndent := indent + "  "
 		for _, k := range keys {
-			fmt.Fprintf(out, "%s  %s: %s\n", indent, k, rawOrAbsent(state[k]))
+			// UBI-78: the same formatted-JSON-block treatment renderCreates
+			// already gives Delta.Creates' own config values -- before this,
+			// a destroy's full-state block (plan/terminate/why's single-
+			// proposal view all share this one renderer) was the one place
+			// left rendering a JSON-valued attribute (an IAM/trust policy
+			// document) as a raw escaped single-line string instead, in
+			// violation of docs/cli-output-spec.md v2's own "JSON-valued
+			// attributes render as FORMATTED, readable JSON blocks" rule.
+			val := formatConfigValueV2(attrIndent, state[k])
+			if strings.Contains(val, "\n") {
+				fmt.Fprintf(out, "%s%s:\n%s%s\n", attrIndent, k, attrIndent, val)
+			} else {
+				fmt.Fprintf(out, "%s%s: %s\n", attrIndent, k, val)
+			}
 		}
 	}
 }

@@ -102,7 +102,7 @@ func renderAIDefaultsCollapsed(w io.Writer, st *styler, assumptions, defaults []
 	if n == 0 {
 		return
 	}
-	fmt.Fprintln(w, st.Purple(fmt.Sprintf("%d AI default(s) applied -- ubx plan --show-defaults to review, or see the saved plan file", n)))
+	fmt.Fprintln(w, st.Purple(fmt.Sprintf("%d AI default(s) in effect -- ubx plan --show-defaults to review, or see the saved plan file", n)))
 }
 
 // mergeAmbiguityNotes is renderAIDefaults/renderAIDefaultsCollapsed's own

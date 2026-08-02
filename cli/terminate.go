@@ -60,8 +60,8 @@ failure modes as a hand-written destroys[] intent file. Renders the full receipt
 destroyed resource's own last-known state, per the full-state-at-review requirement) and
 saves the resolved-but-unaccepted proposal to .ubx/plans/<hash>.json, exactly like "ubx plan".
 
-This command never touches a ledger -- nothing here is accepted or applied. Run "ubx ship
-<hash>" to accept (local tier, --confirm-destroys required) and apply in one step.
+This command never touches a ledger -- nothing here is accepted or shipped. Run "ubx ship
+<hash>" to accept (local tier, --confirm-destroys required) and ship in one step.
 
 "ubx destroy" is not an alias for this command -- it teaches toward "ubx terminate" instead,
 by design (docs/cli-output-spec.md principle 6).`,
@@ -152,7 +152,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 			// bold, matching `ubx plan`'s own identical footer.
 			fmt.Fprintf(outWriter, "\n%s\n%s\n",
 				st.GreenBold(fmt.Sprintf("ubx-proposal: %s", displayHash(hash, st.fullHashes))),
-				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}))))
+				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}, true))))
 			return nil
 		},
 	}

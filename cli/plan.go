@@ -86,8 +86,8 @@ receipt (delta, cost_delta, blast radius, assumptions/defaults/questions) render
 terminal for review, and the resolved-but-unaccepted proposal is written to
 .ubx/plans/<hash>.json, keyed by the exact hash "ubx ship <hash>" will later look for.
 
-This command never touches a ledger -- nothing here is accepted or applied. Run "ubx ship
-<hash>" to accept (local tier) and apply in one step, or run "ubx accept"/"ubx propose" by
+This command never touches a ledger -- nothing here is accepted or shipped. Run "ubx ship
+<hash>" to accept (local tier) and ship in one step, or run "ubx accept"/"ubx propose" by
 hand against the written plan file for the four-verb ceremony (PR-merge signing, a separate
 propose-time PR trailer hash, etc.).`,
 		Args: cobra.MaximumNArgs(1),
@@ -297,7 +297,7 @@ propose-time PR trailer hash, etc.).`,
 			// comment).
 			fmt.Fprintf(outWriter, "\n%s\n%s\n",
 				st.GreenBold(fmt.Sprintf("ubx-proposal: %s", displayHash(hash, st.fullHashes))),
-				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}))))
+				st.GreenBold(fmt.Sprintf("next: %s", nextShipHint([]string{hash}, p.BlastRadius.Destroys > 0))))
 			return nil
 		},
 	}

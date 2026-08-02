@@ -51,8 +51,8 @@ func TestShip_ShortHash_ResolvesUniquePrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx ship %s (short hash): %v\noutput: %s", short, err, shipOut)
 	}
-	if !strings.Contains(shipOut, "outcome: applied") {
-		t.Fatalf("expected outcome: applied, got: %s", shipOut)
+	if !strings.Contains(shipOut, "outcome: shipped") {
+		t.Fatalf("expected outcome: shipped, got: %s", shipOut)
 	}
 }
 

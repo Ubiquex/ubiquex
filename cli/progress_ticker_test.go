@@ -44,8 +44,8 @@ func TestNewProgressPrinter_TicksDuringLongShippingWait(t *testing.T) {
 	if !strings.Contains(out, "0:01") {
 		t.Fatalf("expected the ticked line to show real elapsed time past 0:00 before the terminal event, got:\n%s", out)
 	}
-	if !strings.Contains(out, "applied") {
-		t.Fatalf("expected the terminal \"applied\" line to still print, got:\n%s", out)
+	if !strings.Contains(out, "shipped") {
+		t.Fatalf("expected the terminal \"shipped\" line to still print, got:\n%s", out)
 	}
 }
 
@@ -73,8 +73,8 @@ func TestNewProgressPrinter_NonTTY_NeverTicks(t *testing.T) {
 	if strings.Contains(out, "in_flight") || strings.Contains(out, "shipping") {
 		t.Fatalf("expected nothing rendered for the pending/in_flight/shipping phase on a non-TTY run, got:\n%s", out)
 	}
-	if !strings.Contains(out, "applied") {
-		t.Fatalf("expected the terminal \"applied\" line to still print, got:\n%s", out)
+	if !strings.Contains(out, "shipped") {
+		t.Fatalf("expected the terminal \"shipped\" line to still print, got:\n%s", out)
 	}
 }
 
@@ -118,8 +118,8 @@ func TestNewProgressPrinter_ConcurrentResources_EachTicksIndependently(t *testin
 	if strings.Count(out, "shipping") < 2 {
 		t.Errorf("expected both addresses' own ticker to have fired at least once (2+ \"shipping\" lines total), got:\n%s", out)
 	}
-	if strings.Count(out, "applied") != 2 {
-		t.Errorf("expected exactly one \"applied\" line per address (2 total), got %d:\n%s", strings.Count(out, "applied"), out)
+	if strings.Count(out, "shipped") != 2 {
+		t.Errorf("expected exactly one \"shipped\" line per address (2 total), got %d:\n%s", strings.Count(out, "shipped"), out)
 	}
 }
 

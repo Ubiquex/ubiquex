@@ -71,7 +71,7 @@ func TestWhy_RendersDestroyedResource(t *testing.T) {
 	if !strings.Contains(whyOut, "destroy: "+addr) {
 		t.Fatalf("expected a \"destroy: %s\" line, got: %s", addr, whyOut)
 	}
-	if !strings.Contains(whyOut, "applied at") || !strings.Contains(whyOut, "(destroyed)") {
+	if !strings.Contains(whyOut, "shipped at") || !strings.Contains(whyOut, "(destroyed)") {
 		t.Fatalf("expected the terminal transition annotated \"(destroyed)\", got: %s", whyOut)
 	}
 

@@ -108,7 +108,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 
 	cmd.Flags().StringVar(&out, "out", "sdk/generated", "directory to write generated bindings into (one file per declared provider source)")
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (applied per provider, not once for the whole command)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 
 	return cmd
 }

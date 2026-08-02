@@ -72,7 +72,7 @@ func TestPlan_ShowDefaults_DefaultTrue_FullBlockShown(t *testing.T) {
 	if !strings.Contains(out, "used the default tag set") || !strings.Contains(out, "left retention_days at the provider's own default") {
 		t.Fatalf("expected both bullet lines rendered in full, got: %s", out)
 	}
-	if strings.Contains(out, "AI default(s) applied") {
+	if strings.Contains(out, "AI default(s) in effect") {
 		t.Fatalf("did not expect the collapsed one-liner when shown in full, got: %s", out)
 	}
 }
@@ -96,7 +96,7 @@ func TestPlan_ShowDefaults_ConfigFalse_CollapsesToOneLine(t *testing.T) {
 	if strings.Contains(out, "used the default tag set") || strings.Contains(out, "left retention_days at the provider's own default") {
 		t.Fatalf("expected the bullet text collapsed away, got: %s", out)
 	}
-	if !strings.Contains(out, "2 AI default(s) applied -- ubx plan --show-defaults to review, or see the saved plan file") {
+	if !strings.Contains(out, "2 AI default(s) in effect -- ubx plan --show-defaults to review, or see the saved plan file") {
 		t.Fatalf("expected the exact collapsed one-liner (1 assumption + 1 default = 2), got: %s", out)
 	}
 
@@ -134,7 +134,7 @@ func TestPlan_ShowDefaults_QuestionsNeverCollapse(t *testing.T) {
 	if !strings.Contains(out, "[blocking -- review before accepting]") {
 		t.Fatalf("expected the question's own blocking tag preserved, got: %s", out)
 	}
-	if !strings.Contains(out, "AI default(s) applied") {
+	if !strings.Contains(out, "AI default(s) in effect") {
 		t.Fatalf("expected the AI-defaults portion still collapsed, got: %s", out)
 	}
 }
@@ -155,7 +155,7 @@ func TestPlan_ShowDefaultsFlag_OverridesConfigFalse(t *testing.T) {
 	if !strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected --show-defaults to override config's show_defaults=false, got: %s", out)
 	}
-	if strings.Contains(out, "AI default(s) applied") {
+	if strings.Contains(out, "AI default(s) in effect") {
 		t.Fatalf("did not expect the collapsed one-liner once --show-defaults forced the full block, got: %s", out)
 	}
 }
@@ -174,7 +174,7 @@ func TestPlan_HideDefaultsFlag_OverridesConfigDefaultTrue(t *testing.T) {
 	if strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected --hide-defaults to collapse the block despite no config override, got: %s", out)
 	}
-	if !strings.Contains(out, "AI default(s) applied") {
+	if !strings.Contains(out, "AI default(s) in effect") {
 		t.Fatalf("expected the collapsed one-liner, got: %s", out)
 	}
 }
@@ -214,7 +214,7 @@ func TestPlan_ShowDefaults_TTY_CollapsedLineIsPurple_NOCOLORStripsIt(t *testing.
 	if err != nil {
 		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
 	}
-	line := lineContaining(out, "AI default(s) applied")
+	line := lineContaining(out, "AI default(s) in effect")
 	if line == "" {
 		t.Fatalf("expected the collapsed one-liner, got: %s", out)
 	}
@@ -232,7 +232,7 @@ func TestPlan_ShowDefaults_TTY_CollapsedLineIsPurple_NOCOLORStripsIt(t *testing.
 	if strings.Contains(noColorOut, ansiPurple) {
 		t.Fatalf("expected NO_COLOR to strip all ANSI codes, got: %s", noColorOut)
 	}
-	if !strings.Contains(noColorOut, "AI default(s) applied") {
+	if !strings.Contains(noColorOut, "AI default(s) in effect") {
 		t.Fatalf("expected the collapsed text to still render plainly under NO_COLOR, got: %s", noColorOut)
 	}
 }

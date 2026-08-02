@@ -89,7 +89,7 @@ func newScanCmd() *cobra.Command {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
 					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as/--tf-dir describe a single resource " +
-						"and don't apply to bulk onboarding")}
+						"and aren't relevant to bulk onboarding")}
 				}
 				if tfstatePath == "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all requires --tfstate")}
@@ -120,7 +120,7 @@ func newScanCmd() *cobra.Command {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
 					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") || all || tfstatePath != "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--surface-as/--tf-dir/--all/--tfstate describe a " +
-						"single resource or tfstate-sourced bulk onboarding and don't apply to cloud-side discovery (docs/discovery.md)")}
+						"single resource or tfstate-sourced bulk onboarding and aren't relevant to cloud-side discovery (docs/discovery.md)")}
 				}
 				tags, err := parseTagFlags(tagFlags)
 				if err != nil {
@@ -411,6 +411,7 @@ func newScanCmd() *cobra.Command {
 			fmt.Fprintf(out2, "%s  %s\n\n", header, addr)
 
 			hashes := make([]string, 0, len(proposals))
+			needsConfirm := false
 			for _, p := range proposals {
 				b, err := json.MarshalIndent(p, "", "  ")
 				if err != nil {
@@ -429,9 +430,12 @@ func newScanCmd() *cobra.Command {
 					}
 				}
 				hashes = append(hashes, hash)
+				if p.BlastRadius.Destroys > 0 {
+					needsConfirm = true
+				}
 				renderScanCard(out2, st, p, hash)
 			}
-			fmt.Fprintf(out2, "\n  saved to plan store            next: %s\n", nextShipHint(hashes))
+			fmt.Fprintf(out2, "\n  saved to plan store            next: %s\n", nextShipHint(hashes, needsConfirm))
 			// A proposal was generated -- new resource or drift -- an
 			// actionable finding, not a failure (UBI-20 exit-code contract).
 			return &ExitCodeError{Code: 1, Err: fmt.Errorf("scan %s: %s, %q proposal(s) generated (see above)", addr, kindLabel, propose)}
@@ -541,13 +545,30 @@ func renderScanCard(out io.Writer, st *styler, p *core.Proposal, hash string) {
 // still has to pick one -- there's no "obvious" default between adopting
 // drift and reverting it the way there is for a single generated
 // proposal.
-func nextShipHint(hashes []string) string {
+// nextShipHint builds the "next: ubx ship <hash>" handoff every command
+// that saves a plan ends with. needsConfirm names whether any of hashes'
+// own underlying proposal(s) carry blast_radius.destroys > 0 -- ubx ship
+// refuses those without a confirm flag, so the hint is actively
+// misleading (missing a flag it will demand) if that's left off (UBI-77).
+// --confirm-terminate is the one human-facing spelling shown here
+// regardless of whether the proposal came from `ubx terminate` or a
+// hand-authored destroys[] intent (the founder's own "decide at build"
+// resolution, taken the same direction as shipping/shipped: one
+// vocabulary, not two names for the same wire-level --confirm-destroys
+// flag) -- ship.go's own flag parsing accepts it as a real alias, never
+// just cosmetic text here.
+func nextShipHint(hashes []string, needsConfirm bool) string {
+	var base string
 	switch len(hashes) {
 	case 1:
-		return fmt.Sprintf("ubx ship %s", shortRef(hashes[0]))
+		base = fmt.Sprintf("ubx ship %s", shortRef(hashes[0]))
 	case 2:
-		return fmt.Sprintf("ubx ship %s  (or %s)", shortRef(hashes[0]), shortRef(hashes[1]))
+		base = fmt.Sprintf("ubx ship %s  (or %s)", shortRef(hashes[0]), shortRef(hashes[1]))
 	default:
-		return "ubx ship <hash>"
+		base = "ubx ship <hash>"
 	}
+	if needsConfirm {
+		base += " --confirm-terminate"
+	}
+	return base
 }
