@@ -36,6 +36,18 @@ import (
 // render direction emits, is the canonical form).
 const externalClass = "external"
 
+// ubxRequiredKey is UBI-91's own narrow attribute-annotation escape hatch:
+// a D2 node child named exactly this, one level down (D2's own dotted-
+// path shorthand for a nested map, e.g. "ubx_required.assume_role_policy:
+// value"), carries values for attributes the real provider schema marks
+// Required -- and ONLY those. Everything else about the medium stays
+// topology-only (docs/diagram-medium.md's founding "lossy-medium rule");
+// this closes exactly the gap UBI-90 exposed (a diagram-authored resource
+// with a Required attribute no topology signal could ever express) and no
+// more -- see ubxRequiredConfig's own doc comment for the scope-discipline
+// refusal this reserved name's own sibling values are checked against.
+const ubxRequiredKey = "ubx_required"
+
 // Options configures Parse. NeighborLedgers maps a referenced stack name
 // to an explicit ledger_dir override (docs/diagram-medium.md's own
 // "--neighbor-ledger <stack>=<path>", repeatable on the CLI, slice 3 --
@@ -125,7 +137,8 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			continue
 		}
 
-		if _, err := resolver.InferProvider(providers, typeClass, nil); err != nil {
+		dp, err := resolver.InferProvider(providers, typeClass, nil)
+		if err != nil {
 			questions = append(questions, core.Question{
 				Text:     fmt.Sprintf("node %q (class %q): %v", absID, typeClass, err),
 				Affects:  []string{absID},
@@ -133,6 +146,11 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			})
 			kind[absID] = nodeKindUnresolved
 			continue
+		}
+
+		config, err := ubxRequiredConfig(obj, typeClass, dp)
+		if err != nil {
+			return nil, fmt.Errorf("diagram: %s: %w", absID, err)
 		}
 
 		name := label
@@ -146,7 +164,7 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			Type:   typeClass,
 			Name:   name,
 			Op:     resolver.OpCreate,
-			Config: json.RawMessage("{}"),
+			Config: config,
 		})
 	}
 
@@ -221,10 +239,26 @@ const (
 // responsibility to supply (d2graph.Graph.Objects is populated in parse
 // order, not guaranteed stable across independently-constructed graphs
 // with the same real content in a different declaration order).
+//
+// UBI-91: a resource node carrying a "ubx_required.<attr>: value" block
+// (D2's own dotted-path shorthand for a nested map) compiles to a REAL
+// child object named "ubx_required" in d2graph's own object tree -- which
+// would otherwise make the resource node itself look like a container
+// (non-empty ChildrenArray) and get silently excluded here, exactly the
+// failure mode confirmed empirically before writing this fix (a resource
+// with a ubx_required block stopped being classified as a resource at
+// all). A node whose ONLY child is that one reserved name is still
+// treated as a leaf; the reserved subtree itself (the "ubx_required"
+// object and everything under it -- attribute names/values, never real
+// topology) is excluded entirely, never independently classified as its
+// own resource/container/reference node.
 func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 	var leaves []*d2graph.Object
 	for _, obj := range g.Objects {
-		if len(obj.ChildrenArray) == 0 {
+		if inUbxRequiredSubtree(obj) {
+			continue
+		}
+		if len(obj.ChildrenArray) == 0 || onlyUbxRequiredChild(obj) {
 			leaves = append(leaves, obj)
 		}
 	}
@@ -232,6 +266,29 @@ func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 		return absID(leaves[i]) < absID(leaves[j])
 	})
 	return leaves
+}
+
+// inUbxRequiredSubtree reports whether obj is the reserved "ubx_required"
+// container itself, or anything nested under it -- attribute names and
+// values, never real topology, so never independently classified.
+func inUbxRequiredSubtree(obj *d2graph.Object) bool {
+	for _, seg := range obj.AbsIDArray() {
+		if seg == ubxRequiredKey {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyUbxRequiredChild reports whether obj's own children are exactly one
+// object, the reserved "ubx_required" container -- the shape a resource
+// node with a ubx_required block, and nothing else nested under it,
+// compiles to. A node with ubx_required PLUS a genuine additional child
+// still looks like (and is treated as) an ordinary container, unchanged
+// from before this existed -- mixing the escape hatch with real nested
+// topology isn't a supported pattern this fix adds new handling for.
+func onlyUbxRequiredChild(obj *d2graph.Object) bool {
+	return len(obj.ChildrenArray) == 1 && obj.ChildrenArray[0].ID == ubxRequiredKey
 }
 
 func absID(obj *d2graph.Object) string {
@@ -271,6 +328,66 @@ func firstNonExternalClass(classes []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ubxRequiredConfig builds obj's own resolved Config -- "{}" (the
+// unmodified topology-only default) unless obj carries a "ubx_required"
+// child, in which case every one of ITS OWN children is one supplied
+// attribute value (d2graph's own compiled shape for "ubx_required.<attr>:
+// value", confirmed empirically: a real child object named <attr>, whose
+// own Label.Value holds the raw text -- a bare scalar like a name/ARN, or
+// the full text of a block-string JSON policy document alike, since every
+// attribute in this escape hatch's own real-world scope (assume_role_
+// policy, policy, name, role, policy_arn) is a plain STRING-typed
+// provider attribute, even the two whose own content happens to BE JSON
+// text -- so every value here is encoded as a JSON string, never
+// re-parsed into a nested object).
+//
+// Scope discipline, strict, checked here (not left to resolve-time,
+// UBI-90's own MissingRequiredKeys check -- that check only ever
+// confirms a Required attribute HAS a value, it has no opinion on
+// whether a NON-required one showing up here should have been allowed to
+// in the first place): dp.Schema.MissingRequiredKeys(typeClass, an EMPTY
+// config) reports every attribute the real schema marks Required for
+// typeClass -- exactly the escape hatch's own legal target set. Any
+// ubx_required.<attr> naming something outside that set (Optional,
+// Computed, or not a real attribute at all) is refused immediately, hard
+// -- this is deliberately NOT a general attribute-authoring mechanism;
+// topology-only stays the rule for everything else UBI-47 already
+// established.
+func ubxRequiredConfig(obj *d2graph.Object, typeClass string, dp resolver.DeclaredProvider) (json.RawMessage, error) {
+	var required *d2graph.Object
+	for _, child := range obj.ChildrenArray {
+		if child.ID == ubxRequiredKey {
+			required = child
+			break
+		}
+	}
+	if required == nil {
+		return json.RawMessage("{}"), nil
+	}
+
+	requiredNames := map[string]bool{}
+	for _, issue := range dp.Schema.MissingRequiredKeys(typeClass, map[string]interface{}{}) {
+		requiredNames[issue.Path] = true
+	}
+
+	config := make(map[string]json.RawMessage, len(required.ChildrenArray))
+	for _, attr := range required.ChildrenArray {
+		if !requiredNames[attr.ID] {
+			return nil, fmt.Errorf("ubx_required.%s: %q is not a required attribute on %s -- use --from-doc or an SDK program to set optional attributes", attr.ID, attr.ID, typeClass)
+		}
+		raw, err := json.Marshal(attr.Label.Value)
+		if err != nil {
+			return nil, fmt.Errorf("ubx_required.%s: %w", attr.ID, err)
+		}
+		config[attr.ID] = raw
+	}
+	b, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ubx_required config: %w", err)
+	}
+	return b, nil
 }
 
 func containsString(ss []string, s string) bool {

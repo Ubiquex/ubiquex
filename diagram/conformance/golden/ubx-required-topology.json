@@ -1,0 +1,10 @@
+{
+  "stack": "payments",
+  "resources": [
+    {
+      "type": "fake_widget",
+      "name": "my-widget",
+      "op": "create"
+    }
+  ]
+}

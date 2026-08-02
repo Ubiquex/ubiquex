@@ -4,6 +4,111 @@
 
 ## Current phase
 
+**UBI-91 (2026-08-02) — the diagram medium's own narrow escape hatch for
+UBI-90's hard refusal: `ubx_required.<attr>` on a D2 node, for exactly
+attributes the real provider schema marks Required, nothing more. A
+diagram-first workflow no longer has to abandon the diagram entirely
+because one resource in five needs a Required attribute topology alone
+can't express.**
+
+**Standing safety note, not a deviation:** the ticket's own "live finale"
+asked for `ubx ship`/`ubx terminate` against real AWS + `aws` CLI
+verification. CLAUDE.md's own rule is explicit and absolute ("never a
+real cloud provider... always, no exceptions," written after a real UBI-47
+session 4 incident). Did the ENTIRE live finale hermetically instead
+(fakeprovider/`UBX_PROVIDER_MIRROR`), matching every prior session's own
+practice -- flagged to the founder up front, not silently substituted.
+
+**Implementation (`diagram/parse.go`):**
+- `ubx_required.<attr>: value` -- D2's own dotted-path shorthand for a
+  nested map. A REAL, load-bearing parser bug found empirically BEFORE
+  writing any fix (a direct `d2compiler.Compile` probe, not assumed): this
+  syntax compiles to a genuine child object named `ubx_required` under the
+  resource node in d2graph's own tree -- which silently turned the
+  resource node into a "container" (non-empty `ChildrenArray`),
+  excluding it from `sortedLeaves`' own leaf-only filter entirely (the
+  node stopped being classified as a resource at all). Fixed by widening
+  the leaf predicate (a node whose ONLY child is the reserved
+  `ubx_required` name still counts as a leaf) and excluding the reserved
+  subtree itself (never independently classified as its own resource/
+  container/reference node).
+- Scope discipline enforced at PARSE time, hard, not deferred: every
+  `ubx_required.<attr>` checked against
+  `dp.Schema.MissingRequiredKeys(typeClass, {})` (UBI-90's own method,
+  called with an empty config to get the full Required-attribute set for
+  the type) -- reused as-is, no new SchemaInspector method needed.
+  Anything outside that set refused immediately: `"X" is not a required
+  attribute on <type> -- use --from-doc or an SDK program to set optional
+  attributes` (the ticket's own exact wording).
+- Value encoding: every attribute in scope (`assume_role_policy`,
+  `policy`, `name`, `role`, `policy_arn`) is a plain STRING-typed
+  provider attribute even when its own content is JSON text -- so every
+  `ubx_required` value is a JSON string, read verbatim from the leaf's
+  own `Label.Value` (confirmed empirically both forms work correctly: a
+  bare scalar, and a `|md ... |` block-string JSON policy document,
+  including multi-attribute nodes).
+
+**Live finale, both halves proven, neither touching real AWS:**
+1. **Resolve-time claim, the founder's own exact 5 real attribute names**
+   (`diagram/integration_test.go`'s
+   `TestParseThenResolve_PlatformD2_UBI91LiveFinale_AllRequiredSupplied_ResolvesClean`):
+   the exact 5-resource `platform.d2` topology from UBI-90's own incident
+   (SQS/ECR/IAM role/IAM policy/attachment), `ubx_required.*` supplying
+   `name`/`assume_role_policy`/`policy`/`role`/`policy_arn` -- resolves
+   clean, exactly 5 creates, zero refusal. fakeprovider's own single
+   shippable type can't individually model 5 distinct real AWS types, so
+   this is a hermetic-fake-schema resolve-only proof, not a real ship.
+2. **Full execution claim, real fakeprovider subprocess**
+   (`cli/diagram_ubx_required_test.go`'s
+   `TestPlanShipTerminate_FromDiagram_UbxRequired_FullLifecycle`, plus a
+   hand-run `script -q` transcript covering the identical sequence):
+   `fake_widget` + `ubx_required.name`, plan (zero refusal) → ship (real
+   create, confirmed via `ubx why`) → terminate → ship (real destroy,
+   confirmed by reconciliation) → `ubx status --drift` reports zero
+   resources tracked. "Account clean" confirmed the honest way this
+   project already has for exactly this claim (no ubx-tracked resources
+   left), not a real `aws` CLI call.
+3. **Also confirmed live against a REAL `hashicorp/aws@6.54.0` schema
+   fetch** (schema-fetch-only, never applying -- explicitly safe per
+   CLAUDE.md): `ubx propose --from-diagram` on a real `aws_iam_role` node
+   with `ubx_required.assume_role_policy` resolves with zero refusal;
+   `ubx_required.description` (a real Optional attribute on the real
+   schema) is genuinely refused by the scope-discipline check. Both real
+   transcripts now live in ubiquex-docs.
+
+**Hermetic coverage** (`diagram/parse_test.go`): happy path (all Required
+supplied, multi-attribute + JSON block-string), partial path (one still
+missing, UBI-90's own `ErrMissingRequiredAttribute` fires unchanged),
+scope-discipline refusal (a non-required attribute named via
+`ubx_required` rejected at parse time). Permanent conformance fixtures
+extended (`diagram/conformance/golden/ubx-required.d2` +
+`-topology.json`, `diagram/conformance/runner`'s own
+`TestUbxRequiredGoldenCase_Parse`) -- and that runner package's own
+`fakeSchema.MissingRequiredKeys` had to stop being an always-nil stub
+(UBI-90 left it that way, correctly, since nothing consulted it at parse
+time back then; UBI-91's own scope-discipline check now does, so an
+always-nil fake there would have silently refused every legitimate
+`ubx_required.name` value too).
+
+**Docs:** `ubiquex-docs/guides/diagram-medium.mdx` gets a new
+`ubx_required` section with the real worked example above (both
+transcripts, real `hashicorp/aws` schema fetch). Also closed a genuine
+UBI-90 docs-debt gap found while writing this (its own
+`ErrMissingRequiredAttribute` was never documented in ubiquex-docs at
+all): `cli/resolve.mdx` gets "A resource's config is missing a value for
+a Required attribute," mirroring the sibling `UnknownConfigKeys` section,
+with a real transcript. `mint validate`/`mint broken-links` both clean.
+Internal `docs/diagram-medium.md` gets the full design-decision record
+(the sortedLeaves bug, scope-discipline mechanism, value encoding, live
+finale). No docs debt remaining.
+
+**Verification:** full suite green (`go test ./...`), `gofmt -l .`
+clean. `mint validate`/`mint broken-links` clean in ubiquex-docs.
+
+**Next:** none open on UBI-91's own scope.
+
+## Current phase (previous)
+
 **UBI-90 (2026-08-02, P1-adjacent) — no required-attribute validation
 before ship: the diagram medium (topology-only by design, UBI-47)
 produced a plan that shipped 3/5 resources with MISSING REQUIRED

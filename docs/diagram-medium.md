@@ -1085,3 +1085,89 @@ enrichment step before it's real (this document's own "Live finale" and
 every conformance fixture converge on real, complete stacks; nothing in
 UBI-47's original scope ever proposed silently defaulting or
 Question-ing a required attribute into existence).
+
+**Amendment (2026-08-02, UBI-91): a narrow, in-medium recovery path for
+exactly the gap the amendment above hard-refuses, so a diagram-first
+workflow never has to abandon the diagram entirely for ONE resource out
+of five needing a Required attribute.** UBI-90's own hard refusal is
+correct and stays unconditional -- this amendment doesn't relax it, it
+adds a way to satisfy it without leaving the medium. A node may carry a
+value for an attribute directly via `ubx_required.<attr>: value` -- D2's
+own dotted-path shorthand for a nested map (`role: "x" { class:
+aws_iam_role; ubx_required.assume_role_policy: |md ... | }`).
+
+**Scope discipline, strict, enforced at PARSE time (not deferred to
+resolve):** `diagram.Parse` checks every `ubx_required.<attr>` against
+`dp.Schema.MissingRequiredKeys(typeClass, {})` -- the exact set of
+attributes the real schema marks Required, the identical schema
+`InferProvider` already fetched for type inference. Anything outside that
+set (Optional, Computed, or not a real attribute at all) is refused
+immediately, hard, naming the attribute: `"description" is not a required
+attribute on aws_iam_role -- use --from-doc or an SDK program to set
+optional attributes`. This is deliberately NOT a general attribute-
+authoring escape hatch -- topology-only stays the rule for everything
+else; `ubx_required` closes exactly the UBI-90 gap and no more.
+
+**A real, load-bearing structural fix found empirically before writing
+any of this, not assumed:** `ubx_required.<attr>: value` compiles, in
+d2graph's own object tree, to a REAL child object named `ubx_required`
+under the resource node (D2's own general dotted-path-to-nested-map
+mechanism, the same one containers already use) -- which, left
+unhandled, makes the resource node itself look like a container (a
+non-empty `ChildrenArray`) and silently excludes it from `sortedLeaves`'
+own leaf-only filter, the exact same one `class:`-based type inference
+depends on. Confirmed via a direct `d2compiler.Compile` probe before
+writing the fix: a node with a `ubx_required` block stopped being
+classified as a resource at all. Fixed by widening `sortedLeaves`' own
+leaf predicate (a node whose ONLY child is the reserved `ubx_required`
+name is still a leaf) and excluding the reserved subtree itself (the
+`ubx_required` object and everything nested under it -- attribute names
+and values) from ever being independently classified as its own
+resource/container/reference node.
+
+**Value encoding:** every attribute in this escape hatch's own real-world
+scope (`assume_role_policy`, `policy`, `name`, `role`, `policy_arn`) is a
+plain STRING-typed provider attribute even when its own content happens
+to BE JSON text (an IAM policy document) -- so every `ubx_required` value
+is encoded as a JSON string, read verbatim from the leaf node's own
+`Label.Value` (a plain scalar for `ubx_required.name: "x"`, or the full
+text of a `|md ... |` block-string for a JSON policy document alike),
+never re-parsed into a nested object. Confirmed live against a real,
+pinned `hashicorp/aws@6.54.0` schema fetch (`ubx propose --from-diagram`,
+schema-fetch only, never applying -- this repository's own standing
+CLAUDE.md rule), not just hermetically: a real `aws_iam_role` node with
+`ubx_required.assume_role_policy` resolves with zero missing-required-
+attribute refusal, and `ubx_required.description` (a real Optional
+attribute on the real schema) is genuinely refused by the scope-
+discipline check, both real transcripts now in ubiquex-docs'
+`guides/diagram-medium.mdx`.
+
+**Live finale (hermetic, per this repository's own standing rule --
+`fakeprovider`, never real AWS):** the founder's own exact five-resource
+`platform.d2` topology (`aws_sqs_queue`/`aws_ecr_repository`/
+`aws_iam_role`/`aws_iam_role_policy`/`aws_iam_role_policy_attachment`),
+with `ubx_required.*` supplying every one of the five real attribute
+names UBI-90's own refusal flagged (`name`, `assume_role_policy`,
+`policy`, `role`, `policy_arn`), resolves cleanly with exactly 5 creates
+and zero refusal (`diagram/integration_test.go`'s own
+`TestParseThenResolve_PlatformD2_UBI91LiveFinale_AllRequiredSupplied_ResolvesClean`
+-- fakeprovider's own single shippable type can't individually model five
+distinct real AWS types, so this proves the resolve-time claim with the
+founder's own exact attribute names). The full execution half -- ship,
+terminate, and a confirmed-clean final state -- is proven separately, for
+real, against a real fakeprovider subprocess
+(`cli/diagram_ubx_required_test.go`'s own
+`TestPlanShipTerminate_FromDiagram_UbxRequired_FullLifecycle`, plus a
+hand-run `script -q` transcript covering the identical sequence): plan
+(zero refusal) → ship (real create, confirmed via `ubx why`) → terminate
+→ ship (real destroy, confirmed by reconciliation) → `ubx status --drift`
+reports zero resources tracked.
+
+**Conformance fixtures extended permanently**, matching this arc's own
+existing golden-fixture discipline: `diagram/conformance/golden/
+ubx-required.d2` + `ubx-required-topology.json` (a `fake_widget` node
+carrying `ubx_required.name`, fake_widget's own real schema-Required
+attribute -- proving, permanently, that the node still resolves to
+exactly one real resource in `Topology()`'s own output, never zero
+misclassified-as-container, never two with the escape hatch's own
+attribute nodes leaking through as if they were real topology).

@@ -68,11 +68,26 @@ func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) 
 	return nil
 }
 
-// MissingRequiredKeys is an always-nil stub, matching UnknownConfigKeys
-// immediately above (UBI-90) -- same reasoning: this suite covers the
-// parse direction only, never resolve.
+// MissingRequiredKeys reports fake_widget's own REAL schema-Required
+// attribute ("name", provider/internal/fakeprovider) -- unlike
+// UnknownConfigKeys immediately above, this can't stay an always-nil stub
+// once diagram.Parse itself started consulting it (UBI-91's own
+// ubx_required scope-discipline check runs at PARSE time, not just
+// resolve, precisely so a diagram authoring an escape-hatch value for a
+// non-required attribute is refused immediately -- an always-nil fake
+// here would silently refuse EVERY legitimate ubx_required.name value
+// too, never exercising the real code path golden/ubx-required.d2 exists
+// to prove). Still never resolves a full config the way core/resolver's
+// own fakeSchema does -- config is always empty here, matching this
+// suite's own "parse direction only" scope everywhere else.
 func (f *fakeSchema) MissingRequiredKeys(t string, config map[string]interface{}) []resolver.RequiredAttributeIssue {
-	return nil
+	if t != "fake_widget" {
+		return nil
+	}
+	if _, present := config["name"]; present {
+		return nil
+	}
+	return []resolver.RequiredAttributeIssue{{Path: "name"}}
 }
 
 func fakeWidgetProvider() resolver.DeclaredProvider {
@@ -162,5 +177,59 @@ func TestPaymentsGoldenCase_Parse_Deterministic(t *testing.T) {
 		if string(got) != first {
 			t.Fatalf("Topology changed across repeated parses of the identical golden diagram")
 		}
+	}
+}
+
+// TestUbxRequiredGoldenCase_Parse is UBI-91's own permanent conformance
+// case, added to this suite exactly the way the ticket asked -- golden/
+// ubx-required.d2 carries a "ubx_required.name" value (fake_widget's own
+// REAL schema-Required attribute, provider/internal/fakeprovider) on the
+// node itself, D2's own dotted-path shorthand for a nested map. Proves,
+// permanently, the structural claim ubx_required's own implementation
+// depends on: a resource node carrying this escape hatch still resolves
+// to exactly ONE real resource in Topology()'s own output, never zero
+// (silently misclassified as a container by its own synthetic
+// "ubx_required" child object -- the exact failure mode confirmed
+// empirically, live, before sortedLeaves' own fix existed) and never two
+// (the escape hatch's own attribute-name/value nodes leaking through as
+// if they were real topology). Topology() itself excludes config
+// entirely by design (TestTopology_ExcludesConfig, diagram/parse_test.go)
+// -- the actual VALUE this escape hatch carries is covered by its own
+// hermetic behavioral suite there (happy path, partial path, scope-
+// discipline refusal, JSON-valued attribute parsing), not a second golden
+// file here.
+func TestUbxRequiredGoldenCase_Parse(t *testing.T) {
+	d2Path := filepath.Join("..", "golden", "ubx-required.d2")
+	f, err := os.Open(d2Path)
+	if err != nil {
+		t.Fatalf("open %s: %v", d2Path, err)
+	}
+	defer f.Close()
+
+	intent, err := diagram.Parse("ubx-required.d2", f, "payments", []resolver.DeclaredProvider{fakeWidgetProvider()}, diagram.Options{})
+	if err != nil {
+		t.Fatalf("diagram.Parse(%s): %v", d2Path, err)
+	}
+	if len(intent.Intent.Questions) != 0 {
+		t.Fatalf("golden/ubx-required.d2 produced blocking ambiguity, want none: %+v", intent.Intent.Questions)
+	}
+
+	got, err := diagram.Topology(intent)
+	if err != nil {
+		t.Fatalf("diagram.Topology: %v", err)
+	}
+
+	topoPath := filepath.Join("..", "golden", "ubx-required-topology.json")
+	goldenRaw, err := os.ReadFile(topoPath)
+	if err != nil {
+		t.Fatalf("read golden fixture %s: %v", topoPath, err)
+	}
+	want, err := core.CanonicalJSONBytes(goldenRaw)
+	if err != nil {
+		t.Fatalf("canonicalize golden fixture: %v", err)
+	}
+
+	if string(got) != string(want) {
+		t.Fatalf("parsed topology does not match the golden fixture, byte for byte after canonicalization:\ngot:  %s\nwant: %s", got, want)
 	}
 }

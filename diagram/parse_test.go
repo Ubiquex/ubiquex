@@ -1,12 +1,15 @@
 package diagram
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
@@ -85,6 +88,26 @@ func awsIAMRoleProvider() resolver.DeclaredProvider {
 		Schema: &fakeSchema{
 			types:    map[string]bool{"aws_iam_role": true},
 			required: map[string]map[string]bool{"aws_iam_role": {"assume_role_policy": true}},
+		},
+	}
+}
+
+// awsIAMRoleFullProvider is UBI-91's own dedicated fixture: aws_iam_role
+// with BOTH real Required attributes modeled (name, assume_role_policy --
+// awsIAMRoleProvider, above, deliberately only models one, for UBI-90's
+// own narrower test; kept untouched rather than widened, so this session
+// adds its own fixture instead of risking a shared one drifting under two
+// sessions' different needs). Matches the founder's own real
+// aws_iam_role schema shape (provider/schemakeys_test.go's own
+// awsIAMRoleLikeBlock) closely enough to exercise the multi-attribute
+// ubx_required case realistically.
+func awsIAMRoleFullProvider() resolver.DeclaredProvider {
+	return resolver.DeclaredProvider{
+		Source:  "hashicorp/aws",
+		Version: "6.54.0",
+		Schema: &fakeSchema{
+			types:    map[string]bool{"aws_iam_role": true},
+			required: map[string]map[string]bool{"aws_iam_role": {"name": true, "assume_role_policy": true}},
 		},
 	}
 }
@@ -417,5 +440,127 @@ payments.api -> payments.db
 				t.Fatalf("run %d: resource %d DependsOn differs: %v vs %v", i, j, first.Resources[j].DependsOn, again.Resources[j].DependsOn)
 			}
 		}
+	}
+}
+
+// TestParse_UbxRequired_AllSuppliedResolvesClean is UBI-91's own happy
+// path: every Required attribute (name -- a plain scalar; assume_role_
+// policy -- a JSON policy document, authored via D2's own |md ... |
+// block-string syntax) supplied via ubx_required.* on the node itself.
+// Confirms two things at once: the node is STILL classified as a real
+// resource (not silently demoted to a container by its own ubx_required
+// child -- the exact failure mode confirmed empirically before writing
+// sortedLeaves' own fix), and the values flow into Config correctly.
+func TestParse_UbxRequired_AllSuppliedResolvesClean(t *testing.T) {
+	src := `
+classes: {
+  aws_iam_role: {}
+}
+role: "ci-runner-v13" {
+  class: aws_iam_role
+  ubx_required.name: "ci-runner-v13"
+  ubx_required.assume_role_policy: |md
+    {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "sts:AssumeRole"}]}
+  |
+}
+`
+	intent := mustParse(t, src, "payments", []resolver.DeclaredProvider{awsIAMRoleFullProvider()}, Options{})
+	if len(intent.Resources) != 1 {
+		t.Fatalf("resources = %+v, want exactly 1 (the ubx_required child must never be classified as its own resource/container)", intent.Resources)
+	}
+	role := resourceByName(t, intent, "ci-runner-v13")
+	if role.Type != "aws_iam_role" || role.Op != resolver.OpCreate {
+		t.Fatalf("role = %+v, want type aws_iam_role, op create", role)
+	}
+
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(role.Config, &config); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	var name string
+	if err := json.Unmarshal(config["name"], &name); err != nil || name != "ci-runner-v13" {
+		t.Fatalf("config[name] = %s (err=%v), want \"ci-runner-v13\"", config["name"], err)
+	}
+	var policyText string
+	if err := json.Unmarshal(config["assume_role_policy"], &policyText); err != nil {
+		t.Fatalf("config[assume_role_policy] is not a JSON string: %s (err=%v)", config["assume_role_policy"], err)
+	}
+	// The attribute's own WIRE type is string (real aws_iam_role schema,
+	// matching provider/schemakeys_test.go's own awsIAMRoleLikeBlock) --
+	// its content happens to be JSON text, which must itself parse
+	// cleanly, byte-faithful to what the D2 block-string authored.
+	var policy map[string]interface{}
+	if err := json.Unmarshal([]byte(policyText), &policy); err != nil {
+		t.Fatalf("assume_role_policy content is not valid JSON: %s (err=%v)", policyText, err)
+	}
+	if policy["Version"] != "2012-10-17" {
+		t.Fatalf("policy = %+v, want Version 2012-10-17", policy)
+	}
+
+	l := core.Open(t.TempDir())
+	p, err := resolver.Resolve(l, []resolver.DeclaredProvider{awsIAMRoleFullProvider()}, intent, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v (expected ZERO missing-required-attribute refusal, all Required attrs were supplied via ubx_required)", err)
+	}
+	if len(p.Delta.Creates) != 1 {
+		t.Fatalf("creates = %+v, want 1", p.Delta.Creates)
+	}
+}
+
+// TestParse_UbxRequired_OneStillMissing_UBI90RefusalFires is the partial
+// path: ubx_required supplies "name" but not "assume_role_policy" --
+// Parse itself succeeds (parse only enforces the escape hatch's own
+// scope discipline, never full schema completeness), but resolve still
+// refuses with UBI-90's own exact ErrMissingRequiredAttribute, naming the
+// one attribute genuinely still absent. Proves ubx_required is additive
+// to UBI-90's own check, never a way to bypass it for an attribute that
+// really is missing.
+func TestParse_UbxRequired_OneStillMissing_UBI90RefusalFires(t *testing.T) {
+	src := `
+classes: {
+  aws_iam_role: {}
+}
+role: "ci-runner-v13" {
+  class: aws_iam_role
+  ubx_required.name: "ci-runner-v13"
+}
+`
+	intent := mustParse(t, src, "payments", []resolver.DeclaredProvider{awsIAMRoleFullProvider()}, Options{})
+
+	l := core.Open(t.TempDir())
+	_, err := resolver.Resolve(l, []resolver.DeclaredProvider{awsIAMRoleFullProvider()}, intent, nil)
+	if !errors.Is(err, resolver.ErrMissingRequiredAttribute) {
+		t.Fatalf("resolve err = %v, want ErrMissingRequiredAttribute", err)
+	}
+	if !strings.Contains(err.Error(), "assume_role_policy") {
+		t.Fatalf("resolve err = %v, want it to name the one attribute still missing (assume_role_policy)", err)
+	}
+}
+
+// TestParse_UbxRequired_NonRequiredAttribute_Refused is the scope-
+// discipline case, the ticket's own strict boundary: ubx_required is NOT
+// a general attribute-authoring escape hatch. "tags" isn't in
+// awsIAMRoleFullProvider's own Required set (Optional/Computed/nonexistent
+// are all the same "not the escape hatch's business" answer here) --
+// Parse itself hard-refuses immediately, never silently accepting it or
+// deferring the problem to resolve.
+func TestParse_UbxRequired_NonRequiredAttribute_Refused(t *testing.T) {
+	src := `
+classes: {
+  aws_iam_role: {}
+}
+role: "ci-runner-v13" {
+  class: aws_iam_role
+  ubx_required.name: "ci-runner-v13"
+  ubx_required.tags: "prod"
+}
+`
+	_, err := Parse("test.d2", strings.NewReader(src), "payments", []resolver.DeclaredProvider{awsIAMRoleFullProvider()}, Options{})
+	if err == nil {
+		t.Fatal("Parse: expected a scope-discipline refusal, got success")
+	}
+	want := `"tags" is not a required attribute on aws_iam_role -- use --from-doc or an SDK program to set optional attributes`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("Parse err = %v, want it to contain %q", err, want)
 	}
 }
