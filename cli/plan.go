@@ -473,8 +473,8 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	// UBI-88: "change(s)"/"terminate(s)", not "modify(ies)"/"destroy(s)" --
 	// matching the change/terminate vocabulary the op headers above
 	// already use (renderModifies' "~ <address> change", renderDestroys'
-	// "- destroy: <address>" notwithstanding -- see this ticket's own
-	// report on the wider vocabulary sweep before renaming anything else).
+	// "- <address> destroy" -- word ORDER now matches, the op word itself
+	// stays "destroy", a deliberately scoped decision, not an oversight).
 	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("delta: %s, %s, %s",
 		st.Green(fmt.Sprintf("+%d create(s)", len(p.Delta.Creates))),
 		st.Yellow(fmt.Sprintf("~%d change(s)", len(p.Delta.Modifies))),

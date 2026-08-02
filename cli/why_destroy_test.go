@@ -68,8 +68,8 @@ func TestWhy_RendersDestroyedResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why %s: %v\noutput: %s", destroyID, err, whyOut)
 	}
-	if !strings.Contains(whyOut, "destroy: "+addr) {
-		t.Fatalf("expected a \"destroy: %s\" line, got: %s", addr, whyOut)
+	if !strings.Contains(whyOut, addr+" destroy") {
+		t.Fatalf("expected a \"%s destroy\" line, got: %s", addr, whyOut)
 	}
 	if !strings.Contains(whyOut, "shipped at") || !strings.Contains(whyOut, "(destroyed)") {
 		t.Fatalf("expected the terminal transition annotated \"(destroyed)\", got: %s", whyOut)
@@ -80,8 +80,8 @@ func TestWhy_RendersDestroyedResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why %s: %v\noutput: %s", addr, err, chainOut)
 	}
-	if !strings.Contains(chainOut, "destroy: "+addr) {
-		t.Fatalf("expected a \"destroy: %s\" line in the chain view, got: %s", addr, chainOut)
+	if !strings.Contains(chainOut, addr+" destroy") {
+		t.Fatalf("expected a \"%s destroy\" line in the chain view, got: %s", addr, chainOut)
 	}
 	if !strings.Contains(chainOut, "(destroyed)") {
 		t.Fatalf("expected \"(destroyed)\" in the chain view's own apply history, got: %s", chainOut)

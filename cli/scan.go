@@ -521,7 +521,10 @@ func renderScanCard(out io.Writer, st *styler, p *core.Proposal, hash string) {
 	case core.KindDriftRevert:
 		desc = "restores the ledger's own recorded state"
 	default:
-		desc = fmt.Sprintf("+%d create(s) ~%d modify(ies) -%d destroy(s)", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
+		// UBI-88 vocabulary sweep: "change(s)"/"terminate(s)", matching
+		// the delta line and op headers everywhere else, not "modify(ies)"/
+		// "destroy(s)".
+		desc = fmt.Sprintf("+%d create(s) ~%d change(s) -%d terminate(s)", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
 	}
 	fmt.Fprintf(out, "  %-14s%s     %s\n", p.Kind, st.Ref(hash), desc)
 	for _, m := range p.Delta.Modifies {

@@ -368,13 +368,18 @@ func resolveAndValidatePlan(ledgerDir, hash string, confirmDestroys bool) (draft
 // other blast-radius line in this codebase. Deliberately NOT the full
 // renderPlanReceipt: that already ran once, at `ubx plan`/`ubx scan
 // --propose` time, and re-running it here again in full is noise, not
-// review, for a plan a human has already read.
+// review, for a plan a human has already read. UBI-88 vocabulary sweep:
+// "change(s)"/"terminate(s)", matching the delta line and op headers
+// everywhere else -- this line spells the counts out in words (not the
+// symbol-only "+N ~N -N" shape), so it was a real instance of the same
+// "modify(ies)"/"destroy(s)" inconsistency, not just a bare blast-radius
+// count.
 func renderShipConfirmSummary(out io.Writer, st *styler, p *core.Proposal, age string) {
 	fmt.Fprintf(out, "Ship  %s · %s · %s %s %s\n",
 		p.Stack, age,
 		st.Green(fmt.Sprintf("+%d create(s)", p.BlastRadius.Creates)),
-		st.Yellow(fmt.Sprintf("~%d modify(ies)", p.BlastRadius.Modifies)),
-		st.Red(fmt.Sprintf("-%d destroy(s)", p.BlastRadius.Destroys)))
+		st.Yellow(fmt.Sprintf("~%d change(s)", p.BlastRadius.Modifies)),
+		st.Red(fmt.Sprintf("-%d terminate(s)", p.BlastRadius.Destroys)))
 }
 
 func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft *core.Proposal, yes bool) (*core.Proposal, error) {

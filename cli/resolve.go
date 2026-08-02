@@ -145,7 +145,10 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			}
 
 			out2 := cmd.OutOrStdout()
-			fmt.Fprintf(out2, "resolved: %s: %d create(s), %d modify(ies), %d destroy(s)\n",
+			// UBI-88 vocabulary sweep: "change(s)"/"terminate(s)", matching
+			// the delta line and op headers everywhere else, not
+			// "modify(ies)"/"destroy(s)".
+			fmt.Fprintf(out2, "resolved: %s: %d create(s), %d change(s), %d terminate(s)\n",
 				intent.Stack, len(p.Delta.Creates), len(p.Delta.Modifies), len(p.Delta.Destroys))
 
 			b, err := json.MarshalIndent(p, "", "  ")

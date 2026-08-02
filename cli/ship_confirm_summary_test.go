@@ -46,7 +46,7 @@ func TestShip_ConfirmSummary_DoesNotReRenderFullReceipt(t *testing.T) {
 	if !strings.Contains(shipOut, "Ship  payments ·") {
 		t.Fatalf("expected the one-line summary's own header, got: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "+1 create(s)") || !strings.Contains(shipOut, "~0 modify(ies)") || !strings.Contains(shipOut, "-0 destroy(s)") {
+	if !strings.Contains(shipOut, "+1 create(s)") || !strings.Contains(shipOut, "~0 change(s)") || !strings.Contains(shipOut, "-0 terminate(s)") {
 		t.Fatalf("expected the one-line summary to still carry the blast radius, got: %s", shipOut)
 	}
 	if !strings.Contains(shipOut, "Ship this to payments? Only 'yes' accepted:") {

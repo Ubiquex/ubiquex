@@ -140,7 +140,7 @@ short; `--dialogue` unchanged. "Ship history:", never "apply history:"
 address is the spec), plan-style red-led receipt with full last-known state
 (JSON-valued attributes formatted, readable blocks -- the same renderer
 `ubx plan`'s own create blocks use, UBI-78), saved to plan store, standard
-double consent at ship. A blank line separates each `- destroy: <address>`
+double consent at ship. A blank line separates each `- <address> destroy`
 block from its neighbors (UBI-77). Schema vocabulary stays destroys[]/
 tombstone; docs state the pairing once. The saved plan's own "next:" hint
 shows `--confirm-terminate` -- `ubx ship`'s own human-facing name for the
@@ -260,7 +260,10 @@ never resolves, so "· resolving…" would be a lie there; this keeps
 - Each resource block is ONE header line, colored+bolded by its own op
   (the general "+/~/- `<address>` `<op>`" header rule, UBI-88): green
   `+ <type>.<name> create`, yellow/orange `~ <address> change`, red
-  `- destroy: <address>`. Attributes/diffs render indented beneath the
+  `- <address> destroy` (address-then-op order, matching create/change --
+  UBI-88; the op word itself deliberately stays "destroy" here, not
+  renamed to "terminate" -- see the delta-line vocabulary note below).
+  Attributes/diffs render indented beneath the
   header, one shared indent level (4 extra columns beyond the header's
   own indent) across all three ops — create, change, and terminate alike
   — then ONE empty line before the next resource block (never a trailing
@@ -305,13 +308,17 @@ never resolves, so "· resolving…" would be a lie there; this keeps
   ```
   The delta line's own vocabulary is "change(s)"/"terminate(s)" (UBI-88),
   matching the change/terminate wording the op headers above already use
-  — not "modify(ies)"/"destroy(s)". This rename is scoped to the delta
-  line alone for now; the same wording still appears elsewhere (the
-  per-resource `- destroy: <address>` header itself, `ubx scan`'s own
-  card description, `ubx resolve`'s "resolved: ..." summary, `ubx ship`'s
-  confirmation blast-radius line) — left as-is pending a founder decision
-  on a wider sweep, not silently inconsistent by omission. blast radius'
-  own `+N ~N -N` stays symbol-only, no wording either way.
+  — not "modify(ies)"/"destroy(s)". The same rename also applies (UBI-88
+  vocabulary sweep) to every other spelled-out create/modify/destroy count
+  in user-facing text: `ubx scan`'s own card description, `ubx resolve`'s
+  "resolved: ..." summary, and `ubx ship`'s confirmation blast-radius line
+  (`renderShipConfirmSummary` -- spelled-out words, not the symbol-only
+  `+N ~N -N` shape, so it was a real instance of the same inconsistency).
+  Left deliberately untouched: the per-resource `- <address> destroy`
+  header's own op word (word ORDER now matches create/change, but the
+  word itself stays "destroy," not "terminate" -- a scoped decision, not
+  an oversight), and blast radius' own `+N ~N -N`, which stays
+  symbol-only, no wording either way.
 - `AI defaults — you are signing these:` header bold (`forceBold`,
   keeping the existing purple "AI judgment" color, not replacing it);
   ONE empty line after the header and between every entry (never a

@@ -57,7 +57,7 @@ func TestResolveAccept_SimpleCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx resolve: %v\noutput: %s", err, resolveOut)
 	}
-	if !strings.Contains(resolveOut, "1 create(s), 0 modify(ies)") {
+	if !strings.Contains(resolveOut, "1 create(s), 0 change(s)") {
 		t.Fatalf("expected a 1-create summary, got: %s", resolveOut)
 	}
 

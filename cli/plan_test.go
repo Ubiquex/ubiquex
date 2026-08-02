@@ -134,7 +134,7 @@ func TestPlanShip_DestroysRequireConfirmFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx plan (destroy): %v\noutput: %s", err, planOut)
 	}
-	if !strings.Contains(planOut, "destroy: payments.fake_widget.victim") {
+	if !strings.Contains(planOut, "payments.fake_widget.victim destroy") {
 		t.Fatalf("expected the receipt to render the destroy target, got: %s", planOut)
 	}
 	hash := mustExtractPlanHash(t, ledgerDir, planOut)

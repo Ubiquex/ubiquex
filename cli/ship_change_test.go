@@ -62,7 +62,7 @@ func TestResolveAcceptShip_CreateChain_RealFakeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx resolve: %v\noutput: %s", err, resolveOut)
 	}
-	if !strings.Contains(resolveOut, "2 create(s), 0 modify(ies)") {
+	if !strings.Contains(resolveOut, "2 create(s), 0 change(s)") {
 		t.Fatalf("expected a 2-create summary, got: %s", resolveOut)
 	}
 

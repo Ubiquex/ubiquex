@@ -56,8 +56,8 @@ func TestTerminate_HappyPath_ShipsAndTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why %s: %v\noutput: %s", hash, err, whyOut)
 	}
-	if !strings.Contains(whyOut, "destroy: "+addr) {
-		t.Fatalf("expected a \"destroy: %s\" line, got: %s", addr, whyOut)
+	if !strings.Contains(whyOut, addr+" destroy") {
+		t.Fatalf("expected a \"%s destroy\" line, got: %s", addr, whyOut)
 	}
 	if !strings.Contains(whyOut, "(destroyed)") {
 		t.Fatalf("expected the terminal transition annotated \"(destroyed)\", got: %s", whyOut)

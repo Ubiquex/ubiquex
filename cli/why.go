@@ -354,11 +354,18 @@ func renderModifies(out io.Writer, st *styler, modifies []core.Modification, ind
 // each attribute is printed too (the full single-proposal view) or just
 // the address (the terser per-entry chain view, matching
 // renderProposalCompact's own existing terseness elsewhere). The whole
-// "- destroy: <address>" header renders red AND bold (st.RedBold, UBI-61
+// "- <address> destroy" header renders red AND bold (st.RedBold, UBI-61
 // comment thread's "general +/-/~ header rule") -- docs/cli-output-
 // spec.md: red = destroys, "red-led" full-state block -- matching
 // renderCreates' own whole-line GreenBold treatment, not just the
-// leading "-" glyph colored on its own as this used to render.
+// leading "-" glyph colored on its own as this used to render. UBI-88:
+// address-then-op word order, matching the "<symbol> <address> <op>"
+// shape create's "+ <type>.<name> create" and modify's "~ <address>
+// change" both use -- this was the one op-renderer left as the
+// "<symbol> <op>: <address>" pre-existing odd one out (the op word
+// itself stays "destroy" here, unchanged; the vocabulary sweep's
+// change(s)/terminate(s) rename is scoped to the delta line and the
+// three other flagged surfaces, not this header).
 func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, indent string, showState bool) {
 	// UBI-77: one blank line between consecutive destroy blocks -- the
 	// identical i>0 convention renderCreates already uses (its own doc
@@ -369,12 +376,12 @@ func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, ind
 	// blank comes from renderPlanReceipt's post-delta spacer below it, but
 	// every block in between had neither -- confirmed empirically (a
 	// throwaway 2-address repro) to run straight into the next block's
-	// own "- destroy:" header with zero separation.
+	// own "- <address> destroy" header with zero separation.
 	for i, d := range destroys {
 		if i > 0 {
 			fmt.Fprintln(out)
 		}
-		fmt.Fprintf(out, "%s%s\n", indent, st.RedBold(fmt.Sprintf("- destroy: %s", d.Address)))
+		fmt.Fprintf(out, "%s%s\n", indent, st.RedBold(fmt.Sprintf("- %s destroy", d.Address)))
 		if !showState {
 			continue
 		}

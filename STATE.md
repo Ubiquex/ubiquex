@@ -55,41 +55,53 @@ matching the change/terminate wording the op headers already use — was
 `~N modify(ies), -N destroy(s)`. Scoped to the delta line only, per the
 ticket's own explicit ask not to unilaterally rename beyond it.
 
-**Vocabulary sweep (item 3's own open question) — reported, not acted
-on:** "modify(ies)"/"destroy(s)"/"destroy" (bare) still appear in:
-`renderDestroys`' own `- destroy: <address>` per-resource header (never
-"- terminate:" — this ticket's own required modify shape mirrors create's
-"<symbol> <address> <op>" order, destroy's header keeps its pre-existing
-"<symbol> <op>: <address>" order, unchanged since that wasn't in scope
-either); `cli/scan.go`'s `renderScanCard` blast-radius-style description
-("+%d create(s) ~%d modify(ies) -%d destroy(s)"); `cli/resolve.go`'s
-"resolved: `<stack>`: %d create(s), %d modify(ies), %d destroy(s)" line;
-`cli/ship.go`'s `renderShipConfirmSummary` ("+N create(s) ~N modify(ies)
--N destroy(s)", the `ubx ship` confirmation's own blast-radius-with-words
-line — NOT a symbol-only line, so it's a real instance of the same
-inconsistency, not covered by the "blast radius stays symbol-only"
-carve-out). None of these touched — founder decision needed on whether to
-align them too, or leave delta-line-only.
+**Vocabulary sweep — founder resolved the scope question, completed this
+follow-up round:**
+- `renderDestroys`' own header reordered to `- <address> destroy`
+  (address-then-op, matching create's `+ <type>.<name> create`/modify's
+  `~ <address> change` shape) — word ORDER only; the op word itself
+  deliberately stays "destroy," not renamed to "terminate" (founder's own
+  explicit scoping: word-order fix separate from the vocabulary rename
+  below).
+- Vocabulary renamed `modify(ies)`/`destroy(s)` → `change(s)`/
+  `terminate(s)` in the three flagged surfaces: `cli/scan.go`'s
+  `renderScanCard` default-case description, `cli/resolve.go`'s
+  `resolved: <stack>: ...` line, and `cli/ship.go`'s
+  `renderShipConfirmSummary` (the one spelled-out-words line, not
+  symbol-only — a real instance of the inconsistency, now aligned).
 
 **Verification:** full suite green (`go test ./...`). New regression
 coverage: `core/resolver/resolver_test.go`
 `TestResolve_Modify_NullVsAbsentAttribute_FilteredAsNoise` (unit-level,
-hermetic fakeSchema) and `cli/receipt_modify_v2_test.go`
-`TestPlan_ModifyReceipt_HeaderIndentFormat` (end-to-end against a real
-fakeprovider subprocess). Live-verified via `script -q` real-terminal
-transcripts (`ubx plan`/`ubx why`/`ubx terminate` against a real
-fakeprovider subprocess, FAKEPROVIDER_MODE=ok-v6, rebuilt binary
-confirmed via `ubx version`'s dirty-commit suffix): header colors
-correctly (bold yellow), attribute diff indented 4 extra columns matching
-create/terminate, blank line between consecutive modify blocks, delta
-line reads the new vocabulary, and the live `tags: {} -> (absent)` noise
-this session's own fix targets is confirmed gone from the real receipt.
+hermetic fakeSchema), `cli/receipt_modify_v2_test.go`
+`TestPlan_ModifyReceipt_HeaderIndentFormat`, and
+`cli/scan_card_vocabulary_test.go`
+`TestRenderScanCard_DefaultCase_ChangeTerminateVocabulary` (both
+end-to-end/direct against a real fakeprovider subprocess where reachable).
+Live-verified via `script -q` real-terminal transcripts (rebuilt binary,
+confirmed via `ubx version`'s dirty-commit suffix) for three of the four
+follow-up surfaces: `ubx resolve` (`resolved: ubi88-sweep: 1 create(s),
+0 change(s), 0 terminate(s)`), `ubx ship <plan-hash> --yes` confirmation
+(`Ship ubi88-sweep · 8s old · +1 create(s) ~0 change(s) -0 terminate(s)`,
+colored correctly), and `ubx terminate`/`ubx why` (`- <address> destroy`,
+bold red, address-then-op). **Honest exception, not silently skipped:**
+`renderScanCard`'s own default-case branch (the fourth surface) is
+unreachable through the real `ubx scan` command today — every real
+proposal `ubx scan --propose` generates is Kind adoption/drift_adopt/
+drift_revert, each already handled by its own explicit switch case above
+the default (confirmed via scan_propose_test.go's own pre-existing
+comment, not assumed); this is pre-existing dead code, not introduced by
+this session. Verified instead via a direct unit test calling
+`renderScanCard` with a fabricated `core.Proposal{Kind: KindChange}`, and
+flagged here rather than claiming a terminal transcript the current CLI
+can't actually produce.
 
 **Docs debt:** none — docs/cli-output-spec.md's own "plan — receipt
-format (exact...)" section updated in-session to match (modify header+
-body shape, consistent indent, delta vocabulary + the sweep note above).
+format (exact...)" and "terminate" sections updated in-session to match
+(destroy header word order, vocabulary-sweep completion note).
 
-**Next:** founder decision on the vocabulary-sweep question above.
+**Next:** none open on UBI-88 — both rounds (header/indent/delta-line,
+then the vocabulary sweep) are done.
 
 ## Current phase (previous)
 
