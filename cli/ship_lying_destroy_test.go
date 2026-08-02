@@ -85,8 +85,8 @@ func TestShip_LyingDestroy_ResolvesFailed_NeverDestroyed(t *testing.T) {
 	if strings.Contains(shipOut, "destroyed") {
 		t.Fatalf("ubx ship must never report this destroyed -- the provider's own claimed success was never real: %s", shipOut)
 	}
-	if !strings.Contains(shipOut, "0 applied") || !strings.Contains(shipOut, "1 failed") {
-		t.Fatalf("expected the summary to show 0 applied, 1 failed, got: %s", shipOut)
+	if !strings.Contains(shipOut, "0 shipped") || !strings.Contains(shipOut, "1 failed") {
+		t.Fatalf("expected the summary to show 0 shipped, 1 failed, got: %s", shipOut)
 	}
 
 	whyOut, err := runUbx(t, env, "why", destroyID, "--ledger-dir", ledgerDir)

@@ -4,6 +4,155 @@
 
 ## Current phase
 
+**UBI-92 (2026-08-02) — AWS IAM eventual-consistency: create-side retry, the
+mirror image of destroy's own post-destroy read-back (UBI-42/44).**
+
+Founder found live (`ubx-playground-14`, a real 5-resource
+`platform.d2`-authored stack): `aws_iam_role_policy_attachment.attach`
+failed `AttachRolePolicy` with a real `404 NoSuchEntity` ("The role with
+name ci-runner-v14 cannot be found") immediately after that SAME role
+(`aws_iam_role.ci-runner-v14`) had shipped successfully in the SAME
+batch — confirmed NOT an ordering bug (`ubx why` shows the role's own
+`shipped` transition landing before attach's own attempt even starts).
+Root cause verified empirically, not assumed from the ticket's own
+hypothesis: `cli/stateadapter.go`'s `ApplyResourceChange` unconditionally
+wraps any real provider diagnostic as `*executor.TerminalError` — zero
+retry chance on the create side, ever, even though the destroy side
+already retries the identical failure shape (this document's own
+UBI-42/44 history). AWS IAM's own well-documented eventual-consistency
+lag (`CreateRole` can return success before the role is visible to a
+subsequent `AttachRolePolicy`) is the real mechanism.
+
+**Fix** (`core/executor/ship.go`): `destroyReconcileBackoffSchedule`
+renamed `eventualConsistencyBackoffSchedule` (identical 10-step, ~64s
+schedule, now serving both directions). New
+`retryCreateOnDependencyNotVisible`, called from `shipCreate` only after
+the first `ApplyResourceChange` fails, scoped narrowly: real diagnostic
+(`*TerminalError`) + not-found-shaped text (`looksNotFound`, a documented
+text-heuristic — tfplugin diagnostics carry no structured status code) +
+names an already-shipped same-batch dependency (`hasShippedDependency`,
+keyed off `resultsByAddr`'s own existing "populated only on real success"
+invariant — no new bookkeeping needed). A different error surfacing on
+any retry stops the loop immediately rather than retrying past what this
+exists to smooth over. Every attempt logged to `ra.Reconciliation`,
+rendered by `ubx why` identically to the destroy side. Full design
+record: `docs/executor.md`'s own new "Amendment (2026-08-02, UBI-92)"
+section.
+
+**Hermetic, both layers, per this project's own established two-layer
+convention:**
+1. `core/executor/create_dependency_retry_test.go` (new, package-internal
+   `fakeApplier`): success-after-3-failures, budget-exhausted → terminal,
+   both narrow-scope guards (no dependency; permanent non-not-found
+   error), and a different error surfacing mid-retry stops early with
+   THAT error. Empirically verified load-bearing: temporarily disabling
+   the new call site reproduced the founder's own exact failure shape
+   (`partially_applied`, `1 applied`/`1 failed`) before being restored.
+2. `provider/internal/fakeprovider` (real subprocess, real tfplugin wire
+   protocol) gains `FAKEPROVIDER_APPLY_MODE=fail-create-not-found` +
+   `FAKEPROVIDER_FAIL_CREATE_TARGET`/`FAKEPROVIDER_FAIL_CREATE_COUNT`,
+   keyed by the target `fake_widget`'s own "name" (not "id" — every
+   instance shares the fixed literal `"computed-id"`). New
+   `cli/ship_create_dependency_retry_test.go`: a real `role` + `attach`
+   two-resource chain (the `$ref` lives in `attach`'s own `tags`, not
+   `name`, so the fault-injection target and the dependency's own name
+   don't collide) proves the fix through the real wire protocol —
+   3-failures-then-succeeds (fast, always run) and budget-exhausted
+   (gated `UBX_TEST_SLOW=1`, ~64s, same convention as
+   `cli/ship_lying_destroy_test.go`).
+
+**Also fixed in passing**: `cli/ship_lying_destroy_test.go`'s own
+assertion (`"0 applied"`) had silently bit-rotted since an earlier
+session's "applied" → "shipped" wording change — invisible because this
+test is gated behind `UBX_TEST_SLOW=1` and never runs in default `go test
+./...`. Updated to `"0 shipped"`, reconfirmed green. Worth noting as a
+category: gated slow tests don't get the same "the next `go test ./...`
+would have caught it" safety net a wording sweep normally relies on —
+worth a grep across every `UBX_TEST_SLOW=1`-gated assertion next time a
+CLI-output-wording sweep happens, not just the ones this session's own
+diff touched.
+
+**Live recovery** (`ubx-playground-14.aws_iam_role_policy_attachment.attach`,
+real AWS, `.ubx` config at `~/ubx-playground-14`): read-only inspection
+(`ubx why 549e4c2c6c3c7ce32b433c963d4ee5065df38bab0ce85438cf37be0844a82182`,
+safe — never applies) shows TWO manual ship attempts already made by the
+founder before this fix landed, both against the OLD binary: attempt 1
+(2026-08-02T18:25:xx) — role/ecr/policy/sqs all shipped, attach failed
+NoSuchEntity; attempt 2 (2026-08-02T18:29:xx, ~4 minutes later, a plain
+manual retry) — attach failed with the IDENTICAL NoSuchEntity error
+again. This is real, useful data: IAM's own propagation lag on this
+specific role outlasted a casual few-minute gap, so this was never a
+"just wait a bit and retry" fix — the retry-with-backoff mechanism (or
+enough additional real wall-clock time, untested) is what's actually
+needed. Per CLAUDE.md, `ubx ship` against this real stack cannot be run
+by the agent — the founder's own next step, once this fix is built and
+installed (`make install`; confirm `ubx version` prints this session's
+own commit, not `b4acd8b`):
+
+```
+cd ~/ubx-playground-14
+ubx ship 549e4c2c6c3c7ce32b433c963d4ee5065df38bab0ce85438cf37be0844a82182
+```
+
+The 4 already-shipped resources are idempotent no-ops (recognized
+already-applied, per this proposal's own ship history); only `attach`
+is actually retried. If IAM has caught up in the elapsed real time since
+18:29 regardless of this fix, it may now succeed on the very first
+attempt with no visible retry narration at all — that alone would NOT
+distinguish "the fix worked" from "enough time passed anyway." The
+DIAGNOSTIC form (rather than just re-running blind) is: if it still
+fails once immediately, the SAME command with the new binary should now
+show the `dependency just shipped -- retrying...` narration
+(`ubx-playground-14.aws_iam_role_policy_attachment.attach: ...`) and
+succeed within the ~64s budget, at which point `ubx why` on the same ID
+will show fresh `reconcile:` entries. Either outcome (clean immediate
+success, or retry-then-succeed) resolves the stuck resource; only the
+retry-then-succeed shape is direct proof the NEW binary's own mechanism
+is what did it. Not run by this session — the founder's own next action.
+
+**Docs:** `docs/executor.md` gets the full "Amendment (2026-08-02,
+UBI-92)" design record (mirrors the UBI-44 amendment's own structure).
+`ubiquex-docs/cli/ship.mdx` gets a new "A dependent create outrunning its
+own dependency's visibility" subsection (real transcripts, captured
+against a locally-built `./ubx`/`./fakeprovider` pair, not hand-written)
+— genuinely user-visible behavior (the live "shipping" ticker's own new
+narration line, new `ubx why` reconciliation entries), so this update is
+in scope, not deferred. `mint validate`/`mint broken-links` both clean.
+
+**Docs debt, NOT closed this session (flagged, not silently skipped):**
+`ubiquex-docs/cli/ship.mdx`'s own PRE-EXISTING transcript examples
+throughout the file (the "Shipping a change proposal" section
+specifically, e.g. "2 resource(s), 2 applied, 0 failed... outcome:
+applied") still show the OLD "applied"/"outcome: applied" wording from
+before some earlier session's rename to "shipped"/"outcome: shipped" —
+confirmed stale against the actual current binary (this session's own
+hermetic tests print "shipped," not "applied," e.g. "2 resource(s), 2
+shipped, 0 failed... outcome: shipped"). This session's own NEW addition
+uses the correct, verified current wording, but sits inconsistently next
+to the older stale examples in the same file. Predates this session
+(likely from whichever session renamed the CLI's own outcome vocabulary
+— not UBI-88, which only touched the create/modify/destroy delta-line
+words, not "applied"/"shipped" itself); out of scope to fix wholesale
+here (spans many transcript blocks across the same file, a distinct,
+larger task). Next session touching `ship.mdx` should do a full
+transcript-accuracy pass, not just its own new addition.
+
+**Verification:** default `go test ./...` green. `UBX_TEST_SLOW=1 go
+test ./cli/... ./core/... ./provider/...` (every package this session's
+diff touches, plus the pre-existing bit-rotted assertion this session
+also fixed) green. `UBX_TEST_SLOW=1 go test ./...` (whole repo) has one
+unrelated failure — `intentprovider/claude`'s own real, billed Anthropic
+API live test (`adapter_live_test.go`), which needs real network egress
+and a real credential neither available in this session's sandboxed
+shell; untouched by this session's diff, pre-existing, environmental,
+not a regression. `gofmt -l .` clean.
+
+**Next:** none open on UBI-92's own scope, pending the founder's own live
+recovery run above. The `ship.mdx` wording-consistency docs debt (above)
+is open for a future session.
+
+## Current phase (previous)
+
 **UBI-91 (2026-08-02) — the diagram medium's own narrow escape hatch for
 UBI-90's hard refusal: `ubx_required.<attr>` on a D2 node, for exactly
 attributes the real provider schema marks Required, nothing more. A

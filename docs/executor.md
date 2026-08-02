@@ -2199,6 +2199,104 @@ this whole ticket exists to produce, plus a real `aws`/`ubx why` audit-trail
 check confirming nothing is lost. **This ticket is not closed until that
 comparison actually runs and both audit trails check out clean.**
 
+## Amendment (2026-08-02, UBI-92): create-side eventual-consistency retry — the CREATE-side mirror of UBI-42/44's destroy-side read-back
+
+Found live: `ubx-playground-14` (a pure-diagram, 5-resource stack), an
+`aws_iam_role_policy_attachment` failed `AttachRolePolicy` with a `404
+NoSuchEntity` ("The role with name ci-runner-v14 cannot be found")
+immediately after that SAME role had shipped successfully in the SAME
+batch — the dependency graph waited correctly (this is not an
+ordering/scheduling bug); AWS IAM's own well-documented eventual-
+consistency lag (`CreateRole` can return success before the role is
+visible to other IAM API calls) is the root cause, confirmed by code
+reading, not assumed from the ticket's own hypothesis:
+`cli/stateadapter.go`'s `ApplyResourceChange` unconditionally wraps any
+real `*provider.DiagnosticError` as `*executor.TerminalError` — zero
+retry chance, ever, on the create side, even though the SAME provider
+failure shape (a real diagnostic, no structured status code — the
+tfplugin wire protocol carries only free-text `Messages`) already gets a
+retry-with-backoff on the destroy side (this document's own UBI-42/44
+amendment, above).
+
+**Fix**: `core/executor/ship.go`'s `destroyReconcileBackoffSchedule` is
+renamed `eventualConsistencyBackoffSchedule` (identical 10-step, ~64-second
+schedule, now serving both directions) and reused by a new
+`retryCreateOnDependencyNotVisible`, called from `shipCreate` only after
+the FIRST `ApplyResourceChange` call has already failed. Scoped
+deliberately narrow, checked explicitly rather than assumed by the
+caller — entered only when ALL three hold:
+
+1. the failure is a real diagnostic (`*TerminalError`, never an ambiguous
+   transport-level failure — that class keeps its own existing,
+   untouched `ResourceUnknownPostTimeout` handling);
+2. the diagnostic text looks not-found-shaped (`looksNotFound` — a
+   documented, honest text-heuristic substring match against
+   `notFoundPhrases`: "not found", "does not exist", "doesn't exist",
+   "no such", "cannot be found", "could not be found" — the only signal
+   available, since tfplugin diagnostics carry no structured error
+   code); and
+3. this create names an already-shipped same-batch dependency
+   (`hasShippedDependency`, keying off `resultsByAddr` — populated only
+   once a dependency has ACTUALLY, SUCCESSFULLY applied, per
+   `substituteComputed`'s own doc comment and `shipChange`'s topo-order
+   guarantee, so no new bookkeeping was needed).
+
+A real, permanent failure on a resource with no such dependency, or one
+that merely happens to say "not found" for an unrelated reason, is
+returned immediately, unretried, falling through to `shipCreate`'s own
+existing, unmodified terminal/ambiguous classification — this function
+never duplicates that logic, only decides whether to spend the retry
+budget before reaching it. Unlike the destroy side (retrying a read, no
+side effect, safe to repeat indefinitely), a create's own failed call
+WAS the side-effecting operation, so this retries `ApplyResourceChange`
+itself — the same thing Terraform/OpenTofu's own provider SDKs already
+do internally for this exact AWS quirk; this fires only once THAT
+internal retry has already been exhausted and a diagnostic reached ubx
+anyway. A DIFFERENT error surfacing on any retry attempt (not just
+"still not found") stops the loop immediately rather than silently
+retrying past what this narrow fix exists to smooth over. Every attempt
+is logged to `ra.Reconciliation`, exactly mirroring the destroy side's
+own audit trail (`ubx why` renders these identically for both
+directions — see `renderApplies`, `cli/why.go`).
+
+**Hermetic**: `core/executor/create_dependency_retry_test.go` (new,
+package-internal `fakeApplier`, the package's own established
+convention) proves, with a shrunk test-only schedule: success after
+retry (3 scripted not-found failures then success, exactly 4
+`Reconciliation` entries), budget exhaustion (always not-found →
+`ResourceFailed`, `core.ErrorTerminal`, exactly
+`len(shortBackoffScheduleForTest())+1` entries), the narrow-scope guards
+(no same-batch dependency → immediate fail, zero reconcile entries; a
+genuinely permanent, non-not-found-shaped error alongside a shipped
+dependency → immediate fail, zero reconcile entries), and that a
+DIFFERENT error surfacing mid-retry stops early with THAT error
+surfaced, not the original. Empirically verified load-bearing (not
+accidentally-already-passing): temporarily disabling the new call site
+reproduced the founder's own exact failure shape
+(`partially_applied`/`1 applied`/`1 failed`) in the success-after-retry
+test; restored and re-confirmed green.
+
+`provider/internal/fakeprovider` (the real, subprocess, wire-protocol
+fixture) separately gains the identical fault mode
+(`FAKEPROVIDER_APPLY_MODE=fail-create-not-found`,
+`FAKEPROVIDER_FAIL_CREATE_TARGET`/`FAKEPROVIDER_FAIL_CREATE_COUNT`),
+keyed by the target `fake_widget`'s own "name" (not "id" —
+`decodeWidgetState`'s own fixed literal `"computed-id"` can't
+disambiguate two instances), exercised by
+`cli/ship_create_dependency_retry_test.go` through a real `role` +
+`attach` two-resource chain (`attach`'s own `tags` — not `name`, to
+avoid colliding the fault-injection target with `role`'s own name —
+carries the `$ref` onto `role`, giving it a real `depends_on` edge). Two
+tests: the 3-failures-then-succeeds case (fast, ~1s, always run) and the
+budget-exhausted case (gated behind `UBX_TEST_SLOW=1`, ~64s real elapsed
+time, same convention as `cli/ship_lying_destroy_test.go`) — both pass
+against the real tfplugin wire protocol, not just the in-process fake.
+
+**Live recovery** (`ubx-playground-14.aws_iam_role_policy_attachment.attach`,
+real AWS): see STATE.md for the founder's own exact recovery command and
+outcome — this document records the mechanism, not the one-off incident
+resolution.
+
 ## Out of scope for v1, named so it isn't assumed covered
 
 - Any proposal kind other than `drift_revert` or `change` — **as of UBI-27**

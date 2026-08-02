@@ -415,9 +415,9 @@ func TestShipDestroy_MixedProposal_ReversedOrder(t *testing.T) {
 // clock time.
 func shrinkDestroyReconcileBackoff(t *testing.T) {
 	t.Helper()
-	orig := destroyReconcileBackoffSchedule
-	destroyReconcileBackoffSchedule = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { destroyReconcileBackoffSchedule = orig })
+	orig := eventualConsistencyBackoffSchedule
+	eventualConsistencyBackoffSchedule = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { eventualConsistencyBackoffSchedule = orig })
 }
 
 // --- UBI-44: a clean ApplyResourceChange response is never sufficient ------
@@ -498,7 +498,7 @@ func TestShipDestroy_CleanApply_NoUnnecessaryRetries(t *testing.T) {
 // visible on the read side for a few real reads (bounded, eventual-
 // consistency lag -- SQS's own ~60-second figure, UBI-30, is the real
 // motivating case), still correctly resolves "destroyed" once
-// destroyReconcileBackoffSchedule's own retries reach it, rather than
+// eventualConsistencyBackoffSchedule's own retries reach it, rather than
 // timing out into a false "still_unknown"/"failed" the way the
 // pre-UBI-42 100ms budget would have.
 func TestShipDestroy_DelayedAbsence_ResolvesDestroyed(t *testing.T) {

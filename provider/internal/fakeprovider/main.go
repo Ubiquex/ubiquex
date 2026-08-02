@@ -41,6 +41,11 @@
 // reads back as spuriously gone. Unset by every existing test, so every
 // existing test keeps today's pure-echo behavior unchanged.
 //
+// FAKEPROVIDER_FAIL_CREATE_TARGET / FAKEPROVIDER_FAIL_CREATE_COUNT (UBI-92,
+// ok-v5/ok-v6 only, paired with FAKEPROVIDER_APPLY_MODE=fail-create-not-found
+// below) name which fake_widget's own "name" attribute should fail its
+// create and how many times before letting it through.
+//
 // FAKEPROVIDER_APPLY_MODE (UBI-26, ok-v5/ok-v6 only) selects
 // ApplyResourceChange's behavior:
 //
@@ -77,6 +82,21 @@
 //	                  only ever exercises the read-back-verification
 //	                  ticker, since a lying destroy still returns
 //	                  immediately itself).
+//	"fail-create-not-found" (UBI-92) simulates AWS IAM's own documented
+//	                  eventual-consistency lag on the CREATE side (the
+//	                  mirror image of "lying-destroy"'s destroy-side
+//	                  fault): the fake_widget named by
+//	                  FAKEPROVIDER_FAIL_CREATE_TARGET fails its own create
+//	                  with a not-found-shaped diagnostic ("NoSuchEntity" /
+//	                  "cannot be found") for FAKEPROVIDER_FAIL_CREATE_COUNT
+//	                  attempts, then succeeds normally -- the exact shape
+//	                  a real AttachRolePolicy hit against a role that had
+//	                  itself JUST shipped successfully in the same batch.
+//	                  Every other fake_widget's create is unaffected.
+//	                  Exercises ship.go's own
+//	                  retryCreateOnDependencyNotVisible against the real
+//	                  wire protocol, not just core/executor's in-process
+//	                  fakeApplier.
 //
 // conformance-v5/conformance-v6 are driven by:
 //
@@ -122,6 +142,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -308,6 +329,20 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	case "fail-create-not-found":
+		// UBI-92: PlannedState decodes as null for a destroy (see
+		// destroyRequestID below), so currentStateName's own decode
+		// fails and ok is false -- this only ever fires for a create/
+		// modify apply, never a destroy.
+		if name, ok := currentStateName(req.PlannedState.GetMsgpack()); ok && failCreateNotFound(name) {
+			return &tfplugin6.ApplyResourceChange_Response{
+				Diagnostics: []*tfplugin6.Diagnostic{{
+					Severity: tfplugin6.Diagnostic_ERROR,
+					Summary:  "NoSuchEntity",
+					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found (UBI-92 fail-create-not-found)", name),
+				}},
+			}, nil
+		}
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState
@@ -446,6 +481,18 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 		case <-time.After(fakeProviderSlowApplyDelay):
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		}
+	case "fail-create-not-found":
+		// See fakeProviderServerV6.ApplyResourceChange's matching comment
+		// (UBI-92).
+		if name, ok := currentStateName(req.PlannedState.GetMsgpack()); ok && failCreateNotFound(name) {
+			return &tfplugin5.ApplyResourceChange_Response{
+				Diagnostics: []*tfplugin5.Diagnostic{{
+					Severity: tfplugin5.Diagnostic_ERROR,
+					Summary:  "NoSuchEntity",
+					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found (UBI-92 fail-create-not-found)", name),
+				}},
+			}, nil
 		}
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
@@ -693,6 +740,40 @@ func isDestroyed(id string) bool {
 	destroyedMu.Lock()
 	defer destroyedMu.Unlock()
 	return destroyedIDs[id]
+}
+
+// failCreateAttempts tracks, per fake_widget "name" (UBI-92: "id" can't
+// disambiguate -- see decodeWidgetState, every instance computes the same
+// literal "computed-id"), how many times FAKEPROVIDER_APPLY_MODE=
+// fail-create-not-found has already failed that name's own create --
+// this process's own lifetime only, mirroring destroyedIDs' own convention.
+var (
+	failCreateMu       sync.Mutex
+	failCreateAttempts = map[string]int{}
+)
+
+// failCreateNotFound reports whether this create attempt for the given
+// fake_widget name should be failed with a not-found-shaped diagnostic
+// (FAKEPROVIDER_APPLY_MODE=fail-create-not-found), consuming one attempt
+// from FAKEPROVIDER_FAIL_CREATE_COUNT's own budget each time it does --
+// mirroring a real IAM role's own visibility lag eventually resolving
+// after a bounded number of attempts, not staying wrong forever. Every
+// name other than FAKEPROVIDER_FAIL_CREATE_TARGET is unaffected.
+func failCreateNotFound(name string) bool {
+	if name == "" || name != os.Getenv("FAKEPROVIDER_FAIL_CREATE_TARGET") {
+		return false
+	}
+	budget, _ := strconv.Atoi(os.Getenv("FAKEPROVIDER_FAIL_CREATE_COUNT"))
+	if budget <= 0 {
+		return false
+	}
+	failCreateMu.Lock()
+	defer failCreateMu.Unlock()
+	if failCreateAttempts[name] >= budget {
+		return false
+	}
+	failCreateAttempts[name]++
+	return true
 }
 
 // currentStateName is currentStateID's own twin for "name" -- the

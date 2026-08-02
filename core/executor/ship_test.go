@@ -334,7 +334,7 @@ func (f *fakeApplier) scriptLyingDestroy(id string) {
 // ReadResource calls first -- simulating a real cloud provider's own
 // bounded deletion-visibility lag (SQS's own ~60-second figure, UBI-30)
 // rather than an always-instantly-consistent fake. Proves the new
-// destroyReconcileBackoffSchedule (UBI-42) reaches a genuinely
+// eventualConsistencyBackoffSchedule (UBI-42) reaches a genuinely
 // slow-but-real absence instead of giving up too soon.
 func (f *fakeApplier) scriptDelayedAbsence(id string, readsBeforeAbsent int) {
 	f.mu.Lock()

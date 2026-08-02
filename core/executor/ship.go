@@ -213,20 +213,28 @@ var (
 	maxReconcileAttempts   = 5
 	reconcileRetryInterval = 20 * time.Millisecond
 
-	// destroyReconcileBackoffSchedule replaces a single fixed interval for
-	// destroy's own reconcile-by-query (UBI-42, co-scoped with UBI-44's own
-	// universal post-destroy read-back, below): a real cloud provider's own
-	// deletion-visibility lag (SQS's own documented ~60 seconds, confirmed
-	// live, UBI-30's finale) can easily outlast a short fixed budget, and
-	// the universal read-back now pays this cost on *every* destroy, not
-	// just the rare ambiguous ones a fixed 100ms budget used to gate --
-	// paying a uniformly-long fixed interval on every attempt would be its
-	// own regression. A backoff schedule keeps the common case (a
-	// synchronously-consistent provider -- confirmed live for GCP Pub/Sub,
-	// UBI-44) resolving on the very first read, at essentially zero added
-	// cost, while still reaching a real cloud's own slow tail: ten steps
-	// summing to ~63.75s, comfortably past AWS's own ~60-second figure.
-	destroyReconcileBackoffSchedule = []time.Duration{
+	// eventualConsistencyBackoffSchedule replaces a single fixed interval
+	// for reconcile-by-query against a real cloud provider's own
+	// asynchronous propagation lag -- originally destroy's own post-
+	// destroy read-back (UBI-42, co-scoped with UBI-44's own universal
+	// verification, below: SQS's own documented ~60-second deletion-
+	// visibility lag, confirmed live, UBI-30's finale), and, since UBI-92,
+	// also a dependent CREATE call that fails referencing a same-batch
+	// dependency that just shipped (AWS IAM's own well-documented
+	// eventual-consistency lag: CreateRole can return success before the
+	// role is visible to a subsequent AttachRolePolicy call, found live,
+	// UBI-92 -- symmetric to destroy's own "success doesn't mean
+	// immediately observable" lesson, just on the create/read-visibility
+	// side instead of the delete/absence side). One shared schedule for
+	// both, deliberately -- the SAME real-world propagation-lag problem,
+	// just observed from two different call shapes, not two independent
+	// budgets to keep in sync by hand. A backoff schedule keeps the common
+	// case (a synchronously-consistent provider -- confirmed live for GCP
+	// Pub/Sub, UBI-44) resolving on the very first attempt, at essentially
+	// zero added cost, while still reaching a real cloud's own slow tail:
+	// ten steps summing to ~63.75s, comfortably past AWS's own ~60-second
+	// figure.
+	eventualConsistencyBackoffSchedule = []time.Duration{
 		50 * time.Millisecond,
 		200 * time.Millisecond,
 		500 * time.Millisecond,
@@ -279,7 +287,7 @@ var (
 // nodes shipChange's own scheduler (UBI-67) runs concurrently -- never
 // unbounded, since a real provider's own rate limits are real (this
 // codebase already has a live-verified precedent for respecting a
-// provider's own pace: destroyReconcileBackoffSchedule's own escalating
+// provider's own pace: eventualConsistencyBackoffSchedule's own escalating
 // waits, UBI-42/44). A package var, not a constant, so tests can shrink
 // it; overridable via UBX_SHIP_MAX_PARALLEL for a real run. Default (10)
 // mirrors Terraform's own long-standing `-parallelism=10` default --
@@ -1631,6 +1639,145 @@ func reconcileSameBatchEffects(ctx context.Context, l *core.Ledger, pool Applier
 	}
 }
 
+// notFoundPhrases is the handful of phrasings a real, widely-used
+// provider's own diagnostic text actually uses for "the referenced
+// resource doesn't exist (yet)" -- AWS's own IAM API returns
+// "NoSuchEntity"/"cannot be found" (the founder's own live repro,
+// UBI-92: "The role with name ci-runner-v14 cannot be found"), other
+// providers phrase the same shape as "not found"/"does not exist"/
+// "no such". Not an exhaustive NLP attempt -- the tfplugin wire protocol
+// itself never surfaces a structured HTTP status code or error kind to
+// the caller (provider.DiagnosticError carries free-text Messages only,
+// confirmed by reading the actual wire types), so text matching is the
+// only signal genuinely available here, the same real-world constraint
+// Terraform/OpenTofu's own provider SDKs work around with their own
+// internal retry logic (this is what fires when THAT retry has already
+// been exhausted and a diagnostic reached ubx anyway).
+var notFoundPhrases = []string{
+	"not found",
+	"does not exist",
+	"doesn't exist",
+	"no such",
+	"cannot be found",
+	"could not be found",
+}
+
+// looksNotFound reports whether msg has the shape of a "the referenced
+// resource doesn't exist (yet)" diagnostic -- see notFoundPhrases' own
+// doc comment. Case-insensitive: a real provider's own capitalization is
+// not a signal worth depending on.
+func looksNotFound(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, phrase := range notFoundPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasShippedDependency reports whether any address in dependsOn is
+// already a key of resultsByAddr -- substituteComputed's own doc comment
+// already establishes the invariant this relies on: shipChange's own
+// topo order guarantees a dependency address only ever becomes a
+// resultsByAddr key once it has ACTUALLY, SUCCESSFULLY applied, never
+// merely accepted or attempted. This is the narrow-scope guard UBI-92's
+// own fix depends on: a create with no same-batch dependency at all (or
+// one whose dependency hasn't shipped yet, which shouldn't be possible
+// given topo ordering, but is checked rather than assumed) never enters
+// the retry path below, regardless of how the error is phrased -- a
+// genuinely permanent, unrelated failure on an independent resource
+// still fails fast, exactly as before this existed.
+func hasShippedDependency(dependsOn []string, resultsByAddr map[string]json.RawMessage) bool {
+	for _, dep := range dependsOn {
+		if _, ok := resultsByAddr[dep]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// retryCreateOnDependencyNotVisible is UBI-92's own create-side mirror of
+// reconcileDestroyLoop's post-destroy read-back (UBI-42/44): a real cloud
+// provider's own successful CREATE of a resource doesn't guarantee that
+// resource is IMMEDIATELY visible to another call that references it --
+// AWS IAM's own famous, well-documented eventual-consistency lag
+// (CreateRole can return success before the role is visible to a
+// subsequent AttachRolePolicy call) is the found-live, named case, but
+// the mechanism is provider-agnostic. Symmetric to the destroy side in
+// shape (retry-by-query with the SAME backoff schedule,
+// eventualConsistencyBackoffSchedule, every attempt logged to
+// ra.Reconciliation) but not in mechanism: destroy retries a read (no
+// side effect, safe to repeat indefinitely); a create's own failed call
+// WAS the side-effecting operation, so this retries ApplyResourceChange
+// itself, the same way Terraform/OpenTofu's own provider SDKs already do
+// internally for this exact AWS quirk (this fires only once THAT
+// internal retry has already been exhausted and a diagnostic reached
+// ubx anyway).
+//
+// Scoped deliberately narrow, checked here, not assumed by the caller:
+// only entered when firstErr is a real diagnostic (*TerminalError, never
+// an ambiguous transport-level failure -- that class already has its own
+// existing, unrelated handling, core/executor's ResourceUnknownPostTimeout
+// path, untouched by this), the diagnostic text looks not-found-shaped
+// (looksNotFound), AND this create names an already-shipped same-batch
+// dependency (hasShippedDependency) -- a real, permanent failure on a
+// resource with no such dependency, or one that merely happens to say
+// "not found" for an unrelated reason, is returned immediately, unretried
+// (err == firstErr, unchanged), and falls through to the caller's own
+// EXISTING, unmodified terminal/ambiguous classification -- this function
+// never duplicates that logic, only decides whether to spend the retry
+// budget before reaching it.
+//
+// A DIFFERENT error surfacing on any retry attempt (not just "still not
+// found") stops the loop immediately rather than silently retrying past
+// what this narrow fix exists to smooth over; the loop's own final
+// (possibly different) error is what the caller's classification sees.
+func retryCreateOnDependencyNotVisible(ctx context.Context, app Applier, addr core.Address, resourceSchema any, typeName string, plannedState json.RawMessage, dependsOn []string, resultsByAddr map[string]json.RawMessage, firstErr error, ra *core.ResourceApply, rcd *recorder) (result, lookup json.RawMessage, err error) {
+	var terminal *TerminalError
+	if !errors.As(firstErr, &terminal) || !looksNotFound(terminal.Error()) || !hasShippedDependency(dependsOn, resultsByAddr) {
+		return nil, nil, firstErr
+	}
+
+	rcd.mutate(ra, func(ra *core.ResourceApply) {
+		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
+			At: nowRFC3339(), Outcome: "inconclusive",
+			Detail: "references a same-batch dependency that just shipped -- retrying to allow for real propagation lag (AWS IAM's own well-documented eventual-consistency window, UBI-92): " + terminal.Error(),
+		})
+	})
+
+	lastErr := error(terminal)
+	for attempt := 0; attempt < len(eventualConsistencyBackoffSchedule); attempt++ {
+		emitProgress(ctx, ProgressEvent{
+			Address: addr.String(), Kind: "reconcile_attempt",
+			Attempt: attempt + 1, Total: len(eventualConsistencyBackoffSchedule),
+			Detail: "dependency just shipped -- retrying to allow for provider propagation lag",
+		})
+		time.Sleep(eventualConsistencyBackoffSchedule[attempt])
+
+		res, lu, applyErr := app.ApplyResourceChange(ctx, resourceSchema, typeName, json.RawMessage("null"), plannedState, nil)
+		if applyErr == nil {
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "applied", Detail: "dependency became visible, retry succeeded"})
+			})
+			return res, lu, nil
+		}
+		lastErr = applyErr
+
+		var t *TerminalError
+		if !errors.As(applyErr, &t) || !looksNotFound(t.Error()) {
+			rcd.mutate(ra, func(ra *core.ResourceApply) {
+				ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "inconclusive", Detail: "retry surfaced a different error, stopping early: " + applyErr.Error()})
+			})
+			return nil, nil, lastErr
+		}
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{At: nowRFC3339(), Outcome: "inconclusive", Detail: t.Error()})
+		})
+	}
+	return nil, nil, lastErr
+}
+
 // shipCreate ships one delta.creates entry: PriorState is the literal
 // JSON "null" (a genuine from-scratch create, docs/executor.md's
 // amendment -- never an empty/absent input, which encodeDynamicValue's
@@ -1709,6 +1856,19 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 	}
 
 	result, lookup, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned, nil)
+
+	// UBI-92: a failed create referencing an already-shipped same-batch
+	// dependency with a not-found-shaped error gets the SAME retry-with-
+	// backoff treatment reconcileDestroyLoop's own post-destroy read-back
+	// already established -- AWS IAM's own well-documented eventual-
+	// consistency lag (CreateRole succeeding before AttachRolePolicy can
+	// see it), found live. A no-op (returns applyErr/result/lookup
+	// completely unchanged) for every create that doesn't match this
+	// narrow shape -- see retryCreateOnDependencyNotVisible's own doc
+	// comment for the full scoping.
+	if applyErr != nil {
+		result, lookup, applyErr = retryCreateOnDependencyNotVisible(ctx, app, ra.Address, resourceSchemas[cn.Type], cn.Type, planned, cn.DependsOn, resultsByAddr, applyErr, ra, rcd)
+	}
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
@@ -2143,7 +2303,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 
 // reconcileDestroyLoop repeatedly reads addr's live state (reconcile-by-query)
 // -- universally now (UBI-44), not just after an ambiguous Apply result --
-// up to len(destroyReconcileBackoffSchedule) times, distinguishing
+// up to len(eventualConsistencyBackoffSchedule) times, distinguishing
 // "destroyed" from "already_absent"/"failed" per docs/executor.md's own
 // amendment:
 //
@@ -2164,7 +2324,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 //     "failed" -- a materially more serious finding (the provider lied),
 //     not an ordinary ambiguous-RPC failure.
 //   - Any other read failure is inconclusive, retried per
-//     destroyReconcileBackoffSchedule.
+//     eventualConsistencyBackoffSchedule.
 //
 // Exhausting the budget without a conclusive answer resolves
 // still_unknown. Every attempt is appended to ra.Reconciliation; the final
@@ -2180,7 +2340,7 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 // wording differs, since "the provider actively lied" is a materially more
 // serious finding than "the RPC hiccuped and we're not sure."
 func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, lookup json.RawMessage, providerSource string, providerConfig json.RawMessage, priorPresentMatches, applyClaimedSuccess bool, rcd *recorder, ra *core.ResourceApply) core.ResourceState {
-	for attempt := 0; attempt < len(destroyReconcileBackoffSchedule); attempt++ {
+	for attempt := 0; attempt < len(eventualConsistencyBackoffSchedule); attempt++ {
 		// docs/cli-output-spec.md's own mandatory narration line: a
 		// provider that already claimed success (the common, honest case
 		// this backoff schedule exists for -- real eventual-consistency
@@ -2193,7 +2353,7 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 		}
 		emitProgress(ctx, ProgressEvent{
 			Address: addr.String(), Kind: "reconcile_attempt",
-			Attempt: attempt + 1, Total: len(destroyReconcileBackoffSchedule),
+			Attempt: attempt + 1, Total: len(eventualConsistencyBackoffSchedule),
 			Detail: detail,
 		})
 		_, _, err := core.ReadAndFingerprint(ctx, app, addr, providerSource, providerConfig, lookup)
@@ -2234,7 +2394,7 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 			// identical to a lie until the budget's own tail is reached.
 			// Only the final attempt, still present, earns the definitive
 			// "the provider lied" verdict; every earlier one just retries.
-			if attempt == len(destroyReconcileBackoffSchedule)-1 {
+			if attempt == len(eventualConsistencyBackoffSchedule)-1 {
 				detail := "the provider reported a successful destroy, but a post-destroy read-back found the resource still present after the full retry budget -- the delete never actually happened"
 				rcd.mutate(ra, func(ra *core.ResourceApply) {
 					ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
@@ -2258,7 +2418,7 @@ func reconcileDestroyLoop(ctx context.Context, app Applier, addr core.Address, l
 				})
 			})
 		}
-		time.Sleep(destroyReconcileBackoffSchedule[attempt])
+		time.Sleep(eventualConsistencyBackoffSchedule[attempt])
 	}
 	rcd.transition(ctx, ra, core.ResourceStillUnknown, "reconciliation exhausted its retry budget without a conclusive answer")
 	return core.ResourceStillUnknown
