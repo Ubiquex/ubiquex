@@ -91,7 +91,7 @@ func TestGeneratedFile_NestedObjectBlock(t *testing.T) {
 		t.Fatalf("GeneratedFile: %v", err)
 	}
 
-	mustContain(t, out, "type AwsThingSettings struct {\n\tEnabled any\n}")
+	mustContain(t, out, "type AwsThing_Settings struct {\n\tEnabled any\n}")
 	mustContain(t, out, "Settings any")
 	mustContain(t, out, `WireName: "settings"`)
 	mustContain(t, out, `Kind: "object"`)
@@ -111,7 +111,7 @@ func TestGeneratedFile_ListOfNestedObject(t *testing.T) {
 		t.Fatalf("GeneratedFile: %v", err)
 	}
 
-	mustContain(t, out, "type AwsSecurityGroupRule struct {\n\tFromPort any\n}")
+	mustContain(t, out, "type AwsSecurityGroup_Rule struct {\n\tFromPort any\n}")
 	mustContain(t, out, "Rule any")
 	mustContain(t, out, `WireName: "rule"`)
 	mustContain(t, out, `Kind: "list"`)

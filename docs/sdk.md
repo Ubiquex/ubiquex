@@ -1570,3 +1570,82 @@ plumbing designed for any of the three); extracting `stampDocumentSource`/
 duplicated copies (`sdkeval`, `goeval`, `pyeval` each carry their own —
 a real, deliberate "rule of three" deferral, not an oversight, now that
 all three copies exist).
+
+## Amendment (2026-08-03, UBI-96): nested-block type names weren't globally unique at full-provider scale — root cause, fix, and a second, separate scale limit found along the way
+
+**P1, founder-found live**: the first real `ubx sdk gen --lang go` run
+against a FULL provider (hashicorp/aws@6.54.0, 1,682 types — every
+earlier codegen session, including this doc's own examples above, only
+ever exercised `aws_db_instance` alone) failed to `go build`, ~10+ "X
+redeclared in this block" errors.
+
+**Root cause, confirmed by live schema inspection, not assumed**: every
+nested-block-derived type name (`sdk/codegen/templates/go`'s own
+`goFieldMeta`, mirrored identically in the `ts`/`py` templates) was
+derived as `pathPrefix + fieldPascal` — collision-free *within* one
+resource's own render call, but nothing distinguished that from another
+resource's own bare `pascalCase(wireType)` name, or another resource's
+own nested tree, once every resource shares one flat package/module. AWS's
+own convention of splitting a legacy inline nested block out into its
+own standalone resource (`aws_s3_bucket`'s `logging` block vs. the
+separate `aws_s3_bucket_logging` resource; `aws_autoscaling_group`'s
+`tag` block vs. `aws_autoscaling_group_tag`; `aws_wafv2_web_acl`'s
+recursive `rule.statement...` tree vs. `aws_wafv2_web_acl_rule`'s own
+copy of the identical tree; and more) means the two independently-
+derived names are the SAME STRING by construction, not by accident.
+Verified exhaustively against the real provider: **6,278 colliding
+names**, **100% of them within a single AWS service** (a "namespace by
+service package" restructure — the direction `UBI-98` was independently
+considering — would NOT have fixed this; verified with a direct
+same-service-vs-cross-service classification over every collision, zero
+were cross-service).
+
+**Fix**: every nested-block name now joins `pathPrefix` and `fieldPascal`
+with `"_"` (`sdk/codegen/templates/go/ts/py`'s own `resourceRenderer`,
+each package's doc comment has the full uniqueness proof) — `pascalCase`
+never emits an underscore, so a nested name can never equal any bare
+resource-level name, and two different resources' own nested trees can
+never collide either (the substring up to the first inserted `_` is
+always that resource's own distinct pascal name). Verified against the
+full real schema: 0 collisions across all 72,960 names this scheme
+produces. Applied identically to Go, TypeScript, and Python — Go fails
+this class of bug as a hard `go build` redeclaration; TypeScript can fail
+SILENTLY instead (interface declaration merging, when two colliding
+shapes happen to be compatible); Python has no error at all (a later
+`class`/module-level assignment silently overwrites an earlier one) —
+all three were real, checked directly, not assumed safe by
+extrapolation from Go's own failure.
+
+**Defense in depth**: each template package now exports
+`CheckNoDuplicateDeclarations(src)` (Go: real `go/parser` AST walk;
+TS/Python: a regex scan matched to each language's own known declaration
+shapes and namespace rules), wired into `ubx sdk gen`'s own production
+path (`cli/sdk.go`) for all three languages — generation now refuses to
+write a file with a real collision, rather than only ever catching this
+in a test after the fact.
+
+**A second, separate, previously-undiscovered problem found while
+verifying the fix at true full-provider scale**: even with zero
+redeclarations, `go build` on the real, full 1,682-type/~40MB/~73,000-
+package-level-declaration output still fails — a genuine Go compiler
+crash (`internal compiler error: NewBulk too big`), reproduced
+independently via the real `ubx sdk gen --lang go` CLI path (not just a
+test harness). Confirmed scale-dependent, not a fluke: a synthetic half-
+size split (~840 types, ~20MB) still crashes, at a smaller internal
+threshold; a real single-service-sized subset (AWS's own largest real
+service, `ec2`, 56 types/~74KB) builds clean and instantly. This is a
+hard Go-toolchain ceiling on how much can live in ONE package, entirely
+independent of naming — it is exactly the kind of problem `UBI-98`'s own
+per-service-package restructure would fix (verified directly above), for
+a reason that ticket never named (it argued per-service packaging for
+reviewability and, incorrectly per this amendment, for the naming
+collision — not "the whole provider can never compile as a single
+package no matter what the names are"). Not fixed in this session
+(out of scope for UBI-96's own diagnosed root cause); tracked as a
+comment on the UBI-98 Linear thread rather than left undiscovered again.
+`sdk/codegen/templates/go/fullprovider_live_test.go`'s own permanent,
+`UBX_CONFORMANCE_LIVE=1`-gated CI check asserts zero redeclarations hard
+(the actual UBI-96 regression class) and treats this specific, separate
+compiler-crash signature as a named, non-blocking skip rather than either
+silently passing or permanently red-flagging the whole check over an
+unrelated, already-tracked issue.

@@ -12,23 +12,23 @@ export const __ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0
 
 import type { Computed, FieldMap, ResourceBinding } from "@ubx/sdk";
 
-export interface AwsDbInstanceListenerEndpoint {
+export interface AwsDbInstance_ListenerEndpoint {
   address: string;
   hostedZoneId: string;
   port: number;
 }
 
-export interface AwsDbInstanceMasterUserSecret {
+export interface AwsDbInstance_MasterUserSecret {
   kmsKeyId: string;
   secretArn: string;
   secretStatus: string;
 }
 
-export interface AwsDbInstanceBlueGreenUpdate {
+export interface AwsDbInstance_BlueGreenUpdate {
   enabled: boolean;
 }
 
-export interface AwsDbInstanceRestoreToPointInTime {
+export interface AwsDbInstance_RestoreToPointInTime {
   restoreTime: string;
   sourceDbInstanceAutomatedBackupsArn: string;
   sourceDbInstanceIdentifier: string;
@@ -36,7 +36,7 @@ export interface AwsDbInstanceRestoreToPointInTime {
   useLatestRestorableTime: boolean;
 }
 
-export interface AwsDbInstanceS3Import {
+export interface AwsDbInstance_S3Import {
   bucketName: string;
   bucketPrefix: string;
   ingestionRole: string;
@@ -44,7 +44,7 @@ export interface AwsDbInstanceS3Import {
   sourceEngineVersion: string;
 }
 
-export interface AwsDbInstanceTimeouts {
+export interface AwsDbInstance_Timeouts {
   create: string;
   delete: string;
   update: string;
@@ -122,10 +122,10 @@ export interface AwsDbInstanceConfig {
   upgradeStorageConfig?: boolean | Computed<boolean>;
   username?: string | Computed<string>;
   vpcSecurityGroupIds?: string[] | Computed<string[]>;
-  blueGreenUpdate?: AwsDbInstanceBlueGreenUpdate[] | Computed<AwsDbInstanceBlueGreenUpdate[]>;
-  restoreToPointInTime?: AwsDbInstanceRestoreToPointInTime[] | Computed<AwsDbInstanceRestoreToPointInTime[]>;
-  s3Import?: AwsDbInstanceS3Import[] | Computed<AwsDbInstanceS3Import[]>;
-  timeouts?: AwsDbInstanceTimeouts | Computed<AwsDbInstanceTimeouts>;
+  blueGreenUpdate?: AwsDbInstance_BlueGreenUpdate[] | Computed<AwsDbInstance_BlueGreenUpdate[]>;
+  restoreToPointInTime?: AwsDbInstance_RestoreToPointInTime[] | Computed<AwsDbInstance_RestoreToPointInTime[]>;
+  s3Import?: AwsDbInstance_S3Import[] | Computed<AwsDbInstance_S3Import[]>;
+  timeouts?: AwsDbInstance_Timeouts | Computed<AwsDbInstance_Timeouts>;
 }
 
 export interface AwsDbInstanceAttrs {
@@ -173,10 +173,10 @@ export interface AwsDbInstanceAttrs {
   kmsKeyId: string;
   latestRestorableTime: string;
   licenseModel: string;
-  listenerEndpoint: AwsDbInstanceListenerEndpoint[];
+  listenerEndpoint: AwsDbInstance_ListenerEndpoint[];
   maintenanceWindow: string;
   manageMasterUserPassword: boolean;
-  masterUserSecret: AwsDbInstanceMasterUserSecret[];
+  masterUserSecret: AwsDbInstance_MasterUserSecret[];
   masterUserSecretKmsKeyId: string;
   maxAllocatedStorage: number;
   monitoringInterval: number;
@@ -212,10 +212,10 @@ export interface AwsDbInstanceAttrs {
   upgradeStorageConfig: boolean;
   username: string;
   vpcSecurityGroupIds: string[];
-  blueGreenUpdate: AwsDbInstanceBlueGreenUpdate[];
-  restoreToPointInTime: AwsDbInstanceRestoreToPointInTime[];
-  s3Import: AwsDbInstanceS3Import[];
-  timeouts: AwsDbInstanceTimeouts;
+  blueGreenUpdate: AwsDbInstance_BlueGreenUpdate[];
+  restoreToPointInTime: AwsDbInstance_RestoreToPointInTime[];
+  s3Import: AwsDbInstance_S3Import[];
+  timeouts: AwsDbInstance_Timeouts;
 }
 
 export const AwsDbInstance: ResourceBinding<AwsDbInstanceConfig, AwsDbInstanceAttrs> = {

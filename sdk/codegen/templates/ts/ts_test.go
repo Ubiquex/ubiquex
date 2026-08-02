@@ -95,8 +95,8 @@ func TestGeneratedFile_NestedObjectBlock(t *testing.T) {
 		t.Fatalf("GeneratedFile: %v", err)
 	}
 
-	mustContain(t, out, "export interface AwsThingSettings {\n  enabled: boolean;\n}")
-	mustContain(t, out, "settings?: AwsThingSettings | Computed<AwsThingSettings>;")
+	mustContain(t, out, "export interface AwsThing_Settings {\n  enabled: boolean;\n}")
+	mustContain(t, out, "settings?: AwsThing_Settings | Computed<AwsThing_Settings>;")
 	mustContain(t, out, `wireName: "settings"`)
 	mustContain(t, out, `kind: "object"`)
 	mustContain(t, out, `enabled: "enabled",`)
@@ -115,8 +115,8 @@ func TestGeneratedFile_ListOfNestedObject(t *testing.T) {
 		t.Fatalf("GeneratedFile: %v", err)
 	}
 
-	mustContain(t, out, "export interface AwsSecurityGroupRule {\n  fromPort: number;\n}")
-	mustContain(t, out, "rule?: AwsSecurityGroupRule[] | Computed<AwsSecurityGroupRule[]>;")
+	mustContain(t, out, "export interface AwsSecurityGroup_Rule {\n  fromPort: number;\n}")
+	mustContain(t, out, "rule?: AwsSecurityGroup_Rule[] | Computed<AwsSecurityGroup_Rule[]>;")
 	mustContain(t, out, `wireName: "rule"`)
 	mustContain(t, out, `kind: "list"`)
 	mustContain(t, out, `fromPort: "from_port",`)

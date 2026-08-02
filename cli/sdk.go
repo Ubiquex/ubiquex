@@ -184,6 +184,27 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	if err != nil {
 		return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
 	}
+	// UBI-96: a flat package/module can produce a broken package-level
+	// naming collision (two different resource types' own generated names
+	// coincide -- see each template's own CheckNoDuplicateDeclarations doc
+	// comment for the full account, including why this is a hard `go
+	// build` failure in Go, a possibly-SILENT interface merge in TS, and a
+	// fully silent module-namespace overwrite in Python) that only ever
+	// surfaced, for Go, when someone actually ran `go build` against the
+	// output -- checked here, before ever writing the file, for all three
+	// languages, not just caught in a test after the fact.
+	var selfCheckErr error
+	switch lang {
+	case "go":
+		selfCheckErr = gotemplate.CheckNoDuplicateDeclarations(content)
+	case "py":
+		selfCheckErr = pytemplate.CheckNoDuplicateDeclarations(content)
+	default:
+		selfCheckErr = tstemplate.CheckNoDuplicateDeclarations(content)
+	}
+	if selfCheckErr != nil {
+		return "", 0, fmt.Errorf("%s@%s: generated output failed self-check: %w", source, version, selfCheckErr)
+	}
 
 	path = filepath.Join(out, filenameStem+ext)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

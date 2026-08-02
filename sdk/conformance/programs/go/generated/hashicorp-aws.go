@@ -19,11 +19,11 @@ var SourceProvenance = struct {
 	Version string
 }{Source: "hashicorp/aws", Version: "6.54.0"}
 
-type AwsDbInstanceBlueGreenUpdate struct {
+type AwsDbInstance_BlueGreenUpdate struct {
 	Enabled any
 }
 
-type AwsDbInstanceRestoreToPointInTime struct {
+type AwsDbInstance_RestoreToPointInTime struct {
 	RestoreTime                         any
 	SourceDbInstanceAutomatedBackupsArn any
 	SourceDbInstanceIdentifier          any
@@ -31,7 +31,7 @@ type AwsDbInstanceRestoreToPointInTime struct {
 	UseLatestRestorableTime             any
 }
 
-type AwsDbInstanceS3Import struct {
+type AwsDbInstance_S3Import struct {
 	BucketName          any
 	BucketPrefix        any
 	IngestionRole       any
@@ -39,7 +39,7 @@ type AwsDbInstanceS3Import struct {
 	SourceEngineVersion any
 }
 
-type AwsDbInstanceTimeouts struct {
+type AwsDbInstance_Timeouts struct {
 	Create any
 	Delete any
 	Update any

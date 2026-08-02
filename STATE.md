@@ -4,6 +4,166 @@
 
 ## Current phase
 
+**UBI-96 (2026-08-03, P1) — full-provider Go codegen produced non-compiling
+output (duplicate declarations); root cause confirmed, fixed narrowly
+(not via UBI-98's restructure), and a second, separate, previously-unknown
+Go compiler scale limit found and reported along the way.**
+
+Per the handoff's own explicit protocol: read UBI-96 and UBI-98 in full
+before choosing a fix approach, since UBI-98's own text claimed its
+per-service-package restructure "may structurally eliminate" UBI-96's
+root cause.
+
+**Step 1 — diagnosis, via live schema inspection against the real cached
+`hashicorp/aws@6.54.0` binary (a throwaway schema-dump tool, same
+"schema fetch is free" precedent as UBI-9 batch 3's `cmd/schemadump`,
+deleted before committing), not assumed from the ticket's own hypothesis
+list:** every nested-block-derived Go/TS/Python type name
+(`sdk/codegen/templates/{go,ts,py}`'s own `goFieldMeta`/`tsValueType`/
+`pyFieldMeta`, three independent but identical copies) was
+`pathPrefix + fieldPascal` — collision-free *within* one resource's own
+render call, but nothing distinguished that from a DIFFERENT resource's
+own bare `pascalCase(wireType)` name, once every resource shares one flat
+package. AWS's own convention of splitting a legacy inline nested block
+out into its own standalone resource (`aws_s3_bucket`'s `logging` block
+vs. the separate `aws_s3_bucket_logging` resource; `aws_autoscaling_group`/
+`aws_autoscaling_group_tag`; `aws_wafv2_web_acl`'s recursive
+`rule.statement...` tree vs. `aws_wafv2_web_acl_rule`'s own copy of the
+identical tree; and many more) means the two independently-derived names
+are the SAME STRING by construction, not a coincidence. **This is case
+(b) from the ticket's own framing — two DIFFERENT resource types
+coincidentally producing the same derived name — confirmed exhaustively,
+not case (a) or (c)**: 6,278 colliding names total across the real
+1,682-type schema.
+
+**The decisive finding, tested directly rather than trusted**: UBI-98's
+own text asserted "two same-named types in DIFFERENT service packages
+never collide" as its reason for superseding a narrow fix. Classified
+every one of the 6,278 collisions by a plausible service-package
+derivation (second underscore-token of the wire type) — **100% are
+within a single AWS service, 0% cross-service.** The parent resource and
+its own split-out sibling are, by definition, always the same AWS
+service. Per the handoff's own decision tree ("if collisions would
+persist even WITHIN a single service package... fix that specifically,
+regardless of file layout"): **fixed narrowly, did NOT build UBI-98's
+per-provider-repo/per-service-package restructure this session** — that
+restructure would not have fixed this bug, and building the full thing
+(new `--out` semantics, docs rewrite, three fixture layouts) on a false
+premise would have been real, wasted, hard-to-unwind scope.
+
+**Step 2 — the fix**: every nested-block name now joins `pathPrefix` and
+`fieldPascal` with `"_"` (all three: `sdk/codegen/templates/go/ts/py`,
+each package's own `resourceRenderer` doc comment carries the full
+uniqueness proof) — `pascalCase` never emits an underscore, so a nested
+name can never equal any bare resource-level name, and two different
+resources' own nested trees can never collide with each other either
+(the substring up to the first inserted `_` is always that resource's
+own distinct pascal name). Verified exhaustively against the real full
+schema, not spot-checked: 0 collisions across all 72,960 names this
+scheme produces.
+
+**TS and Python checked explicitly, both were genuinely affected (not
+assumed safe by extrapolation from Go)**: Go fails this hard (`var`/
+`type` share one package-level namespace — a real `go build`
+redeclaration error, the founder's own literal repro). TypeScript can
+fail *silently* instead — separate type/value namespaces mean a
+resource-var-vs-nested-interface collision is harmless, but two
+DIFFERENT resources' own nested interfaces sharing a name (the
+`aws_wafv2_web_acl`/`aws_wafv2_web_acl_rule` shape) hits TS's own
+interface-declaration-merging rules, which can merge silently rather
+than erroring when shapes happen to be compatible — worse than Go's
+loud failure, not better. Python has NO error at all: one flat module
+namespace, a later `class`/module-level assignment silently overwrites
+an earlier one — the worst of the three, a genuinely silent correctness
+bug with zero signal. Fixed identically in all three.
+
+**Defense in depth, not just tests**: each template package now exports
+`CheckNoDuplicateDeclarations(src)` — Go's is a real `go/parser`/`go/ast`
+walk over package-level `var`/`type`/`const`/`func` declarations,
+reporting every duplicate found in one pass (not just the first — the
+founder's own repro hit "too many errors" truncation from `go build`
+itself); TS/Python's are regex scans matched to each language's own known
+declaration shapes and namespace rules (interface/const separately for
+TS; class+module-assignment together for Python, since Python has one
+flat namespace). Wired into `ubx sdk gen`'s own production path
+(`cli/sdk.go generateOneProvider`) for all three languages — generation
+now refuses to WRITE a file with a real collision, rather than only ever
+catching this in a test after the fact.
+
+**A second, separate, previously-undiscovered problem, found verifying
+the fix at the ticket's own required full scale, NOT fixed this
+session**: even with zero redeclarations, `go build` on the real full
+1,682-type output (~40MB, ~934,825 lines, ~73,000 package-level
+declarations in ONE Go file) still fails — a genuine Go compiler crash,
+`internal compiler error: NewBulk too big: nbit=55551 count=2425423
+nword=1736 size=4210534328` (go1.26.3 darwin/arm64). Confirmed
+scale-dependent and reproducible, not a fluke or an artifact of the test
+harness: (1) reproduced independently via the real `ubx sdk gen --lang
+go` CLI path against a real `.ubx/config` pinning `hashicorp/aws@6.54.0`,
+`go build`'d directly, outside any test; (2) a synthetic ~840-type/~20MB
+half-size split still crashes, at a smaller internal threshold
+(nword=796, size≈870MB); (3) a real single-service-sized subset — AWS's
+own largest actual service by type count, `ec2` at 56 types/~74KB —
+builds clean and instantly, no crash at all. This is a hard Go-toolchain
+ceiling on how much can live in ONE compiled package, entirely
+independent of naming — confirmed NOT the redeclaration bug (0 results
+from `CheckNoDuplicateDeclarations` on the exact same failing output).
+
+This is exactly the kind of problem UBI-98's own per-service-package
+restructure WOULD fix (verified directly, item 3 above) — but for a
+reason UBI-98's own ticket text never named (it argued per-service
+packaging for reviewability/naming; the naming argument is now shown
+false, per above, but the restructure turns out to be load-bearing
+anyway, for an entirely different, harder reason: a full-provider Go
+`go build` literally cannot pass without it, no matter how names are
+derived). Not fixed in this session — out of scope for UBI-96's own
+diagnosed root cause, and building UBI-98's full restructure (new `--out`
+semantics, docs rewrite, three fixture layouts, `--out` as a repo-shaped
+tree) is real, substantial, separately-scoped work. Commented on both the
+UBI-96 and UBI-98 Linear threads with the full finding rather than
+leaving it to be independently rediscovered; `docs/sdk.md` gets a new
+"Amendment (2026-08-03, UBI-96)" section with the complete writeup.
+
+**Verification**: `go test ./...` (whole repo) green. `gofmt -l .` clean.
+`go vet ./...` clean. New hermetic tests (always run, no network): per
+template package, a synthetic `aws_thing`/`aws_thing_logging` fixture
+reproducing the exact real collision shape, asserting the fix + zero
+duplicate declarations; Go's own version additionally does a REAL `go
+build` of the fixture in a throwaway module (replace-local to `sdk/go`,
+`GOPROXY=off` — fully network-free) as the strongest available proof.
+New live-gated test (`UBX_CONFORMANCE_LIVE=1`,
+`sdk/codegen/templates/go/fullprovider_live_test.go`,
+`TestFullProvider_Go_CompilesClean`) is the ticket's own literal required
+check, made permanent: acquires the real full `hashicorp/aws@6.54.0`
+(asserts exactly 1,682 types, named explicitly so a future provider bump
+that changes this count is a deliberate test update, not silent
+scope-narrowing), generates the full Go binding, hard-asserts zero
+duplicate declarations (the actual UBI-96 regression class — this is the
+must-pass bar), then attempts a real `go build` — treating the known
+`NewBulk too big` signature specifically as a named, informative
+`t.Skip` (not a silent pass, not a permanent-red hard failure over an
+already-tracked, separate issue) and anything else as a hard failure
+(a real regression). Ran this live test for real this session: skipped
+with the expected, named reason. Conformance fixtures regenerated for
+real against the live provider with the fixed templates
+(`sdk/conformance/programs/{go,ts,py}/generated/hashicorp-aws.*`) — diff
+is exactly the 4 renamed `aws_db_instance` nested-struct names in each
+language, nothing else; golden `payments_{,go_,py_}json` tests
+unaffected (they only ever reference `AwsDbInstance`/`AwsDbInstanceConfig`,
+never a nested struct name) and still pass, confirmed via the real
+deno/goeval-sandboxed/wasmtime evaluators (all three were available and
+actually ran, not skipped).
+
+**Next**: UBI-98's own eventual build session should treat "full-provider
+Go compile" as a hard, load-bearing requirement (per the NewBulk finding
+above), not just a reviewability nice-to-have — and should NOT assume it
+also needs to solve UBI-96's naming problem, since that's already fixed
+and independently verified. UBI-94 (the `ubx_required` reference-
+resolution gap, filed previous session) remains open, untouched this
+session (unrelated area).
+
+## Current phase (previous)
+
 **UBI-93 (2026-08-02, P1) — UBI-92's own diagnosis was wrong: the retry
 fix is real and worth keeping, but the true root cause of BOTH live
 repros was a permanent identity mismatch, never eventual consistency.

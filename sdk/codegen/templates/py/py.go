@@ -132,10 +132,30 @@ func fieldIsSettable(f ir.Field) bool {
 
 // resourceRenderer accumulates one resource type's own nested Config
 // dataclass declarations (KindObject fields, at any depth), keyed by a
-// deterministic, collision-free name derived from the full field path
-// from the resource's own PascalCase name (used only for the generated
-// CLASS name -- Python class names are conventionally PascalCase even
-// though field/module names are snake_case).
+// deterministic name derived from the full field path from the
+// resource's own PascalCase name (used only for the generated CLASS name
+// -- Python class names are conventionally PascalCase even though
+// field/module names are snake_case) -- collision-free WITHIN one
+// resource (no two fields can share the same path), but that was never
+// the whole story: every resource's own classes and its module-level
+// ResourceBinding share one flat module namespace, and a bare
+// "parentPascal+fieldPascal" concatenation (the original scheme,
+// UBI-96) can and does collide with a name some OTHER resource
+// generates -- Python has no redeclaration error at all for this (a
+// later `class X` or `X = sdk.ResourceBinding(...)` silently replaces an
+// earlier one in the module's namespace), so this class of bug is
+// SILENT here, not a compile failure the way it is in Go -- arguably
+// worse. See sdk/codegen/templates/go's own goFieldMeta doc comment for
+// the full, live-verified account (6,278 real collisions against
+// hashicorp/aws@6.54.0, 100% within a single AWS service -- so
+// namespacing by service package, UBI-98's own direction, would not have
+// fixed this either). The "_" joining pathPrefix to fieldPascal below is
+// the identical fix: pascalCase never emits an underscore, so a nested
+// class name can never equal another resource's own bare pascalCase
+// name (which has none), and two different resources' own nested trees
+// can never collide with each other either, since the first path
+// segment up to the first inserted "_" is always that resource's own
+// distinct pascal name.
 type resourceRenderer struct {
 	pascalName  string
 	nestedDecls []string
@@ -164,7 +184,7 @@ func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 		if err != nil {
 			return "", err
 		}
-		name := pathPrefix + fieldPascal
+		name := pathPrefix + "_" + fieldPascal
 		if r.seen == nil {
 			r.seen = map[string]bool{}
 		}

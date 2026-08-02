@@ -17,11 +17,11 @@ import ubx_sdk as sdk
 SOURCE_PROVENANCE = {"source": "hashicorp/aws", "version": "6.54.0"}
 
 @dataclasses.dataclass
-class AwsDbInstanceBlueGreenUpdate:
+class AwsDbInstance_BlueGreenUpdate:
     enabled: Any = None
 
 @dataclasses.dataclass
-class AwsDbInstanceRestoreToPointInTime:
+class AwsDbInstance_RestoreToPointInTime:
     restore_time: Any = None
     source_db_instance_automated_backups_arn: Any = None
     source_db_instance_identifier: Any = None
@@ -29,7 +29,7 @@ class AwsDbInstanceRestoreToPointInTime:
     use_latest_restorable_time: Any = None
 
 @dataclasses.dataclass
-class AwsDbInstanceS3Import:
+class AwsDbInstance_S3Import:
     bucket_name: Any = None
     bucket_prefix: Any = None
     ingestion_role: Any = None
@@ -37,7 +37,7 @@ class AwsDbInstanceS3Import:
     source_engine_version: Any = None
 
 @dataclasses.dataclass
-class AwsDbInstanceTimeouts:
+class AwsDbInstance_Timeouts:
     create: Any = None
     delete: Any = None
     update: Any = None
