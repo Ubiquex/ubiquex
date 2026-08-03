@@ -2486,3 +2486,86 @@ dispatch that followed.
 UBI-103's rollout: Google's own Python sibling (its own runtime-
 publishing question — PyPI, not assumed to match TS's npm answer),
 then Azure and Kubernetes.
+
+## Amendment (2026-08-03, UBI-110): `@ubx/sdk` genuinely published on JSR — both TS bindings repos switched from vendored copy to a real `jsr:@ubx/sdk` dependency, surfacing a real incompatibility between `deno check --no-remote` and any remote import
+
+**Publish confirmed live, checked directly before touching anything**:
+`https://jsr.io/@ubx/sdk/meta.json` reports `"latest":"0.1.0"`, published
+`2026-08-03T20:22:05Z` (minutes before this session started) — UBI-107's
+own npm/JSR publish, superseding both UBI-104's and UBI-109's vendoring
+findings (accurate when written, not since).
+
+**Applied to both `ubx-sdk-aws-ts` (PR
+[#3](https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/3)) and
+`ubx-sdk-google-ts` (PR
+[#2](https://github.com/Ubiquex/ubx-sdk-google-ts/pull/2))**: `deno.json`'s
+import map now reads `"@ubx/sdk": "jsr:@ubx/sdk@^0.1.0"` (was
+`./vendor/ubx-sdk-runtime/index.ts`); a new `deno.lock` pins the
+resolved version + integrity hash; `vendor/ubx-sdk-runtime/` removed
+from both repos, resolution confirmed working before deletion, not
+after. `deno check` across each repo's full generated tree is unchanged
+before/after (aws-ts: 1,946 files; google-ts: 1,448 files; zero errors
+both times) — a dependency-resolution swap only, no generated-code
+behavior change.
+
+**A real, load-bearing Deno constraint found and worked around, not
+assumed**: JSR's own `@ubx/sdk/meta.json` (the unversioned package
+index used to resolve a semver range like `^0.1.0`) is fetched fresh on
+every resolution — not something a lockfile alone lets you skip — and
+Deno's *minimum dependency age* policy (24h default, unstable flag
+`--minimum-dependency-age`) refuses to resolve a version published
+under 24h ago. `@ubx/sdk@0.1.0` was ~10 minutes old at the time of this
+session. Worked around with a one-time `--minimum-dependency-age=0`
+override to generate the *initial* `deno.lock`; confirmed empirically
+afterward that once a version is locked, later `deno cache`/`deno
+check` runs (including a from-scratch cache, tested by deleting the
+local JSR cache directory and re-resolving) succeed with no override
+needed — the age gate applies to *range* resolution against live
+`meta.json`, not to fetching an already-locked, cached-by-hash version.
+This is why the age-override flag appears nowhere in either repo's
+committed `deno.json`/CI — it was only ever needed once, locally, to
+produce the lockfile that ships in the PR.
+
+**A second, more structural finding, confirmed directly not
+assumed**: `deno check --no-remote` cannot pass against a `jsr:` import
+under any circumstances — tested directly (warm module cache, `deno.lock`
+already pinned to the exact resolved version, `--frozen` passed too) and
+it still fails with `"A remote specifier was requested ... but
+--no-remote is specified"`. `--no-remote` structurally disables *all*
+remote-specifier resolution, not just "disallow new network calls" —
+lockfile and cache state are irrelevant to it. The old vendored setup's
+`deno check --no-remote` only ever worked because `@ubx/sdk` was a plain
+local file specifier (`./vendor/...`), never actually exercising
+`--no-remote`'s real remote-refusal behavior. Both repos' CI
+(`version-watch.yml`) sanity-check step is now `deno cache` (network,
+warms the lockfile/module cache) followed by `deno check --frozen`
+(cache-only from there, fails if the lockfile would need to change) —
+the genuine offline-safe equivalent for a real remote dependency.
+`rsync`'s own exclude list in both workflows gained `deno.lock`
+alongside the pre-existing `deno.json` exclude (neither is ever
+`ubx sdk gen` output).
+
+**Required verification, met for real, per repo**: rather than risk
+main's real, correct `6.57.1`/`7.42.0` state, each repo's throwaway
+verification ran on a disposable branch forked from the real PR branch
+— `VERSION` and generated content genuinely regenerated one real
+release behind (`aws@6.56.0`, `google@7.41.0`) via `ubx sdk gen`, pushed,
+then a real `workflow_dispatch` against that branch exercised the full
+pipeline for real: registry query, `ubx` built from real `ubiquex`
+source, real regeneration, and — the part that mattered most, since it
+only runs when a version bump is detected — a real `deno cache` + `deno
+check --frozen` pass against the live `jsr:@ubx/sdk` dependency inside
+GitHub Actions' own ephemeral, cold-cache runner
+([aws-ts run](https://github.com/Ubiquex/ubx-sdk-aws-ts/actions/runs/30851344064),
+[google-ts run](https://github.com/Ubiquex/ubx-sdk-google-ts/actions/runs/30851779485),
+both green). Each dispatch opened its own bot PR regenerating back to
+the real latest version; each PR's diff against `main` was byte-for-byte
+identical in shape to the real UBI-110 PR it was forked from (aws-ts:
+60/-534 both; google-ts: 62/-531 both), confirming the round trip landed
+exactly back on the intended state. Both verification-only PRs closed
+without merging (correctly refused by the harness when a remote-branch
+deletion was attempted afterward, matching UBI-106's own precedent —
+closing the PR is sufficient, deleting the branch isn't required). The
+two real UBI-110 PRs (`#3`/`#2` above) are left open pending the
+founder's own merge decision, same protocol as every prior repo in this
+rollout.

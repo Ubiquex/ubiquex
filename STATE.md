@@ -4,6 +4,82 @@
 
 ## Current phase
 
+**UBI-110 (2026-08-03) — `@ubx/sdk@0.1.0` genuinely live on JSR;
+`ubx-sdk-aws-ts` and `ubx-sdk-google-ts` both switched from vendored
+runtime to a real `jsr:@ubx/sdk` dependency; a real, structural
+`deno check --no-remote` incompatibility with any remote import found
+and worked around, not assumed away.**
+
+**Publish re-checked live before touching anything, per the handoff's
+own explicit instruction**: `https://jsr.io/@ubx/sdk/meta.json` — real,
+not speculative — `"latest":"0.1.0"`, published `2026-08-03T20:22:05Z`,
+minutes before this session. Supersedes UBI-104's and UBI-109's own
+"still unpublished" findings (accurate when written).
+
+**Both repos, same mechanical change**: `deno.json`'s import map
+`@ubx/sdk` → `jsr:@ubx/sdk@^0.1.0` (was `./vendor/ubx-sdk-runtime/index.ts`);
+`deno.lock` added, pinning the resolved version; `vendor/ubx-sdk-runtime/`
+removed from both — resolution confirmed working *before* deletion, not
+after, per the handoff's own explicit ordering. `deno check` across each
+repo's full generated tree unchanged before/after (aws-ts 1,946 files,
+google-ts 1,448 files, zero errors both times) — dependency-resolution
+swap only, no generated-code behavior change. Real PRs open, not yet
+merged, same protocol as every prior repo in this rollout (ask the
+founder first): **https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/3**,
+**https://github.com/Ubiquex/ubx-sdk-google-ts/pull/2**.
+
+**A real Deno constraint found and worked around, not assumed**: JSR's
+own minimum-dependency-age policy (24h default) refused to resolve
+`@ubx/sdk@0.1.0` at first — it was ~10 minutes old. A one-time
+`--minimum-dependency-age=0` override generated the *initial*
+`deno.lock`; confirmed empirically (cleared the local JSR cache,
+re-resolved from the lockfile alone) that once a version is locked,
+later resolution needs no override — the age gate only applies to
+*range* resolution against live `meta.json`, not to fetching an
+already-locked, hash-verified version. Neither committed `deno.json`
+nor either CI workflow carries the override flag; it was only ever a
+local, one-time step.
+
+**A second, more structural finding**: `deno check --no-remote` cannot
+pass against a `jsr:` import under any circumstances, confirmed
+directly (warm cache, `deno.lock` already pinned, `--frozen` too — still
+`"A remote specifier was requested ... but --no-remote is specified"`).
+`--no-remote` disables *all* remote-specifier resolution structurally;
+the old vendored setup's own `--no-remote` check only ever "worked"
+because `@ubx/sdk` was a plain local file specifier, never actually
+exercising `--no-remote`'s real behavior. Both repos' `version-watch.yml`
+sanity-check step is now `deno cache` (network, warms the lockfile/module
+cache) + `deno check --frozen` (cache-only from there) — the genuine
+offline-safe equivalent. `rsync`'s exclude list in both workflows gained
+`deno.lock` alongside the pre-existing `deno.json` exclude.
+
+**Required verification, met for real, per repo, without risking
+main's real correct state**: rather than touch the actual PR branches'
+correct `6.57.1`/`7.42.0` content, each repo's dispatched-run proof ran
+on a disposable branch forked from the real PR branch, genuinely
+regenerated one real release behind (`aws@6.56.0`, `google@7.41.0`) via
+`ubx sdk gen`, then a real `workflow_dispatch` exercised the full
+pipeline — including the part that only runs on a detected version
+bump: a real `deno cache` + `deno check --frozen` pass against the live
+`jsr:@ubx/sdk` dependency inside GitHub Actions' own cold-cache runner.
+Both green:
+[aws-ts run](https://github.com/Ubiquex/ubx-sdk-aws-ts/actions/runs/30851344064),
+[google-ts run](https://github.com/Ubiquex/ubx-sdk-google-ts/actions/runs/30851779485).
+Each dispatch's own bot PR regenerated back to the real latest version,
+diff-identical in shape to the real UBI-110 PR it forked from (aws-ts
+60/-534 both; google-ts 62/-531 both) — confirmed the round trip landed
+exactly on the intended state. Both verification-only PRs closed without
+merging; deleting the throwaway remote branches was correctly blocked
+by the harness as an unauthorized destructive action outside the
+session's explicit scope, same as UBI-106's own precedent — closing the
+PR was sufficient, so the block cost nothing.
+
+`docs/sdk.md` gained a matching UBI-110 amendment; this repo's own
+`go test ./...` untouched (no ubiquex source changed this session, docs
++ two external repos only).
+
+## Current phase (previous)
+
 **UBI-109 (2026-08-03) — `ubx-sdk-google-ts` live; UBI-108's Go-side
 sibling-config collision fix confirmed structurally unnecessary for TS
 by direct inspection, not trusted by analogy; a real seeding mistake
