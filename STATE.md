@@ -4,6 +4,69 @@
 
 ## Current phase
 
+**UBI-115 (2026-08-03) — `ubx-sdk-azure-go` live: final row of the original four-provider rollout. Headline finding: the NestedType fix's generality claim resolved with a definitive negative, not a "tested and passed" positive — `hashicorp/azurerm@5.0.0` negotiates tfplugin protocol v5, not v6, and NestedType is a v6-only wire field, so the fix's mechanism is never even exercised by this provider at this version.**
+
+**Repo confirmed before anything else, per the ticket's own explicit
+instruction**: `github.com/ubiquex/ubx-sdk-azure-go` already existed
+(founder-created beforehand, standing protocol) — confirmed via the real
+GitHub API (`pushedAt` == `createdAt`, genuinely empty), then cloned
+locally.
+
+**The ticket's own real, priority ask (item 3) — resolved with a
+definitive negative**: checked the real launched `hashicorp/azurerm@5.0.0`
+binary directly, not assumed — it negotiates tfplugin **protocol v5**,
+not v6. `NestedType` (UBI-112's fix, `provider/schema.go`) exists only on
+`tfplugin6.Schema_Attribute`; `tfplugin5.Schema_Attribute` has no
+equivalent field. A v5 session structurally cannot carry a
+`NestedType`-encoded attribute — the fix's generality claim isn't
+"tested and passed" here, it's "not exercised at all," a different and
+more fundamental finding than Kubernetes' "present, 1/81 types, handled
+correctly." Could change in a future azurerm release if HashiCorp ever
+registers v6 for it — re-check per provider per version, same lesson as
+the earlier "protocol v6 only premise did not hold" finding.
+
+**Other three collision classes, checked for real, specifically for
+Azure**: compiler-crash-class (UBI-98) absent — largest file
+`azurerm/kubernetes/cluster.go`, 1,057 lines; sibling-`_config`
+collision (UBI-96/108) — zero candidates across all 1,103 real type
+names paired against `<type>_config`; bare-version-suffix collision
+(UBI-112) — 3 real version-suffixed names, all with real content ahead
+of the marker, none hit the fold. No new Azure-specific collision class
+found.
+
+**Real schema scale, not guessed**: **1,103 resource types** for
+`hashicorp/azurerm@5.0.0`, 144 derived service packages — direct
+generation, not estimated (recalling UBI-108's "Google guessed 400-600,
+was really 1,319" lesson). Largest in the family after Google (1,330);
+AWS (1,682) still larger; Kubernetes (81) far smaller.
+
+**Zero `ubiquex`-core changes needed this session** — `go test ./...`
+untouched, trivially green.
+
+**Required verification, clean on the first dispatch**: seeded at
+`5.0.0`, one version behind real latest (`5.0.1` — this rollout's first
+genuine major-version jump, `4.x`→`5.0.x`, confirmed live). Pushed
+directly to `main` (brand-new empty repo). Dispatched run green first
+try
+(https://github.com/Ubiquex/ubx-sdk-azure-go/actions/runs/30858026095),
+found `5.0.1`, regenerated for real, `go build ./...`/`go vet ./...`
+clean across the full 1,103-type tree, opened a real, clean,
+deterministic `5.0.0`→`5.0.1` provenance-only-bump PR —
+**https://github.com/Ubiquex/ubx-sdk-azure-go/pull/1** (144 files,
+287/-287 lines, every changed file confirmed by name to be a `doc.go`
+stamp or `VERSION`, zero resource-schema content changes). Founder
+confirmed merging — merged; `main` confirmed at `5.0.1` via the real
+GitHub API.
+
+`docs/sdk.md` gained a matching UBI-115 amendment.
+
+**UBI-103's rollout, complete**: AWS, Google, Kubernetes, and Azure all
+real and live across Go/TS/Python — twelve repos total. The original
+four-provider rollout plan is done. `hashicorp/helm` remains explicitly
+out of scope, its own future ticket.
+
+## Current phase (previous)
+
 **UBI-114 (2026-08-04) — `ubx-sdk-kubernetes-py` live: both of UBI-112's `ubiquex`-core fixes (NestedType translation, bare-version-suffix filename fold) confirmed to hold for Python's own template path, checked directly not assumed. Completes Kubernetes' full Go/TS/Python row.**
 
 **Repo confirmed before anything else, per the ticket's own explicit
