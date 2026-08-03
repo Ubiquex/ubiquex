@@ -2655,3 +2655,158 @@ merging (nothing to merge, given the empty diff).
 
 **All of AWS (Go/TS/Python) + Google (Go/TS/Python) now real and
 live**; UBI-103's rollout has just Azure and Kubernetes remaining.
+
+## Amendment (2026-08-03, UBI-112): `ubx-sdk-kubernetes-go` — first non-cloud-provider in the rollout, two genuinely new schema-shape findings neither AWS nor Google ever surfaced, both fixed at the source
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-kubernetes-go**
+(public) — didn't exist at session start (`gh api
+repos/Ubiquex/ubx-sdk-kubernetes-go` → 404, confirmed against the full
+org repo listing); unlike every prior repo in this rollout, the founder
+explicitly authorized the agent itself to create it this session rather
+than founder-creating it beforehand. Scope confirmed via the ticket's
+own comment thread before anything else: **`hashicorp/kubernetes`
+ONLY** — `hashicorp/helm` is a separate provider, explicitly out of
+scope, its own future ticket. Repo-scoped `UBIQUEX_SOURCE_TOKEN` PAT
+added by the founder, same per-repo pattern as every sibling (checked
+via `gh secret list`, genuinely empty before, present after).
+
+**Real schema scale, confirmed not assumed**: **81 resource types** for
+`hashicorp/kubernetes@3.2.0` — a real, architecturally smaller and
+flatter schema than AWS (1,682) or Google (1,330), exactly as UBI-103
+predicted going in, now confirmed rather than guessed. 37 derived
+service packages.
+
+**Item 3(a), the compiler-crash-class check (UBI-98) — confirmed
+absent, not assumed smaller just because there are fewer resource
+types**: largest real generated file is `kubernetes/cron/job_v1.go` at
+1,855 lines, nowhere near the pathological ~250,000-line scale that hit
+`aws_wafv2_web_acl_rule` pre-UBI-98.
+
+**Item 3(b), the sibling-`_config` collision class (UBI-96/108) —
+checked for real, confirmed absent**: zero collisions, `go
+build ./...`/`go vet ./...` clean across the full 81-type tree, both
+before and after the two fixes below.
+
+**Item 3(c), a genuinely new schema-shape class, found and fixed at the
+source, not routed around**: the real full-schema generation hit a
+live failure neither AWS nor Google's own schemas have ever produced —
+`sdk gen: hashicorp/kubernetes@3.2.0: sdk/codegen/ir:
+FromSchema("kubernetes_validating_admission_policy_v1"): attribute
+"metadata": parse type: EOF`. Root cause: `provider/schema.go`'s
+tfplugin6 translation only ever read `Schema_Attribute.Type`; one real
+resource, `kubernetes_validating_admission_policy_v1`, carries several
+attributes (15 total) via `Schema_Attribute.NestedType` instead — the
+Terraform Plugin Framework's structured/object-attribute wire encoding,
+mutually exclusive with `Type` on the wire — leaving `Type` empty and
+failing to parse as JSON. Quantified before fixing, not just patched
+blind: a throwaway diagnostic against the real launched provider binary
+found exactly 1 of 81 real resource types affected, 15 nested-type
+attributes total, real recursion depth 5
+(`kubernetes_validating_admission_policy_v1.spec.match_constraints.object_selector.label_selector.match_expressions.key`
+— the PodSpec-containing-containers self-referential shape the ticket
+named as a real risk up front, confirmed present). Fixed at the
+translation boundary: `NestedType` (itself recursive — a
+`Schema_Object`'s own attributes may carry further `NestedType`) is now
+converted to the equivalent `cty` object/collection type (`SINGLE` →
+bare object, `LIST`/`SET`/`MAP` → the matching cty collection wrapping
+it) before anything downstream ever sees it, so IR, codegen, and
+`ctyvalue.go`'s own config-encoding all keep working unmodified —
+zero changes needed outside `provider/schema.go` and the error-plumbing
+its now-fallible `blockFromV6`/`schemaFromV6`/`schemaMapFromV6`
+required. `tfplugin5` confirmed to carry no equivalent field at all
+(`NestedType` is a protocol-v6-only addition) — no v5 translation
+changes needed. New regression tests
+(`provider/schema_test.go`): single/list/set/map nesting, real depth-2
+recursion, and a malformed-child-type error case. Re-verified against
+AWS's real full `hashicorp/aws@6.54.0` schema afterward (live test,
+`UBX_CONFORMANCE_LIVE=1`): identical 1,941 files/258 packages, zero
+regression.
+
+**A second, real, novel finding — a reviewability defect, not a
+compile error, found and also fixed at the source, this time
+generalized rather than Kubernetes-specific**: `ir.ServiceAndLocalName`
+(UBI-98) assumes a stable `<provider>_<service>_<resource>` wire-name
+shape, mechanically splitting on the first two tokens. Kubernetes' real
+provider instead widely uses a flatter
+`kubernetes_<resource>[_v1|_v2|_v2beta2]` convention, and before a fix
+this reduced the local name to literally nothing but the version marker
+for many real resources — `kubernetes_deployment_v1` → service
+`deployment`, local name just `v1`, producing a generated file named
+`v1.go` that carries zero information about which resource it defines.
+The generated tree had *nine* such bare-version files
+(`deployment/v1.go`, `job/v1.go`, `namespace/v1.go`, `pod/v1.go`,
+`role/v1.go`, `secret/v1.go` alongside `secret/v1_data.go`,
+`service/v1.go`, `endpoints/v1.go`, `ingress/v1.go`) before the fix.
+Fixed generally, not hardcoded to Kubernetes: when the entire remaining
+local-name portion of a wire type is a bare API-version marker (`v1`,
+`v2beta2`, `v1alpha1`, ... — regex `^v[0-9]+(alpha|beta)?[0-9]*$`), the
+service token folds back into the local name (`deployment_v1.go`, not
+`v1.go`). Confirmed live, not assumed, that this changes nothing for
+either existing provider: AWS's real full schema re-run (above) is
+byte-identical in file/package count; a live diagnostic against
+Google's real `hashicorp/google@7.42.0` schema found exactly one wire
+type ending in a version-like token
+(`google_apigee_security_profile_v2`) and confirmed it already has more
+than one token ahead of the version marker (`security_profile_v2`, not
+a bare `v2`), so it never hits this fold's narrow trigger — zero
+behavior change for Google. New regression test in
+`sdk/codegen/ir/ir_test.go` covers both the fold and the confirmed-unaffected
+cases side by side.
+
+**A related, deliberately NOT "fixed" limitation, named rather than
+silently smoothed over**: Kubernetes' own real provider is inconsistent
+about underscore-separating compound resource names —
+`kubernetes_daemonset` (no underscore) vs. `kubernetes_daemon_set_v1`
+(underscore) both real, both meaning the same real-world `DaemonSet`
+kind. The mechanical, non-curated wire-name split has no way to know
+these are the same concept without a hand-maintained synonym table —
+exactly the class of limitation `ServiceAndLocalName`'s own doc comment
+already accepts for AWS's EC2/VPC "core" resource family (`aws_vpc`,
+`aws_instance`, and friends fragmenting into many small packages rather
+than one curated "ec2" package). The result: `DaemonSet` lands in two
+differently-named service directories (`daemonset/`, `daemon/`) in the
+real generated tree. Real, accepted, documented — not a regression from
+this session's fixes, and out of scope for a purely mechanical
+derivation by design (docs/sdk.md's and `ServiceAndLocalName`'s own
+"cannot ever consult an external...taxonomy" constraint, since `ubx sdk
+gen` must stay 100% local/offline).
+
+**Item 6, confirmed not re-solved**: `ubx-sdk-go` (the shared Go
+runtime) is already real and published — this repo's `go.mod` depends
+on it directly (module corrected post-gen to
+`github.com/ubiquex/ubx-sdk-kubernetes-go`, matching UBI-108's own
+precedent — codegen's mechanical shortName derivation always writes
+`.../ubx-sdk-kubernetes`), verified via a real credential-free `go
+build ./...`/`go vet ./...` against the real public Go proxy, no
+`replace` directive.
+
+**Required verification, met for real**: seeded at `3.2.0`, one real
+version behind the real latest (`3.2.1`) at seed time, same discipline
+as every prior repo. Initial seed pushed directly to `main` (a brand
+new, empty repo — nothing to risk, same as UBI-108's own first-seed
+precedent, unlike later sessions' disposable-branch verification
+against an already-correct `main`). First dispatched run genuinely
+failed, not silently retried past: it built `ubx` from `ubiquex`'s real
+`main` on GitHub, which didn't yet have this session's local fixes
+committed — the exact same `NestedType` `EOF` failure reproduced in CI
+after reproducing locally first. Fixed by actually pushing the fix to
+`ubiquex` `main` (`adfa68d..42ece27`) before re-dispatching, not by
+weakening the workflow. Second dispatched run green:
+https://github.com/Ubiquex/ubx-sdk-kubernetes-go/actions/runs/30855489963
+— queried the real registry, found `3.2.1`, built `ubx` from the
+now-fixed `ubiquex` source, regenerated for real, ran a real `go
+build ./...`/`go vet ./...` against the full regenerated 81-type tree,
+opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-kubernetes-go/pull/1** — a clean,
+deterministic `3.2.0`→`3.2.1` provenance-only bump (38 files, 75
+additions/75 deletions — exactly 2 lines × 37 `doc.go` files' version
+stamps + 1 `VERSION` line, zero resource-schema content changes,
+confirming the round trip is byte-for-byte deterministic here too).
+Founder confirmed merging — merged; `main` confirmed at `3.2.1` via the
+real GitHub API.
+
+**UBI-103's rollout**: AWS and Google (all three languages each) real
+and live; Kubernetes/Go (UBI-112) now real and live, first non-cloud
+provider proven. `hashicorp/helm` explicitly deferred to its own future
+ticket (not part of this one's scope). Remaining: Kubernetes' own
+TS/Python siblings, then Azure.
