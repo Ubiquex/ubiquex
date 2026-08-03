@@ -12,9 +12,9 @@
 # chosen to match that real run, not invented independently.
 import ubx_sdk as sdk
 
-# UBI-98: generated/db/, not generated/hashicorp-aws/db/ -- unlike TS/Go's
-# own conformance fixtures, which nest under the source-sanitized
-# directory name a real `ubx sdk gen` run would use verbatim
+# UBI-98: generated/aws/db/, not generated/hashicorp-aws/aws/db/ --
+# unlike TS/Go's own conformance fixtures, which nest under the source-
+# sanitized directory name a real `ubx sdk gen` run would use verbatim
 # ("hashicorp-aws"), Python's own dotted `import` syntax cannot traverse
 # a hyphenated path segment at all (a real, load-bearing language
 # constraint, not a stylistic choice) -- generated/'s own real service
@@ -22,7 +22,11 @@ import ubx_sdk as sdk
 # deliberately-curated-for-this-fixture placement the pre-restructure
 # comment on this file's own generated/ sibling already established
 # ("filtered to aws_db_instance only, unlike a real ubx sdk gen run").
-from generated.db.instance import Instance, InstanceConfig
+# The "aws/" segment itself (UBI-106: every service package nests under
+# the provider's own shortName directory) stays -- "aws" has no hyphen,
+# so only the "hashicorp-aws" SOURCE directory is the one real Python
+# import can never traverse, not this one.
+from generated.aws.db.instance import Instance, InstanceConfig
 
 
 def describe():

@@ -188,8 +188,9 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 
 	wantPaths := []string{
 		"pyproject.toml",
-		"ecr/__init__.py", "ecr/repository.py",
-		"iam/__init__.py", "iam/role.py", "iam/role_policy_attachment.py",
+		"aws/__init__.py",
+		"aws/ecr/__init__.py", "aws/ecr/repository.py",
+		"aws/iam/__init__.py", "aws/iam/role.py", "aws/iam/role_policy_attachment.py",
 	}
 	for _, p := range wantPaths {
 		if _, ok := files[p]; !ok {
@@ -202,15 +203,15 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 
 	mustContain(t, files["pyproject.toml"], `name = "ubx-sdk-aws"`)
 
-	mustContain(t, files["ecr/__init__.py"], `SOURCE_PROVENANCE = {"source": "hashicorp/aws", "version": "6.54.0"}`)
-	mustContain(t, files["ecr/repository.py"], "Repository = sdk.ResourceBinding(")
-	// ecr/repository.py must NOT redeclare SOURCE_PROVENANCE -- that
-	// lives exactly once, in ecr/__init__.py, for the whole package.
-	mustNotContain(t, files["ecr/repository.py"], "SOURCE_PROVENANCE")
+	mustContain(t, files["aws/ecr/__init__.py"], `SOURCE_PROVENANCE = {"source": "hashicorp/aws", "version": "6.54.0"}`)
+	mustContain(t, files["aws/ecr/repository.py"], "Repository = sdk.ResourceBinding(")
+	// aws/ecr/repository.py must NOT redeclare SOURCE_PROVENANCE -- that
+	// lives exactly once, in aws/ecr/__init__.py, for the whole package.
+	mustNotContain(t, files["aws/ecr/repository.py"], "SOURCE_PROVENANCE")
 
-	mustContain(t, files["iam/role.py"], "Role = sdk.ResourceBinding(")
-	mustContain(t, files["iam/role_policy_attachment.py"], "RolePolicyAttachment = sdk.ResourceBinding(")
-	mustContain(t, files["iam/role_policy_attachment.py"], `wire_type="aws_iam_role_policy_attachment",`)
+	mustContain(t, files["aws/iam/role.py"], "Role = sdk.ResourceBinding(")
+	mustContain(t, files["aws/iam/role_policy_attachment.py"], "RolePolicyAttachment = sdk.ResourceBinding(")
+	mustContain(t, files["aws/iam/role_policy_attachment.py"], `wire_type="aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real declaration collisions: %v", err)
@@ -225,10 +226,10 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["vpc/vpc.py"]; !ok {
-		t.Fatalf("GeneratedRepo: expected vpc/vpc.py for the bare \"aws_vpc\" type, got paths: %v", keys(files))
+	if _, ok := files["aws/vpc/vpc.py"]; !ok {
+		t.Fatalf("GeneratedRepo: expected aws/vpc/vpc.py for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["vpc/vpc.py"], "Vpc = sdk.ResourceBinding(")
+	mustContain(t, files["aws/vpc/vpc.py"], "Vpc = sdk.ResourceBinding(")
 }
 
 // TestGeneratedRepo_ServiceNameIsPythonKeyword_Escaped is a real, live-
@@ -243,8 +244,8 @@ func TestGeneratedRepo_ServiceNameIsPythonKeyword_Escaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["lambda_/function.py"]; !ok {
-		t.Fatalf("GeneratedRepo: expected lambda_/function.py (escaped Python keyword), got paths: %v", keys(files))
+	if _, ok := files["aws/lambda_/function.py"]; !ok {
+		t.Fatalf("GeneratedRepo: expected aws/lambda_/function.py (escaped Python keyword), got paths: %v", keys(files))
 	}
 }
 

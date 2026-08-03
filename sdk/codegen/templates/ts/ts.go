@@ -67,14 +67,22 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	files := map[string]string{
 		"package.json": packageJSON(shortName, source, version),
 	}
+	// UBI-106: every service directory nests under shortName/ (e.g.
+	// aws/iam/, never iam/ at the repo root) -- fixes a real repo-
+	// browsing problem (200+ service directories at hashicorp/aws's own
+	// repo root sorted ahead of README.md by GitHub's file browser).
+	// package.json stays at the true root. ES module resolution is
+	// purely path-based (confirmed live, UBI-98 session 2) -- no
+	// identifier-validity guard needed for shortName as a path segment,
+	// unlike Python's own dotted-import requirement below.
 	for _, service := range services {
-		files[service+"/doc.ts"] = PackageDoc(source, version)
+		files[shortName+"/"+service+"/doc.ts"] = PackageDoc(source, version)
 		for _, e := range byService[service] {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: %w", e.rt.WireType, err)
 			}
-			files[service+"/"+e.local+".ts"] = content
+			files[shortName+"/"+service+"/"+e.local+".ts"] = content
 		}
 	}
 	return files, nil

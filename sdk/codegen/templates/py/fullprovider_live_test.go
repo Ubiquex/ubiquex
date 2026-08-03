@@ -98,9 +98,17 @@ func TestFullProvider_Py_ImportsClean(t *testing.T) {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
+	// UBI-106: every service package now nests under one shared "aws/"
+	// namespace directory, so grouping by the FIRST "/" segment alone
+	// would always report "1" regardless of real service count -- group
+	// by the file's own full DIRECTORY (everything before the LAST "/")
+	// instead, which still correctly distinguishes aws/iam from aws/ecr
+	// (off by one here specifically: aws/__init__.py's own directory,
+	// "aws", counts as one extra entry alongside the real per-service
+	// ones -- a cosmetic log-count quirk, not worth a special case).
 	servicePackages := map[string]bool{}
 	for path := range files {
-		if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		if idx := strings.LastIndex(path, "/"); idx >= 0 {
 			servicePackages[path[:idx]] = true
 		}
 	}

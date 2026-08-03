@@ -81,20 +81,46 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	}
 	sort.Strings(services)
 
+	// UBI-106: every service package nests under a namespace directory
+	// (e.g. aws/iam/, never iam/ at the repo root) -- fixes a real
+	// repo-browsing problem (200+ service directories at hashicorp/aws's
+	// own repo root sorted ahead of README.md by GitHub's file browser).
+	// pyproject.toml stays at the true root. Unlike Go/TS, this namespace
+	// segment itself must be a valid Python identifier (`import
+	// aws.iam.role` requires "aws" to parse as one) -- pyShortNameIdent
+	// guards it the same way pyModuleIdent already guards service/local
+	// names, PLUS a hyphen guard neither of those needs (shortName's own
+	// pyproject.toml package NAME conventionally keeps hyphens, e.g.
+	// "ubx-sdk-aws" -- fine there, a TOML string, but not here). Not
+	// exercised by "aws" itself (no hyphen, not a keyword), but a real,
+	// universal constraint for any future provider whose shortName has
+	// one (e.g. a hypothetical "google-beta") -- guarded unconditionally
+	// now, before Google's own repos exist, the same defensive-not-yet-
+	// confirmed posture pyModuleIdent's own leading-digit guard already
+	// established.
+	ns := pyShortNameIdent(shortName)
 	files := map[string]string{
-		"pyproject.toml": pyprojectTOML(shortName, source, version),
+		"pyproject.toml":    pyprojectTOML(shortName, source, version),
+		ns + "/__init__.py": PackageDoc(source, version),
 	}
 	for _, service := range services {
-		files[service+"/__init__.py"] = PackageDoc(source, version)
+		files[ns+"/"+service+"/__init__.py"] = PackageDoc(source, version)
 		for _, e := range byService[service] {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
 			}
-			files[service+"/"+e.local+".py"] = content
+			files[ns+"/"+service+"/"+e.local+".py"] = content
 		}
 	}
 	return files, nil
+}
+
+// pyShortNameIdent guards shortName for use as the namespace directory
+// every service package nests under -- see GeneratedRepo's own comment
+// above for why this needs a hyphen guard pyModuleIdent doesn't.
+func pyShortNameIdent(shortName string) string {
+	return pyModuleIdent(strings.ReplaceAll(shortName, "-", "_"))
 }
 
 // pyModuleIdent guards a derived service or local module name against

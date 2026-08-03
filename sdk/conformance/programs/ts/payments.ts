@@ -15,7 +15,7 @@
 // real run, not invented independently, so this case is a genuine
 // convergence proof, not a coincidence.
 import { intent, resource, stack } from "@ubx/sdk";
-import { Instance } from "./generated/hashicorp-aws/db/instance.ts";
+import { Instance } from "./generated/hashicorp-aws/aws/db/instance.ts";
 
 export default stack("payments", () => {
   intent({

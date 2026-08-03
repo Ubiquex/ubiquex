@@ -185,8 +185,8 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 
 	wantPaths := []string{
 		"package.json",
-		"ecr/doc.ts", "ecr/repository.ts",
-		"iam/doc.ts", "iam/role.ts", "iam/role_policy_attachment.ts",
+		"aws/ecr/doc.ts", "aws/ecr/repository.ts",
+		"aws/iam/doc.ts", "aws/iam/role.ts", "aws/iam/role_policy_attachment.ts",
 	}
 	for _, p := range wantPaths {
 		if _, ok := files[p]; !ok {
@@ -199,15 +199,15 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 
 	mustContain(t, files["package.json"], `"name": "@ubx/sdk-aws"`)
 
-	mustContain(t, files["ecr/doc.ts"], `__ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0" }`)
-	mustContain(t, files["ecr/repository.ts"], "export const Repository:")
-	// ecr/repository.ts must NOT redeclare __ubxSourceProvenance -- that
-	// lives exactly once, in ecr/doc.ts, for the whole directory.
-	mustNotContain(t, files["ecr/repository.ts"], "__ubxSourceProvenance")
+	mustContain(t, files["aws/ecr/doc.ts"], `__ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0" }`)
+	mustContain(t, files["aws/ecr/repository.ts"], "export const Repository:")
+	// aws/ecr/repository.ts must NOT redeclare __ubxSourceProvenance --
+	// that lives exactly once, in aws/ecr/doc.ts, for the whole directory.
+	mustNotContain(t, files["aws/ecr/repository.ts"], "__ubxSourceProvenance")
 
-	mustContain(t, files["iam/role.ts"], "export const Role:")
-	mustContain(t, files["iam/role_policy_attachment.ts"], "export const RolePolicyAttachment:")
-	mustContain(t, files["iam/role_policy_attachment.ts"], `wireType: "aws_iam_role_policy_attachment",`)
+	mustContain(t, files["aws/iam/role.ts"], "export const Role:")
+	mustContain(t, files["aws/iam/role_policy_attachment.ts"], "export const RolePolicyAttachment:")
+	mustContain(t, files["aws/iam/role_policy_attachment.ts"], `wireType: "aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real declaration collisions: %v", err)
@@ -222,10 +222,10 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["vpc/vpc.ts"]; !ok {
-		t.Fatalf("GeneratedRepo: expected vpc/vpc.ts for the bare \"aws_vpc\" type, got paths: %v", keys(files))
+	if _, ok := files["aws/vpc/vpc.ts"]; !ok {
+		t.Fatalf("GeneratedRepo: expected aws/vpc/vpc.ts for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["vpc/vpc.ts"], "export const Vpc:")
+	mustContain(t, files["aws/vpc/vpc.ts"], "export const Vpc:")
 }
 
 func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {

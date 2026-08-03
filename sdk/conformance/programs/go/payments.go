@@ -15,7 +15,7 @@ package main
 import (
 	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
 
-	db "github.com/ubiquex/ubx-sdk-aws/db"
+	db "github.com/ubiquex/ubx-sdk-aws/aws/db"
 )
 
 func main() {

@@ -137,13 +137,13 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 	}
 
 	// Both real types share one derived service package ("svc").
-	thingSrc, ok := files["svc/thing.go"]
+	thingSrc, ok := files["aws/svc/thing.go"]
 	if !ok {
-		t.Fatalf("expected svc/thing.go, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing.go, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["svc/thing_logging.go"]
+	loggingSrc, ok := files["aws/svc/thing_logging.go"]
 	if !ok {
-		t.Fatalf("expected svc/thing_logging.go, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing_logging.go, got paths: %v", keys(files))
 	}
 
 	// The nested struct (from aws_svc_thing's own "logging" block) is

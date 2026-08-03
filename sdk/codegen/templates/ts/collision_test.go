@@ -108,13 +108,13 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	thingSrc, ok := files["svc/thing.ts"]
+	thingSrc, ok := files["aws/svc/thing.ts"]
 	if !ok {
-		t.Fatalf("expected svc/thing.ts, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing.ts, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["svc/thing_logging.ts"]
+	loggingSrc, ok := files["aws/svc/thing_logging.ts"]
 	if !ok {
-		t.Fatalf("expected svc/thing_logging.ts, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing_logging.ts, got paths: %v", keys(files))
 	}
 
 	mustContain(t, thingSrc, "export interface Thing_Logging {\n  enabled: boolean;\n}")

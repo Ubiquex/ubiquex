@@ -76,14 +76,25 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	files := map[string]string{
 		"go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName),
 	}
+	// UBI-106: every service package nests under shortName/ (e.g.
+	// aws/iam/, never iam/ at the repo root) -- a real repo-browsing
+	// finding, not a design nicety: a bare-root layout put 200+ service
+	// directories directly at hashicorp/aws's own repo root, alphabetically
+	// sorted ahead of README.md by GitHub's own file browser, burying it
+	// below the fold. go.mod itself stays at the true root (a Go module's
+	// own go.mod is never optional-location) -- only service packages
+	// move. Directory names need no Go-identifier validity (only Go
+	// PACKAGE declarations do), so shortName needs no guarding here the
+	// way pyModuleIdent guards it for Python's own dotted-import
+	// requirement, below.
 	for _, service := range services {
-		files[service+"/doc.go"] = PackageDoc(service, source, version)
+		files[shortName+"/"+service+"/doc.go"] = PackageDoc(service, source, version)
 		for _, e := range byService[service] {
 			content, err := ResourceFile(service, e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: %w", e.rt.WireType, err)
 			}
-			files[service+"/"+e.local+".go"] = content
+			files[shortName+"/"+service+"/"+e.local+".go"] = content
 		}
 	}
 	return files, nil

@@ -106,13 +106,13 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	thingSrc, ok := files["svc/thing.py"]
+	thingSrc, ok := files["aws/svc/thing.py"]
 	if !ok {
-		t.Fatalf("expected svc/thing.py, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing.py, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["svc/thing_logging.py"]
+	loggingSrc, ok := files["aws/svc/thing_logging.py"]
 	if !ok {
-		t.Fatalf("expected svc/thing_logging.py, got paths: %v", keys(files))
+		t.Fatalf("expected aws/svc/thing_logging.py, got paths: %v", keys(files))
 	}
 
 	mustContain(t, thingSrc, "class Thing_Logging:\n    enabled: Any = None")

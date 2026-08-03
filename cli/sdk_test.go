@@ -97,7 +97,7 @@ func TestSDKGen_MultipleLanguagesSameOut_DoNotCollide(t *testing.T) {
 
 	assertGoRepoCompiles(t, filepath.Join(outDir, "go", "fake-widget"))
 	assertTSRepoChecks(t, filepath.Join(outDir, "ts", "fake-widget"))
-	assertPyRepoImports(t, filepath.Join(outDir, "py", "fake-widget"), "widget.widget", "Widget", "WidgetConfig")
+	assertPyRepoImports(t, filepath.Join(outDir, "py", "fake-widget"), "widget.widget.widget", "Widget", "WidgetConfig")
 }
 
 // TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror covers UBI-98's
@@ -136,16 +136,16 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	}
 	mustContainSDK(t, string(pkgJSON), `"name": "@ubx/sdk-widget"`)
 
-	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "doc.ts"))
+	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "doc.ts"))
 	if err != nil {
-		t.Fatalf("reading widget/doc.ts: %v", err)
+		t.Fatalf("reading widget/widget/doc.ts: %v", err)
 	}
 	mustContainSDK(t, string(docContent), `__ubxSourceProvenance = { source: "fake/widget", version: "0.1.0" }`)
 
-	genPath := filepath.Join(repoDir, "widget", "widget.ts")
+	genPath := filepath.Join(repoDir, "widget", "widget", "widget.ts")
 	content, err := os.ReadFile(genPath)
 	if err != nil {
-		t.Fatalf("reading widget/widget.ts: %v", err)
+		t.Fatalf("reading widget/widget/widget.ts: %v", err)
 	}
 	generated := string(content)
 
@@ -206,8 +206,10 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 // "fake_widget" (tokens "fake"/"widget", no third token -- the same
 // bare-two-token shape 11 real hashicorp/aws@6.54.0 types hit, e.g.
 // "aws_vpc") derives service AND local name both "widget", so the
-// expected tree is <outDir>/fake-widget/{go.mod,widget/{doc.go,widget.go}}
-// -- module github.com/ubiquex/ubx-sdk-widget, package widget, type
+// expected tree is <outDir>/fake-widget/{go.mod,widget/widget/{doc.go,widget.go}}
+// (UBI-106: every service package nests under the provider's own
+// shortName directory, "widget/" here, never at the repo root) --
+// module github.com/ubiquex/ubx-sdk-widget, package widget, type
 // Widget (never FakeWidget/generated.FakeWidget -- the founder's own
 // locked naming scheme, checked here against the real CLI path, not just
 // sdk/codegen/templates/go's own unit tests).
@@ -243,17 +245,17 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	mustContainSDK(t, string(goMod), "module github.com/ubiquex/ubx-sdk-widget")
 	mustContainSDK(t, string(goMod), "require github.com/ubiquex/ubx-sdk-go v0.0.0")
 
-	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "doc.go"))
+	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "doc.go"))
 	if err != nil {
-		t.Fatalf("reading widget/doc.go: %v", err)
+		t.Fatalf("reading widget/widget/doc.go: %v", err)
 	}
 	mustContainSDK(t, string(docContent), "package widget")
 	mustContainSDK(t, string(docContent), `Source: "fake/widget", Version: "0.1.0"`)
 
-	genPath := filepath.Join(repoDir, "widget", "widget.go")
+	genPath := filepath.Join(repoDir, "widget", "widget", "widget.go")
 	content, err := os.ReadFile(genPath)
 	if err != nil {
-		t.Fatalf("reading widget/widget.go: %v", err)
+		t.Fatalf("reading widget/widget/widget.go: %v", err)
 	}
 	generated := string(content)
 
@@ -357,16 +359,16 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	}
 	mustContainSDK(t, string(pyproject), `name = "ubx-sdk-widget"`)
 
-	initContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "__init__.py"))
+	initContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "__init__.py"))
 	if err != nil {
-		t.Fatalf("reading widget/__init__.py: %v", err)
+		t.Fatalf("reading widget/widget/__init__.py: %v", err)
 	}
 	mustContainSDK(t, string(initContent), `SOURCE_PROVENANCE = {"source": "fake/widget", "version": "0.1.0"}`)
 
-	genPath := filepath.Join(repoDir, "widget", "widget.py")
+	genPath := filepath.Join(repoDir, "widget", "widget", "widget.py")
 	content, err := os.ReadFile(genPath)
 	if err != nil {
-		t.Fatalf("reading widget/widget.py: %v", err)
+		t.Fatalf("reading widget/widget/widget.py: %v", err)
 	}
 	generated := string(content)
 
@@ -389,8 +391,10 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 
 	// Not just string matching -- the generated repo tree must actually
 	// import and run against the real sdk/py/ubx_sdk runtime, exactly
-	// as a real SDK program would.
-	assertPyRepoImports(t, repoDir, "widget.widget", "Widget", "WidgetConfig")
+	// as a real SDK program would. "widget.widget.widget" (not
+	// "widget.widget"): UBI-106 nests the service package one level
+	// deeper, under the provider's own shortName directory.
+	assertPyRepoImports(t, repoDir, "widget.widget.widget", "Widget", "WidgetConfig")
 }
 
 // requirePython3 skips a test when python3 isn't on PATH -- this
