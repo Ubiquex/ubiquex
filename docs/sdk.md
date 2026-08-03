@@ -2810,3 +2810,89 @@ and live; Kubernetes/Go (UBI-112) now real and live, first non-cloud
 provider proven. `hashicorp/helm` explicitly deferred to its own future
 ticket (not part of this one's scope). Remaining: Kubernetes' own
 TS/Python siblings, then Azure.
+
+## Amendment (2026-08-03, UBI-113): `ubx-sdk-kubernetes-ts` — UBI-112's two real `ubiquex`-core fixes confirmed to hold for TS's own template path, checked directly not assumed; first TS repo in this family born directly on the real published `@ubx/sdk`, no vendoring stopgap ever existed here
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-kubernetes-ts**
+(public) — this time founder-created beforehand per the ticket's own
+scope (item 1), reverting to this rollout's standing protocol rather
+than UBI-112's one-time agent-creates exception (confirmed via `gh api`
+→ 404 before the founder created it, then re-confirmed after). Its own
+repo-scoped `UBIQUEX_SOURCE_TOKEN` PAT was already present at session
+start (added by the founder alongside repo creation, not a separate
+ask this time).
+
+**Scope carried forward, not re-litigated**: `hashicorp/kubernetes`
+ONLY — `hashicorp/helm` stays deferred to its own future ticket, per
+UBI-112's own confirmed scope.
+
+**Item 3's own explicit ask, done for real, not assumed from Go**:
+verified both of UBI-112's `ubiquex`-core fixes directly against TS's
+own generated output, not trusted by analogy —
+
+1. **`NestedType`/structured-attribute translation**: generated
+   `kubernetes_validating_admission_policy_v1` and inspected the actual
+   TS output directly — a full, correctly-typed, real recursion-depth-5
+   interface tree
+   (`AdmissionPolicyV1_Spec_MatchConstraints_ObjectSelector` down to
+   `..._NamespaceSelector_MatchExpressions`). Confirmed structurally:
+   the fix lives entirely in `provider/schema.go`'s tfplugin6
+   translation layer, shared by every language ahead of any
+   per-language template — TS needed zero template-level changes,
+   exactly as the shared-translation-boundary design intended.
+2. **Bare-version-suffix filenames**: checked the full generated tree
+   directly for any `v1.ts`/`v2beta2.ts`-style bare-version file — zero
+   found; every versioned resource's own local name stays
+   self-descriptive (`deployment_v1.ts`, not `v1.ts`), same
+   `ir.ServiceAndLocalName` fix, same result as Go.
+
+**Item 5, the compiler-crash-class (UBI-98) and sibling-`_config`
+collision (UBI-96/108) checks — done for real, specifically for TS**:
+`deno check --frozen` clean across the full 81-type/118-file tree, both
+at the initial seed and after the verification bump. Largest file
+`kubernetes/cron/job_v1.ts` at 1,860 lines (Go's own equivalent: 1,855
+lines) — no language-specific blowup, no collision.
+
+**Real schema scale, confirmed independently of Go's own count**: 81
+resource types for `hashicorp/kubernetes@3.2.0` — same real count, 37
+derived service packages, confirmed by direct generation, not assumed
+to match Go's number just because it's the same provider version.
+
+**Item 3's runtime decision — the first TS repo in this family with
+nothing to migrate**: depends on `jsr:@ubx/sdk@^0.1.0` directly from
+the initial commit (UBI-107/110's real publish already existed at this
+repo's birth) — no vendored `vendor/ubx-sdk-runtime/` stopgap ever
+existed here, unlike every prior TS repo (`ubx-sdk-aws-ts`,
+`ubx-sdk-google-ts`) which started vendored and migrated later.
+`deno.lock` needed the same one-time
+`--minimum-dependency-age=0` override UBI-110 found and documented
+(`@ubx/sdk@0.1.0` was still under 24h old at generation time) — the
+override was only ever a local, one-time step to produce the initial
+lockfile; neither the committed `deno.json` nor the CI workflow carries
+it, matching UBI-110's own confirmed "once locked, no override needed
+again" finding, re-confirmed here (the CI dispatch's own `deno cache` +
+`deno check --frozen` ran with no override and passed clean).
+
+**Required verification, met for real, clean on the first dispatch this
+time (unlike UBI-112's Go repo, where the first dispatch genuinely
+failed because the `ubiquex` fix hadn't been pushed to `main` yet — that
+fix has been on `main` since UBI-112, so there was nothing left to
+discover here)**: seeded at `3.2.0`, one real version behind the real
+latest (`3.2.1`, unchanged since UBI-112 — no new release in between).
+Initial seed pushed directly to `main` (a brand-new empty repo).
+Dispatched run green on the first try:
+https://github.com/Ubiquex/ubx-sdk-kubernetes-ts/actions/runs/30856441168
+— queried the real registry, found `3.2.1`, built `ubx` from
+`ubiquex`'s real `main`, regenerated for real, ran a real `deno cache` +
+`deno check --frozen` against the full regenerated 81-type tree, opened
+a real PR — **https://github.com/Ubiquex/ubx-sdk-kubernetes-ts/pull/1**
+— a clean, deterministic `3.2.0`→`3.2.1` provenance-only bump (39
+files, 76/-76 lines: 37 `doc.ts` version stamps + `VERSION` +
+`package.json`'s own embedded version string, zero resource-schema
+content changes). Founder confirmed merging — merged; `main` confirmed
+at `3.2.1` via the real GitHub API.
+
+**UBI-103's rollout**: AWS and Google (all three languages each) real
+and live; Kubernetes now real and live in Go (UBI-112) and TS
+(UBI-113) — `hashicorp/helm` still deferred to its own future ticket.
+Remaining: Kubernetes' own Python sibling, then Azure.
