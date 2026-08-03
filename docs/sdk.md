@@ -1649,3 +1649,179 @@ comment on the UBI-98 Linear thread rather than left undiscovered again.
 compiler-crash signature as a named, non-blocking skip rather than either
 silently passing or permanently red-flagging the whole check over an
 unrelated, already-tracked issue.
+
+## Amendment (2026-08-03, UBI-98): Go bindings restructured to a per-provider repo, per-AWS-service package layout — fixes the NewBulk crash for real; TypeScript and Python left unrestructured
+
+**Scope**: `--lang go` only. TS/Python still write one flat file per
+provider source, exactly as before this session — restructuring them the
+same way is real, separately-scoped follow-up work, explicitly not done
+this session (STATE.md; do not assume TS/Python were left silently
+inconsistent, this is a deliberate, named boundary).
+
+**The confirmed hard blocker, verified reproduced before anything was
+built**: UBI-96's own closing comment reported a genuine Go compiler
+crash ("internal compiler error: NewBulk too big") compiling the full
+1,682-type provider as one flat package/file, unrelated to naming.
+Re-ran `TestFullProvider_Go_CompilesClean` against the current,
+post-UBI-96-fix generated output before starting any design work — it
+reproduced identically, confirming a real, still-open blocker, not a
+stale or already-fixed hypothesis.
+
+**`ubx sdk gen --lang go`'s own `--out` semantics changed**: writes a
+repo-shaped tree per declared provider source now, not one flat file --
+`<out>/<source-sanitized>/` (e.g. `hashicorp-aws/`), with its own `go.mod`
+stub (`module github.com/ubiquex/ubx-sdk-<shortName>`, e.g.
+`ubx-sdk-aws` for `hashicorp/aws` -- the founder's own worked example on
+the ticket, `shortName` derived mechanically as the source's own last
+`/`-segment, never a hand-curated friendlier rename like `google` ->
+`gcp`, since this session only generates against and verifies against
+the real `hashicorp/aws` provider), one Go package per derived
+AWS-service boundary (`iam/`, `ecr/`, `sqs/`, ...), one file per resource
+type within its own service package. `--lang ts`/`--lang py` are
+UNCHANGED.
+
+**Naming scheme within a service package, per the founder's own locked
+comment on UBI-98**: the redundant `Aws<Service>` prefix is dropped from
+every generated type name, since the import path already encodes
+provider+service --
+
+```
+generated.AwsEcrRepository        -> ecr.Repository
+generated.AwsEcrRepositoryConfig  -> ecr.RepositoryConfig
+```
+
+`WireType` inside the runtime `ResourceBinding` literal still carries the
+REAL, full, unshortened wire type string (`"aws_ecr_repository"`) --
+only the Go identifier drops the prefix, never the wire-protocol value a
+real provider actually reads.
+
+**Service-boundary derivation, verified against the real 1,682-type
+schema before being trusted, not assumed clean** (the ticket's own
+explicit ask): a wire type's own token structure --
+`<provider>_<service>_<local...>` -- splits into `(service, local)`
+mechanically (`sdk/codegen/ir.ServiceAndLocalName`), deliberately with NO
+external, network-fetched AWS-service-taxonomy lookup (`ubx sdk gen` must
+stay 100% local/offline). Checked exhaustively, not spot-checked: **zero
+`(service, local)` collisions across all 1,682 real wire types** -- this
+derivation is genuinely unambiguous, mechanically.
+
+It is, however, confirmed NOT a faithful reproduction of AWS's own real
+service taxonomy the way a hand-curated table (Pulumi's own bridge
+metadata, for one real example) would be -- named explicitly rather than
+silently passed off as taxonomy-accurate: 11 real wire types are bare
+two-token names (`aws_vpc`, `aws_instance`, `aws_route`, `aws_subnet`,
+...) with no third token to serve as a local name at all (handled: the
+local name falls back to the service token itself); and roughly 130 of
+the 1,682 types, dominated by AWS's own EC2/VPC "core" resource family
+(`aws_vpc`, `aws_subnet`, `aws_instance`, `aws_security_group`,
+`aws_route_table`, `aws_internet_gateway`, `aws_eip`, and more), carry
+NO explicit service token in their wire name at all -- Terraform's own
+AWS provider predates its later services' `aws_<service>_*` convention
+for exactly this resource family -- so this mechanical split fragments
+them into many small, sometimes idiosyncratically-named single/few-type
+packages (`key` for `aws_key_pair` alone, `flow` for `aws_flow_log`
+alone, `main` for `aws_main_route_table_association` alone) rather than
+one curated `ec2` package. This does not block either of this
+restructure's two hard requirements (a full-provider `go build`
+compiling clean -- MORE, smaller packages only helps that; the founder's
+own locked naming scheme, which holds regardless of where the boundary
+lines fall) -- a hand-curated wire-type -> canonical-AWS-service
+exception table remains real, separately-scopable follow-up work, tracked
+here rather than silently shipped as if it were taxonomy-accurate.
+
+**Two real, live-verified Go-identifier edge cases in the derived service
+name itself**, found running the real full-provider generation, not
+anticipated by the ticket: `aws_default_vpc` and five sibling real types
+derive service `"default"` -- a Go keyword, `package default` is a
+syntax error. `aws_main_route_table_association` derives service
+`"main"` -- not a keyword, but special to the `go` tool itself (a package
+literally named `main` is treated as a command requiring `func main()`,
+so `go build ./...` failed with "function main is undeclared in the main
+package"). Both resolved with a trailing underscore
+(`sdk/codegen/templates/go`'s own `goPackageIdent`), the same convention
+this package's own `pythonIdentifier` already established for a wire
+name colliding with a Python keyword. `internal`/`vendor`/`testdata` are
+guarded the same way defensively (real, well-known go-tool-special
+directory names) even though none occur in `hashicorp/aws@6.54.0`'s own
+real schema -- not verified against a real occurrence this session,
+unlike `default`/`main`, named as such rather than presented as
+equally-confirmed.
+
+**A third, separate, previously-undiscovered problem, found verifying
+THIS restructure at true full-provider scale, not anticipated by UBI-98's
+own ticket text (which only ever discussed aggregate package size)**:
+even with per-service packages, `wafv2` and `quicksight` STILL crashed
+the Go compiler identically, despite being small by resource-type count
+(15 and 25 types respectively) -- because AWS's own recursive schema
+shapes (`aws_wafv2_web_acl_rule`'s own "statement"-inside-"statement"
+tree, the real, extreme case) physically repeat an IDENTICAL nested block
+shape at every depth level a real provider schema can express recursion
+to at all (there is no true self-reference in a real tfplugin schema;
+"recursion" is always statically unrolled to some fixed depth, each level
+re-declaring the literal same block verbatim). `aws_wafv2_web_acl_rule`
+ALONE rendered to over 10MB / ~250,000 lines before a fix -- enough on
+its own, independent of any sibling type sharing its package, to
+reproduce the identical Go compiler crash, a problem no amount of
+per-service-package splitting could ever fix by itself.
+
+Fixed in two halves, verified separately (the first alone was NOT
+enough, confirmed live, not assumed): (1) nested Go struct declarations
+(cosmetic documentation only -- confirmed by reading `sdk/go/runtime`'s
+own `serializeConfig` before relying on this, which walks a Config value
+purely by Go struct FIELD NAME via reflection, never by a nested value's
+own declared TYPE NAME) now dedupe by a canonical STRUCTURAL signature of
+the shape, not just its derived path -- two positions in the tree with
+the identical shape share one declaration. Deduplicating this alone
+shrank `aws_wafv2_web_acl_rule` from >10MB to ~6.5MB, but the real
+full-provider build still crashed identically -- (2) the runtime
+`sdk.FieldMap{...}` literal `ResourceBinding.Fields` is actually built
+from (NOT cosmetic -- this is what the runtime reads) was still being
+re-inlined in full at every depth with no dedup at all, and THAT, not the
+struct declarations, was what was actually driving the crash. Fixed
+identically in spirit: a repeated shape's `sdk.FieldMap{...}` literal is
+now hoisted into one shared top-level `var` the first time it's seen,
+and every later occurrence of the identical shape references that var
+instead of re-inlining -- `aws_wafv2_web_acl_rule` dropped to ~69KB
+(~150x smaller than the original unfixed output), confirmed by direct
+measurement, not inferred from the compiler no longer crashing alone.
+
+**Required verification, run for real, exactly as specified**: `ubx sdk
+gen --lang go` against the REAL full `hashicorp/aws@6.54.0` provider
+(1,682 types) produces a repo-shaped tree (1,941 files across 258 service
+packages) where `go build ./...` compiles every package clean --
+confirmed twice, independently: (1) `sdk/codegen/templates/go/fullprovider_live_test.go`'s
+own `TestFullProvider_Go_CompilesClean`, rewritten this session to be a
+HARD pass/fail (the UBI-96-era `NewBulk`-crash named skip is gone --
+per-service packages, plus the shape-dedup fixes above, mean no known
+crash remains to carve out); (2) independently, outside the test harness
+entirely, via the real built `ubx` binary: `ubx sdk gen --lang go --out
+sdk/generated` against a real `.ubx/config` pinning `hashicorp/aws@6.54.0`,
+followed by a real `go build ./...` against the actual on-disk output.
+Both passed clean. This is now a permanent, always-available (behind
+`UBX_CONFORMANCE_LIVE=1`) hermetic/CI check, per the ticket's own
+explicit requirement.
+
+**Conformance fixtures updated**: `sdk/conformance/programs/go/generated/`
+is now `hashicorp-aws/` (a nested repo-shaped module, `db/` package --
+`aws_db_instance`'s own derived service is `"db"`, not `"rds"`, since the
+derivation is wire-name-mechanical, not AWS's own product-family naming)
+with its own `go.mod`; `sdk/conformance/programs/go/go.mod` gained a
+`require`+`replace` for it (a nested `go.mod` is a real module boundary
+Go enforces, so importing it needs the same treatment as
+`github.com/ubiquex/ubx-sdk-go`'s own existing replace); `payments.go`'s
+import/usage updated to `db.Instance`/`db.InstanceConfig`. Only the
+`payments.go` file's own content — and therefore its
+`intent.sources[].content_hash` in `golden/payments_go.json` — changed;
+the resolved `resources`/`stack`/`intent.summary` are byte-identical,
+re-verified via the real `goeval` evaluator.
+
+**Not done this session, named explicitly, not silently**: TypeScript
+and Python codegen are unrestructured (still one flat file per provider
+source) -- UBI-98's own scope item 5 explicitly permits this ("do TS/
+Python as a following session's scope" if Go alone doesn't leave room),
+and this session's own diagnosis work (the service-derivation-ambiguity
+finding, the two Go-identifier edge cases, and especially the recursive-
+shape blowup) took the whole session on its own. A hand-curated
+wire-type -> canonical-AWS-service exception table (closing the
+taxonomy-accuracy gap named above) is also real, separately-scopable
+follow-up work.

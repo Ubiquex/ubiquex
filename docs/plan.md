@@ -2,6 +2,27 @@
 
 ## Changelog
 
+- 2026-08-03 — UBI-98: `ubx sdk gen --lang go` restructured to UBI-98's
+  own repo-shaped, per-AWS-service-package layout -- confirmed-reproduced
+  the UBI-96-reported Go compiler crash first, then fixed it for real
+  (per-service packages alone were NOT enough -- a real recursive-schema
+  blowup, `aws_wafv2_web_acl_rule` alone rendering >10MB, needed a second,
+  separate structural-shape-dedup fix on top). `--out` now writes
+  `<out>/<source-sanitized>/` with its own `go.mod` (module
+  `github.com/ubiquex/ubx-sdk-<shortName>`), one package per derived
+  service (`iam/`, `ecr/`, ...), the founder's own locked naming scheme
+  (`ecr.Repository`, never `generated.AwsEcrRepository`). Required
+  verification met twice: the rewritten, now-hard-pass
+  `TestFullProvider_Go_CompilesClean`, and independently via the real
+  built `ubx` binary against the real `hashicorp/aws@6.54.0` provider.
+  `--lang ts`/`--lang py` UNCHANGED -- explicitly deferred to a following
+  session, not silently left inconsistent. Full account, including the
+  service-derivation-ambiguity finding (mechanically unambiguous, but not
+  a faithful AWS-taxonomy reproduction for ~130 unprefixed EC2-family
+  types) and the two Go-keyword/go-tool-special package-name edge cases
+  (`default`, `main`): docs/sdk.md's new "Amendment (2026-08-03,
+  UBI-98)" section; full session account in STATE.md.
+
 - 2026-07-30 — UBI-55: `ubx promote <proposal-id> --to <target-dir>`
   built, closing the "Environments & promotion" open question's own CLI
   surface (UBI-14's design, ratified 2026-07-30). Re-resolution, never

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +18,12 @@ import (
 // struct` sharing one package-level identifier, Go's own real failure mode
 // for UBI-96 (var and type share ONE namespace at package level, unlike
 // TypeScript's separate type/value namespaces -- see this package's own
-// resourceRenderer doc comment). Independent of GeneratedFile: a hand-built
-// source string, so this exercises the checker's own parsing/reporting
+// resourceRenderer doc comment). Independent of GeneratedRepo: hand-built
+// source strings, so this exercises the checker's own parsing/reporting
 // logic directly, not just "does today's fixed output happen to be clean."
+// Both declarations in the SAME file here; TestCheckNoDuplicateDeclarations_DetectsCollisionAcrossFiles,
+// below, proves the harder case UBI-98 actually introduced: a collision
+// split across two SIBLING files of one package.
 func TestCheckNoDuplicateDeclarations_DetectsRealCollision(t *testing.T) {
 	src := `package generated
 
@@ -29,7 +33,7 @@ type Foo struct {
 
 var Foo = struct{}{}
 `
-	err := CheckNoDuplicateDeclarations(src)
+	err := CheckNoDuplicateDeclarations(map[string]string{"a.go": src})
 	if err == nil {
 		t.Fatal("expected an error for a package with both `type Foo` and `var Foo`, got nil")
 	}
@@ -38,31 +42,82 @@ var Foo = struct{}{}
 	}
 }
 
-func TestCheckNoDuplicateDeclarations_CleanSource_NoError(t *testing.T) {
-	src := `package generated
-
-type Foo struct {
-	Bar any
+// TestCheckNoDuplicateDeclarations_DetectsCollisionAcrossFiles is UBI-98's
+// own real shape: GeneratedRepo emits one FILE per resource type, all
+// sharing one service package's own directory -- a collision between two
+// SIBLING files must be caught exactly as hard as one within a single
+// file, since Go's package-level namespace spans every file in a
+// directory combined, not just one file at a time.
+func TestCheckNoDuplicateDeclarations_DetectsCollisionAcrossFiles(t *testing.T) {
+	files := map[string]string{
+		"a.go": "package generated\n\ntype Foo struct {\n\tBar any\n}\n",
+		"b.go": "package generated\n\nvar Foo = struct{}{}\n",
+	}
+	err := CheckNoDuplicateDeclarations(files)
+	if err == nil {
+		t.Fatal("expected an error for a cross-file `type Foo`/`var Foo` collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "Foo") {
+		t.Fatalf("expected the error to name the colliding identifier %q, got: %v", "Foo", err)
+	}
 }
 
-var Baz = struct{}{}
-`
-	if err := CheckNoDuplicateDeclarations(src); err != nil {
+func TestCheckNoDuplicateDeclarations_CleanSource_NoError(t *testing.T) {
+	files := map[string]string{
+		"a.go": "package generated\n\ntype Foo struct {\n\tBar any\n}\n",
+		"b.go": "package generated\n\nvar Baz = struct{}{}\n",
+	}
+	if err := CheckNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("expected no error for a collision-free package, got: %v", err)
 	}
 }
 
-// TestGeneratedFile_CrossResourceNestedBlockVsSiblingResource_NoCollision
-// reproduces UBI-96's own real, live-verified shape directly: AWS's own
+// TestCheckRepoNoDuplicateDeclarations_DifferentPackages_NeverCollide is
+// this restructure's own central proof: the SAME identifier name in TWO
+// DIFFERENT service packages (separate directories) is never a
+// collision, since they are separate Go compilation units by
+// construction -- the whole reason UBI-98's per-service-package split
+// exists.
+func TestCheckRepoNoDuplicateDeclarations_DifferentPackages_NeverCollide(t *testing.T) {
+	repo := map[string]string{
+		"go.mod":       "module github.com/ubiquex/ubx-sdk-aws\n\ngo 1.23\n",
+		"ecr/thing.go": "package ecr\n\ntype Thing struct {\n\tBar any\n}\n",
+		"iam/thing.go": "package iam\n\ntype Thing struct {\n\tBar any\n}\n",
+		"iam/other.go": "package iam\n\nvar Other = 1\n",
+	}
+	if err := CheckRepoNoDuplicateDeclarations(repo); err != nil {
+		t.Fatalf("identically-named types in different service packages should never collide: %v", err)
+	}
+}
+
+func TestCheckRepoNoDuplicateDeclarations_SamePackageAcrossFiles_Collides(t *testing.T) {
+	repo := map[string]string{
+		"go.mod":   "module github.com/ubiquex/ubx-sdk-aws\n\ngo 1.23\n",
+		"iam/a.go": "package iam\n\ntype Role struct {\n\tBar any\n}\n",
+		"iam/b.go": "package iam\n\nvar Role = struct{}{}\n",
+	}
+	err := CheckRepoNoDuplicateDeclarations(repo)
+	if err == nil {
+		t.Fatal("expected an error for a same-package cross-file collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "iam") || !strings.Contains(err.Error(), "Role") {
+		t.Fatalf("expected the error to name the package (iam) and identifier (Role), got: %v", err)
+	}
+}
+
+// TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision
+// reproduces UBI-96's own real, live-verified shape directly, now scoped
+// to ONE service package (UBI-98's own restructure): AWS's own
 // convention of splitting a legacy inline nested block out into its own
 // standalone resource. aws_thing's own "logging" nested block and the
-// separate aws_thing_logging resource are the exact same shape as the real
-// aws_s3_bucket / aws_s3_bucket_logging collision found live against
-// hashicorp/aws@6.54.0 (STATE.md/this session) -- before the "_" join fix,
-// both would derive the bare name "AwsThingLogging" (a `type` from the
-// first, a `var` from the second), which is exactly what failed to `go
-// build` at full-provider scale.
-func TestGeneratedFile_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *testing.T) {
+// separate aws_thing_logging resource are the exact same shape as the
+// real aws_s3_bucket / aws_s3_bucket_logging collision found live
+// against hashicorp/aws@6.54.0 (STATE.md/UBI-96 session) -- before the
+// "_" join fix, both would derive the bare local name "ThingLogging" (a
+// `type` from the first, a `var` from the second, in the SAME service
+// package's own two separate files), which is exactly what failed to
+// `go build` at full-provider scale.
+func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *testing.T) {
 	loggingBlock := ir.Field{
 		WireName: "logging",
 		Type: ir.TypeRef{Kind: ir.KindObject, Object: []ir.Field{
@@ -70,33 +125,45 @@ func TestGeneratedFile_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		}},
 	}
 	types := []*ir.ResourceType{
-		rt("aws_thing", loggingBlock),
-		rt("aws_thing_logging",
+		rt("aws_svc_thing", loggingBlock),
+		rt("aws_svc_thing_logging",
 			scalarField("id", ir.ScalarString, false, false, true, false),
 			scalarField("target", ir.ScalarString, false, true, false, false),
 		),
 	}
-	out, err := GeneratedFile("generated", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
 	if err != nil {
-		t.Fatalf("GeneratedFile: %v", err)
+		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	// The nested struct (from aws_thing's own "logging" block) is now
-	// namespaced with an underscore -- never the bare concatenation that
-	// would collide with aws_thing_logging's own resource-level names.
-	mustContain(t, out, "type AwsThing_Logging struct {\n\tEnabled any\n}")
-	// aws_thing_logging (a REAL, distinct resource) still gets its own
-	// unqualified Config/ResourceBinding names, completely unaffected.
-	mustContain(t, out, "type AwsThingLoggingConfig struct {")
-	mustContain(t, out, "var AwsThingLogging = sdk.ResourceBinding{")
-	mustNotContain(t, out, "type AwsThingLogging struct {")
+	// Both real types share one derived service package ("svc").
+	thingSrc, ok := files["svc/thing.go"]
+	if !ok {
+		t.Fatalf("expected svc/thing.go, got paths: %v", keys(files))
+	}
+	loggingSrc, ok := files["svc/thing_logging.go"]
+	if !ok {
+		t.Fatalf("expected svc/thing_logging.go, got paths: %v", keys(files))
+	}
 
-	if err := CheckNoDuplicateDeclarations(out); err != nil {
-		t.Fatalf("GeneratedFile output has a real package-level collision: %v", err)
+	// The nested struct (from aws_svc_thing's own "logging" block) is
+	// now namespaced with an underscore -- never the bare concatenation
+	// that would collide with aws_svc_thing_logging's own resource-level
+	// names.
+	mustContain(t, thingSrc, "type Thing_Logging struct {\n\tEnabled any\n}")
+	// aws_svc_thing_logging (a REAL, distinct resource, same package)
+	// still gets its own unqualified Config/ResourceBinding names,
+	// completely unaffected.
+	mustContain(t, loggingSrc, "type ThingLoggingConfig struct {")
+	mustContain(t, loggingSrc, "var ThingLogging = sdk.ResourceBinding{")
+	mustNotContain(t, thingSrc, "type ThingLogging struct {")
+
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has a real package-level collision: %v", err)
 	}
 
 	requireGoToolchain(t)
-	buildGeneratedModule(t, out)
+	buildGeneratedRepo(t, files)
 }
 
 // requireGoToolchain skips when `go` isn't on PATH -- go build ./sdk/...
@@ -112,30 +179,35 @@ func requireGoToolchain(t *testing.T) {
 	}
 }
 
-// buildGeneratedModule writes generatedSrc (package generated) into a
-// fresh, throwaway Go module that requires+replaces
+// buildGeneratedRepo writes files (a GeneratedRepo's own output: go.mod +
+// every service package's own subdirectory/files) to a throwaway
+// directory, rewrites the emitted go.mod to ALSO replace
 // github.com/ubiquex/ubx-sdk-go with THIS repo's own real sdk/go (the
-// same local-replace shape sdk/conformance/programs/go/go.mod already
-// uses for real), then runs `go build ./...` against it -- the strongest,
-// most direct proof available that a collision fix actually holds: not a
-// string comparison, a real compiler. Deliberately network-free
-// (GOPROXY=off): the only external dependency is a local filesystem
-// path, so this needs no live provider, no cache, nothing beyond the Go
-// toolchain already required to run `go test` on this repo at all --
-// this is the fully hermetic sibling of TestFullProvider_Go_CompilesClean
-// (fullprovider_live_test.go), which does the identical `go build` proof
-// but at real full-provider scale, gated behind UBX_CONFORMANCE_LIVE=1.
-func buildGeneratedModule(t *testing.T, generatedSrc string) {
+// generator's own emitted go.mod deliberately has no such replace --
+// see GeneratedRepo's own doc comment -- a real consumer would pin a
+// real published version; only this test needs the local override), then
+// runs `go build ./...` against it -- the strongest, most direct proof
+// available that a fix actually holds: not a string comparison, a real
+// compiler, across every package in the tree at once (the same shape
+// TestFullProvider_Go_CompilesClean uses at real full-provider scale).
+func buildGeneratedRepo(t *testing.T, files map[string]string) {
 	t.Helper()
 
-	sdkGoRoot := sdkGoModuleRoot(t)
 	dir := t.TempDir()
-	goMod := "module ubx-sdk-gen-collision-check\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
+	for path, content := range files {
+		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "generated.go"), []byte(generatedSrc), 0o644); err != nil {
-		t.Fatalf("write generated.go: %v", err)
+
+	sdkGoRoot := sdkGoModuleRoot(t)
+	goMod := files["go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -145,6 +217,27 @@ func buildGeneratedModule(t *testing.T, generatedSrc string) {
 	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go build of the generated package failed:\n%s", out)
+		t.Fatalf("go build of the generated repo failed:\n%s", out)
 	}
+}
+
+// sdkGoModuleRoot resolves this repo's own sdk/go module root (the
+// hand-authored runtime every generated Go binding requires+replaces) --
+// shared by buildGeneratedRepo and fullprovider_live_test.go's own
+// buildGeneratedRepoAtFullScale so both compute the identical, verified
+// path.
+func sdkGoModuleRoot(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller: could not determine this test file's own path")
+	}
+	root, err := filepath.Abs(filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "go"))
+	if err != nil {
+		t.Fatalf("resolve sdk/go path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("expected %s to be sdk/go's own module root (containing go.mod): %v", root, err)
+	}
+	return root
 }

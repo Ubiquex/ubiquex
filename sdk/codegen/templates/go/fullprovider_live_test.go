@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -31,16 +30,24 @@ func requireConformanceLive(t *testing.T) {
 	}
 }
 
-// TestFullProvider_Go_CompilesClean is UBI-96's own required verification,
+// TestFullProvider_Go_CompilesClean is UBI-98's own required verification,
 // automated and made permanent: `ubx sdk gen --lang go` against the REAL,
-// FULL hashicorp/aws@6.54.0 provider (1,682 resource types -- the exact
-// founder repro) must produce output CheckNoDuplicateDeclarations accepts
-// and `go build` compiles clean. Before this session, the only committed
-// Go conformance fixture was filtered to one resource type
-// (sdk/conformance/programs/go/generated/hashicorp-aws.go's own doc
-// comment), which is exactly why this class of bug went undetected --
-// this test closes that gap at the real, full scale the bug actually
-// occurred at, not a subset.
+// FULL hashicorp/aws@6.54.0 provider (1,682 resource types) must produce
+// a repo-shaped tree (go.mod + one package per derived AWS-service
+// boundary) where `go build ./...` compiles EVERY package clean.
+//
+// This supersedes the UBI-96-era version of this same test, which could
+// only ever assert zero redeclarations at full-provider scale and had to
+// treat a real Go compiler crash ("internal compiler error: NewBulk too
+// big" -- a hard ceiling on how much can live in ONE flat package,
+// confirmed unrelated to naming) as a known, separately-tracked, named
+// skip rather than a hard pass -- see STATE.md's UBI-96 session and the
+// UBI-98 Linear thread for the full diagnosis. UBI-98's own
+// per-service-package restructure is exactly what closes that gap: the
+// largest real derived service package (ec2, 56 real types) was already
+// confirmed, in that same prior session, to build clean and instantly on
+// its own -- this test is the permanent, full-tree version of that same
+// proof, now a HARD pass/fail with no compiler-crash carve-out at all.
 //
 // Gated behind UBX_CONFORMANCE_LIVE=1 (acquiring the real provider binary
 // is a real network round trip the first time; free/no-credentials
@@ -48,7 +55,7 @@ func requireConformanceLive(t *testing.T) {
 // no AWS account, see this project's own prior "a provider's own schema
 // costs nothing" finding, STATE.md 2026-07-10) -- CLAUDE.md's own
 // standing rule keeps `go test ./...` hermetic and credential-free by
-// default; TestGeneratedFile_CrossResourceNestedBlockVsSiblingResource_NoCollision
+// default; TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision
 // (collision_test.go, same package) is this test's fully hermetic,
 // always-on sibling, proving the identical fix with a small synthetic
 // fixture instead of a real provider download.
@@ -105,57 +112,59 @@ func TestFullProvider_Go_CompilesClean(t *testing.T) {
 		types = append(types, resType)
 	}
 
-	out, err := GeneratedFile("generated", source, version, types)
+	files, err := GeneratedRepo("aws", source, version, types)
 	if err != nil {
-		t.Fatalf("GeneratedFile: %v", err)
+		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	// This is UBI-96's own actual reported bug, and the hard, must-pass
-	// bar for this test: zero redeclarations, at the real full-provider
-	// scale the founder's own repro hit. Confirmed fixed.
-	if err := CheckNoDuplicateDeclarations(out); err != nil {
-		t.Fatalf("full-provider generated output has real package-level collisions:\n%v", err)
+	servicePackages := map[string]bool{}
+	for path := range files {
+		if idx := strings.IndexByte(path, '/'); idx >= 0 {
+			servicePackages[path[:idx]] = true
+		}
+	}
+	t.Logf("full-provider repo tree: %d files across %d service packages", len(files), len(servicePackages))
+
+	// This is UBI-96's own actual reported bug, re-verified in this new
+	// per-package shape: zero redeclarations, checked per service
+	// package across the whole real full-provider tree.
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("full-provider generated repo has real package-level collisions:\n%v", err)
 	}
 
-	requireGoToolchain(t)
-	buildGeneratedModuleAtFullScale(t, out)
+	buildGeneratedRepoAtFullScale(t, files)
 }
 
-// buildGeneratedModuleAtFullScale is buildGeneratedModule's own full-scale
-// sibling, with one deliberate difference: a SEPARATE, NEWLY DISCOVERED
-// problem (not UBI-96's own reported bug, not fixed by this session's
-// naming change) blocks a clean `go build` at the full 1,682-type/~40MB/
-// ~73,000-package-level-declaration scale this test exercises -- a real Go
-// compiler crash ("internal compiler error: NewBulk too big"), confirmed
-// scale-dependent (still crashes, at a smaller internal threshold, against
-// a synthetic ~840-type/~20MB half-size split; does NOT reproduce against
-// a real single-service subset the size of AWS's own largest real service,
-// ec2's 56 types/~74KB, which builds clean and instantly) -- see
-// STATE.md's own full write-up of this session. This is exactly the kind
-// of scale problem UBI-98's own per-service-package restructure would fix
-// (verified: a realistically-sized per-service package builds fine), for
-// a reason UBI-98's own ticket never named (it argued per-service
-// packaging for reviewability/naming, not "the whole provider doesn't
-// compile as a single package no matter what the names are").
-//
-// This test therefore does NOT hard-fail the whole suite on that specific,
-// separately-tracked crash signature -- doing so would make this
-// permanent CI check permanently red for a reason outside THIS ticket's
-// own diagnosed root cause, which trains reviewers to ignore red instead
-// of trusting it. Any OTHER build failure (a real redeclaration slipping
-// past CheckNoDuplicateDeclarations, a genuine unrelated regression) still
-// hard-fails immediately, exactly like buildGeneratedModule.
-func buildGeneratedModuleAtFullScale(t *testing.T, generatedSrc string) {
+// buildGeneratedRepoAtFullScale is buildGeneratedRepo's own full-scale
+// sibling: the SAME real, live full-provider tree GeneratedRepo produced
+// above, written to disk and `go build ./...`'d for real. Unlike the
+// UBI-96-era version of this test, this is now a HARD pass/fail with no
+// "known NewBulk crash" carve-out -- UBI-98's own per-service-package
+// split is specifically what makes that legitimate: no single package in
+// this tree is anywhere near the ~73,000-declaration/~40MB scale that
+// crashed the Go compiler under the old flat-package scheme (the largest
+// real derived service, ec2, is 56 types -- already confirmed, in the
+// session that diagnosed the crash, to build clean and instantly on its
+// own). Any build failure here is therefore a real regression, not a
+// known, separately-tracked limitation.
+func buildGeneratedRepoAtFullScale(t *testing.T, files map[string]string) {
 	t.Helper()
 
 	dir := t.TempDir()
-	sdkGoRoot := sdkGoModuleRoot(t)
-	goMod := "module ubx-sdk-gen-fullprovider-check\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
+	for path, content := range files {
+		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "generated.go"), []byte(generatedSrc), 0o644); err != nil {
-		t.Fatalf("write generated.go: %v", err)
+
+	sdkGoRoot := sdkGoModuleRoot(t)
+	goMod := files["go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
@@ -164,31 +173,7 @@ func buildGeneratedModuleAtFullScale(t *testing.T, generatedSrc string) {
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return
-	}
-	if strings.Contains(string(out), "internal compiler error: NewBulk too big") {
-		t.Skipf("KNOWN, SEPARATELY TRACKED limitation (not UBI-96's own bug, not fixed by this session): the Go compiler itself crashes compiling the full 1,682-type provider as one package -- see STATE.md and the UBI-98 Linear thread. CheckNoDuplicateDeclarations already proved the actual reported bug (redeclarations) is fixed above; this specific crash needs UBI-98's own per-service package split to resolve, tracked there, not silently ignored:\n%s", out)
-	}
-	t.Fatalf("go build of the full-provider generated package failed with an UNEXPECTED error (not the known NewBulk crash) -- likely a real regression:\n%s", out)
-}
-
-// sdkGoModuleRoot resolves this repo's own sdk/go module root (the
-// hand-authored runtime every generated Go binding requires+replaces) --
-// shared by buildGeneratedModule and buildGeneratedModuleAtFullScale so
-// both compute the identical, verified path.
-func sdkGoModuleRoot(t *testing.T) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller: could not determine this test file's own path")
-	}
-	root, err := filepath.Abs(filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "go"))
 	if err != nil {
-		t.Fatalf("resolve sdk/go path: %v", err)
+		t.Fatalf("go build of the full-provider generated repo tree failed -- this is now a hard failure, UBI-98's per-service-package split having removed the known NewBulk-crash carve-out this test used to have:\n%s", out)
 	}
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected %s to be sdk/go's own module root (containing go.mod): %v", root, err)
-	}
-	return root
 }

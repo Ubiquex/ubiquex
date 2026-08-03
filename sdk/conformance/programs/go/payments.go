@@ -15,7 +15,7 @@ package main
 import (
 	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
 
-	generated "github.com/ubiquex/ubiquex/sdk/conformance/programs/go/generated"
+	db "github.com/ubiquex/ubx-sdk-aws/db"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 			Summary: "Provision a small Postgres RDS instance in the payments stack, modeled on the staging database but downsized for low initial traffic.",
 		})
 
-		sdk.Resource(generated.AwsDbInstance, "payments", generated.AwsDbInstanceConfig{
+		sdk.Resource(db.Instance, "payments", db.InstanceConfig{
 			Engine:           "postgres",
 			InstanceClass:    "db.t3.small",
 			AllocatedStorage: 20,

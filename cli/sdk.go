@@ -46,12 +46,27 @@ func newSDKCmd() *cobra.Command {
 // for real, not still open: --out defaults to sdk/generated (a sibling
 // of ledger/ and dialogues/, matching those authoring-medium
 // directories' own top-level placement -- docs/architecture.md's Ledger
-// stores section), and one file per declared provider SOURCE (never per
-// resource type, and never a source/ subdirectory either) -- a real
-// provider can own dozens to hundreds of types; one cohesive,
-// git-reviewable file per source keeps that from becoming a file
-// explosion, and a flat <out>/<source-sanitized>.ts is simpler than an
-// extra directory level for no behavioral gain.
+// stores section), and one file per declared provider SOURCE for --lang
+// ts/py -- a real provider can own dozens to hundreds of types; one
+// cohesive, git-reviewable file per source keeps that from becoming a
+// file explosion, and a flat <out>/<source-sanitized>.ts is simpler than
+// an extra directory level for no behavioral gain.
+//
+// UBI-98 (2026-08-03): --lang go's own --out semantics changed --
+// confirmed, not assumed, that the flat single-file shape above
+// literally cannot compile at real full-provider scale (a genuine Go
+// compiler crash, "internal compiler error: NewBulk too big" --
+// unrelated to naming, a hard ceiling on how much can live in one
+// package). --lang go now writes a REPO-SHAPED tree instead:
+// <out>/<source-sanitized>/ with its own go.mod stub (module
+// github.com/ubiquex/ubx-sdk-<shortName>) and one package per derived
+// AWS-service boundary (ir.ServiceAndLocalName -- iam/, ecr/, sqs/, ...),
+// one file per resource type within its own service package, the type
+// names themselves dropping the redundant Aws<Service> prefix
+// (ecr.Repository, never generated.AwsEcrRepository) since the import
+// path already encodes provider+service. --lang ts/py are UNCHANGED
+// (still one flat file) -- restructuring them the same way is real,
+// separately-scoped follow-up work, not done this session (STATE.md).
 func newSDKGenCmd() *cobra.Command {
 	var (
 		out     string
@@ -64,9 +79,14 @@ func newSDKGenCmd() *cobra.Command {
 		Short: "Generate typed bindings for every provider declared in [providers] -- local, never published",
 		Long: `Reads .ubx/config's own [providers] table (the same source of truth "ubx resolve"/"ubx ship" already read),
 acquires each declared provider's real binary at its pinned version, dumps its real schema (no Configure, no
-credentials needed -- a pure local gRPC call against the launched binary), and writes one file per provider
-source under --out, in the language named by --lang ("ts", "go", or "py"): idiomatic bindings whose generated field
-map maps back to the provider's real wire attribute names at evaluation time.
+credentials needed -- a pure local gRPC call against the launched binary), and writes idiomatic bindings under
+--out in the language named by --lang ("ts", "go", or "py") whose generated field map maps back to the provider's
+real wire attribute names at evaluation time.
+
+--lang go writes a repo-shaped tree per provider source: --out/<source-sanitized>/, its own go.mod stub, one
+package per derived AWS-service boundary (iam/, ecr/, sqs/, ...), one file per resource type -- required so a
+full-provider binding actually compiles (a flat single-file/single-package shape hits a real Go compiler ceiling
+at real full-provider scale). --lang ts/py still write one flat file per provider source under --out.
 
 Always regenerates from the exact config-pinned version's real, freshly-acquired schema -- never a stale cache
 from a different version (the same provider.Acquire version-pinned cache discipline "ubx scan"/"ubx accept
@@ -106,7 +126,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		},
 	}
 
-	cmd.Flags().StringVar(&out, "out", "sdk/generated", "directory to write generated bindings into (one file per declared provider source)")
+	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- one file per declared provider source for --lang ts/py; a repo-shaped tree (own go.mod, one package per AWS-service boundary) per provider source for --lang go`)
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 
@@ -114,12 +134,18 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 }
 
 // generateOneProvider acquires+launches one provider, fetches its real
-// schema, runs it through sdk/codegen/ir + the lang-selected template,
-// and writes the result to <out>/<source-sanitized>.<ts|go>. A separate
-// function (not inlined into RunE) so a per-provider context.WithTimeout
-// is easy to scope correctly -- each declared provider gets its own
-// fresh timeout budget, never one shared budget that a slow first
-// provider could eat into a fast second one's own allowance.
+// schema, and runs it through sdk/codegen/ir + the lang-selected
+// template. --lang go writes UBI-98's own repo-shaped tree
+// (<out>/<source-sanitized>/, its own go.mod, one package per derived
+// AWS-service boundary -- see generateGoProviderRepo); --lang ts/py are
+// UNCHANGED from UBI-33/34/35/36 (one flat <out>/<source-sanitized>.<ts|py>
+// file) -- TS/Python restructuring is explicitly out of scope this
+// session (STATE.md), named here rather than silently left inconsistent.
+// A separate function (not inlined into RunE) so a per-provider
+// context.WithTimeout is easy to scope correctly -- each declared
+// provider gets its own fresh timeout budget, never one shared budget
+// that a slow first provider could eat into a fast second one's own
+// allowance.
 func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string) (path string, resourceCount int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -162,12 +188,16 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		types = append(types, resType)
 	}
 
+	if lang == "go" {
+		path, err := generateGoProviderRepo(out, source, version, types)
+		if err != nil {
+			return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
+		}
+		return path, len(types), nil
+	}
+
 	var content, ext, filenameStem string
 	switch lang {
-	case "go":
-		content, err = gotemplate.GeneratedFile(goPackageName(out), source, version, types)
-		ext = ".go"
-		filenameStem = sanitizeSourceForFilename(source)
 	case "py":
 		content, err = pytemplate.GeneratedFile(source, version, types)
 		ext = ".py"
@@ -187,16 +217,12 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	// UBI-96: a flat package/module can produce a broken package-level
 	// naming collision (two different resource types' own generated names
 	// coincide -- see each template's own CheckNoDuplicateDeclarations doc
-	// comment for the full account, including why this is a hard `go
-	// build` failure in Go, a possibly-SILENT interface merge in TS, and a
-	// fully silent module-namespace overwrite in Python) that only ever
-	// surfaced, for Go, when someone actually ran `go build` against the
-	// output -- checked here, before ever writing the file, for all three
-	// languages, not just caught in a test after the fact.
+	// comment for the full account, including why this is a possibly-
+	// SILENT interface merge in TS, and a fully silent module-namespace
+	// overwrite in Python) -- checked here, before ever writing the file,
+	// not just caught in a test after the fact.
 	var selfCheckErr error
 	switch lang {
-	case "go":
-		selfCheckErr = gotemplate.CheckNoDuplicateDeclarations(content)
 	case "py":
 		selfCheckErr = pytemplate.CheckNoDuplicateDeclarations(content)
 	default:
@@ -213,30 +239,55 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	return path, len(types), nil
 }
 
-// goPackageName derives a generated Go file's own package clause from
-// --out's own final path component -- every provider source generated
-// into the same --out directory must share one Go package (Go's own
-// one-package-per-directory rule, unlike TS where each file is its own
-// module regardless of directory), so the directory name doubling as the
-// package name is the natural, idiomatic default (matches this project's
-// own real conformance fixture: sdk/conformance/programs/go/generated/
-// -> package generated).
-func goPackageName(out string) string {
-	base := strings.ToLower(filepath.Base(out))
-	var b strings.Builder
-	for i, r := range base {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9' && i > 0:
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
+// generateGoProviderRepo writes UBI-98's own repo-shaped Go output tree
+// for one provider source: <out>/<source-sanitized>/ containing its own
+// go.mod stub (module github.com/ubiquex/ubx-sdk-<shortName>) and one
+// package per derived AWS-service boundary (gotemplate.GeneratedRepo).
+// Returns the provider's own repo root directory (the CLI's own
+// "generated N resource type(s) ... -> <path>" message names this
+// directory, not a single file, since --lang go no longer writes one).
+func generateGoProviderRepo(out, source, version string, types []*ir.ResourceType) (string, error) {
+	files, err := gotemplate.GeneratedRepo(providerShortName(source), source, version, types)
+	if err != nil {
+		return "", err
+	}
+	// UBI-96's own defense-in-depth discipline, unchanged in spirit,
+	// updated for UBI-98's own multi-file-per-package shape: refuse to
+	// WRITE a tree with a real package-level collision, checked across
+	// every service package at once, rather than only ever catching this
+	// in a test after the fact.
+	if err := gotemplate.CheckRepoNoDuplicateDeclarations(files); err != nil {
+		return "", fmt.Errorf("generated repo failed self-check: %w", err)
+	}
+
+	repoDir := filepath.Join(out, sanitizeSourceForFilename(source))
+	for relPath, content := range files {
+		fullPath := filepath.Join(repoDir, filepath.FromSlash(relPath))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			return "", err
 		}
 	}
-	name := b.String()
-	if name == "" || (name[0] >= '0' && name[0] <= '9') {
-		return "generated"
+	return repoDir, nil
+}
+
+// providerShortName derives a declared provider source's own short name
+// for its generated repo's Go module path (github.com/ubiquex/ubx-sdk-<shortName>)
+// -- the founder's own worked example on UBI-98 (github.com/ubiquex/ubx-sdk-aws
+// for "hashicorp/aws"): the source's own last "/"-separated segment,
+// mechanically, never a hand-curated friendlier rename (e.g. "google" ->
+// "gcp") -- this session only ever generates against, and verifies
+// against, the real hashicorp/aws provider; inventing an unverified
+// rename table for providers this session has no way to test against
+// would be exactly the kind of un-verified assumption this project's own
+// standing discipline refuses to ship.
+func providerShortName(source string) string {
+	if idx := strings.LastIndex(source, "/"); idx >= 0 {
+		return source[idx+1:]
 	}
-	return name
+	return source
 }
 
 // sanitizeSourceForFilename turns a provider source ("hashicorp/aws")

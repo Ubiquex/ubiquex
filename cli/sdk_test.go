@@ -120,6 +120,16 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	}
 }
 
+// TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror covers UBI-98's
+// own repo-shaped --lang go output end to end via the real CLI path:
+// "fake_widget" (tokens "fake"/"widget", no third token -- the same
+// bare-two-token shape 11 real hashicorp/aws@6.54.0 types hit, e.g.
+// "aws_vpc") derives service AND local name both "widget", so the
+// expected tree is <outDir>/fake-widget/{go.mod,widget/{doc.go,widget.go}}
+// -- module github.com/ubiquex/ubx-sdk-widget, package widget, type
+// Widget (never FakeWidget/generated.FakeWidget -- the founder's own
+// locked naming scheme, checked here against the real CLI path, not just
+// sdk/codegen/templates/go's own unit tests).
 func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	dir := t.TempDir()
 	mirrorDir := t.TempDir()
@@ -132,6 +142,7 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 "fake/widget" = "0.1.0"
 `)
 
+	repoDir := filepath.Join(outDir, "fake-widget")
 	out, err := runUbx(t, []string{
 		"FAKEPROVIDER_MODE=ok-v6",
 		"UBX_PROVIDER_MIRROR=" + mirrorDir,
@@ -139,79 +150,92 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx sdk gen --lang go: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "generated 1 resource type(s) for fake/widget@0.1.0") {
-		t.Fatalf("unexpected stdout: %s", out)
+	wantStdout := "generated 1 resource type(s) for fake/widget@0.1.0 -> " + repoDir
+	if !strings.Contains(out, wantStdout) {
+		t.Fatalf("unexpected stdout: %s\nwant to contain: %s", out, wantStdout)
 	}
 
-	genPath := filepath.Join(outDir, "fake-widget.go")
+	goMod, err := os.ReadFile(filepath.Join(repoDir, "go.mod"))
+	if err != nil {
+		t.Fatalf("reading go.mod: %v", err)
+	}
+	mustContainSDK(t, string(goMod), "module github.com/ubiquex/ubx-sdk-widget")
+	mustContainSDK(t, string(goMod), "require github.com/ubiquex/ubx-sdk-go v0.0.0")
+
+	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "doc.go"))
+	if err != nil {
+		t.Fatalf("reading widget/doc.go: %v", err)
+	}
+	mustContainSDK(t, string(docContent), "package widget")
+	mustContainSDK(t, string(docContent), `Source: "fake/widget", Version: "0.1.0"`)
+
+	genPath := filepath.Join(repoDir, "widget", "widget.go")
 	content, err := os.ReadFile(genPath)
 	if err != nil {
-		t.Fatalf("reading generated file: %v", err)
+		t.Fatalf("reading widget/widget.go: %v", err)
 	}
 	generated := string(content)
 
-	mustContainSDK(t, generated, "package generated")
-	mustContainSDK(t, generated, `Source: "fake/widget", Version: "0.1.0"`)
-	mustContainSDK(t, generated, "type FakeWidgetConfig struct {")
+	mustContainSDK(t, generated, "package widget")
+	mustContainSDK(t, generated, "type WidgetConfig struct {")
 	mustContainSDK(t, generated, "Name any")
 	mustContainSDK(t, generated, "Tags any")
-	mustContainSDK(t, generated, `var FakeWidget = sdk.ResourceBinding{`)
+	mustContainSDK(t, generated, `var Widget = sdk.ResourceBinding{`)
+	// WireType carries the REAL, full wire type -- never shortened.
 	mustContainSDK(t, generated, `WireType: "fake_widget",`)
 	mustContainSDK(t, generated, `"Name": sdk.FieldSpec{WireName: "name"},`)
 	mustContainSDK(t, generated, `"Tags": sdk.FieldSpec{WireName: "tags"},`)
+	mustNotContainSDK(t, generated, "FakeWidget")
 
 	// id is computed-only -- must never appear in the Config struct.
-	configBlock := generated[strings.Index(generated, "type FakeWidgetConfig struct {"):]
+	configBlock := generated[strings.Index(generated, "type WidgetConfig struct {"):]
 	configBlock = configBlock[:strings.Index(configBlock, "}")]
 	if strings.Contains(configBlock, "Id ") {
-		t.Fatalf("FakeWidgetConfig should not include the computed-only id field:\n%s", configBlock)
+		t.Fatalf("WidgetConfig should not include the computed-only id field:\n%s", configBlock)
 	}
 
-	// Not just string matching -- the generated file must actually
+	// Not just string matching -- the generated repo tree must actually
 	// compile against the real sdk/go runtime module, exactly as a real
-	// SDK program's own go.mod would resolve it (a local replace,
-	// mirroring how sdk/conformance/programs/go does it for real).
-	assertGoFileCompiles(t, genPath, "generated")
+	// consumer's own go.mod would eventually resolve it (a local replace
+	// appended here, mirroring how sdk/conformance/programs/go/go.mod
+	// does it for real -- the generator's own emitted go.mod deliberately
+	// has no such replace, since a real consumer would pin a real
+	// published version instead).
+	assertGoRepoCompiles(t, repoDir)
 }
 
-// assertGoFileCompiles copies genPath into a fresh, throwaway Go module
-// that requires+replaces github.com/ubiquex/ubx-sdk-go with this repo's
-// own real sdk/go directory, and runs `go build` against it -- proof the
-// generated source is not just textually plausible but real, compilable
-// Go that a program can actually import and use.
-func assertGoFileCompiles(t *testing.T, genPath, pkgName string) {
+// assertGoRepoCompiles builds repoDir (a generateGoProviderRepo's own
+// output: go.mod + one directory per derived service package) in place
+// after appending a replace directive pointing github.com/ubiquex/ubx-sdk-go
+// at this repo's own real sdk/go directory (the generator's own emitted
+// go.mod deliberately has no such replace -- a real consumer would pin a
+// real published version; only this test needs the local override,
+// mirroring how sdk/conformance/programs/go/go.mod does it for real) --
+// proof the generated repo tree is not just textually plausible but
+// real, compilable Go across every package it wrote, not just one file.
+func assertGoRepoCompiles(t *testing.T, repoDir string) {
 	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", "sdk", "go"))
+	sdkGoRoot, err := filepath.Abs(filepath.Join("..", "sdk", "go"))
 	if err != nil {
 		t.Fatalf("resolve sdk/go path: %v", err)
 	}
 
-	moduleDir := t.TempDir()
-	pkgDir := filepath.Join(moduleDir, pkgName)
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(genPath)
+	goModPath := filepath.Join(repoDir, "go.mod")
+	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reading generated go.mod: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(pkgDir, "generated.go"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	goMod := "module ubx-sdkgen-compile-check\n\ngo 1.23\n\n" +
-		"require github.com/ubiquex/ubx-sdk-go v0.0.0\n\n" +
-		"replace github.com/ubiquex/ubx-sdk-go => " + repoRoot + "\n"
-	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(goMod), 0o644); err != nil {
+	updated := string(goMod) + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	if err := os.WriteFile(goModPath, []byte(updated), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := exec.Command("go", "build", "./...")
-	cmd.Dir = moduleDir
+	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("generated Go file does not compile against sdk/go/runtime: %v\n%s", err, out)
+		t.Fatalf("generated repo tree does not compile against sdk/go/runtime: %v\n%s", err, out)
 	}
 }
 
@@ -319,5 +343,12 @@ func mustContainSDK(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
 		t.Fatalf("output missing %s:\n%s", fmt.Sprintf("%q", needle), haystack)
+	}
+}
+
+func mustNotContainSDK(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Fatalf("output unexpectedly contains %s:\n%s", fmt.Sprintf("%q", needle), haystack)
 	}
 }
