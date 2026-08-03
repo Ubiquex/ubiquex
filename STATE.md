@@ -4,6 +4,58 @@
 
 ## Current phase
 
+**UBI-109 (2026-08-03) — `ubx-sdk-google-ts` live; UBI-108's Go-side
+sibling-config collision fix confirmed structurally unnecessary for TS
+by direct inspection, not trusted by analogy; a real seeding mistake
+made and caught mid-session, not silently smoothed over.**
+
+Founder created the empty repo beforehand, confirmed public and cloned
+before any work started. Runtime-publishing status re-checked live
+first, per the handoff's own explicit instruction, before anything
+else: `npm view @ubx/sdk` still 404. Vendored again (UBI-104's
+precedent) — **UBI-107 updated with a real note**: this is now the
+SECOND repo carrying its own separately-vendored copy of the same
+unpublished runtime, the drift risk that ticket names no longer
+theoretical.
+
+**Item 4's own real ask, done properly**: rather than trusting UBI-108's
+Go-context conclusion ("TS/Python structurally immune") by analogy,
+generated the actual full `hashicorp/google@7.42.0` schema via
+`--lang ts` and inspected the exact 3 colliding files directly —
+`instance.ts` declares a bare `InstanceConfig` interface (no
+disambiguation, unlike Go's trailing underscore), `instance_config.ts`
+declares its own, entirely separate-module-scope `InstanceConfig`
+const. Confirmed structurally, not inferred: zero special-casing
+needed in `sdk/codegen/templates/ts`. UBI-98's own compiler-crash-class
+check also confirmed clean specifically for TS (largest file 2,615
+lines, `google/container/cluster.ts`).
+
+**A real mistake, made and caught, not smoothed over**: seeded this
+repo at `7.42.0` — the actual real latest at seed time — leaving no
+room for a genuine version-bump dispatch to prove (the first real
+dispatch correctly no-op'd). First fix attempt was sloppy: changed only
+the `VERSION` tracker to `7.41.0` without regenerating content, leaving
+every file's own `// Code generated from hashicorp/google@7.42.0`
+banner contradicting the tracker — caught before a real reviewer would
+have, fixed by actually regenerating real `7.41.0` content so tracker
+and code agree.
+
+**Real, successful dispatched run after the fix**: queried the real
+registry, built `ubx` from real `ubiquex` source, regenerated for real,
+ran a real `deno check --no-remote` across the full ~1,330-type tree
+(1,448 files, zero errors), opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-google-ts/pull/1** (a genuine
+`7.41.0`→`7.42.0` bump, 138 files changed, `vendor/`/`deno.json`
+untouched). Founder confirmed merging — merged; `main` confirmed at
+`7.42.0` via the real GitHub API.
+
+**All of AWS + Google/Go + Google/TS now real and live.** Remaining in
+UBI-103's rollout: Google's own Python sibling (PyPI runtime-publishing
+question, not assumed to match TS's npm answer), then Azure and
+Kubernetes.
+
+## Current phase (previous)
+
 **UBI-108 (2026-08-03) — first non-AWS provider (`ubx-sdk-google-go`)
 surfaces a real, new naming-collision class AWS's own 1,682 types never
 hit; fixed at the codegen source, not routed around; real schema scale
