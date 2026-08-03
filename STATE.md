@@ -4,6 +4,96 @@
 
 ## Current phase
 
+**UBI-99 (2026-08-03) — the version-watch GitHub Actions automation
+now lives for real in a real, separately hosted repo, not just designed
+against locally-generated output.**
+
+Per the founder's own decision on the ticket: this automation lives
+INSIDE each per-provider bindings repo (UBI-98's repo-shaped output),
+not in `ubiquex` itself. Since no such repo existed yet as a real,
+pushed GitHub repo (only as UBI-98's local-only generated output), this
+session's first real scope item was establishing that repo for real,
+then building and — critical, per the ticket's own "prove it, don't
+assume" bar — actually running its automation live, not just authoring
+YAML and calling it done.
+
+**Two real repos created, both public** (founder's own call, asked
+directly rather than assumed — matches the eventual Pulumi-style
+"public per-cloud SDK" model and avoids private cross-repo Go-module
+auth entirely):
+- **https://github.com/Ubiquex/ubx-sdk-aws-go** — seeded via a real
+  `ubx sdk gen --lang go --out .` against `hashicorp/aws@6.54.0`.
+- **https://github.com/Ubiquex/ubx-sdk-go** — a real, load-bearing
+  dependency this ticket's own scope never named: every generated
+  file's `go.mod` already hard-requires this exact module (UBI-98's own
+  codegen), but it had never been published — only ever built against
+  via a test-only local `replace`. Publishing UBI-98's own already-
+  isolated `sdk/go/` nested module as its own real repo (tagged
+  `v0.0.0`) was the fix; verified live against the real
+  `proxy.golang.org`, zero credentials, zero `replace` directive.
+
+**A real provisioning detour, not a codegen bug**: the founder's first
+attempt to create the real repo produced a stray, empty, wrongly-named
+repo (a `gh secret set` invocation where the PAT's own value landed in
+the NAME argument instead of being pasted at the value prompt — GitHub
+uppercases secret names, which is what made the mistake visible:
+`PAT_11AAMF52...` in the secret list, verbatim). Caught by checking
+actual GitHub state rather than trusting the stated intent, twice (once
+for the stray repo, once for the same name-vs-value mistake recurring
+on the real repo after rename). Resolved: stray repo deleted, real repo
+renamed to `ubx-sdk-aws-go` (the founder's own choice, leaving room for
+future `ubx-sdk-aws-ts`/`ubx-sdk-aws-py` siblings), PAT rotated (the
+mistaken one was in shell history in plaintext — revoked, not just
+overwritten), secret re-set correctly. Full account, including the
+go.mod-module-name consequence of the `-go`-suffixed naming choice:
+`docs/sdk.md`'s new UBI-99 amendment.
+
+**Required verification, met for real — three real bugs found and
+fixed live across real dispatched runs, none caught by `actionlint`
+(syntax-only)**: (1) `Bad credentials` on the private `ubiquex`
+checkout — the org requires fine-grained-PAT approval, unrelated to
+the token's own scope being correct; (2) `rsync ... file has vanished`
+(exit 24) — generating into `.gen/` *inside* the repo checkout meant
+`rsync --delete`'s destination scan raced its own still-being-read
+source; fixed by moving every scratch path (`ubiquex` clone, built
+`ubx` binary, `ubx sdk gen`'s own output) under `$RUNNER_TEMP`,
+structurally outside `$GITHUB_WORKSPACE`; (3) `go build -C` must be the
+first flag, not preceded by `-o`. A fourth, non-codegen blocker —
+`GitHub Actions is not permitted to create or approve pull requests` —
+turned out to be an org-wide GitHub policy (`Ubiquex` org Settings →
+Actions), not anything `ubx` or this workflow controls; the founder
+enabled it directly (out of scope for any token this session held, by
+design — an org-admin action, correctly left to the founder rather than
+requesting broader `admin:org` scope to do it directly).
+
+**Final real, successful run**: queried the real Terraform Registry API
+(found `6.57.1`, newer than the seeded `6.54.0`), built `ubx` from real
+`ubiquex` `main` source, regenerated for real (1682 → 1687 resource
+types), sanity-built the regenerated tree, opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-aws-go/pull/1** (284 files
+changed, genuinely new AWS-service directories like `bedrock/`,
+`mailmanager/` landing as new files). `main`'s own `VERSION` confirmed
+still `6.54.0` afterward — never auto-merged, exactly as designed.
+`ubx sdk gen` confirmed to need no cloud credentials in this real CI
+run (no `AWS_*`/cloud credential set anywhere in the workflow).
+
+**One open finding, not blocking, worth a future session's attention**:
+this session's Terraform-Registry-API design (querying
+`registry.terraform.io` directly for version metadata) sits alongside
+an EARLIER, different decision recorded in this same file — UBI-8's
+own "download provider binaries from registry.opentofu.org, not
+registry.terraform.io, over ToS risk for a third-party tool." Not
+treated as a contradiction this session (the two are different HTTP
+calls against different endpoints — a public, unauthenticated,
+documented JSON version-listing API vs. redistributing actual provider
+binaries — and the founder's own ticket explicitly named and confirmed
+the exact registry.terraform.io versions-API call shape against real
+HashiCorp docs), but flagged here rather than silently assumed
+compatible, per this file's own protocol for a doc/decision that a
+later implementation could read as being in tension.
+
+## Current phase (previous)
+
 **UBI-98 session 2 (2026-08-04) — TypeScript and Python restructured the
 same repo-shaped way Go was the prior session; UBI-98 now fully closed
 across all three languages.**

@@ -1964,3 +1964,118 @@ e.g. grouping the ~130 unprefixed EC2/VPC-family types under one real
 `ec2` boundary the way a hand-maintained bridge like Pulumi's own would,
 rather than the many small mechanically-derived packages this session's
 own wire-name-only, fully-offline derivation produces).
+
+## Amendment (2026-08-03, UBI-99): `ubx-sdk-aws-go` is now a real, separately hosted and automated repo, not just locally-generated `ubx sdk gen` output
+
+**Founder decision, per the ticket**: the "auto-detect a provider version
+bump, regenerate, open a PR" automation lives INSIDE each per-provider
+bindings repo (UBI-98's repo-shaped output), not in `ubiquex` itself and
+not as a generic user-facing guide only.
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-aws-go** (public),
+seeded with a real `ubx sdk gen --lang go --out .` against
+`hashicorp/aws@6.54.0`. The provider version this repo was last
+generated from is tracked in a `VERSION` file at the repo root, not
+`.ubx/config.hcl` — this repo carries no ubx stack/config of its own,
+only generated bindings.
+
+**A real, load-bearing dependency this ticket's own scope didn't name,
+found rather than assumed**: every generated file's `go.mod` already
+hard-requires `github.com/ubiquex/ubx-sdk-go` (UBI-98's own
+`sdk/codegen/templates/go/go.go` bakes this in) — but that module had
+never been published anywhere; `TestFullProvider_Go_CompilesClean` only
+ever built against it via a test-only `replace` directive to the local
+`sdk/go/` tree. A standalone `ubx-sdk-aws-go` repo, built with no such
+replace available, cannot `go build` at all without a real
+`github.com/ubiquex/ubx-sdk-go` to resolve. Fixed by publishing exactly
+that already-isolated nested module (`sdk/go/`, unchanged) as its own
+real repo: **https://github.com/Ubiquex/ubx-sdk-go** (public), tagged
+`v0.0.0` to match the pinned require version. Verified for real, not
+assumed: a clean `go mod tidy && go build && go vet` of `ubx-sdk-aws-go`
+against the real public Go module proxy (`proxy.golang.org`), zero
+credentials, zero `replace` directive.
+
+**Repo naming, and a real second-order bug it caused**: founder chose
+`ubx-sdk-aws-go` (not `ubx-sdk-aws`) to leave room for future
+`ubx-sdk-aws-ts`/`ubx-sdk-aws-py` siblings — one repo per (provider,
+language) pair, not one repo per provider containing all three
+languages. Since `ubx sdk gen`'s `go.mod` module name is derived
+mechanically from the provider source alone (`hashicorp/aws` →
+`ubx-sdk-aws`, per UBI-98's own `shortName` derivation — never a
+hand-curated rename), it never matches this naming scheme by
+construction. The workflow (below) excludes `go.mod`/`go.sum` from its
+regeneration diff for exactly this reason — regenerating them in place
+every run would silently revert the module path back to the mechanical
+name.
+
+**The version-watch workflow itself**
+(`.github/workflows/version-watch.yml` in `ubx-sdk-aws-go`): weekly
+(Monday 06:00 UTC) + `workflow_dispatch`. Queries the confirmed-real
+Terraform Registry API
+(`https://registry.terraform.io/v1/providers/hashicorp/aws/versions`,
+no auth), compares the latest version against `VERSION` via `sort -V`,
+and on a newer version: builds `ubx` from `ubiquex`'s own `main` HEAD
+(decided explicitly, not defaulted into — see below), re-runs
+`ubx sdk gen --lang go`, sanity-builds the regenerated tree before
+committing anything, and opens a PR in `ubx-sdk-aws-go` itself (never
+auto-merges).
+
+**Item 6, decided as the ticket asked**: `ubx` is built from source
+every run, checking out `Ubiquex/ubiquex`'s own `main` branch — not a
+tagged release. Checked, not assumed: the two existing release tags
+(`v0.1.0`, `v0.2.0`) are 177+ commits stale and predate UBI-98 entirely
+— pinning to either would regenerate the OLD flat-file layout, not this
+repo's own real shape. There's no release cadence yet that tracks
+feature landings, so source-from-main is the only way to get
+`ubx sdk gen`'s current, correct behavior; accepted tradeoff for v1
+(an `ubiquex` regression on `main` could affect this workflow) until a
+real release process exists.
+
+**Cross-repo auth**: `ubiquex` is private, so checking it out from
+`ubx-sdk-aws-go`'s own workflow needs a credential beyond the default
+`GITHUB_TOKEN` (repo-scoped only). A fine-grained PAT
+(`UBIQUEX_SOURCE_TOKEN`, `contents: read` only, scoped to `Ubiquex/
+ubiquex` alone) stored as an Actions secret on `ubx-sdk-aws-go`. Item 4
+(no cloud credentials needed) holds — confirmed in a real run, not just
+by the CLI's own `--help` text: the job never sets any `AWS_*`/cloud
+credential anywhere.
+
+**Item 5, the known limitation, held as-is per the ticket**: `sort -V`
+on semver strings isn't bulletproof against pre-release tags —
+commented in the workflow at the exact call site, not hardened further.
+
+**A real bug found and fixed live, not caught by `actionlint` (which
+only checks YAML/expression syntax, not runtime behavior)**: the first
+real dispatch failed with `rsync ... file has vanished` (exit 24).
+Root cause: the workflow originally generated into `.gen/` *inside* the
+repo checkout, so `rsync --delete`'s destination scan treated its own
+still-being-read source directory as extraneous destination content and
+deleted it mid-transfer — a source/destination overlap, not a registry
+or codegen bug. Fixed by moving every scratch path (the `ubiquex`
+clone, the built `ubx` binary, the generation output) under
+`$RUNNER_TEMP`, structurally outside `$GITHUB_WORKSPACE`. A second,
+smaller bug (`go build -C` must be the first flag, not `-o` before it)
+surfaced next and was fixed the same way — live, in a real run, not
+guessed at.
+
+**Required verification, met for real, not simulated**: a real
+`workflow_dispatch` run
+(https://github.com/Ubiquex/ubx-sdk-aws-go/actions) queried the real
+registry (found `6.57.1`, newer than the seeded `6.54.0`), built `ubx`
+from real `ubiquex` source, regenerated for real (1682 → 1687 resource
+types), sanity-built the result, and opened a real PR:
+**https://github.com/Ubiquex/ubx-sdk-aws-go/pull/1** — 284 files
+changed, new files landing under genuinely new AWS service
+directories (`bedrock/`, `mailmanager/`, ...), `main`'s own `VERSION`
+left untouched at `6.54.0` (confirmed after the run — never
+auto-merged).
+
+**A repo-provisioning surprise worth recording, not a codegen finding**:
+creating `ubx-sdk-aws-go` for real needed one org-level GitHub policy
+change beyond anything `ubx` or this workflow controls —
+"Allow GitHub Actions to create and approve pull requests" is an
+org-wide setting (`Ubiquex` org, Settings → Actions) that overrides any
+per-repo attempt to enable it; `gh pr create` fails outright
+(`GitHub Actions is not permitted to create or approve pull requests`)
+until the org owner enables it. One-time, not something this workflow
+or a future sibling repo (`ubx-sdk-gcp`, etc.) needs to repeat.
