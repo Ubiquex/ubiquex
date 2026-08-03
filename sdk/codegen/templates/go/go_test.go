@@ -29,7 +29,7 @@ func TestResourceFile_FlatResource(t *testing.T) {
 		scalarField("allocated_storage", ir.ScalarNumber, false, true, false, false),
 		scalarField("master_password", ir.ScalarString, true, false, false, true),
 	)
-	out, err := ResourceFile("db", "instance", rt)
+	out, err := ResourceFile("db", "instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestResourceFile_DropsProviderAndServicePrefix_FoundersLockedNamingScheme(t
 		scalarField("id", ir.ScalarString, false, false, true, false),
 		scalarField("name", ir.ScalarString, false, true, false, false),
 	)
-	out, err := ResourceFile("ecr", "repository", rt)
+	out, err := ResourceFile("ecr", "repository", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestResourceFile_ListSetMapOfScalar(t *testing.T) {
 		Type: ir.TypeRef{Kind: ir.KindMap, Element: &ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString}}}
 
 	rt := rt("aws_db_instance", listField, setField, mapField)
-	out, err := ResourceFile("db", "instance", rt)
+	out, err := ResourceFile("db", "instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 		}},
 	}
 	rt := rt("aws_thing", nested)
-	out, err := ResourceFile("thing", "thing", rt)
+	out, err := ResourceFile("thing", "thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestResourceFile_RecursiveShape_DeduplicatesIdenticalStructs(t *testing.T) 
 		{WireName: "child", Type: level2},
 	}}
 	rt := rt("aws_thing", ir.Field{WireName: "statement", Type: level1})
-	out, err := ResourceFile("thing", "thing", rt)
+	out, err := ResourceFile("thing", "thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestResourceFile_RecursiveShape_TrueRepeat(t *testing.T) {
 		ir.Field{WireName: "primary_statement", Type: shape},
 		ir.Field{WireName: "secondary_statement", Type: shape},
 	)
-	out, err := ResourceFile("thing", "thing", rt)
+	out, err := ResourceFile("thing", "thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 		ir.Field{WireName: "primary_statement", Type: shape},
 		ir.Field{WireName: "secondary_statement", Type: shape},
 	)
-	out, err := ResourceFile("thing", "thing", rt)
+	out, err := ResourceFile("thing", "thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 		}}},
 	}
 	rt := rt("aws_security_group", nested)
-	out, err := ResourceFile("securitygroup", "security_group", rt)
+	out, err := ResourceFile("securitygroup", "security_group", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 
 func TestResourceFile_UnsupportedWireNameCharacters_Errors(t *testing.T) {
 	rt := rt("aws_thing", scalarField("Weird-Name!", ir.ScalarString, false, true, false, false))
-	if _, err := ResourceFile("thing", "thing", rt); err == nil {
+	if _, err := ResourceFile("thing", "thing", rt, ""); err == nil {
 		t.Fatal("ResourceFile: got nil error for an unsupported wire-name character, want an error")
 	}
 }
@@ -290,12 +290,12 @@ func TestResourceFile_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 		scalarField("id", ir.ScalarString, false, false, true, false),
 		scalarField("instance_class", ir.ScalarString, false, true, false, false),
 	)
-	first, err := ResourceFile("db", "instance", rt)
+	first, err := ResourceFile("db", "instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		again, err := ResourceFile("db", "instance", rt)
+		again, err := ResourceFile("db", "instance", rt, "")
 		if err != nil {
 			t.Fatalf("ResourceFile (run %d): %v", i, err)
 		}
@@ -440,6 +440,60 @@ func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 				t.Fatalf("run %d produced different content for %s than run 0", i, path)
 			}
 		}
+	}
+}
+
+// TestGeneratedRepo_SiblingConfigCollision_Escaped is UBI-108's own
+// hermetic sibling of a real, live-verified finding against
+// hashicorp/google@7.40.0 -- NOT a hypothetical, and NOT the same
+// collision class UBI-96 already fixed (that one was nested BLOCK type
+// names; this is two independent TOP-LEVEL resources). 3 real hits:
+// google_spanner_instance + google_spanner_instance_config,
+// google_workstations_workstation + google_workstations_workstation_config,
+// google_migration_center_report + google_migration_center_report_config.
+// "svc_instance" here mirrors spanner/instance exactly: "instance"'s own
+// AUTO-derived Config struct ("InstanceConfig") collides with sibling
+// "instance_config"'s own REAL binding var (also "InstanceConfig",
+// PascalCase of its own wire-derived local name) -- both in the same
+// service package. hashicorp/aws's own 1,682 types never happened to
+// produce this exact shape; hashicorp/google's real schema does, 3 times.
+func TestGeneratedRepo_SiblingConfigCollision_Escaped(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_svc_instance", scalarField("id", ir.ScalarString, false, false, true, false)),
+		rt("aws_svc_instance_config", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+
+	instanceSrc, ok := files["aws/svc/instance.go"]
+	if !ok {
+		t.Fatalf("expected aws/svc/instance.go, got paths: %v", keys(files))
+	}
+	configSrc, ok := files["aws/svc/instance_config.go"]
+	if !ok {
+		t.Fatalf("expected aws/svc/instance_config.go, got paths: %v", keys(files))
+	}
+
+	// "instance"'s own Config struct is disambiguated (trailing
+	// underscore, the same escape convention goPackageIdent/pyModuleIdent
+	// already use for a keyword collision) -- never the bare
+	// "InstanceConfig" that would collide.
+	mustContain(t, instanceSrc, "type InstanceConfig_ struct {")
+	mustContain(t, instanceSrc, "var Instance = sdk.ResourceBinding{")
+	mustNotContain(t, instanceSrc, "type InstanceConfig struct {")
+
+	// "instance_config"'s own binding var and its OWN (unrelated) auto
+	// Config struct are both completely undisturbed -- the collision is
+	// resolved on the OTHER sibling's side, never by mangling a resource's
+	// own real, wire-derived identity.
+	mustContain(t, configSrc, "var InstanceConfig = sdk.ResourceBinding{")
+	mustContain(t, configSrc, "type InstanceConfigConfig struct {")
+	mustContain(t, configSrc, `WireType: "aws_svc_instance_config",`)
+
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has a real declaration collision: %v", err)
 	}
 }
 

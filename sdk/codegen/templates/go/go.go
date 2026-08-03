@@ -89,8 +89,35 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// requirement, below.
 	for _, service := range services {
 		files[shortName+"/"+service+"/doc.go"] = PackageDoc(service, source, version)
+
+		// UBI-108: a real, live-verified collision class hashicorp/aws
+		// never surfaced -- a sibling resource in this SAME service
+		// package whose own wire name is exactly "<other>_config" (a
+		// real, independent resource, not a nested block) declares a
+		// binding var identical to some sibling's own auto-derived
+		// "<Name>Config" struct name. Checked package-wide, before
+		// rendering any one file, the same "spans a whole directory, not
+		// one file" scope UBI-96's own duplicate check already needs for
+		// Go specifically (ResourceFile's own doc comment has the full
+		// account, including the 3 real hits this found).
+		siblingPascalNames := map[string]bool{}
 		for _, e := range byService[service] {
-			content, err := ResourceFile(service, e.local, e.rt)
+			pn, err := pascalCase(e.local)
+			if err != nil {
+				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: local name %q: %w", e.rt.WireType, e.local, err)
+			}
+			siblingPascalNames[pn] = true
+		}
+		for _, e := range byService[service] {
+			pn, err := pascalCase(e.local)
+			if err != nil {
+				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: local name %q: %w", e.rt.WireType, e.local, err)
+			}
+			configOverride := ""
+			if siblingPascalNames[pn+"Config"] {
+				configOverride = pn + "Config_"
+			}
+			content, err := ResourceFile(service, e.local, e.rt, configOverride)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: %w", e.rt.WireType, err)
 			}
@@ -131,10 +158,29 @@ func PackageDoc(pkgName, source, version string) string {
 // unchanged -- the real, full wire type string a provider actually
 // expects over the wire, never shortened; only the GO IDENTIFIER drops
 // the redundant prefix, never the wire-protocol value.
-func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType) (string, error) {
+//
+// configTypeNameOverride is UBI-108's own real, live-verified finding on
+// hashicorp/google@7.40.0 (3 real hits: spanner/instance+instance_config,
+// workstations/workstation+workstation_config,
+// migration/center_report+center_report_config) -- a SIBLING resource in
+// the SAME service package whose own wire name is exactly
+// "<this resource>_config" (a real, independent top-level resource, not
+// a nested block -- distinct from UBI-96's own nested-block-name
+// collision) declares a binding var named exactly what this resource's
+// own auto-derived "<Name>Config" struct would be. GeneratedRepo checks
+// every sibling up front (a package-wide concern, same reason UBI-96's
+// own duplicate check spans a whole directory) and passes a
+// disambiguated override here when it detects one; empty string means
+// "no collision, use the default `<Name>Config`" -- every existing
+// caller/test that predates this finding passes "" unchanged.
+func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configTypeNameOverride string) (string, error) {
 	pascalName, err := pascalCase(localWireName)
 	if err != nil {
 		return "", fmt.Errorf("%s: local name %q: %w", rt.WireType, localWireName, err)
+	}
+	configTypeName := pascalName + "Config"
+	if configTypeNameOverride != "" {
+		configTypeName = configTypeNameOverride
 	}
 
 	r := &resourceRenderer{pascalName: pascalName}
@@ -198,7 +244,7 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType) (string, e
 	// Required/Optional/Computed all false and must still be settable,
 	// hence `!Computed` rather than `Required || Optional` alone --
 	// fieldIsSettable's own doc comment).
-	fmt.Fprintf(&b, "type %sConfig struct {\n", pascalName)
+	fmt.Fprintf(&b, "type %s struct {\n", configTypeName)
 	for _, f := range rt.Fields {
 		if !fieldIsSettable(f) {
 			continue
