@@ -4,6 +4,82 @@
 
 ## Current phase
 
+**UBI-116 (2026-08-03) — `ubx-sdk-azure-ts` live: Azure's TS sibling. UBI-115's v5-protocol finding confirmed identical for TS's own generation path. A real correction to the ticket's own premise: Kubernetes was the v6 outlier, not the norm — AWS and Google were already v5 the whole time, making this the third v5-protocol TS repo, not the first. A genuine regen-workflow bug (package.json's name field) found via real dispatch and fixed before merging.**
+
+**Repo confirmed before anything else**: `github.com/ubiquex/ubx-sdk-azure-ts`
+already existed (founder-created, genuinely empty — `pushedAt` ==
+`createdAt`), confirmed via the real GitHub API, then cloned locally.
+
+**The ticket's own real ask, confirmed then corrected**: re-verified
+directly that `hashicorp/azurerm@5.0.0` negotiates protocol v5 on the
+`--lang ts` code path too (schema-fetch is shared, language-independent
+code — confirmed live, not assumed). But the ticket's own framing ("TS's
+first v5-only provider... AWS/Google/Kubernetes may all have been v6")
+was checked directly against all four real binaries and found wrong:
+`hashicorp/aws@6.54.0` → v5, `hashicorp/google@7.42.0` → v5,
+`hashicorp/kubernetes@3.2.1` → v6, `hashicorp/azurerm@5.0.0` → v5.
+**Kubernetes was the v6 outlier, not the norm** — this is the *third*
+v5-protocol TS repo (after AWS-TS/UBI-104, Google-TS/UBI-109), not the
+first. Traces back to a 2026-07-10 finding recorded before the SDK
+rollout even began (`terraform-provider-aws@6.54.0` already known to
+report v5) — connected forward rather than re-discovered.
+
+**A real bug found and fixed before merging, not shipped and found
+later**: the version-watch workflow, ported mechanically from
+`ubx-sdk-kubernetes-ts`, silently reverted `package.json`'s `name` field
+(`@ubx/sdk-azure` → the wrong mechanical `@ubx/sdk-azurerm`) on its
+first real dispatch — Azure is the first provider in this family whose
+repo shortname (`azure`) diverges from its mechanically-derived one
+(`azurerm`), so this class of bug never had a chance to surface in any
+prior TS sibling. Caught by diffing the opened PR line-by-line, not
+trusting the line-count summary. Fixed with a `sed` correction after the
+regen `rsync` (package.json can't just be excluded like go.mod — its
+`description` field legitimately needs the version-stamp update every
+run). First PR (#1) closed unmerged; workflow fix pushed to `main`;
+re-dispatched clean; second PR (#2) verified correct before merging.
+
+**Other collision classes, wire-name-level facts reconfirmed not
+re-derived**: compiler-crash-class absent (largest file
+`azurerm/kubernetes/cluster.ts`, 1,139 lines); sibling-`_config` and
+bare-version-suffix collisions both carry over unchanged from UBI-115,
+reconfirmed by a clean `deno check --frozen` across the full tree (a
+collision would fail typechecking).
+
+**Real schema scale, confirmed independently**: 1,103 resource types
+for `hashicorp/azurerm@5.0.0`, exactly matching Go's count — 144 service
+packages, 1,246 files. `jsr:@ubx/sdk@^0.1.0` from the initial commit, no
+vendoring (same as Kubernetes-TS).
+
+**Zero `ubiquex`-core changes needed this session** — the fix lived
+entirely in the external repo's workflow file. `go test ./...`
+untouched, trivially green.
+
+**Required verification, met for real across two dispatches**: seeded
+at `5.0.0`, one version behind real latest (`5.0.1`, unchanged since
+UBI-115). First dispatch
+(https://github.com/Ubiquex/ubx-sdk-azure-ts/actions/runs/30859055971)
+green but PR #1 carried the package.json regression — closed unmerged.
+Workflow fix pushed, re-dispatched
+(https://github.com/Ubiquex/ubx-sdk-azure-ts/actions/runs/30859286297),
+green, opened a real, clean, deterministic `5.0.0`→`5.0.1`
+provenance-only bump PR —
+**https://github.com/Ubiquex/ubx-sdk-azure-ts/pull/2** (145 files,
+288/-288 lines, every changed file confirmed by name to be `doc.ts`/
+`VERSION`/`package.json`'s version stamp only, `name` field confirmed
+unchanged this time). Founder confirmed merging — merged; `main`
+confirmed at `5.0.1` via the real GitHub API.
+
+`docs/sdk.md` gained a matching UBI-116 amendment (which also corrects
+UBI-115's own entry below, which had prematurely claimed the rollout
+was complete).
+
+**UBI-103's rollout**: AWS, Google, Kubernetes real and live across
+Go/TS/Python; Azure real and live in Go (UBI-115) and TS (UBI-116).
+Remaining: Azure's Python sibling — the last row before the original
+four-provider rollout plan is genuinely complete.
+
+## Current phase (previous)
+
 **UBI-115 (2026-08-03) — `ubx-sdk-azure-go` live: final row of the original four-provider rollout. Headline finding: the NestedType fix's generality claim resolved with a definitive negative, not a "tested and passed" positive — `hashicorp/azurerm@5.0.0` negotiates tfplugin protocol v5, not v6, and NestedType is a v6-only wire field, so the fix's mechanism is never even exercised by this provider at this version.**
 
 **Repo confirmed before anything else, per the ticket's own explicit
@@ -60,10 +136,11 @@ GitHub API.
 
 `docs/sdk.md` gained a matching UBI-115 amendment.
 
-**UBI-103's rollout, complete**: AWS, Google, Kubernetes, and Azure all
-real and live across Go/TS/Python — twelve repos total. The original
-four-provider rollout plan is done. `hashicorp/helm` remains explicitly
-out of scope, its own future ticket.
+**UBI-103's rollout (corrected 2026-08-03 in UBI-116 — this entry
+originally overstated completion)**: AWS, Google, and Kubernetes real
+and live across Go/TS/Python; Azure's Go row live, TS/Python siblings
+not yet started as of this entry's own session. `hashicorp/helm` remains
+explicitly out of scope, its own future ticket.
 
 ## Current phase (previous)
 
