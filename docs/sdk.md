@@ -2896,3 +2896,106 @@ at `3.2.1` via the real GitHub API.
 and live; Kubernetes now real and live in Go (UBI-112) and TS
 (UBI-113) — `hashicorp/helm` still deferred to its own future ticket.
 Remaining: Kubernetes' own Python sibling, then Azure.
+
+## Amendment (2026-08-04, UBI-114): `ubx-sdk-kubernetes-py` — Kubernetes' Python sibling, both of UBI-112's real `ubiquex`-core fixes confirmed to hold for Python's own template path, checked directly not assumed; completes Kubernetes' full Go/TS/Python row
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-kubernetes-py**
+(public) — founder-created beforehand per the ticket's own scope (item
+1), standing protocol (confirmed via `gh api` returning the repo before
+the agent touched anything, not a 404 requiring a stop-and-ask this
+time). Its own repo-scoped `UBIQUEX_SOURCE_TOKEN` PAT was already
+present at session start (`gh secret list` confirmed it, same as
+UBI-113's repo) — item 7's "org-level policy/PAT already resolved"
+check passed cleanly, nothing to ask for.
+
+**Item 3's real ask, done for real, not trusted by analogy from Go/TS**:
+`pypi.org/pypi/ubx-sdk/json` and `pypi.org/simple/ubx-sdk/` — the real
+API endpoints, not the bot-challenge HTML page — both re-checked live
+before deciding vendor vs. depend, both still genuine 404s as of this
+session. `ubx-sdk` remains unpublished; vendored `vendor/ubx_sdk/`
+(byte-identical to `sdk/py/ubx_sdk/__init__.py`, confirmed by `diff`),
+same UBI-105/111 stopgap, now a THIRD Python repo carrying it.
+
+**Item 4's explicit ask, done for real, not trusted by analogy from
+Go/TS**: verified both of UBI-112's `ubiquex`-core fixes directly
+against Python's own generated output —
+
+1. **`NestedType`/structured-attribute translation**: generated
+   `kubernetes_validating_admission_policy_v1` and inspected the actual
+   Python output directly
+   (`kubernetes/validating/admission_policy_v1.py`) — a full,
+   correctly-typed, real recursion-depth-5 dataclass/`FieldSpec` tree
+   (`AdmissionPolicyV1_Spec_MatchConstraints_ObjectSelector` down to
+   `..._NamespaceSelector_MatchExpressions`). The fix lives entirely in
+   `provider/schema.go`'s tfplugin6 translation layer, shared by every
+   language ahead of any per-language template — Python needed zero
+   template-level changes, same result as Go/TS.
+2. **Bare-version-suffix filenames**: checked the full generated tree
+   directly for any `v1.py`/`v2beta2.py`-style bare-version file — zero
+   found; every versioned resource's own local name stays
+   self-descriptive (`deployment_v1.py`, not `v1.py`), same
+   `ir.ServiceAndLocalName` fix, same result as Go/TS.
+   `kubernetes/config/map_v1.py` and `kubernetes/config/map_v1_data.py`
+   correctly stay unfolded — neither local name is purely a version
+   token.
+
+**Item 5, the compiler-crash-class (UBI-98) and sibling-`_config`
+collision (UBI-96/108) checks — done for real, specifically for
+Python**: a real recursive `importlib.import_module` of all 119
+generated modules (81 resource types + 37 service `__init__.py` + the
+top-level package), zero errors — the actual verification bar this
+project uses in place of a compiler, matching UBI-98/105/111's own bar.
+Largest file `kubernetes/cron/job_v1.py` at 1,858 lines (Go's own
+equivalent: 1,855 lines) — no language-specific blowup. The
+sibling-`_config` collision class doesn't even have a candidate to be
+immune to here: `hashicorp/kubernetes`'s real 81-type schema has zero
+wire types ending in `_config` at all (checked directly against every
+generated `wire_type=` string) — a genuinely different finding from
+Go/TS's "collision exists but doesn't reproduce because of
+namespacing," since Kubernetes carries no Google-Spanner-shaped
+`<type>`/`<type>_config` pair in the first place.
+
+**A genuinely new, Python-specific finding, not a repeat of any prior
+language in this rollout**: Go's own tree needed a `default_/` service
+directory (Go reserves `default` as a keyword, used in `switch`
+statements). Python has no such reservation — `default` is neither a
+hard keyword (`keyword.iskeyword`) nor a soft keyword
+(`keyword.issoftkeyword`) — so this repo's `kubernetes/default/`
+directory stays unmodified, unlike its Go sibling. Checked directly
+(all 37 real service directory names against both keyword lists), not
+assumed from AWS's own unrelated `lambda`-collides-with-Python finding
+(UBI-98/105) — a keyword collision in one language's own reserved-word
+list doesn't imply anything about a different directory name in a
+different language.
+
+**Real schema scale, confirmed independently of Go/TS's own count**: 81
+resource types for `hashicorp/kubernetes@3.2.0`, same real count, 37
+derived service packages — confirmed by direct generation, not assumed
+to match just because it's the same provider version.
+
+**Required verification, met for real, clean on the first dispatch**
+(no `ubiquex`-core fix needed this session — both of UBI-112's fixes
+have been on `main` since UBI-112/113, nothing left to discover):
+seeded at `3.2.0`, one real version behind the real latest (`3.2.1`,
+unchanged since UBI-112/113 — no new release in between). Initial seed
+pushed directly to `main` (a brand-new empty repo, nothing to risk).
+Dispatched run green on the first try:
+https://github.com/Ubiquex/ubx-sdk-kubernetes-py/actions/runs/30857078322
+— queried the real registry, found `3.2.1`, built `ubx` from
+`ubiquex`'s real `main`, regenerated for real, ran a real recursive
+import-check against the full regenerated 119-module tree, opened a
+real PR — **https://github.com/Ubiquex/ubx-sdk-kubernetes-py/pull/1** —
+a clean, deterministic `3.2.0`→`3.2.1` provenance-only bump (40 files,
+78/-78 lines: 37 `__init__.py` `SOURCE_PROVENANCE` version stamps +
+`VERSION` + `pyproject.toml`'s own embedded version string, zero
+resource-schema content changes). Founder confirmed merging — merged;
+`main` confirmed at `3.2.1` via the real GitHub API.
+
+`docs/sdk.md` (this amendment) is the only `ubiquex`-repo change this
+session — `go test ./...` untouched, trivially green (no core-package
+fix needed, unlike UBI-112).
+
+**UBI-103's rollout**: AWS and Google (all three languages each) and
+Kubernetes (all three languages: Go/UBI-112, TS/UBI-113, Python/UBI-114)
+now real and live — `hashicorp/helm` still deferred to its own future
+ticket. Kubernetes' full Go/TS/Python row is complete. Remaining: Azure.

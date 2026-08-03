@@ -4,6 +4,76 @@
 
 ## Current phase
 
+**UBI-114 (2026-08-04) — `ubx-sdk-kubernetes-py` live: both of UBI-112's `ubiquex`-core fixes (NestedType translation, bare-version-suffix filename fold) confirmed to hold for Python's own template path, checked directly not assumed. Completes Kubernetes' full Go/TS/Python row.**
+
+**Repo confirmed before anything else, per the ticket's own explicit
+instruction**: `github.com/ubiquex/ubx-sdk-kubernetes-py` already
+existed (founder-created beforehand, standing protocol, no stop-and-ask
+needed this time) — confirmed via the real GitHub API, then cloned
+locally (was empty, size 0, before this session's seed).
+
+**PyPI, checked via the real endpoints, not the bot-challenge page,
+per the ticket's own explicit instruction**: `pypi.org/pypi/ubx-sdk/json`
+and `pypi.org/simple/ubx-sdk/` both re-checked live — still genuine
+404s. `ubx-sdk` remains unpublished; vendored `vendor/ubx_sdk/`
+(byte-identical to `sdk/py/ubx_sdk/__init__.py`), same UBI-105/111
+stopgap, now a third Python repo carrying it.
+
+**UBI-112's two real fixes carried forward, verified directly for
+Python's own template path, not trusted by analogy from TS (UBI-113's
+own discipline)**:
+1. `kubernetes_validating_admission_policy_v1`
+   (`kubernetes/validating/admission_policy_v1.py`) generates its full,
+   correctly-typed, real recursion-depth-5 dataclass/`FieldSpec`
+   tree — zero Python-template changes needed, fix lives entirely in
+   `provider/schema.go`.
+2. Zero bare `v1.py`-style filenames anywhere in the generated tree —
+   same `ir.ServiceAndLocalName` fold, same result as Go/TS.
+
+**Compiler-crash-class (UBI-98) and sibling-`_config` collision
+(UBI-96/108) — both checked directly for Python, both confirmed
+absent**: a real recursive `importlib.import_module` of all 119
+generated modules, zero errors. Largest file
+`kubernetes/cron/job_v1.py`, 1,858 lines (Go: 1,855). No `_config`-suffixed
+wire type exists anywhere in the real 81-type kubernetes schema at
+all — a different, stronger finding than Go/TS's "collision exists but
+doesn't reproduce," since there's no collision surface here to begin
+with.
+
+**A genuinely new, Python-specific finding**: Go's tree needed
+`default_/` (Go reserves `default` as a keyword). Python has no such
+reservation (`default` is neither a hard nor soft keyword) — this
+repo's `kubernetes/default/` stays unmodified, unlike its Go sibling.
+Checked directly against all 37 real service directory names, not
+assumed from AWS's unrelated `lambda` finding.
+
+**Real schema scale confirmed independently**: 81 resource types for
+`hashicorp/kubernetes@3.2.0` — same count as Go/TS, confirmed by direct
+generation.
+
+**Required verification, clean on the first dispatch** (both
+`ubiquex`-core fixes already on `main` since UBI-112/113, nothing left
+to discover): seeded at `3.2.0`, pushed directly to `main`. Dispatched
+run green on the first try
+(https://github.com/Ubiquex/ubx-sdk-kubernetes-py/actions/runs/30857078322),
+opened a real, clean, deterministic `3.2.0`→`3.2.1` provenance-only-bump
+PR — **https://github.com/Ubiquex/ubx-sdk-kubernetes-py/pull/1** (40
+files, 78/-78 lines, zero resource-schema content changes). Founder
+confirmed merging — merged; `main` confirmed at `3.2.1` via the real
+GitHub API.
+
+`docs/sdk.md` gained a matching UBI-114 amendment. No `ubiquex` source
+changed this session (docs + one new external repo only) — `go test
+./...` untouched, trivially green.
+
+**UBI-103's rollout**: AWS and Google (all three languages each) real
+and live; Kubernetes now real and live across all three languages —
+Go (UBI-112), TS (UBI-113), Python (UBI-114). Kubernetes' full row is
+complete. `hashicorp/helm` still deferred to its own future ticket.
+Remaining: Azure.
+
+## Current phase (previous)
+
 **UBI-113 (2026-08-03) — `ubx-sdk-kubernetes-ts` live: UBI-112's two `ubiquex`-core fixes (NestedType translation, bare-version-suffix filename fold) confirmed to hold for TS's own template path, checked directly not assumed. First TS repo in this family born directly on the real published `@ubx/sdk` — no vendoring stopgap ever existed here.**
 
 **Founder-created this time, standing protocol restored**: unlike
