@@ -2569,3 +2569,89 @@ closing the PR is sufficient, deleting the branch isn't required). The
 two real UBI-110 PRs (`#3`/`#2` above) are left open pending the
 founder's own merge decision, same protocol as every prior repo in this
 rollout.
+
+## Amendment (2026-08-03, UBI-111): `ubx-sdk-google-py` — Google's Python sibling, PyPI status re-checked via the real API endpoints (not the bot-challenged HTML page), the sibling-`_config` collision confirmed structurally immune for Python too, checked directly not by analogy
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-google-py**
+(public), founder-created per this rollout's standing protocol —
+confirmed to exist and cloned before any work started (it genuinely
+didn't exist on the first check this session; the founder created it
+mid-session, re-confirmed via `gh api repos/Ubiquex/ubx-sdk-google-py`
+before proceeding). Seeded via a real `ubx sdk gen --lang py --out .`
+against `hashicorp/google@7.42.0` — UBI-106's nested `google/` layout
+from birth, matching both Google siblings' own precedent. 1,330 real
+resource types, 1,449 real Python modules.
+
+**PyPI publishing status, checked via the real API, not the page a
+browser would render**: `pypi.org/project/ubx-sdk/`'s plain HTML page
+returns HTTP 200 — but that's PyPI's own bot-challenge shell (a
+"Client Challenge" JS page served for the URL regardless of whether the
+underlying project exists), not evidence of a real project. The two
+authoritative endpoints both say **not published**:
+`pypi.org/pypi/ubx-sdk/json` → 404, `pypi.org/simple/ubx-sdk/` → 404 —
+cross-checked against a known-real package (`requests`) on the same two
+endpoints, both 200. Vendored again (`vendor/ubx_sdk/`, byte-identical
+to this repo's own canonical `sdk/py/ubx_sdk/__init__.py`, confirmed by
+diff, not assumed copied correctly) — the identical UBI-105 stopgap.
+This is now the **second** Python repo carrying a separately-vendored
+copy of the same unpublished runtime; **UBI-107** should be checked
+before any future Python sibling repeats this vendoring rather than
+depending on a real published package.
+
+**Item 4's own explicit ask — checked directly against Python's real
+generated output, not trusted by analogy from either Go's original
+finding or TS's own UBI-109 confirmation**: inspected the exact
+`spanner`/`workstations`/`migration` files UBI-108 found colliding in
+Go. `google/spanner/instance.py` declares a bare `class InstanceConfig`
+(the `google_spanner_instance` resource's own args dataclass);
+`google/spanner/instance_config.py` separately declares
+`InstanceConfig = sdk.ResourceBinding(...)` (the *different*
+`google_spanner_instance_config` resource's own binding) — same
+identifier, different files. Neither service directory's `__init__.py`
+re-exports submodule symbols into a shared namespace (checked directly:
+each `__init__.py` only carries `SOURCE_PROVENANCE`), so the two
+`InstanceConfig`s never actually share a namespace —
+`google.spanner.instance.InstanceConfig` and
+`google.spanner.instance_config.InstanceConfig` are distinct,
+independently-addressable names. Real proof, not just "no error
+surfaced": a genuine `importlib.import_module` of both files (and all
+1,449 real modules) succeeded, zero errors — if the collision applied,
+this import would have failed loudly. Third language, third
+independent confirmation of the same structural immunity (per-file/
+per-module namespacing) TS already established in UBI-109 — Python's
+own module system holds for a reason distinct from TS's ES-module
+scoping, but the practical result is identical.
+
+**UBI-98's compiler-crash-class check, also confirmed clean for
+Python specifically**: largest real generated file,
+`google/container/cluster.py`, 2,520 lines — matches Go's 2,495 and
+TS's 2,615 findings for the exact same resource, nowhere near crash
+scale.
+
+**UBI-98/105's Python-keyword-collision finding (AWS's `lambda` →
+`lambda_/`) does NOT recur for Google**: checked all 118 real Google
+service directory names against `keyword.iskeyword`/
+`keyword.issoftkeyword` directly — zero collisions. Not assumed
+exhaustive from AWS's own single finding; Google's own service names
+were checked fresh.
+
+**Required verification, met for real**: rather than risk `main`'s own
+real, correct `7.42.0` state, the dispatched-run proof ran on a
+disposable branch forked from `main`, genuinely regenerated one real
+release behind (`7.41.0`) via `ubx sdk gen`, confirmed to import cleanly
+locally first, then a real `workflow_dispatch`
+(https://github.com/Ubiquex/ubx-sdk-google-py/actions/runs/30853315736,
+green) exercised the full pipeline: registry query, `ubx` built from
+real `ubiquex` source, real regeneration, and a real recursive
+`importlib.import_module` of every generated module inside GitHub
+Actions' own runner (matching UBI-105's own "real import, not a syntax
+lint" bar). The dispatch's own bot PR regenerating back to `7.42.0` had
+an **empty diff against `main`** (0 files) — stronger confirmation than
+either TS sibling's own dispatch got, since this repo's `main` already
+held the real `7.42.0` content directly (no separate feature-branch
+step, unlike UBI-110's existing repos): the `7.41.0`→`7.42.0` round trip
+is byte-for-byte deterministic. Verification-only PR closed without
+merging (nothing to merge, given the empty diff).
+
+**All of AWS (Go/TS/Python) + Google (Go/TS/Python) now real and
+live**; UBI-103's rollout has just Azure and Kubernetes remaining.
