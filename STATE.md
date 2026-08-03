@@ -4,6 +4,80 @@
 
 ## Current phase
 
+**UBI-117 (2026-08-04) — `ubx-sdk-azure-py` live: Azure's Python sibling, the FINAL row of UBI-103's original four-provider rollout. UBI-116's shortname/mechanical-name divergence bug (pyproject.toml's `name` field) checked and fixed BEFORE the first dispatch this time, per the ticket's own explicit instruction — clean on the first try, no second round needed.**
+
+**Repo confirmed before anything else**: `github.com/ubiquex/ubx-sdk-azure-py`
+already existed (founder-created, genuinely empty — `pushedAt` ==
+`createdAt`), confirmed via the real GitHub API, then cloned locally.
+
+**The pre-emptive check the ticket demanded, done properly this time**:
+ran `ubx sdk gen --lang py` locally against `hashicorp/azurerm@5.0.0`
+*before* touching the real repo, and confirmed directly the generated
+`pyproject.toml` carries the identical bug UBI-116 found in
+`package.json`: `cli/sdk.go`'s `providerShortName` derives mechanically
+from the source's last `/`-segment (`"hashicorp/azurerm"` →
+`"azurerm"`), so `pyproject.toml`'s `name` comes out `ubx-sdk-azurerm`,
+not this repo's real name `ubx-sdk-azure`. Fixed in the initial commit
+AND baked into `version-watch.yml`'s regen step (a `sed` after `rsync`,
+same shape as UBI-116's `package.json` fix) before the workflow ever
+ran for real — this is why the first dispatch came back clean instead
+of needing a second round like UBI-116's did.
+
+**v5-protocol finding, reconfirmed directly for Python's own path, not
+assumed from TS/Go**: raw handshake against the real
+`hashicorp/azurerm@5.0.0` binary (`TF_PLUGIN_MAGIC_COOKIE` +
+`PLUGIN_PROTOCOL_VERSIONS=6,5`) returned `1|5|unix|...|grpc` — protocol
+v5, identical to UBI-115/116. Expected (schema-fetch is shared,
+language-independent code), but checked live via a dedicated probe.
+
+**Other collision classes, checked for real, specifically for Python**:
+compiler-crash-class absent (largest file `azurerm/kubernetes/cluster.py`,
+1,060 lines); sibling-`_config` collision — 0/1,103 candidates against
+the real generated local-name list; bare-version-suffix collision —
+zero bare `v<N>.py` filenames. Real recursive `importlib.import_module`
+of every generated module: 1,247 modules, zero errors.
+
+**Runtime dependency check**: `pypi.org/pypi/ubx-sdk/json` and
+`pypi.org/simple/ubx-sdk/` both still 404 (checked live) — vendored
+into `vendor/ubx_sdk/` per UBI-105/111/114's precedent, byte-identical
+to `sdk/py/ubx_sdk/__init__.py` in this repo.
+
+**Real schema scale, confirmed independently**: 1,103 resource types
+for `hashicorp/azurerm@5.0.0`, exactly matching Go's and TS's counts —
+144 service packages, 1,247 files.
+
+**Zero `ubiquex`-core changes needed this session** — `go test ./...`
+untouched, trivially green.
+
+**Required verification, clean on the first dispatch**: seeded at
+`5.0.0`, one version behind real latest (`5.0.1`, unchanged since
+UBI-115/116). Pushed directly to `main` (brand-new empty repo).
+Dispatched run green first try
+(https://github.com/Ubiquex/ubx-sdk-azure-py/actions/runs/30860199232),
+found `5.0.1`, regenerated for real, full 1,247-file tree re-imported
+clean, opened a real, clean, deterministic `5.0.0`→`5.0.1`
+provenance-only bump PR —
+**https://github.com/Ubiquex/ubx-sdk-azure-py/pull/1** (146 files,
+290/-290 lines, every changed file confirmed by name AND diff content
+to be a service `__init__.py` provenance stamp, `VERSION`, or
+`pyproject.toml`'s version-stamped `description` — `name` field
+confirmed unchanged, spot-checked, not just line-count-trusted).
+Founder confirmed merging — merged; `main` confirmed at `5.0.1` via
+the real GitHub API.
+
+`docs/sdk.md` gained a matching UBI-117 amendment.
+
+**UBI-103's rollout: genuinely, fully complete.** Verified against the
+real GitHub org repo list before writing this (not asserted from
+memory of the plan — the exact mistake UBI-115's entry made and
+UBI-116 had to correct): AWS, Google, Kubernetes, Azure all real and
+live across Go/TS/Python — 12 `ubx-sdk-{provider}-{lang}` repos exist,
+confirmed via `gh repo list Ubiquex`, plus the two shared runtimes
+(`ubx-sdk-go`; TS's `@ubx/sdk` published from `ubiquex`'s own `sdk/ts/`
+to JSR, no separate repo needed).
+
+## Current phase (previous)
+
 **UBI-116 (2026-08-03) — `ubx-sdk-azure-ts` live: Azure's TS sibling. UBI-115's v5-protocol finding confirmed identical for TS's own generation path. A real correction to the ticket's own premise: Kubernetes was the v6 outlier, not the norm — AWS and Google were already v5 the whole time, making this the third v5-protocol TS repo, not the first. A genuine regen-workflow bug (package.json's name field) found via real dispatch and fixed before merging.**
 
 **Repo confirmed before anything else**: `github.com/ubiquex/ubx-sdk-azure-ts`
