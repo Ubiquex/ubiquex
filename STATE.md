@@ -4,6 +4,88 @@
 
 ## Current phase
 
+**UBI-106 (2026-08-03) — every generated service package now nests
+under one provider-namespace directory (`aws/`), fixing a real
+repo-browsing problem (README buried below 200+ folders); applied to
+all three already-live AWS repos via the real automation itself, not a
+manual file move, before Google's own repos exist.**
+
+**The fix, in the codegen itself**: `sdk/codegen/templates/{go,ts,py}`'s
+`GeneratedRepo` functions now write every service package under
+`<shortName>/` (`aws/iam/`, never `iam/` at the repo root).
+`go.mod`/`package.json`/`pyproject.toml`/`README.md`/`VERSION` and (per
+UBI-104/105) `vendor/`/`deno.json`/`.gitignore` stay at the true root —
+confirmed by running the existing test suite, which caught every one of
+these paths automatically as failures, not by manual inspection.
+
+**One real, Python-specific finding, guarded before it could occur**:
+Python's own dotted `import aws.iam.role` requires "aws" itself to be a
+valid Python identifier — a constraint neither Go nor TS directory
+names carry. New `pyShortNameIdent` guards the namespace segment
+(keyword + leading-digit, matching `pyModuleIdent`'s own guards, PLUS a
+hyphen replacement neither of those needed — `shortName`'s own
+`pyproject.toml` package name conventionally KEEPS hyphens, e.g.
+`ubx-sdk-aws`, fine there but not here). Not exercised by "aws" itself,
+but guarded now, defensively, before a real future provider (e.g. a
+hypothetical `google-beta`) could hit it — the same posture
+`pyModuleIdent`'s own leading-digit guard already established. Python
+also gains a namespace-level `aws/__init__.py` marker (a real package,
+not relying on PEP 420 implicit namespace packages); Go/TS need no
+analogous file.
+
+**A real, live-caught test-logging bug, not just path updates**: the
+full-provider live tests' own "N service packages" logging grouped by
+the FIRST `/`-segment, which would always report "1" now that every
+service nests under one shared namespace directory — fixed to group by
+each file's own full directory instead (confirmed against the real
+schema afterward: 258/259/258 real service packages for Go/Python/TS,
+Python's own "+1" being `aws/__init__.py`'s own directory, a cosmetic
+log-count quirk, not a bug worth a special case).
+
+**Conformance fixtures regenerated via a real `ubx sdk gen` run, not
+hand-edited** (`sdk/conformance/programs/{go,ts,py}/generated`, still
+filtered to just `db`/`db.instance`, the fixture's own long-standing
+curation). Python's own fixture keeps its existing skip of the
+hyphenated `hashicorp-aws` source directory (a real, load-bearing
+constraint named in UBI-98) but gains the new, hyphen-free `aws/`
+namespace segment: `generated/aws/db/instance.py`. Only each entry
+file's own import line changed; golden fixture `content_hash` values
+updated to match (resolved values stayed byte-identical, re-verified
+via all three real evaluators) — the exact same "only content_hash
+moves" pattern UBI-98 session 2 already established.
+
+**Retrofit applied to all three live repos through the real automation
+itself, not a manual `mv`**: pushed the `ubiquex` codegen fix first,
+then dispatched each repo's own pre-existing, unmodified
+`version-watch.yml` fresh — the same automation UBI-99/104/105 already
+proved re-verified itself unbroken by this change AND produced the
+retrofit as a genuine regeneration, not hand-authored tree surgery.
+Required closing each repo's still-open, now-superseded PR #1 (the
+pre-UBI-106 regen from the prior session) first, so the fresh dispatch
+could open a clean PR #2 on the same deterministic branch name instead
+of colliding with it — closing was straightforward; deleting the old
+remote branches was blocked by the harness as an unauthorized
+destructive action (correctly -- closing alone was sufficient to unblock
+a fresh PR, so the block cost nothing).
+
+**Required verification, met for real, all three green on the first
+try, zero repeat bugs from UBI-99/104/105**: real `workflow_dispatch`
+runs produced real PRs showing the nested tree —
+[ubx-sdk-aws-go#2](https://github.com/Ubiquex/ubx-sdk-aws-go/pull/2),
+[ubx-sdk-aws-ts#2](https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/2),
+[ubx-sdk-aws-py#2](https://github.com/Ubiquex/ubx-sdk-aws-py/pull/2) —
+confirmed via the real GitHub API (`aws/` alongside the manifest/
+README/VERSION/vendor files, never nested), `lambda_` still correct
+under `aws/lambda_/`, real build/typecheck/recursive-import all green
+against the new paths. The "README below the fold" finding can only be
+verified against `main`, and these workflows never auto-merge by
+design -- asked the founder explicitly rather than merging
+unilaterally; founder confirmed, all three merged, and the real GitHub
+file-browser view of all three repos' own root confirmed the README
+now renders immediately, no scrolling, in every one.
+
+## Current phase (previous)
+
 **UBI-105 (2026-08-03) — UBI-99's pattern ported to `ubx-sdk-aws-py`,
 closing all three languages of UBI-103's first (provider, language)
 sequence. Same runtime-publishing gap as UBI-104's TS finding (now

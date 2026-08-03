@@ -2237,3 +2237,99 @@ now real, live, and automated**: https://github.com/Ubiquex/ubx-sdk-aws-go
 https://github.com/Ubiquex/ubx-sdk-aws-py (UBI-105). Remaining, per
 UBI-103's own umbrella: the same three-language rollout for every other
 supported provider.
+
+## Amendment (2026-08-03, UBI-106): every generated service package nests under one provider-namespace directory — a real repo-browsing fix, applied to all three live AWS repos before Google's own repos exist
+
+**Founder finding**: UBI-98's own per-service-package layout put every
+AWS service directory (200+ for `hashicorp/aws`) directly at the repo
+ROOT. GitHub's file browser sorts directories before files
+alphabetically, so `README.md` sat below the fold behind `accessanalyzer/`
+through `xray/` — a real, live-verified repo-browsing problem, not a
+hypothetical.
+
+**Fix**: `sdk/codegen/templates/{go,ts,py}`'s own `GeneratedRepo`
+functions now nest every service package under one namespace directory
+named after the provider's own `shortName` (`aws/` for
+`hashicorp/aws`) — `aws/iam/`, never `iam/` at the repo root.
+`go.mod`/`package.json`/`pyproject.toml`/`README.md`/`VERSION` and (per
+UBI-104/105's own vendoring decisions) `vendor/`/`deno.json`/`.gitignore`
+all stay at the true repo root — only service packages move.
+
+**A real, Python-specific consequence, guarded before it could ever
+occur, not discovered after the fact**: unlike Go/TS (directory names
+carry no identifier-validity requirement), Python's own dotted
+`import aws.iam.role` requires "aws" itself to parse as a valid Python
+identifier. New `pyShortNameIdent` guards the namespace segment the
+same way `pyModuleIdent` already guards service/local names, PLUS a
+hyphen-to-underscore replacement neither of those needs (`shortName`'s
+own `pyproject.toml` package NAME conventionally keeps hyphens, e.g.
+`ubx-sdk-aws` — fine there, a TOML string, not a Python identifier).
+Not exercised by "aws" itself (no hyphen), but a real, universal
+constraint for any future provider whose `shortName` has one (e.g. a
+hypothetical `google-beta`) — guarded now, before Google's own repos
+exist, the same defensive-not-yet-confirmed posture `pyModuleIdent`'s
+own leading-digit guard already established. Python also gets a new
+namespace-level `aws/__init__.py` (a real package marker, not relying
+on PEP 420 implicit namespace packages) — Go/TS need no analogous
+marker (directories with no `package`/module-init requirement).
+
+**Existing tests updated, not just the generator**: every unit test in
+`sdk/codegen/templates/{go,ts,py}` and `cli/sdk_test.go` asserting a
+flat path (`"iam/doc.go"`, `"widget/doc.ts"`, ...) now asserts the
+nested one (`"aws/iam/doc.go"`, `"widget/widget/doc.ts"`, ...) — caught
+by simply running the suite after the codegen change, not inferred in
+advance. The full-provider live tests' own service-count logging
+(`TestFullProvider_{Go,TS,Py}_*Clean`) needed its own fix too: grouping
+by the FIRST `/`-segment alone would always report "1" once every
+service nests under one shared namespace directory — fixed to group by
+each file's own full directory (`LastIndex`, not `IndexByte`), confirmed
+against the real full-provider schema afterward (258/259/258 real
+service packages, not the misleading "1" the unfixed logging would
+have shown).
+
+**Conformance fixtures regenerated, not hand-edited**: `sdk/conformance/programs/{go,ts,py}/generated`
+rebuilt via a real `ubx sdk gen` run against the same `hashicorp/aws@6.54.0`
+pin, filtered back down to just `db`/`db.instance` (this fixture's own
+long-standing "filtered to aws_db_instance only" curation, unchanged).
+Python's own fixture — which already skips the hyphenated
+`hashicorp-aws` source directory entirely, a real, load-bearing
+constraint named in UBI-98's own restructure — keeps that skip but
+gains the new `aws/` namespace segment (no hyphen, no constraint
+against it): `generated/aws/db/instance.py`, not `generated/db/instance.py`.
+Only each entry file's own import-path line changed
+(`payments.go`/`.ts`/`.py`); golden fixture `content_hash` values
+updated to match (resolved `resources`/`stack`/`intent.summary` stayed
+byte-identical, re-verified via all three real evaluators, the same
+"only content_hash moves" pattern UBI-98 session 2 already established
+for a renaming change).
+
+**Applied to all three ALREADY-LIVE AWS repos, via the real automation
+itself, not a manual file move**: rather than hand-moving each repo's
+existing tree, the `ubiquex` codegen fix was pushed first, each repo's
+own pre-existing, unmodified `version-watch.yml` was dispatched fresh
+against it, and the SAME real automation that already proved itself in
+UBI-99/104/105 both re-verified itself as unbroken by this change AND
+produced the retrofit as a byproduct of a genuine regeneration — no
+`mv`, no hand-authored tree surgery. This also meant closing each
+repo's own still-open, now-superseded PR #1 (the pre-UBI-106
+`6.54.0`→`6.57.1` regen from the prior session) first, so the fresh
+dispatch could open a clean PR #2 on the same deterministic branch
+name rather than colliding with it.
+
+**Required verification, met for real, per repo, zero repeat bugs from
+UBI-99/104/105**: a real `workflow_dispatch` run per repo (all three
+green on the first try) produced a real PR per repo showing the nested
+tree for real —
+[ubx-sdk-aws-go#2](https://github.com/Ubiquex/ubx-sdk-aws-go/pull/2),
+[ubx-sdk-aws-ts#2](https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/2),
+[ubx-sdk-aws-py#2](https://github.com/Ubiquex/ubx-sdk-aws-py/pull/2) —
+confirmed via the real GitHub API (each branch's own root tree: `aws/`
+alongside `go.mod`/`package.json`/`pyproject.toml`/`README.md`/`VERSION`/
+`vendor/`, never nested), Python's `lambda_` fix confirmed still
+correct under the new `aws/lambda_/` path, and the real sanity-check
+step (build/typecheck/recursive-import) green against the new paths in
+all three. Founder confirmed merging all three (the "README below the
+fold" finding can only be verified against `main`, and these workflows
+never auto-merge by design) — merged, and the real GitHub file-browser
+view of all three repos' own root confirmed the README now renders
+immediately, no scrolling, in every one.
