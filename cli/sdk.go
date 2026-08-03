@@ -52,21 +52,27 @@ func newSDKCmd() *cobra.Command {
 // file explosion, and a flat <out>/<source-sanitized>.ts is simpler than
 // an extra directory level for no behavioral gain.
 //
-// UBI-98 (2026-08-03): --lang go's own --out semantics changed --
-// confirmed, not assumed, that the flat single-file shape above
-// literally cannot compile at real full-provider scale (a genuine Go
-// compiler crash, "internal compiler error: NewBulk too big" --
-// unrelated to naming, a hard ceiling on how much can live in one
-// package). --lang go now writes a REPO-SHAPED tree instead:
-// <out>/<source-sanitized>/ with its own go.mod stub (module
-// github.com/ubiquex/ubx-sdk-<shortName>) and one package per derived
+// UBI-98 (2026-08-03/2026-08-04, two sessions): --out's own semantics
+// changed for all three languages -- confirmed, not assumed, that Go's
+// flat single-file shape above literally cannot compile at real
+// full-provider scale (a genuine Go compiler crash, "internal compiler
+// error: NewBulk too big" -- unrelated to naming, a hard ceiling on how
+// much can live in one package). All three --lang values now write a
+// REPO-SHAPED tree per provider source instead: <out>/<source-sanitized>/
+// with its own manifest stub (go.mod for Go, package.json for TS,
+// pyproject.toml for Python) and one directory/package per derived
 // AWS-service boundary (ir.ServiceAndLocalName -- iam/, ecr/, sqs/, ...),
-// one file per resource type within its own service package, the type
+// one file per resource type within its own service directory, the type
 // names themselves dropping the redundant Aws<Service> prefix
-// (ecr.Repository, never generated.AwsEcrRepository) since the import
-// path already encodes provider+service. --lang ts/py are UNCHANGED
-// (still one flat file) -- restructuring them the same way is real,
-// separately-scoped follow-up work, not done this session (STATE.md).
+// (ecr.Repository, never generated.AwsEcrRepository) since the directory
+// already encodes provider+service. TS/Python were NOT restructured for
+// the compile-crash reason Go was -- confirmed live, not assumed, that
+// neither `deno check` nor a real Python import chokes on even the worst
+// real single-type case (aws_wafv2_web_acl_rule) -- but were restructured
+// the same way anyway for consistency and reviewability (STATE.md has
+// the full account of what's genuinely language-specific -- Python's own
+// real "lambda" keyword collision, TS needing no directory-name escaping
+// at all -- versus what's shared).
 func newSDKGenCmd() *cobra.Command {
 	var (
 		out     string
@@ -83,10 +89,11 @@ credentials needed -- a pure local gRPC call against the launched binary), and w
 --out in the language named by --lang ("ts", "go", or "py") whose generated field map maps back to the provider's
 real wire attribute names at evaluation time.
 
---lang go writes a repo-shaped tree per provider source: --out/<source-sanitized>/, its own go.mod stub, one
-package per derived AWS-service boundary (iam/, ecr/, sqs/, ...), one file per resource type -- required so a
-full-provider binding actually compiles (a flat single-file/single-package shape hits a real Go compiler ceiling
-at real full-provider scale). --lang ts/py still write one flat file per provider source under --out.
+Every --lang writes a repo-shaped tree per provider source: --out/<lang>/<source-sanitized>/, its own manifest
+stub (go.mod / package.json / pyproject.toml), one directory per derived AWS-service boundary (iam/, ecr/, sqs/,
+...), one file per resource type, the redundant Aws<Service> prefix dropped from every generated identifier.
+--lang is its own path segment (not folded into <source-sanitized>) so generating multiple languages against the
+same --out never interleaves their manifests/source trees into one directory.
 
 Always regenerates from the exact config-pinned version's real, freshly-acquired schema -- never a stale cache
 from a different version (the same provider.Acquire version-pinned cache discipline "ubx scan"/"ubx accept
@@ -126,7 +133,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		},
 	}
 
-	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- one file per declared provider source for --lang ts/py; a repo-shaped tree (own go.mod, one package per AWS-service boundary) per provider source for --lang go`)
+	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<lang>/`)
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 
@@ -188,101 +195,80 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		types = append(types, resType)
 	}
 
-	if lang == "go" {
-		path, err := generateGoProviderRepo(out, source, version, types)
-		if err != nil {
-			return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
-		}
-		return path, len(types), nil
-	}
-
-	var content, ext, filenameStem string
+	var files map[string]string
+	var checkErr error
 	switch lang {
+	case "go":
+		files, err = gotemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		if err == nil {
+			checkErr = gotemplate.CheckRepoNoDuplicateDeclarations(files)
+		}
 	case "py":
-		content, err = pytemplate.GeneratedFile(source, version, types)
-		ext = ".py"
-		// Python module names can't contain a hyphen ("import
-		// hashicorp-aws" is a SyntaxError) -- underscores, not the
-		// hyphenated convention TS/Go both use, so the generated file is
-		// actually importable by name.
-		filenameStem = strings.ReplaceAll(sanitizeSourceForFilename(source), "-", "_")
+		files, err = pytemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		if err == nil {
+			checkErr = pytemplate.CheckRepoNoDuplicateDeclarations(files)
+		}
 	default:
-		content, err = tstemplate.GeneratedFile(source, version, types)
-		ext = ".ts"
-		filenameStem = sanitizeSourceForFilename(source)
+		files, err = tstemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		if err == nil {
+			checkErr = tstemplate.CheckRepoNoDuplicateDeclarations(files)
+		}
 	}
 	if err != nil {
 		return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
 	}
-	// UBI-96: a flat package/module can produce a broken package-level
-	// naming collision (two different resource types' own generated names
-	// coincide -- see each template's own CheckNoDuplicateDeclarations doc
-	// comment for the full account, including why this is a possibly-
-	// SILENT interface merge in TS, and a fully silent module-namespace
-	// overwrite in Python) -- checked here, before ever writing the file,
-	// not just caught in a test after the fact.
-	var selfCheckErr error
-	switch lang {
-	case "py":
-		selfCheckErr = pytemplate.CheckNoDuplicateDeclarations(content)
-	default:
-		selfCheckErr = tstemplate.CheckNoDuplicateDeclarations(content)
-	}
-	if selfCheckErr != nil {
-		return "", 0, fmt.Errorf("%s@%s: generated output failed self-check: %w", source, version, selfCheckErr)
+	// UBI-96's own defense-in-depth discipline, updated for UBI-98's own
+	// per-service-directory, multi-file shape: refuse to WRITE a tree
+	// with a real declaration collision, checked across the whole repo at
+	// once, rather than only ever catching this in a test after the
+	// fact. Each template package's own CheckRepoNoDuplicateDeclarations
+	// doc comment has the full, per-language account of what can and
+	// cannot actually collide (Go: within one directory, since Go's
+	// package namespace spans every file in it; TS/Python: within one
+	// file only, since both give every file its own independent
+	// namespace -- confirmed, not assumed, this session).
+	if checkErr != nil {
+		return "", 0, fmt.Errorf("%s@%s: generated repo failed self-check: %w", source, version, checkErr)
 	}
 
-	path = filepath.Join(out, filenameStem+ext)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", 0, err
-	}
-	return path, len(types), nil
-}
-
-// generateGoProviderRepo writes UBI-98's own repo-shaped Go output tree
-// for one provider source: <out>/<source-sanitized>/ containing its own
-// go.mod stub (module github.com/ubiquex/ubx-sdk-<shortName>) and one
-// package per derived AWS-service boundary (gotemplate.GeneratedRepo).
-// Returns the provider's own repo root directory (the CLI's own
-// "generated N resource type(s) ... -> <path>" message names this
-// directory, not a single file, since --lang go no longer writes one).
-func generateGoProviderRepo(out, source, version string, types []*ir.ResourceType) (string, error) {
-	files, err := gotemplate.GeneratedRepo(providerShortName(source), source, version, types)
-	if err != nil {
-		return "", err
-	}
-	// UBI-96's own defense-in-depth discipline, unchanged in spirit,
-	// updated for UBI-98's own multi-file-per-package shape: refuse to
-	// WRITE a tree with a real package-level collision, checked across
-	// every service package at once, rather than only ever catching this
-	// in a test after the fact.
-	if err := gotemplate.CheckRepoNoDuplicateDeclarations(files); err != nil {
-		return "", fmt.Errorf("generated repo failed self-check: %w", err)
-	}
-
-	repoDir := filepath.Join(out, sanitizeSourceForFilename(source))
+	// lang is its own path segment, not folded into the source-sanitized
+	// directory name -- a real gap found live testing all three languages
+	// end to end this session, not assumed safe: --out defaults IDENTICALLY
+	// across --lang go/ts/py, and (unlike the old flat-file scheme, where
+	// each language's own file EXTENSION naturally disambiguated
+	// "hashicorp-aws.go" from "hashicorp-aws.ts" from "hashicorp_aws.py"
+	// sharing one directory) a repo-shaped TREE has no such built-in
+	// per-language distinction at the top level -- generating go then ts
+	// then py into the same --out would otherwise interleave three
+	// different ecosystems' manifests (go.mod/package.json/pyproject.toml)
+	// and source trees into ONE directory, breaking the "ready to become
+	// its OWN real repo" promise this whole restructure exists to keep
+	// (docs/sdk.md).
+	repoDir := filepath.Join(out, lang, sanitizeSourceForFilename(source))
 	for relPath, content := range files {
 		fullPath := filepath.Join(repoDir, filepath.FromSlash(relPath))
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			return "", err
+			return "", 0, err
 		}
 		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			return "", err
+			return "", 0, err
 		}
 	}
-	return repoDir, nil
+	return repoDir, len(types), nil
 }
 
 // providerShortName derives a declared provider source's own short name
-// for its generated repo's Go module path (github.com/ubiquex/ubx-sdk-<shortName>)
+// for its generated repo's own manifest (Go's module path
+// github.com/ubiquex/ubx-sdk-<shortName>, TS's package.json name
+// @ubx/sdk-<shortName>, Python's pyproject.toml name ubx-sdk-<shortName>)
 // -- the founder's own worked example on UBI-98 (github.com/ubiquex/ubx-sdk-aws
 // for "hashicorp/aws"): the source's own last "/"-separated segment,
 // mechanically, never a hand-curated friendlier rename (e.g. "google" ->
-// "gcp") -- this session only ever generates against, and verifies
+// "gcp") -- this project only ever generates against, and verifies
 // against, the real hashicorp/aws provider; inventing an unverified
-// rename table for providers this session has no way to test against
-// would be exactly the kind of un-verified assumption this project's own
-// standing discipline refuses to ship.
+// rename table for providers there's no way to test against would be
+// exactly the kind of un-verified assumption this project's own standing
+// discipline refuses to ship.
 func providerShortName(source string) string {
 	if idx := strings.LastIndex(source, "/"); idx >= 0 {
 		return source[idx+1:]

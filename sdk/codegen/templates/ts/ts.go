@@ -4,6 +4,24 @@
 // sdk/codegen that knows what "idiomatic TypeScript" means -- camelCase
 // property names, interface declarations, a runtime field-map descriptor
 // -- none of which leaks back into sdk/codegen/ir itself.
+//
+// UBI-98's own per-provider-repo/per-service-package restructure,
+// applied to TS in the session AFTER Go's own (STATE.md): GeneratedFile
+// (one flat file for a whole provider) is replaced by
+// ResourceFile/PackageDoc/GeneratedRepo (one file per resource type, one
+// doc.ts per service directory). A real, load-bearing difference from Go
+// found and verified this session, not assumed: ES modules give every
+// FILE its own independent scope, so (unlike Go, where UBI-96's original
+// cross-resource collision bug required the package-wide "_" join fix to
+// avoid a hard `go build` redeclaration) two DIFFERENT resource types'
+// own declarations can NEVER collide with each other here, regardless of
+// directory or naming, the moment each type gets its own file -- this
+// restructure closes that whole class of risk for TS as a structural side
+// effect of moving to per-type files, not because of anything specific to
+// the per-SERVICE-directory grouping itself (which is here for
+// reviewability/the founder's own Pulumi-parity naming goal, matching
+// Go's `ecr.Repository`, not for a compile-correctness reason the way
+// Go's package split was).
 package ts
 
 import (
@@ -14,55 +32,147 @@ import (
 	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
 )
 
-// GeneratedFile renders one TypeScript module covering every resource
-// type declared by one provider source+version -- one file per provider
-// source, never per-resource-type (docs/sdk.md's own "ubx sdk gen" design:
-// a real provider owns dozens to hundreds of types; one cohesive,
-// reviewable, git-committed file per source matches that better than a
-// file explosion). types is sorted by WireType here, defensively, even if
-// a caller already passed a sorted slice -- codegen output must never
-// depend on caller-supplied ordering (determinism is a feature,
-// CLAUDE.md's own standing rule).
-func GeneratedFile(source, version string, types []*ir.ResourceType) (string, error) {
+// GeneratedRepo renders every file for one provider's repo-shaped
+// TypeScript output tree: a package.json stub (name "@ubx/sdk-<shortName>",
+// not published -- docs/sdk.md's own "No runtime package is published
+// yet" posture, now joined by "no generated bindings package either"),
+// one doc.ts per derived service directory (PackageDoc), and one
+// <local>.ts per resource type (ResourceFile) inside its own service
+// directory. Returns a map of path, relative to the repo root using "/"
+// always (never the host OS separator) -> file content -- mirrors
+// sdk/codegen/templates/go's own GeneratedRepo exactly in shape.
+func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].WireType < sorted[j].WireType })
 
+	type entry struct {
+		rt    *ir.ResourceType
+		local string
+	}
+	byService := map[string][]entry{}
+	var services []string
+	for _, rt := range sorted {
+		service, local, err := ir.ServiceAndLocalName(rt.WireType)
+		if err != nil {
+			return nil, fmt.Errorf("sdk/codegen/templates/ts: %w", err)
+		}
+		if _, ok := byService[service]; !ok {
+			services = append(services, service)
+		}
+		byService[service] = append(byService[service], entry{rt, local})
+	}
+	sort.Strings(services)
+
+	files := map[string]string{
+		"package.json": packageJSON(shortName, source, version),
+	}
+	for _, service := range services {
+		files[service+"/doc.ts"] = PackageDoc(source, version)
+		for _, e := range byService[service] {
+			content, err := ResourceFile(e.local, e.rt)
+			if err != nil {
+				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: %w", e.rt.WireType, err)
+			}
+			files[service+"/"+e.local+".ts"] = content
+		}
+	}
+	return files, nil
+}
+
+// packageJSON renders the repo-shaped tree's own manifest stub -- a real,
+// consumer-ready `npm install`able shape (were it ever published; it
+// isn't, matching @ubx/sdk's own "not yet published" posture, docs/sdk.md),
+// not consulted by anything this codebase's own hermetic evaluator or
+// `deno check` verification actually reads (Deno resolves "@ubx/sdk" via
+// its own import map, never package.json/node_modules resolution).
+func packageJSON(shortName, source, version string) string {
+	return fmt.Sprintf(`{
+  "name": "@ubx/sdk-%s",
+  "version": "0.0.0",
+  "description": "Generated TypeScript bindings for %s@%s (ubx sdk gen). DO NOT EDIT.",
+  "type": "module",
+  "dependencies": {
+    "@ubx/sdk": "0.0.0"
+  }
+}
+`, shortName, source, version)
+}
+
+// PackageDoc renders one service directory's shared doc.ts: the
+// "generated, do not edit, committed to git" banner (docs/sdk.md's own
+// "ubx sdk gen: local, pinned, offline-after-generation") plus
+// __ubxSourceProvenance -- declared exactly once per directory, here,
+// rather than repeated (or, worse, redeclared -- a real `SyntaxError:
+// Identifier '...' has already been declared` if two files in the same
+// directory each tried) in every resource type's own file.
+func PackageDoc(source, version string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Code generated by `ubx sdk gen` from %s@%s. DO NOT EDIT.\n", source, version)
 	b.WriteString("// This file is committed to git like any other reviewable generated code\n")
 	b.WriteString("// (docs/sdk.md — \"ubx sdk gen: local, pinned, offline-after-generation\") --\n")
 	b.WriteString("// re-run `ubx sdk gen` to regenerate after a provider version bump.\n")
-	fmt.Fprintf(&b, "export const __ubxSourceProvenance = { source: %q, version: %q } as const;\n\n", source, version)
-	b.WriteString("import type { Computed, FieldMap, ResourceBinding } from \"@ubx/sdk\";\n\n")
-
-	for _, rt := range sorted {
-		if err := renderResource(&b, rt); err != nil {
-			return "", fmt.Errorf("sdk/codegen/templates/ts: %s: %w", rt.WireType, err)
-		}
-	}
-
-	return b.String(), nil
+	fmt.Fprintf(&b, "export const __ubxSourceProvenance = { source: %q, version: %q } as const;\n", source, version)
+	return b.String()
 }
 
-// renderResource writes one resource type's full binding: nested object
-// interfaces (as needed, deepest-first isn't required -- TS interface
-// declarations are order-independent), the settable Config interface,
-// the all-fields Attrs interface, and the runtime descriptor object
-// resource() actually reads at evaluation time.
-func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
-	pascalName, err := pascalCase(rt.WireType)
+// ResourceFile renders one TypeScript module for a single resource type.
+// localWireName is ir.ServiceAndLocalName's own second return value for
+// rt.WireType (e.g. "repository" for "aws_ecr_repository") -- used ONLY
+// to derive this file's own exported identifiers (the founder's own
+// locked naming scheme, applied identically to Go: `Repository`, never
+// `AwsEcrRepository`, since the directory already encodes provider+
+// service). rt.WireType itself is rendered into the runtime
+// ResourceBinding literal completely unchanged.
+func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
+	pascalName, err := pascalCase(localWireName)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("%s: local name %q: %w", rt.WireType, localWireName, err)
 	}
 
 	r := &resourceRenderer{pascalName: pascalName}
 	for _, f := range rt.Fields {
 		if err := r.collectNestedInterfaces(f, pascalName); err != nil {
-			return err
+			return "", err
 		}
 	}
+
+	// The runtime descriptor's own body is built into a SEPARATE buffer
+	// first, before anything else is written to the file -- mirrors
+	// sdk/codegen/templates/go's own ResourceFile exactly: r.fieldSpecLiteral
+	// (called below) can hoist a new shared FieldMap const as a side
+	// effect (r.fieldMapDecls), which must be written to the file BEFORE
+	// this descriptor references it by name.
+	var descriptor strings.Builder
+	fmt.Fprintf(&descriptor, "export const %s: ResourceBinding<%sConfig, %sAttrs> = {\n", pascalName, pascalName, pascalName)
+	fmt.Fprintf(&descriptor, "  wireType: %q,\n", rt.WireType)
+	descriptor.WriteString("  fields: {\n")
+	for _, f := range rt.Fields {
+		if !fieldIsSettable(f) {
+			continue
+		}
+		idiomatic, err := camelCase(f.WireName)
+		if err != nil {
+			return "", err
+		}
+		spec, err := r.fieldSpecLiteral(f, 2)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&descriptor, "    %s: %s,\n", idiomatic, spec)
+	}
+	descriptor.WriteString("  },\n")
+	descriptor.WriteString("};\n")
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "// Code generated by `ubx sdk gen` from %s. DO NOT EDIT.\n", rt.WireType)
+	b.WriteString("import type { Computed, FieldMap, ResourceBinding } from \"@ubx/sdk\";\n\n")
+
 	for _, decl := range r.nestedDecls {
+		b.WriteString(decl)
+		b.WriteString("\n")
+	}
+	for _, decl := range r.fieldMapDecls {
 		b.WriteString(decl)
 		b.WriteString("\n")
 	}
@@ -70,14 +180,14 @@ func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
 	// Config interface: settable fields only (Required or Optional --
 	// see fieldIsSettable's own doc comment for the Computed-only
 	// exclusion this implements).
-	fmt.Fprintf(b, "export interface %sConfig {\n", pascalName)
+	fmt.Fprintf(&b, "export interface %sConfig {\n", pascalName)
 	for _, f := range rt.Fields {
 		if !fieldIsSettable(f) {
 			continue
 		}
 		idiomatic, err := camelCase(f.WireName)
 		if err != nil {
-			return err
+			return "", err
 		}
 		optionalMark := ""
 		if !f.Required {
@@ -85,56 +195,35 @@ func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
 		}
 		valueType, err := r.tsValueType(f.Type, pascalName, f.WireName)
 		if err != nil {
-			return err
+			return "", err
 		}
-		fmt.Fprintf(b, "  %s%s: %s | Computed<%s>;\n", idiomatic, optionalMark, valueType, valueType)
+		fmt.Fprintf(&b, "  %s%s: %s | Computed<%s>;\n", idiomatic, optionalMark, valueType, valueType)
 	}
 	b.WriteString("}\n\n")
 
 	// Attrs interface: every field, plain value types -- Computed<T>
 	// wrapping happens once, generically, in the runtime's own Computed<T>
-	// type (sdk/ts/runtime), not per-field here (docs/sdk.md: "resource()'s
-	// return value's fields are Computed<T>", uniformly, not just the
-	// schema-Computed ones -- see the runtime package's own doc comment
-	// for why that's correct even for fields the program itself set).
-	fmt.Fprintf(b, "export interface %sAttrs {\n", pascalName)
+	// type, not per-field here.
+	fmt.Fprintf(&b, "export interface %sAttrs {\n", pascalName)
 	for _, f := range rt.Fields {
 		idiomatic, err := camelCase(f.WireName)
 		if err != nil {
-			return err
+			return "", err
 		}
 		valueType, err := r.tsValueType(f.Type, pascalName, f.WireName)
 		if err != nil {
-			return err
+			return "", err
 		}
-		fmt.Fprintf(b, "  %s: %s;\n", idiomatic, valueType)
+		fmt.Fprintf(&b, "  %s: %s;\n", idiomatic, valueType)
 	}
 	b.WriteString("}\n\n")
 
-	// The runtime descriptor -- the one thing resource() actually reads
-	// at evaluation time (wireType for resources[].type, fields for
-	// config-key -> wire-name mapping, recursively for nested objects).
-	fmt.Fprintf(b, "export const %s: ResourceBinding<%sConfig, %sAttrs> = {\n", pascalName, pascalName, pascalName)
-	fmt.Fprintf(b, "  wireType: %q,\n", rt.WireType)
-	b.WriteString("  fields: {\n")
-	for _, f := range rt.Fields {
-		if !fieldIsSettable(f) {
-			continue
-		}
-		idiomatic, err := camelCase(f.WireName)
-		if err != nil {
-			return err
-		}
-		spec, err := fieldSpecLiteral(f, 2)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(b, "    %s: %s,\n", idiomatic, spec)
-	}
-	b.WriteString("  },\n")
-	b.WriteString("};\n\n")
+	// The runtime descriptor -- wireType carries the REAL, full wire type
+	// string, always, regardless of what the exported identifiers above
+	// dropped.
+	b.WriteString(descriptor.String())
 
-	return nil
+	return b.String(), nil
 }
 
 // fieldIsSettable reports whether a field belongs in a Config interface
@@ -149,39 +238,61 @@ func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
 // already covers it (Computed is false for every nested block), which is
 // why this is `Required || Optional || !Computed` rather than the
 // simpler-looking `Required || Optional` that would silently drop every
-// nested block from Config -- caught by TestGeneratedFile_NestedObjectBlock
-// actually asserting on the rendered Config interface, not just the
-// Attrs one.
+// nested block from Config.
 func fieldIsSettable(f ir.Field) bool {
 	return f.Required || f.Optional || !f.Computed
 }
 
 // resourceRenderer accumulates one resource type's own nested interface
-// declarations (KindObject fields, at any depth) as tsValueType walks
-// them, keyed by a deterministic name derived from the full field path
-// from the resource's own PascalCase name -- collision-free WITHIN one
-// resource (no two fields can share the same path), but that was never
-// the whole story: every resource's own interfaces share one module-level
-// type namespace, and a bare "parentPascal+fieldPascal" concatenation
-// (the original scheme, UBI-96) can and does collide with a nested
-// interface some OTHER resource generates -- TS's own declaration-merging
-// rules for `interface` mean this can even fail silently (shapes get
-// merged rather than erroring) rather than a clean compile error. See
-// sdk/codegen/templates/go's own goFieldMeta doc comment for the full,
-// live-verified account (6,278 real collisions against
-// hashicorp/aws@6.54.0, 100% within a single AWS service -- so
-// namespacing by service package, UBI-98's own direction, would not have
-// fixed this either). The "_" joining pathPrefix to fieldPascal below is
-// the identical fix: pascalCase never emits an underscore, so a nested
-// interface name can never equal another resource's own bare pascalCase
-// name (which has none), and two different resources' own nested trees
-// can never collide with each other either, since the first path segment
-// up to the first inserted "_" is always that resource's own distinct
-// pascal name.
+// declarations (KindObject fields, at any depth), keyed by a
+// deterministic name derived from the full field path from the
+// resource's own local PascalCase name (UBI-98: the caller now passes
+// this package's own per-type localWireName-derived pascalName, never
+// the full wire-type-derived one UBI-96 used, and every declaration this
+// renderer emits lives in exactly one file -- ES modules give each file
+// its own independent scope, so cross-RESOURCE collision is structurally
+// impossible here regardless of naming, unlike Go; see this package's
+// own doc comment for the full account). Within ONE resource's own tree,
+// the identical UBI-96 "_" join (pathPrefix + "_" + fieldPascal) still
+// applies so two DIFFERENT nested paths in the same file never share a
+// bare name.
+//
+// A SEPARATE problem, found live this session verifying a synthetic
+// reproduction of Go's own real aws_wafv2_web_acl_rule finding (STATE.md,
+// UBI-98's Go session) against the SAME real schema for TS: AWS's own
+// recursive schema shapes physically repeat an IDENTICAL nested block
+// shape at every depth level a real provider schema can express
+// recursion to at all. Confirmed empirically NOT to crash `deno check`
+// the way it crashed the Go compiler (aws_wafv2_web_acl_rule alone --
+// 16.7MB/~253,000 lines of naively-unrolled TS -- type-checked clean in
+// ~2 real seconds) -- so this dedup is NOT required to avoid a crash for
+// TS the way it was for Go. Applied anyway, for the same underlying
+// reason it was worth doing for Go even setting the crash aside: a
+// single generated file that large is still a real reviewability/git-
+// diff/repo-bloat problem (docs/sdk.md's own explicit "committed to git
+// like any other reviewable generated code" design goal), and the fix is
+// unconditionally safe here for the identical reason it was safe in Go:
+// confirmed by reading sdk/ts/runtime's own serializeConfig before
+// relying on this, which reads a config value purely via `Object.entries`
+// against the runtime FieldMap VALUE, never against a nested interface's
+// own declared TYPE NAME (TS types are erased at runtime entirely) --
+// two structurally-identical shapes sharing one interface name changes
+// nothing about runtime behavior. seenShapes closes the (cosmetic)
+// interface-declaration half; seenFieldMapVars/fieldMapDecls (see
+// objectFieldMapRef, below) closes the OTHER half, which -- exactly as
+// in Go -- is not cosmetic: the runtime FieldMap literal
+// ResourceBinding.fields is built from IS what the evaluator actually
+// reads, so hoisting a repeated shape into one shared top-level `const`
+// and referencing it by name is what actually shrinks the real output
+// (aws_wafv2_web_acl_rule: confirmed dropping from 16.7MB to a small
+// fraction of that after this fix, mirroring Go's own ~150x reduction).
 type resourceRenderer struct {
-	pascalName  string
-	nestedDecls []string
-	seen        map[string]bool
+	pascalName       string
+	nestedDecls      []string
+	seenNames        map[string]bool
+	seenShapes       map[string]string
+	seenFieldMapVars map[string]string
+	fieldMapDecls    []string
 }
 
 func (r *resourceRenderer) collectNestedInterfaces(f ir.Field, pathPrefix string) error {
@@ -190,8 +301,10 @@ func (r *resourceRenderer) collectNestedInterfaces(f ir.Field, pathPrefix string
 }
 
 // tsValueType returns the TS type text for one field's own TypeRef,
-// recording a new nested interface declaration (once per unique path) as
-// a side effect whenever it encounters a KindObject.
+// recording a new nested interface declaration (once per unique
+// STRUCTURAL SHAPE, not merely once per unique path -- see
+// resourceRenderer's own doc comment) as a side effect whenever it
+// encounters a KindObject.
 func (r *resourceRenderer) tsValueType(t ir.TypeRef, pathPrefix, wireName string) (string, error) {
 	switch t.Kind {
 	case ir.KindScalar:
@@ -224,32 +337,50 @@ func (r *resourceRenderer) tsValueType(t ir.TypeRef, pathPrefix, wireName string
 		}
 		return "Record<string, " + el + ">", nil
 	case ir.KindObject:
+		shape, err := nestedShapeSignature(t)
+		if err != nil {
+			return "", err
+		}
+		if r.seenShapes == nil {
+			r.seenShapes = map[string]string{}
+		}
+		if existing, ok := r.seenShapes[shape]; ok {
+			// An earlier position in this resource's own tree already
+			// declared an interface for this EXACT shape -- share it
+			// rather than recursing again to emit a byte-identical
+			// duplicate under a different path-derived name.
+			return existing, nil
+		}
+
 		fieldPascal, err := pascalCase(wireName)
 		if err != nil {
 			return "", err
 		}
 		name := pathPrefix + "_" + fieldPascal
-		if r.seen == nil {
-			r.seen = map[string]bool{}
+		if r.seenNames == nil {
+			r.seenNames = map[string]bool{}
 		}
-		if !r.seen[name] {
-			r.seen[name] = true
-			var body strings.Builder
-			fmt.Fprintf(&body, "export interface %s {\n", name)
-			for _, inner := range t.Object {
-				innerIdiomatic, err := camelCase(inner.WireName)
-				if err != nil {
-					return "", err
-				}
-				innerType, err := r.tsValueType(inner.Type, name, inner.WireName)
-				if err != nil {
-					return "", err
-				}
-				fmt.Fprintf(&body, "  %s: %s;\n", innerIdiomatic, innerType)
+		if r.seenNames[name] {
+			return "", fmt.Errorf("field %q: internal error: nested interface name %q already used for a DIFFERENT shape (path collision, not a shape repeat)", wireName, name)
+		}
+		r.seenNames[name] = true
+		r.seenShapes[shape] = name
+
+		var body strings.Builder
+		fmt.Fprintf(&body, "export interface %s {\n", name)
+		for _, inner := range t.Object {
+			innerIdiomatic, err := camelCase(inner.WireName)
+			if err != nil {
+				return "", err
 			}
-			body.WriteString("}\n")
-			r.nestedDecls = append(r.nestedDecls, body.String())
+			innerType, err := r.tsValueType(inner.Type, name, inner.WireName)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&body, "  %s: %s;\n", innerIdiomatic, innerType)
 		}
+		body.WriteString("}\n")
+		r.nestedDecls = append(r.nestedDecls, body.String())
 		return name, nil
 	default:
 		return "", fmt.Errorf("field %q: unrecognized type kind %v", wireName, t.Kind)
@@ -258,15 +389,15 @@ func (r *resourceRenderer) tsValueType(t ir.TypeRef, pathPrefix, wireName string
 
 // fieldSpecLiteral renders one settable field's own runtime FieldSpec
 // literal (sdk/ts/runtime's own FieldSpec type: a plain wire-name string
-// for a scalar or a list/set/map-of-scalar field -- no recursion needed,
-// the runtime serializer passes those through as-is -- or an object
-// literal naming wireName/kind/fields for anything that needs recursive
-// wire-name mapping at evaluation time). A plain function, not a
-// resourceRenderer method -- unlike tsValueType, it never needs to
-// record a new nested interface declaration (that already happened, via
-// renderResource's own collectNestedInterfaces pre-pass, before this is
-// ever called).
-func fieldSpecLiteral(f ir.Field, indent int) (string, error) {
+// for a scalar or a list/set/map-of-scalar field -- no recursion needed
+// -- or an object literal naming wireName/kind/fields for anything that
+// needs recursive wire-name mapping at evaluation time). Now a
+// resourceRenderer method: the object/collection-of-object branches
+// route through r.objectFieldMapRef, which may hoist a shared top-level
+// FieldMap const as a side effect (see resourceRenderer's own doc
+// comment for why this, not just the nested interface declarations, is
+// what actually bounds output size for a deeply recursive real schema).
+func (r *resourceRenderer) fieldSpecLiteral(f ir.Field, indent int) (string, error) {
 	pad := strings.Repeat("  ", indent)
 	innerPad := strings.Repeat("  ", indent+1)
 	switch f.Type.Kind {
@@ -279,32 +410,76 @@ func fieldSpecLiteral(f ir.Field, indent int) (string, error) {
 			return fmt.Sprintf("%q", f.WireName), nil
 		}
 		kind := map[ir.TypeKind]string{ir.KindList: "list", ir.KindSet: "set", ir.KindMap: "map"}[f.Type.Kind]
-		fieldsLit, err := objectFieldMapLiteral(f.Type.Element.Object, indent+1)
+		fieldsRef, err := r.objectFieldMapRef(f.Type.Element.Object)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("{\n%swireName: %q,\n%skind: %q,\n%sfields: %s,\n%s}",
-			innerPad, f.WireName, innerPad, kind, innerPad, fieldsLit, pad), nil
+			innerPad, f.WireName, innerPad, kind, innerPad, fieldsRef, pad), nil
 	case ir.KindObject:
-		fieldsLit, err := objectFieldMapLiteral(f.Type.Object, indent+1)
+		fieldsRef, err := r.objectFieldMapRef(f.Type.Object)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("{\n%swireName: %q,\n%skind: %q,\n%sfields: %s,\n%s}",
-			innerPad, f.WireName, innerPad, "object", innerPad, fieldsLit, pad), nil
+			innerPad, f.WireName, innerPad, "object", innerPad, fieldsRef, pad), nil
 	default:
 		return "", fmt.Errorf("field %q: unrecognized type kind %v", f.WireName, f.Type.Kind)
 	}
 }
 
-// objectFieldMapLiteral renders a FieldMap literal for one nested
-// object's own fields -- every field of a nested object is "settable"
-// from the config's own point of view (a program author writes the
-// whole nested object literal; there's no separate Required/Optional
-// gate at this level the way there is for a resource's own top-level
-// Config, since NestedBlock-derived fields carry no such flags at all --
-// ir.go's own Field doc comment).
-func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
+// objectFieldMapRef returns an EXPRESSION for one nested object's own
+// FieldMap -- either a reference to an already-hoisted shared top-level
+// const (a shape this resource's own tree has already rendered once,
+// anywhere in it) or, the first time a given shape is seen, a fresh
+// inline object literal that ALSO gets hoisted into a new shared const
+// (recorded in r.fieldMapDecls) so every LATER occurrence of the
+// identical shape references it instead of re-inlining. Keyed by
+// nestedShapeSignature -- the same structural fingerprint r.tsValueType
+// already uses for the (cosmetic) nested interface declarations,
+// deliberately: the base name for a new shared const reuses whatever
+// name tsValueType already minted for the identical shape during
+// ResourceFile's own earlier collectNestedInterfaces pre-pass (that pass
+// always runs first and recurses through every field's full tree,
+// settable or not, so r.seenShapes is already fully populated for every
+// shape this method will ever be asked about) -- the fallback branch
+// below is defensive, not expected to ever actually trigger.
+func (r *resourceRenderer) objectFieldMapRef(fields []ir.Field) (string, error) {
+	shape, err := nestedShapeSignature(ir.TypeRef{Kind: ir.KindObject, Object: fields})
+	if err != nil {
+		return "", err
+	}
+	if r.seenFieldMapVars == nil {
+		r.seenFieldMapVars = map[string]string{}
+	}
+	if existing, ok := r.seenFieldMapVars[shape]; ok {
+		return existing, nil
+	}
+
+	base := r.seenShapes[shape]
+	if base == "" {
+		base = fmt.Sprintf("%s_shape%d", r.pascalName, len(r.seenFieldMapVars))
+	}
+	constName := base + "Fields"
+	r.seenFieldMapVars[shape] = constName
+
+	lit, err := r.objectFieldMapLiteral(fields, 0)
+	if err != nil {
+		return "", err
+	}
+	r.fieldMapDecls = append(r.fieldMapDecls, fmt.Sprintf("const %s: FieldMap = %s;\n", constName, lit))
+	return constName, nil
+}
+
+// objectFieldMapLiteral renders an INLINE FieldMap object literal for
+// one nested object's own fields -- every field of a nested object is
+// "settable" from the config's own point of view (a program author
+// writes the whole nested object literal; there's no separate
+// Required/Optional gate at this level the way there is for a resource's
+// own top-level Config, since NestedBlock-derived fields carry no such
+// flags at all). Called from exactly one place now (objectFieldMapRef,
+// the first time a given shape is seen).
+func (r *resourceRenderer) objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 	pad := strings.Repeat("  ", indent)
 	innerPad := strings.Repeat("  ", indent+1)
 	var b strings.Builder
@@ -314,7 +489,7 @@ func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		spec, err := fieldSpecLiteral(f, indent+1)
+		spec, err := r.fieldSpecLiteral(f, indent+1)
 		if err != nil {
 			return "", err
 		}
@@ -322,6 +497,47 @@ func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 	}
 	fmt.Fprintf(&b, "%s}", pad)
 	return b.String(), nil
+}
+
+// nestedShapeSignature computes a canonical, structure-only fingerprint
+// of one TypeRef's own recursive shape (field wire names, in
+// schema-declared order, each with its own recursive signature) --
+// mirrors sdk/codegen/templates/go's own function of the same name
+// exactly (kept as an independent copy, not shared via sdk/codegen/ir,
+// matching this package's own established "no per-language identifier
+// convention lives in ir" posture -- this is closer to a codegen
+// IMPLEMENTATION DETAIL than a naming convention, but duplicating a few
+// lines is cheaper and safer here than inventing a new cross-language
+// shared-helper seam for one function, with no other consumer).
+func nestedShapeSignature(t ir.TypeRef) (string, error) {
+	switch t.Kind {
+	case ir.KindScalar:
+		return fmt.Sprintf("s%d", t.Scalar), nil
+	case ir.KindList, ir.KindSet, ir.KindMap:
+		el, err := nestedShapeSignature(*t.Element)
+		if err != nil {
+			return "", err
+		}
+		kindTag := map[ir.TypeKind]byte{ir.KindList: 'L', ir.KindSet: 'S', ir.KindMap: 'M'}[t.Kind]
+		return fmt.Sprintf("%c<%s>", kindTag, el), nil
+	case ir.KindObject:
+		var b strings.Builder
+		b.WriteString("O{")
+		for _, f := range t.Object {
+			sig, err := nestedShapeSignature(f.Type)
+			if err != nil {
+				return "", err
+			}
+			b.WriteString(f.WireName)
+			b.WriteString(":")
+			b.WriteString(sig)
+			b.WriteString(";")
+		}
+		b.WriteString("}")
+		return b.String(), nil
+	default:
+		return "", fmt.Errorf("unrecognized type kind %v", t.Kind)
+	}
 }
 
 // pascalCase and camelCase both convert a provider wire name

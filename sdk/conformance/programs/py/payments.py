@@ -11,7 +11,18 @@
 # Every concrete value below matches payments.ts/payments.go exactly --
 # chosen to match that real run, not invented independently.
 import ubx_sdk as sdk
-from generated.hashicorp_aws import AwsDbInstance, AwsDbInstanceConfig
+
+# UBI-98: generated/db/, not generated/hashicorp-aws/db/ -- unlike TS/Go's
+# own conformance fixtures, which nest under the source-sanitized
+# directory name a real `ubx sdk gen` run would use verbatim
+# ("hashicorp-aws"), Python's own dotted `import` syntax cannot traverse
+# a hyphenated path segment at all (a real, load-bearing language
+# constraint, not a stylistic choice) -- generated/'s own real service
+# packages are placed directly inside it here instead, the same
+# deliberately-curated-for-this-fixture placement the pre-restructure
+# comment on this file's own generated/ sibling already established
+# ("filtered to aws_db_instance only, unlike a real ubx sdk gen run").
+from generated.db.instance import Instance, InstanceConfig
 
 
 def describe():
@@ -21,9 +32,9 @@ def describe():
     )
 
     sdk.resource(
-        AwsDbInstance,
+        Instance,
         "payments",
-        AwsDbInstanceConfig(
+        InstanceConfig(
             engine="postgres",
             instance_class="db.t3.small",
             allocated_storage=20,

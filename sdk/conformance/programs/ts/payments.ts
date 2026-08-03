@@ -15,7 +15,7 @@
 // real run, not invented independently, so this case is a genuine
 // convergence proof, not a coincidence.
 import { intent, resource, stack } from "@ubx/sdk";
-import { AwsDbInstance } from "./generated/hashicorp-aws.ts";
+import { Instance } from "./generated/hashicorp-aws/db/instance.ts";
 
 export default stack("payments", () => {
   intent({
@@ -23,7 +23,7 @@ export default stack("payments", () => {
       "Provision a small Postgres RDS instance in the payments stack, modeled on the staging database but downsized for low initial traffic.",
   });
 
-  resource(AwsDbInstance, "payments", {
+  resource(Instance, "payments", {
     engine: "postgres",
     instanceClass: "db.t3.small",
     allocatedStorage: 20,

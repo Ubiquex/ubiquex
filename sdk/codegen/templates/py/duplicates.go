@@ -23,15 +23,25 @@ var (
 	moduleAssignRe = regexp.MustCompile(`(?m)^(\w+) = sdk\.ResourceBinding\(`)
 )
 
-// CheckNoDuplicateDeclarations reports every Python identifier this
-// package's own GeneratedFile declares more than once at module scope.
-// UBI-96's real failure mode here is the WORST of the three languages:
-// no error, no warning, just a later resource's own class or
-// ResourceBinding silently overwriting an earlier one in the generated
-// module's namespace, corrupting whichever binding got shadowed with no
-// signal at all. See sdk/codegen/templates/go's own
+// CheckNoDuplicateDeclarations reports every Python identifier ONE
+// generated file (ResourceFile's own output -- UBI-98's per-resource-
+// type-file restructure) declares more than once at module scope.
+//
+// UBI-96's own real failure mode here was the WORST of the three
+// languages: no error, no warning, just a later resource's own class or
+// ResourceBinding silently overwriting an earlier one in a flat module's
+// namespace, corrupting whichever binding got shadowed with no signal at
+// all. That specific cross-resource shape can no longer happen ACROSS
+// files at all under UBI-98's restructure -- confirmed, not assumed:
+// Python modules give every FILE its own independent namespace, so two
+// different resource types' own declarations, now always in separate
+// files, can never collide with each other regardless of naming. What
+// this function still checks for real, WITHIN one file: the same
+// "_"-joined nested-dataclass naming scheme still needs to stay
+// collision-free within a single resource type's own recursive tree,
+// which is exactly what it verifies. See sdk/codegen/templates/go's own
 // CheckNoDuplicateDeclarations doc comment for the shared root cause and
-// the "_" join fix both packages now use.
+// the "_" join fix all three packages now use.
 func CheckNoDuplicateDeclarations(src string) error {
 	counts := map[string]int{}
 	for _, m := range classDeclRe.FindAllStringSubmatch(src, -1) {
@@ -51,4 +61,32 @@ func CheckNoDuplicateDeclarations(src string) error {
 	}
 	sort.Strings(dupes)
 	return fmt.Errorf("sdk/codegen/templates/py: %d module-level identifier(s) declared more than once: %s", len(dupes), strings.Join(dupes, ", "))
+}
+
+// CheckRepoNoDuplicateDeclarations is CheckNoDuplicateDeclarations' own
+// entry point for a full GeneratedRepo output (path -> content, spanning
+// every service package in one provider's repo tree, "pyproject.toml"
+// included) -- runs the single-file check independently against every
+// ".py" file. Deliberately NOT a cross-file check (unlike Go's own
+// CheckRepoNoDuplicateDeclarations, which groups by directory because
+// Go's package-level namespace spans a whole directory): confirmed, not
+// assumed, that no such cross-file namespace exists for Python at all
+// (every module has its own independent namespace) -- kept as a
+// uniform, per-language API shape cli/sdk.go's own production path can
+// call identically across all three languages.
+func CheckRepoNoDuplicateDeclarations(repo map[string]string) error {
+	paths := make([]string, 0, len(repo))
+	for path := range repo {
+		if strings.HasSuffix(path, ".py") {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		if err := CheckNoDuplicateDeclarations(repo[path]); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	return nil
 }

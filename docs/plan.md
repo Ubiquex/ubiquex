@@ -2,6 +2,30 @@
 
 ## Changelog
 
+- 2026-08-04 — UBI-98 session 2 (closes UBI-98): `ubx sdk gen --lang ts`
+  and `--lang py` restructured the same repo-shaped way `--lang go` was
+  the prior session -- checked explicitly, not assumed, whether Go's own
+  `NewBulk too big` compiler-crash class also hits `deno check`/a real
+  Python `import`: it does NOT (a synthetic worst-case
+  `aws_wafv2_web_acl_rule` reproduction, 16.7MB TS / 21.2MB Python,
+  checked/imported clean in seconds) -- the structural shape-dedup fix
+  was still ported to both anyway, for reviewability/size, not crash
+  avoidance. Real per-language findings: TS needs no service/local-name
+  escaping at all (confirmed live); Python's `lambda` is both a real
+  keyword and a real 20-type AWS service, fixed with the same trailing-
+  underscore convention `pythonIdentifier` already used for field names.
+  A separate, real bug found only by running all three languages against
+  one shared `--out`: the repo-shaped tree has no per-language
+  disambiguation at its top level the way the old flat-file extensions
+  did, so generating go/ts/py together interleaved their manifests into
+  one directory -- fixed by making `--lang` its own path segment
+  (`<out>/<lang>/<source>/`), covered by a new dedicated test. Required
+  verification met for both languages, twice each (permanent
+  `UBX_CONFORMANCE_LIVE=1` tests + a real built-`ubx`-binary run), same
+  bar as Go's own session. Full account: docs/sdk.md's new "Amendment
+  (2026-08-04, UBI-98 session 2)" section; STATE.md has the full session
+  narrative.
+
 - 2026-08-03 — UBI-98: `ubx sdk gen --lang go` restructured to UBI-98's
   own repo-shaped, per-AWS-service-package layout -- confirmed-reproduced
   the UBI-96-reported Go compiler crash first, then fixed it for real

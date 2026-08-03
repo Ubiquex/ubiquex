@@ -4,6 +4,150 @@
 
 ## Current phase
 
+**UBI-98 session 2 (2026-08-04) — TypeScript and Python restructured the
+same repo-shaped way Go was the prior session; UBI-98 now fully closed
+across all three languages.**
+
+Continuing UBI-98 per the handoff's own explicit instruction: apply the
+identical restructure to TS/Python, re-verify each language's own
+UBI-96-era duplicate/collision guard against the new per-service
+structure, and — critical, named explicitly in the handoff — check
+explicitly, not assume, whether Go's own `wafv2`/`quicksight`-class
+oversized-single-type crash also affects TS/Python before assuming
+per-service packaging alone suffices.
+
+**Step 1 — the crash-class check, done FIRST, before any design work,
+exactly as instructed**: built a throwaway tool rendering
+`aws_wafv2_web_acl_rule` (the real, live-verified worst case from Go's
+own session) through the OLD, pre-restructure `ts.GeneratedFile`/
+`py.GeneratedFile`. **Finding: the naive single-type output is even
+LARGER than Go's own original (16.7MB/~252,812 lines TS; 21.2MB/
+~258,004 lines/21,026 dataclasses Python, vs. Go's original ~10.8MB) —
+but NEITHER crashes.** `deno check --no-remote` on the raw 16.7MB TS
+file: clean, 2.24s cold (no cache). A real Python `import` of the raw
+21.2MB/21,026-dataclass file: clean, 4.4s. Confirmed, not inferred from
+Go's result: Go's `NewBulk too big` is a Go-compiler-internal limit
+(IR/DWARF bulk allocation), not a general "huge generated code" problem
+— TypeScript's structural type checker and CPython's class/dataclass
+machinery both handle it without difficulty. The structural shape-
+dedup fix (both halves: the cosmetic nested-declaration dedup AND the
+load-bearing runtime FieldMap-literal-hoisting dedup) was still ported
+to both languages anyway — not required to avoid a crash, but the same
+underlying output-bloat problem Go had (a single 16–21MB file is a real
+reviewability/git-diff problem on its own), and cheap to port since the
+exact algorithm (shape-signature-keyed caching, `nestedShapeSignature`)
+was already proven correct in Go this session.
+
+**Step 2 — the restructure itself, mirroring Go's own
+GeneratedRepo/ResourceFile/PackageDoc shape exactly**: `sdk/codegen/templates/ts`
+and `.../py` both rewritten the same way — `GeneratedFile` (one flat
+file) replaced by `ResourceFile`/`PackageDoc`/`GeneratedRepo` (one file
+per resource type, one shared doc file per service directory: `doc.ts`
+for TS, `__init__.py` for Python — Python's own REAL package marker,
+matching this repo's own pre-existing `sdk/conformance/programs/py/generated/__init__.py`
+precedent, not an invented convention). `cli/sdk.go`'s `generateOneProvider`
+unified into one dispatch across all three languages (`generateGoProviderRepo`-
+style logic generalized, not three separate near-duplicate functions).
+
+**A REAL, confirmed-not-assumed structural difference from Go, found
+reasoning through (then verified via dedicated tests) rather than
+copy-pasted from Go's own design**: ES modules (TS) and Python modules
+both give every FILE its own independent namespace — UBI-96's own
+original cross-resource collision bug (two different resource types'
+declarations colliding) is now structurally IMPOSSIBLE across files for
+TS/Python, regardless of naming or directory, the moment each type gets
+its own file — a stronger guarantee than Go has (Go's package namespace
+still spans every file in one directory, so Go's own per-service-
+DIRECTORY split remains load-bearing for collision-avoidance in a way
+it never was for TS/Python). `CheckNoDuplicateDeclarations` (both
+languages) now checks ONE file's own declarations (the real, still-
+present within-one-resource nested-shape collision the `"_"` join
+guards against); a new `CheckRepoNoDuplicateDeclarations` runs that
+per-file, confirmed via a dedicated test that two different files
+sharing an identical declared name is never flagged.
+
+**Step 3 — two real, live-verified per-language identifier edge cases,
+neither assumed to transfer from Go's own `default`/`main` findings**:
+checked exhaustively against the real 258 derived service names for
+each language, separately. **TypeScript needs NO escaping at all** —
+confirmed live (the full-provider TS live test passed clean without any
+keyword-guard mechanism), since ES module resolution is purely string-
+based; a directory literally named `default/`, `main/`, or `lambda/` is
+unremarkable to Deno. **Python has a real, DIFFERENT keyword collision
+Go never hit**: `lambda` is both a genuine Python keyword and a real
+20-type AWS service (`aws_lambda_*`) — `import lambda.function` is a
+`SyntaxError`. Fixed with `pyModuleIdent` (new), the identical trailing-
+underscore convention `pythonIdentifier` already used for a keyword-
+colliding FIELD name, now also applied to service/local MODULE names —
+`lambda_/function.py`. Also guards a leading digit defensively (a real,
+universal Python grammar fact), though no real wire-derived name in the
+current schema actually triggers it.
+
+**Step 4 — a third, separate bug, found only by testing all three
+languages together against the SAME `--out`, not anticipated by either
+this or the prior session's own scope**: `--out` defaults IDENTICALLY
+across `--lang go/ts/py`. Under the OLD flat-file scheme this was
+harmless (file EXTENSIONS naturally disambiguated
+`hashicorp-aws.go`/`.ts`/`hashicorp_aws.py` sharing one directory) — a
+repo-shaped TREE has no such built-in top-level distinction, so
+generating all three languages against the same `--out` (verified by
+actually doing exactly that, end to end, via the real built `ubx`
+binary) interleaved three different ecosystems' manifests
+(`go.mod`/`package.json`/`pyproject.toml`) and source trees into ONE
+directory — not silent data loss (no filename collision ever actually
+occurs between languages), but a real break of the "ready to become its
+own real repo" promise. Fixed by making `--lang` its own path segment:
+`<out>/<lang>/<source-sanitized>/`, never folded into the source-
+sanitized directory name. New test,
+`TestSDKGen_MultipleLanguagesSameOut_DoNotCollide`, generates all three
+languages against one shared `--out` and real-verifies each (compiles/
+type-checks/imports) survives independently.
+
+**Required verification, met for both languages, twice each, matching
+Go's own precedent bar exactly**: `ubx sdk gen --lang ts`/`--lang py`
+against the REAL full `hashicorp/aws@6.54.0` provider (1,682 types)
+each produce a repo-shaped tree (1,941 files, 258 service directories)
+that type-checks/imports clean in full — (1) new, permanent,
+`UBX_CONFORMANCE_LIVE=1`-gated `TestFullProvider_TS_ChecksClean`/
+`TestFullProvider_Py_ImportsClean`, mirroring
+`TestFullProvider_Go_CompilesClean` exactly; (2) independently, via the
+real built `ubx` binary: generated all three languages against ONE
+shared `.ubx/config` + `--out`, then ran a real `deno check --no-remote`
+over every `.ts` file and a real recursive Python `importlib.import_module`
+walk over every `.py` file in each language's own on-disk tree. All
+passed clean -- TS in ~1.5s, Python importing all 1,940 real modules
+clean.
+
+**Verification**: `go test ./...` (whole repo) green. `gofmt -l .`
+clean. `go vet ./...` clean. `sdk/conformance/programs/{ts,py}/generated/`
+regenerated. TS mirrors the real CLI output shape exactly
+(`generated/hashicorp-aws/db/{doc.ts,instance.ts}` + `package.json`, no
+obstacle to matching Go's own precedent); Python deliberately does NOT
+(`generated/db/` directly, no `hashicorp-aws/` intermediate) — a real,
+load-bearing deviation, documented in `payments.py`'s own updated
+comment: Python's dotted `import` cannot traverse a hyphenated path
+segment (`from generated.hashicorp-aws.db.instance import ...` is a
+`SyntaxError`), consistent with this fixture's own pre-existing
+"filtered/hand-fitted to this one case" posture, not a new
+inconsistency. `payments.ts`/`payments.py` updated to the new
+`Instance`/`InstanceConfig` names; only each entry file's own content
+(and therefore its golden fixture's `content_hash`) changed — resolved
+`resources`/`stack`/`intent.summary` byte-identical in both, re-verified
+via the real `tseval`/`pyeval` evaluators; the Go golden case, untouched
+this session, still passes.
+
+**UBI-98 is now fully closed, all three languages, both hard
+requirements (per-language full-provider real-toolchain verification;
+the founder's own locked naming scheme) met and re-verified end to end.**
+Remaining, real, separately-scopable follow-up work, unchanged from the
+prior session's own note: a hand-curated wire-type → canonical-AWS-
+service exception table (the ~130 unprefixed EC2/VPC-family types
+still land in many small, mechanically-derived packages rather than one
+curated `ec2` boundary — a real taxonomy-accuracy gap, not a
+correctness bug, named in both sessions' amendments).
+
+## Current phase (previous)
+
 **UBI-98 (2026-08-03) — Go bindings restructured to per-provider repo,
 per-AWS-service-package layout; TS/Python explicitly deferred, not
 silently left inconsistent.**

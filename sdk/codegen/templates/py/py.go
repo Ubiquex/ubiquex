@@ -13,6 +13,31 @@
 // real -- e.g. a field literally named "class" or "in"), handled the
 // same way generated protobuf/thrift Python bindings conventionally do:
 // a trailing underscore.
+//
+// UBI-98's own per-provider-repo/per-service-package restructure,
+// applied to Python in the session AFTER Go's own and TS's own
+// (STATE.md): GeneratedFile (one flat file for a whole provider) is
+// replaced by ResourceFile/PackageDoc/GeneratedRepo (one file per
+// resource type, one __init__.py per service package -- Python's own
+// real package marker, not a separate doc file, matching this
+// codebase's own existing sdk/conformance/programs/py/generated/__init__.py
+// precedent of using __init__.py for exactly this directory role). Like
+// TS (see sdk/codegen/templates/ts's own package doc comment), Python
+// modules give every FILE its own independent namespace, so UBI-96's
+// original cross-resource collision bug (two different resource types'
+// own declarations silently overwriting each other in ONE flat module,
+// this package's own WORST failure mode of the three languages, no error
+// at all) is now structurally impossible ACROSS files regardless of
+// naming -- confirmed, not assumed, same as TS.
+//
+// A REAL Python-specific finding, checked explicitly rather than assumed
+// safe by extrapolation from Go/TS: unlike Go (no collision) or TS (no
+// restriction on directory names at all), Python service/module names
+// MUST be valid Python identifiers to be importable via the standard
+// `import x.y` dotted syntax this restructure's own generated code uses
+// -- and "lambda" is BOTH a real Python keyword AND a real AWS service
+// (aws_lambda_*, 20 real types), confirmed against the real
+// hashicorp/aws@6.54.0 schema. See pyModuleIdent, below.
 package pytmpl
 
 import (
@@ -23,44 +48,131 @@ import (
 	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
 )
 
-// GeneratedFile renders one Python module covering every resource type
-// declared by one provider source+version -- one file per provider
-// source, mirroring the TS/Go templates' own GeneratedFile exactly in
-// that respect. types is sorted by WireType here, defensively, even if a
-// caller already passed a sorted slice -- codegen output must never
-// depend on caller-supplied ordering.
-func GeneratedFile(source, version string, types []*ir.ResourceType) (string, error) {
+// GeneratedRepo renders every file for one provider's repo-shaped Python
+// output tree: a pyproject.toml stub (name "ubx-sdk-<shortName>", not
+// published -- matching Go/TS's own "not yet published" posture), one
+// __init__.py per derived service package (PackageDoc), and one
+// <local>.py per resource type (ResourceFile) inside its own service
+// package. Returns a map of path, relative to the repo root using "/"
+// always -> file content -- mirrors sdk/codegen/templates/go's own
+// GeneratedRepo exactly in shape.
+func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].WireType < sorted[j].WireType })
 
+	type entry struct {
+		rt    *ir.ResourceType
+		local string
+	}
+	byService := map[string][]entry{}
+	var services []string
+	for _, rt := range sorted {
+		service, local, err := ir.ServiceAndLocalName(rt.WireType)
+		if err != nil {
+			return nil, fmt.Errorf("sdk/codegen/templates/py: %w", err)
+		}
+		service = pyModuleIdent(service)
+		local = pyModuleIdent(local)
+		if _, ok := byService[service]; !ok {
+			services = append(services, service)
+		}
+		byService[service] = append(byService[service], entry{rt, local})
+	}
+	sort.Strings(services)
+
+	files := map[string]string{
+		"pyproject.toml": pyprojectTOML(shortName, source, version),
+	}
+	for _, service := range services {
+		files[service+"/__init__.py"] = PackageDoc(source, version)
+		for _, e := range byService[service] {
+			content, err := ResourceFile(e.local, e.rt)
+			if err != nil {
+				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
+			}
+			files[service+"/"+e.local+".py"] = content
+		}
+	}
+	return files, nil
+}
+
+// pyModuleIdent guards a derived service or local module name against
+// Python's own real identifier rules -- required here in a way neither
+// Go (a real language keyword collision, "default"/"main") nor TS (no
+// restriction at all, verified live this session) needed identically:
+// Python's own `import x.y` dotted syntax, and a directory acting as a
+// real package, both require every path segment to be a valid Python
+// identifier. Two real, distinct guards: (1) a Python keyword (checked
+// against pythonKeywords, the same table pythonIdentifier already
+// established for a colliding FIELD name -- "lambda" is the one real,
+// live-verified hit: aws_lambda_* is a real 20-type AWS service, and
+// "lambda" is a real Python keyword, so `import lambda.function` would
+// be a SyntaxError); (2) a leading digit (a real, universal Python
+// grammar rule -- `import 3thing` is invalid -- not confirmed to occur
+// in hashicorp/aws@6.54.0's own real schema this session, but guarded
+// unconditionally anyway since it's a hard language fact, not a
+// speculative future-provider concern the way Go's own
+// internal/vendor/testdated defensive guard was). Both resolved the same
+// way pythonIdentifier already resolves a keyword-colliding field name:
+// a trailing underscore.
+func pyModuleIdent(name string) string {
+	if pythonKeywords[name] {
+		return name + "_"
+	}
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		return "_" + name
+	}
+	return name
+}
+
+// pyprojectTOML renders the repo-shaped tree's own manifest stub -- a
+// real, consumer-ready shape (were it ever published; it isn't, matching
+// ubx_sdk's own "not yet published" posture), not consulted by anything
+// this codebase's own hermetic verification actually reads (a real
+// import resolves via PYTHONPATH directly against the on-disk tree, the
+// same mechanism cli/sdk_test.go's own assertPyFileImports already
+// uses).
+func pyprojectTOML(shortName, source, version string) string {
+	return fmt.Sprintf(`[project]
+name = "ubx-sdk-%s"
+version = "0.0.0"
+description = "Generated Python bindings for %s@%s (ubx sdk gen). DO NOT EDIT."
+dependencies = ["ubx_sdk"]
+`, shortName, source, version)
+}
+
+// PackageDoc renders one service package's own __init__.py -- Python's
+// real package marker (required for the directory to be a regular,
+// dotted-importable package), doing double duty here as the shared
+// "generated, do not edit, committed to git" banner
+// (docs/sdk.md's own "ubx sdk gen: local, pinned,
+// offline-after-generation") plus SOURCE_PROVENANCE, declared exactly
+// once per package -- never repeated (or, worse, silently redefined
+// with no error at all, Python's own worst-of-three failure mode UBI-96
+// first found) in every resource type's own file.
+func PackageDoc(source, version string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code generated by `ubx sdk gen` from %s@%s. DO NOT EDIT.\n", source, version)
 	b.WriteString("# This file is committed to git like any other reviewable generated code\n")
 	b.WriteString("# (docs/sdk.md — \"ubx sdk gen: local, pinned, offline-after-generation\") --\n")
 	b.WriteString("# re-run `ubx sdk gen` to regenerate after a provider version bump.\n")
-	b.WriteString("from __future__ import annotations\n\n")
-	b.WriteString("import dataclasses\n")
-	b.WriteString("from typing import Any\n\n")
-	b.WriteString("import ubx_sdk as sdk\n\n")
-	fmt.Fprintf(&b, "SOURCE_PROVENANCE = {%q: %q, %q: %q}\n\n", "source", source, "version", version)
-
-	for _, rt := range sorted {
-		if err := renderResource(&b, rt); err != nil {
-			return "", fmt.Errorf("sdk/codegen/templates/py: %s: %w", rt.WireType, err)
-		}
-	}
-
-	return b.String(), nil
+	fmt.Fprintf(&b, "SOURCE_PROVENANCE = {%q: %q, %q: %q}\n", "source", source, "version", version)
+	return b.String()
 }
 
-// renderResource writes one resource type's full binding: nested object
-// dataclasses (as needed), the settable Config dataclass, and the
-// runtime descriptor resource() actually reads at evaluation time.
-func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
-	pascalName, err := pascalCase(rt.WireType)
+// ResourceFile renders one Python module for a single resource type.
+// localWireName is ir.ServiceAndLocalName's own second return value for
+// rt.WireType (already passed through pyModuleIdent by GeneratedRepo) --
+// used ONLY to derive this file's own module name and (PascalCased)
+// class names (the founder's own locked naming scheme, applied
+// identically to Go/TS: `Repository`, never `AwsEcrRepository`, since
+// the package already encodes provider+service). rt.WireType itself is
+// rendered into the runtime ResourceBinding call completely unchanged.
+func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
+	pascalName, err := pascalCase(localWireName)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("%s: local name %q: %w", rt.WireType, localWireName, err)
 	}
 
 	r := &resourceRenderer{pascalName: pascalName}
@@ -69,20 +181,56 @@ func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
 			continue
 		}
 		if err := r.collectNestedDataclasses(f, pascalName); err != nil {
-			return err
+			return "", err
 		}
 	}
+
+	// The runtime descriptor's own body is built into a SEPARATE buffer
+	// first -- mirrors sdk/codegen/templates/go and .../ts's own
+	// ResourceFile exactly: r.fieldSpecLiteral (called below) can hoist a
+	// new shared FieldMap dict as a side effect (r.fieldMapDecls), which
+	// must be written to the file BEFORE this descriptor references it
+	// by name.
+	var descriptor strings.Builder
+	fmt.Fprintf(&descriptor, "%s = sdk.ResourceBinding(\n", pascalName)
+	fmt.Fprintf(&descriptor, "    wire_type=%q,\n", rt.WireType)
+	descriptor.WriteString("    fields={\n")
+	for _, f := range rt.Fields {
+		if !fieldIsSettable(f) {
+			continue
+		}
+		idiomatic, err := pythonIdentifier(f.WireName)
+		if err != nil {
+			return "", err
+		}
+		spec, err := r.fieldSpecLiteral(f, 2)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&descriptor, "        %q: %s,\n", idiomatic, spec)
+	}
+	descriptor.WriteString("    },\n")
+	descriptor.WriteString(")\n")
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Code generated by `ubx sdk gen` from %s. DO NOT EDIT.\n", rt.WireType)
+	b.WriteString("from __future__ import annotations\n\n")
+	b.WriteString("import dataclasses\n")
+	b.WriteString("from typing import Any\n\n")
+	b.WriteString("import ubx_sdk as sdk\n\n")
+
 	for _, decl := range r.nestedDecls {
+		b.WriteString(decl)
+		b.WriteString("\n")
+	}
+	for _, decl := range r.fieldMapDecls {
 		b.WriteString(decl)
 		b.WriteString("\n")
 	}
 
 	// Config dataclass: settable fields only (same fieldIsSettable rule
-	// sdk/codegen/templates/ts and .../go use -- a NestedBlock-derived
-	// field has Required/Optional/Computed all false and must still be
-	// settable, hence `!Computed` rather than `Required || Optional`
-	// alone).
-	fmt.Fprintf(b, "@dataclasses.dataclass\nclass %sConfig:\n", pascalName)
+	// sdk/codegen/templates/ts and .../go use).
+	fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %sConfig:\n", pascalName)
 	var anyField bool
 	for _, f := range rt.Fields {
 		if !fieldIsSettable(f) {
@@ -90,38 +238,22 @@ func renderResource(b *strings.Builder, rt *ir.ResourceType) error {
 		}
 		idiomatic, err := pythonIdentifier(f.WireName)
 		if err != nil {
-			return err
+			return "", err
 		}
 		anyField = true
-		fmt.Fprintf(b, "    %s: Any = None\n", idiomatic)
+		fmt.Fprintf(&b, "    %s: Any = None\n", idiomatic)
 	}
 	if !anyField {
 		b.WriteString("    pass\n")
 	}
 	b.WriteString("\n")
 
-	// The runtime descriptor.
-	fmt.Fprintf(b, "%s = sdk.ResourceBinding(\n", pascalName)
-	fmt.Fprintf(b, "    wire_type=%q,\n", rt.WireType)
-	b.WriteString("    fields={\n")
-	for _, f := range rt.Fields {
-		if !fieldIsSettable(f) {
-			continue
-		}
-		idiomatic, err := pythonIdentifier(f.WireName)
-		if err != nil {
-			return err
-		}
-		spec, err := fieldSpecLiteral(f, 2)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(b, "        %q: %s,\n", idiomatic, spec)
-	}
-	b.WriteString("    },\n")
-	b.WriteString(")\n\n")
+	// The runtime descriptor -- wire_type carries the REAL, full wire
+	// type string, always, regardless of what the class name above
+	// dropped.
+	b.WriteString(descriptor.String())
 
-	return nil
+	return b.String(), nil
 }
 
 // fieldIsSettable mirrors sdk/codegen/templates/ts and .../go's own
@@ -133,33 +265,47 @@ func fieldIsSettable(f ir.Field) bool {
 // resourceRenderer accumulates one resource type's own nested Config
 // dataclass declarations (KindObject fields, at any depth), keyed by a
 // deterministic name derived from the full field path from the
-// resource's own PascalCase name (used only for the generated CLASS name
-// -- Python class names are conventionally PascalCase even though
-// field/module names are snake_case) -- collision-free WITHIN one
-// resource (no two fields can share the same path), but that was never
-// the whole story: every resource's own classes and its module-level
-// ResourceBinding share one flat module namespace, and a bare
-// "parentPascal+fieldPascal" concatenation (the original scheme,
-// UBI-96) can and does collide with a name some OTHER resource
-// generates -- Python has no redeclaration error at all for this (a
-// later `class X` or `X = sdk.ResourceBinding(...)` silently replaces an
-// earlier one in the module's namespace), so this class of bug is
-// SILENT here, not a compile failure the way it is in Go -- arguably
-// worse. See sdk/codegen/templates/go's own goFieldMeta doc comment for
-// the full, live-verified account (6,278 real collisions against
-// hashicorp/aws@6.54.0, 100% within a single AWS service -- so
-// namespacing by service package, UBI-98's own direction, would not have
-// fixed this either). The "_" joining pathPrefix to fieldPascal below is
-// the identical fix: pascalCase never emits an underscore, so a nested
-// class name can never equal another resource's own bare pascalCase
-// name (which has none), and two different resources' own nested trees
-// can never collide with each other either, since the first path
-// segment up to the first inserted "_" is always that resource's own
-// distinct pascal name.
+// resource's own local PascalCase name (UBI-98: the caller now passes
+// this package's own per-type localWireName-derived pascalName, never
+// the full wire-type-derived one UBI-96 used, and every declaration this
+// renderer emits lives in exactly one file -- Python modules give each
+// file its own independent namespace, so cross-RESOURCE collision is
+// structurally impossible here regardless of naming, unlike Go; see this
+// package's own doc comment for the full account). Within ONE resource's
+// own tree, the identical UBI-96 "_" join (pathPrefix + "_" + fieldPascal)
+// still applies so two DIFFERENT nested paths in the same file never
+// share a bare class name.
+//
+// A SEPARATE problem, found live this session against the SAME real
+// schema Go's own aws_wafv2_web_acl_rule finding came from (STATE.md,
+// UBI-98's Go session): AWS's own recursive schema shapes physically
+// repeat an IDENTICAL nested block shape at every depth level a real
+// provider schema can express recursion to at all. Confirmed empirically
+// NOT to crash a real Python import the way it crashed the Go compiler
+// (aws_wafv2_web_acl_rule alone -- 21.2MB/~258,000 lines, 21,026
+// dataclasses, of naively-unrolled Python -- imported clean in ~4.4 real
+// seconds) -- so this dedup is NOT required to avoid a crash for Python
+// either, exactly like TS. Applied anyway, for the identical reason: a
+// single generated file that large is still a real reviewability/git-
+// diff/repo-bloat problem, and the fix is unconditionally safe here for
+// the identical reason it was safe in Go/TS: confirmed by reading
+// sdk/py/ubx_sdk's own runtime serializer before relying on this (it
+// reads a Config value's own dataclass FIELD NAMES via
+// dataclasses.fields()/getattr, matched against the runtime FieldMap
+// dict's own keys, never against a nested dataclass's own declared CLASS
+// NAME) -- two structurally-identical shapes sharing one class name
+// changes nothing about runtime behavior. seenShapes closes the
+// (cosmetic) dataclass-declaration half; seenFieldMapVars/fieldMapDecls
+// (see objectFieldMapRef, below) closes the OTHER half, which -- exactly
+// as in Go/TS -- is not cosmetic: the runtime fields={...} dict
+// ResourceBinding is built from IS what the evaluator actually reads.
 type resourceRenderer struct {
-	pascalName  string
-	nestedDecls []string
-	seen        map[string]bool
+	pascalName       string
+	nestedDecls      []string
+	seenNames        map[string]bool
+	seenShapes       map[string]string
+	seenFieldMapVars map[string]string
+	fieldMapDecls    []string
 }
 
 func (r *resourceRenderer) collectNestedDataclasses(f ir.Field, pathPrefix string) error {
@@ -168,11 +314,9 @@ func (r *resourceRenderer) collectNestedDataclasses(f ir.Field, pathPrefix strin
 }
 
 // pyFieldMeta records a new nested Config dataclass declaration (once
-// per unique path) as a side effect whenever it encounters a KindObject.
-// The return value itself is unused by callers (every Config field is
-// typed Any regardless of shape) -- this only exists to drive the
-// nested-dataclass side effect walk, mirroring
-// sdk/codegen/templates/go's own goFieldMeta.
+// per unique STRUCTURAL SHAPE, not merely once per unique path -- see
+// resourceRenderer's own doc comment) as a side effect whenever it
+// encounters a KindObject.
 func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string) (string, error) {
 	switch t.Kind {
 	case ir.KindScalar:
@@ -180,35 +324,49 @@ func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 	case ir.KindList, ir.KindSet, ir.KindMap:
 		return r.pyFieldMeta(*t.Element, pathPrefix, wireName)
 	case ir.KindObject:
+		shape, err := nestedShapeSignature(t)
+		if err != nil {
+			return "", err
+		}
+		if r.seenShapes == nil {
+			r.seenShapes = map[string]string{}
+		}
+		if existing, ok := r.seenShapes[shape]; ok {
+			return existing, nil
+		}
+
 		fieldPascal, err := pascalCase(wireName)
 		if err != nil {
 			return "", err
 		}
 		name := pathPrefix + "_" + fieldPascal
-		if r.seen == nil {
-			r.seen = map[string]bool{}
+		if r.seenNames == nil {
+			r.seenNames = map[string]bool{}
 		}
-		if !r.seen[name] {
-			r.seen[name] = true
-			var body strings.Builder
-			fmt.Fprintf(&body, "@dataclasses.dataclass\nclass %s:\n", name)
-			var anyField bool
-			for _, inner := range t.Object {
-				innerIdiomatic, err := pythonIdentifier(inner.WireName)
-				if err != nil {
-					return "", err
-				}
-				if _, err := r.pyFieldMeta(inner.Type, name, inner.WireName); err != nil {
-					return "", err
-				}
-				anyField = true
-				fmt.Fprintf(&body, "    %s: Any = None\n", innerIdiomatic)
-			}
-			if !anyField {
-				body.WriteString("    pass\n")
-			}
-			r.nestedDecls = append(r.nestedDecls, body.String())
+		if r.seenNames[name] {
+			return "", fmt.Errorf("field %q: internal error: nested dataclass name %q already used for a DIFFERENT shape (path collision, not a shape repeat)", wireName, name)
 		}
+		r.seenNames[name] = true
+		r.seenShapes[shape] = name
+
+		var body strings.Builder
+		fmt.Fprintf(&body, "@dataclasses.dataclass\nclass %s:\n", name)
+		var anyField bool
+		for _, inner := range t.Object {
+			innerIdiomatic, err := pythonIdentifier(inner.WireName)
+			if err != nil {
+				return "", err
+			}
+			if _, err := r.pyFieldMeta(inner.Type, name, inner.WireName); err != nil {
+				return "", err
+			}
+			anyField = true
+			fmt.Fprintf(&body, "    %s: Any = None\n", innerIdiomatic)
+		}
+		if !anyField {
+			body.WriteString("    pass\n")
+		}
+		r.nestedDecls = append(r.nestedDecls, body.String())
 		return name, nil
 	default:
 		return "", fmt.Errorf("field %q: unrecognized type kind %v", wireName, t.Kind)
@@ -216,11 +374,12 @@ func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 }
 
 // fieldSpecLiteral renders one settable field's own runtime
-// sdk.FieldSpec(...) call literal, mirroring
-// sdk/codegen/templates/go's own fieldSpecLiteral exactly (see that
-// function's doc comment for the scalar-vs-object-vs-collection-of-
-// object distinction).
-func fieldSpecLiteral(f ir.Field, indent int) (string, error) {
+// sdk.FieldSpec(...) call literal, mirroring sdk/codegen/templates/go
+// and .../ts's own fieldSpecLiteral exactly. Now a resourceRenderer
+// method: the object/collection-of-object branches route through
+// r.objectFieldMapRef, which may hoist a shared module-level FieldMap
+// dict as a side effect.
+func (r *resourceRenderer) fieldSpecLiteral(f ir.Field, indent int) (string, error) {
 	pad := strings.Repeat("    ", indent)
 	innerPad := strings.Repeat("    ", indent+1)
 	switch f.Type.Kind {
@@ -231,29 +390,74 @@ func fieldSpecLiteral(f ir.Field, indent int) (string, error) {
 			return fmt.Sprintf("sdk.FieldSpec(wire_name=%q)", f.WireName), nil
 		}
 		kind := map[ir.TypeKind]string{ir.KindList: "list", ir.KindSet: "set", ir.KindMap: "map"}[f.Type.Kind]
-		fieldsLit, err := objectFieldMapLiteral(f.Type.Element.Object, indent+1)
+		fieldsRef, err := r.objectFieldMapRef(f.Type.Element.Object)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("sdk.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
-			innerPad, f.WireName, innerPad, kind, innerPad, fieldsLit, pad), nil
+			innerPad, f.WireName, innerPad, kind, innerPad, fieldsRef, pad), nil
 	case ir.KindObject:
-		fieldsLit, err := objectFieldMapLiteral(f.Type.Object, indent+1)
+		fieldsRef, err := r.objectFieldMapRef(f.Type.Object)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("sdk.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
-			innerPad, f.WireName, innerPad, "object", innerPad, fieldsLit, pad), nil
+			innerPad, f.WireName, innerPad, "object", innerPad, fieldsRef, pad), nil
 	default:
 		return "", fmt.Errorf("field %q: unrecognized type kind %v", f.WireName, f.Type.Kind)
 	}
 }
 
-// objectFieldMapLiteral renders a FieldMap dict literal for one nested
-// object's own fields -- every field of a nested object is "settable"
-// from the config's own point of view (mirrors
-// sdk/codegen/templates/go's own objectFieldMapLiteral).
-func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
+// objectFieldMapRef returns an EXPRESSION for one nested object's own
+// fields dict -- either a reference to an already-hoisted shared
+// module-level variable (a shape this resource's own tree has already
+// rendered once, anywhere in it) or, the first time a given shape is
+// seen, a fresh inline dict literal that ALSO gets hoisted into a new
+// shared variable (recorded in r.fieldMapDecls) so every LATER
+// occurrence of the identical shape references it instead of
+// re-inlining. Keyed by nestedShapeSignature -- the same structural
+// fingerprint r.pyFieldMeta already uses for the (cosmetic) nested
+// dataclass declarations, deliberately: the base name for a new shared
+// variable reuses whatever name pyFieldMeta already minted for the
+// identical shape during ResourceFile's own earlier
+// collectNestedDataclasses pre-pass. A single leading underscore marks
+// it as module-internal (PEP 8's own convention), never part of this
+// file's public/reviewed API surface (Config/the resource's own
+// ResourceBinding).
+func (r *resourceRenderer) objectFieldMapRef(fields []ir.Field) (string, error) {
+	shape, err := nestedShapeSignature(ir.TypeRef{Kind: ir.KindObject, Object: fields})
+	if err != nil {
+		return "", err
+	}
+	if r.seenFieldMapVars == nil {
+		r.seenFieldMapVars = map[string]string{}
+	}
+	if existing, ok := r.seenFieldMapVars[shape]; ok {
+		return existing, nil
+	}
+
+	base := r.seenShapes[shape]
+	if base == "" {
+		base = fmt.Sprintf("%s_shape%d", r.pascalName, len(r.seenFieldMapVars))
+	}
+	varName := "_" + base + "Fields"
+	r.seenFieldMapVars[shape] = varName
+
+	lit, err := r.objectFieldMapLiteral(fields, 0)
+	if err != nil {
+		return "", err
+	}
+	r.fieldMapDecls = append(r.fieldMapDecls, fmt.Sprintf("%s = %s\n", varName, lit))
+	return varName, nil
+}
+
+// objectFieldMapLiteral renders an INLINE FieldMap dict literal for one
+// nested object's own fields -- every field of a nested object is
+// "settable" from the config's own point of view (mirrors
+// sdk/codegen/templates/go and .../ts's own objectFieldMapLiteral).
+// Called from exactly one place now (objectFieldMapRef, the first time a
+// given shape is seen).
+func (r *resourceRenderer) objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 	pad := strings.Repeat("    ", indent)
 	innerPad := strings.Repeat("    ", indent+1)
 	var b strings.Builder
@@ -263,7 +467,7 @@ func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		spec, err := fieldSpecLiteral(f, indent+1)
+		spec, err := r.fieldSpecLiteral(f, indent+1)
 		if err != nil {
 			return "", err
 		}
@@ -271,6 +475,44 @@ func objectFieldMapLiteral(fields []ir.Field, indent int) (string, error) {
 	}
 	fmt.Fprintf(&b, "%s}", pad)
 	return b.String(), nil
+}
+
+// nestedShapeSignature computes a canonical, structure-only fingerprint
+// of one TypeRef's own recursive shape -- mirrors
+// sdk/codegen/templates/go and .../ts's own function of the same name
+// exactly (kept as an independent copy in each template package,
+// matching this project's own established "no per-language identifier
+// convention lives in ir" posture, sdk/codegen/ir's own Field doc
+// comment).
+func nestedShapeSignature(t ir.TypeRef) (string, error) {
+	switch t.Kind {
+	case ir.KindScalar:
+		return fmt.Sprintf("s%d", t.Scalar), nil
+	case ir.KindList, ir.KindSet, ir.KindMap:
+		el, err := nestedShapeSignature(*t.Element)
+		if err != nil {
+			return "", err
+		}
+		kindTag := map[ir.TypeKind]byte{ir.KindList: 'L', ir.KindSet: 'S', ir.KindMap: 'M'}[t.Kind]
+		return fmt.Sprintf("%c<%s>", kindTag, el), nil
+	case ir.KindObject:
+		var b strings.Builder
+		b.WriteString("O{")
+		for _, f := range t.Object {
+			sig, err := nestedShapeSignature(f.Type)
+			if err != nil {
+				return "", err
+			}
+			b.WriteString(f.WireName)
+			b.WriteString(":")
+			b.WriteString(sig)
+			b.WriteString(";")
+		}
+		b.WriteString("}")
+		return b.String(), nil
+	default:
+		return "", fmt.Errorf("unrecognized type kind %v", t.Kind)
+	}
 }
 
 // pythonIdentifier turns a provider wire name (snake_case, verbatim from
@@ -336,7 +578,8 @@ func splitWireName(wireName string) ([]string, error) {
 }
 
 // pythonKeywords is the lowercase-only subset of Python 3's reserved-word
-// set (keyword.kwlist) that a real wire name could ever actually collide
+// set (keyword.kwlist) that a real wire name -- or, as of UBI-98, a real
+// derived service/local module name -- could ever actually collide
 // with -- splitWireName only ever accepts lowercase ascii, so the
 // capitalized reserved words (False/None/True) can never match a real
 // wire name and are omitted rather than listed misleadingly.
