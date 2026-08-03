@@ -1,4 +1,8 @@
 {
+  "name": "@ubx/sdk",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "exports": "./src/index.ts",
   "tasks": {
     "test": "deno test --no-remote src/",
     "check": "deno check --no-remote src/index.ts"
