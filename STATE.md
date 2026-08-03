@@ -4,6 +4,91 @@
 
 ## Current phase
 
+**UBI-105 (2026-08-03) — UBI-99's pattern ported to `ubx-sdk-aws-py`,
+closing all three languages of UBI-103's first (provider, language)
+sequence. Same runtime-publishing gap as UBI-104's TS finding (now
+confirmed, not assumed, to be a genuine cross-language pattern), a
+third distinct resolution mechanism, zero repeat bugs on the first real
+dispatched run.**
+
+Founder created the empty `github.com/ubiquex/ubx-sdk-aws-py` repo
+beforehand, confirmed public and cloned before any work started, same
+protocol as UBI-104.
+
+**Seeded**: real `ubx sdk gen --lang py --out .` against the same
+`hashicorp/aws@6.54.0` snapshot both `-go` and `-ts` siblings share.
+
+**Item 2, traced not assumed, a third mechanism distinct from both
+priors**: read `sdk/codegen/templates/py/py.go`'s own doc comments,
+then `collision_test.go`'s real subprocess-import test, before deciding
+anything. Generated Python bindings do a plain `import ubx_sdk as sdk`
+— resolved via standard `PYTHONPATH` module search, no module-proxy
+fetch (Go) and no explicit import-map config file (TS's `deno.json`).
+The gap is the same shape as TS's once outside the monorepo though:
+locally `PYTHONPATH` points at this repo's own private `sdk/py/`, which
+a standalone repo can't reach. Checked for real: `pip index versions
+ubx_sdk` / a direct PyPI JSON API check both 404, no `.pypirc`, no
+`twine` installed — zero PyPI auth on this machine, matching npm's
+absence. Per this ticket's own explicit instruction (a stronger
+directive than UBI-104's own "ask the founder first"), vendored
+directly without asking: `sdk/py/ubx_sdk/` copied into
+`ubx-sdk-aws-py/vendor/ubx_sdk/`. **A real Linear ticket filed this
+time, not silently deferred again**: UBI-107, covering both the still-
+open npm gap from UBI-104 and this session's own PyPI gap together
+(same underlying "runtime never actually published" problem, same
+founder-new-account blocker for both).
+
+**UBI-98's own Python "lambda" finding, confirmed holding in THIS real
+output, not re-derived**: `aws_lambda_*` (20 types) lands under
+`lambda_/` (trailing underscore) — checked directly in the real
+generated tree, `lambda_/__init__.py` and `lambda_/function.py` both
+present and importing `ubx_sdk` cleanly.
+
+**Item 4's own real bar, done correctly — a real
+`importlib.import_module` of every generated module, not a syntax
+check, matching UBI-98's own precedent exactly rather than settling for
+something lighter.** A real, live-caught gotcha along the way: the
+first local dry run of this exact import script scattered
+`__pycache__`/`.pyc` files through every service directory (a real
+side effect of a real import, not a bug in the generation itself) —
+`git add -A` swept them into the initial commit before this was caught;
+fixed by amending (safe — never yet pushed) after adding `.gitignore`,
+and the CI workflow's own sanity-check step sets
+`PYTHONDONTWRITEBYTECODE=1` so the same thing can't happen on a real
+regeneration run.
+
+**Everything UBI-99/UBI-104 already solved carried over clean on the
+FIRST real dispatched run, zero repeat bugs**: `$RUNNER_TEMP` isolation,
+`go build -C` flag order, and — mirroring the `setup-deno@v2` lesson
+directly — `actions/setup-python@v5` checked against its real tag via
+`git ls-remote` before being trusted, not assumed correct by pattern-
+matching the Go/TS workflows. Item 6 (org policy/PAT) confirmed clean
+without re-solving: `can_approve_pull_request_reviews: true` already
+applied to this brand-new repo automatically; only the per-repo
+`UBIQUEX_SOURCE_TOKEN` secret needed re-setting.
+
+**Real, successful first dispatched run**: queried the real registry
+(found `6.57.1`, newer than the seeded `6.54.0`), built `ubx` from real
+`ubiquex` source, regenerated for real (1682 → 1687 resource types), a
+real recursive import of every generated module (1946 imported, zero
+errors), opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-aws-py/pull/1** (285 files
+changed, genuinely new AWS-service directories landing as new files,
+`vendor/`/`.gitignore` untouched in the diff). `main`'s own `VERSION`
+confirmed still `6.54.0` afterward — never auto-merged.
+
+**All three languages of UBI-103's first (provider, language) sequence
+are now real, live, and automated**:
+https://github.com/Ubiquex/ubx-sdk-aws-go (UBI-99),
+https://github.com/Ubiquex/ubx-sdk-aws-ts (UBI-104),
+https://github.com/Ubiquex/ubx-sdk-aws-py (UBI-105). Remaining, per
+UBI-103's own umbrella: the same three-language rollout for every other
+supported provider, plus UBI-107's own real, filed (not deferred)
+runtime-publishing follow-up (npm + PyPI, replacing both languages'
+vendoring stopgaps).
+
+## Current phase (previous)
+
 **UBI-104 (2026-08-03) — UBI-99's pattern ported to `ubx-sdk-aws-ts`,
 first real proof it generalizes to a second (provider, language) pair;
 one genuinely different finding (TS runtime publishing), everything
