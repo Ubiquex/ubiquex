@@ -4,6 +4,80 @@
 
 ## Current phase
 
+**UBI-108 (2026-08-03) — first non-AWS provider (`ubx-sdk-google-go`)
+surfaces a real, new naming-collision class AWS's own 1,682 types never
+hit; fixed at the codegen source, not routed around; real schema scale
+(1,319 types) confirmed far larger than the ticket's own "400-600+"
+guess.**
+
+Founder created the empty `github.com/ubiquex/ubx-sdk-google-go` repo
+beforehand, confirmed public and cloned before any work started, same
+protocol as every prior repo this arc. Naming locked per UBI-103:
+`google`, never `gcp` — both the repo suffix and the nested (UBI-106)
+namespace directory.
+
+**Real schema scale, checked not assumed**: 1,319 resource types for
+`hashicorp/google@7.40.0` — the ticket guessed "likely 400-600+";
+actual is much closer to AWS's own 1,682. 118 real service packages.
+
+**The real finding, item 5's own explicit ask, not skipped**: full-scale
+generation hit a genuine self-check failure — 3 real instances
+(`spanner`, `workstations`, `migration`) where an independent, real,
+TOP-LEVEL sibling resource's own wire name is exactly
+`<sibling>_config` (e.g. `google_spanner_instance` +
+`google_spanner_instance_config`, both real resources — NOT one
+resource's own nested block, which is what UBI-96 fixed). The
+`_config`-suffixed resource's own real binding var collides with its
+sibling's entirely CODEGEN-INVENTED `<Name>Config` companion struct,
+both package-level Go identifiers in the same service package.
+
+**Fixed properly, not routed around**: `GeneratedRepo` (Go only — TS/
+Python confirmed structurally immune, same reasoning UBI-98 already
+established for why UBI-96 was Go-only) now checks every sibling's real
+binding-var name package-wide before rendering any file; only the
+CODEGEN-INVENTED struct name gets disambiguated (trailing underscore,
+matching `goPackageIdent`/`pyModuleIdent`'s own escape convention) when
+it would collide — never a real resource's own wire-derived identity.
+New dedicated regression test
+(`TestGeneratedRepo_SiblingConfigCollision_Escaped`) mirrors the real
+shape exactly. Re-verified against the real full google schema after
+the fix: zero collisions, real `go build ./...`/`go vet ./...` clean
+across all 1,319 types/1,437 files, credential-free against the real
+published `ubx-sdk-go`. AWS's own full-provider live tests re-run
+afterward too — no regression.
+
+**Item 5's other half, also checked not assumed**: the oversized-
+recursive-type compiler-crash class (UBI-98) does NOT reproduce in
+Google's real schema — largest file (`google/container/cluster.go`,
+2,495 lines) nowhere near the >10MB/~250,000-line scale
+`aws_wafv2_web_acl_rule` hit. No Go-keyword/go-tool-special service-name
+collision either (AWS's own `default`/`main` finding) — checked
+directly against all 118 real derived service names, none hit.
+
+**Item 6, confirmed not re-solved**: `ubx-sdk-go` is already real,
+published, and depended on directly — no vendoring, no new publishing
+decision, unlike TS/Python's own UBI-104/105 precedent.
+
+**Real, successful first dispatched run**: seeded one version behind
+latest (`7.40.0` vs. real latest `7.42.0`) for a genuine bump, same
+discipline as every prior repo. Queried the real registry, built `ubx`
+from real `ubiquex` source, regenerated for real, real `go build`/
+`go vet` clean, opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-google-go/pull/1** (152 files
+changed, `google/` nesting and the corrected `go.mod` module name both
+intact). Founder confirmed merging (same as UBI-106) — merged;
+confirmed via the real GitHub API (not `raw.githubusercontent.com`,
+which lagged the merge by several minutes — a real, minor verification
+gotcha worth remembering: check the API, not the CDN mirror, right
+after a merge).
+
+**UBI-103's rollout, second provider now underway**: AWS (all three
+languages) and Google/Go both real and live. Remaining: Google's own
+TS/Python siblings (their own runtime-publishing questions investigated
+fresh, not assumed to match AWS's), then Azure and Kubernetes.
+
+## Current phase (previous)
+
 **UBI-106 (2026-08-03) — every generated service package now nests
 under one provider-namespace directory (`aws/`), fixing a real
 repo-browsing problem (README buried below 200+ folders); applied to

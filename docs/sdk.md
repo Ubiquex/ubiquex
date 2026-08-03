@@ -2333,3 +2333,93 @@ fold" finding can only be verified against `main`, and these workflows
 never auto-merge by design) — merged, and the real GitHub file-browser
 view of all three repos' own root confirmed the README now renders
 immediately, no scrolling, in every one.
+
+## Amendment (2026-08-03, UBI-108): first non-AWS provider — `ubx-sdk-google-go` — surfaces a real, new naming-collision class hashicorp/aws's own 1,682 types never happened to hit
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-google-go** (public),
+seeded via a real `ubx sdk gen --lang go --out .` against
+`hashicorp/google@7.40.0`, UBI-106's nested `google/` layout from birth
+(no retrofit needed — the first repo born after that fix). Naming
+locked per UBI-103: `google`, never `gcp` — matches the real Terraform
+provider source (`hashicorp/google`) exactly, both as the repo suffix
+and the nested namespace directory.
+
+**Real schema scale, confirmed not assumed**: **1,319 resource types**
+for `hashicorp/google@7.40.0` — the ticket's own "likely 400-600+"
+guess was wrong by a wide margin; Google's real schema is much closer
+to AWS's own 1,682 than to a mid-size provider. 118 real service
+packages (vs. AWS's 258/259).
+
+**Item 5's own explicit ask — a real, new collision class found,
+NOT assumed clean by extrapolating AWS's own fixes**: running the real
+full-schema generation hit a genuine, live self-check failure UBI-96's
+fix does NOT cover — 3 real instances (`google/spanner`,
+`google/workstations`, `google/migration`) where an independent,
+TOP-LEVEL sibling resource's own wire name is exactly
+`<other-resource>_config` (e.g. `google_spanner_instance` +
+`google_spanner_instance_config`, both real, both independently
+addressable resources — not one resource's own nested block, which is
+what UBI-96 originally fixed). The `_config`-suffixed resource's own
+real binding var (`spanner.InstanceConfig`, PascalCase of its own real
+wire name) collides with its sibling's entirely CODEGEN-INVENTED
+`<Name>Config` companion struct (`spanner.Instance`'s own auto-derived
+`InstanceConfig`) — both package-level Go identifiers in the same
+service package.
+
+**Fixed at the source, not routed around**: `GeneratedRepo` (Go only —
+TS/Python are structurally immune, confirmed not assumed: ES modules
+and Python modules each give every FILE its own independent namespace,
+the exact reasoning UBI-98 already established for why UBI-96 itself
+was Go-only) now checks every sibling's own real binding-var name
+*before* rendering any file in a service package; when a resource's
+default `<Name>Config` struct would collide with a real sibling's own
+binding var, only the CODEGEN-INVENTED struct name is disambiguated
+(trailing underscore — `InstanceConfig_` — the same escape convention
+`goPackageIdent`/`pyModuleIdent` already use for a keyword collision),
+never the real resource's own wire-derived identity. A dedicated
+regression test (`TestGeneratedRepo_SiblingConfigCollision_Escaped`)
+mirrors the real `spanner.Instance`/`instance_config` shape exactly.
+Re-verified against the real full `hashicorp/google@7.40.0` schema
+after the fix: zero collisions, real `go build ./...`/`go vet ./...`
+clean across all 1,319 types (1,437 files) — confirmed via a real
+`replace`-free build against the actual published `ubx-sdk-go`.
+AWS's own full-provider live tests re-run afterward too: no regression.
+
+**Item 5's other half — the oversized-recursive-type compiler-crash
+class (UBI-98) — confirmed NOT present in Google's real schema,
+checked not assumed**: largest real generated file is
+`google/container/cluster.go` at 2,495 lines — nowhere near the
+>10MB/~250,000-line pathological scale `aws_wafv2_web_acl_rule` hit
+before UBI-98's own shape-dedup fix. Also checked and confirmed clean:
+no Go-keyword/go-tool-special service-name collision (AWS's own
+`default`/`main` finding) anywhere in Google's real 118 derived service
+names.
+
+**Item 6, confirmed not re-solved**: `ubx-sdk-go` (the shared Go
+runtime) is already real and published — this repo's `go.mod` depends
+on it directly, verified via a real credential-free `go build`/`go vet`
+against the real public Go proxy, no `replace` directive, exactly like
+`ubx-sdk-aws-go`. No new publishing decision needed for Go (unlike
+TS/Python's own vendoring precedent from UBI-104/105).
+
+**Required verification, met for real on the first dispatched run**:
+seeded one version behind the real latest (`7.40.0`, latest `7.42.0`)
+to get a genuine bump, same discipline as every prior repo in this
+family. A real `workflow_dispatch` run
+(https://github.com/Ubiquex/ubx-sdk-google-go/actions) queried the real
+registry, found `7.42.0`, built `ubx` from real `ubiquex` source,
+regenerated for real, ran a real `go build ./...`/`go vet ./...`
+against the full regenerated tree, and opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-google-go/pull/1** — 152 files
+changed, `google/` nesting and `go.mod`'s own corrected module name
+both intact in the diff. Founder confirmed merging (same as UBI-106) —
+merged; `main` confirmed at `7.42.0` via the real GitHub API (not the
+`raw.githubusercontent.com` CDN, which lagged behind the merge by a few
+minutes — a real, if minor, verification gotcha worth naming: check the
+API, not the CDN mirror, when confirming a just-merged change).
+
+**UBI-103's rollout, second provider now underway**: AWS (all three
+languages, UBI-99/104/105/106) and Google/Go (UBI-108) both real and
+live. Remaining: Google's own TS/Python siblings (their own runtime-
+publishing questions to investigate fresh, not assumed to match AWS's
+answers), then Azure and Kubernetes.
