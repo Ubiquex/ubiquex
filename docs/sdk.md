@@ -2079,3 +2079,81 @@ per-repo attempt to enable it; `gh pr create` fails outright
 (`GitHub Actions is not permitted to create or approve pull requests`)
 until the org owner enables it. One-time, not something this workflow
 or a future sibling repo (`ubx-sdk-gcp`, etc.) needs to repeat.
+
+## Amendment (2026-08-03, UBI-104): `ubx-sdk-aws-ts` ported UBI-99's exact pattern, first real proof the pattern generalizes — and a genuinely different answer on runtime publishing
+
+**Real repo**: **https://github.com/Ubiquex/ubx-sdk-aws-ts** (public),
+seeded via a real `ubx sdk gen --lang ts --out .` against the same
+`hashicorp/aws@6.54.0` `ubx-sdk-aws-go` was seeded from (cross-language
+consistency — both per-provider sibling repos start from the same
+provider snapshot).
+
+**Item 2's own question, answered — genuinely different from Go, not
+identical**: Go needed `ubx-sdk-go` published as a real module because
+`go build`/`go get` resolve import paths via real VCS/proxy fetch, with
+no local override outside a test-only `replace`. TypeScript/Deno
+resolves the bare specifier `@ubx/sdk` a completely different way — an
+explicit `deno.json` **import map**, not automatic registry resolution.
+The *original* pre-UBI-98 design intent (this doc's own session-1 text)
+already called for publishing `@ubx/sdk` to npm; that was never
+executed. Checked for real, not assumed: `npm view @ubx/sdk` → 404 (no
+such package), and this machine has zero npm auth at all (`npm whoami`
+→ not logged in). Publishing needs a real npm account/org owning the
+`@ubx` scope — asked the founder directly rather than guessing;
+decision: **vendor a local copy for now**, not publish to npm this
+session. `sdk/ts/runtime/src/index.ts` (self-contained, zero imports)
+copied into `ubx-sdk-aws-ts/vendor/ubx-sdk-runtime/index.ts`, with
+`deno.json`'s import map pointing `@ubx/sdk` there. Verified for real:
+`deno check --no-remote` across all 1940 generated files, zero errors,
+zero network access. Documented as a deliberate, known stopgap (this
+repo's own README) — the npm-publish gap named in this doc's own
+"Out of scope for v1" section remains genuinely open, now for a second
+language too.
+
+**A real consequence of vendoring, handled the same way Go's
+`go.mod`/`go.sum` mismatch was**: `ubx sdk gen`'s own output never
+touches `deno.json` or `vendor/` (neither is ever codegen'd — both are
+hand-maintained), so both are excluded from the version-watch
+workflow's regeneration `rsync --delete`, the same way Go excluded
+`go.mod`/`go.sum` to stop a mechanical shortName mismatch from
+silently reverting the module path every run. Missing this exclusion
+would have silently deleted the vendored runtime and the import map on
+the very first real regeneration.
+
+**Items 3–4, ported and re-verified live, not just copy-pasted and
+assumed to still work**: the identical `$RUNNER_TEMP` scratch-isolation
+pattern (the fix for UBI-99's own `rsync ... file has vanished`
+overlap bug), the identical `go build -C <dir> -o <out>` flag order
+(the fix for UBI-99's own flag-ordering bug) — both carried over
+correctly on the FIRST real dispatched run this session, no repeat of
+either bug. The sanity-check step is genuinely different, not a
+find-and-replace of Go's: `deno check --no-remote` (matching this
+project's own real TS tooling, `sdk/ts/`'s existing `deno.json` tasks —
+not `tsc`, which this project doesn't use), needing `denoland/setup-deno`
+added as a new step (Go's `actions/setup-go` has no TS equivalent).
+Caught before it could fail in CI: `denoland/setup-deno@v2` doesn't
+exist as a real tag (only fully-qualified versions like `v2.0.5` do,
+confirmed via the real GitHub API before relying on it) — pinned to
+the real `v2.0.5` tag instead.
+
+**Item 5, confirmed clean, no new org-policy work needed**: the
+`Ubiquex` org's "Allow GitHub Actions to create and approve pull
+requests" setting (enabled org-wide during UBI-99) already applied to
+this brand-new repo automatically — confirmed via a real API check
+(`can_approve_pull_request_reviews: true`) before dispatching, not
+assumed. Only a per-repo `UBIQUEX_SOURCE_TOKEN` secret (same PAT value,
+already scoped to `Ubiquex/ubiquex` alone, not repo-specific) needed
+re-setting — secrets don't carry across repos automatically the way
+the org policy does.
+
+**Required verification, met for real on the first dispatched run,
+no repeat bugs**: a real `workflow_dispatch` run
+(https://github.com/Ubiquex/ubx-sdk-aws-ts/actions) queried the real
+registry, found `6.57.1` newer than the seeded `6.54.0`, built `ubx`
+from real `ubiquex` source, regenerated for real (1682 → 1687 resource
+types), typechecked the result with zero errors, and opened a real PR:
+**https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/1** — 287 files
+changed, genuinely new AWS-service directories (`bedrock/`,
+`mailmanager/`, ...) landing as new files, `vendor/`/`deno.json`
+untouched in the diff, `main`'s own `VERSION` left at `6.54.0`
+afterward (never auto-merged).

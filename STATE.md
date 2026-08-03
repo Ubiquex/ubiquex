@@ -4,6 +4,81 @@
 
 ## Current phase
 
+**UBI-104 (2026-08-03) — UBI-99's pattern ported to `ubx-sdk-aws-ts`,
+first real proof it generalizes to a second (provider, language) pair;
+one genuinely different finding (TS runtime publishing), everything
+else confirmed to carry over clean on the first real run.**
+
+First child of UBI-103's umbrella (11 remaining provider/language pairs
+to roll out the same way). Founder created the empty
+`github.com/ubiquex/ubx-sdk-aws-ts` repo beforehand (per this session's
+own instruction not to create org repos directly) — confirmed it
+existed and was cloned before any work started, per protocol; caught
+and flagged it being created **private** rather than the ticket's own
+explicit "public" (founder fixed it, confirmed before proceeding).
+
+**Seeded**: real `ubx sdk gen --lang ts --out .` against the same
+`hashicorp/aws@6.54.0` `ubx-sdk-aws-go` was seeded from — same provider
+snapshot across sibling per-language repos, deliberately, not a
+coincidence.
+
+**The one real, investigated-not-assumed difference from Go
+(UBI-104's own item 2)**: TypeScript/Deno resolves the shared runtime's
+bare `@ubx/sdk` specifier via a `deno.json` import map, not automatic
+module-proxy/VCS fetch the way Go's `go build` does. This doc's own
+session-1 design intent already called for publishing `@ubx/sdk` to
+npm — never executed. Checked for real: `npm view @ubx/sdk` → 404,
+this machine has zero npm auth. Asked the founder directly (mirroring
+how the GitHub PAT decision was asked in UBI-99) rather than silently
+picking a path: **decision was to vendor a local copy for now**, not
+stand up npm publishing this session. `sdk/ts/runtime/src/index.ts`
+copied into `ubx-sdk-aws-ts/vendor/ubx-sdk-runtime/index.ts`,
+`deno.json`'s import map pointing there; verified via a real
+`deno check --no-remote` across all 1940 generated files (zero errors,
+zero network access) before committing. `vendor/`/`deno.json` excluded
+from the version-watch workflow's regeneration `rsync --delete` the
+same way Go excluded `go.mod`/`go.sum` — same underlying reason (codegen
+never touches either, so without the exclusion the first real regen run
+would have silently deleted both). Full account: `docs/sdk.md`'s new
+UBI-104 amendment.
+
+**Everything else UBI-99 already solved carried over clean on the
+FIRST real dispatched run — zero repeat bugs**: the `$RUNNER_TEMP`
+scratch-isolation fix (UBI-99's own rsync self-overlap bug), the
+`go build -C <dir> -o <out>` flag order (UBI-99's own flag-ordering
+bug), and the org-level "Allow GitHub Actions to create and approve
+pull requests" policy (confirmed via a real API check —
+`can_approve_pull_request_reviews: true` — already applied to this
+brand-new repo automatically, no re-solving needed, exactly as UBI-99's
+own closing note predicted). Only the per-repo `UBIQUEX_SOURCE_TOKEN`
+secret needed re-setting (repo secrets don't carry across repos the way
+an org policy does).
+
+**One new, TS-specific bug, caught before it reached a real run**:
+`denoland/setup-deno@v2` doesn't exist as an actual git tag (only
+fully-qualified versions like `v2.0.5` do) — checked directly against
+the real GitHub API before trusting it, not discovered by a failed CI
+run this time. Pinned to the real `v2.0.5` tag.
+
+**Real, successful first dispatched run**: queried the real registry
+(found `6.57.1`, newer than the seeded `6.54.0`), built `ubx` from real
+`ubiquex` source, regenerated for real (1682 → 1687 resource types),
+typechecked clean, opened a real PR —
+**https://github.com/Ubiquex/ubx-sdk-aws-ts/pull/1** (287 files
+changed, genuinely new AWS-service directories landing as new files,
+`vendor/`/`deno.json` untouched in the diff). `main`'s own `VERSION`
+confirmed still `6.54.0` afterward — never auto-merged.
+
+**Real repos so far, both language siblings now live**:
+https://github.com/Ubiquex/ubx-sdk-aws-go (UBI-99) and
+https://github.com/Ubiquex/ubx-sdk-aws-ts (UBI-104). Remaining, per
+UBI-103's umbrella: `ubx-sdk-aws-py` (same pattern, Python's own runtime-
+publishing story to be investigated the same way — PyPI, not assumed),
+then the same three-language rollout for every other supported
+provider.
+
+## Current phase (previous)
+
 **UBI-99 (2026-08-03) — the version-watch GitHub Actions automation
 now lives for real in a real, separately hosted repo, not just designed
 against locally-generated output.**
