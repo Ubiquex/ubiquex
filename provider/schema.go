@@ -2,6 +2,10 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
+
+	"github.com/zclconf/go-cty/cty"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/ubiquex/ubiquex/provider/tfplugin5"
 	"github.com/ubiquex/ubiquex/provider/tfplugin6"
@@ -102,22 +106,30 @@ func (s *Schema) IsAttrComputed(attrName string) bool {
 	return false
 }
 
-func schemaFromV6(s *tfplugin6.Schema) *Schema {
+func schemaFromV6(s *tfplugin6.Schema) (*Schema, error) {
 	if s == nil {
-		return nil
+		return nil, nil
 	}
-	return &Schema{Version: s.Version, Block: blockFromV6(s.Block)}
+	block, err := blockFromV6(s.Block)
+	if err != nil {
+		return nil, err
+	}
+	return &Schema{Version: s.Version, Block: block}, nil
 }
 
-func blockFromV6(b *tfplugin6.Schema_Block) Block {
+func blockFromV6(b *tfplugin6.Schema_Block) (Block, error) {
 	if b == nil {
-		return Block{}
+		return Block{}, nil
 	}
 	out := Block{}
 	for _, a := range b.Attributes {
+		typeJSON, err := attributeTypeJSONFromV6(a)
+		if err != nil {
+			return Block{}, fmt.Errorf("attribute %q: %w", a.Name, err)
+		}
 		out.Attributes = append(out.Attributes, Attribute{
 			Name:      a.Name,
-			Type:      json.RawMessage(a.Type),
+			Type:      typeJSON,
 			Required:  a.Required,
 			Optional:  a.Optional,
 			Computed:  a.Computed,
@@ -125,14 +137,78 @@ func blockFromV6(b *tfplugin6.Schema_Block) Block {
 		})
 	}
 	for _, nb := range b.BlockTypes {
+		nested, err := blockFromV6(nb.Block)
+		if err != nil {
+			return Block{}, fmt.Errorf("block %q: %w", nb.TypeName, err)
+		}
 		out.NestedBlocks = append(out.NestedBlocks, NestedBlock{
 			TypeName: nb.TypeName,
 			Nesting:  nestingModeFromV6(nb.Nesting),
-			Block:    blockFromV6(nb.Block),
+			Block:    nested,
 			MaxItems: nb.MaxItems,
 		})
 	}
-	return out
+	return out, nil
+}
+
+// attributeTypeJSONFromV6 returns a's ctyjson-encoded type. Most attributes
+// carry it directly on the wire (Type); Terraform Plugin Framework-style
+// "structured"/object attributes (first real instance found: UBI-112,
+// hashicorp/kubernetes@3.2.0's kubernetes_validating_admission_policy_v1 —
+// zero AWS/Google attributes ever hit this) carry NestedType instead, and
+// leave Type empty — the two are mutually exclusive on the wire. NestedType
+// is recursively converted to the equivalent cty object/collection type
+// here, at the translation boundary, so every downstream consumer (IR,
+// codegen, ctyvalue's own config-encoding) keeps working against a single
+// cty.Type shape and never needs to know NestedType existed.
+func attributeTypeJSONFromV6(a *tfplugin6.Schema_Attribute) (json.RawMessage, error) {
+	if a.NestedType == nil {
+		return json.RawMessage(a.Type), nil
+	}
+	ty, err := nestedObjectCtyTypeFromV6(a.NestedType)
+	if err != nil {
+		return nil, err
+	}
+	marshaled, err := ctyjson.MarshalType(ty)
+	if err != nil {
+		return nil, fmt.Errorf("marshal nested type: %w", err)
+	}
+	return json.RawMessage(marshaled), nil
+}
+
+// nestedObjectCtyTypeFromV6 converts one Schema_Object (itself recursive —
+// a nested attribute's own NestedType may nest further, exactly the
+// PodSpec-containing-containers-containing-volumeMounts shape UBI-112 named
+// as a real risk, confirmed present here at depth 5:
+// kubernetes_validating_admission_policy_v1.spec.match_constraints
+// .object_selector.label_selector.match_expressions.key) into the
+// equivalent cty.Type. Nesting mirrors NestedBlock's own SINGLE/LIST/SET/MAP
+// handling: SINGLE is a bare object, the others wrap it in the matching cty
+// collection type.
+func nestedObjectCtyTypeFromV6(o *tfplugin6.Schema_Object) (cty.Type, error) {
+	attrTypes := make(map[string]cty.Type, len(o.Attributes))
+	for _, a := range o.Attributes {
+		typeJSON, err := attributeTypeJSONFromV6(a)
+		if err != nil {
+			return cty.NilType, fmt.Errorf("nested attribute %q: %w", a.Name, err)
+		}
+		ty, err := ctyjson.UnmarshalType(typeJSON)
+		if err != nil {
+			return cty.NilType, fmt.Errorf("nested attribute %q: parse type: %w", a.Name, err)
+		}
+		attrTypes[a.Name] = ty
+	}
+	obj := cty.Object(attrTypes)
+	switch o.Nesting {
+	case tfplugin6.Schema_Object_LIST:
+		return cty.List(obj), nil
+	case tfplugin6.Schema_Object_SET:
+		return cty.Set(obj), nil
+	case tfplugin6.Schema_Object_MAP:
+		return cty.Map(obj), nil
+	default: // SINGLE, or an unrecognized/future mode -- treat as a bare object
+		return obj, nil
+	}
 }
 
 func nestingModeFromV6(m tfplugin6.Schema_NestedBlock_NestingMode) NestingMode {
@@ -152,15 +228,19 @@ func nestingModeFromV6(m tfplugin6.Schema_NestedBlock_NestingMode) NestingMode {
 	}
 }
 
-func schemaMapFromV6(m map[string]*tfplugin6.Schema) map[string]*Schema {
+func schemaMapFromV6(m map[string]*tfplugin6.Schema) (map[string]*Schema, error) {
 	if m == nil {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]*Schema, len(m))
 	for k, v := range m {
-		out[k] = schemaFromV6(v)
+		schema, err := schemaFromV6(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", k, err)
+		}
+		out[k] = schema
 	}
-	return out
+	return out, nil
 }
 
 func schemaFromV5(s *tfplugin5.Schema) *Schema {

@@ -346,6 +346,37 @@ func TestServiceAndLocalName_BareTwoTokenType(t *testing.T) {
 	}
 }
 
+// TestServiceAndLocalName_BareVersionSuffixFoldsIntoService covers UBI-112's
+// real finding: hashicorp/kubernetes@3.2.0's own "_v1"/"_v2beta2"-suffixed
+// wire types (e.g. "kubernetes_deployment_v1") would otherwise reduce to a
+// local name of just "v1" -- a generated file that would be literally named
+// "v1.go", carrying zero information about which resource it defines. The
+// service token folds back in so the local name stays self-descriptive.
+// Confirmed live against hashicorp/aws@6.54.0 and hashicorp/google@7.42.0's
+// real full schemas that this fold changes nothing for either: zero wire
+// types in either provider reduce to a bare two-token-remainder version
+// marker (google_apigee_security_profile_v2 has three remainder tokens,
+// "security_profile_v2", not one -- outside this fold's own narrow trigger).
+func TestServiceAndLocalName_BareVersionSuffixFoldsIntoService(t *testing.T) {
+	cases := []struct {
+		wireType, service, local string
+	}{
+		{"kubernetes_deployment_v1", "deployment", "deployment_v1"},
+		{"kubernetes_horizontal_pod_autoscaler_v2beta2", "horizontal", "pod_autoscaler_v2beta2"},
+		{"kubernetes_secret_v1_data", "secret", "v1_data"},
+		{"google_apigee_security_profile_v2", "apigee", "security_profile_v2"},
+	}
+	for _, c := range cases {
+		service, local, err := ServiceAndLocalName(c.wireType)
+		if err != nil {
+			t.Fatalf("ServiceAndLocalName(%q): %v", c.wireType, err)
+		}
+		if service != c.service || local != c.local {
+			t.Fatalf("ServiceAndLocalName(%q) = (%q, %q), want (%q, %q)", c.wireType, service, local, c.service, c.local)
+		}
+	}
+}
+
 func TestServiceAndLocalName_TooFewTokens_Errors(t *testing.T) {
 	for _, wireType := range []string{"aws", "", "_", "aws_"} {
 		if _, _, err := ServiceAndLocalName(wireType); err == nil {

@@ -150,10 +150,22 @@ func (p *v6Provider) Schema(ctx context.Context) (*Schemas, error) {
 	if err := diagnosticErrorV6(resp.Diagnostics); err != nil {
 		return nil, err
 	}
+	providerSchema, err := schemaFromV6(resp.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("provider schema: %w", err)
+	}
+	resources, err := schemaMapFromV6(resp.ResourceSchemas)
+	if err != nil {
+		return nil, fmt.Errorf("resource schemas: %w", err)
+	}
+	dataSources, err := schemaMapFromV6(resp.DataSourceSchemas)
+	if err != nil {
+		return nil, fmt.Errorf("data source schemas: %w", err)
+	}
 	return &Schemas{
-		Provider:    schemaFromV6(resp.Provider),
-		Resources:   schemaMapFromV6(resp.ResourceSchemas),
-		DataSources: schemaMapFromV6(resp.DataSourceSchemas),
+		Provider:    providerSchema,
+		Resources:   resources,
+		DataSources: dataSources,
 	}, nil
 }
 

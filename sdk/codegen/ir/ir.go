@@ -11,6 +11,7 @@ package ir
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -147,16 +148,36 @@ type ResourceType struct {
 // service exception table, matching real per-service reviewability more
 // closely, remains real, separately-scopable follow-up work. See
 // STATE.md and the UBI-98 Linear thread for the full account.
+// apiVersionSuffixPattern matches a bare Kubernetes/Terraform-style API
+// version marker token -- "v1", "v2beta2", "v1alpha1", and so on. Used only
+// to detect the UBI-112 finding below; not a Kubernetes-specific check --
+// any future provider whose wire names carry the same trailing-version
+// convention hits the same fold.
+var apiVersionSuffixPattern = regexp.MustCompile(`^v[0-9]+(alpha|beta)?[0-9]*$`)
+
 func ServiceAndLocalName(wireType string) (service, localWireName string, err error) {
 	tokens := strings.Split(wireType, "_")
 	if len(tokens) < 2 || tokens[0] == "" || tokens[1] == "" {
 		return "", "", fmt.Errorf("sdk/codegen/ir: ServiceAndLocalName(%q): wire type must be at least \"<provider>_<service>\"", wireType)
 	}
 	service = tokens[1]
-	if len(tokens) > 2 {
-		localWireName = strings.Join(tokens[2:], "_")
-	} else {
+	switch {
+	case len(tokens) == 2:
 		localWireName = service
+	case len(tokens) == 3 && apiVersionSuffixPattern.MatchString(tokens[2]):
+		// UBI-112 (hashicorp/kubernetes@3.2.0): a bare version-marker
+		// remainder (e.g. "kubernetes_deployment_v1" -> service
+		// "deployment", tokens[2:] just "v1") would otherwise become the
+		// ENTIRE local name -- a generated file literally named "v1.go",
+		// carrying zero information about which resource it defines.
+		// Folding the service token back in ("deployment_v1") costs
+		// nothing for providers that never hit this shape (AWS/Google's
+		// real full schemas confirmed to have zero wire types ending in a
+		// bare version token) and fixes every real instance found across
+		// Kubernetes' own 81 real resource types.
+		localWireName = service + "_" + tokens[2]
+	default:
+		localWireName = strings.Join(tokens[2:], "_")
 	}
 	return service, localWireName, nil
 }
