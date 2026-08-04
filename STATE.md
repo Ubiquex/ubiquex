@@ -4,6 +4,179 @@
 
 ## Current phase
 
+**UBI-74 Slice 5 (2026-08-04) — cross-medium calling, closed, live-verified: a diagram's own `ubx_blueprint` node and an md draft's own "Use blueprint X with..." recognition both compile to a new `blueprint_calls` intent/v1 field, expanded by literally invoking the target blueprint through the SAME goeval/tseval/pyeval machinery Slice 2's SDK calling already proved. Hermetic byte-comparison confirms SDK/diagram/md produce IDENTICAL resolved deltas; the md leg shipped a real Claude draft against real AWS (`ubx ship` handed off to the founder, per standing doctrine).**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 5's
+own authoritative scope) and Slice 4's own closing report just below
+this entry (multi-language build, closed, live-verified across all
+three languages) before touching this arc again. Also read the resolved
+diagram/md calling-convention design comments on UBI-74 (2026-08-04):
+the `ubx_blueprint`-classed D2 node (literal attrs, no AI) and the md
+"Use blueprint X with..." prose call (thin AI mapping step) — these are
+the exact mechanisms implemented, not re-derived.
+
+**1. The core design decision, made before writing any expansion code:
+diagram and md calls route through Slice 2's own SDK-invocation
+mechanism by literal reuse, never a second one.** A blueprint package is
+compiled Go/TS/Python code — diagram/md can't execute it directly (no
+AI at the diagram call site, per the original design; md's own AI job
+is extraction only, never re-drafting). The answer: both mediums compile
+down to a new, purely additive `resolver.IntentFile.BlueprintCalls`
+field (`core/resolver/resolver.go`, mirrors `DependsOn`'s own
+additive-field precedent exactly); `blueprint.ExpandCalls`
+(`blueprint/invoke.go`, new) expands each entry by SYNTHESIZING a
+throwaway calling program and running it through `goeval.Evaluate`/
+`tseval.Evaluate`/`pyeval.Evaluate` — the IDENTICAL functions `ubx
+resolve --from-code` already calls for a hand-written SDK program.
+`resolver.Resolve` itself has zero notion a blueprint call exists at
+all (hard-refuses `ErrUnexpandedBlueprintCalls` if one is still present
+un-expanded) — `core` stays entirely dependency-free of `blueprint`
+this way (the reverse would be a real import cycle, `blueprint` already
+imports `core/resolver`). Expansion is spliced into `cli/resolve.go`'s
+`RunE` right before `resolver.Resolve` — the ONE point every intent/v1
+document passes through regardless of which medium produced it (a
+hand-written file, a diagram-produced draft via `ubx propose
+--from-diagram`, an md-drafted document via `ubx propose --from-doc`),
+so it's genuinely one shared mechanism for three sources, not three
+parallel ones.
+
+**2. Diagram calling convention (`diagram/parse.go`): a node classed
+`ubx_blueprint`, extended from UBI-91's own `ubx_required` mechanism,
+never re-derived.** Checked BEFORE `resolver.InferProvider` is ever
+called (so a blueprint-calling node needs no declared provider schema
+at all), its own attributes read directly via D2's own dotted-path
+shorthand (the EXACT mechanism `ubx_required` already established —
+`blueprint:`/`blueprint_ref:`/`blueprint_path:` reserved, every other
+attribute a literal call param, verbatim raw text, zero AI). A relative
+local `blueprint:` value resolves against `Options.BaseDir` once, at
+parse time — the same "relative to what" convention this package's own
+neighbor-ledger resolution already establishes. A blueprint-calling
+node touching a topology edge needed ZERO changes to the existing
+edge-translation pass — it already treats "anything that isn't
+`nodeKindResource`/`nodeKindReference`" as inert.
+
+**3. md calling convention (`intentprovider`): a new wire field +
+system-prompt rule, mirroring established precedent exactly.**
+`wireBlueprintCall` (`validate.go`) mirrors `wireResourceIntent`'s own
+"Config is a JSON-encoded STRING" workaround for the identical reason
+(`Args` is open-shaped, a structured-output schema must close every
+object node). The system prompt (`intentprovider/claude/adapter.go`)
+gains one new rule, styled after the existing IAM-attach-language rule:
+recognize "Use/call/instantiate an existing blueprint" phrasing, extract
+the reference + args verbatim into ONE `blueprint_calls` entry, NEVER
+draft resources for it (the model has no way to know what a blueprint
+actually contains). The empty-draft check (`parseAndValidate`) now
+treats a non-empty `blueprint_calls` as legitimate too — a
+blueprint-call-only draft correctly has empty `resources[]`.
+
+**4. Per-language call synthesis (`blueprint/invoke.go`) — each
+evaluator's own real constraints checked directly before designing
+around them, not guessed:** `callLanguagePreference` tries `ts`, then
+`py`, then `go` (whichever the pulled copy has built). TS needs no
+manifest at all — `tseval/runner.go`'s own entry-file import is an
+ABSOLUTE path, so a synthesized caller can live anywhere and reference
+the blueprint's own `ts/<pkg>.ts` directly, no copy needed. Python's own
+WASI sandbox (`pyeval/runner.go`) mounts only the entry file's own
+DIRECTORY at `/prog` — a synthesized Python caller MUST be copied
+alongside the blueprint's own `py/` files (`copyDir`, reused from Slice
+3's own pull.go), never mutating the original. Go needs a real `go.mod`
+requiring+replacing the blueprint's own `go/` package by local path
+(`goeval.buildProgram` itself copies the whole module before building,
+so the original stays untouched regardless).
+
+**5. One real assumption checked live and found WRONG, corrected before
+it shipped as a documented limitation that would have been false.**
+First pass assumed the blueprint's own placeholder `github.com/
+ubiquex/ubx-sdk-go v0.0.0` (`GenerateGo`'s own emitted `go.mod`) would
+need a real `go mod tidy` or a local `replace` before a synthesized Go
+caller could resolve it — checked directly with a real `go build`
+importing it before writing that constraint down, and it's wrong:
+`v0.0.0` is a genuinely real, resolvable version of the real published
+module (confirmed: `h1:+/X+c+TIjkGSlpjgf5Xzc+cbRslctAK3+MDgUhFFzAQ=`,
+the same hash seen in earlier sessions' own go.sum files). The real,
+narrower condition: that module must already be in the LOCAL Go module
+cache, since `goeval`'s own `GOPROXY=off` blocks a fresh network fetch
+during evaluation — true on this machine (confirmed:
+`TestExpandCalls_LocalBlueprint_GoFallback` passes for real, not
+skipped). Corrected the doc comments to state the accurate, narrower
+condition rather than shipping the broader, wrong one.
+
+**6. Live verification, the ticket's own required bar, genuinely met —
+md got the real-AWS leg, diagram's equivalence is a real hermetic
+proof.** `TestBlueprintCrossMedium_SDKGoDiagramTSAndMDTS_IdenticalDelta`
+(`cli/blueprint_cross_medium_test.go`) is the required first proof: the
+SAME blueprint fixture Slice 2's own SDK-calling test already proves
+against real fakeprovider, called via a hand-written Go SDK program, a
+real `.d2` topology's own `ubx_blueprint` node (`diagram.Parse`, real
+parsing), and a real fake-adapter md draft (`intentprovider.
+DraftWithRetry`, real validation) — all three resolve, through the real
+`ubx resolve` CLI command, to the IDENTICAL delta shape, confirmed by
+direct normalized comparison. Then the SAME real CI-platform blueprint
+already live-proven in Go (Slice 2) and TS (Slice 4) —
+`~/ubx-playground-ubi74-slice4/ci-platform/` — was called for real over
+md (chosen over diagram specifically because it's the leg that hadn't
+been live-verified against a real model anywhere in this arc yet;
+diagram's own "zero AI" claim carries less real-world risk since it's
+checked directly, structurally, with no model involved at all): a real
+`.md` document (`Use blueprint <path> with: repo_name = ..., queue_name
+= ..., retention_days = 14`) drafted via `ubx propose --from-doc`
+against the REAL Claude API — the real model correctly recognized the
+pattern, extracted the reference and all three args verbatim, emitted
+`resources: []` (zero hallucinated resources) and exactly one
+`blueprint_calls` entry. `ubx resolve` against that real draft, against
+the REAL `hashicorp/aws@6.54.0` provider's own real schema — `payments:
+5 create(s), 0 change(s), 0 terminate(s)`, `message_retention_seconds:
+1209600` (14 × 86400, confirmed by reading the resolved JSON directly),
+the cross-resource reference correctly addressing
+`payments.aws_iam_policy.ci-runner-access.arn` (the REAL calling stack,
+never the build-time blueprint directory name) — an IDENTICAL shape to
+Slice 2/4's own SDK-proven resolves, this time reached via a real model
+reading real prose. `ubx accept`ed into a real ledger
+(`~/ubx-playground-ubi74-slice5/ledger/`, change id
+`08d2bbf32434d000cd24efa1898993998ed6ce5fffcddc106c7b0628060f5cc8`) —
+resolved and accepted, ready for `ubx ship`.
+
+**Why `ubx ship` itself was not run, deliberately, not an oversight**:
+the same CLAUDE.md-mandated, UBI-67-established, every-prior-slice-
+precedented handoff — the founder runs the real `ubx ship`/`ubx
+terminate` themselves, once everything up to accept is prepared. **This
+session does not claim the live-ship bar was met — only resolve/accept,
+against a real md-drafted call, deliberately.**
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before every
+live verification step. docs/blueprint.md updated in place (new
+"Cross-medium calling" section, corrected scope framing, new Slice 5
+implementation-slices entry); docs/plan.md updated (new changelog entry,
+"Strata blueprints" subsection updated in place to "Slices 1–5 — Slice
+5 closed"). Committed and pushed to `origin/main` (`d3cf7f0`), per
+CLAUDE.md's own standing commit+push authorization.
+
+**Not done this session, named so it isn't assumed covered**: the
+founder's own real `ubx ship`/`ubx terminate` against
+`~/ubx-playground-ubi74-slice5/` remains outstanding (as does the same
+for `~/ubx-playground-ubi74-slice4/`, still outstanding from last
+session). Diagram's own live-AWS leg was intentionally not attempted
+(not required by this slice's own success bar — only ONE medium needed
+the real-AWS leg, md was chosen; diagram's equivalence is proven
+hermetically instead, explicitly, not silently assumed). A blueprint's
+own build-time directory name isn't independently recorded anywhere a
+call site can verify against (`blueprintNameFromCall`'s own doc comment
+has the full account) — a real, named gap, Slice 6's own provenance
+tagging is the natural place to close it.
+
+Next: Slice 6 (provenance + why/render integration — `{"kind":
+"blueprint", "ref": ...}` tagging on every resource a blueprint call
+produces, `why` showing blueprint provenance, `render --diagram`
+grouping blueprint-sourced resources visually) is the natural next
+session for this arc, per UBI-74's own implementation-breakdown comment.
+Not started this session. The founder's own real `ubx ship`/`ubx
+terminate` + account-clean checks against both
+`~/ubx-playground-ubi74-slice4/` and `~/ubx-playground-ubi74-slice5/`
+remain outstanding, independent of Slice 6.
+
+## Current phase (previous)
+
 **UBI-74 Slice 4 (2026-08-04) — multi-language build, closed, live-verified across Go/TS/Python: `--lang go|ts|py|all` compiles ONE AI draft into up to three sibling `go/`/`ts/`/`py/` packages; TS-compiled function called from a real TS stack and resolved against real AWS (`ubx ship` handed off to the founder, per standing doctrine).**
 
 Read UBI-74's own Linear "Implementation breakdown" comment (Slice 4's
