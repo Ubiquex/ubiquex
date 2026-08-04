@@ -4,6 +4,177 @@
 
 ## Current phase
 
+**UBI-74 Slice 4 (2026-08-04) — multi-language build, closed, live-verified across Go/TS/Python: `--lang go|ts|py|all` compiles ONE AI draft into up to three sibling `go/`/`ts/`/`py/` packages; TS-compiled function called from a real TS stack and resolved against real AWS (`ubx ship` handed off to the founder, per standing doctrine).**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 4's
+own authoritative scope) and Slice 3's own closing report just below
+this entry (package/pull/verify, closed, real git repo round-trip)
+before touching this arc again. Also read the resolved "--lang default"
+Linear comment (2026-08-04): no `--lang` means build all three
+languages from one AI draft; `--lang all` is the explicit synonym;
+`--lang go`/`ts`/`py` narrows to one — implemented exactly as specified.
+
+**1. Confirmed before writing any new codegen, not assumed: `sdk/codegen`'s
+own IR/template machinery does NOT drop in cleanly for blueprint
+codegen.** `sdk/codegen/ir`/`templates/go|ts|py` translate a real
+PROVIDER SCHEMA into a generic, reusable binding library — a
+structurally different problem from blueprint codegen's own (a resolved
+draft's already-CONCRETE field/value pairs → source, the reverse
+direction, no schema at all). This was checked directly (read `ir.go`,
+`ts.go`'s own `ResourceFile`, `py.go`'s own `ResourceFile`, the real
+runtime APIs in `sdk/go/runtime`/`sdk/ts/runtime`/`sdk/py/ubx_sdk`)
+before concluding anything, per this session's own explicit instruction
+not to assume a trivial drop-in. What genuinely carried over: per-
+language identifier-casing precedent (TS reuses Go's own `pascalCase`/
+`camelCase` directly — byte-identical convention; Python needed a real,
+separate `pythonIdentifier`, snake_case + reserved-word escaping,
+mirroring `sdk/codegen/templates/py`'s own established precedent,
+independently reimplemented per this codebase's own "no shared
+unexported helper across a package boundary" discipline), the
+`{param}`/`{param op literal}` placeholder grammar (language-neutral
+text, only the RENDERING differs per language's own native string-
+interpolation syntax), and number/JSON-string literal rendering (`decode
+.go`'s own `numberLiteral`/`jsonStringLiteral` — valid syntax
+byte-identical across all three languages, confirmed, not assumed; Go's
+own pre-existing `%q` stayed untouched since Go's own escaping isn't
+always byte-identical to JSON's).
+
+**2. Shared decode layer, factored out of `gogen.go`
+(`blueprint/decode.go`, new).** `decodeBlueprint` validates every
+resource is `op: create`, decodes each resource's own Config into
+sorted `(wireKey, value)` pairs, walks every value (including one level
+down inside a JSON-embedded-ref string) for `$ref`/`depends_on`
+addresses, and topologically sorts — genuinely language-neutral, now
+shared by `GenerateGo`/`GenerateTS`/`GeneratePython` instead of tripled.
+Per-language identifiers deliberately NOT decided here: each generator
+wraps a `decodedResource` with its own derived ident and does its own
+collision check (two resource names could collide under one language's
+own casing convention without colliding under another's).
+`blueprint/gogen.go` refactored onto this shared layer with ZERO
+behavior change — confirmed by re-running the full existing Go test
+suite unchanged (all passed) before adding anything new.
+
+**3. Real per-language adaptations, each a deliberate, checked design
+decision:**
+- **Native default parameters (TS/Python)** replace Go's own
+  functional-options workaround entirely — Go has no default-argument
+  syntax (why Slice 2 built `Option`/`With<Param>` in the first place);
+  TS/Python both have real native defaults, so `tsgen.go`/`pygen.go` use
+  them directly, reordering `params:` into required-then-defaulted
+  first (both languages reject a required param after a defaulted one).
+- **`ResourceBinding<any, any>` (TS)** instead of a generated per-
+  resource Config/Attrs interface pair — TS's own runtime
+  (`sdk/ts/runtime`) walks a plain object literal's own keys directly at
+  RUNTIME, no compile-time type reification needed the way Go's
+  reflection-based `serializeConfig` requires a concrete struct type.
+  **One real, live-found typechecking bug this surfaced, caught by a
+  real `deno check` failure, not predicted**: `Computed<T>`'s own
+  conditional type only resolves to a property-indexable shape when `T`
+  is a CONCRETE object type — a naked `T = any` instead distributes into
+  `ComputedMarker | {indexed...}`, a union whose `ComputedMarker` branch
+  has no index signature, so `ciRunner.arn` failed to typecheck even
+  though it's exactly as permissive at runtime as Go's own untyped
+  `Computed.Field(string)`. Fixed with an `as any` cast at each
+  referenced resource's own local `const` declaration
+  (`renderTSFunction`) — confirmed by re-running `deno check` clean
+  afterward, not assumed fixed from the type theory alone.
+- **A mandatory dataclass Config (Python)** — matching Go's own
+  requirement, for the SAME underlying reason TS doesn't share:
+  `ubx_sdk`'s own `resource()` hard-requires a REAL dataclass instance
+  (`_serialize_config`'s own `dataclasses.is_dataclass(value)` check),
+  never a plain dict. Every field defaults to `Any = None` uniformly
+  (mirroring `cli/testdata/sdk_resolve_py/bindings.py`'s own established
+  convention) — no required-vs-optional distinction exists in a
+  blueprint's own dataclass, so no Python-side field-ordering constraint
+  to work around.
+- **A second real, live-found bug, caught by a hermetic test's own
+  literal string assertion, not a type checker**: Python's own local
+  variable naming initially reused `lowerFirst(pascalIdent)` (Go/TS's
+  own camelCase-from-PascalCase derivation, e.g. `"CiRunner"` →
+  `"ciRunner"`) — WRONG for Python's own snake_case convention.
+  `TestGeneratePython_CiPlatform`'s own literal assertion on the exact
+  generated variable name (`"ci_runner"`) caught this immediately;
+  fixed with a dedicated `pyLocalVarName` (`pythonIdentifier` applied to
+  the resource's own wire Name directly, never derived from the
+  PascalCase binding identifier).
+
+**4. Output structure: breaking change from Slices 1-3, deliberate,
+documented.** Build output now ALWAYS nests under a `<lang>/`
+subdirectory — even `--lang go` alone now writes `go/go.mod` etc, not a
+flat `go.mod` at the blueprint directory's own root. `ubx blueprint
+package`/`pull`/`verify` needed ZERO code changes for this (confirmed,
+not assumed) — their own `filepath.WalkDir`-based file discovery
+already treated a directory tree generically, nested or not; only test
+fixtures/assertions across `blueprint/gogen_test.go`,
+`cli/blueprint_test.go`, and `cli/blueprint_call_test.go` needed
+updating for the new paths.
+
+**5. Live verification, the ticket's own required bar, genuinely met for
+Go/TS/Python's own compile/typecheck/import leg, and for TS's own
+real-AWS leg (Go already proved real-AWS in Slice 2, Python's own
+real-AWS leg wasn't required this slice's own bar).** The identical
+CI-platform Ubxfile built `--lang all` against the REAL Claude API (one
+known, previously-documented flakiness retry — "response had no text
+content block," the same intermittent failure mode Slice 2's own
+session already recorded, recovered on a plain retry) — 5 resources,
+one draft, three sibling package directories
+(`~/ubx-playground-ubi74-slice4/ci-platform/{go,ts,py}/`). `go build`/
+`go vet` (real network, real published `ubx-sdk-go` module), `deno check
+--no-remote` (real import map onto `sdk/ts/runtime/src/index.ts`), and a
+real `python3` import of every generated module (`PYTHONPATH` onto
+`sdk/py`) all succeeded cleanly against this SAME live-drafted output —
+not synthetic fixtures. The TS-compiled function was then called from a
+real TS stack (`~/ubx-playground-ubi74-slice4/stack/
+create_ci_platform.ts`, stack name `"payments"`, `retention_days: 14` —
+UBI-123's own corrected value, the real AWS maximum, never `30`) and
+resolved via `ubx resolve --from-code` against the REAL
+`hashicorp/aws@6.54.0` provider's own real schema — `payments: 5
+create(s), 0 change(s), 0 terminate(s)`, `message_retention_seconds:
+1209600` in the resolved proposal (confirmed by reading the resolved
+JSON directly), and the cross-resource reference correctly addressing
+`payments.aws_iam_policy.ci-runner-access.arn` (the REAL calling stack,
+not the build-time blueprint name) — direct, real confirmation the TS
+embedded-ref/`addressOf()` design is correct against a real provider
+schema. `ubx accept`ed into a real ledger
+(`~/ubx-playground-ubi74-slice4/ledger/`, change id
+`1f4a4f6310119ac57eddc00ac323fd4c3df4e88df8a9e51e39b5c08764e959b4`) —
+resolved and accepted, ready for `ubx ship`.
+
+**Why `ubx ship` itself was not run, deliberately, not an oversight**:
+the same CLAUDE.md-mandated, UBI-67-established, Slice-2-precedented
+handoff — the founder runs the real `ubx ship`/`ubx terminate`
+themselves, once everything up to accept is prepared. **This session
+does not claim the live-ship bar was met — only resolve/accept, against
+a real TS-compiled call, deliberately.**
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before every
+live verification step. docs/blueprint.md updated in place (new
+"Multi-language codegen" section, corrected scope/breaking-change
+framing, new Slice 4 implementation-slices entry); docs/plan.md updated
+(new changelog entry, "Strata blueprints" subsection updated in place to
+"Slices 1–4 — Slice 4 closed"). Committed and pushed to `origin/main`
+(`176aade`), per CLAUDE.md's own standing commit+push authorization.
+
+**Not done this session, named so it isn't assumed covered**: the
+founder's own real `ubx ship`/`ubx terminate` against
+`~/ubx-playground-ubi74-slice4/` remains outstanding. Python's own real-
+AWS leg was intentionally not attempted (not required by this slice's
+own success bar — only the TS-compiled path needed the real-AWS leg,
+Go already proved it in Slice 2); Python's own UBI-123 arithmetic
+correctness is verified hermetically and via the shared `--lang all`
+live draft/compile/import leg, not a real-AWS one.
+
+Next: Slice 5 (cross-medium calling — the `ubx_blueprint`-classed
+diagram node, the md "Use blueprint X with..." prose call) is the
+natural next session for this arc, per UBI-74's own implementation-
+breakdown comment. Not started this session. The founder's own real
+`ubx ship`/`ubx terminate` + account-clean check against
+`~/ubx-playground-ubi74-slice4/` remains outstanding, independent of
+Slice 5.
+
+## Current phase (previous)
+
 **UBI-74 Slice 3 (2026-08-04) — package + local/git distribution, closed, fully live-verified: `ubx blueprint package`/`pull`/`verify` built, pushed to a real new GitHub repo, pulled from a separate directory, hash verified, real `go build` confirmed.**
 
 Read UBI-74's own Linear "Implementation breakdown" comment (Slice 3's
