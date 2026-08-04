@@ -88,12 +88,33 @@ func TestGenerateGo_CiPlatform(t *testing.T) {
 	}
 
 	fn := files["ciplatform.go"]
-	if !strings.Contains(fn, "func CiPlatform(repoName string, queueName string, retentionDays int) {") {
-		t.Fatalf("ciplatform.go missing expected signature:\n%s", fn)
+	if !strings.Contains(fn, "func CiPlatform(repoName string, queueName string, opts ...Option) {") {
+		t.Fatalf("ciplatform.go missing expected signature (required params direct, default param via functional options):\n%s", fn)
 	}
 	if !strings.Contains(fn, "Name: repoName,") {
 		t.Fatalf("ciplatform.go should substitute the repoName param directly:\n%s", fn)
 	}
+	// retention_days (default 1) must be functional-options plumbing, not a
+	// positional argument -- docs/blueprint.md's "Resolved defaults" design.
+	if !strings.Contains(fn, "type Option func(*options)") {
+		t.Fatalf("ciplatform.go missing the Option type:\n%s", fn)
+	}
+	if !strings.Contains(fn, "type options struct {\n\tretentionDays int\n}") {
+		t.Fatalf("ciplatform.go missing the options struct with retentionDays:\n%s", fn)
+	}
+	if !strings.Contains(fn, "func WithRetentionDays(v int) Option {") {
+		t.Fatalf("ciplatform.go missing WithRetentionDays:\n%s", fn)
+	}
+	if !strings.Contains(fn, "cfg := options{\n\t\tretentionDays: 1,\n\t}") {
+		t.Fatalf("ciplatform.go should seed cfg with the declared default 1:\n%s", fn)
+	}
+	if !strings.Contains(fn, "for _, opt := range opts {\n\t\topt(&cfg)\n\t}") {
+		t.Fatalf("ciplatform.go missing the options-applying loop:\n%s", fn)
+	}
+	// ci-notifications' message_retention_seconds is a literal in this
+	// fixture's intent (not wired to retention_days at all) -- nothing here
+	// asserts cfg.retentionDays is actually consumed; that's covered by a
+	// separate fixture below (TestGenerateGo_DefaultParamOptionsPattern).
 	// ci-runner is referenced by ci-runner-access, so it must get a local var.
 	if !strings.Contains(fn, "ciRunner := sdk.Resource(CiRunner,") {
 		t.Fatalf("ciplatform.go should assign a local var to a referenced resource:\n%s", fn)
@@ -163,6 +184,27 @@ func TestGenerateGo_UndeclaredParamPlaceholder(t *testing.T) {
 	}
 }
 
+// TestGenerateGo_DefaultParamOptionIdentCollision proves
+// checkOptionIdentCollisions is real: a resource named "option" would
+// otherwise collide with the generated `type Option func(*options)` --
+// hard build error, never a silent identifier clash the Go compiler would
+// only report cryptically later.
+func TestGenerateGo_DefaultParamOptionIdentCollision(t *testing.T) {
+	intent := mustIntentFile(t, `{
+		"schema_version": 1, "kind": "ubx:intent/v1", "stack": "s",
+		"intent": {"summary": "x"},
+		"resources": [{"type": "a", "name": "option", "op": "create", "config": {}}]
+	}`)
+	ubxfile := &Ubxfile{Lang: "go", Params: []Param{{Name: "retention_days", Type: ParamNumber, Default: 1}}}
+	_, err := GenerateGo("s", ubxfile, intent)
+	if err == nil {
+		t.Fatal("expected a collision error between resource \"option\" and the generated Option type, got nil")
+	}
+	if !strings.Contains(err.Error(), "Option") {
+		t.Fatalf("expected the collision error to name Option, got: %v", err)
+	}
+}
+
 func TestGenerateGo_ModifyOpRejected(t *testing.T) {
 	intent := mustIntentFile(t, `{
 		"schema_version": 1, "kind": "ubx:intent/v1", "stack": "s",
@@ -211,6 +253,284 @@ func TestGenerateGo_CompilesClean(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build of the generated blueprint package failed:\n%s", out)
+	}
+}
+
+// ciPlatformIntentWithDefaultUsed is ciPlatformIntent's own two-resource
+// slice, but wires retention_days (the params: default entry) into a real
+// Config field -- message_retention_seconds -- as a bare "{retention_days}"
+// token, the exact shape a real intent-provider draft would produce for a
+// numeric param interpolated directly (docs/blueprint.md's "Value
+// translation" section). ciPlatformIntent itself never actually USES
+// retention_days anywhere, so it can't prove cfg.retentionDays's own value
+// actually reaches the wire -- this fixture exists specifically to prove
+// that, by running the generated function for real (below), not just
+// compiling it.
+const ciPlatformIntentWithDefaultUsed = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "ci-platform",
+  "intent": {"summary": "CI platform"},
+  "resources": [
+    {
+      "type": "aws_sqs_queue",
+      "name": "ci-notifications",
+      "op": "create",
+      "config": {"name": "{queue_name}", "message_retention_seconds": "{retention_days}"}
+    }
+  ]
+}`
+
+// TestGenerateGo_DefaultParamOptionsPattern is this package's own real,
+// direct proof -- running the generated function, not just compiling it --
+// that a params: default value is genuinely load-bearing at call time:
+// omitting it uses the Ubxfile's own declared default (1), and
+// With<Param>(...) genuinely overrides it. Resolves Slice 1's own named
+// open point (docs/blueprint.md: "params: default values are parsed but
+// not yet load-bearing at codegen time").
+func TestGenerateGo_DefaultParamOptionsPattern(t *testing.T) {
+	requireGoToolchain(t)
+	sdkGoRoot := sdkGoModuleRoot(t)
+
+	intent := mustIntentFile(t, ciPlatformIntentWithDefaultUsed)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfile(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		callArgs string
+		want     float64
+	}{
+		{"default", `"payments-ci-artifacts", "payments-notifications"`, 1},
+		{"overridden", `"payments-ci-artifacts", "payments-notifications", ciplatform.WithRetentionDays(30)`, 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pkgDir := filepath.Join(dir, "ciplatform")
+			if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range files {
+				if name == "go.mod" {
+					content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			stackDir := filepath.Join(dir, "stack")
+			if err := os.MkdirAll(stackDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stackGoMod := "module stack\n\ngo 1.23\n\n" +
+				"require github.com/ubiquex/ubx-sdk-go v0.0.0\nrequire ciplatform v0.0.0\n\n" +
+				"replace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n" +
+				"replace ciplatform => " + pkgDir + "\n"
+			if err := os.WriteFile(filepath.Join(stackDir, "go.mod"), []byte(stackGoMod), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			mainSrc := "package main\n\n" +
+				"import (\n\tciplatform \"ciplatform\"\n\tsdk \"github.com/ubiquex/ubx-sdk-go/runtime\"\n)\n\n" +
+				"func main() {\n" +
+				"\tsdk.Main(sdk.Stack(\"ci-platform\", func() {\n" +
+				"\t\tsdk.Intent(sdk.IntentInfo{Summary: \"x\"})\n" +
+				"\t\tciplatform.CiPlatform(" + tc.callArgs + ")\n" +
+				"\t}))\n" +
+				"}\n"
+			if err := os.WriteFile(filepath.Join(stackDir, "main.go"), []byte(mainSrc), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "go", "run", ".")
+			cmd.Dir = stackDir
+			cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+			out, err := cmd.Output()
+			if err != nil {
+				var stderr []byte
+				if ee, ok := err.(*exec.ExitError); ok {
+					stderr = ee.Stderr
+				}
+				t.Fatalf("go run the calling stack failed: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+			}
+
+			var doc struct {
+				Resources []struct {
+					Type   string         `json:"type"`
+					Config map[string]any `json:"config"`
+				} `json:"resources"`
+			}
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("parse emitted intent/v1: %v\noutput: %s", err, out)
+			}
+			if len(doc.Resources) != 1 || doc.Resources[0].Type != "aws_sqs_queue" {
+				t.Fatalf("expected exactly one aws_sqs_queue resource, got: %s", out)
+			}
+			got, ok := doc.Resources[0].Config["message_retention_seconds"].(float64)
+			if !ok {
+				t.Fatalf("message_retention_seconds missing or not a number: %s", out)
+			}
+			if got != tc.want {
+				t.Fatalf("message_retention_seconds = %v, want %v (retention_days default/override not load-bearing): %s", got, tc.want, out)
+			}
+		})
+	}
+}
+
+// ciPlatformIntentWithEmbeddedRef reproduces UBI-74 Slice 2's own real,
+// live-found bug: a JSON-embedded $ref (an IAM policy's "Resource" field
+// naming a sibling resource's ARN, docs/blueprint.md's own adversarial
+// case) whose address is prefixed with the BUILD-time blueprint stack
+// name ("ci-platform", GenerateGo's own first argument below) -- exactly
+// the shape a real intent-provider draft produces, confirmed live against
+// the real Claude API (STATE.md, UBI-74 Slice 2).
+const ciPlatformIntentWithEmbeddedRef = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "ci-platform",
+  "intent": {"summary": "CI platform"},
+  "resources": [
+    {
+      "type": "aws_ecr_repository",
+      "name": "container-repo",
+      "op": "create",
+      "config": {"name": "{repo_name}"}
+    },
+    {
+      "type": "aws_iam_role_policy",
+      "name": "ci-runner-access",
+      "op": "create",
+      "config": {
+        "name": "ci-runner-access",
+        "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ecr:GetAuthorizationToken\",\"Resource\":{\"$ref\":{\"to\":\"ci-platform.aws_ecr_repository.container-repo.arn\"}}}]}"
+      }
+    }
+  ]
+}`
+
+// TestGenerateGo_EmbeddedRefUsesRuntimeStackName is this package's own
+// real, direct proof -- running the generated function from a stack named
+// DIFFERENTLY than the blueprint's own build-time stack name, not just
+// compiling it -- that a JSON-embedded $ref's own address reflects the
+// REAL CALLING stack at run time, not the literal build-time text. Before
+// this fix, GenerateGo rendered the embedded $ref's address VERBATIM as
+// an opaque Go string literal (docs/blueprint.md's own Slice 1
+// "adversarial cases" framing, which turned out to be wrong once actually
+// called from a real, differently-named stack -- UBI-74 Slice 2's own
+// live-AWS verification hit this directly, not hypothetically): the
+// resolver then rejects the address outright, since "ci-platform.
+// aws_ecr_repository.container-repo.arn" names no resource in a stack
+// actually named "payments". See renderEmbeddedRefString's own doc
+// comment for the full account.
+func TestGenerateGo_EmbeddedRefUsesRuntimeStackName(t *testing.T) {
+	requireGoToolchain(t)
+	sdkGoRoot := sdkGoModuleRoot(t)
+
+	intent := mustIntentFile(t, ciPlatformIntentWithEmbeddedRef)
+	ubxfile := &Ubxfile{
+		Dir:  "testdata",
+		Lang: "go",
+		Params: []Param{
+			{Name: "repo_name", Type: ParamString, Required: true},
+		},
+	}
+	files, err := GenerateGo("ci-platform", ubxfile, intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+
+	fn := files["ciplatform.go"]
+	// The build-time stack name must never appear as a baked address
+	// literal -- it must be reconstructed from the referenced resource's
+	// own runtime Computed.Address() instead.
+	if strings.Contains(fn, `ci-platform.aws_ecr_repository.container-repo.arn`) {
+		t.Fatalf("ciplatform.go bakes in the build-time stack name as a literal address, should use containerRepo's own runtime Address() instead:\n%s", fn)
+	}
+	if !strings.Contains(fn, `containerRepo.Field("arn").Address()`) {
+		t.Fatalf("ciplatform.go missing the runtime address expression for the embedded $ref:\n%s", fn)
+	}
+
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "ciplatform")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		if name == "go.mod" {
+			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stackDir := filepath.Join(dir, "stack")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stackGoMod := "module stack\n\ngo 1.23\n\n" +
+		"require github.com/ubiquex/ubx-sdk-go v0.0.0\nrequire ciplatform v0.0.0\n\n" +
+		"replace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n" +
+		"replace ciplatform => " + pkgDir + "\n"
+	if err := os.WriteFile(filepath.Join(stackDir, "go.mod"), []byte(stackGoMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately named "payments" -- NOT "ci-platform" -- the ordinary,
+	// ubiquitous case: a real stack almost never shares its own name with
+	// whatever directory a blueprint happened to be built in.
+	mainSrc := "package main\n\n" +
+		"import (\n\tciplatform \"ciplatform\"\n\tsdk \"github.com/ubiquex/ubx-sdk-go/runtime\"\n)\n\n" +
+		"func main() {\n" +
+		"\tsdk.Main(sdk.Stack(\"payments\", func() {\n" +
+		"\t\tsdk.Intent(sdk.IntentInfo{Summary: \"x\"})\n" +
+		"\t\tciplatform.CiPlatform(\"payments-ci-artifacts\")\n" +
+		"\t}))\n" +
+		"}\n"
+	if err := os.WriteFile(filepath.Join(stackDir, "main.go"), []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".")
+	cmd.Dir = stackDir
+	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+	out, err := cmd.Output()
+	if err != nil {
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		t.Fatalf("go run the calling stack failed: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+	}
+
+	var doc struct {
+		Resources []struct {
+			Type   string         `json:"type"`
+			Config map[string]any `json:"config"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("parse emitted intent/v1: %v\noutput: %s", err, out)
+	}
+	var policy string
+	for _, r := range doc.Resources {
+		if r.Type == "aws_iam_role_policy" {
+			policy, _ = r.Config["policy"].(string)
+		}
+	}
+	if policy == "" {
+		t.Fatalf("emitted document missing the aws_iam_role_policy resource's own policy field: %s", out)
+	}
+	if !strings.Contains(policy, `"payments.aws_ecr_repository.container-repo.arn"`) {
+		t.Fatalf("embedded $ref should address the REAL calling stack (\"payments\"), not the build-time blueprint name (\"ci-platform\"): %s", policy)
+	}
+	if strings.Contains(policy, "ci-platform.aws_ecr_repository") {
+		t.Fatalf("embedded $ref still carries the build-time stack name literally: %s", policy)
 	}
 }
 

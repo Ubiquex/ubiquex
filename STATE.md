@@ -4,6 +4,140 @@
 
 ## Current phase
 
+**UBI-74 Slice 2 (2026-08-04) — local call: `params:` defaults made genuinely load-bearing (functional options), a real stack imports Slice 1's built package and calls it, resolves via `ubx resolve --from-code` completely unchanged, hermetic resolve→accept→ship proven end to end, and the real-AWS leg resolved+accepted (not shipped — see below).**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 2's
+own authoritative scope) and Slice 1's own closing report just below
+this entry (its one named open point: `params:` defaults not yet
+load-bearing) before touching this arc again.
+
+**1. Resolved defaults: functional options (`blueprint/gogen.go`).**
+Checked how the rest of this codebase already handles an optional/
+defaulted call-time value before inventing anything new, per this
+session's own instruction — found exactly one precedent,
+`provider/acquire.go`'s own `AcquireOption`/`acquireConfig`/`With*`
+triple, and matched it exactly: required params stay direct positional
+Go arguments; every `default` param moves onto a generated, unexported
+`options` struct seeded with the Ubxfile's own declared default, with a
+`With<PascalParam>(v <type>) Option` function per default param and a
+trailing `opts ...Option` on the generated function. New synthetic
+identifiers (`Option`/`options`/`With*`/`cfg`/`opts`) are checked for
+collisions against every resource/param-derived identifier before
+emitting anything (`checkOptionIdentCollisions`) — hard build error,
+never silently overwritten, matching this codebase's own established
+posture. Live-verified by actually RUNNING the generated function twice
+(`TestGenerateGo_DefaultParamOptionsPattern`, `go run` not `go build`) —
+once with no `opts` (wire config carries the declared default),
+once with `WithRetentionDays(30)` (wire config carries the override) —
+decoding the emitted document's own JSON to check the real value, not a
+source-string match.
+
+**2. A real, live-found bug, not predicted by Slice 1's own docs, fixed
+this session.** Slice 1's docs concluded a JSON-embedded `$ref` (an IAM
+policy's "Resource" field naming a sibling resource's ARN) was "exactly
+correct" rendered verbatim as an opaque Go string literal — checked only
+against a COMPILE test, never an actual call. Slice 2's own first
+real-AWS attempt (below) actually ran the generated function from a
+stack named differently than the blueprint's own build-time name and
+got a real resolver refusal: the literal baked in the BUILD-time stack
+name (`ci-platform`) forever, which a real calling stack (`payments`)
+can't satisfy. Fixed by `renderEmbeddedRefString` (`gogen.go`): splits
+the string into literal segments plus the referenced resource's own
+runtime `Computed.Address()` calls, `+`-concatenated, so the address
+reflects whichever stack actually calls the function — exactly like
+every non-string-embedded `$ref` already did. Regression-tested
+deterministically (`TestGenerateGo_EmbeddedRefUsesRuntimeStackName`, a
+real `go run` proving the emitted address uses the calling stack's own
+name) and confirmed against a real live Claude draft before the real-AWS
+leg below counted as done. docs/blueprint.md's own "Adversarial cases"
+section corrected in place, not left stale.
+
+**3. Hermetic proof, the ticket's own required first half, fully met.**
+`TestBlueprintCall_ResolveAcceptShip_RealFakeProvider` and
+`TestBlueprintCall_DefaultOverride_ResolveUnchanged` (new,
+`cli/blueprint_call_test.go`): a real `blueprint.GenerateGo`-built
+package (not a hand-written stand-in), imported by a real `sdk.Stack`/
+`sdk.Main` calling stack via an ordinary local `go.mod` `replace`
+directive, resolved through the completely unmodified `ubx resolve
+--from-code` CLI path, accepted, and shipped end to end against
+`fakeprovider` — zero errors, proving the "one artifact, real function
+call, zero new resolver machinery" design claim concretely, not just
+architecturally.
+
+**4. Real-AWS verification — resolve/accept only, `ship` deliberately
+NOT run this session.** The identical CI-platform pattern (ECR + SQS +
+IAM role + policy + attachment) built against the REAL Claude API (no
+fake adapter, prose iterated twice live — a resource literally named
+`{repo_name}` and a drafted `repository_name` field that isn't
+`aws_ecr_repository`'s real attribute name, both prose issues, not code
+bugs, both recorded in docs/blueprint.md), called from a real stack
+(`repo_name="payments-ci-artifacts"`, `queue_name="payments-notifications"`,
+`WithRetentionDays(30)`), resolved via `ubx resolve --from-code` against
+the REAL `hashicorp/aws@6.54.0` provider's own real schema (`--source`/
+`--provider-version` — CLAUDE.md's own doctrine names schema-fetch-only
+`resolve` as safe against a real provider) — `payments: 5 create(s), 0
+change(s), 0 terminate(s)`, real param values, `message_retention_seconds:
+30` (the override reaching the real pipeline), and the embedded `$ref`s
+correctly addressing `payments.aws_ecr_repository.container-repo.arn`/
+`payments.aws_sqs_queue.pipeline-events.arn` — direct, real confirmation
+finding 2's fix is correct. `ubx accept`ed into a real ledger
+(change id `45f63ce10849...`) — resolved and accepted, ready to ship.
+
+**Why `ubx ship` itself was not run, deliberately, not an oversight**:
+CLAUDE.md's own ship-verification rule ("never run `ubx ship`... against
+a real cloud provider... even one already credentialed... always, no
+exceptions") was honored as absolute rather than reinterpreted for this
+ticket's own "start hermetic... THEN a real live leg" framing — this
+project's own UBI-67 session already found that framing insufficient
+once tested against the harness's own independent safety classifier
+(an attempt to draft and act on a specific named real-`ship` exception
+in the same turn was blocked as self-authorized permission-widening; see
+UBI-67's own entry further down this file). The established resolution
+recorded there — the founder runs the real `ubx ship`/`ubx terminate`
+themselves, once everything up to accept is prepared — is this session's
+own stopping point too. Ready and waiting at
+`~/ubx-playground-ubi74-slice2/` (`ci-platform/` the built package,
+`stack/create_ci_platform.go` the calling stack, `ledger/` the accepted
+proposal): `ubx ship 45f63ce10849... --ledger-dir
+~/ubx-playground-ubi74-slice2/ledger`, then (after inspecting the real
+result) `ubx terminate` + a real `aws` CLI check confirming the account
+clean, whenever the founder runs it by hand. **This session does not
+claim the live-ship bar was met — only resolve/accept, deliberately.**
+
+A separate, smaller finding along the way: `ubx blueprint build`'s own
+real Claude API calls were intermittently flaky in THIS session's own
+environment (a background job) — two of six live draft attempts hit
+"request failed (network/connection): context deadline exceeded" or
+"response had no text content block" with no code or credential change
+between attempts, both recovered on a plain retry. Not investigated
+further once a harness-level classifier flagged that line of
+investigation (grepping the vendored SDK for credential-resolution
+internals) as exactly the kind of self-directed credential probing this
+project's own permission model exists to block — correctly stopped
+rather than worked around. Worth a note in case a future session hits
+the same flakiness: retry before assuming a real bug.
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before every
+live verification step, per this project's own standing rebuild
+discipline (`make install` itself skipped this session — a pre-existing
+PATH mismatch between `/usr/local/bin/ubx` and `~/go/bin/ubx` on this
+machine, unrelated to this session's own changes, left untouched rather
+than silently "fixed" by copying over the founder's own global install
+without being asked). docs/blueprint.md updated in place (new "Resolved
+defaults: functional options" and "Calling convention" sections, the
+corrected "Adversarial cases" entry, a new Slice 2 implementation-slices
+log entry) per this project's docs-first protocol.
+
+Next: Slice 3 (package + local/git distribution — `ubx blueprint
+package`/`pull`/`verify`) is the natural next session for this arc, per
+UBI-74's own implementation-breakdown comment. Not started this session.
+The founder's own real `ubx ship`/`ubx terminate` + account-clean check
+against `~/ubx-playground-ubi74-slice2/` remains outstanding and should
+be done before or independently of Slice 3.
+
+## Current phase (previous)
+
 **UBI-74 Slice 1 (2026-08-04) — Strata blueprints arc opened for real: the Ubxfile format + `ubx blueprint build .` (Go only), design doc, hermetic tests, and a real live-verified build against the real Claude API and the real published `ubx-sdk-go` module.**
 
 Read UBI-74's full Linear comment thread first, per the handoff prompt's

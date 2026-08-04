@@ -1,36 +1,46 @@
 # Blueprints — signed, reusable, parameterized proposal templates (UBI-74)
 
-> **Slice 1 (this document): the Ubxfile format + `ubx blueprint build .`,
-> Go only, no publishing/distribution/nesting/multi-language/cross-medium/
-> provenance yet.** Full design context (naming, trust model, the eight-
-> slice breakdown, the rejected intermediate designs) lives in UBI-74's own
-> Linear comment thread — read it before touching this arc again, later
-> comments supersede earlier ones. This document only pins down what
-> Slice 1 actually built: the Ubxfile grammar and the resolved-intent →
-> Go codegen. Slices 2–8 (local call, package/distribute, multi-language,
+> **Slices 1–2 (this document): the Ubxfile format + `ubx blueprint build
+> .` (Go only), the resolved functional-options defaults design, and a
+> real stack calling a locally-built blueprint package through `ubx
+> resolve --from-code`, completely unchanged.** No publishing/
+> distribution/nesting/multi-language/cross-medium/provenance yet. Full
+> design context (naming, trust model, the eight-slice breakdown, the
+> rejected intermediate designs) lives in UBI-74's own Linear comment
+> thread — read it before touching this arc again, later comments
+> supersede earlier ones. Slices 3–8 (package/distribute, multi-language,
 > cross-medium calling, provenance/render, OCI push, tarball delivery) are
 > each their own future session; nesting (`uses:`) is UBI-121, tracked and
 > designed separately, never touched here.
 
-## Scope: what Slice 1 builds, and what it doesn't
+## Scope: what Slices 1–2 build, and what they don't
 
-Builds: parsing an `Ubxfile` (three keys only — `lang`, `params`,
-`resources`); `ubx blueprint build .` (finds the Ubxfile the same way
-`docker build .` finds a Dockerfile, resolves `resources:` through the
-existing intent-provider pipeline — UBI-41's `DraftWithRetry` — exactly
-once, then compiles the resulting draft into real, compilable Go source:
-a typed function whose parameters match `params:`, whose body makes real
-`sdk.Resource()` calls with real `Computed` refs between them, reusing
-`sdk/go/runtime` — UBI-35's own evaluator — completely unchanged).
+**Slice 1** builds: parsing an `Ubxfile` (three keys only — `lang`,
+`params`, `resources`); `ubx blueprint build .` (finds the Ubxfile the
+same way `docker build .` finds a Dockerfile, resolves `resources:`
+through the existing intent-provider pipeline — UBI-41's `DraftWithRetry`
+— exactly once, then compiles the resulting draft into real, compilable
+Go source: a typed function whose parameters match `params:`, whose body
+makes real `sdk.Resource()` calls with real `Computed` refs between them,
+reusing `sdk/go/runtime` — UBI-35's own evaluator — completely unchanged).
 
-Not built here, named so it isn't assumed covered: calling the built
-package from a real stack (Slice 2 — this session never runs the
-generated function, only compiles it); `--lang ts`/`--lang py`/`--lang
-all` (Slice 4); packaging/pulling/verifying (`ubx blueprint
-package`/`pull`/`verify`, Slice 3); diagram/md call sites (Slice 5);
-provenance tagging and `why`/`render` integration (Slice 6); OCI push
-(Slice 7); tarball delivery (Slice 8); `uses:` nesting (UBI-121); the
-bound policy engine (UBI-118, split off UBI-74 entirely).
+**Slice 2** builds: closing Slice 1's own named open point — `params:`
+`default` values become genuinely load-bearing at call time via a
+functional-options pattern (below) — and proving the built package is
+actually callable: a plain Go SDK program (`sdk.Stack`/`sdk.Main`, no
+blueprint machinery of its own) imports the locally-built package via an
+ordinary Go module `replace` directive and calls its function with real
+parameter values, resolving through `ubx resolve --from-code` exactly as
+any other Go SDK program does.
+
+Not built here, named so it isn't assumed covered: distribution of any
+kind — a "local import" is the ONLY calling shape Slice 2 proves; a
+stack's own `uses:` key naming a blueprint by ref (UBI-121), package/pull/
+verify (`ubx blueprint package`/`pull`/`verify`, Slice 3), `--lang ts`/
+`--lang py`/`--lang all` (Slice 4), diagram/md call sites (Slice 5),
+provenance tagging and `why`/`render` integration (Slice 6), OCI push
+(Slice 7), tarball delivery (Slice 8); the bound policy engine (UBI-118,
+split off UBI-74 entirely).
 
 ## The Ubxfile format
 
@@ -215,6 +225,13 @@ speculatively" posture for the sibling-`*Config` collision it does handle.
   parameter of its own, since real prose (`"An ECR repository called
   \"{repo_name}\" for the {team} team"` or similar) can legitimately
   interpolate a parameter into a longer literal string.
+- A string value that itself decodes as JSON carrying a `$ref` marker one
+  level down (a JSON-embedded ref, typically an IAM policy document's own
+  "Resource" field — see "Adversarial cases" below) is split into literal
+  text segments plus the referenced resource's own runtime `Computed.
+  Address()` calls, `+`-concatenated (`renderEmbeddedRefString`, Slice
+  2) — never rendered as one opaque literal; see "Adversarial cases"
+  below for why that distinction is load-bearing, not cosmetic.
 - Anything else (a plain literal, or an object/array with no `$ref`/
   `{param}` anywhere inside it) is rendered as a literal Go value —
   `map[string]any{...}`/`[]any{...}`/scalar, recursively, mechanically
@@ -288,30 +305,226 @@ second one.
   verification hit it directly, not hypothetically (see the
   implementation-slices log below). Checked against `core/resolver/
   refs.go`'s own `containsMarker` doc comment before concluding
-  anything: this is NOT a gap needing a future fix — it's the exact,
-  already-supported "JSON-envelope string that needs marker resolution"
-  shape that comment names directly, which the resolver's own reference
-  walk and the executor's own `substituteComputed` already know how to
-  find and substitute one level into a string attribute's own decoded
-  JSON, at Slice 2+'s own call/resolve time. Slice 1's own `renderString`
-  never tries to parse or rewrite a string leaf's own content — it
-  renders the resolved value VERBATIM as a quoted Go literal — which is
-  exactly correct here, since that reproduces the identical embedded-
-  `$ref` text the resolver pipeline already expects to find.
+  anything: the resolver's own reference walk and the executor's own
+  `substituteComputed` already know how to find and substitute one level
+  into a string attribute's own decoded JSON, at call/resolve time — that
+  part was right.
 
-- **`params:` `default` values are parsed but not yet load-bearing at
-  codegen time.** Go has no native optional/default-argument syntax, so
-  every declared param — `required` or `default` alike — compiles to an
-  equally required, positional Go function argument (confirmed by this
-  slice's own live verification: `retention_days: number, default 1`
-  produced `retentionDays int` in the generated signature, no different
-  from the two `required` params next to it). `Param.Default` is parsed
-  and stored on `Ubxfile.Params` (validated, never silently dropped at
-  PARSE time) but genuinely unused by `GenerateGo`. What a caller not
-  passing a value for a `default` param should actually mean — a
-  functional-options pattern, a second generated overload, something
-  else — is a real open question, deliberately deferred to whatever
-  Slice 2's own calling convention turns out to need, not decided here.
+  **What Slice 1 got wrong, corrected in Slice 2 once actually called
+  live**: Slice 1 concluded `renderString` should render this string
+  VERBATIM as a quoted Go literal, reasoning that reproducing the
+  embedded `$ref` text unchanged was "exactly correct." That conclusion
+  was only ever checked against `TestGenerateGo_CompilesClean` — a
+  COMPILE check, never a real call — and it's wrong: the embedded
+  address's own stack-name prefix (`ci-platform`, the Ubxfile
+  directory's own build-time name) is baked into that literal forever,
+  but a real calling stack is essentially never also named `ci-platform`
+  — Slice 2's own real-AWS verification hit this directly, calling from
+  a stack named `payments` and getting "reference does not resolve to
+  any known resource or attribute: ci-platform.aws_ecr_repository....".
+  Fixed by `renderEmbeddedRefString` (`gogen.go`): a JSON-embedded `$ref`
+  is no longer rendered as one opaque literal — it's split into literal
+  text segments plus the referenced resource's own real, RUNTIME
+  `Computed.Address()` calls, `+`-concatenated, so the address reflects
+  whatever stack the function is ACTUALLY called from, exactly like
+  every non-string-embedded `$ref` already did via `renderRef`. See
+  "Resolved defaults: functional options" and "Calling convention"
+  below, and `TestGenerateGo_EmbeddedRefUsesRuntimeStackName`, for the
+  full account and the regression test.
+
+- **`params:` `default` values are now genuinely load-bearing at call
+  time (Slice 2), closing Slice 1's own named open point.** See "Resolved
+  defaults: functional options" below for the design and why.
+
+## Resolved defaults: functional options (Slice 2)
+
+Slice 1 shipped with `params:` `default` values parsed and validated but
+compiled to an equally-required positional Go argument — Go has no native
+default-argument syntax, so `retention_days: number, default 1` produced
+`retentionDays int`, indistinguishable at the call site from a `required`
+param. Closing that gap needed a real convention for "what does a caller
+not passing a value for a `default` param actually get" — decided here,
+not invented from scratch: **checked against how the rest of this
+codebase already handles an optional/defaulted call-time value before
+choosing anything new**, per this session's own instruction. A search
+turned up exactly one established precedent, `provider/acquire.go`'s own
+`AcquireOption`/`acquireConfig`/`With*` triple (`WithHTTPClient`,
+`WithRegistryAPIBase`, `WithCacheRoot`, `WithPlatform`, all folding into
+`Acquire(ctx, src, version, opts ...AcquireOption)`) — Go's own standard
+functional-options idiom, already real and shipped in this repo, not a
+convention this session introduced. `sdk/go/runtime`'s own Config structs
+(`gogen.go`'s `<Name>Config` output) are a different, non-competing
+pattern — every field typed `any`, an unset field simply omitted from the
+wire config (`serializeConfig`'s "not set — omitted" branch) — but that
+shape exists to describe a resource's own WIRE attributes, addressed by
+provider field name, not a Go FUNCTION's own call-time argument list;
+it has no notion of a parameter's own declared default value at all, so
+it doesn't answer this question on its own.
+
+**The design, mirroring `AcquireOption` exactly:**
+
+- **Required params stay direct, positional Go arguments** — unchanged
+  from Slice 1, in `params:`'s own declared order.
+- **Every `default` param moves onto a generated, unexported `options`
+  struct**, seeded with the Ubxfile's own declared default value (a real
+  Go literal — string/int/bool, per the param's `Type`), and the
+  generated function gains a trailing `opts ...Option` parameter.
+- **One `With<PascalParam>(v <type>) Option` function per `default`
+  param** — e.g. `retention_days` produces `WithRetentionDays(v int)
+  Option` — each a closure setting exactly its own field on the
+  `options` struct, the same shape every `With*` in `acquire.go` already
+  has.
+- The function body seeds `cfg := options{retentionDays: 1, ...}`, then
+  `for _, opt := range opts { opt(&cfg) }` before any `sdk.Resource()`
+  call — identical to `Acquire`'s own `cfg := acquireConfig{...}` +
+  options-apply-loop shape.
+- Any reference to a `default` param inside the resources prose (a
+  `{param_name}` token, resolved the same way Slice 1 already resolves
+  one) now renders as `cfg.<field>` instead of a bare argument identifier
+  — `paramRef` branches on `Param.Required` to choose between the two.
+
+```go
+type Option func(*options)
+
+type options struct {
+	retentionDays int
+}
+
+// WithRetentionDays overrides the "retention_days" params: default.
+func WithRetentionDays(v int) Option {
+	return func(o *options) { o.retentionDays = v }
+}
+
+func CiPlatform(repoName string, queueName string, opts ...Option) {
+	cfg := options{
+		retentionDays: 1,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	// ... sdk.Resource() calls, referencing cfg.retentionDays wherever
+	// {retention_days} appeared in the resources prose ...
+}
+```
+
+A caller wanting the default writes `CiPlatform("payments-ci-artifacts",
+"payments-notifications")`; a caller overriding it writes
+`CiPlatform("payments-ci-artifacts", "payments-notifications",
+WithRetentionDays(30))`. A blueprint with zero `default` params (all
+`required`) gets no `Option`/`options`/`With*` machinery generated at
+all — the function signature is exactly Slice 1's own shape, unchanged;
+this is a pure additive convention, not a breaking one.
+
+**Identifier collisions, guarded, not assumed impossible.** Introducing
+`Option`/`options`/`With<Param>`/`cfg`/`opts` as new synthetic
+identifiers creates a real, if narrow, new collision surface once a
+blueprint author can freely choose resource and param names — a resource
+literally named `option` would otherwise collide with the generated
+`type Option`, or a param literally named `opts` with the generated
+function's own variadic parameter. `checkOptionIdentCollisions`
+(`gogen.go`) checks every synthetic identifier this pattern introduces
+against every identifier already derived from resource/param names before
+emitting anything, and fails loudly, naming the exact collision, if any
+overlap — matching this codebase's own "hard build error, never silently
+overwritten" posture for identifier collisions (the same posture
+`gotmpl`'s own duplicate-`*Config`-name detection already established),
+rather than inventing a rename scheme. Covered by
+`TestGenerateGo_DefaultParamOptionIdentCollision`.
+
+**Live-verified, not just compile-checked.**
+`TestGenerateGo_DefaultParamOptionsPattern` runs the generated function
+for real (`go run`, not `go build`) twice — once with no `opts` (asserts
+the wire config carries the declared default, `1`) and once with
+`WithRetentionDays(30)` (asserts the override reaches the wire config
+instead) — decoding the emitted `intent/v1` document's own JSON to check
+the actual value, not a string match against the generated source. This
+is what makes the claim "defaults are load-bearing" a runtime fact, not
+just a codegen-shape fact.
+
+## Calling convention (Slice 2)
+
+Slice 1 stopped at a compiled, but never-run, Go package. Slice 2's own
+job was proving that package is genuinely usable — and the answer,
+confirmed live, is that it needs **zero new mechanism**: a blueprint's
+own compiled output is an ordinary Go package exporting an ordinary Go
+function: nothing about it is special to `ubx` at the calling end. A real
+stack calls it exactly the way it would call any other Go library.
+
+**The calling stack is a plain SDK program** — `sdk.Stack`/`sdk.Main`,
+the same shape every other Go SDK program in this project already uses
+(`goeval/testdata/happy/main.go`, `cli/testdata/sdk_resolve_go/
+create_widget.go`) — with one addition: it imports the blueprint's own
+built package and calls its function from inside the `Stack` closure,
+exactly like calling any other helper that happens to make `sdk.Resource`
+calls of its own:
+
+```go
+package main
+
+import (
+	ciplatform "github.com/acme/ci-platform" // the blueprint's own built package
+	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
+)
+
+func main() {
+	sdk.Main(sdk.Stack("payments", func() {
+		sdk.Intent(sdk.IntentInfo{Summary: "payments' own CI platform, via blueprint"})
+		ciplatform.CiPlatform("payments-ci-artifacts", "payments-notifications",
+			ciplatform.WithRetentionDays(30))
+	}))
+}
+```
+
+**Local addressing is an ordinary Go module `replace` directive** — per
+UBI-74's own "three source types" comment (local/git/Strata, addressing
+not decided for the other two until their own slice), Slice 2 only proves
+the LOCAL case: the calling stack's own `go.mod` `require`s the
+blueprint's own module path and `replace`s it to a local filesystem path,
+precisely the same mechanism `sdk/codegen/templates/go/collision_test.go`
+and `blueprint/gogen_test.go`'s own `TestGenerateGo_CompilesClean` already
+use to build hermetically against this repo's own `sdk/go` — no new
+addressing syntax, no new resolution code, ordinary `go.mod`:
+
+```
+module payments-stack
+
+go 1.23
+
+require github.com/ubiquex/ubx-sdk-go v0.0.0
+require github.com/acme/ci-platform v0.0.0
+
+replace github.com/ubiquex/ubx-sdk-go => ../path/to/ubx-sdk-go
+replace github.com/acme/ci-platform => ../path/to/ci-platform
+```
+
+**Resolution needs zero new resolver machinery — the ticket's own core
+claim, confirmed live.** `ubx resolve --from-code <entry>.go` (UBI-27/
+UBI-35) already compiles and runs ANY Go SDK program under `goeval` and
+hands its emitted `intent/v1` document to the exact same resolver every
+other medium uses; a blueprint call is invisible to that pipeline —
+by the time `sdk.Main` writes the document to stdout, the blueprint's
+own `sdk.Resource()` calls have already expanded into ordinary resources
+with ordinary `$ref`-marker dependency edges, indistinguishable from
+resources a human hand-wrote directly in the same `Stack` closure.
+`TestBlueprintCall_ResolveAcceptShip_RealFakeProvider` (`cli/
+blueprint_call_test.go`) is this claim made concrete and hermetic: a real
+`blueprint.GenerateGo`-built package, imported by a real calling stack,
+resolved via the unmodified `ubx resolve --from-code` CLI path, accepted,
+and shipped end to end against `fakeprovider` — zero errors, the
+blueprint's two resources (one cross-referencing the other via a real
+`$ref`, proving intra-blueprint dependency edges survive the round trip)
+shipping exactly as a hand-authored equivalent already does
+(`ship_change_test.go`'s own primary/mirror shape).
+
+**Real-AWS verification.** The identical CI-platform blueprint from
+Slice 1's own live verification (ECR + SQS + IAM role + policy +
+attachment, drafted against the real Claude API, no fake adapter) was
+called from a real stack and resolved against the real `hashicorp/aws`
+provider's own real schema (`ubx resolve --from-code`, a safe schema-
+fetch-only operation per this project's own standing ship-verification
+doctrine) and accepted into a real ledger, ready to ship — see the
+Implementation slices log below for what was and wasn't run live this
+session, and why.
 
 ## Implementation slices
 
@@ -370,3 +583,115 @@ second one.
 
   Full test suite green (`go test ./...`), gofmt/go vet clean. Committed
   this session -- see STATE.md for the commit and any docs-debt entries.
+
+- 2026-08-04 (UBI-74 Slice 2): built and live-verified, both hermetically
+  and against real AWS (resolve/accept only -- see below for why `ship`
+  itself was deliberately not run this session). Closes Slice 1's own
+  named open point (`params:` default) and proves the calling convention.
+
+  **Functional-options defaults** (`gogen.go`: `renderOptions`,
+  `defaultLiteral`, `checkOptionIdentCollisions`, `paramRef`'s own
+  `Required`-branch): matches `provider/acquire.go`'s own `AcquireOption`
+  precedent, confirmed to be this codebase's own established idiom for
+  optional/defaulted call-time values before inventing anything new (the
+  session's own explicit instruction). See "Resolved defaults: functional
+  options" above for the full design.
+
+  **Two real, live-found findings, neither predicted in Slice 1's own
+  "adversarial cases" section, both fixed this session:**
+
+  1. **The JSON-embedded-`$ref` case Slice 1 believed was "exactly
+     correct" was wrong once actually called from a real, differently-
+     named stack.** Slice 1's own live verification never actually RAN
+     the generated function (its own success bar was build+compile
+     only); Slice 2's first real-AWS attempt did, from a stack named
+     `payments` calling a blueprint built as `ci-platform`, and got a
+     real resolver refusal: `reference does not resolve to any known
+     resource or attribute: ci-platform.aws_ecr_repository....`. Root
+     cause: `renderString` rendered a JSON-embedded `$ref`'s own address
+     VERBATIM, baking in the BUILD-time blueprint stack name forever.
+     Fixed by `renderEmbeddedRefString` (see "Adversarial cases
+     considered" above for the full account) -- splits the string into
+     literal segments plus the referenced resource's own runtime
+     `Computed.Address()` calls, so the address reflects whichever stack
+     actually calls the function. Regression-tested deterministically
+     (`TestGenerateGo_EmbeddedRefUsesRuntimeStackName`, a real `go run`
+     proving the emitted document's own address uses the CALLING stack's
+     name, not the build-time one) and confirmed against the real fix
+     applied to a real live Claude draft before accepting the real-AWS
+     leg below as done.
+  2. **A live Claude draft, given a resource "named `{repo_name}`,"
+     genuinely used the literal token `{repo_name}` as the resource's
+     own IDENTITY (`ResourceIntent.Name`), not just its `name` attribute
+     VALUE** -- correctly rejected by `pascalCase`'s own existing
+     character validation (unrelated to this session's own code changes;
+     pure prose ambiguity), but worth recording since it recurred
+     identically across two separate live draft attempts before the
+     Ubxfile's own prose was tightened to explicitly separate a
+     resource's own fixed internal "slug" from the parameterized
+     attribute VALUE named inside it. Not a code bug -- a reminder that a
+     blueprint author's own prose needs to disambiguate resource
+     identity from resource content wherever a param could plausibly be
+     read as either, the same category of lesson UBI-74 Slice 1 already
+     learned once for `{param}`-preservation itself.
+
+  **Hermetic proof, required by the ticket's own success bar, fully
+  met**: `TestBlueprintCall_ResolveAcceptShip_RealFakeProvider` (`cli/
+  blueprint_call_test.go`) -- a real `blueprint.GenerateGo`-built
+  package (not a hand-written stand-in), imported by a real `sdk.Stack`/
+  `sdk.Main` calling stack via an ordinary local `go.mod` `replace`,
+  resolved through the completely unmodified `ubx resolve --from-code`
+  CLI path, accepted, and shipped end to end against `fakeprovider` --
+  zero errors, both resources (one cross-referencing the other via a
+  real `$ref`) shipping exactly as `ship_change_test.go`'s own
+  hand-authored equivalent already does.
+  `TestBlueprintCall_DefaultOverride_ResolveUnchanged` covers the same
+  path with a `With<Param>` override reaching the resolved proposal.
+
+  **Real-AWS verification, resolve/accept only -- ship deliberately not
+  run this session, per CLAUDE.md's own standing rule.** The identical
+  CI-platform blueprint (ECR + SQS + IAM role + policy + attachment)
+  built against the REAL Claude API (no fake adapter, `~/ubx-playground-
+  ubi74-slice2/ci-platform/`), called from a real stack
+  (`~/ubx-playground-ubi74-slice2/stack/create_ci_platform.go`, stack
+  name `payments`, `repo_name="payments-ci-artifacts"`,
+  `queue_name="payments-notifications"`,
+  `WithRetentionDays(30)`), resolved via `ubx resolve --from-code`
+  against the REAL `hashicorp/aws@6.54.0` provider's own real schema
+  (`--source`/`--provider-version`, a safe schema-fetch-only operation --
+  CLAUDE.md's own doctrine explicitly names `resolve`/`propose`/`sdk gen`
+  as safe against a real provider) -- `payments: 5 create(s), 0
+  change(s), 0 terminate(s)`, real `repo_name`/`queue_name` values, real
+  `message_retention_seconds: 30` (the override, not the default,
+  confirming functional options reach the real pipeline too), and the
+  JSON-embedded `$ref`s correctly addressing `payments.aws_ecr_repository
+  .container-repo.arn`/`payments.aws_sqs_queue.pipeline-events.arn` (the
+  REAL calling stack, not `ci-platform`) -- direct, real confirmation
+  the embedded-ref fix above is correct, not just unit-tested. `ubx
+  accept`ed into a real ledger (`~/ubx-playground-ubi74-slice2/ledger/`,
+  change id `45f63ce10849...`) -- resolved and accepted, ready for `ubx
+  ship`.
+
+  CLAUDE.md's own ship-verification rule ("never run `ubx ship`... against
+  a real cloud provider... even one already credentialed on the machine...
+  always, no exceptions") was deliberately honored as absolute, not
+  reinterpreted for this ticket's own "start hermetic... THEN a real live
+  leg" framing -- this project's own prior session (UBI-67, see this
+  file's own STATE.md entry) already found that framing insufficient once
+  tested against the harness's own independent safety classifier: an
+  attempt to draft and act on a specific named real-`ship` exception in
+  the same turn was blocked as self-authorized permission-widening, and
+  the established resolution recorded there is that the founder runs the
+  real `ubx ship`/`ubx terminate` themselves, in their own shell, once
+  everything up to accept is prepared and ready. That is exactly this
+  session's own stopping point: `~/ubx-playground-ubi74-slice2/ledger/`
+  is ready for `ubx ship 45f63ce10849... --ledger-dir
+  ~/ubx-playground-ubi74-slice2/ledger` (then, after inspecting the real
+  result, `ubx terminate`/an `aws` CLI check to confirm the account
+  clean) whenever the founder runs it. **This session does not claim the
+  live-ship bar was met -- only resolve/accept, deliberately.**
+
+  Full test suite green (`go test ./...`), `gofmt -l .`/`go vet ./...`
+  clean. `make build` run and `ubx version` checked before every live
+  verification step above, per this project's own standing rebuild
+  discipline. Committed this session -- see STATE.md.
