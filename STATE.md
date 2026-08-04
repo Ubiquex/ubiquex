@@ -4,6 +4,122 @@
 
 ## Current phase
 
+**UBI-74 Slice 3 (2026-08-04) — package + local/git distribution, closed, fully live-verified: `ubx blueprint package`/`pull`/`verify` built, pushed to a real new GitHub repo, pulled from a separate directory, hash verified, real `go build` confirmed.**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 3's
+own authoritative scope) and Slice 2's own closing report just below
+this entry (the first blueprint's complete real lifecycle: build →
+resolve → accept → ship → verify → terminate) before touching this arc
+again.
+
+**1. `blueprint.lock.json` — the manifest, hashed via `core.CanonicalJSON`
+(`blueprint/manifest.go`).** Per this session's own explicit instruction
+not to invent a new hashing convention: `hashFiles` walks a built
+blueprint directory (skipping dot-prefixed entries and the manifest's own
+filename), hashing each real file (`"sha256:<hex>"`, docs/schema.md's
+own established format); `buildManifest` canonicalizes
+`{schema_version, name, files}` through `core.CanonicalJSON` — the SAME
+JCS-style canonicalization (core/canonical.go) `core.Hash` already uses
+for a Proposal's own hash — before hashing the canonical bytes into one
+`content_hash`. Deliberately NOT a hash of the tarball's own raw bytes
+(header metadata isn't content, per CLAUDE.md's "determinism is a
+feature" rule). The manifest is an ordinary file written into the
+blueprint's own directory, which is what makes it travel through ANY
+distribution mechanism (local copy, git commit, tarball) for free — no
+distribution-mechanism-specific plumbing needed.
+
+**2. `ubx blueprint package <dir> -o <file>.tar.gz`
+(`blueprint/package.go`).** Writes the manifest into `dir`, then archives
+`dir`'s own file set (sorted, deterministic entry order, every header's
+`ModTime`/`Uid`/`Gid` zeroed) into a gzipped tar — a re-`package` of
+unchanged content reproduces byte-identical tarball output, confirmed by
+a dedicated test, not just an identical hash.
+
+**3. `ubx blueprint pull <source> <dest>` (`blueprint/pull.go`), two
+source types per Slice 3's own scope (OCI/Strata stays Slice 7).** A
+`source` that already exists as a local directory is copied verbatim;
+anything else is shelled out to the real `git` binary (matching
+`github/git.go`'s own "no pure-Go git reimplementation needed"
+precedent) — cloned, checked out at `--ref` (branch/tag/commit), then the
+directory at `--path` within it (default `"."`) is copied into `dest`.
+`dest` must not already exist or must be empty — pull never overwrites.
+A real, live-found test-design issue caught before it could produce a
+false-positive: a throwaway local git repo IS a local directory, so
+`Pull`'s own local-vs-git dispatch (based on `os.Stat` success) would
+silently misroute a hermetic test's own "git" source through the
+plain-copy path, never exercising `gitClone`/`gitCheckout` at all —
+fixed by using a `file://` URL in every git-path test, which forces the
+git-clone branch even though the "repository" is itself on local disk.
+
+**4. `ubx blueprint verify <dir>` (`blueprint/verify.go`).** Recomputes
+the same canonicalization over `dir`'s CURRENT files and compares against
+`blueprint.lock.json`'s own declared `content_hash` — same tamper-
+evidence principle `core.Hash`/`core.Validate` already give a ledger
+entry. Recomputation deliberately uses the manifest's own declared
+`name`, never the directory's current basename — content hash must stay
+invariant under "which directory did you pull this into" (a git clone or
+local copy very plausibly lands somewhere renamed), the same portability
+lesson Slice 2's own embedded-`$ref` stack-name fix already established
+for a different field. A mismatch names exactly which files differ
+(added/removed/changed), not just "hashes differ somewhere."
+
+**5. Live verification, the ticket's own required bar, genuinely met —
+a real new GitHub repo, not a local-only round trip.** Slice 1/2's own
+already-live-AWS-verified CI-platform package
+(`~/ubx-playground-ubi74-slice2/ci-platform/`) was copied into a fresh
+scratch dir and packaged (5 files, `content_hash`
+`sha256:6a120fff3bb22d769d3b0568ed01e30f535af25a14ee34af4f7969d333ee12de`).
+Per this session's own check-first-before-shared-state-action discipline,
+asked the founder how to get a real repo rather than unilaterally
+creating one — founder chose "create it" — so `gh repo create
+Ubiquex/ubx-sdk-blueprints --public` (real, new GitHub repo) + a plain
+`git push` (real commit history, `ci-platform/` subdirectory) put the
+packaged directory (now including `blueprint.lock.json`) on GitHub for
+real. `ubx blueprint pull
+https://github.com/Ubiquex/ubx-sdk-blueprints.git <dest> --ref main
+--path ci-platform` — a genuinely separate local directory, a real HTTPS
+clone (not a local-filesystem shortcut) — reproduced the identical file
+set; `ubx blueprint verify <dest>` recomputed the IDENTICAL content hash
+`package` originally reported, confirmed by direct comparison, not
+assumed. `go build ./...`/`go vet ./...` against the pulled copy, with NO
+local `replace` (the real, already-published `github.com/ubiquex/
+ubx-sdk-go` module, real network) both succeeded cleanly — genuinely
+usable, not just byte-identical. Tamper-detection also confirmed live (a
+throwaway copy, one file edited, `verify` caught it and named the exact
+file, exit code 2).
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before every
+live verification step. docs/blueprint.md updated in place (new
+"Package/pull/verify: distribution" section, corrected scope/Not-built-
+here framing, new Slice 3 implementation-slices entry); docs/plan.md
+updated (new changelog entry, "Strata blueprints" subsection updated in
+place to "Slices 1–3 — Slice 3 closed"). Committed and pushed to
+`origin/main` (`6dec43c`), per CLAUDE.md's own standing commit+push
+authorization — this also carried the prior session's own two
+already-committed-but-unpushed commits (UBI-74 Slice 2, UBI-123) along
+with it, since they were sitting ahead of `origin/main` already.
+
+**Not done this session, named so it isn't assumed covered**: the
+founder's own real `ubx ship`/`ubx terminate` against
+`~/ubx-playground-ubi74-slice2/` (UBI-123's own corrected-value handoff,
+two entries below) remains outstanding — untouched by this session,
+which worked in a separate copy specifically to avoid disturbing that
+still-pending state. Slice 3's own tarball output (`package -o
+file.tar.gz`) was produced and structurally tested but never consumed by
+`pull` (pulling FROM a bare tarball file is explicitly Slice 8's own
+scope, not this slice's).
+
+Next: Slice 4 (multi-language build — `--lang all`/`--lang ts`/`--lang
+py`, one Ubxfile → three compiled outputs from one AI draft) is the
+natural next session for this arc, per UBI-74's own implementation-
+breakdown comment. Not started this session. The founder's own real `ubx
+ship`/`ubx terminate` + account-clean check against
+`~/ubx-playground-ubi74-slice2/` (UBI-123's corrected value) remains
+outstanding, independent of Slice 3/4.
+
+## Current phase (previous)
+
 **UBI-123, reopened (2026-08-04) — DIAGNOSED, DISPROVEN, NOT A CODE BUG: the "encode path corrupts message_retention_seconds" hypothesis is empirically false; the real root cause is that 30 days of SQS retention (2,592,000 seconds) exceeds AWS's own real, documented 14-day (1,209,600 second) maximum. Hermetic proof built and green; live-ship not run by this session (blocked, see below) but the corrected live-verification value is known and ready.**
 
 Read the ticket's reopening comment in full before touching this again —
