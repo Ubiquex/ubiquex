@@ -4,6 +4,62 @@
 
 ## Current phase
 
+**UBI-82 (2026-08-04, ubiquex-docs only) — the UBI-75/76/77/78/79 docs debt closed: 149 apply/applied hits across 14 ubiquex-docs pages, swept and live-reverified, not hand-translated.**
+
+Precise scope pulled from the original debt record in this file (commit
+ccf4540), not re-grepped from scratch, per the ticket's own instruction.
+Every fakeprovider-sourced transcript on 13 of the 14 pages was actually
+re-run against a freshly rebuilt `./ubx` + `fakeprovider` and
+re-captured verbatim -- real hashes, real timestamps, including a real
+`hashicorp/random` provider acquisition (no cloud, no billing) to avoid
+fabricating `ship.mdx`'s own multi-provider version-pin-mismatch
+scenario rather than touching real AWS for it. `cli/status.mdx`'s own 3
+recorded hits turned out to all be ordinary-English "applies"/"applied"
+(config-default application, the exit-code contract) — zero changes
+needed, confirmed by review, not assumed.
+
+Real-AWS/GCP-labeled transcripts were never hand-edited or silently
+re-derived, per CLAUDE.md's own standing rule (an agent never runs `ubx
+ship` against real cloud) — each got an honest, dated `<Note>`/
+`<Warning>` instead, explaining the transcript predates this vocabulary
+sweep and stays byte-for-byte what actually happened: `ship.mdx`'s UBI-27
+create-chain Note and its UBI-44 lying-destroy transcript (this ticket's
+own survey had missed that the UBI-44 block genuinely carries apply-vocab
+hits — found and handled here), `create-flow.mdx`, `multi-provider-flow.mdx`
+(both entire pages are one continuous real transcript), and a THIRD
+real-cloud instance the original survey didn't know about:
+`why.mdx`'s three apply-history examples (a generic `aws_s3_bucket` case,
+the UBI-29 SQS create-chain, the UBI-30 destroy-tombstone) turned out to
+be real AWS captures too, not fakeprovider fixtures.
+
+**Two real, current gaps in the actual CLI found live, not fixed here
+(this was a docs-only session; the strings live in `core/executor/ship.go`,
+not a doc file)**: the redacted-restore-declined message and the
+blocked-dependency message both still literally say "apply"/"applied,"
+missed by the original UBI-79 code sweep. Both flagged in-place on
+`cli/ship.mdx` with a `<Warning>`, captured verbatim from the real
+current binary rather than silently worked around. Worth a small
+follow-up ticket.
+
+**Absorbed naturally, not scope-creep**: every transcript re-captured
+live also picked up UBI-88's own later, separate `modify(ies)`/
+`destroy(s)` → `change(s)`/`terminate(s)` rename, plus UBI-75's inline
+address-prefixed progress-line format (no more separate header line) and
+UBI-77's `--confirm-terminate` flag — since "re-run and capture the real
+current binary's output" necessarily produces whatever the binary
+actually prints today, and leaving old delta-vocabulary or old line
+shapes in a freshly re-captured transcript would have reintroduced
+exactly the kind of doc/binary mismatch this whole debt-closing session
+exists to fix.
+
+`mint validate`/`mint broken-links` both clean. Committed and pushed to
+`ubiquex-docs` (14 files, +723/-473) — see `ubiquex-docs`'s own STATE.md
+for the full per-page writeup. Zero changes to this repo (`ubiquex`
+itself); `go test ./...` untouched. No debt carried forward from this
+ticket.
+
+## Current phase (previous)
+
 **UBI-87 (2026-08-04) — intent-provider zero-config model default changed from `claude-opus-4-8` to `claude-sonnet-5`: a real founder cost trap (a new/unconfigured user silently burning opus pricing on every `plan`/`propose`/`chat` call, discovered by hitting a real credit wall) closed at the one hardcoded fallback, plus every place that fallback was documented or asserted in a hermetic test.**
 
 **The fix itself**: `intentprovider/claude/adapter.go`'s `DefaultModel`
@@ -14275,6 +14331,33 @@ underlying wording predates this vocabulary sweep, or re-verified for
 real against real AWS/GCP by the founder directly (never by an agent,
 per CLAUDE.md) -- not silently hand-edited. `mint validate`/`mint
 broken-links` clean, committed and pushed, before closing this debt out.
+
+**RESOLVED — UBI-82 (2026-08-04).** All 14 pages swept, exactly per the
+precise scope this entry recorded. Every fakeprovider-sourced transcript
+was actually re-run against a freshly rebuilt `./ubx` + `fakeprovider`
+and re-captured verbatim, not hand-translated -- 13 of the 14 pages
+needed this (`cli/status.mdx`'s own 3 hits were all ordinary English, zero
+changes needed there). The real-AWS/GCP-labeled transcripts took the
+documented-note path, not founder re-verification: `ship.mdx`'s UBI-27
+create-chain Note, `create-flow.mdx`, and `multi-provider-flow.mdx` each
+got an honest, dated `<Note>` explaining the transcript predates this
+vocabulary sweep and stays byte-for-byte real; `ship.mdx`'s UBI-44
+lying-destroy transcript got the same treatment once this session found
+it (this entry's own survey had missed that this specific block actually
+carries "apply history"/"0 applied" hits). A new, third real-cloud
+instance this entry's own survey didn't know about was also found and
+handled the same way: `why.mdx`'s three apply-history transcripts (a
+generic `aws_s3_bucket` example, the UBI-29 SQS create-chain, and the
+UBI-30 destroy-tombstone) are also real, historical AWS captures, not
+fakeprovider fixtures. Two real, current gaps in the CLI itself (not
+docs) were found live and flagged with an in-page `<Warning>` rather
+than silently fixed in a docs-only session: the redacted-restore-
+declined message and the blocked-dependency message in
+`core/executor/ship.go` both still literally say "apply"/"applied,"
+missed by the original UBI-79 code sweep -- worth a small follow-up
+ticket. `mint validate`/`mint broken-links` both clean, committed and
+pushed to `ubiquex-docs`. See `ubiquex-docs`' own STATE.md for the full
+per-page writeup. No debt carried forward.
 
 **UBI-64's ubiquex-docs work was done in this same session, per
 protocol**: `cli/init.mdx` (flags table + new "--reset-ledger:
