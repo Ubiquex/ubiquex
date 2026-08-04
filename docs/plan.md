@@ -2,6 +2,29 @@
 
 ## Changelog
 
+- 2026-08-04 — UBI-74 Slice 3 (Strata blueprints, package/distribute):
+  `ubx blueprint package <dir> -o <file>.tar.gz` (content hash over a
+  built blueprint's own files via `core.CanonicalJSON` -- the SAME
+  JCS-style canonicalization `core.Hash` already uses for a Proposal,
+  never a new hashing convention -- written into `dir/blueprint.lock.json`,
+  the directory archived into a gzipped tar); `ubx blueprint pull <source>
+  <dest>` (a local path, copied as-is; or a git repo, cloned and checked
+  out at `--ref`, `--path` naming the blueprint's own location within
+  it -- OCI/Strata stays Slice 7); `ubx blueprint verify <dir>`
+  (recomputes and confirms a directory's own content hash still matches
+  its declared manifest, naming exactly which file changed on a
+  mismatch). Live-verified per the ticket's own required bar: Slice 1/2's
+  already-live-AWS-verified CI-platform package, packaged, pushed to a
+  real, newly created GitHub repository
+  (`github.com/Ubiquex/ubx-sdk-blueprints`) with real commit history,
+  pulled into a completely separate local directory via a real HTTPS
+  clone, verified (content hash matched byte-for-byte), and confirmed
+  genuinely usable via a real `go build`/`go vet` against the actual
+  published `ubx-sdk-go` module. Full account: docs/blueprint.md's
+  "Package/pull/verify: distribution" section (new) and its own Slice 3
+  implementation-slices entry; this file's own "Strata blueprints"
+  subsection below, updated in place. Slices 4-8 remain future sessions.
+
 - 2026-08-04 — UBI-74 Slice 1 (Strata blueprints, opens the arc): the
   `Ubxfile` format (`lang`/`params`/`resources`, strict YAML, `uses:` a
   hard parse error) and `ubx blueprint build .` -- resolves `resources:`
@@ -5686,12 +5709,28 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slice 1 (UBI-74) — closed
+### Strata blueprints: Slices 1–3 (UBI-74) — Slice 3 closed
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
-rejected intermediate designs); docs/blueprint.md is Slice 1's own
-authoritative build doc. This section is a pointer, not a duplicate.
+rejected intermediate designs); docs/blueprint.md is the authoritative
+build doc for Slices 1–3. This section is a pointer, not a duplicate.
+
+Slice 3 (package/distribute) built `ubx blueprint package`/`pull`/
+`verify`: a content hash over a built blueprint's own files (`core.
+CanonicalJSON`, the same JCS-style approach `core.Hash` already uses for
+a Proposal) recorded in a `blueprint.lock.json` manifest that travels
+with the directory through any distribution mechanism; a gzipped,
+content-addressed tarball (`package`); local-path and git+ref pull
+(`pull`, OCI/Strata deferred to Slice 7); and tamper-evident hash
+re-verification (`verify`). Live-verified against a real, newly created
+GitHub repository (`github.com/Ubiquex/ubx-sdk-blueprints`) — packaged,
+pushed with real commit history, pulled into a separate local directory
+via a real HTTPS clone, verified, and a real `go build`/`go vet` against
+the actual published `ubx-sdk-go` module confirmed the pulled copy is
+genuinely usable. Full account: docs/blueprint.md's "Package/pull/
+verify: distribution" section and its own Slice 3 implementation-slices
+entry.
 
 Slice 1 built: parsing an `Ubxfile` (`lang`/`params`/`resources` only,
 strict-YAML, `uses:`/nesting a hard parse error per UBI-121 staying
@@ -5722,10 +5761,12 @@ already know how to substitute later. Full account, including the
 `params: default` (parsed, not yet load-bearing at Go-codegen time —
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
-Slices 2–8 (local call, package/distribute, multi-language, cross-medium
-calling, provenance/render, OCI push, tarball delivery) are each their
-own future session, tracked in UBI-74's own implementation-breakdown
-comment. Nesting is UBI-121; the bound policy engine is UBI-118 — both
+Slices 2 (local call) and 3 (package/distribute) are both closed, per
+this section's own updated heading and the Slice 3 paragraph above.
+Slices 4–8 (multi-language, cross-medium calling, provenance/render, OCI
+push, tarball delivery) are each their own future session, tracked in
+UBI-74's own implementation-breakdown comment. Nesting is UBI-121; the
+bound policy engine is UBI-118 — both
 split off UBI-74 already, tracked separately.
 
 ## Deferred (explicitly not now)

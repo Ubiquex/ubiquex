@@ -17,16 +17,17 @@ import (
 	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
-// newBlueprintCmd is UBI-74 Slice 1's own CLI entry point -- a parent
-// command, matching newSDKCmd's own shape, leaving room for Slice 3's
-// `ubx blueprint package`/`pull`/`verify` siblings without renaming
-// anything this slice ships.
+// newBlueprintCmd is UBI-74's own CLI entry point -- a parent command,
+// matching newSDKCmd's own shape.
 func newBlueprintCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "blueprint",
 		Short: "Blueprint commands: build a signed, reusable, parameterized proposal template",
 	}
 	cmd.AddCommand(newBlueprintBuildCmd())
+	cmd.AddCommand(newBlueprintPackageCmd())
+	cmd.AddCommand(newBlueprintPullCmd())
+	cmd.AddCommand(newBlueprintVerifyCmd())
 	return cmd
 }
 
@@ -107,6 +108,105 @@ yet callable from a real stack (Slice 2), packaged, or published (Slice 3+).`,
 	}
 
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for the intent-provider drafting call")
+
+	return cmd
+}
+
+// newBlueprintPackageCmd is `ubx blueprint package` (docs/blueprint.md,
+// Slice 3): computes a content hash over a built blueprint directory's
+// own files (the same canonical-hashing approach core.Hash already uses
+// for a Proposal, core/canonical.go), writes it into
+// dir/blueprint.lock.json, and archives the directory into a
+// content-addressed gzipped tar at -o.
+func newBlueprintPackageCmd() *cobra.Command {
+	var out string
+
+	cmd := &cobra.Command{
+		Use:   "package <dir>",
+		Short: "Package a built blueprint directory into a content-addressed tarball",
+		Long: `Computes a content hash over every file in dir (the same canonical-hashing approach "ubx accept" already
+uses for a Proposal's own hash -- core/canonical.go), writes it into dir/blueprint.lock.json, and archives dir
+(including that manifest) into a gzipped tar at -o.
+
+dir must already be a built blueprint (an Ubxfile, plus whatever "ubx blueprint build" produced) -- package
+doesn't build anything itself.`,
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if out == "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint package: -o is required")}
+			}
+			manifest, err := blueprint.Package(args[0], out)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: err}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "packaged %q -> %s (%d file(s), content hash %s)\n", manifest.Name, out, len(manifest.Files), manifest.ContentHash)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&out, "output", "o", "", "output tarball path (e.g. ci-platform-v1.tar.gz)")
+
+	return cmd
+}
+
+// newBlueprintPullCmd is `ubx blueprint pull` (docs/blueprint.md, Slice
+// 3): resolves a blueprint reference (a local path, or a git repo+ref)
+// into a real local directory. OCI/Strata sources aren't supported yet
+// (Slice 7).
+func newBlueprintPullCmd() *cobra.Command {
+	var ref, path string
+
+	cmd := &cobra.Command{
+		Use:   "pull <source> <dest>",
+		Short: "Pull a blueprint from a local path or a git repo into dest",
+		Long: `source is either an existing local directory (copied into dest as-is, --ref/--path unused) or a git
+repository URL (cloned, checked out at --ref -- branch/tag/commit, default the repo's own default branch -- then
+the directory at --path within it, default ".", copied into dest). OCI/Strata sources aren't supported yet
+(Slice 7).
+
+dest must not already exist, or must be empty -- pull never overwrites existing content.`,
+		Args:          cobra.ExactArgs(2),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dest, err := blueprint.Pull(cmd.Context(), args[0], args[1], ref, path)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: err}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "pulled %s -> %s\n", args[0], dest)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&ref, "ref", "", "git ref (branch/tag/commit) -- default the repo's own default branch")
+	cmd.Flags().StringVar(&path, "path", "", "path within the git repo to the blueprint package -- default \".\"")
+
+	return cmd
+}
+
+// newBlueprintVerifyCmd is `ubx blueprint verify` (docs/blueprint.md,
+// Slice 3): recomputes a blueprint directory's own content hash and
+// confirms it matches blueprint.lock.json's own declared hash -- the
+// same tamper-evidence principle proposal verification already gives a
+// ledger entry, applied here to a pulled blueprint's own files.
+func newBlueprintVerifyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "verify <dir>",
+		Short:         "Recompute a blueprint's own content hash and confirm it matches blueprint.lock.json",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manifest, err := blueprint.Verify(args[0])
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: err}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "verified %q: content hash %s matches (%d file(s))\n", manifest.Name, manifest.ContentHash, len(manifest.Files))
+			return nil
+		},
+	}
 
 	return cmd
 }
