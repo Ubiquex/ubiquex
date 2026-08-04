@@ -207,8 +207,18 @@ func (g *generator) resolveAddress(addr string) (target *decodedResource, path [
 	return target, parts[3:], nil
 }
 
-var placeholderToken = regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
-var placeholderWholeString = regexp.MustCompile(`^\{([a-zA-Z0-9_]+)\}$`)
+// placeholderToken/placeholderWholeString match one {param_name} token,
+// OPTIONALLY followed by a single arithmetic operator and an integer
+// literal constant -- {param_name} (a bare reference, unchanged since
+// Slice 1) or {param_name * 86400}/{param_name / 60}/etc (UBI-123: a
+// simple, deliberately narrow "unit conversion or derived value" form --
+// exactly one operator, one param, one literal constant, never a general
+// expression language; see paramExpr's own doc comment for the full
+// account of why this exists and what it deliberately doesn't support).
+// Capture groups: (1) param name, (2) operator (empty if bare), (3)
+// literal (empty if bare).
+var placeholderToken = regexp.MustCompile(`\{([a-zA-Z0-9_]+)(?:\s*([+\-*/])\s*([0-9]+)\s*)?\}`)
+var placeholderWholeString = regexp.MustCompile(`^\{([a-zA-Z0-9_]+)(?:\s*([+\-*/])\s*([0-9]+)\s*)?\}$`)
 
 // renderAny renders one already-JSON-decoded value into a Go source
 // expression, recursively -- a $ref marker becomes a Computed.Field()
@@ -325,7 +335,7 @@ func (g *generator) renderString(dr *decodedResource, s string) (string, error) 
 	}
 
 	if m := placeholderWholeString.FindStringSubmatch(s); m != nil {
-		return g.paramRef(m[1])
+		return g.paramExpr(m[1], m[2], m[3])
 	}
 
 	matches := placeholderToken.FindAllStringSubmatch(s, -1)
@@ -335,7 +345,7 @@ func (g *generator) renderString(dr *decodedResource, s string) (string, error) 
 
 	var args []string
 	for _, m := range matches {
-		ref, err := g.paramRef(m[1])
+		ref, err := g.paramExpr(m[1], m[2], m[3])
 		if err != nil {
 			return "", err
 		}
@@ -485,6 +495,49 @@ func (g *generator) paramRef(name string) (string, error) {
 		return cname, nil
 	}
 	return "cfg." + cname, nil
+}
+
+// paramExpr returns the Go expression for one {param_name} or {param_name
+// <op> <literal>} token match (placeholderToken/placeholderWholeString's
+// own capture groups -- op/literal are both "" for a bare token). op/
+// literal empty is exactly paramRef's own existing bare-reference
+// behavior, unchanged.
+//
+// UBI-123: a real, live-found gap this closes -- until this fix, the
+// resources: prose grammar had NO way to express a parameter's value
+// needing arithmetic before reaching a resource's own Config (a unit
+// conversion, e.g. "retention in DAYS" as the blueprint's own natural
+// param unit vs. `aws_sqs_queue.message_retention_seconds`'s own real
+// wire unit) -- not just this codegen step, but the intent-provider
+// draft step too: `{retention_days}` is the only token shape
+// blueprintDraftPrompt's own preamble ever taught the model to preserve
+// literally, so a param requiring a derived value had no route through
+// EITHER step of the pipeline, draft or codegen, to reach the generated
+// function as anything but a raw, unconverted pass-through (confirmed by
+// tracing UBI-74 Slice 2's own real live draft and generated source
+// directly, not assumed: the resources: prose itself never asked for a
+// conversion at all, and even if it had, this file's own placeholderToken
+// regex -- before this fix -- had no character class wide enough to
+// recognize the extra `* 86400` text as anything but ordinary literal
+// content). `{param_name <op> <literal>}` is the new, deliberately
+// narrow answer: exactly one operator, one already-declared param, one
+// integer literal constant -- never a general expression language, never
+// two params combined, never a nested/repeated operation. `op`/`literal`
+// empty means an ordinary bare reference, identical to Slice 1/2's own
+// existing behavior.
+func (g *generator) paramExpr(name, op, literal string) (string, error) {
+	ref, err := g.paramRef(name)
+	if err != nil {
+		return "", err
+	}
+	if op == "" {
+		return ref, nil
+	}
+	p := g.params[name] // paramRef above already confirmed name is declared
+	if p.Type != ParamNumber {
+		return "", fmt.Errorf("prose references {%s %s %s}, but %q is declared %q, not %q -- arithmetic on a placeholder is only supported for number params", name, op, literal, name, p.Type, ParamNumber)
+	}
+	return fmt.Sprintf("%s %s %s", ref, op, literal), nil
 }
 
 // topoSort orders resources so every dependency (via $ref or

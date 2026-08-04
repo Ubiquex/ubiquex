@@ -534,6 +534,190 @@ func TestGenerateGo_EmbeddedRefUsesRuntimeStackName(t *testing.T) {
 	}
 }
 
+// ciPlatformIntentWithUnitConversion reproduces UBI-123's own real,
+// live-found bug: an SQS queue whose message_retention_seconds needs a
+// UNIT CONVERSION from the blueprint's own natural param unit (days) to
+// the real AWS wire unit (seconds) -- exactly the shape that shipped
+// broken against real AWS (`InvalidAttributeValue: Invalid value for the
+// parameter MessageRetentionPeriod`, retention_days=30 sent as
+// message_retention_seconds=30 instead of 2592000). Also exercises a
+// REQUIRED param's own arithmetic (max_receive_count -- an int doubled),
+// since UBI-123's own root-cause framing ("any blueprint parameter that
+// needs unit conversion or derived computation may be affected") isn't
+// specific to default params.
+const ciPlatformIntentWithUnitConversion = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "ci-platform",
+  "intent": {"summary": "CI platform"},
+  "resources": [
+    {
+      "type": "aws_sqs_queue",
+      "name": "ci-notifications",
+      "op": "create",
+      "config": {
+        "name": "{queue_name}",
+        "message_retention_seconds": "{retention_days * 86400}",
+        "visibility_timeout_seconds": "{max_receive_count * 2}"
+      }
+    }
+  ]
+}`
+
+func ciPlatformUbxfileWithUnitConversion() *Ubxfile {
+	return &Ubxfile{
+		Dir:  "testdata",
+		Lang: "go",
+		Params: []Param{
+			{Name: "queue_name", Type: ParamString, Required: true},
+			{Name: "max_receive_count", Type: ParamNumber, Required: true},
+			{Name: "retention_days", Type: ParamNumber, Default: 1},
+		},
+	}
+}
+
+// TestGenerateGo_PlaceholderArithmetic is UBI-123's own required hermetic
+// regression test: an Ubxfile with a parameter that needs arithmetic in
+// the generated resource config, confirming the generated Go performs the
+// REAL computation, not a bare pass-through. Runs the generated function
+// for real (go run, not go build) across three cases -- a required
+// param's own arithmetic, a default param's own declared default used
+// arithmetically, and that same default overridden -- decoding the
+// emitted intent/v1 document's own JSON to check the actual computed
+// number reaches the wire, exactly the way UBI-74 Slice 2's own
+// TestGenerateGo_DefaultParamOptionsPattern already proved plain defaults
+// load-bearing.
+func TestGenerateGo_PlaceholderArithmetic(t *testing.T) {
+	requireGoToolchain(t)
+	sdkGoRoot := sdkGoModuleRoot(t)
+
+	intent := mustIntentFile(t, ciPlatformIntentWithUnitConversion)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfileWithUnitConversion(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+
+	fn := files["ciplatform.go"]
+	if !strings.Contains(fn, "cfg.retentionDays * 86400") {
+		t.Fatalf("ciplatform.go missing the real days->seconds arithmetic (cfg.retentionDays * 86400), got a bare pass-through instead:\n%s", fn)
+	}
+	if !strings.Contains(fn, "maxReceiveCount * 2") {
+		t.Fatalf("ciplatform.go missing the required param's own arithmetic (maxReceiveCount * 2):\n%s", fn)
+	}
+
+	for _, tc := range []struct {
+		name              string
+		callArgs          string
+		wantRetentionSec  float64
+		wantVisibilitySec float64
+	}{
+		{"default", `"payments-notifications", 5`, 86400, 10},
+		{"overridden", `"payments-notifications", 5, ciplatform.WithRetentionDays(30)`, 2592000, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pkgDir := filepath.Join(dir, "ciplatform")
+			if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range files {
+				if name == "go.mod" {
+					content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			stackDir := filepath.Join(dir, "stack")
+			if err := os.MkdirAll(stackDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stackGoMod := "module stack\n\ngo 1.23\n\n" +
+				"require github.com/ubiquex/ubx-sdk-go v0.0.0\nrequire ciplatform v0.0.0\n\n" +
+				"replace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n" +
+				"replace ciplatform => " + pkgDir + "\n"
+			if err := os.WriteFile(filepath.Join(stackDir, "go.mod"), []byte(stackGoMod), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			mainSrc := "package main\n\n" +
+				"import (\n\tciplatform \"ciplatform\"\n\tsdk \"github.com/ubiquex/ubx-sdk-go/runtime\"\n)\n\n" +
+				"func main() {\n" +
+				"\tsdk.Main(sdk.Stack(\"ci-platform\", func() {\n" +
+				"\t\tsdk.Intent(sdk.IntentInfo{Summary: \"x\"})\n" +
+				"\t\tciplatform.CiPlatform(" + tc.callArgs + ")\n" +
+				"\t}))\n" +
+				"}\n"
+			if err := os.WriteFile(filepath.Join(stackDir, "main.go"), []byte(mainSrc), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "go", "run", ".")
+			cmd.Dir = stackDir
+			cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+			out, err := cmd.Output()
+			if err != nil {
+				var stderr []byte
+				if ee, ok := err.(*exec.ExitError); ok {
+					stderr = ee.Stderr
+				}
+				t.Fatalf("go run the calling stack failed: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+			}
+
+			var doc struct {
+				Resources []struct {
+					Type   string         `json:"type"`
+					Config map[string]any `json:"config"`
+				} `json:"resources"`
+			}
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("parse emitted intent/v1: %v\noutput: %s", err, out)
+			}
+			if len(doc.Resources) != 1 {
+				t.Fatalf("expected exactly one resource, got: %s", out)
+			}
+			gotRetention, ok := doc.Resources[0].Config["message_retention_seconds"].(float64)
+			if !ok {
+				t.Fatalf("message_retention_seconds missing or not a number: %s", out)
+			}
+			if gotRetention != tc.wantRetentionSec {
+				t.Fatalf("message_retention_seconds = %v, want %v (retention_days * 86400 not genuinely computed): %s", gotRetention, tc.wantRetentionSec, out)
+			}
+			gotVisibility, ok := doc.Resources[0].Config["visibility_timeout_seconds"].(float64)
+			if !ok {
+				t.Fatalf("visibility_timeout_seconds missing or not a number: %s", out)
+			}
+			if gotVisibility != tc.wantVisibilitySec {
+				t.Fatalf("visibility_timeout_seconds = %v, want %v (max_receive_count * 2 not genuinely computed): %s", gotVisibility, tc.wantVisibilitySec, out)
+			}
+		})
+	}
+}
+
+// TestGenerateGo_PlaceholderArithmeticRejectsNonNumberParam confirms
+// arithmetic on a non-number-typed param is a hard build error, never a
+// silently-broken Go expression (e.g. a string "*" 3, which wouldn't
+// compile, or worse, would compile into something nonsensical for a
+// looser field type) -- matching this codebase's own "hard error, never
+// silent" posture for every other adversarial case in this package.
+func TestGenerateGo_PlaceholderArithmeticRejectsNonNumberParam(t *testing.T) {
+	intent := mustIntentFile(t, `{
+		"schema_version": 1, "kind": "ubx:intent/v1", "stack": "s",
+		"intent": {"summary": "x"},
+		"resources": [{"type": "a", "name": "one", "op": "create", "config": {"name": "{repo_name * 2}"}}]
+	}`)
+	ubxfile := &Ubxfile{Lang: "go", Params: []Param{{Name: "repo_name", Type: ParamString, Required: true}}}
+	_, err := GenerateGo("s", ubxfile, intent)
+	if err == nil {
+		t.Fatal("expected a hard error for arithmetic on a string param, got nil")
+	}
+	if !strings.Contains(err.Error(), "repo_name") || !strings.Contains(err.Error(), "number") {
+		t.Fatalf("expected the error to name repo_name and the number-only restriction, got: %v", err)
+	}
+}
+
 func requireGoToolchain(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {

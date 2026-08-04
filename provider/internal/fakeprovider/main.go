@@ -117,13 +117,18 @@
 //	                             with Sensitive: true (UBI-23) — lets a test exercise
 //	                             provider.Redact/core's $redacted handling end to end
 //	                             without a real Sensitive-bearing provider schema.
-//	FAKEPROVIDER_ATTR_TYPES      (UBI-63 session 3) comma-separated "name:kind" overrides
-//	                             for FAKEPROVIDER_ATTRS entries whose real shape isn't a
-//	                             plain string — kind one of "bool", "list" (list of
-//	                             string), "map" (map of string; "tags"/"tags_all" already
-//	                             default to this without needing an entry here). Lets a
-//	                             test model e.g. a bool-typed attribute with its own real
-//	                             zero value (false), not just strings/maps.
+//	FAKEPROVIDER_ATTR_TYPES      (UBI-63 session 3; "number" added UBI-123) comma-separated
+//	                             "name:kind" overrides for FAKEPROVIDER_ATTRS entries whose
+//	                             real shape isn't a plain string — kind one of "bool",
+//	                             "number" (cty.Number, a real numeric-typed attribute —
+//	                             UBI-123's own encode-path repro needs this: a plain
+//	                             string-typed attribute never exercises encodePrimitiveValue's
+//	                             cty.Number branch at all), "list" (list of string), "map"
+//	                             (map of string; "tags"/"tags_all" already default to this
+//	                             without needing an entry here). Lets a test model e.g. a
+//	                             bool-typed attribute with its own real zero value (false),
+//	                             or a numeric attribute like message_retention_seconds, not
+//	                             just strings/maps.
 //	FAKEPROVIDER_COMPUTED_ATTRS  (UBI-63 session 3) comma-separated FAKEPROVIDER_ATTRS
 //	                             names (beyond "id", always Computed) to advertise as
 //	                             Computed rather than plain Optional — models a real
@@ -893,6 +898,8 @@ func conformanceCtyType() cty.Type {
 			fields[name] = cty.Map(cty.String)
 		case types[name] == "bool":
 			fields[name] = cty.Bool
+		case types[name] == "number":
+			fields[name] = cty.Number
 		case types[name] == "list":
 			fields[name] = cty.List(cty.String)
 		case types[name] == "map":
@@ -938,11 +945,23 @@ func echoConformanceState(msgpackBytes []byte) ([]byte, error) {
 	}
 	vals := val.AsValueMap()
 
-	if idVal, ok := vals["id"]; ok && idVal.IsNull() {
+	// UBI-123: !v.IsKnown(), not just v.IsNull() -- ReadResource's own
+	// CurrentState never carries an unknown value (there is no such thing
+	// as "unknown current state"), so IsNull() alone was enough for this
+	// function's original ReadResource-only use. ApplyResourceChange's own
+	// PlannedState is different: a Computed-and-unset attribute is
+	// genuinely UNKNOWN there, per the tfplugin protocol's own real
+	// semantics, not null -- and a real ApplyResourceChange response is
+	// never allowed to still carry an unknown value. Echoing one back
+	// unfilled (this function's original id-fill checked IsNull() only)
+	// is exactly what produced "decode value: value is not known" the
+	// first time this function was reused for Apply (UBI-123's own
+	// hermetic repro work).
+	if idVal, ok := vals["id"]; ok && (idVal.IsNull() || !idVal.IsKnown()) {
 		vals["id"] = cty.StringVal("computed-" + conformanceResourceType() + "-id")
 	}
 	for name, v := range vals {
-		if (name == "tags" || name == "tags_all") && v.IsNull() {
+		if (name == "tags" || name == "tags_all") && (v.IsNull() || !v.IsKnown()) {
 			vals[name] = cty.MapValEmpty(cty.String)
 		}
 	}
@@ -981,6 +1000,8 @@ func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
 			a.Type = []byte(`["map","string"]`)
 		case types[name] == "bool":
 			a.Type = []byte(`"bool"`)
+		case types[name] == "number":
+			a.Type = []byte(`"number"`)
 		case types[name] == "list":
 			a.Type = []byte(`["list","string"]`)
 		case types[name] == "map":
@@ -1009,6 +1030,8 @@ func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
 			a.Type = []byte(`["map","string"]`)
 		case types[name] == "bool":
 			a.Type = []byte(`"bool"`)
+		case types[name] == "number":
+			a.Type = []byte(`"number"`)
 		case types[name] == "list":
 			a.Type = []byte(`["list","string"]`)
 		case types[name] == "map":
@@ -1059,6 +1082,27 @@ func (s *fakeConformanceServerV6) ReadResource(_ context.Context, req *tfplugin6
 	return &tfplugin6.ReadResource_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
 }
 
+// ApplyResourceChange (UBI-123) -- added alongside ReadResource so a
+// conformance-mode fixture can serve a real CREATE, not just drift-check
+// reads: echoes PlannedState back exactly like ReadResource echoes
+// CurrentState (echoConformanceState's own id-fill-in/mutate logic is
+// generic to whichever msgpack bytes it's handed), which is exactly what
+// this repo's own real create-path encode-fidelity tests need -- a
+// resource type/attribute shape defined per-test via env vars, round-
+// tripped through a REAL cty-msgpack-encoded gRPC call to a REAL separate
+// process, not a mock. Destroy/private-state handling deliberately not
+// added here (fakeProviderServerV6's own ApplyResourceChange already
+// covers that, for fake_widget) -- conformance mode's own real job is
+// drift detection (adopt/mutate/scan-diff), a create-path fixture is this
+// addition's only new use.
+func (s *fakeConformanceServerV6) ApplyResourceChange(_ context.Context, req *tfplugin6.ApplyResourceChange_Request) (*tfplugin6.ApplyResourceChange_Response, error) {
+	out, err := echoConformanceState(req.PlannedState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin6.ApplyResourceChange_Response{NewState: &tfplugin6.DynamicValue{Msgpack: out}}, nil
+}
+
 type fakeConformanceServerV5 struct {
 	tfplugin5.UnimplementedProviderServer
 }
@@ -1091,6 +1135,16 @@ func (s *fakeConformanceServerV5) ReadResource(_ context.Context, req *tfplugin5
 		return nil, err
 	}
 	return &tfplugin5.ReadResource_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
+}
+
+// ApplyResourceChange -- see fakeConformanceServerV6's own identical
+// addition (UBI-123) for the full reasoning; mirrored here for v5.
+func (s *fakeConformanceServerV5) ApplyResourceChange(_ context.Context, req *tfplugin5.ApplyResourceChange_Request) (*tfplugin5.ApplyResourceChange_Response, error) {
+	out, err := echoConformanceState(req.PlannedState.GetMsgpack())
+	if err != nil {
+		return nil, err
+	}
+	return &tfplugin5.ApplyResourceChange_Response{NewState: &tfplugin5.DynamicValue{Msgpack: out}}, nil
 }
 
 func serveConformanceV6() {

@@ -695,3 +695,103 @@ session, and why.
   clean. `make build` run and `ubx version` checked before every live
   verification step above, per this project's own standing rebuild
   discipline. Committed this session -- see STATE.md.
+
+- 2026-08-04 (UBI-123, reopened): **the encode-path bug did not exist.**
+  The ticket's own reopening comment reported the resolved proposal
+  genuinely carrying `"message_retention_seconds": 2592000` on disk (file-
+  read verified, confirmed correct) yet the real `ubx ship` against real
+  AWS still failing with `InvalidAttributeValue: Invalid value for the
+  parameter MessageRetentionPeriod` three separate times, including once
+  with a brand-new queue name ruling out name-reuse -- reasonably
+  concluding the bug must be downstream of resolution, in whatever encodes
+  the resolved intent into the real tfplugin `ApplyResourceChange` wire
+  call, and instructing this session not to re-diagnose codegen.
+
+  **Traced the actual encode path first** (`core/executor/ship.go`'s
+  `shipCreate` -> `Applier.ApplyResourceChange` -> `cli/stateadapter.go`'s
+  `stateReaderAdapter` -> `provider/provider.go`'s v5/v6 `ApplyResourceChange`
+  -> `provider/ctyvalue.go`'s `encodeUnknownAwareDynamicValue`/
+  `encodePrimitiveValue`) before writing a line of test code. Found one
+  real, general (but NOT applicable to this specific value) precision
+  hazard along the way: `shipCreate` decodes `cn.Config` with a plain
+  `json.Unmarshal` (no `UseNumber()`), so every JSON number becomes a Go
+  `float64` before `encodeUnknownAwareDynamicValue`'s own `UseNumber()`-
+  based decoder ever gets a chance to preserve it exactly -- a real
+  precision-loss risk for numbers beyond float64's exact-integer range
+  (2^53), confirmed empirically (`123456789012345678` round-trips to
+  `123456789012345680`). But `2592000` is nowhere near that boundary --
+  Go's `float64`/JSON round-trip is provably lossless for it, confirmed
+  empirically before concluding anything.
+
+  **Built the exact hermetic repro the ticket required, not a substitute
+  for it** -- and it's what settled this. `fake_widget` (this repo's own
+  standing create-path fixture) has no numeric-typed attribute at all, so
+  a real `cty.Number` value had never once gone through
+  `encodePrimitiveValue`'s own `cty.Number` branch in this repo's test
+  suite before now. Extended `provider/internal/fakeprovider`'s existing
+  dynamic conformance-mode fixture (env-var-driven arbitrary resource
+  type/attrs, previously read-only -- adopt/mutate/scan-diff only) with a
+  real `"number"` `FAKEPROVIDER_ATTR_TYPES` kind (`cty.Number`, both v5
+  and v6 schema builders) and a genuine `ApplyResourceChange` handler
+  (previously unimplemented for conformance mode -- it only ever needed
+  `ReadResource`), reusing the existing `echoConformanceState` helper.
+  One real bug surfaced building this fixture itself (not in production
+  code): `echoConformanceState`'s own Computed-`id` fill-in checked
+  `IsNull()` only, correct for `ReadResource`'s own `CurrentState` (never
+  unknown) but wrong for `ApplyResourceChange`'s own `PlannedState` (a
+  Computed-and-unset attribute is genuinely UNKNOWN there, not null, per
+  the tfplugin protocol) -- fixed to check `IsNull() || !IsKnown()`.
+
+  **`TestResolveAcceptShip_NumericConfig_SurvivesEncodeUnchanged`**
+  (`cli/ship_numeric_config_test.go`, UBI-123's own required permanent
+  regression guard for this bug CLASS -- "correct at rest, corrupted in
+  flight"): a real `aws_sqs_queue`-typed, `message_retention_seconds:
+  2592000`-configured resource, resolved, accepted, and shipped through
+  the completely real `ubx resolve`/`accept`/`ship` CLI path against a
+  REAL fakeprovider subprocess (conformance-v6 mode, not a mock) --
+  checked at two independent points: (1) `UBX_SHIP_DEBUG_TRACE_CONFIG`
+  (new, `core/executor/ship.go`'s `traceShipCreateConfig` -- the "real
+  logging/tracing at the encode boundary" this investigation's own first
+  required step asked for, kept as a permanent, zero-cost-when-unset
+  diagnostic aid, not a one-off print deleted afterward) shows
+  `"message_retention_seconds":2592000` in the exact `plannedState` bytes
+  immediately before `ApplyResourceChange` fires; (2) `ubx why`'s own
+  rendering of the real fake provider's own echoed-back
+  `provider_result` -- proof the value survived a REAL cty-msgpack
+  encode, a REAL gRPC call across a REAL process boundary, and a REAL
+  decode back, not just what ubx's own client claims to have sent. Both
+  show `2592000`, unchanged, every time.
+
+  **The real root cause, once the encode-corruption hypothesis was ruled
+  out empirically rather than just re-asserted: `message_retention_seconds:
+  2592000` is not a corrupted value reaching AWS -- it is a genuinely
+  INVALID one, confirmed directly against AWS's own `SetQueueAttributes`
+  API reference.** SQS's real `MessageRetentionPeriod` bound is
+  documented as "an integer representing seconds, from 60 (1 minute) to
+  1,209,600 (14 days)" -- `retention_days: 30` converts (correctly, per
+  UBI-123's own original fix) to 2,592,000 seconds, more than DOUBLE the
+  real maximum. `InvalidAttributeValue: Invalid value for the parameter
+  MessageRetentionPeriod` is AWS's SQS service correctly rejecting an
+  out-of-range value -- not ubx corrupting, dropping, or misencoding
+  anything. This is why the bug "round-tripped to the founder three
+  times on unverified fixes": every prior fix (the arithmetic conversion
+  itself, and the embedded-ref stack-name fix before it) was genuinely
+  correct, and none of them could ever have made 30 days of SQS retention
+  valid, because it structurally isn't.
+
+  **Corrected live-verification guidance, not attempted with the
+  original value**: the founder's own next `ubx resolve --from-code`
+  against `~/ubx-playground-ubi74-slice2/stack/create_ci_platform.go`
+  must call `ciplatform.WithRetentionDays` with a value that converts to
+  at most 1,209,600 seconds (14 days) -- e.g. `WithRetentionDays(14)`
+  (the real maximum, 1,209,600 seconds exactly) or `WithRetentionDays(7)`
+  (604,800 seconds, a safer margin) -- never `30` again; it will fail
+  identically against real AWS regardless of anything in this codebase,
+  every time, forever, no matter how many more times codegen/executor are
+  independently re-verified correct.
+
+  Full suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+  ./...` clean. This session's own live-AWS leg (ship the corrected
+  value, confirm the SQS queue creates, terminate everything, confirm the
+  account clean) was not run by this session itself -- see STATE.md for
+  why and for the exact handoff.

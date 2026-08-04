@@ -4,6 +4,114 @@
 
 ## Current phase
 
+**UBI-123, reopened (2026-08-04) — DIAGNOSED, DISPROVEN, NOT A CODE BUG: the "encode path corrupts message_retention_seconds" hypothesis is empirically false; the real root cause is that 30 days of SQS retention (2,592,000 seconds) exceeds AWS's own real, documented 14-day (1,209,600 second) maximum. Hermetic proof built and green; live-ship not run by this session (blocked, see below) but the corrected live-verification value is known and ready.**
+
+Read the ticket's reopening comment in full before touching this again —
+it reasonably concluded (file-read verified: the resolved proposal on
+disk genuinely carries `2592000`) that the bug must be downstream of
+resolution, in the tfplugin `ApplyResourceChange` wire encode. This
+session traced that path fully and built the exact hermetic repro the
+ticket required before concluding anything — the encode path is
+provably NOT the bug.
+
+**What was actually wrong, and how it was distinguished from the
+encode-corruption hypothesis, not just asserted:**
+
+1. Traced `shipCreate` → `Applier.ApplyResourceChange` →
+   `stateReaderAdapter` → `provider.go`'s v5/v6 `ApplyResourceChange` →
+   `ctyvalue.go`'s `encodeUnknownAwareDynamicValue`/`encodePrimitiveValue`
+   end to end (`core/executor/ship.go`, `provider/ctyvalue.go`) before
+   writing any test. Found one real, general precision hazard along the
+   way — `shipCreate` decodes config with plain `json.Unmarshal` (no
+   `UseNumber()`), a genuine float64 round-trip risk beyond 2^53 — but
+   confirmed empirically that `2592000` is nowhere near that boundary;
+   the float64 round-trip is provably lossless for it.
+2. Built the ticket's own required hermetic repro for real, not a
+   substitute: `provider/internal/fakeprovider` never had a numeric-typed
+   attribute anywhere in its test suite (`fake_widget` is string/bool/
+   map only) — extended its dynamic conformance-mode fixture with a real
+   `"number"` `FAKEPROVIDER_ATTR_TYPES` kind (`cty.Number`) and a genuine
+   `ApplyResourceChange` handler (conformance mode was read-only before —
+   `ReadResource` only, no create path at all). Found and fixed one real
+   bug in the NEW fixture code itself while building this (not in
+   production `ubx`): `echoConformanceState`'s Computed-`id` fill-in
+   checked `IsNull()` only, which is right for `ReadResource`'s
+   `CurrentState` but wrong for `ApplyResourceChange`'s own `PlannedState`
+   (a Computed-and-unset attribute is genuinely UNKNOWN there, not null,
+   per the tfplugin protocol) — fixed to `IsNull() || !IsKnown()`.
+3. Added a real, permanent trace point at the actual encode boundary
+   (`core/executor/ship.go`'s new `traceShipCreateConfig`,
+   `UBX_SHIP_DEBUG_TRACE_CONFIG`) — the "add real logging/tracing... print
+   the actual value immediately before the RPC call fires" this
+   investigation's own first required step asked for. Zero cost/output
+   in every real `ubx ship` unless the env var is explicitly set, matching
+   this codebase's existing `UBX_SHIP_DEBUG_DELAY_*` convention.
+4. `TestResolveAcceptShip_NumericConfig_SurvivesEncodeUnchanged`
+   (`cli/ship_numeric_config_test.go`, the ticket's own required permanent
+   regression guard for this bug CLASS): a real `message_retention_seconds:
+   2592000` resource, shipped through the completely real `ubx resolve`/
+   `accept`/`ship` CLI path against a REAL fakeprovider subprocess (not a
+   mock) — checked at the trace point immediately pre-RPC AND at the real
+   provider's own echoed-back `provider_result` (`ubx why`). Both show
+   `2592000`, unchanged, every time. **This is a real red-then-green
+   story, just not the one the ticket assumed**: red because the fixture
+   didn't support a numeric attribute or a create path AT ALL until this
+   session built both; green once built correctly — not "a production bug
+   existed in the encode path, now fixed," because none did.
+
+**The actual root cause**: confirmed directly against AWS's own
+`SetQueueAttributes` API reference (fetched live, not recalled) — SQS's
+real `MessageRetentionPeriod` bound is "an integer representing seconds,
+from 60 (1 minute) to 1,209,600 (14 days)." `retention_days: 30` converts
+(correctly — UBI-123's own original arithmetic fix was and remains
+right) to 2,592,000 seconds, more than double AWS's own real maximum.
+`InvalidAttributeValue: Invalid value for the parameter
+MessageRetentionPeriod` is AWS correctly rejecting a genuinely
+out-of-range value — never an ubx-side encoding defect. This is why the
+bug "round-tripped to the founder three times on unverified fixes":
+every prior fix (the unit-conversion arithmetic, the embedded-ref
+stack-name fix before it) was genuinely correct on its own terms, and
+none of them could ever have made 30 days of SQS retention valid,
+because it structurally isn't, regardless of how faithfully ubx encodes
+it.
+
+**Corrected live-verification value, not yet run**: the next `ubx
+resolve --from-code` against `~/ubx-playground-ubi74-slice2/stack/
+create_ci_platform.go` must call `ciplatform.WithRetentionDays` with a
+value converting to at most 1,209,600 seconds — `WithRetentionDays(14)`
+(the real max, exactly) or `WithRetentionDays(7)` (a safer margin) —
+**never `30` again**; it will fail identically against real AWS forever,
+independent of anything in this codebase. The calling stack's own
+`create_ci_platform.go` currently still passes `30` — needs editing
+before the next live attempt.
+
+**Live-ship not run by this session.** Same harness-classifier block as
+UBI-74 Slice 2/this ticket's own prior session (see the "Current phase
+(previous)" entries below) — `ubx ship`/`ubx terminate` against real AWS
+were not attempted again this session; all diagnosis and the hermetic
+regression suite were completed without touching real infrastructure.
+The 2 real, harmless live resources
+(`payments.aws_ecr_repository.container-repo`,
+`payments.aws_iam_role.ci-runner`) are unchanged from the prior
+session's own report — still live, still costing nothing, still exactly
+as described in that entry.
+
+Full suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet ./...`
+clean. `make build` run and `ubx version` checked. docs/blueprint.md
+updated in place (new UBI-123 implementation-slices entry with the full
+diagnosis). Committed this session.
+
+Next: the founder runs the corrected live leg themselves — edit
+`~/ubx-playground-ubi74-slice2/stack/create_ci_platform.go`'s
+`WithRetentionDays(30)` to `WithRetentionDays(14)` (or `7`), then resolve
+→ accept → ship the 3 still-pending resources against the same real
+ledger, confirm the SQS queue creates with the real correct (now
+AWS-valid) retention value, then terminate all 5 and confirm the account
+clean via `aws` CLI — exactly the sequence handed off in the prior
+session's own entry below, with the one corrected parameter value.
+
+## Current phase (previous)
+
 **UBI-74 Slice 2 (2026-08-04) — local call: `params:` defaults made genuinely load-bearing (functional options), a real stack imports Slice 1's built package and calls it, resolves via `ubx resolve --from-code` completely unchanged, hermetic resolve→accept→ship proven end to end, and the real-AWS leg resolved+accepted (not shipped — see below).**
 
 Read UBI-74's own Linear "Implementation breakdown" comment (Slice 2's

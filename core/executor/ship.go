@@ -303,6 +303,35 @@ var (
 	debugDelayBetweenChangeResources = parseDebugDelay("UBX_SHIP_DEBUG_DELAY_BETWEEN_RESOURCES")
 )
 
+// traceShipCreateConfig (UBI-123) writes planned (shipCreate's own
+// already-decoded, substituted, and re-marshaled plannedState bytes) to
+// stderr when UBX_SHIP_DEBUG_TRACE_CONFIG is set -- exactly what's about
+// to be handed to ApplyResourceChange, after config-decode/
+// substituteComputed/re-marshal but before the RPC boundary, tagged with
+// the resource's own address. Same "zero in every real ubx ship, an
+// explicit env var away for a real repro" convention as
+// debugDelayAfterInFlight above -- a real, live-reported bug (a numeric
+// config value allegedly shipping to real AWS with a different value than
+// the resolved proposal recorded) needed a way to see EXACTLY what
+// shipCreate is actually about to send, not what an earlier pipeline
+// stage claims. Reads the env var fresh on every call, deliberately NOT
+// cached in a package var the way debugDelayAfterInFlight/
+// debugDelayAfterApplySuccess are: those are only ever exercised by a real
+// `ubx` subprocess (killed mid-flight, UBI-26's own adversarial harness),
+// started fresh with the env var already set; this one also needs to work
+// from an in-process test (cli's own runUbx, which sets env vars via
+// t.Setenv on an already-running test binary, after core/executor's
+// package-level vars already finished initializing) -- see UBI-123's own
+// investigation for why this distinction mattered (it turned out the
+// value survives this encode path unchanged, confirmed with this exact
+// trace point).
+func traceShipCreateConfig(addr core.Address, planned json.RawMessage) {
+	if os.Getenv("UBX_SHIP_DEBUG_TRACE_CONFIG") == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ubx ship trace: %s: plannedState immediately before ApplyResourceChange: %s\n", addr, planned)
+}
+
 // maxParallelShipNodes bounds how many delta.creates/.modifies/.destroys
 // nodes shipChange's own scheduler (UBI-67) runs concurrently -- never
 // unbounded, since a real provider's own rate limits are real (this
@@ -1893,6 +1922,7 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
+	traceShipCreateConfig(ra.Address, planned)
 	result, lookup, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[cn.Type], cn.Type, json.RawMessage("null"), planned, nil)
 
 	// UBI-92: a failed create referencing an already-shipped same-batch
