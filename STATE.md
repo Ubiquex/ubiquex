@@ -4,6 +4,149 @@
 
 ## Current phase
 
+**UBI-74 Slice 1 (2026-08-04) — Strata blueprints arc opened for real: the Ubxfile format + `ubx blueprint build .` (Go only), design doc, hermetic tests, and a real live-verified build against the real Claude API and the real published `ubx-sdk-go` module.**
+
+Read UBI-74's full Linear comment thread first, per the handoff prompt's
+own instruction (the design evolved through several real corrections;
+later comments supersede earlier ones) — the "Implementation breakdown"
+comment (2026-08-04) is Slice 1's own authoritative scope, pulled
+directly rather than re-derived. UBI-121 (nesting/`uses:`) and UBI-118
+(bound policy engine) were already split off UBI-74 before this session
+and stayed untouched.
+
+**Built**: `docs/blueprint.md` (new, written before code per this
+project's docs-first protocol, mirroring docs/sdk.md/docs/diagram-
+medium.md's own structure) — the Ubxfile grammar, the build-pipeline
+reuse of UBI-41's `DraftWithRetry` (exactly once, no ledger, stops at the
+raw draft — a blueprint isn't bound to any stack's own reality until
+Slice 2+'s own call/resolve step), and the resolved-intent → Go codegen
+design, including every real tradeoff decision (number always compiles
+to Go `int`; bindings derived from the draft's own observed config keys,
+never a live provider schema fetch; `$ref`/`{param}` value translation;
+topological resource ordering).
+
+`blueprint/` (new top-level package, named after the CLI verb it
+implements per CLAUDE.md's own package-naming convention): `ubxfile.go`
+(strict-YAML parser, `yaml.Node`-based to preserve `params:` declaration
+order — a Go map has none, and determinism is a project-wide feature;
+`uses:` or any other unrecognized key is a hard parse error, not silently
+ignored — this is what makes UBI-121 loud when someone eventually
+hand-writes it early), `gogen.go` (`GenerateGo`: genuinely new codegen,
+confirmed by search that nothing in `sdk/codegen` already goes resolved-
+intent → source — that package's own `ir`/`gotmpl` go the other
+direction, schema → binding library, for `ubx sdk gen`), `identifier.go`
+(hyphen/underscore-tolerant PascalCase/camelCase helpers, a small,
+deliberately separate reimplementation of `gotmpl`'s own splitWireName
+discipline rather than exporting/reusing its unexported version across a
+package boundary for a different alphabet). `cli/blueprint.go` wires
+`ubx blueprint build [dir]` (parent `newBlueprintCmd` + leaf
+`newBlueprintBuildCmd`, matching `newSDKCmd`'s own shape) — defaults to
+".", derives the blueprint's own name from the directory basename, wraps
+`resources:` prose with a short parameter-preservation preamble before
+handing it to the SAME `buildIntentAdapter`/`Redact`/`DraftWithRetry`/
+`PopulateSources` sequence `draftFromDoc` already runs (not a new
+pipeline — draftBlueprint's only real addition is what content is handed
+in, not how it's drafted), then writes `GenerateGo`'s own output
+(go.mod/bindings.go/<pkg>.go) into that same directory.
+
+**A real, load-bearing finding caught by a hermetic test failure, not
+predicted in the design doc's first draft**: `intentprovider/
+validate.go`'s own wire-level `Config` field is a JSON-encoded STRING
+(what an adapter must literally emit), unwrapped into a real
+`json.RawMessage` object by `parseAndValidate` before `DraftWithRetry`
+ever returns. `cli/blueprint_test.go`'s first fake-adapter fixture used a
+raw JSON object for `config` and was correctly rejected by real
+validation ("cannot unmarshal object into Go struct field
+wireResourceIntent.resources.config of type string") — fixed by matching
+`propose_from_doc_test.go`'s own fixture convention (a JSON-encoded
+string). `GenerateGo`'s own assumption (Config is a real object one level
+deep by the time codegen sees it) turned out correct once traced through
+`parseAndValidate`, not a lucky guess that happened to pass.
+
+**Live verification, the ticket's own required bar, genuinely met**: a
+hand-authored Ubxfile for this project's own recurring CI-platform
+pattern (ECR+SQS+IAM role+policy+attachment, matching
+`intentprovider/conformance/fixtures/platform-iam-attach.md`'s own shape,
+parameterized — `repo_name`/`queue_name` required, `retention_days`
+defaulting to 1) built via `ubx blueprint build .` against the REAL
+Claude API (no fake adapter) — 5 resources (the real draft split the
+policy and its attachment into two resources). `go mod tidy` + `go build
+./...` + `go vet ./...` all run for real against the actual published
+`github.com/ubiquex/ubx-sdk-go` module — real network, real `go.sum`
+hashes fetched from the real module proxy, not this repo's own hermetic
+local-`replace` trick (that trick stays reserved for `go test ./...`,
+matching `sdk/codegen/templates/go/collision_test.go`'s own established
+pattern, reused for `blueprint/gogen_test.go`'s own
+`TestGenerateGo_CompilesClean`). Clean, confirmed by reading the compiled
+output and running `go vet` too, not stopped at "the code looks right."
+`make build` run first and `ubx version` checked before this verification
+counted as done, per this project's own standing rebuild discipline.
+
+**One real finding from the live draft that corrected this session's own
+first-draft speculation, not just confirmed it**: `aws_iam_policy`'s own
+`policy` attribute came back from the real Claude draft as a plain Go
+string whose OWN content is escaped JSON with a `$ref` marker embedded
+inside it. docs/blueprint.md's own first-drafted adversarial-cases
+section (written before live verification) had flagged this shape as a
+possible unhandled gap — checked against `core/resolver/refs.go`'s own
+`containsMarker` doc comment before shipping that framing, and it was
+wrong: this is the exact, already-supported "JSON-envelope string that
+needs marker resolution" shape that comment names directly (real,
+existing precedent — an IAM-policy-shaped document with a `$ref` standing
+in for a literal ARN), which the resolver's own reference walk and the
+executor's own `substituteComputed` already know how to find and
+substitute one level into a string attribute's own decoded JSON at Slice
+2+'s own call/resolve time. Slice 1's own `renderString` never tries to
+parse or rewrite a string leaf's own content — it renders the resolved
+value VERBATIM as a quoted Go literal — which is exactly correct here.
+docs/blueprint.md corrected in place (not left stale) once this was
+confirmed live, both in its adversarial-cases section and its
+implementation-slices log.
+
+**One real, deliberately-named open point, not silently swept under**:
+`params:` `default` values are parsed and validated but not yet
+load-bearing at Go-codegen time — Go has no native optional/default-
+argument syntax, so a `default` param compiles to an equally required,
+positional Go argument, same as a `required` one (confirmed live:
+`retention_days: number, default 1` produced `retentionDays int`, no
+different from its two `required` siblings). What a Slice-2+ caller not
+passing a value for a `default` param should actually mean is a real
+open question, deliberately deferred to whatever that slice's own
+calling convention turns out to need.
+
+Hermetic tests: `blueprint/ubxfile_test.go` (parser, including the
+unknown-key/missing-lang/unsupported-lang/param-spec/duplicate-param/
+resources-path-vs-inline cases), `blueprint/gogen_test.go` (codegen,
+including the duplicate-identifier/dependency-cycle/undeclared-
+placeholder/modify-op-rejected cases, plus a real `go build ./...`
+compile check via the same local-`replace`-onto-`sdk/go` hermetic
+pattern `sdk/codegen/templates/go/collision_test.go` already
+established), `cli/blueprint_test.go` (CLI wiring, `fakeIntentAdapter`/
+`withBuildIntentAdapter` per `propose_from_doc_test.go`'s own seam).
+`go test ./...`, `gofmt -l .`, `go vet ./...` all clean across the whole
+repo. `docs/plan.md` updated (new changelog entry + a new "Strata
+blueprints: Slice 1 (UBI-74) — closed" subsection, pointing at
+docs/blueprint.md rather than duplicating it) per this project's own
+"a plan change isn't real until it lands in docs/plan.md" rule.
+
+No user-visible ubiquex-docs update needed this session in the sense
+CLAUDE.md's session protocol usually requires — `ubx blueprint build` is
+a genuinely new command, but Slice 1's own founder-set success bar was
+explicitly build+compile, not a docs-site publish; documenting it in the
+public docs site is reasonable follow-up work but wasn't asked for this
+session and no docs-debt was created by skipping it (nothing shipped
+was silently left undocumented — docs/blueprint.md **is** the design/
+usage doc, just internal rather than on the public site). Flagged here
+explicitly rather than left ambiguous, in case a future session
+disagrees and wants it moved.
+
+Next: Slice 2 (local call — a real stack imports Slice 1's built package
+directly, calls it with real params, ships on fakeprovider first per
+standing doctrine) is the natural next session for this arc, per UBI-74's
+own implementation-breakdown comment. Not started this session.
+
+## Current phase (previous)
+
 **UBI-82 (2026-08-04, ubiquex-docs only) — the UBI-75/76/77/78/79 docs debt closed: 149 apply/applied hits across 14 ubiquex-docs pages, swept and live-reverified, not hand-translated.**
 
 Precise scope pulled from the original debt record in this file (commit

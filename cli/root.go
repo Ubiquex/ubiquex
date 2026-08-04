@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMCPCmd())
 	root.AddCommand(newChatCmd())
 	root.AddCommand(newSDKCmd())
+	root.AddCommand(newBlueprintCmd())
 	root.AddCommand(newRenderCmd())
 	root.AddCommand(newVerifyCmd())
 	root.AddCommand(newBlameCmd())

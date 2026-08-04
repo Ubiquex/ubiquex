@@ -2,6 +2,25 @@
 
 ## Changelog
 
+- 2026-08-04 — UBI-74 Slice 1 (Strata blueprints, opens the arc): the
+  `Ubxfile` format (`lang`/`params`/`resources`, strict YAML, `uses:` a
+  hard parse error) and `ubx blueprint build .` -- resolves `resources:`
+  through UBI-41's own intent-provider pipeline exactly once, compiles
+  the draft into a real Go package (new codegen, `blueprint/gogen.go`:
+  resource bindings derived from the draft's own observed config keys,
+  never a live schema fetch; topologically-ordered `sdk.Resource()`
+  calls; real `$ref` -> `.Field()` and `{param}` -> Go-variable
+  translation). Live-verified against the real Claude API and the real
+  published `github.com/ubiquex/ubx-sdk-go` module (network, not a local
+  override) with a hand-authored CI-platform (ECR+SQS+IAM
+  role+policy+attachment) Ubxfile -- `go build`/`go vet` both clean. One
+  real finding: an IAM policy's own `$ref`-embedded-in-JSON-string shape,
+  checked against `core/resolver/refs.go`'s own already-documented
+  convention rather than assumed a bug -- it isn't. Full account:
+  docs/blueprint.md (new); this file's own "Strata blueprints: Slice 1"
+  subsection below. Slices 2-8 remain future sessions; UBI-121 (nesting)
+  and UBI-118 (bound policy) stay split off, tracked separately.
+
 - 2026-08-04 — UBI-98 session 2 (closes UBI-98): `ubx sdk gen --lang ts`
   and `--lang py` restructured the same repo-shaped way `--lang go` was
   the prior session -- checked explicitly, not assumed, whether Go's own
@@ -5666,6 +5685,48 @@ clean across the whole repo; zero regressions. **UBI-45 closed** across
 three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
+
+### Strata blueprints: Slice 1 (UBI-74) — closed
+
+UBI-74's own Linear comment thread (2026-08-02/04) is the design record
+of the full arc (naming, trust model, the eight-slice breakdown, the
+rejected intermediate designs); docs/blueprint.md is Slice 1's own
+authoritative build doc. This section is a pointer, not a duplicate.
+
+Slice 1 built: parsing an `Ubxfile` (`lang`/`params`/`resources` only,
+strict-YAML, `uses:`/nesting a hard parse error per UBI-121 staying
+separate) and `ubx blueprint build .` — resolves `resources:` through
+UBI-41's own `DraftWithRetry` exactly once (no ledger, no
+`resolver.Resolve` — a blueprint re-resolves against a real stack at
+CALL time, Slice 2+, never at build time), then compiles the draft into
+a real, self-contained Go package (`blueprint/gogen.go`, new work — no
+existing codegen already went resolved-intent → source): a
+`ResourceBinding`/`Config` pair per resource derived from the draft's own
+observed config keys (never a live provider schema fetch — deliberate,
+docs/blueprint.md), a topologically-ordered, parameterized function with
+real `$ref` → `.Field()` translation and `{param_name}` → Go-variable
+substitution.
+
+Live-verified per the ticket's own required bar: a hand-authored
+CI-platform Ubxfile (ECR+SQS+IAM role+policy+attachment, matching
+`intentprovider/conformance/fixtures/platform-iam-attach.md`'s own
+shape) built against the real Claude API, `go build`/`go vet` both clean
+against the real published `github.com/ubiquex/ubx-sdk-go` module (real
+network, not a local override). One real finding worth naming again
+here: an `aws_iam_policy.policy` string arrived from the real draft with
+a `$ref` marker embedded in its own escaped JSON — checked against
+`core/resolver/refs.go`'s own documented "JSON-embedded refs" shape
+before assuming it was a bug, and it isn't; Slice 1's codegen renders
+such a string verbatim, which is exactly the shape the resolver/executor
+already know how to substitute later. Full account, including the
+`params: default` (parsed, not yet load-bearing at Go-codegen time —
+Go has no native optional-argument syntax) open point: docs/blueprint.md.
+
+Slices 2–8 (local call, package/distribute, multi-language, cross-medium
+calling, provenance/render, OCI push, tarball delivery) are each their
+own future session, tracked in UBI-74's own implementation-breakdown
+comment. Nesting is UBI-121; the bound policy engine is UBI-118 — both
+split off UBI-74 already, tracked separately.
 
 ## Deferred (explicitly not now)
 
