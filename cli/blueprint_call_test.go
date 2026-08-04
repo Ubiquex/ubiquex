@@ -103,10 +103,14 @@ func writeBlueprintPackage(t *testing.T, dir, name string) string {
 	}
 	sdkGoRoot := blueprintCallSdkGoRoot(t)
 	for fname, content := range files {
-		if fname == "go.mod" {
+		// Strip the "go/" prefix (Slice 4: sibling per-language output
+		// directories) -- pkgDir plays the role of the "go/" subdirectory
+		// content directly, exactly like Slice 1-3's own flat layout did.
+		rel := strings.TrimPrefix(fname, "go/")
+		if rel == "go.mod" {
 			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 		}
-		if err := os.WriteFile(filepath.Join(pkgDir, fname), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(pkgDir, rel), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

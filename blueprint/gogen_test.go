@@ -81,13 +81,13 @@ func TestGenerateGo_CiPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateGo: %v", err)
 	}
-	for _, want := range []string{"go.mod", "bindings.go", "ciplatform.go"} {
+	for _, want := range []string{"go/go.mod", "go/bindings.go", "go/ciplatform.go"} {
 		if _, ok := files[want]; !ok {
 			t.Fatalf("missing generated file %q; got %v", want, keysOf(files))
 		}
 	}
 
-	fn := files["ciplatform.go"]
+	fn := files["go/ciplatform.go"]
 	if !strings.Contains(fn, "func CiPlatform(repoName string, queueName string, opts ...Option) {") {
 		t.Fatalf("ciplatform.go missing expected signature (required params direct, default param via functional options):\n%s", fn)
 	}
@@ -131,7 +131,7 @@ func TestGenerateGo_CiPlatform(t *testing.T) {
 		t.Fatalf("ci-runner-access is never referenced, should not get an assigned local var:\n%s", fn)
 	}
 
-	bindings := files["bindings.go"]
+	bindings := files["go/bindings.go"]
 	if !strings.Contains(bindings, `WireType: "aws_ecr_repository"`) {
 		t.Fatalf("bindings.go missing ecr binding:\n%s", bindings)
 	}
@@ -234,13 +234,18 @@ func TestGenerateGo_CompilesClean(t *testing.T) {
 
 	dir := t.TempDir()
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		// Strip the "go/" prefix (Slice 4: sibling per-language output
+		// directories) -- this test only cares about Go's own compile
+		// check, so dir plays the role of the "go/" subdirectory content
+		// directly, exactly like Slice 1-3's own flat layout did.
+		rel := strings.TrimPrefix(name, "go/")
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	sdkGoRoot := sdkGoModuleRoot(t)
-	goMod := files["go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	goMod := files["go/go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -313,10 +318,11 @@ func TestGenerateGo_DefaultParamOptionsPattern(t *testing.T) {
 				t.Fatal(err)
 			}
 			for name, content := range files {
-				if name == "go.mod" {
+				rel := strings.TrimPrefix(name, "go/")
+				if rel == "go.mod" {
 					content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 				}
-				if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(pkgDir, rel), []byte(content), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -443,7 +449,7 @@ func TestGenerateGo_EmbeddedRefUsesRuntimeStackName(t *testing.T) {
 		t.Fatalf("GenerateGo: %v", err)
 	}
 
-	fn := files["ciplatform.go"]
+	fn := files["go/ciplatform.go"]
 	// The build-time stack name must never appear as a baked address
 	// literal -- it must be reconstructed from the referenced resource's
 	// own runtime Computed.Address() instead.
@@ -460,10 +466,11 @@ func TestGenerateGo_EmbeddedRefUsesRuntimeStackName(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range files {
-		if name == "go.mod" {
+		rel := strings.TrimPrefix(name, "go/")
+		if rel == "go.mod" {
 			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 		}
-		if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(pkgDir, rel), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -597,7 +604,7 @@ func TestGenerateGo_PlaceholderArithmetic(t *testing.T) {
 		t.Fatalf("GenerateGo: %v", err)
 	}
 
-	fn := files["ciplatform.go"]
+	fn := files["go/ciplatform.go"]
 	if !strings.Contains(fn, "cfg.retentionDays * 86400") {
 		t.Fatalf("ciplatform.go missing the real days->seconds arithmetic (cfg.retentionDays * 86400), got a bare pass-through instead:\n%s", fn)
 	}
@@ -621,10 +628,11 @@ func TestGenerateGo_PlaceholderArithmetic(t *testing.T) {
 				t.Fatal(err)
 			}
 			for name, content := range files {
-				if name == "go.mod" {
+				rel := strings.TrimPrefix(name, "go/")
+				if rel == "go.mod" {
 					content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 				}
-				if err := os.WriteFile(filepath.Join(pkgDir, name), []byte(content), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(pkgDir, rel), []byte(content), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}

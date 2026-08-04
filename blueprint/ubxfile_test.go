@@ -115,13 +115,31 @@ func TestParseUbxfile_MissingLang(t *testing.T) {
 }
 
 func TestParseUbxfile_UnsupportedLang(t *testing.T) {
-	dir := writeUbxfile(t, "lang: ts\nresources: hello\n")
+	dir := writeUbxfile(t, "lang: rust\nresources: hello\n")
 	_, err := ParseUbxfile(dir)
 	if err == nil {
-		t.Fatal("expected an error for lang: ts (Slice 1 only supports go), got nil")
+		t.Fatal("expected an error for lang: rust (only go/ts/py/all are recognized, Slice 4), got nil")
 	}
-	if !strings.Contains(err.Error(), "ts") {
+	if !strings.Contains(err.Error(), "rust") {
 		t.Fatalf("error = %v, want it to name the unsupported lang", err)
+	}
+}
+
+// TestParseUbxfile_AllFourLangValuesAccepted confirms Slice 4's own
+// broadened lang: grammar -- go/ts/py/all all parse cleanly now, not
+// just "go" (Slice 1's own original restriction).
+func TestParseUbxfile_AllFourLangValuesAccepted(t *testing.T) {
+	for _, lang := range []string{"go", "ts", "py", "all"} {
+		t.Run(lang, func(t *testing.T) {
+			dir := writeUbxfile(t, "lang: "+lang+"\nresources: hello\n")
+			uf, err := ParseUbxfile(dir)
+			if err != nil {
+				t.Fatalf("ParseUbxfile: %v", err)
+			}
+			if uf.Lang != lang {
+				t.Fatalf("Lang = %q, want %q", uf.Lang, lang)
+			}
+		})
 	}
 }
 

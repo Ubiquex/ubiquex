@@ -31,26 +31,60 @@ func newBlueprintCmd() *cobra.Command {
 	return cmd
 }
 
+// blueprintGenerators maps a --lang value to its own codegen entry
+// point -- Slice 4's own multi-language build model: the AI draft
+// (draftBlueprint, below) runs EXACTLY ONCE regardless of how many
+// languages are requested, and each requested language's own generator
+// compiles that SAME already-drafted intent independently. "all" isn't
+// a key here -- parseLangFlag expands it into every key below.
+var blueprintGenerators = map[string]func(string, *blueprint.Ubxfile, *resolver.IntentFile) (map[string]string, error){
+	"go": blueprint.GenerateGo,
+	"ts": blueprint.GenerateTS,
+	"py": blueprint.GeneratePython,
+}
+
+// parseLangFlag resolves --lang's own raw value into the ordered list of
+// languages to build -- "" or "all" means every language (Slice 4's own
+// resolved "no --lang default" design, UBI-74's own "--lang default"
+// Linear comment: build ALL THREE from one AI draft when no flag is
+// given, since the draft's own cost is paid once either way), one of
+// "go"/"ts"/"py" narrows to exactly that language. Always returns
+// languages in the same fixed order (go, ts, py) regardless of input
+// order, so build output/log lines stay deterministic.
+func parseLangFlag(lang string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "", "all":
+		return []string{"go", "ts", "py"}, nil
+	case "go", "ts", "py":
+		return []string{lang}, nil
+	default:
+		return nil, fmt.Errorf("--lang %q not recognized -- want one of go, ts, py, all", lang)
+	}
+}
+
 // newBlueprintBuildCmd is `ubx blueprint build` (docs/blueprint.md):
 // finds an Ubxfile in the given directory (default ".", the same
 // `docker build .` convention the Ubxfile format itself borrows),
 // resolves its resources: prose through the intent-provider pipeline
-// exactly once, and compiles the resulting draft into a real, compilable
-// Go package written into that same directory.
+// exactly once, and compiles the resulting draft into real, compilable
+// SDK packages -- one sibling directory per requested language ("go/",
+// "ts/", "py/") written into that same directory.
 func newBlueprintBuildCmd() *cobra.Command {
 	var timeout time.Duration
+	var lang string
 
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
-		Short: "Build the Ubxfile in dir (default \".\") into a real, compilable SDK package",
+		Short: "Build the Ubxfile in dir (default \".\") into real, compilable SDK package(s)",
 		Long: `Reads the Ubxfile in dir (default the current directory, matching "docker build ."'s own convention
 of finding a Dockerfile), resolves its resources: prose (inline, or an included .md file) through the same
-intent-provider pipeline "ubx propose --from-doc"/"ubx plan --from-doc" already use -- exactly once -- and
-compiles the resulting draft into a real Go package: one typed function per blueprint, parameters matching
-the Ubxfile's own params: block, real sdk.Resource() calls with real Computed refs between them.
+intent-provider pipeline "ubx propose --from-doc"/"ubx plan --from-doc" already use -- EXACTLY ONCE, regardless
+of how many languages --lang requests -- and compiles the resulting draft into real SDK package(s): one typed
+function per blueprint per language, parameters matching the Ubxfile's own params: block, real resource() calls
+with real Computed refs between them, written into sibling "go/"/"ts/"/"py/" subdirectories of dir.
 
-Slice 1 only: --lang is not yet a flag (the Ubxfile's own lang: key must be "go"); the built package is not
-yet callable from a real stack (Slice 2), packaged, or published (Slice 3+).`,
+--lang selects which language(s): "go", "ts", "py", or "all" (every language -- the default when --lang is
+omitted entirely, since the AI draft's own cost is paid once regardless of how many languages compile from it).`,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -60,6 +94,11 @@ yet callable from a real stack (Slice 2), packaged, or published (Slice 3+).`,
 				dir = args[0]
 			}
 			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
+			}
+
+			langs, err := parseLangFlag(lang)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
 			}
@@ -86,28 +125,39 @@ yet callable from a real stack (Slice 2), packaged, or published (Slice 3+).`,
 			}
 			fmt.Fprintln(outWriter, "✓")
 
-			files, err := blueprint.GenerateGo(blueprintName, ubxfile, draft)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
+			allFiles := map[string]string{}
+			for _, l := range langs {
+				files, err := blueprintGenerators[l](blueprintName, ubxfile, draft)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build (%s): %w", l, err)}
+				}
+				for name, content := range files {
+					allFiles[name] = content
+				}
 			}
 
-			names := make([]string, 0, len(files))
-			for name := range files {
+			names := make([]string, 0, len(allFiles))
+			for name := range allFiles {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				if err := os.WriteFile(filepath.Join(absDir, name), []byte(files[name]), 0o644); err != nil {
+				full := filepath.Join(absDir, name)
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
+				}
+				if err := os.WriteFile(full, []byte(allFiles[name]), 0o644); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
 				}
 			}
 
-			fmt.Fprintf(outWriter, "built %d resource(s) -> %s (%s)\n", len(draft.Resources), absDir, strings.Join(names, ", "))
+			fmt.Fprintf(outWriter, "built %d resource(s) -> %s (%s: %s)\n", len(draft.Resources), absDir, strings.Join(langs, ", "), strings.Join(names, ", "))
 			return nil
 		},
 	}
 
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for the intent-provider drafting call")
+	cmd.Flags().StringVar(&lang, "lang", "", "target language(s): go, ts, py, or all (default: all)")
 
 	return cmd
 }

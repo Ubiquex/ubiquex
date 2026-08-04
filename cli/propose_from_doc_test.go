@@ -19,11 +19,17 @@ type fakeIntentAdapter struct {
 	draft   string
 	lastReq intentprovider.DraftRequest
 	err     error
+	// calls counts real Draft invocations -- e.g. blueprint_test.go's own
+	// TestBlueprintBuild_DefaultLangBuildsAllThree uses this to confirm
+	// the AI draft happens exactly once regardless of how many languages
+	// a build compiles from it, not once per language.
+	calls int
 }
 
 func (a *fakeIntentAdapter) Name() string  { return "fake" }
 func (a *fakeIntentAdapter) Model() string { return "fake-model-v1" }
 func (a *fakeIntentAdapter) Draft(_ context.Context, req intentprovider.DraftRequest) (json.RawMessage, error) {
+	a.calls++
 	a.lastReq = req
 	if a.err != nil {
 		return nil, a.err

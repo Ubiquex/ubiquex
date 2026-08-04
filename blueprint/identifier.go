@@ -114,3 +114,81 @@ func packageIdent(name string) (string, error) {
 	}
 	return joined, nil
 }
+
+// ---------------------------------------------------------------------
+// Slice 4: TypeScript and Python identifier conventions -- each its own
+// small, separate function (matching this file's own established
+// precedent above: a deliberately separate reimplementation per
+// language/package boundary, rather than reaching into
+// sdk/codegen/templates/ts|py's own unexported pascalCase/camelCase/
+// pythonIdentifier for the same reason those two packages don't share
+// their own copies with EACH OTHER either -- see docs/blueprint.md's own
+// "Multi-language codegen" section). PascalCase/camelCase themselves
+// need no TS-specific variant at all: JavaScript/TypeScript's own
+// identifier casing convention is byte-identical to Go's (both
+// PascalCase types, camelCase values), so tsgen.go reuses pascalCase/
+// camelCase/lowerFirst above directly.
+// ---------------------------------------------------------------------
+
+// tsReservedIdent guards a derived top-level TS identifier (the
+// blueprint's own exported function name, ultimately) against a real
+// JavaScript/TypeScript reserved word -- smaller-scope than the full ES
+// spec list, matching goReservedIdent's own stated precedent: this
+// package only ever derives a handful of top-level identifiers per
+// blueprint, not hundreds, so only the words that could plausibly
+// collide with a hand-chosen blueprint directory name are listed.
+func tsReservedIdent(name string) bool {
+	switch name {
+	case "break", "case", "catch", "class", "const", "continue",
+		"debugger", "default", "delete", "do", "else", "export",
+		"extends", "false", "finally", "for", "function", "if",
+		"import", "in", "instanceof", "new", "null", "return",
+		"super", "switch", "this", "throw", "true", "try",
+		"typeof", "var", "void", "while", "with", "yield",
+		"let", "static", "await", "async", "enum", "interface",
+		"type", "namespace", "module", "declare", "public",
+		"private", "protected", "implements", "package":
+		return true
+	}
+	return false
+}
+
+// pythonKeywords is the lowercase-only subset of Python 3's reserved-word
+// set (keyword.kwlist) that a real, lowercase-ascii-only wire/resource
+// name could ever actually collide with -- capitalized reserved words
+// (False/None/True) can never match, since splitIdentifierParts only
+// ever accepts lowercase ascii + digits (matching
+// sdk/codegen/templates/py/py.go's own pythonKeywords, independently
+// reimplemented here for the same package-boundary reason every other
+// identifier helper in this file already is).
+var pythonKeywords = map[string]bool{
+	"and": true, "as": true, "assert": true, "async": true, "await": true,
+	"break": true, "class": true, "continue": true, "def": true, "del": true,
+	"elif": true, "else": true, "except": true, "finally": true, "for": true,
+	"from": true, "global": true, "if": true, "import": true, "in": true,
+	"is": true, "lambda": true, "nonlocal": true, "not": true, "or": true,
+	"pass": true, "raise": true, "return": true, "try": true, "while": true,
+	"with": true, "yield": true,
+}
+
+// pythonIdentifier converts a hyphen/underscore-separated lowercase name
+// into Python's own snake_case identifier convention -- usually IS the
+// original name verbatim with hyphens folded to underscores (real wire
+// names are already lowercase-with-underscores, i.e. already valid,
+// idiomatic Python identifiers), except for the real, live-relevant
+// case of a reserved-word collision (e.g. a param or resource named
+// "lambda" -- both a real Python keyword AND a real AWS service),
+// escaped with a trailing underscore, PEP 8's own established
+// convention for exactly this collision (matching
+// sdk/codegen/templates/py's own pythonIdentifier precedent).
+func pythonIdentifier(name string) (string, error) {
+	parts, err := splitIdentifierParts(name)
+	if err != nil {
+		return "", err
+	}
+	joined := strings.Join(parts, "_")
+	if pythonKeywords[joined] {
+		return joined + "_", nil
+	}
+	return joined, nil
+}

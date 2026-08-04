@@ -48,6 +48,44 @@ func (t ParamType) GoType() string {
 	}
 }
 
+// TSType returns the TypeScript type a param of this type compiles to in
+// the generated function's own signature (Slice 4). Unlike Go,
+// ParamNumber -> "number" carries no int/float distinction at all --
+// TypeScript has exactly one numeric type, so there's no Go-style
+// "always int" decision to make here in the first place.
+func (t ParamType) TSType() string {
+	switch t {
+	case ParamString:
+		return "string"
+	case ParamNumber:
+		return "number"
+	case ParamBool:
+		return "boolean"
+	default:
+		return "any"
+	}
+}
+
+// PyType returns the Python type annotation a param of this type
+// compiles to in the generated function's own signature (Slice 4).
+// Mirrors GoType's own "number always compiles to int" decision (every
+// real example in UBI-74's own design record is an integer count; float
+// support is deliberately not invented ahead of a real need) -- applied
+// here too, for consistency across all three generated languages rather
+// than letting Python's own native float default quietly diverge.
+func (t ParamType) PyType() string {
+	switch t {
+	case ParamString:
+		return "str"
+	case ParamNumber:
+		return "int"
+	case ParamBool:
+		return "bool"
+	default:
+		return "Any"
+	}
+}
+
 // Param is one params: entry, in the Ubxfile's own declared order.
 type Param struct {
 	Name     string
@@ -65,7 +103,14 @@ type Ubxfile struct {
 	// Dir is the directory this Ubxfile was loaded from -- resources:
 	// paths resolve relative to it.
 	Dir string
-	// Lang is the target language. Slice 1 only accepts "go".
+	// Lang is the blueprint's own declared target language(s) -- one of
+	// "go"/"ts"/"py"/"all" (Slice 4). Validated here (a real value from
+	// this set), but NOT currently consulted by `ubx blueprint build`'s
+	// own language selection -- that's governed entirely by the CLI's
+	// own --lang flag (default "all" when omitted), per UBI-74's own
+	// resolved "--lang default" design. Left as a real, named open point
+	// rather than silently wired together with a guessed precedence
+	// (docs/blueprint.md).
 	Lang string
 	// Params is params:, in file declaration order (never a map --
 	// determinism, docs/blueprint.md).
@@ -109,8 +154,10 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 	if strings.TrimSpace(raw.Lang) == "" {
 		return nil, fmt.Errorf("blueprint: %s: lang: is required", path)
 	}
-	if raw.Lang != "go" {
-		return nil, fmt.Errorf("blueprint: %s: lang: %q is not supported this slice -- only \"go\" is built by UBI-74 Slice 1 (--lang all/ts/py is Slice 4's own scope)", path, raw.Lang)
+	switch raw.Lang {
+	case "go", "ts", "py", "all":
+	default:
+		return nil, fmt.Errorf("blueprint: %s: lang: %q not recognized -- want one of go, ts, py, all", path, raw.Lang)
 	}
 
 	params, err := parseParams(&raw.Params, path)

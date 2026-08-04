@@ -2,6 +2,41 @@
 
 ## Changelog
 
+- 2026-08-04 — UBI-74 Slice 4 (Strata blueprints, multi-language):
+  `ubx blueprint build --lang go|ts|py|all` -- the SAME single AI draft
+  (drafted exactly once, regardless of language count) compiled into up
+  to three sibling `go/`/`ts/`/`py/` package directories by three
+  independent generators (`GenerateGo`/`GenerateTS`/`GeneratePython`)
+  sharing one new language-neutral decode/dependency/topo-sort layer
+  (`blueprint/decode.go`). Confirmed before building anything new, not
+  assumed: `sdk/codegen`'s own IR/template machinery (schema -> generic
+  binding library) doesn't drop in cleanly for blueprint codegen
+  (resolved concrete values -> source) -- real per-language adaptations
+  implemented explicitly (native default parameters for TS/Python vs.
+  Go's own functional-options workaround; `ResourceBinding<any, any>` for
+  TS; a mandatory dataclass Config for Python, matching Go's own struct
+  requirement for a reason TS doesn't share). Two real bugs caught by
+  this session's own hermetic tests before shipping: TypeScript's
+  `Computed<any>` failing to typecheck property access at all (a real
+  `deno check` error -- TS's conditional-type distribution over a naked
+  `any` produces a union whose `ComputedMarker` branch has no index
+  signature; fixed with a targeted `as any` cast), and Python's own local
+  variable naming initially reusing Go/TS's camelCase derivation instead
+  of genuine snake_case (caught by a hermetic test's own literal
+  assertion, fixed with a dedicated identifier helper). Live-verified:
+  the same CI-platform Ubxfile built `--lang all` against the real Claude
+  API, all three languages' own output compiling (`go build`)/
+  type-checking (`deno check --no-remote`)/importing (`python3`) cleanly,
+  the TS-compiled function called from a real TS stack and resolved
+  against the real `hashicorp/aws@6.54.0` provider's own schema with
+  UBI-123's own corrected `retention_days: 14` reaching the resolved
+  proposal correctly (`1209600` seconds), accepted into a real ledger
+  (`ubx ship` itself deliberately handed off to the founder, per
+  CLAUDE.md's own standing doctrine). Full account: docs/blueprint.md's
+  "Multi-language codegen" section (new) and its own Slice 4
+  implementation-slices entry; this file's own "Strata blueprints"
+  subsection updated in place. Slices 5-8 remain future sessions.
+
 - 2026-08-04 — UBI-74 Slice 3 (Strata blueprints, package/distribute):
   `ubx blueprint package <dir> -o <file>.tar.gz` (content hash over a
   built blueprint's own files via `core.CanonicalJSON` -- the SAME
@@ -5709,12 +5744,40 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slices 1–3 (UBI-74) — Slice 3 closed
+### Strata blueprints: Slices 1–4 (UBI-74) — Slice 4 closed
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
 rejected intermediate designs); docs/blueprint.md is the authoritative
-build doc for Slices 1–3. This section is a pointer, not a duplicate.
+build doc for Slices 1–4. This section is a pointer, not a duplicate.
+
+Slice 4 (multi-language) built `--lang go|ts|py|all` on `ubx blueprint
+build`: the SAME single AI draft compiled into up to three sibling
+package directories (`go/`/`ts/`/`py/`) by three independent generators
+sharing one new language-neutral decode/dependency/topo-sort layer
+(`blueprint/decode.go`). Confirmed before building anything new, not
+assumed: `sdk/codegen`'s own IR/template machinery (schema -> generic
+binding library) doesn't drop in cleanly for blueprint codegen (resolved
+concrete values -> source) — a genuinely different problem, real
+adaptations implemented per language (native default parameters for
+TS/Python vs. Go's own functional-options workaround; `ResourceBinding<any,
+any>` for TS, matching its own runtime's plain-object-literal duck typing;
+a mandatory dataclass Config for Python, matching Go's own struct
+requirement for a reason TS doesn't share). Two real bugs caught by this
+session's own hermetic tests before shipping: TypeScript's `Computed<any>`
+failing to typecheck property access at all (fixed with a targeted `as
+any` cast), and Python's local variable naming initially reusing Go/TS's
+camelCase derivation instead of genuine snake_case (fixed with a
+dedicated identifier helper). Live-verified: the same CI-platform Ubxfile
+built `--lang all` against the real Claude API, all three languages'
+output compiling/typechecking/importing cleanly, the TS-compiled function
+called from a real TS stack and resolved against the real
+`hashicorp/aws@6.54.0` provider's own schema with UBI-123's own corrected
+`retention_days: 14` reaching the resolved proposal correctly, accepted
+into a real ledger (`ubx ship` itself deliberately handed off to the
+founder, per this project's own standing doctrine). Full account:
+docs/blueprint.md's "Multi-language codegen" section and its own Slice 4
+implementation-slices entry.
 
 Slice 3 (package/distribute) built `ubx blueprint package`/`pull`/
 `verify`: a content hash over a built blueprint's own files (`core.
@@ -5761,10 +5824,10 @@ already know how to substitute later. Full account, including the
 `params: default` (parsed, not yet load-bearing at Go-codegen time —
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
-Slices 2 (local call) and 3 (package/distribute) are both closed, per
-this section's own updated heading and the Slice 3 paragraph above.
-Slices 4–8 (multi-language, cross-medium calling, provenance/render, OCI
-push, tarball delivery) are each their own future session, tracked in
+Slices 2 (local call), 3 (package/distribute), and 4 (multi-language) are
+all closed, per this section's own updated heading and the Slice 3/4
+paragraphs above. Slices 5–8 (cross-medium calling, provenance/render,
+OCI push, tarball delivery) are each their own future session, tracked in
 UBI-74's own implementation-breakdown comment. Nesting is UBI-121; the
 bound policy engine is UBI-118 — both
 split off UBI-74 already, tracked separately.

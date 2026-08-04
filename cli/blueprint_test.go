@@ -28,7 +28,7 @@ func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
 
-	out, err := runUbx(t, nil, "blueprint", "build", dir)
+	out, err := runUbx(t, nil, "blueprint", "build", dir, "--lang", "go")
 	if err != nil {
 		t.Fatalf("blueprint build: %v\noutput:\n%s", err, out)
 	}
@@ -36,13 +36,17 @@ func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
 		t.Fatalf("output = %q, want a built-resource-count line", out)
 	}
 
-	for _, want := range []string{"go.mod", "bindings.go", "ciplatform.go"} {
+	for _, want := range []string{"go/go.mod", "go/bindings.go", "go/ciplatform.go"} {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 			t.Fatalf("expected %s to be written: %v", want, err)
 		}
 	}
+	// --lang go alone must not also produce ts/py output.
+	if _, err := os.Stat(filepath.Join(dir, "ts")); !os.IsNotExist(err) {
+		t.Fatalf("--lang go should not produce a ts/ directory (err = %v)", err)
+	}
 
-	fn, err := os.ReadFile(filepath.Join(dir, "ciplatform.go"))
+	fn, err := os.ReadFile(filepath.Join(dir, "go", "ciplatform.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +61,49 @@ func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
 	}
 	if !strings.Contains(string(fake.lastReq.Content), "repo_name") || !strings.Contains(string(fake.lastReq.Content), "PARAMETERIZED BLUEPRINT") {
 		t.Fatalf("adapter content missing the parameter-preservation preamble:\n%s", fake.lastReq.Content)
+	}
+}
+
+// TestBlueprintBuild_DefaultLangBuildsAllThree confirms Slice 4's own
+// resolved "--lang default" design: omitting --lang entirely builds ALL
+// THREE languages from the SAME single AI draft call (fake.calls tracks
+// how many times the adapter itself was invoked -- must stay 1, not 3,
+// proving the draft genuinely isn't repeated per language).
+func TestBlueprintBuild_DefaultLangBuildsAllThree(t *testing.T) {
+	fake := &fakeIntentAdapter{draft: blueprintTestDraft}
+	withBuildIntentAdapter(t, fake)
+
+	dir := filepath.Join(t.TempDir(), "ci-platform")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
+
+	out, err := runUbx(t, nil, "blueprint", "build", dir)
+	if err != nil {
+		t.Fatalf("blueprint build (no --lang): %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "go, ts, py") {
+		t.Fatalf("output = %q, want it to name all three languages", out)
+	}
+	for _, want := range []string{"go/ciplatform.go", "ts/ciplatform.ts", "py/ciplatform.py"} {
+		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
+			t.Fatalf("expected %s to be written: %v", want, err)
+		}
+	}
+	if fake.calls != 1 {
+		t.Fatalf("intent-provider adapter was called %d time(s), want exactly 1 (one draft, three languages compiled from it)", fake.calls)
+	}
+}
+
+func TestBlueprintBuild_InvalidLangFlag(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ci-platform")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nresources: hello\n")
+	if _, err := runUbx(t, nil, "blueprint", "build", dir, "--lang", "rust"); err == nil {
+		t.Fatal("expected an error for --lang rust, got nil")
 	}
 }
 
@@ -86,11 +133,11 @@ func TestBlueprintBuild_DefaultsToCurrentDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
-	if _, err := runUbx(t, nil, "blueprint", "build"); err != nil {
+	if _, err := runUbx(t, nil, "blueprint", "build", "--lang", "go"); err != nil {
 		t.Fatalf("blueprint build (no dir arg): %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "ciplatform.go")); err != nil {
-		t.Fatalf("expected ciplatform.go to be written into the current directory: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "go", "ciplatform.go")); err != nil {
+		t.Fatalf("expected go/ciplatform.go to be written into the current directory: %v", err)
 	}
 }
 
@@ -101,8 +148,13 @@ func writeBuiltBlueprintDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: hello\n")
-	writeFile(t, filepath.Join(dir, "go.mod"), "module ciplatform\n\ngo 1.23\n")
-	writeFile(t, filepath.Join(dir, "ciplatform.go"), "package ciplatform\n\nfunc CIPlatform(repoName string) {}\n")
+	// Nested under go/ (Slice 4: sibling per-language output directories),
+	// mirroring what `ubx blueprint build --lang go` itself now writes.
+	if err := os.MkdirAll(filepath.Join(dir, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "go", "go.mod"), "module ciplatform\n\ngo 1.23\n")
+	writeFile(t, filepath.Join(dir, "go", "ciplatform.go"), "package ciplatform\n\nfunc CIPlatform(repoName string) {}\n")
 	return dir
 }
 
@@ -140,7 +192,7 @@ func TestBlueprintVerify_TamperedFile_Fails(t *testing.T) {
 		t.Fatalf("blueprint package: %v", err)
 	}
 
-	writeFile(t, filepath.Join(dir, "ciplatform.go"), "package ciplatform\n\n// tampered\n")
+	writeFile(t, filepath.Join(dir, "go", "ciplatform.go"), "package ciplatform\n\n// tampered\n")
 
 	if _, err := runUbx(t, nil, "blueprint", "verify", dir); err == nil {
 		t.Fatal("blueprint verify: expected an error after tampering, got nil")
@@ -175,7 +227,7 @@ func TestBlueprintPull_LocalToGitToVerify_RealGoBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(built, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
-	if _, err := runUbx(t, nil, "blueprint", "build", built); err != nil {
+	if _, err := runUbx(t, nil, "blueprint", "build", built, "--lang", "go"); err != nil {
 		t.Fatalf("blueprint build: %v", err)
 	}
 
@@ -230,7 +282,7 @@ func TestBlueprintPull_LocalToGitToVerify_RealGoBuild(t *testing.T) {
 	if _, err := os.Stat(sdkGoDir); err != nil {
 		t.Skipf("sdk/go not found at %s, skipping compile check: %v", sdkGoDir, err)
 	}
-	goModPath := filepath.Join(dest, "go.mod")
+	goModPath := filepath.Join(dest, "go", "go.mod")
 	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +293,7 @@ func TestBlueprintPull_LocalToGitToVerify_RealGoBuild(t *testing.T) {
 	}
 
 	buildCmd := exec.Command("go", "build", "./...")
-	buildCmd.Dir = dest
+	buildCmd.Dir = filepath.Join(dest, "go")
 	buildCmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build (pulled copy): %v: %s", err, out)
