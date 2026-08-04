@@ -242,11 +242,13 @@ itself to everywhere else):
   Sonnet 5 (both current-generation, either is a reasonable adapter
   default; `[intent].model`, below, is user-configurable either way). No
   beta header required. This is the "API-level constraint" layer above.
-- **Model + effort**: `claude-opus-4-8` as the adapter's own hardcoded
-  fallback default when `[intent].model` is unset — this codebase's
-  standing default for anything not explicitly pinned by the user, same
-  posture `ubx init`'s own template defaults already take. `effort:
-  "high"` as the request default (this is a reasoning-shaped task —
+- **Model + effort**: `claude-sonnet-5` as the adapter's own hardcoded
+  fallback default when `[intent].model` is unset (UBI-87 — was
+  `claude-opus-4-8`; a zero-config user was silently burning opus
+  pricing on every call with no warning, a real cost trap) — this
+  codebase's standing default for anything not explicitly pinned by the
+  user, same posture `ubx init`'s own template defaults already take.
+  `effort: "high"` as the request default (this is a reasoning-shaped task —
   surfacing genuine ambiguity, not a bare classification/extraction call —
   so `low`/`medium` risk under-thinking the exact cases this arc's whole
   design center cares most about getting right); not user-configurable in
@@ -423,7 +425,7 @@ adapter-vendor-defined arbitrary keys:
 ```hcl
 intent = {
   adapter = "claude"                            # required: "claude" | "openai" | "gemini" | "ollama"
-  model   = "claude-opus-4-8"                    # optional: adapter's own hardcoded default otherwise
+  model   = "claude-sonnet-5"                    # optional: adapter's own hardcoded default otherwise
   key_ref = { env = "ANTHROPIC_API_KEY" }        # required: NEVER a literal key
 }
 ```
@@ -549,7 +551,7 @@ sign `cost_delta`/`blast_radius`/every resolved config value.
     "summary": "provision a database for payments, modeled on staging, smaller",
     "sources": [
       { "kind": "document", "ref": "payments.md", "content_hash": "sha256:..." },
-      { "kind": "intent_provider", "ref": "claude:claude-opus-4-8", "content_hash": "sha256:..." }
+      { "kind": "intent_provider", "ref": "claude:claude-sonnet-5", "content_hash": "sha256:..." }
     ],
     "assumptions": [
       {
@@ -883,7 +885,7 @@ own full JSON content (content-addressed, mirroring `HashDocument`'s
 existing scheme -- `HashDocument` is reused unchanged for this, despite
 the name; its doc comment now says so). The file records: every turn
 verbatim (`Turn{Text, At}`), the adapter name and model pinned
-(`claude`, `claude-opus-4-8`, etc.), a session start timestamp, and the
+(`claude`, `claude-sonnet-5`, etc.), a session start timestamp, and the
 final `intent/v1` draft the session produced -- but that embedded draft
 is a PRE-provenance copy (`intent.sources` empty). This avoids a
 circular hash: the dialogue file can't reference its own hash inside

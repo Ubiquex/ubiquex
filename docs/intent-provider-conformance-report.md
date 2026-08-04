@@ -35,7 +35,7 @@ honest, not a defect in the harness.
 
 | Adapter | Status | Notes |
 | --- | --- | --- |
-| **Claude** (`intentprovider/claude`) | **Supported** | This report's own subject. `claude-opus-4-8` default, `output_config.format` structured output, `effort: "high"`. |
+| **Claude** (`intentprovider/claude`) | **Supported** | This report's own subject. `claude-opus-4-8` default at the time of this report's runs below; UBI-87 later moved the zero-config default to `claude-sonnet-5` (cost trap fix, unrelated to conformance — see docs/intent-provider.md). `output_config.format` structured output, `effort: "high"`. |
 | OpenAI | Not built | Named in the ticket's own roster (Claude → OpenAI → Gemini → local); earns "supported" via this identical suite whenever it's built, not by existing. |
 | Gemini | Not built | `[intent].auth`/`vertex` config shape already settled (docs/intent-provider.md's own "Gemini/Vertex" section, `.ubx/config`'s `[intent]` table) — no adapter code yet. |
 | Local (ollama-class) | Not built | Designed for, not built — docs/intent-provider.md's own "Out of scope for v1." |

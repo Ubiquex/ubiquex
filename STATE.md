@@ -4,6 +4,79 @@
 
 ## Current phase
 
+**UBI-87 (2026-08-04) — intent-provider zero-config model default changed from `claude-opus-4-8` to `claude-sonnet-5`: a real founder cost trap (a new/unconfigured user silently burning opus pricing on every `plan`/`propose`/`chat` call, discovered by hitting a real credit wall) closed at the one hardcoded fallback, plus every place that fallback was documented or asserted in a hermetic test.**
+
+**The fix itself**: `intentprovider/claude/adapter.go`'s `DefaultModel`
+constant — the sole place `New()` resolves a model when `Config.Model`
+is empty (`cli/intentadapter.go`'s `buildIntentAdapter` is the only
+caller, itself fed straight from `[intent].model` with no other
+resolution layer in between) — changed from `"claude-opus-4-8"` to
+`"claude-sonnet-5"`. One constant, no other runtime logic touched.
+
+**Downstream fixes this one constant change required, found by grep, not
+assumed absent**: `intentprovider/claude/adapter_live_test.go`'s
+`rosterModels` map used to alias `"opus": claude.DefaultModel` — with
+the constant repointed, that would have silently stopped exercising
+opus at all in the live per-model conformance test (two roster entries
+both resolving to sonnet-5, one mislabeled) rather than failing loudly.
+Fixed by spelling every roster entry as its own explicit literal
+instead of aliasing off the constant. `cli/stackcascade_test.go`'s
+`TestPlan_FromDoc_StackFromConfig_NoFlag` hardcoded the old zero-config
+progress line (`"drafting via claude:claude-opus-4-8… ✓ · resolving…"`)
+as its own expected string — updated to sonnet-5, still a real
+hermetic assertion, not weakened.
+
+**Hermetic test, per the ticket's own explicit ask**:
+`intentprovider/claude/adapter_test.go`'s `TestNew_DefaultsModel` now
+asserts the zero-config model against the literal string
+`"claude-sonnet-5"`, not just against `DefaultModel` itself — so a
+future accidental revert of the constant back to opus still fails this
+test even if nothing else changed alongside it.
+
+**Docs updated in the same session, scoped deliberately**: `cli/config.mdx`
+(ubiquex-docs) gained a new "Zero-config model default" subsection
+under `[intent]` stating plainly what model is used when `[intent]` is
+absent or `model` is unset, and how to override it — the ticket's own
+explicit ask. `cli/plan.mdx`'s illustrative `--from-doc` progress-line
+transcript updated to sonnet-5 too (mechanical — read directly off
+`cli/plan.go`'s own `Fprintf` format string, not a live re-run).
+Internal `docs/intent-provider.md`, `docs/schema.md`, and
+`docs/cli-output-spec.md` updated the same way — all illustrative
+examples, none content-hash-tied. Deliberately **left untouched**:
+`ubiquex-docs/guides/chat.mdx`, `ubiquex-docs/cli/why.mdx`, and
+`ubiquex-docs/guides/md-medium.mdx`'s own `claude-opus-4-8` mentions —
+these are real, content-hash-addressed transcripts captured from an
+actual 2026-07-27 session (the hash is over the byte content including
+the model string); editing the model name in them would desync the
+displayed hash from the displayed content, i.e. make the doc actually
+wrong instead of just stale. `docs/intent-provider-conformance-report.md`'s
+per-model results table (UBI-65's own real, timed, historical
+opus/sonnet-5/haiku runs) also left untouched for the same reason — only
+its one *current-state* claim ("`claude-opus-4-8` default") got a
+dated correction note, the historical numbers themselves are a
+published record of what actually ran, not a description of today's
+default.
+
+**`ubx init`'s own suggestion, implemented (small enough to not defer)**:
+every `ubx init` run now prints one extra line unconditionally — "AI
+drafting (...) defaults to model claude-sonnet-5 if left unconfigured"
+— even though the minimal template never writes an `[intent]` block
+itself. Deliberately unconditional, not gated behind any flag: the
+founder's own cost-trap moment was hitting the wall with *no* prior
+warning at all, so the warning needs to land at the one moment every
+new stack passes through `ubx init` — verified manually (`ubx init` in
+a scratch dir, real stdout inspected), not just asserted from reading
+the code.
+
+**Full suite green** (`go test ./...`, all packages, including the
+touched `cli`/`intentprovider/claude` packages specifically).
+`make build` rebuilt and `ubx version` confirmed
+(`dev+965acb0-dirty` pre-commit, per this project's own stale-binary
+discipline). `mint validate` and `mint broken-links` both clean on
+ubiquex-docs.
+
+## Current phase (previous)
+
 **UBI-117 (2026-08-04) — `ubx-sdk-azure-py` live: Azure's Python sibling, the FINAL row of UBI-103's original four-provider rollout. UBI-116's shortname/mechanical-name divergence bug (pyproject.toml's `name` field) checked and fixed BEFORE the first dispatch this time, per the ticket's own explicit instruction — clean on the first try, no second round needed.**
 
 **Repo confirmed before anything else**: `github.com/ubiquex/ubx-sdk-azure-py`

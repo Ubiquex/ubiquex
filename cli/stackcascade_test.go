@@ -45,7 +45,7 @@ func TestPlan_FromDoc_StackFromConfig_NoFlag(t *testing.T) {
 		t.Fatalf("expected the resolved delta's own blast radius, got: %s", out)
 	}
 
-	wantProgress := "drafting via claude:claude-opus-4-8… ✓ · resolving…"
+	wantProgress := "drafting via claude:claude-sonnet-5… ✓ · resolving…"
 	progressIdx := strings.Index(out, wantProgress)
 	receiptIdx := strings.Index(out, "Plan  playground")
 	if progressIdx < 0 {

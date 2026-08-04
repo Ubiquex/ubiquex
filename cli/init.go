@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
 // docsConfigRef is the one place this file names where the full,
@@ -199,6 +200,15 @@ Refuses to overwrite an existing config unless --force is given.`,
 			st := newStyler(cmd)
 			fmt.Fprintf(out, "%s\n", st.Green(fmt.Sprintf("+ %s has been generated successfully", path)))
 			fmt.Fprintf(out, "%s\n", st.Dim(fmt.Sprintf("    see %s", docsConfigRef)))
+			// UBI-87: printed unconditionally, even though the minimal
+			// template never writes an [intent] block itself -- the founder
+			// cost-trap this ticket fixes was hitting a credit wall with NO
+			// prior warning at all, so the warning has to show up here, at
+			// the one moment every new stack passes through, not only for
+			// whoever thinks to open cli/config.mdx first.
+			fmt.Fprintf(out, "%s\n", st.Dim(fmt.Sprintf(
+				"    AI drafting (ubx propose --from-doc, ubx plan --from-doc, ubx chat) defaults to model %s if left unconfigured -- see %s, [intent]",
+				claude.DefaultModel, docsConfigRef)))
 			if !hasProvider(values) {
 				fmt.Fprintf(out, "next: add a provider (re-run with --source/--provider-version, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
 			} else {

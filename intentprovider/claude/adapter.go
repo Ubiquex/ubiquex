@@ -25,7 +25,18 @@ import (
 // Config.Model is unset -- this codebase's standing default for anything
 // not explicitly pinned by the user (docs/architecture.md's own
 // "provider_configs" freeform-but-defaulted convention, applied here).
-const DefaultModel = "claude-opus-4-8"
+//
+// UBI-87: was claude-opus-4-8. A zero-config user (no [intent] block, or
+// an [intent] block with no model field) was silently burning opus
+// pricing on every plan/propose/chat call -- a real cost trap, found live
+// by the founder hitting a credit wall with no prior warning. sonnet-5 is
+// the standing "good balance of cost/quality" tier project-wide, and
+// UBI-65's fix means even haiku now handles this project's hardest tested
+// case (the IAM attach-policy shape) correctly -- sonnet-5 as the silent
+// default is a comfortable, defensible choice, not a quality compromise.
+// docs/intent-provider.md and cli/config.mdx both document this default
+// explicitly so it's never a silent surprise either way again.
+const DefaultModel = "claude-sonnet-5"
 
 // defaultEffort is the request-level reasoning effort this adapter
 // sends for any model that supports the parameter at all (effortSupported,

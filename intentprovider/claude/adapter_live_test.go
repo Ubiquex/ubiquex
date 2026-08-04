@@ -84,9 +84,15 @@ func TestAdapter_Conformance_RealAPI(t *testing.T) {
 // model's IAM-shape competence must be MEASURED, not assumed, so this
 // runs the full fixture suite -- not just fixture #3 -- once per model,
 // each its own named subtest.
+//
+// UBI-87: each model name is now spelled out as its own literal, not
+// aliased off claude.DefaultModel -- DefaultModel itself moved to
+// claude-sonnet-5, and aliasing "opus" to it here would have silently
+// stopped testing opus at all (two roster entries pointing at the same
+// sonnet-5 string, "opus" in name only) rather than failing loudly.
 var rosterModels = map[string]string{
-	"opus":     claude.DefaultModel,
-	"sonnet-5": "claude-sonnet-5",
+	"opus":     "claude-opus-4-8",
+	"sonnet-5": claude.DefaultModel,
 	"haiku":    "claude-haiku-4-5-20251001",
 }
 

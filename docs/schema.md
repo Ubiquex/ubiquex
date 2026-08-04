@@ -1448,7 +1448,7 @@ true by construction).
   "schema_version": 1,
   "stack": "payments",
   "adapter": "claude",
-  "model": "claude-opus-4-8",
+  "model": "claude-sonnet-5",
   "started_at": "2026-07-28T00:00:00Z",
   "turns": [
     { "text": "We need a Postgres database for payments, like staging but smaller.", "at": "2026-07-28T00:00:01Z" },

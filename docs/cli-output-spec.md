@@ -155,7 +155,7 @@ well).
 
 ## Progress narration (cross-verb)
 
-- plan --from-doc: "drafting via claude:claude-opus-4-8… ✓ validated · resolving…"
+- plan --from-doc: "drafting via claude:claude-sonnet-5… ✓ validated · resolving…"
 - sdk gen / fleet scans: per-item counters ("aws 1,682 types · 214/1,682")
 - Any reconcile/backoff loop: attempt counter + elapsed, always.
 
@@ -242,7 +242,7 @@ specifically (the intent-provider call is a real, seconds-long network
 round trip; parsing a `.d2` diagram or evaluating an SDK program is
 effectively instant, so neither gets one):
 ```
-drafting via claude:claude-opus-4-8… ✓ · resolving…
+drafting via claude:claude-sonnet-5… ✓ · resolving…
 ```
 Printed by `ubx plan` itself (not inside the shared `draftFromDoc`,
 which `ubx propose --from-doc` also calls) — `ubx propose --from-doc`

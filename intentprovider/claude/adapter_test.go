@@ -10,10 +10,20 @@ import (
 	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
+// TestNew_DefaultsModel is UBI-87's own hermetic regression test: a
+// zero-config Adapter (no Model given at all, matching an absent
+// [intent] block or an [intent] block with no model field) must resolve
+// to claude-sonnet-5, never claude-opus-4-8 -- pinned as a literal, not
+// just checked against DefaultModel itself, so this test still catches a
+// future accidental revert back to opus even if DefaultModel's own value
+// changed alongside it.
 func TestNew_DefaultsModel(t *testing.T) {
 	a := New(Config{})
 	if a.model != DefaultModel {
 		t.Errorf("model = %q, want default %q", a.model, DefaultModel)
+	}
+	if a.model != "claude-sonnet-5" {
+		t.Errorf("zero-config model = %q, want \"claude-sonnet-5\" (UBI-87: never claude-opus-4-8)", a.model)
 	}
 	if a.Name() != "claude" {
 		t.Errorf("Name() = %q, want \"claude\"", a.Name())
