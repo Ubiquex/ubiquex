@@ -2,6 +2,40 @@
 
 ## Changelog
 
+- 2026-08-04 — UBI-74 Slice 5 (Strata blueprints, cross-medium calling):
+  a diagram's own `ubx_blueprint`-classed node (`diagram/parse.go`, zero
+  AI, reusing UBI-91's own `ubx_required` structural-attribute mechanism)
+  and an md draft's own "Use blueprint X with..." recognition
+  (`intentprovider`, a thin AI mapping step that never re-drafts the
+  blueprint's own resources) both compile to the SAME new
+  `resolver.IntentFile.BlueprintCalls` wire field (purely additive,
+  matching `DependsOn`'s own precedent), expanded by `blueprint.
+  ExpandCalls` -- spliced into `ubx resolve` right before `resolver.
+  Resolve`, the one shared point every intent/v1 document passes through
+  regardless of medium -- into real resources by literally invoking the
+  target blueprint's own compiled function through the IDENTICAL
+  `goeval`/`tseval`/`pyeval` machinery `ubx resolve --from-code` already
+  runs for a hand-written SDK program (UBI-74 Slice 2's own real
+  invocation mechanism, never a second, parallel one). `resolver.Resolve`
+  itself hard-refuses an unexpanded `BlueprintCalls`, rather than
+  silently ignoring one. One real assumption checked live and corrected
+  before it became a design liability: Go's own placeholder `v0.0.0`
+  `ubx-sdk-go` version turned out to be genuinely real and resolvable,
+  not a placeholder needing a `go mod tidy`/local `replace` first -- the
+  real condition is just the module already being in the local Go module
+  cache. Live-verified: a hermetic byte-comparison test first (the SAME
+  blueprint called via a hand-written Go SDK program, a real `.d2`
+  diagram, and a real fake-adapter md draft all resolve to the IDENTICAL
+  delta shape), then the md leg for real -- a real `.md` document drafted
+  against the REAL Claude API correctly recognized the pattern with zero
+  hallucinated resources, resolved against the REAL
+  `hashicorp/aws@6.54.0` provider's own schema with UBI-123's own
+  corrected `retention_days: 14` reaching the resolved proposal
+  correctly, accepted into a real ledger. Full account: docs/blueprint.md's
+  "Cross-medium calling" section (new) and its own Slice 5
+  implementation-slices entry; this file's own "Strata blueprints"
+  subsection updated in place. Slices 6-8 remain future sessions.
+
 - 2026-08-04 — UBI-74 Slice 4 (Strata blueprints, multi-language):
   `ubx blueprint build --lang go|ts|py|all` -- the SAME single AI draft
   (drafted exactly once, regardless of language count) compiled into up
@@ -5744,12 +5778,42 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slices 1–4 (UBI-74) — Slice 4 closed
+### Strata blueprints: Slices 1–5 (UBI-74) — Slice 5 closed
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
 rejected intermediate designs); docs/blueprint.md is the authoritative
-build doc for Slices 1–4. This section is a pointer, not a duplicate.
+build doc for Slices 1–5. This section is a pointer, not a duplicate.
+
+Slice 5 (cross-medium calling) built a diagram's own `ubx_blueprint`-
+classed node (`diagram/parse.go`, zero AI, reusing UBI-91's own
+`ubx_required` structural-attribute mechanism) and an md draft's own
+"Use blueprint X with..." recognition (`intentprovider`, a thin AI
+mapping step that never re-drafts the blueprint's own resources) —
+both compiling to the SAME new `resolver.IntentFile.BlueprintCalls`
+wire field, expanded by `blueprint.ExpandCalls` (spliced into `ubx
+resolve` right before `resolver.Resolve`) into real resources by
+literally invoking the target blueprint's own compiled function through
+the IDENTICAL `goeval`/`tseval`/`pyeval` machinery `ubx resolve
+--from-code` already runs for a hand-written SDK program (UBI-74 Slice
+2's own real invocation mechanism, never a second, parallel one).
+Confirmed live and corrected before it became a design liability: an
+initial assumption that Go's own placeholder `v0.0.0` `ubx-sdk-go`
+version would need a `go mod tidy`/local `replace` first was checked
+directly with a real build and found wrong — `v0.0.0` is a genuinely
+real, resolvable version; the actual condition is just the module
+already being in the local Go module cache. Live-verified with a
+hermetic byte-comparison test first (the SAME blueprint called via a
+hand-written Go SDK program, a real `.d2` diagram, and a real fake-
+adapter md draft all resolve to the IDENTICAL delta shape), then the md
+leg for real: a real `.md` document drafted against the REAL Claude API
+correctly recognized the pattern with zero hallucinated resources,
+resolved against the REAL `hashicorp/aws@6.54.0` provider's own schema
+with UBI-123's own corrected `retention_days: 14` reaching the resolved
+proposal correctly, accepted into a real ledger (`ubx ship` itself
+handed off to the founder). Full account: docs/blueprint.md's
+"Cross-medium calling" section and its own Slice 5 implementation-slices
+entry.
 
 Slice 4 (multi-language) built `--lang go|ts|py|all` on `ubx blueprint
 build`: the SAME single AI draft compiled into up to three sibling
@@ -5824,12 +5888,12 @@ already know how to substitute later. Full account, including the
 `params: default` (parsed, not yet load-bearing at Go-codegen time —
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
-Slices 2 (local call), 3 (package/distribute), and 4 (multi-language) are
-all closed, per this section's own updated heading and the Slice 3/4
-paragraphs above. Slices 5–8 (cross-medium calling, provenance/render,
-OCI push, tarball delivery) are each their own future session, tracked in
-UBI-74's own implementation-breakdown comment. Nesting is UBI-121; the
-bound policy engine is UBI-118 — both
+Slices 2 (local call), 3 (package/distribute), 4 (multi-language), and 5
+(cross-medium calling) are all closed, per this section's own updated
+heading and the Slice 3/4/5 paragraphs above. Slices 6–8 (provenance/
+render, OCI push, tarball delivery) are each their own future session,
+tracked in UBI-74's own implementation-breakdown comment. Nesting is
+UBI-121; the bound policy engine is UBI-118 — both
 split off UBI-74 already, tracked separately.
 
 ## Deferred (explicitly not now)

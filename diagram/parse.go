@@ -48,6 +48,33 @@ const externalClass = "external"
 // refusal this reserved name's own sibling values are checked against.
 const ubxRequiredKey = "ubx_required"
 
+// ubxBlueprintClass is UBI-74 Slice 5's own diagram calling convention:
+// a node classed exactly this is never a resource-create at all -- its
+// own attributes (read directly, no ubx_required-style nested reserved
+// subtree needed, since EVERY attribute here is meaningful literal
+// content, not an escape hatch layered on top of topology-only parsing)
+// name a blueprint to call plus its own parameter values. Reuses the
+// EXACT structural-attribute-reading mechanism ubx_required already
+// established (D2's own dotted-path shorthand compiling to a real child
+// object per attribute, Label.Value holding the raw text) -- zero AI
+// anywhere in this path, per the original design (docs/blueprint.md's
+// own "Cross-medium calling" section).
+const ubxBlueprintClass = "ubx_blueprint"
+
+// blueprintRefAttr/blueprintRefKeyAttr/blueprintPathAttr are the three
+// reserved attribute names a ubx_blueprint node's own children may use
+// -- blueprintRefAttr is required (which blueprint to call, a local
+// path or git URL, mirroring blueprint.Pull's own addressing exactly,
+// UBI-74 Slice 3); blueprintRefKeyAttr/blueprintPathAttr are optional,
+// meaningful only for a git Blueprint reference (mirroring blueprint.
+// Pull's own --ref/--path parameters). Every OTHER child on the node is
+// a blueprint call parameter, keyed by its own D2 identifier.
+const (
+	blueprintRefAttr    = "blueprint"
+	blueprintRefKeyAttr = "blueprint_ref"
+	blueprintPathAttr   = "blueprint_path"
+)
+
 // Options configures Parse. NeighborLedgers maps a referenced stack name
 // to an explicit ledger_dir override (docs/diagram-medium.md's own
 // "--neighbor-ledger <stack>=<path>", repeatable on the CLI, slice 3 --
@@ -138,6 +165,16 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			kind[absID] = nodeKindReference
 			refAddress[absID] = addr
 			_ = ledgerDir // recorded for the informational note built below, not a wire-level $cross (see "Cross-stack edges" note)
+			continue
+		}
+
+		if hasClass(obj.Classes, ubxBlueprintClass) {
+			call, err := blueprintCallFromNode(obj, label, opts)
+			if err != nil {
+				return nil, fmt.Errorf("diagram: %s: %w", absID, err)
+			}
+			kind[absID] = nodeKindBlueprintCall
+			intent.BlueprintCalls = append(intent.BlueprintCalls, call)
 			continue
 		}
 
@@ -286,6 +323,16 @@ const (
 	nodeKindResource nodeKind = iota
 	nodeKindReference
 	nodeKindUnresolved
+	// nodeKindBlueprintCall (UBI-74 Slice 5) is inert everywhere the
+	// existing edge-translation logic (Parse's own "Third pass," below)
+	// already treats "anything that isn't nodeKindResource/
+	// nodeKindReference" as having no ubx-legible meaning as an edge
+	// endpoint -- no changes needed there at all: a blueprint call has
+	// no known resource address until it's EXPANDED (blueprint.
+	// ExpandCalls, after this package returns), so wiring a topology
+	// edge to/from one isn't supported this slice, silently a no-op,
+	// same as an edge touching an unresolved node already is.
+	nodeKindBlueprintCall
 )
 
 // pendingResource carries what Parse's first pass already knows about a
@@ -322,6 +369,16 @@ func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 	var leaves []*d2graph.Object
 	for _, obj := range g.Objects {
 		if inUbxRequiredSubtree(obj) {
+			continue
+		}
+		// A ubx_blueprint node's own children are ALWAYS just its own
+		// literal attribute values (blueprintCallFromNode reads them
+		// directly, below) -- never real topology, so this node is
+		// always a leaf regardless of how many children it has, the
+		// same reasoning onlyUbxRequiredChild already applies to an
+		// ordinary resource node's own reserved ubx_required subtree.
+		if hasClass(obj.Classes, ubxBlueprintClass) {
+			leaves = append(leaves, obj)
 			continue
 		}
 		if len(obj.ChildrenArray) == 0 || onlyUbxRequiredChild(obj) {
@@ -379,6 +436,59 @@ func hasClass(classes []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// blueprintCallFromNode reads a ubx_blueprint-classed node's own
+// children directly (D2's own dotted-path shorthand -- "blueprint:
+// value" inside the node's braces compiles to a real child object named
+// "blueprint" whose own Label.Value holds the raw text, exactly the
+// shape ubxRequiredConfig already reads one level deeper) into a
+// resolver.BlueprintCall: blueprintRefAttr (required) plus
+// blueprintRefKeyAttr/blueprintPathAttr (both optional, git-only) are
+// the three reserved names; every OTHER child is a blueprint call
+// parameter, verbatim raw text -- type coercion against the target
+// blueprint's own declared params happens entirely at expansion time
+// (blueprint.ExpandCalls), never here (this package has no schema/
+// Ubxfile access at all, by design -- docs/diagram-medium.md's own
+// "lossy-medium," zero-I/O parsing discipline).
+//
+// A relative (non-URL, non-absolute) blueprint: value is resolved
+// against opts.BaseDir here, once -- the same convention this package's
+// own neighbor-ledger resolution already establishes for "relative to
+// what," so a BlueprintCall's own Blueprint field is always either an
+// already-absolute local path or a genuine URL by the time this
+// function returns, never ambiguous about its own base directory later.
+func blueprintCallFromNode(obj *d2graph.Object, label string, opts Options) (resolver.BlueprintCall, error) {
+	call := resolver.BlueprintCall{Name: label, Args: map[string]string{}}
+	var haveBlueprint bool
+	for _, child := range obj.ChildrenArray {
+		switch child.ID {
+		case blueprintRefAttr:
+			call.Blueprint = child.Label.Value
+			haveBlueprint = true
+		case blueprintRefKeyAttr:
+			call.Ref = child.Label.Value
+		case blueprintPathAttr:
+			call.Path = child.Label.Value
+		default:
+			call.Args[child.ID] = child.Label.Value
+		}
+	}
+	if !haveBlueprint || strings.TrimSpace(call.Blueprint) == "" {
+		return resolver.BlueprintCall{}, fmt.Errorf("ubx_blueprint node %q is missing a %q attribute naming the blueprint to call", label, blueprintRefAttr)
+	}
+	call.Blueprint = resolveBlueprintRefBaseDir(call.Blueprint, opts.BaseDir)
+	return call, nil
+}
+
+// resolveBlueprintRefBaseDir joins a relative local blueprint reference
+// against baseDir -- a git URL (contains "://") or an already-absolute
+// path passes through unchanged.
+func resolveBlueprintRefBaseDir(ref, baseDir string) string {
+	if strings.Contains(ref, "://") || filepath.IsAbs(ref) || baseDir == "" {
+		return ref
+	}
+	return filepath.Join(baseDir, ref)
 }
 
 // firstNonExternalClass returns the one class name docs/diagram-medium.md's

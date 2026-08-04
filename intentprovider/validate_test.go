@@ -92,7 +92,7 @@ func TestParseAndValidate_RejectsCases(t *testing.T) {
 			// about a change and never actually recorded it.
 			name:    "empty resources and empty destroys",
 			raw:     `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"provision a database like staging but smaller","assumptions":[{"text":"chose db.t3.small","affects":["aws_db_instance.payments.instance_class"]}],"defaults":[],"questions":[]},"resources":[],"destroys":[]}`,
-			wantErr: "no resources and no destroys",
+			wantErr: "no resources, no destroys, and no blueprint_calls",
 		},
 	}
 
@@ -139,5 +139,55 @@ func TestParseAndValidate_EmptyDraftAllowedWithKnownContext(t *testing.T) {
 	}
 	if len(draft.Resources) != 0 || len(draft.Destroys) != 0 {
 		t.Fatalf("expected an empty no-op draft, got resources=%+v destroys=%+v", draft.Resources, draft.Destroys)
+	}
+}
+
+// TestParseAndValidate_BlueprintCall is UBI-74 Slice 5's own required
+// hermetic proof for the md calling convention's wire shape: a draft
+// naming ONLY a blueprint_calls entry, no resources[] at all, is a
+// legitimate, complete draft (not the "described but never declared"
+// bug empty-resources normally catches) -- args decodes from its own
+// JSON-encoded string form into a real map[string]string.
+func TestParseAndValidate_BlueprintCall(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"call the ci-platform blueprint","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[{"name":"ci-platform call","blueprint":"../ci-platform","ref":"","path":"","args":"{\"repo_name\":\"payments-ci-artifacts\",\"queue_name\":\"payments-notifications\"}"}]}`
+	draft, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	if draft == nil {
+		t.Fatal("expected a non-nil draft")
+	}
+	if len(draft.Resources) != 0 {
+		t.Fatalf("expected zero resources[] for a blueprint-call-only draft, got %+v", draft.Resources)
+	}
+	if len(draft.BlueprintCalls) != 1 {
+		t.Fatalf("expected exactly one blueprint call, got %d", len(draft.BlueprintCalls))
+	}
+	call := draft.BlueprintCalls[0]
+	if call.Blueprint != "../ci-platform" {
+		t.Errorf("Blueprint = %q, want %q", call.Blueprint, "../ci-platform")
+	}
+	if call.Args["repo_name"] != "payments-ci-artifacts" || call.Args["queue_name"] != "payments-notifications" {
+		t.Fatalf("Args decoded wrong: %+v", call.Args)
+	}
+}
+
+// TestParseAndValidate_BlueprintCallMissingBlueprint confirms a
+// blueprint_calls entry with no blueprint reference is a hard, named
+// validation error -- never silently dropped or defaulted.
+func TestParseAndValidate_BlueprintCallMissingBlueprint(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[{"name":"x","blueprint":"","ref":"","path":"","args":"{}"}]}`
+	_, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) == 0 {
+		t.Fatal("expected a validation error for a blueprint_calls entry with no blueprint reference, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "blueprint_calls[0].blueprint") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error naming blueprint_calls[0].blueprint, got: %v", errs)
 	}
 }

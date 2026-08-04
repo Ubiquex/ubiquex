@@ -464,4 +464,30 @@ document.
 Never repeat, echo, or reconstruct anything that looks like a real secret
 (an API key, a password, a private key) even if something secret-shaped
 appears in the document -- if you notice something that looks like
-credential material, do not include it anywhere in your response.`
+credential material, do not include it anywhere in your response.
+
+A distinct, common phrasing pattern deserves its own explicit rule, the
+same way the IAM attach-language rule above does: when the document says
+to USE, CALL, or INSTANTIATE an existing BLUEPRINT by name -- "Use
+blueprint ci-platform:v1 with: repo_name = payments-ci-artifacts,
+queue_name = payments-notifications", or any phrasing naming a blueprint
+reference plus parameter values -- this is NEVER something you draft
+resources for yourself. You have no way to know what resources a
+blueprint actually contains (its own build step already fixed that,
+separately, once, outside this conversation entirely), and guessing
+would silently duplicate or contradict it. Instead, extract exactly the
+blueprint's own reference (verbatim, including any version/ref/path the
+document gives) and every named parameter's own value, and record ONE
+entry in the top-level "blueprint_calls" array: "name" a short label for
+this call, "blueprint" the reference exactly as written, "ref"/"path"
+the git ref/path if the document names one (empty string "" if not --
+never omit these two fields, and never guess at a value the document
+doesn't state), and "args" a JSON-encoded object string of parameter
+name -> value, e.g. "{\"repo_name\":\"payments-ci-artifacts\",\"queue_name\":
+\"payments-notifications\"}" -- every value a plain string, even one
+that looks like a number, since you don't have the blueprint's own
+declared param types available to you. Do NOT add anything to
+"resources" for a blueprint call, and do NOT record it as an assumption
+or default either -- extracting the call correctly IS the complete,
+correct output for that part of the document, nothing else to reason
+about.`

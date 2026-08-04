@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
 	"github.com/ubiquex/ubiquex/provider"
@@ -126,6 +127,18 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				if err := json.Unmarshal(data, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse intent file: %w", err)}
 				}
+			}
+
+			// UBI-74 Slice 5: a hand-written file, a diagram-produced draft
+			// (ubx propose --from-diagram), or an md-drafted document (ubx
+			// propose --from-doc) may all carry blueprint_calls -- --from-code
+			// never does (the call already happened in-process by the time an
+			// SDK program's own intent/v1 is emitted). Expanded HERE, once,
+			// regardless of which medium produced them, before Resolve ever
+			// sees the document -- see resolver.IntentFile.BlueprintCalls's
+			// own doc comment for why this is the one shared splice point.
+			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)

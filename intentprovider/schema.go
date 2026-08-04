@@ -85,10 +85,39 @@ func IntentDraftJSONSchema() map[string]any {
 			},
 		},
 	}
+	blueprintCall := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"name", "blueprint", "ref", "path", "args"},
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Short, human-readable label for this call -- never part of any resource's own address.",
+			},
+			"blueprint": map[string]any{
+				"type":        "string",
+				"description": "The blueprint reference exactly as the document names it -- a local path or a git URL, verbatim, never guessed or normalized.",
+			},
+			"ref": map[string]any{
+				"type":        "string",
+				"description": "Git ref (branch/tag/commit) if the document names one -- empty string if not applicable or not given.",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path within a git repo to the blueprint, if the document names one -- empty string if not applicable or not given.",
+			},
+			"args": map[string]any{
+				"type": "string",
+				"description": "A JSON-encoded object string mapping each parameter name to the exact string value the document gives it, " +
+					"e.g. \"{\\\"repo_name\\\":\\\"payments-ci-artifacts\\\"}\". Always string values here, regardless of the param's own real type -- " +
+					"you do not have the blueprint's own declared param types available, so never guess at a number or boolean literal.",
+			},
+		},
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"schema_version", "kind", "stack", "intent", "resources", "destroys"},
+		"required":             []string{"schema_version", "kind", "stack", "intent", "resources", "destroys", "blueprint_calls"},
 		"properties": map[string]any{
 			"schema_version": map[string]any{"type": "integer", "const": 1},
 			"kind":           map[string]any{"type": "string", "const": "ubx:intent/v1"},
@@ -129,6 +158,13 @@ func IntentDraftJSONSchema() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Canonical <stack>.<type>.<name> addresses to remove. Never inferred from a resource's absence -- only from an explicit removal request in the document.",
+			},
+			"blueprint_calls": map[string]any{
+				"type":  "array",
+				"items": blueprintCall,
+				"description": "One entry per \"Use blueprint X with...\"-style invocation the document names -- empty array if none. " +
+					"NEVER draft resources[] entries for a blueprint call yourself; you have no way to know what resources the " +
+					"blueprint actually contains, and guessing would silently duplicate or contradict what its own build step already fixed.",
 			},
 		},
 	}

@@ -564,3 +564,150 @@ role: "ci-runner-v13" {
 		t.Fatalf("Parse err = %v, want it to contain %q", err, want)
 	}
 }
+
+// TestParse_UbxBlueprint_NodeBecomesBlueprintCall is UBI-74 Slice 5's own
+// required hermetic proof for the diagram calling convention: a node
+// classed ubx_blueprint is NEVER classified as a resource (zero AI, pure
+// structural parsing, matching ubx_required's own established
+// mechanism) -- its own "blueprint" attribute plus every other literal
+// attribute become one resolver.BlueprintCall, verbatim, no provider/
+// schema lookup involved at all (unlike an ordinary resource node,
+// InferProvider is never even called for this node).
+func TestParse_UbxBlueprint_NodeBecomesBlueprintCall(t *testing.T) {
+	src := `
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "../ci-platform"
+  repo_name: "payments-ci-artifacts"
+  queue_name: "payments-notifications"
+}
+`
+	intent := mustParse(t, src, "payments", nil, Options{})
+	if len(intent.Resources) != 0 {
+		t.Fatalf("resources = %+v, want none -- a ubx_blueprint node must never be classified as a resource", intent.Resources)
+	}
+	if len(intent.BlueprintCalls) != 1 {
+		t.Fatalf("blueprint_calls = %+v, want exactly 1", intent.BlueprintCalls)
+	}
+	call := intent.BlueprintCalls[0]
+	if call.Name != "ci-platform call" {
+		t.Errorf("Name = %q, want %q", call.Name, "ci-platform call")
+	}
+	if call.Blueprint != "../ci-platform" {
+		t.Errorf("Blueprint = %q, want %q", call.Blueprint, "../ci-platform")
+	}
+	if call.Args["repo_name"] != "payments-ci-artifacts" || call.Args["queue_name"] != "payments-notifications" {
+		t.Fatalf("Args = %+v, want repo_name/queue_name set verbatim", call.Args)
+	}
+	// blueprint/blueprint_ref/blueprint_path are reserved -- never
+	// duplicated into Args.
+	if _, ok := call.Args["blueprint"]; ok {
+		t.Error("Args should not contain the reserved \"blueprint\" key")
+	}
+}
+
+// TestParse_UbxBlueprint_GitRefAndPath confirms blueprint_ref/
+// blueprint_path -- the git-source-only optional attributes -- parse
+// into BlueprintCall.Ref/Path, distinct from ordinary call params.
+func TestParse_UbxBlueprint_GitRefAndPath(t *testing.T) {
+	src := `
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "https://github.com/example/blueprints.git"
+  blueprint_ref: "v3"
+  blueprint_path: "ci-platform"
+  repo_name: "payments-ci-artifacts"
+}
+`
+	intent := mustParse(t, src, "payments", nil, Options{})
+	call := intent.BlueprintCalls[0]
+	if call.Ref != "v3" {
+		t.Errorf("Ref = %q, want %q", call.Ref, "v3")
+	}
+	if call.Path != "ci-platform" {
+		t.Errorf("Path = %q, want %q", call.Path, "ci-platform")
+	}
+	if _, ok := call.Args["blueprint_ref"]; ok {
+		t.Error("Args should not contain the reserved \"blueprint_ref\" key")
+	}
+	if _, ok := call.Args["blueprint_path"]; ok {
+		t.Error("Args should not contain the reserved \"blueprint_path\" key")
+	}
+}
+
+// TestParse_UbxBlueprint_MissingBlueprintAttr_Refused confirms a
+// ubx_blueprint node with no "blueprint:" attribute is a hard, named
+// parse error -- never silently dropped or deferred to expansion time.
+func TestParse_UbxBlueprint_MissingBlueprintAttr_Refused(t *testing.T) {
+	src := `
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  repo_name: "payments-ci-artifacts"
+}
+`
+	_, err := Parse("test.d2", strings.NewReader(src), "payments", nil, Options{})
+	if err == nil {
+		t.Fatal("Parse: expected an error for a missing blueprint: attribute, got nil")
+	}
+	if !strings.Contains(err.Error(), "blueprint") {
+		t.Fatalf("Parse err = %v, want it to name the missing blueprint attribute", err)
+	}
+}
+
+// TestParse_UbxBlueprint_RelativePathResolvedAgainstBaseDir confirms a
+// relative local blueprint: value is resolved against opts.BaseDir --
+// the SAME "relative to what" convention this package's own neighbor-
+// ledger resolution already establishes -- while a git URL passes
+// through completely unchanged.
+func TestParse_UbxBlueprint_RelativePathResolvedAgainstBaseDir(t *testing.T) {
+	src := `
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "../ci-platform"
+}
+`
+	intent := mustParse(t, src, "payments", nil, Options{BaseDir: "/home/user/stacks/payments"})
+	got := intent.BlueprintCalls[0].Blueprint
+	want := filepath.Join("/home/user/stacks/payments", "../ci-platform")
+	if got != want {
+		t.Errorf("Blueprint = %q, want %q", got, want)
+	}
+
+	src2 := `
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "https://github.com/example/blueprints.git"
+}
+`
+	intent2 := mustParse(t, src2, "payments", nil, Options{BaseDir: "/home/user/stacks/payments"})
+	if got := intent2.BlueprintCalls[0].Blueprint; got != "https://github.com/example/blueprints.git" {
+		t.Errorf("a git URL must pass through BaseDir resolution unchanged, got %q", got)
+	}
+}
+
+// TestParse_UbxBlueprint_MixedWithOrdinaryResource confirms a diagram
+// with BOTH an ordinary typed resource node AND a ubx_blueprint node
+// parses both correctly, independently -- the new node kind doesn't
+// disturb the existing classification/edge-translation passes at all.
+func TestParse_UbxBlueprint_MixedWithOrdinaryResource(t *testing.T) {
+	src := `
+classes: {
+  aws_vpc: {}
+}
+network: "main-vpc" {
+  class: aws_vpc
+}
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "../ci-platform"
+  repo_name: "payments-ci-artifacts"
+}
+`
+	intent := mustParse(t, src, "payments", []resolver.DeclaredProvider{awsProvider()}, Options{})
+	if len(intent.Resources) != 1 {
+		t.Fatalf("resources = %+v, want exactly 1 (the ordinary aws_vpc node)", intent.Resources)
+	}
+	if len(intent.BlueprintCalls) != 1 {
+		t.Fatalf("blueprint_calls = %+v, want exactly 1", intent.BlueprintCalls)
+	}
+}

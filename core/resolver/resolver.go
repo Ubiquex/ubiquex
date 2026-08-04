@@ -215,6 +215,65 @@ type IntentFile struct {
 	Intent        core.Intent      `json:"intent"`
 	Resources     []ResourceIntent `json:"resources"`
 	Destroys      []string         `json:"destroys,omitempty"`
+
+	// BlueprintCalls was added 2026-08-04 (UBI-74 Slice 5): one entry per
+	// blueprint invocation this document names -- a diagram's own
+	// ubx_blueprint-classed node (diagram/parse.go), or an md draft's own
+	// "Use blueprint X with..." recognition (intentprovider/validate.go),
+	// both compile down to this SAME shape. An SDK program's own direct
+	// function call to a blueprint package (UBI-74 Slice 2) never
+	// produces one -- the call already happened in-process by the time
+	// its own intent/v1 is emitted, so there is nothing left to expand.
+	//
+	// Purely additive and optional, matching DependsOn's own precedent
+	// (above): every OTHER producer of an intent file (a hand-written
+	// JSON file, ubx blueprint build's own draft, an SDK program's own
+	// evaluated output) leaves this nil and is completely unaffected.
+	// blueprint.ExpandCalls (the blueprint package -- core stays
+	// dependency-free of it, the same "core never imports a leaf
+	// package" discipline every other StateReader/EventLookup-shaped
+	// seam in this codebase already follows) expands every entry here
+	// into real Resources BEFORE Resolve (below) ever sees them --
+	// resolveOnce hard-refuses to run against a document that still
+	// carries an unexpanded entry, rather than silently ignoring it.
+	BlueprintCalls []BlueprintCall `json:"blueprint_calls,omitempty"`
+}
+
+// BlueprintCall is one blueprint invocation an intent/v1 document names
+// -- see IntentFile.BlueprintCalls's own doc comment for the full
+// account of where this comes from and how it gets expanded. Args is
+// always string-keyed/string-valued regardless of a param's own real
+// declared type (docs/blueprint.md's own "Cross-medium calling"
+// section) -- neither the diagram medium (a D2 node attribute's own raw
+// text) nor the md medium (an LLM extracting a value from prose) has
+// the target blueprint's own Ubxfile in hand at the point this struct
+// is populated, so type coercion (string -> the param's own real
+// string/number/bool type) is deferred entirely to expansion time, once
+// the target blueprint's own declared params are actually known.
+type BlueprintCall struct {
+	// Name is a short, human-readable label for this call (a diagram
+	// node's own label, or an md draft's own short description) -- used
+	// only for error messages and the synthesized calling stack's own
+	// intent.summary, never part of any resource's own address.
+	Name string `json:"name"`
+	// Blueprint names the blueprint to call -- an absolute or relative
+	// local filesystem path, or a git repository URL (Ref/Path below
+	// name which ref/location within it, mirroring blueprint.Pull's own
+	// parameter shape exactly, UBI-74 Slice 3). No OCI/Strata reference
+	// syntax yet (Slice 7).
+	Blueprint string `json:"blueprint"`
+	// Ref is the git ref (branch/tag/commit) to check out -- ignored
+	// for a local Blueprint path, optional for a git one (empty means
+	// whatever `git clone` itself checks out by default, matching
+	// blueprint.Pull's own "ref" parameter).
+	Ref string `json:"ref,omitempty"`
+	// Path is the blueprint's own location within the git repo --
+	// ignored for a local Blueprint path, optional for a git one
+	// (empty/"." means the repo root IS the blueprint, matching
+	// blueprint.Pull's own "path" parameter).
+	Path string `json:"path,omitempty"`
+	// Args maps a declared param name to its own raw string value.
+	Args map[string]string `json:"args"`
 }
 
 // ResourceIntent is one entry of IntentFile.Resources. Op is always
@@ -253,6 +312,13 @@ const (
 var (
 	// ErrUnknownIntentKind means IntentFile.Kind isn't "ubx:intent/v1".
 	ErrUnknownIntentKind = errors.New("resolve: unrecognized intent file kind")
+
+	// ErrUnexpandedBlueprintCalls means IntentFile.BlueprintCalls is
+	// still non-empty at Resolve time -- blueprint.ExpandCalls (or an
+	// equivalent) must run first and clear it; Resolve itself has no
+	// notion of a blueprint call at all (UBI-74 Slice 5), by design --
+	// see IntentFile.BlueprintCalls's own doc comment.
+	ErrUnexpandedBlueprintCalls = errors.New("resolve: intent file still has unexpanded blueprint_calls -- expand them into resources first")
 
 	// ErrInvalidOp means a resource intent's Op isn't "create" or "modify".
 	ErrInvalidOp = errors.New("resolve: resource op must be \"create\" or \"modify\"")
@@ -606,6 +672,9 @@ func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, k
 func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string) (*core.Proposal, error) {
 	if intent.Kind != IntentFileKind {
 		return nil, fmt.Errorf("%w: got %q", ErrUnknownIntentKind, intent.Kind)
+	}
+	if len(intent.BlueprintCalls) > 0 {
+		return nil, fmt.Errorf("%w (%d entries)", ErrUnexpandedBlueprintCalls, len(intent.BlueprintCalls))
 	}
 
 	batch := make(map[string]*batchEntry, len(intent.Resources))

@@ -38,12 +38,27 @@ import (
 // a content_hash or reliably know its own adapter/model identity string.
 // sources.go's PopulateSources fills this in after a draft validates.
 type wireIntentFile struct {
-	SchemaVersion int64                `json:"schema_version"`
-	Kind          string               `json:"kind"`
-	Stack         string               `json:"stack"`
-	Intent        wireIntent           `json:"intent"`
-	Resources     []wireResourceIntent `json:"resources"`
-	Destroys      []string             `json:"destroys"`
+	SchemaVersion  int64                `json:"schema_version"`
+	Kind           string               `json:"kind"`
+	Stack          string               `json:"stack"`
+	Intent         wireIntent           `json:"intent"`
+	Resources      []wireResourceIntent `json:"resources"`
+	Destroys       []string             `json:"destroys"`
+	BlueprintCalls []wireBlueprintCall  `json:"blueprint_calls"`
+}
+
+// wireBlueprintCall is UBI-74 Slice 5's own md calling-convention wire
+// shape -- mirrors wireResourceIntent's own "Config is a JSON-encoded
+// STRING" workaround exactly, for the identical reason (Args is
+// fundamentally open-shaped, param-name -> raw value, and a structured-
+// output schema must close every object node -- schema.go's own
+// IntentDraftJSONSchema has the full account).
+type wireBlueprintCall struct {
+	Name      string `json:"name"`
+	Blueprint string `json:"blueprint"`
+	Ref       string `json:"ref"`
+	Path      string `json:"path"`
+	Args      string `json:"args"` // JSON-encoded object string, param name -> raw string value
 }
 
 type wireIntent struct {
@@ -127,8 +142,8 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 	// context in the first place), not the original bug -- rejecting it
 	// would just reintroduce, one layer up, the exact "every unchanged
 	// resource drafts as a fresh create" defect UBI-85 exists to fix.
-	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 && !allowEmptyDraft {
-		errs = append(errs, "draft has no resources and no destroys -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[]")
+	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 && len(wire.BlueprintCalls) == 0 && !allowEmptyDraft {
+		errs = append(errs, "draft has no resources, no destroys, and no blueprint_calls -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[] (or, for a blueprint invocation, to blueprint_calls[])")
 	}
 
 	seen := map[string]bool{}
@@ -174,6 +189,30 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		}
 	}
 
+	blueprintCalls := make([]resolver.BlueprintCall, 0, len(wire.BlueprintCalls))
+	for i, c := range wire.BlueprintCalls {
+		path := fmt.Sprintf("blueprint_calls[%d]", i)
+		if c.Name == "" {
+			errs = append(errs, path+".name: must not be empty")
+		}
+		if c.Blueprint == "" {
+			errs = append(errs, path+".blueprint: must not be empty")
+		}
+		args := map[string]string{}
+		if c.Args != "" {
+			if err := json.Unmarshal([]byte(c.Args), &args); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.args: not a valid JSON object of string values: %v", path, err))
+			}
+		}
+		blueprintCalls = append(blueprintCalls, resolver.BlueprintCall{
+			Name:      c.Name,
+			Blueprint: c.Blueprint,
+			Ref:       c.Ref,
+			Path:      c.Path,
+			Args:      args,
+		})
+	}
+
 	for i, a := range wire.Intent.Assumptions {
 		if a.Text == "" {
 			errs = append(errs, fmt.Sprintf("intent.assumptions[%d].text: must not be empty", i))
@@ -204,7 +243,8 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 			Defaults:    wire.Intent.Defaults,
 			Questions:   wire.Intent.Questions,
 		},
-		Resources: resources,
-		Destroys:  wire.Destroys,
+		Resources:      resources,
+		Destroys:       wire.Destroys,
+		BlueprintCalls: blueprintCalls,
 	}, nil
 }
