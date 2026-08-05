@@ -32,6 +32,18 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 7. Background agents are not used in this project's sessions — work is sequential
    by design (a background docs agent wedged mid-session during the UX-fix arc;
    the fix is doing the work inline, in the foreground, every time).
+8. Any session claiming a fix is "published" or "live" for a shared runtime
+   (`sdk/go/runtime`, `sdk/ts/runtime`, `sdk/py`) or any per-provider bindings
+   repo must verify against the SEPARATE published repo/registry directly — a
+   real `git log`/`diff` against the actual separate repo, or a real registry
+   query (the Go module proxy, jsr.io, pypi.org) — never infer "published" from
+   a commit to the monorepo's own copy alone. (UBI-131: UBI-126's Go fix was
+   reported "committed and pushed" across multiple session summaries, meaning
+   only the monorepo's own `sdk/go/runtime/runtime.go` — the separate, real
+   `github.com/ubiquex/ubx-sdk-go` repo was never touched, still showing only
+   its original scaffold commit a full day later; caught only when the founder
+   pushed back on the status claim and a real `git log` was run against the
+   actual separate repo, not the monorepo.)
 
 ## Git rules (strict)
 

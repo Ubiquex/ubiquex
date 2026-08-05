@@ -152,6 +152,68 @@ misrepresented) depth of live verification.
 
 ## Current phase
 
+**UBI-131 (2026-08-06) — process fix institutionalized: sessions must verify a "published"/"live" claim for a shared runtime or bindings repo against the SEPARATE real repo/registry, never infer it from a monorepo commit alone. Documentation-only, no code touched.**
+
+Read the ticket fully — it names the exact real incident: UBI-126's own
+Go fix (`PushBlueprintSource`/`PopBlueprintSource`) was reported
+"committed and pushed" across multiple session summaries, meaning only
+the monorepo's own `sdk/go/runtime/runtime.go` — the separate, real
+`github.com/ubiquex/ubx-sdk-go` repo was never touched, still showing
+only its original scaffold commit a full day later, caught only when the
+founder pushed back on the status claim and a real `git log` was run
+against the actual separate repo. UBI-131's own description also notes
+this exact session's own UBI-126 work already did the RIGHT thing for
+TS/Python (checked `jsr.io`/`pypi.org` live rather than assuming) —
+proving the check is both necessary and cheap once it's a standing habit,
+not just a one-off catch.
+
+**Added as CLAUDE.md's own "Session protocol" item 8**, matching item
+7's own established format (a plain directive sentence + a parenthetical
+citing the real incident) — the same institutionalization pattern the
+"rebuild before re-testing" (Code conventions, UBI-63) and "background
+agents banned" (Session protocol item 7, the wedge incident) rules
+already went through:
+
+> 8. Any session claiming a fix is "published" or "live" for a shared
+> runtime (`sdk/go/runtime`, `sdk/ts/runtime`, `sdk/py`) or any
+> per-provider bindings repo must verify against the SEPARATE published
+> repo/registry directly — a real `git log`/`diff` against the actual
+> separate repo, or a real registry query (the Go module proxy, jsr.io,
+> pypi.org) — never infer "published" from a commit to the monorepo's own
+> copy alone. (UBI-131: UBI-126's Go fix was reported "committed and
+> pushed" across multiple session summaries, meaning only the monorepo's
+> own `sdk/go/runtime/runtime.go` — the separate, real
+> `github.com/ubiquex/ubx-sdk-go` repo was never touched, still showing
+> only its original scaffold commit a full day later; caught only when
+> the founder pushed back on the status claim and a real `git log` was
+> run against the actual separate repo, not the monorepo.)
+
+**STATE.md's own placement, checked rather than guessed, per the
+handoff's own explicit instruction**: this file has no "standing
+conventions" section at all — its only non-chronological headers
+(`Current focus`/`Open decisions`/`Done`/`Next steps`/`Docs debt`/
+`Surprises / findings`, all clustered near line 15245+) are leftover
+structure from session 1, long superseded by this file's own current
+"Current phase"/"Current phase (previous)" rolling-log convention; a
+grep for "standing convention" anywhere in this file returns nothing.
+Both existing precedent rules (UBI-63's rebuild-before-retest, the
+background-agents-banned rule) live EXCLUSIVELY in CLAUDE.md, with no
+STATE.md echo of either — confirming CLAUDE.md alone is this project's
+own established home for standing, cross-session rules; STATE.md is a
+handoff log of what happened, not a rulebook. No new STATE.md section
+added — this entry is this session's own ordinary chronological log
+entry, per protocol item 3, nothing more.
+
+Full account: `CLAUDE.md`'s own new item 8 (quoted above, in full).
+Nothing else in this repo changed — confirmed via `git status` before
+committing. Committed and pushed to `origin/main`.
+
+Next: whichever the founder prioritizes — the founder-driven publish
+cycle for all three runtimes named in UBI-126's own closing account, or
+any other gap from UBI-74's own closing retrospective.
+
+## Current phase (previous)
+
 **UBI-126 (2026-08-06) — TS/Python direct-SDK-import blueprint provenance parity, closing the remaining half of this ticket (Go's own half closed 2026-08-05): all three languages now stamp `{"kind":"blueprint","ref":...}` identically, real cross-language live verification against the real `ci-platform` blueprint, both regression classes Go's own fix hit checked explicitly and confirmed structurally absent.**
 
 Read the ticket fully and the prior Go session's own diagnosis/fix
