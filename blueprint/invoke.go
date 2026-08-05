@@ -295,13 +295,36 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	// the SAME blueprint ref -- identically regardless of which medium
 	// (SDK/diagram/md) or which language (Go/TS/Python) actually
 	// executed it, since blueprintRef describes the blueprint itself
-	// (name + content hash), never the calling mechanism. A resource
-	// that already carried its own Sources (shouldn't happen -- no
-	// evaluator emits one today -- but appended rather than overwritten
-	// defensively, matching core.IntentSource's own established
-	// "multiple kinds coexist" posture).
+	// (name + content hash), never the calling mechanism.
+	//
+	// UBI-126: for a Go call specifically, the evaluated program's own
+	// resources may ALREADY carry a "blueprint"-kind source -- generated
+	// code now calls sdk.PushBlueprintSource(rawName) around its own
+	// body (sdk/go/runtime.go) so a DIRECT-import call gets provenance
+	// too, and writeGoCaller's own synthesized program is just another
+	// caller of that SAME generated code, so it fires here as well.
+	// THAT tag only ever carries the blueprint's own bare, unsanitized
+	// name (never a real content hash -- the compiled binary has no way
+	// to compute its own on-disk directory's hash; see sdkprovenance.go's
+	// own doc comment). This function already computed the REAL,
+	// complete blueprintRef (name + content hash) externally, before
+	// ever running the caller -- strictly more authoritative than
+	// anything the evaluated program could produce -- so any existing
+	// "blueprint"-kind entry is REPLACED here, never appended alongside
+	// (a stray incomplete duplicate would otherwise shadow the real one
+	// wherever a renderer reads sources[0], e.g. `ubx render`'s own
+	// container label). A non-blueprint source (shouldn't exist today,
+	// no evaluator emits one) is left untouched, matching
+	// core.IntentSource's own established "multiple kinds coexist"
+	// posture.
 	for i := range result.Resources {
-		result.Resources[i].Sources = append(result.Resources[i].Sources, core.IntentSource{
+		kept := result.Resources[i].Sources[:0]
+		for _, s := range result.Resources[i].Sources {
+			if s.Kind != "blueprint" {
+				kept = append(kept, s)
+			}
+		}
+		result.Resources[i].Sources = append(kept, core.IntentSource{
 			Kind: "blueprint",
 			Ref:  blueprintRef,
 		})
@@ -494,8 +517,32 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 		return "", err
 	}
 
-	goMod := fmt.Sprintf("module ubx-blueprint-caller\n\ngo 1.23\n\n%s\nrequire %s v0.0.0\n\nreplace %s => %s\n",
-		sdkGoRequire, pkgName, pkgName, blueprintGoDir)
+	// sdkGoReplace mirrors sdkGoRequire's own "reuse whatever the
+	// blueprint's own go.mod already declares, verbatim" reasoning,
+	// extended to an OPTIONAL replace directive: a real, published
+	// blueprint's own go.mod never has one (Slice 1's own established
+	// convention -- v0.0.0 resolves from the real module proxy/cache,
+	// no override needed), so this stays "" and the synthesized caller's
+	// own behavior is completely unchanged from before this line existed.
+	// A hermetically-tested blueprint fixture that DOES carry a local
+	// `replace github.com/ubiquex/ubx-sdk-go => ...` (every real test
+	// fixture in this codebase that builds a callable blueprint already
+	// adds one, so its own package compiles against local sdk/go
+	// unpublished changes) needs the synthesized caller to resolve the
+	// IDENTICAL sdk-go copy, not silently fall back to a stale published
+	// version -- without this, any real sdk/go runtime change (UBI-126's
+	// own new PushBlueprintSource/PopBlueprintSource, say) would compile
+	// fine against a direct-import caller (which already carries its own
+	// local replace) but fail this synthesized-caller path specifically,
+	// with a confusing "undefined: sdk.X" error pointing at generated
+	// code that never changed.
+	sdkGoReplace := extractReplaceLine(string(blueprintGoMod), "github.com/ubiquex/ubx-sdk-go")
+	if sdkGoReplace != "" {
+		sdkGoReplace += "\n"
+	}
+
+	goMod := fmt.Sprintf("module ubx-blueprint-caller\n\ngo 1.23\n\n%s\nrequire %s v0.0.0\n\nreplace %s => %s\n%s",
+		sdkGoRequire, pkgName, pkgName, blueprintGoDir, sdkGoReplace)
 	if err := os.WriteFile(filepath.Join(entryDir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		return "", err
 	}
@@ -537,4 +584,21 @@ func extractRequireLine(goMod, modulePath string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("go.mod has no require line for %s", modulePath)
+}
+
+// extractReplaceLine is extractRequireLine's own optional sibling: a
+// "replace <modulePath> => ..." line, verbatim, or "" if goMod has none
+// -- a real, published blueprint's own go.mod never does (see
+// writeGoCaller's own doc comment on sdkGoReplace for why this matters
+// only for hermetically-tested fixtures that DO carry one), so unlike
+// extractRequireLine, absence is never an error here.
+func extractReplaceLine(goMod, modulePath string) string {
+	prefix := "replace " + modulePath + " "
+	for _, line := range strings.Split(goMod, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, prefix) {
+			return trimmed
+		}
+	}
+	return ""
 }

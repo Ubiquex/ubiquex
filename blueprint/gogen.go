@@ -65,7 +65,7 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 		"go/go.mod":      fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", pkgName),
 		"go/bindings.go": renderGoBindings(pkgName, g.ordered()),
 	}
-	fnSrc, err := renderGoFunction(pkgName, funcName, ubxfile.Params, g)
+	fnSrc, err := renderGoFunction(pkgName, funcName, blueprintName, ubxfile.Params, g)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,17 @@ func renderGoBindings(pkgName string, resources []*goResource) string {
 // reference already has a variable to read), assigning a local variable
 // only for a resource a sibling actually references, avoiding an
 // unused-local Go compile error.
-func renderGoFunction(pkgName, funcName string, params []Param, g *goGenerator) (string, error) {
+//
+// blueprintName (UBI-126) wraps the function body in
+// sdk.PushBlueprintSource(blueprintName)/defer sdk.PopBlueprintSource()
+// -- the SAME raw, unsanitized name (never pkgName, which is a
+// Go-identifier-sanitized derivative) buildManifest/ubx why/ubx render
+// already use, so every sdk.Resource() call inside this function --
+// direct SDK import, the ONLY calling convention that previously had no
+// provenance mechanism at all (diagram/md get theirs externally, from
+// blueprint.ExpandCalls) -- self-tags without the calling stack's own
+// code needing to change in any way.
+func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g *goGenerator) (string, error) {
 	var required, defaulted []Param
 	for _, p := range params {
 		if p.Required {
@@ -466,6 +476,7 @@ func renderGoFunction(pkgName, funcName string, params []Param, g *goGenerator) 
 	sig.WriteString(")")
 
 	fmt.Fprintf(&b, "func %s {\n", sig.String())
+	fmt.Fprintf(&b, "\tsdk.PushBlueprintSource(%q)\n\tdefer sdk.PopBlueprintSource()\n\n", blueprintName)
 	if hasOptions {
 		b.WriteString("\tcfg := options{\n")
 		for _, p := range defaulted {

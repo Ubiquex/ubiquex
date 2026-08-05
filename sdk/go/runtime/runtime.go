@@ -153,10 +153,11 @@ type intentDocIntent struct {
 }
 
 type intentResource struct {
-	Type   string `json:"type"`
-	Name   string `json:"name"`
-	Op     string `json:"op"`
-	Config any    `json:"config"`
+	Type    string         `json:"type"`
+	Name    string         `json:"name"`
+	Op      string         `json:"op"`
+	Config  any            `json:"config"`
+	Sources []IntentSource `json:"sources,omitempty"`
 }
 
 // ---------------------------------------------------------------------
@@ -217,9 +218,66 @@ func (c *collector) addResource(binding ResourceBinding, name string, config any
 	c.seenAddresses[address] = true
 
 	serialized := serializeConfig(binding.Fields, config, address)
-	c.resources = append(c.resources, intentResource{Type: binding.WireType, Name: name, Op: "create", Config: serialized})
+	ir := intentResource{Type: binding.WireType, Name: name, Op: "create", Config: serialized}
+	if len(blueprintSourceStack) > 0 {
+		// UBI-126: this Resource() call is executing from inside a
+		// compiled blueprint's own generated function body (pushBlueprintSource
+		// below, called only by ubx blueprint build's own generated code --
+		// never by a stack author directly). The innermost (most recently
+		// pushed) scope wins, matching ordinary lexical-scoping intuition
+		// and staying correct if a blueprint ever calls another blueprint
+		// (nesting itself is UBI-121, unbuilt, but this doesn't need to
+		// special-case its absence). Ref is deliberately the blueprint's
+		// own bare declared name here, NOT yet "name:content_hash" -- this
+		// process has no way to compute a real content hash for itself
+		// (the compiled binary doesn't know its own on-disk blueprint
+		// directory, and baking a hash into source that gets hashed
+		// itself is circular) -- ubx resolve's own external
+		// StampDirectCallProvenance step (blueprint package) resolves the
+		// bare name to a real content hash afterward, the same way
+		// blueprint.ExpandCalls already computes one externally for
+		// diagram/md calls, just at a different pipeline stage.
+		ir.Sources = []IntentSource{{Kind: "blueprint", Ref: blueprintSourceStack[len(blueprintSourceStack)-1]}}
+	}
+	c.resources = append(c.resources, ir)
 
 	return newComputed(address)
+}
+
+// blueprintSourceStack is UBI-126's own fix: a compiled blueprint's own
+// generated function (blueprint/gogen.go's own renderGoFunction) wraps
+// its entire body in PushBlueprintSource(name)/defer PopBlueprintSource()
+// -- an implicit, package-level side channel exactly like `current`
+// above (never a new sdk.Resource parameter, which would force every
+// existing caller, blueprint or not, to change), so a stack author
+// calling a blueprint's exported function directly needs to do nothing
+// different at all: the scope is entirely internal to code `ubx
+// blueprint build` itself generates. A plain stack that never imports a
+// blueprint never pushes anything, so blueprintSourceStack stays empty
+// and intentResource.Sources stays unset -- zero wire-format change for
+// the overwhelming majority of ordinary SDK programs.
+var blueprintSourceStack []string
+
+// PushBlueprintSource marks every sdk.Resource() call for the duration
+// of the current scope (until the matching PopBlueprintSource) as
+// produced by the blueprint named name -- name is the blueprint's own
+// declared name (Ubxfile directory basename, the SAME identifier
+// buildManifest/ubx why/ubx render already use), never a Go
+// module/import path, and never (cannot be, see addResource's own
+// comment) a content hash. Called only by generated blueprint code, never
+// meant to be called by a stack author's own code directly.
+func PushBlueprintSource(name string) {
+	blueprintSourceStack = append(blueprintSourceStack, name)
+}
+
+// PopBlueprintSource ends the innermost still-open PushBlueprintSource
+// scope. Panics on an unbalanced call (more pops than pushes) -- a real
+// bug in generated code, not something to silently tolerate.
+func PopBlueprintSource() {
+	if len(blueprintSourceStack) == 0 {
+		panic("sdk.PopBlueprintSource: called with no matching PushBlueprintSource -- this should only ever be called by ubx blueprint build's own generated code")
+	}
+	blueprintSourceStack = blueprintSourceStack[:len(blueprintSourceStack)-1]
 }
 
 func (c *collector) finish() (*intentDoc, error) {

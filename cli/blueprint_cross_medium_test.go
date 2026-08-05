@@ -271,6 +271,142 @@ platform: "platform call" {
 	assertIdenticalCreates(t, "md vs SDK", sdkCreates, mdCreates)
 }
 
+// blueprintSourcesForComparison extracts each create's own "sources"
+// entries (stack/type/name -> the raw sources array, re-marshaled for a
+// stable, order-independent string comparison) -- normalizeCreateForComparison's
+// own sibling, deliberately separate: that function EXCLUDES sources
+// entirely (by design, since it predates UBI-126 and the SDK/diagram/md
+// delta-shape comparison never needed to know about provenance), this
+// one is ONLY about sources.
+func blueprintSourcesForComparison(t *testing.T, creates []json.RawMessage) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, raw := range creates {
+		var node struct {
+			Stack   string          `json:"stack"`
+			Type    string          `json:"type"`
+			Name    string          `json:"name"`
+			Sources json.RawMessage `json:"sources"`
+		}
+		if err := json.Unmarshal(raw, &node); err != nil {
+			t.Fatalf("unmarshal create node: %v\nraw: %s", err, raw)
+		}
+		var sources any
+		if len(node.Sources) > 0 {
+			if err := json.Unmarshal(node.Sources, &sources); err != nil {
+				t.Fatalf("unmarshal sources: %v\nraw: %s", err, raw)
+			}
+		}
+		normalized, err := json.Marshal(sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[node.Stack+"."+node.Type+"."+node.Name] = string(normalized)
+	}
+	return out
+}
+
+// TestBlueprintCrossMedium_ProvenanceIdentical is UBI-126's own required
+// hermetic proof, extending TestBlueprintCrossMedium_
+// SDKGoDiagramTSAndMDTS_IdenticalDelta's own "three mediums, one
+// resolved delta" bar to provenance too: the SAME blueprint (one shared
+// on-disk pkgDir, unlike the sibling test above -- which deliberately
+// builds a SEPARATE copy for its own SDK leg, since a direct comparison
+// there only ever needed matching DELTA shape, never a matching content
+// hash) called via all three mediums must produce BYTE-IDENTICAL
+// "sources" -- the exact same {"kind":"blueprint","ref":"platform:
+// sha256:..."} entry, not merely the same SHAPE. This is the real
+// regression proof for UBI-126's own core claim: before this fix, the
+// SDK leg's own resolved creates carried no "sources" key at all, while
+// diagram/md's did -- after it, all three are indistinguishable.
+func TestBlueprintCrossMedium_ProvenanceIdentical(t *testing.T) {
+	requireHermeticSandbox(t)
+	requireDeno(t)
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	pkgDir := writeBlueprintCrossMediumPackage(t)
+
+	// --- SDK leg: a direct import of the SAME shared pkgDir (not a
+	// separately-built copy) -- the only way a byte-identical content
+	// hash across all three legs is even possible. ---
+	sdkDir := t.TempDir()
+	sdkEntry := writeBlueprintCallingStack(t, sdkDir, filepath.Join(pkgDir, "go"), `"widget1"`)
+	sdkLedgerDir := t.TempDir()
+	sdkResolvedPath := filepath.Join(t.TempDir(), "sdk-resolved.json")
+	sdkOut, err := runUbx(t, env, "resolve", "--from-code", sdkEntry, "--provider", fakeProviderBinary, "--ledger-dir", sdkLedgerDir, "--timeout", "60s", "--out", sdkResolvedPath)
+	if err != nil {
+		t.Fatalf("ubx resolve --from-code (SDK leg): %v\noutput: %s", err, sdkOut)
+	}
+	sdkRaw, err := os.ReadFile(sdkResolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sdkDoc struct {
+		Delta struct {
+			Creates []json.RawMessage `json:"creates"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(sdkRaw, &sdkDoc); err != nil {
+		t.Fatalf("parse SDK resolved proposal: %v\nfile: %s", err, sdkRaw)
+	}
+	sdkSources := blueprintSourcesForComparison(t, sdkDoc.Delta.Creates)
+
+	// --- Diagram leg ---
+	d2Src := `
+platform: "platform call" {
+  class: ubx_blueprint
+  blueprint: ` + jsonQuote(pkgDir) + `
+  primary_name: "widget1"
+}
+`
+	diagramIntent, err := diagram.Parse("cross-medium-provenance.d2", strings.NewReader(d2Src), "platform", nil, diagram.Options{})
+	if err != nil {
+		t.Fatalf("diagram.Parse: %v", err)
+	}
+	diagramIntent.Intent.Summary = "platform, via a diagram blueprint call"
+	diagramPath := filepath.Join(t.TempDir(), "diagram-draft.json")
+	writeResolverIntentFile(t, diagramPath, diagramIntent)
+	diagramSources := blueprintSourcesForComparison(t, resolveCreates(t, diagramPath))
+
+	// --- md leg ---
+	mdArgs, err := json.Marshal(map[string]string{"primary_name": "widget1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdDraftJSON := `{
+	  "schema_version": 1,
+	  "kind": "ubx:intent/v1",
+	  "stack": "platform",
+	  "intent": {"summary": "platform, via an md blueprint call", "assumptions": [], "defaults": [], "questions": []},
+	  "resources": [],
+	  "destroys": [],
+	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + jsonQuote(string(mdArgs)) + `}]
+	}`
+	fake := &fakeIntentAdapter{draft: mdDraftJSON}
+	mdIntent, _, err := intentprovider.DraftWithRetry(context.Background(), fake, "platform", []byte("Use blueprint platform with: primary_name = widget1"), nil)
+	if err != nil {
+		t.Fatalf("intentprovider.DraftWithRetry: %v", err)
+	}
+	mdPath := filepath.Join(t.TempDir(), "md-draft.json")
+	writeResolverIntentFile(t, mdPath, mdIntent)
+	mdSources := blueprintSourcesForComparison(t, resolveCreates(t, mdPath))
+
+	if len(sdkSources) == 0 {
+		t.Fatal("SDK leg produced zero resources with sources -- fixture problem, not a real comparison")
+	}
+	for addr, want := range sdkSources {
+		if !strings.Contains(want, `"kind":"blueprint"`) {
+			t.Fatalf("%s: SDK leg's own source is missing blueprint provenance entirely: %s", addr, want)
+		}
+		if got := diagramSources[addr]; got != want {
+			t.Fatalf("%s: diagram sources differ from SDK:\n  SDK:     %s\n  diagram: %s", addr, want, got)
+		}
+		if got := mdSources[addr]; got != want {
+			t.Fatalf("%s: md sources differ from SDK:\n  SDK: %s\n  md:  %s", addr, want, got)
+		}
+	}
+}
+
 // jsonQuote quotes s as a JSON string literal suitable for splicing
 // directly into a D2/JSON source snippet built via string concatenation
 // in this file (a bare JSON-quoted string is also valid D2 quoted-string

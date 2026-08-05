@@ -119,6 +119,25 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				if err := json.Unmarshal(canon, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse evaluated intent: %w", err)}
 				}
+				// UBI-126: a direct SDK-import call to a blueprint's own
+				// compiled function (Slice 2's own original calling
+				// convention -- distinct from blueprint_calls/ExpandCalls
+				// below, which only ever fires for a diagram/md call) gets
+				// each of its own blueprint-produced resources' bare,
+				// incomplete "sources" entry (sdk/go/runtime's own
+				// PushBlueprintSource, set by generated code with zero
+				// changes needed to the calling stack's own code)
+				// resolved to a real "name:content_hash" ref here -- Go
+				// only for now (this mechanism walks the entry program's
+				// own Go module graph; TS/Python have no analogous
+				// mechanism yet, a real, named, remaining gap). A no-op,
+				// and never runs `go list`, for any program that never
+				// imports a blueprint.
+				if strings.EqualFold(filepath.Ext(fromCode), ".go") {
+					if err := blueprint.StampDirectCallProvenance(ctx, fromCode, &intent); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+					}
+				}
 			} else {
 				data, err := os.ReadFile(args[0])
 				if err != nil {

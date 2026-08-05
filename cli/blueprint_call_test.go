@@ -81,11 +81,21 @@ func blueprintCallUbxfile() *blueprint.Ubxfile {
 }
 
 // writeBlueprintPackage runs the real, unmodified blueprint.GenerateGo
-// (Slice 1) against blueprintCallIntent and writes its output to dir/name,
-// with a local replace onto sdk/go so the package builds hermetically --
-// exactly blueprint/gogen_test.go's own TestGenerateGo_CompilesClean
-// pattern, reused here because Task 3's own subject is what happens AFTER
-// build, not build itself.
+// (Slice 1) against blueprintCallIntent and writes its output to
+// dir/name/go (Slice 4's own real sibling-per-language layout -- restored
+// here, UBI-126: StampDirectCallProvenance needs a real Ubxfile at the Go
+// module's own PARENT directory to find this fixture at all, so a flat
+// layout with no Ubxfile can no longer stand in for a real built
+// blueprint the way it could before this fix), with a local replace onto
+// sdk/go so the package builds hermetically -- exactly blueprint/
+// gogen_test.go's own TestGenerateGo_CompilesClean pattern, reused here
+// because Task 3's own subject is what happens AFTER build, not build
+// itself. A placeholder Ubxfile at dir/name (never parsed by anything in
+// this call chain -- GenerateGo already ran against a hand-built
+// *blueprint.Ubxfile, not this file) is written purely so
+// StampDirectCallProvenance's own "is this on-disk directory a real
+// blueprint" check (an Ubxfile's mere presence, matching every other
+// blueprint-root detection in this codebase) finds it.
 func writeBlueprintPackage(t *testing.T, dir, name string) string {
 	t.Helper()
 	var intent resolver.IntentFile
@@ -97,15 +107,16 @@ func writeBlueprintPackage(t *testing.T, dir, name string) string {
 		t.Fatalf("blueprint.GenerateGo: %v", err)
 	}
 
-	pkgDir := filepath.Join(dir, name)
+	root := filepath.Join(dir, name)
+	pkgDir := filepath.Join(root, "go")
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, blueprint.UbxfileName), []byte("lang: go\n\nparams:\n  primary_name: string, required\n\nresources: |\n  placeholder -- never re-drafted by a blueprint CALL, only by\n  `ubx blueprint build`, which this test never runs.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sdkGoRoot := blueprintCallSdkGoRoot(t)
 	for fname, content := range files {
-		// Strip the "go/" prefix (Slice 4: sibling per-language output
-		// directories) -- pkgDir plays the role of the "go/" subdirectory
-		// content directly, exactly like Slice 1-3's own flat layout did.
 		rel := strings.TrimPrefix(fname, "go/")
 		if rel == "go.mod" {
 			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
@@ -233,6 +244,134 @@ func TestBlueprintCall_ResolveAcceptShip_RealFakeProvider(t *testing.T) {
 	}
 	if !strings.Contains(shipOut, "platform.fake_widget.mirror : shipped") {
 		t.Fatalf("expected mirror to show shipped (real ref substitution against primary's own real post-apply state), got: %s", shipOut)
+	}
+}
+
+// TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance is UBI-126's
+// own required success-bar proof: the exact same direct-SDK-import
+// calling path TestBlueprintCall_ResolveAcceptShip_RealFakeProvider
+// already proves ships correctly (Slice 2's own original mechanism) now
+// ALSO carries the same {"kind":"blueprint","ref":"<name>:sha256:..."}
+// per-resource provenance a diagram/md call already gets from
+// blueprint.ExpandCalls (Slice 6) -- confirmed directly against the real
+// resolved JSON, not inferred from `ubx why`/`ubx render`'s own
+// downstream rendering (those are already proven to render whatever
+// `sources` they're given correctly; this test's own job is confirming
+// `sources` genuinely gets THERE for a direct-SDK call, which it never
+// did before this fix).
+func TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance(t *testing.T) {
+	requireHermeticSandbox(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	pkgDir := writeBlueprintPackage(t, dir, "platform")
+	entry := writeBlueprintCallingStack(t, dir, pkgDir, `"widget1"`)
+
+	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
+	resolveOut, err := runUbx(t, env, "resolve",
+		"--from-code", entry,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--out", resolvedPath,
+		"--timeout", "60s",
+	)
+	if err != nil {
+		t.Fatalf("ubx resolve --from-code (blueprint call): %v\noutput: %s", err, resolveOut)
+	}
+
+	raw, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Delta struct {
+			Creates []struct {
+				Type    string `json:"type"`
+				Name    string `json:"name"`
+				Sources []struct {
+					Kind string `json:"kind"`
+					Ref  string `json:"ref"`
+				} `json:"sources"`
+			} `json:"creates"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse resolved proposal: %v\nraw: %s", err, raw)
+	}
+	if len(doc.Delta.Creates) != 2 {
+		t.Fatalf("expected 2 creates (primary+mirror), got %d: %s", len(doc.Delta.Creates), raw)
+	}
+
+	var refs []string
+	for _, c := range doc.Delta.Creates {
+		if len(c.Sources) != 1 {
+			t.Fatalf("%s.%s: expected exactly 1 source, got %d: %s", c.Type, c.Name, len(c.Sources), raw)
+		}
+		if c.Sources[0].Kind != "blueprint" {
+			t.Fatalf("%s.%s: source kind = %q, want \"blueprint\": %s", c.Type, c.Name, c.Sources[0].Kind, raw)
+		}
+		name, hash, ok := strings.Cut(c.Sources[0].Ref, ":")
+		if !ok || name != "platform" || !strings.HasPrefix(hash, "sha256:") {
+			t.Fatalf("%s.%s: ref = %q, want \"platform:sha256:<hex>\": %s", c.Type, c.Name, c.Sources[0].Ref, raw)
+		}
+		refs = append(refs, c.Sources[0].Ref)
+	}
+	if refs[0] != refs[1] {
+		t.Fatalf("primary and mirror got DIFFERENT blueprint refs from the SAME call: %q vs %q", refs[0], refs[1])
+	}
+}
+
+// TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance is
+// UBI-126's own end-to-end success-bar proof, one level past resolve:
+// not just that the resolved JSON carries "sources", but that `ubx why`
+// and `ubx render` -- run for real, against a real shipped ledger --
+// now show full blueprint provenance for a direct-SDK-import call,
+// matching what `cli/blueprint_provenance_test.go`/`render_blueprint_
+// test.go` already proved for a diagram call (UBI-74 Slice 6). Same
+// primary+mirror fixture, same real fakeprovider ship
+// TestBlueprintCall_ResolveAcceptShip_RealFakeProvider already proves,
+// carried one step further into the two commands a real user would
+// actually run to inspect provenance.
+func TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance(t *testing.T) {
+	requireHermeticSandbox(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	pkgDir := writeBlueprintPackage(t, dir, "platform")
+	entry := writeBlueprintCallingStack(t, dir, pkgDir, `"widget1"`)
+
+	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
+	if _, err := runUbx(t, env, "resolve", "--from-code", entry, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--out", resolvedPath, "--timeout", "60s"); err != nil {
+		t.Fatalf("ubx resolve --from-code: %v", err)
+	}
+	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx accept: %v\noutput: %s", err, acceptOut)
+	}
+	changeID := mustExtractID(t, acceptOut)
+	if _, err := runUbx(t, env, "ship", changeID, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir); err != nil {
+		t.Fatalf("ubx ship: %v", err)
+	}
+
+	whyOut, err := runUbx(t, nil, "why", "platform.fake_widget.primary", "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx why: %v\noutput: %s", err, whyOut)
+	}
+	if !strings.Contains(whyOut, "source: blueprint platform:sha256:") {
+		t.Fatalf("ubx why on a direct-SDK-imported blueprint's own resource is missing provenance -- the UBI-126 gap, unfixed:\n%s", whyOut)
+	}
+
+	renderOut, err := runUbx(t, nil, "render", "--stack", "platform", "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx render: %v\noutput: %s", err, renderOut)
+	}
+	if !strings.Contains(renderOut, "style.stroke-dash: 3") {
+		t.Fatalf("ubx render on a direct-SDK-imported blueprint's own resources is missing the dashed-border grouping -- the UBI-126 gap, unfixed:\n%s", renderOut)
+	}
+	if !strings.Contains(renderOut, `"primary"`) || !strings.Contains(renderOut, `"mirror"`) {
+		t.Fatalf("ubx render missing one of the blueprint's own resources:\n%s", renderOut)
 	}
 }
 

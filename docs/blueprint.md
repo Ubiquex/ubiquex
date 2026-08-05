@@ -1757,6 +1757,201 @@ the identical original content hash, proving content-hash-based trust
 survives redistribution to a real, independent second location, exactly
 the property this slice's own success bar required.
 
+## Provenance parity across all three calling mediums: UBI-126
+
+UBI-126 (filed at the close of UBI-74's own 8-slice retrospective,
+2026-08-05, the #1 gap named there) — a real correctness/consistency
+gap, not a new feature: Slice 6's own provenance tagging only ever fired
+for a diagram/md call (`blueprint.ExpandCalls`'s own external stamping,
+which has full knowledge of the blueprint's own ref because it just
+pulled and hashed it before running the caller). A direct SDK-import call
+(Slice 2's own ORIGINAL calling convention, proven first, live on real
+AWS) never got the same treatment — its resolved resources carried no
+`sources` at all, even though Slice 5's own hermetic proof
+(`TestBlueprintCrossMedium_SDKGoDiagramTSAndMDTS_IdenticalDelta`) already
+established all three calling conventions produce byte-identical resolved
+DELTAS. `ubx why`/`ubx render` on a direct-SDK-called resource showed
+nothing a diagram/md call's own identical resource already did.
+
+### Why this needed a genuinely different mechanism, not just a copy-paste
+
+`ExpandCalls` (Slice 6) can safely stamp EVERY resource its own
+synthesized calling program produces, because that synthesized program's
+one and only job is calling the target blueprint function — nothing else
+ever appears in its own result. A real, hand-written direct-SDK-import
+stack has no such guarantee: it can freely mix a blueprint call with its
+own directly-declared resources in the same program, so "stamp
+everything goeval returns" is never correct there. The compiled,
+sandboxed binary that actually executes a direct-SDK-import call also
+has no way to compute its own blueprint's real content hash — it doesn't
+know its own on-disk blueprint directory at runtime, and baking a
+hash into source code that then gets hashed AS PART of that same
+directory is circular (the same reasoning `blueprint.lock.json`'s own
+exclusion from `hashFiles`'s walk already establishes, one level up).
+
+### The fix: an implicit, in-process scope + an external hash resolution step
+
+**Inside the evaluated program** (`sdk/go/runtime/runtime.go`): a new
+package-level scope stack, `PushBlueprintSource(name)`/
+`PopBlueprintSource()` — implicit, exactly like the existing `current
+*collector` (the active `Stack()` pointer) already is, deliberately NOT
+a new parameter on `sdk.Resource()` itself (which would force every
+existing caller, blueprint or not, to change). `blueprint/gogen.go`'s
+own `renderGoFunction` wraps EVERY generated blueprint function's body in
+this scope, using the blueprint's own bare, unsanitized declared name
+(`filepath.Base` of its directory — the SAME identifier `buildManifest`/
+`ubx why`/`ubx render` already use, never the Go-identifier-sanitized
+module/package name). `addResource` (inside `sdk.Resource()`) checks
+this scope and, if active, stamps the new `intentResource.Sources` field
+with `{"kind":"blueprint","ref":"<bare-name>"}` — deliberately
+INCOMPLETE (no content hash yet), since the compiled binary genuinely
+cannot compute one for itself.
+
+**Outside the evaluated program**, after it returns
+(`blueprint/sdkprovenance.go`, new — `StampDirectCallProvenance`, called
+from `cli/resolve.go`'s own `--from-code` handling, Go entries only): a
+fast-path check first — if no resource carries an incomplete blueprint
+source, this is a no-op, `go list` never runs, an ordinary Go SDK program
+pays nothing extra. Otherwise, walks the entry program's own real Go
+module graph (`go list -m -f '{{.Path}}|{{.Dir}}' all`, run directly
+against the entry file's own real directory and go.mod — not goeval's
+own already-torn-down ephemeral build copy; module resolution is
+deterministic from the same go.mod/module cache/replace directives
+either way, `GOFLAGS=-mod=mod` matching `goeval`'s own `buildProgram`
+exactly, since a freshly-written, not-yet-`go mod tidy`d go.mod is the
+normal state here). For every resolved module whose own directory's
+PARENT contains a real `Ubxfile` (Slice 4's own established go/ts/py
+sibling-directory convention — a blueprint's Go module root is always
+exactly one level below the blueprint's own root), computes its real
+content hash via `buildManifest` — the SAME function `ExpandCalls`
+already calls, never a second hashing mechanism — and rewrites every
+matching incomplete `Sources[].Ref` in place to the full
+`"<name>:<content_hash>"` form.
+
+**A real, named, remaining scope boundary**: this only works for a
+blueprint reachable via a local directory or a local `go.mod` `replace`
+directive — the pattern every real direct-SDK-import example in this
+project already uses (Slice 2's own live verification included). A
+blueprint distributed as a standalone published Go module, with no
+adjacent `Ubxfile`/`blueprint.lock.json` inside that module's own
+boundary, isn't supported yet — a real, honest limitation, refused with
+a clear, named error rather than silently producing a wrong or missing
+ref.
+
+**Go only, for now.** This whole mechanism — the module-graph walk
+specifically — is inherently Go-specific. TS/Python's own direct-import
+calling paths still have the ORIGINAL gap (no provenance at all);
+extending this to them needs an analogous, language-appropriate discovery
+mechanism (TS: its own import-map/`package.json` resolution; Python:
+`sys.path`/module resolution) — real, separate future work, not attempted
+here, named rather than silently left unaddressed.
+
+### A real regression found and fixed along the way
+
+A direct-SDK-import call and `ExpandCalls`'s own synthesized Go caller
+turn out to hit BOTH provenance mechanisms at once — the synthesized
+caller is, after all, just another caller of the SAME generated blueprint
+function, which now ALWAYS pushes its own scope regardless of who
+invokes it. `invokeCall`'s own pre-existing stamping loop (Slice 6)
+previously APPENDED its own complete, authoritative ref rather than
+replacing whatever was already there — meaning a Go-language diagram/md
+call briefly produced TWO source entries (one bare, from the new
+SDK-level tag; one complete, from `invokeCall` itself), with renderers
+that read `sources[0]` (e.g. `ubx render`'s own container label) picking
+up the WRONG, incomplete one. Caught by this session's own
+`TestRender_BlueprintCall_GroupsInDashedContainer_RealFakeProvider`
+(pre-existing, from Slice 6/7) failing for real before any new test was
+even written. Fixed by having `invokeCall` filter out any existing
+`"blueprint"`-kind source before appending its own — its own externally-
+computed ref is always strictly more authoritative than anything the
+evaluated program could produce internally. A second, related fix was
+needed alongside it: `writeGoCaller`'s own synthesized caller previously
+resolved `github.com/ubiquex/ubx-sdk-go` however the blueprint's own
+go.mod's `require` line said (never any `replace`), which broke the
+FIRST time a real sdk/go runtime change (this one) needed testing before
+being published — fixed by also carrying forward an optional `replace`
+line if the blueprint's own go.mod has one, matching (and never
+overriding) production behavior, where no such `replace` exists at all.
+
+### Hermetic tests
+
+`cli/blueprint_call_test.go` (new):
+`TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance` (the resolved
+JSON itself, both resources sharing the identical complete ref);
+`TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance` (one level
+further — a REAL shipped ledger, `ubx why` showing `source: blueprint
+platform:sha256:...`, `ubx render` showing the dashed-border grouping,
+exactly matching what a diagram call already produced before this fix).
+`blueprint/invoke_test.go`:
+`TestExpandCalls_ProvenanceStamped_Go` (the Go-language sibling of the
+existing TS/Python tests — the ONE language combination that exercises
+BOTH provenance mechanisms at once, and the exact regression proof for
+the double-tagging bug above). `cli/blueprint_cross_medium_test.go`:
+`TestBlueprintCrossMedium_ProvenanceIdentical` (extends Slice 5's own
+identical-delta proof to provenance specifically — the SAME shared
+on-disk blueprint called via all three mediums produces BYTE-IDENTICAL
+`sources`, not merely same-shaped).
+
+### Live verification
+
+The direct-SDK-import path's real generated code (`ubx blueprint build`,
+the real `ci-platform` pattern, a real Claude draft) was rebuilt with
+this fix in place and confirmed to emit the new
+`sdk.PushBlueprintSource("ci-platform")`/`defer sdk.PopBlueprintSource()`
+wrapping around its own function body. `TestBlueprintCall_
+DirectSDKImport_WhyAndRenderShowProvenance` is itself a real, live,
+end-to-end run — real `ubx resolve --from-code`, real `ubx accept`, a
+real `ubx ship` against `fakeprovider` (this project's own standing
+"never real cloud for verification" discipline applies identically here;
+fakeprovider is the sanctioned stand-in, the same one every prior
+slice's own hermetic ship-and-verify test already uses) — captured real,
+unedited output:
+
+```text
+$ ubx why platform.fake_widget.primary --ledger-dir .
+platform.fake_widget.primary: 2 proposal(s), newest first
+- drift_adopt 9e99845520ac… (2026-08-05T11:31:57Z): platform.fake_widget.primary's own real, same-batch side effect from shipping f6a2de0bafc3f3dc2fe9f69460fafda333d021527d899bcc06514958e540c1db (post-chain re-observation, UBI-63)
+    accepted by [roozbeh] via local at 2026-08-05T11:31:57Z
+    ~ platform.fake_widget.primary change
+        tags.env: "prod" -> (absent)
+- change f6a2de0bafc3… (2026-08-05T11:31:57Z): platform, via a called blueprint
+    source: document create_platform.go (content_hash=sha256:8d377a41fa173de885f47c40c8d0e0a75651046144ed44b48efb5bf59d8873ab)
+    accepted by [roozbeh] via local at 2026-08-05T11:31:57Z
+    + fake_widget.primary create
+      source: blueprint platform:sha256:e1aaf06dd3c0…
+        (this resource's own creation is signed by the CALLING stack's own acceptance below; the blueprint's own authorship has no separate signing ceremony in this build yet)
+        name: "widget1"
+        tags:
+        {
+          "env": "prod"
+        }
+```
+
+```text
+$ ubx render --stack platform --ledger-dir .
+classes: {
+  fake_widget
+}
+bp0: "platform:sha256:e1aaf06dd3c0…" {
+  style.stroke-dash: 3
+  style.fill: transparent
+  r0: "mirror" {
+    class: fake_widget
+    tooltip: "id: computed-id; name: widget1; tags: {\"peer_id\":\"computed-id\"}"
+  }
+  r1: "primary" {
+    class: fake_widget
+    tooltip: "id: computed-id; name: widget1; tags: {\"env\":\"prod\"}"
+  }
+}
+bp0.r0 -> bp0.r1
+```
+
+A resource created by a direct SDK import now shows EXACTLY the same
+provenance shape a diagram or md call's own identical resource already
+did (Slice 6) — the calling convention that started this whole arc
+(Slice 2) is, at last, no longer the one silently missing it.
+
 ## Implementation slices
 
 - 2026-08-04 (UBI-74 Slice 1): built and live-verified. `blueprint/`
@@ -2496,3 +2691,80 @@ the property this slice's own success bar required.
   ./...` clean. `make build` run and `ubx version` checked before the
   live verification above. Committed this session -- see STATE.md, which
   also carries the required closing retrospective across all 8 slices.
+
+- 2026-08-05 (UBI-126): fixed and live-verified -- per "Provenance parity
+  across all three calling mediums: UBI-126" above. `sdk/go/runtime/
+  runtime.go` (`intentResource.Sources`, `PushBlueprintSource`/
+  `PopBlueprintSource`, `addResource`'s own stamping), `blueprint/
+  gogen.go` (`renderGoFunction` wraps every generated function body),
+  `blueprint/sdkprovenance.go` (new -- `StampDirectCallProvenance`,
+  `discoverImportedBlueprints`, `pendingBlueprintNames`), `blueprint/
+  invoke.go` (`invokeCall`'s own stamping loop now REPLACES rather than
+  appends; `writeGoCaller`/`extractReplaceLine` carry forward an
+  optional sdk-go `replace`), and `cli/resolve.go` (the new `--from-code`
+  splice, Go entries only) match the design above.
+
+  **A real regression found and fixed before it shipped wrong, not
+  after**: the FIRST full-suite run after the core fix landed failed a
+  PRE-EXISTING test (`TestRender_BlueprintCall_GroupsInDashedContainer_
+  RealFakeProvider`, Slice 6/7) with `undefined: sdk.PushBlueprintSource`
+  -- `ExpandCalls`'s own synthesized Go caller resolves `ubx-sdk-go`
+  however the blueprint's own go.mod says, with NO local override,
+  meaning it always pointed at the REAL PUBLISHED module (stale, lacking
+  this session's own unpublished sdk/go changes) regardless of what a
+  direct-import caller's own separate go.mod carried. Traced to root
+  cause (`writeGoCaller` never copies a blueprint's own optional
+  `replace` line, only its `require`) before attempting any fix, and
+  fixed there specifically, not by loosening the underlying design (which
+  correctly keeps production blueprints resolving the real published
+  SDK, never a local override). A SECOND regression surfaced once that
+  one was fixed: the SAME render test now failed a DIFFERENT way (the
+  rendered container was labeled bare `"platform"`, no hash) --
+  `invokeCall`'s own stamping loop was APPENDING its own complete ref
+  alongside the new SDK-level bare tag rather than replacing it, so
+  `sources[0]` (what `ubx render`'s own container label reads) picked up
+  the wrong, incomplete one. Both caught by the full suite, in order,
+  before either could reach a commit.
+
+  **Hermetic tests**: `cli/blueprint_call_test.go` (two new tests --
+  resolved-JSON-level and real-shipped-ledger-level proof, the latter
+  literally running `ubx why`/`ubx render` against a real fakeprovider
+  ship); `blueprint/invoke_test.go`
+  (`TestExpandCalls_ProvenanceStamped_Go`, closing a real pre-existing
+  test-coverage gap -- TS and Python each had their own sibling, Go
+  never did, and Go specifically is where the double-tagging regression
+  above lived); `cli/blueprint_cross_medium_test.go`
+  (`TestBlueprintCrossMedium_ProvenanceIdentical`, using one shared
+  on-disk blueprint across all three legs -- deliberately NOT reusing the
+  sibling delta-shape test's own separately-built SDK-leg copy, since a
+  byte-identical PROVENANCE comparison specifically needs the exact same
+  content hash, which two independently-built copies of identical
+  content don't guarantee).
+
+  **Live verification**: the real `ci-platform` blueprint (`ubx blueprint
+  build`, a real Claude draft) rebuilt with this fix in place, confirmed
+  to emit the real `sdk.PushBlueprintSource("ci-platform")` wrapping.
+  `TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance` itself
+  is a real, live, end-to-end run (real resolve/accept/ship against
+  `fakeprovider`, this project's own sanctioned real-cloud stand-in) --
+  captured real, unedited `ubx why`/`ubx render` output showing full
+  blueprint provenance on a direct-SDK-imported resource for the first
+  time in this arc's own history.
+
+  Full test suite green (`go test ./... -count=1`, both this repo and
+  `sdk/go`'s own separate module), `gofmt -l .`/`go vet ./...` clean.
+  `make build` run and `ubx version` checked before live verification.
+  Committed this session -- see STATE.md.
+
+  **Not done this session, named so it isn't assumed covered**: TS/
+  Python's own direct-import calling paths still have the ORIGINAL
+  gap (no provenance mechanism at all) -- a real, separate, honestly
+  named follow-up, not attempted here. `sdk/go`'s own changes are NOT
+  yet published to the real `github.com/ubiquex/ubx-sdk-go` repo -- every
+  real blueprint built against the real published SDK today still lacks
+  `PushBlueprintSource`/`PopBlueprintSource` until that publish happens
+  (a separate release process this session didn't trigger); every test
+  and live-verification run above used a local `replace` to this repo's
+  own `sdk/go`, matching this project's own established hermetic-testing
+  convention, not a claim that the real published module already has
+  this fix.

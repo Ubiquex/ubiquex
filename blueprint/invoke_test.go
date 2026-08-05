@@ -72,6 +72,19 @@ func writeCallableBlueprint(t *testing.T, onlyLangs ...string) string {
 			t.Fatalf("Generate%s: %v", lang, err)
 		}
 		for name, content := range files {
+			if lang == "go" && name == "go/go.mod" {
+				// A real, published blueprint's own go.mod never needs
+				// this (Slice 1's own established "v0.0.0 is a genuinely
+				// real, resolvable version" convention) -- only a
+				// hermetically-tested fixture that must compile against
+				// THIS repo's own not-yet-published sdk/go changes does,
+				// matching gogen_test.go's own TestGenerateGo_CompilesClean
+				// pattern exactly. writeGoCaller's own optional
+				// sdkGoReplace extraction (invoke.go) is what makes
+				// ExpandCalls' own synthesized Go caller pick this up too,
+				// not just a direct-import caller.
+				content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoModuleRoot(t) + "\n"
+			}
 			full := filepath.Join(dir, name)
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 				t.Fatal(err)
@@ -386,5 +399,48 @@ func TestExpandCalls_ProvenanceStamped_Python(t *testing.T) {
 	}
 	if !strings.HasPrefix(sources[0].Ref, "ci-platform:sha256:") {
 		t.Fatalf("Ref = %q, want it to start with \"ci-platform:sha256:\"", sources[0].Ref)
+	}
+}
+
+// TestExpandCalls_ProvenanceStamped_Go is TS/Python's own Go sibling --
+// and UBI-126's own required regression proof specifically: a Go call
+// goes through BOTH provenance mechanisms at once (sdk/go/runtime's own
+// PushBlueprintSource, firing for ANY call to generated code including
+// ExpandCalls' own synthesized Go caller; AND this function's own
+// external blueprintRef stamping, invokeCall's pre-existing Slice 6
+// mechanism) -- exactly the combination that, before invokeCall's own
+// "replace, don't append" fix, produced TWO source entries (one bare
+// "ci-platform" from the SDK-level tag, one complete "ci-platform:
+// sha256:..." from invokeCall) instead of the single, complete one every
+// other calling path already produces.
+func TestExpandCalls_ProvenanceStamped_Go(t *testing.T) {
+	requireGoToolchain(t)
+	dir := writeCallableBlueprint(t, "go")
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{
+				"queue_name": "payments-notifications", "max_receive_count": "5",
+			}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("ExpandCalls: %v", err)
+	}
+	if len(intent.Resources) != 1 {
+		t.Fatalf("expected exactly 1 resource, got %d", len(intent.Resources))
+	}
+	sources := intent.Resources[0].Sources
+	if len(sources) != 1 {
+		t.Fatalf("expected exactly 1 source (not a bare SDK-level tag alongside invokeCall's own complete one), got %+v", sources)
+	}
+	if sources[0].Kind != "blueprint" {
+		t.Fatalf("Kind = %q, want %q", sources[0].Kind, "blueprint")
+	}
+	if !strings.HasPrefix(sources[0].Ref, "ci-platform:sha256:") {
+		t.Fatalf("Ref = %q, want it to start with \"ci-platform:sha256:\" (a bare \"ci-platform\" would mean the SDK-level tag leaked through unresolved)", sources[0].Ref)
 	}
 }
