@@ -134,6 +134,85 @@ func TestEmitD2_NameCollisionAcrossTypes_NoKeyCollision(t *testing.T) {
 	}
 }
 
+// TestEmitD2_BlueprintSourcedResources_GroupInDashedContainer is UBI-74
+// Slice 6's own required hermetic proof, at the emitD2 unit level: two
+// resources sharing the same blueprintRef nest inside one dashed-border
+// container, edges between them use the container-qualified path, and
+// the container is labeled with a short form of the ref.
+func TestEmitD2_BlueprintSourcedResources_GroupInDashedContainer(t *testing.T) {
+	resources := []emitResource{
+		{
+			addr:         core.Address{Stack: "payments", Type: "fake_widget", Name: "mirror"},
+			dependsOn:    []string{"payments.fake_widget.primary"},
+			blueprintRef: "ci-platform:sha256:" + strings.Repeat("a", 64),
+		},
+		{
+			addr:         core.Address{Stack: "payments", Type: "fake_widget", Name: "primary"},
+			blueprintRef: "ci-platform:sha256:" + strings.Repeat("a", 64),
+		},
+	}
+
+	out := mustEmitD2(t, resources)
+
+	if strings.Count(out, "style.stroke-dash: 3") != 1 || strings.Count(out, "style.fill: transparent") != 1 {
+		t.Fatalf("expected exactly one dashed-border container (both resources share one blueprint call), got: %s", out)
+	}
+	if !strings.Contains(out, "bp0: ") {
+		t.Fatalf("expected the container key bp0, got: %s", out)
+	}
+	if !strings.Contains(out, "ci-platform:sha256:"+strings.Repeat("a", 12)+"…") {
+		t.Fatalf("expected the container labeled with the short-hash form of the ref, got: %s", out)
+	}
+	// Indented (nested inside bp0's own braces), not top-level -- a
+	// top-level r0/r1 would render at zero indent, the exact distinction
+	// TestEmitD2_MixedBlueprintAndOrdinaryResources_OnlyBlueprintOnesGroup
+	// below also checks for the mixed case.
+	if !strings.Contains(out, "  r0: \"mirror\" {") || !strings.Contains(out, "  r1: \"primary\" {") {
+		t.Fatalf("expected both resources nested (indented) inside bp0, got: %s", out)
+	}
+	if !strings.Contains(out, "bp0.r0 -> bp0.r1") {
+		t.Fatalf("expected the depends_on edge between container-qualified paths, got: %s", out)
+	}
+}
+
+// TestEmitD2_MixedBlueprintAndOrdinaryResources_OnlyBlueprintOnesGroup
+// proves an ordinary (non-blueprint) resource renders top-level exactly
+// as before this slice, even in a stack that ALSO has a blueprint-sourced
+// resource -- grouping is purely additive, never a behavior change for a
+// resource with no blueprintRef.
+func TestEmitD2_MixedBlueprintAndOrdinaryResources_OnlyBlueprintOnesGroup(t *testing.T) {
+	resources := []emitResource{
+		{addr: core.Address{Stack: "payments", Type: "aws_vpc", Name: "main-vpc"}},
+		{
+			addr:         core.Address{Stack: "payments", Type: "fake_widget", Name: "queue"},
+			blueprintRef: "ci-platform:sha256:" + strings.Repeat("b", 64),
+		},
+	}
+
+	out := mustEmitD2(t, resources)
+
+	if !strings.Contains(out, "\nr0: \"main-vpc\" {") {
+		t.Fatalf("expected the ordinary resource to render top-level (unindented) as r0, unchanged, got: %s", out)
+	}
+	if !strings.Contains(out, "  r1: \"queue\" {") {
+		t.Fatalf("expected the blueprint-sourced resource nested (indented) inside bp0 as r1, got: %s", out)
+	}
+}
+
+// TestEmitD2_NoBlueprintResources_NoContainer_ByteIdenticalToBefore
+// confirms a stack with zero blueprint-sourced resources produces output
+// with no container syntax at all -- Slice 6's own explicit requirement
+// that grouping never changes an ordinary stack's rendering.
+func TestEmitD2_NoBlueprintResources_NoContainer_ByteIdenticalToBefore(t *testing.T) {
+	resources := []emitResource{
+		{addr: core.Address{Stack: "payments", Type: "aws_vpc", Name: "main-vpc"}},
+	}
+	out := mustEmitD2(t, resources)
+	if strings.Contains(out, "bp0") || strings.Contains(out, "stroke-dash") {
+		t.Fatalf("expected no container syntax at all for a stack with no blueprint-sourced resources, got: %s", out)
+	}
+}
+
 func TestEmitD2_NoResources_EmptyButValid(t *testing.T) {
 	out := mustEmitD2(t, nil)
 	if strings.TrimSpace(out) != "" {

@@ -275,9 +275,10 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent string) {
 	for i, raw := range creates {
 		var node struct {
-			Type   string                     `json:"type"`
-			Name   string                     `json:"name"`
-			Config map[string]json.RawMessage `json:"config"`
+			Type    string                     `json:"type"`
+			Name    string                     `json:"name"`
+			Config  map[string]json.RawMessage `json:"config"`
+			Sources []core.IntentSource        `json:"sources"`
 		}
 		if err := json.Unmarshal(raw, &node); err != nil || node.Type == "" || node.Name == "" {
 			continue
@@ -289,6 +290,15 @@ func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent 
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintf(out, "%s%s\n", indent, st.GreenBold(fmt.Sprintf("+ %s.%s create", node.Type, node.Name)))
+		// UBI-74 Slice 6: a resource's own per-resource sources (today,
+		// only ever a "blueprint" kind -- blueprint.ExpandCalls is the
+		// one producer that ever populates ResourceIntent.Sources)
+		// render right under the create header, before its attributes --
+		// "which blueprint made this" is scannable at a glance, the same
+		// prominence the header line itself already gets.
+		for _, s := range node.Sources {
+			renderIntentSource(out, st, s, indent+"  ")
+		}
 		keys := make([]string, 0, len(node.Config))
 		for k := range node.Config {
 			keys = append(keys, k)
@@ -457,6 +467,18 @@ func renderProposalCompact(out io.Writer, st *styler, ledger *core.Ledger, p *co
 	for _, s := range p.Intent.Sources {
 		renderIntentSource(out, st, s, "    ")
 	}
+	// UBI-74 Slice 6: the chain view (ubx why <address>) didn't render
+	// Acceptance at all before this -- only the single-proposal view
+	// (renderProposal, bare-proposal-id form) did. A blueprint-created
+	// resource's own "full provenance chain" needs this: it's the real,
+	// concrete half of the dual-signature story renderIntentSource's own
+	// "blueprint" case names (the calling stack's own instantiation
+	// signing) -- without it, `ubx why <address>` on a blueprint-created
+	// resource would show WHICH blueprint but never WHO signed off on
+	// actually calling it.
+	if p.Acceptance != nil {
+		fmt.Fprintf(out, "    accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
+	}
 	renderCreates(out, st, p.Delta.Creates, "    ")
 	renderModifies(out, st, p.Delta.Modifies, "    ")
 	renderDestroys(out, st, p.Delta.Destroys, "    ", false)
@@ -494,6 +516,33 @@ func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent s
 		fmt.Fprintf(out, "%s%s cloudtrail_unattributed -- %s\n", indent, label, unattributedReason(s.Reason))
 	case "promotion":
 		fmt.Fprintf(out, "%s%s promoted from %s/%s\n", indent, label, s.Base, st.Hash(s.Ref))
+	case "blueprint":
+		// UBI-74 Slice 6: Ref is always "<name>:<content_hash>"
+		// (blueprint.ExpandCalls' own stamping) -- split so the hash
+		// portion gets the SAME short/full-hash styling every other
+		// hash in this command's output already gets (st.Hash,
+		// --full-hashes-aware), rather than a bare, un-styled string.
+		// The dual-signature story UBI-74's own design record names --
+		// the blueprint AUTHOR's own signing, separate from the CALLING
+		// stack's own instantiation signing -- is rendered honestly,
+		// not assumed: this build has no separate accept/sign ceremony
+		// for a blueprint's own definition at all (no `ubx blueprint
+		// accept`, no ledger entry for a blueprint by itself), so only
+		// the SECOND signature is real today -- the surrounding
+		// proposal's own "accepted by ... via ... at ..." line (already
+		// rendered elsewhere in this same `ubx why` output) IS that
+		// real, calling-stack signing. Named here explicitly rather
+		// than silently implying a blueprint-authorship signature
+		// exists when it doesn't.
+		name, hash, ok := strings.Cut(s.Ref, ":")
+		hash = strings.TrimPrefix(hash, "sha256:") // truncate the hex itself, not the "sha256:" label eating into the budget
+		if !ok {
+			fmt.Fprintf(out, "%s%s blueprint %s\n", indent, label, s.Ref)
+		} else {
+			fmt.Fprintf(out, "%s%s blueprint %s:sha256:%s\n", indent, label, name, st.Hash(hash))
+		}
+		fmt.Fprintf(out, "%s  (this resource's own creation is signed by the CALLING stack's own acceptance below; "+
+			"the blueprint's own authorship has no separate signing ceremony in this build yet)\n", indent)
 	default:
 		fmt.Fprintf(out, "%s%s %s %s (content_hash=%s)\n", indent, label, s.Kind, s.Ref, s.ContentHash)
 	}

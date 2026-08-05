@@ -2,6 +2,41 @@
 
 ## Changelog
 
+- 2026-08-05 — UBI-74 Slice 6 (Strata blueprints, provenance + `why`/
+  `render` integration): every resource a blueprint call produces is
+  stamped with a `{"kind": "blueprint", "ref": "<name>:<content_hash>"}`
+  entry in a new per-RESOURCE `resolver.ResourceIntent.Sources` field --
+  reusing `core.IntentSource`'s own existing multi-kind shape verbatim
+  (a new `"blueprint"` kind, never a new field shape), since a
+  document-level source can't express "resource A came from a blueprint,
+  sibling B in the same document didn't." `blueprint.ExpandCalls` is the
+  one producer that stamps it, using `buildManifest`'s own fresh content
+  hash as the version (never requiring the blueprint to have been
+  `package`d first). `ubx why` renders the full chain -- which blueprint,
+  which version, and an honest dual-signature account: only the calling
+  stack's own real acceptance is backed by a real signing ceremony in
+  this build, the blueprint author's own signing is named as a gap, not
+  fabricated. `ubx render` groups a blueprint call's own resources inside
+  one dashed-border D2 container (`style.stroke-dash`/`style.fill:
+  transparent`, empirically verified against the real `d2parser`/
+  `d2format` pipeline before use), labeled with the blueprint's own ref --
+  real, resolved-time truth, consistent with `diagram/emit.go`'s own "no
+  synthetic containers" principle, not an exception to it. Found and
+  fixed a real, pre-existing bug along the way: `Emit` read `depends_on`/
+  provenance from Fleet's own "latest touching proposal," silently wrong
+  whenever a later, unrelated proposal touches the same address without
+  re-creating it (a real shape a two-resource blueprint call with a
+  `$ref` between them produces) -- fixed with a new `creatingProposalFor`
+  helper that finds the actual creating proposal from the address's own
+  full history. Live-verified against real `hashicorp/aws@6.54.0`: the
+  real CI-platform blueprint, resolved/accepted against the real provider
+  schema, shipped by the founder, then `ubx why`/`ubx render` both
+  confirmed correct against the real shipped result. Full account:
+  docs/blueprint.md's "Provenance: Slice 6" section (new) and its own
+  Slice 6 implementation-slices entry; this file's own "Strata
+  blueprints" subsection updated in place. Slices 7-8 remain future
+  sessions.
+
 - 2026-08-04 — UBI-74 Slice 5 (Strata blueprints, cross-medium calling):
   a diagram's own `ubx_blueprint`-classed node (`diagram/parse.go`, zero
   AI, reusing UBI-91's own `ubx_required` structural-attribute mechanism)
@@ -5778,12 +5813,51 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slices 1–5 (UBI-74) — Slice 5 closed
+### Strata blueprints: Slices 1–6 (UBI-74) — Slice 6 closed
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
 rejected intermediate designs); docs/blueprint.md is the authoritative
-build doc for Slices 1–5. This section is a pointer, not a duplicate.
+build doc for Slices 1–6. This section is a pointer, not a duplicate.
+
+Slice 6 (provenance + `why`/`render` integration) built: every resource a
+blueprint call produces (any medium, any language) is stamped with a
+`{"kind": "blueprint", "ref": "<name>:<content_hash>"}` entry in a new
+per-RESOURCE `resolver.ResourceIntent.Sources` field (reusing
+`core.IntentSource`'s own existing multi-kind shape verbatim -- a new
+`"blueprint"` kind value, never a new field shape -- since a
+DOCUMENT-level source can't express "resource A came from a blueprint,
+sibling resource B in the same document didn't," a real scenario a mixed
+diagram/md document already makes possible). `ubx why` renders the full
+chain -- which blueprint, which content-hash version, and (per the
+design record's own "dual-signature" story) an honest account that only
+the CALLING stack's own real acceptance is backed by a real signing
+ceremony in this build; the blueprint AUTHOR's own signing has no
+separate mechanism yet, named as a gap rather than fabricated. `ubx
+render` groups a blueprint call's own resources inside one dashed-border
+D2 container (`style.stroke-dash`/`style.fill: transparent`, verified
+against this project's own real `d2parser`/`d2format` pipeline before
+use), labeled with the blueprint's own ref -- real, resolved-time truth
+pulled from the resource's own creating proposal, consistent with (not an
+exception to) `diagram/emit.go`'s own "no synthetic containers, no
+guessed structure" principle. A real, pre-existing bug found and fixed
+along the way, not introduced by this slice: `Emit` read `depends_on`/
+provenance from Fleet's own "latest touching proposal," which for a
+resource later touched by an unrelated reconciliation proposal (a real
+shape a two-resource blueprint call with a `$ref` between them produces)
+is NOT the same as its own creating proposal -- silently dropping that
+data. Fixed with a new `creatingProposalFor` helper that walks the
+address's own full recorded history to find the actual create,
+independent of whatever touched it most recently. Live-verified against
+real `hashicorp/aws@6.54.0`: the real CI-platform blueprint (ECR+SQS+IAM
+role+policy+attachment) called once for the `payments` stack, resolved
+and accepted against the real provider schema, shipped by the founder
+(per this project's own standing `ubx ship` handoff doctrine), then `ubx
+why`/`ubx render` both confirmed correct against the real shipped result
+-- all five resources correctly grouped under one container, the full
+provenance chain and real ship history rendering correctly. Full account:
+docs/blueprint.md's "Provenance: Slice 6" section and its own Slice 6
+implementation-slices entry.
 
 Slice 5 (cross-medium calling) built a diagram's own `ubx_blueprint`-
 classed node (`diagram/parse.go`, zero AI, reusing UBI-91's own
@@ -5888,12 +5962,13 @@ already know how to substitute later. Full account, including the
 `params: default` (parsed, not yet load-bearing at Go-codegen time —
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
-Slices 2 (local call), 3 (package/distribute), 4 (multi-language), and 5
-(cross-medium calling) are all closed, per this section's own updated
-heading and the Slice 3/4/5 paragraphs above. Slices 6–8 (provenance/
-render, OCI push, tarball delivery) are each their own future session,
-tracked in UBI-74's own implementation-breakdown comment. Nesting is
-UBI-121; the bound policy engine is UBI-118 — both
+Slices 2 (local call), 3 (package/distribute), 4 (multi-language), 5
+(cross-medium calling), and 6 (provenance + `why`/`render`) are all
+closed, per this section's own updated heading and the Slice 3/4/5/6
+paragraphs above. Slices 7–8 (OCI push, tarball delivery) are each their
+own future session, tracked in UBI-74's own implementation-breakdown
+comment. Nesting is UBI-121; the bound policy engine is UBI-118; the
+override mechanism and `render --sync-overrides` are UBI-86 — all three
 split off UBI-74 already, tracked separately.
 
 ## Deferred (explicitly not now)

@@ -1,28 +1,37 @@
 # Blueprints — signed, reusable, parameterized proposal templates (UBI-74)
 
-> **Slices 1–5 (this document): the Ubxfile format + `ubx blueprint build
+> **Slices 1–6 (this document): the Ubxfile format + `ubx blueprint build
 > .`, the resolved functional-options defaults design (Go) and native
 > default parameters (TS/Python), a real stack calling a locally-built
 > blueprint package through `ubx resolve --from-code`, `ubx blueprint
 > package`/`pull`/`verify` (content-addressed tarball, local-path and
 > git+ref distribution, content-hash tamper-evidence), multi-language
 > codegen (`--lang go|ts|py|all` compiling ONE AI draft into up to three
-> sibling `go/`/`ts/`/`py/` package directories), and cross-medium calling
+> sibling `go/`/`ts/`/`py/` package directories), cross-medium calling
 > — a diagram's own `ubx_blueprint`-classed node (zero AI) and an md
 > draft's own "Use blueprint X with..." recognition (a thin AI mapping
 > step, never a re-draft) both compile to the SAME `blueprint_calls`
 > intent/v1 field, expanded by literally invoking the target blueprint's
 > own compiled function through the identical goeval/tseval/pyeval
 > machinery `ubx resolve --from-code` already runs for a hand-written SDK
-> program.** No provenance/OCI-Strata/tarball-as-standalone-delivery yet.
-> Full design context (naming, trust model, the eight-slice breakdown, the
-> rejected intermediate designs) lives in UBI-74's own Linear comment
-> thread — read it before touching this arc again, later comments
-> supersede earlier ones. Slices 6–8 (provenance/render, OCI push, tarball
-> delivery) are each their own future session; nesting (`uses:`) is
-> UBI-121, tracked and designed separately, never touched here.
+> program — and provenance + `why`/`render` integration: every resource a
+> blueprint call produces carries a `{"kind": "blueprint", "ref":
+> "<name>:<content_hash>"}` entry in its own per-resource `sources`,
+> `ubx why <address>` renders the full provenance chain (which blueprint,
+> honestly distinguishing the blueprint author's own signing — which this
+> build has no separate ceremony for yet — from the calling stack's own
+> real instantiation signing), and `ubx render` visually groups a
+> blueprint call's own resources inside one dashed-border container.**
+> No OCI-Strata/tarball-as-standalone-delivery yet. Full design context
+> (naming, trust model, the eight-slice breakdown, the rejected
+> intermediate designs) lives in UBI-74's own Linear comment thread — read
+> it before touching this arc again, later comments supersede earlier
+> ones. Slices 7–8 (OCI push, tarball delivery) are each their own future
+> session; nesting (`uses:`) is UBI-121, tracked and designed separately,
+> never touched here. The override mechanism and `render --sync-overrides`
+> are UBI-86, a separate ticket, not touched here either.
 
-## Scope: what Slices 1–5 build, and what they don't
+## Scope: what Slices 1–6 build, and what they don't
 
 **Slice 1** builds: parsing an `Ubxfile` (three keys only — `lang`,
 `params`, `resources`); `ubx blueprint build .` (finds the Ubxfile the
@@ -92,18 +101,40 @@ a hand-written SDK program (UBI-74 Slice 2's own real invocation
 mechanism, never a second, parallel one). See "Cross-medium calling"
 below for the full design.
 
+**Slice 6** builds: provenance tagging + `why`/`render` integration —
+every resource a blueprint call produces (`blueprint.ExpandCalls`, any
+medium, any language) is stamped with a `{"kind": "blueprint", "ref":
+"<name>:<content_hash>"}` entry in a new per-RESOURCE
+`resolver.ResourceIntent.Sources` field (reusing `core.IntentSource`'s
+own existing multi-kind shape verbatim, a new `"blueprint"` kind value,
+never a new field shape), threaded through `resolveOnce` into each
+create node's own `"sources"` key; `ubx why <address>` renders the full
+chain, honestly distinguishing the (not-yet-implemented) blueprint
+author's own signing from the real calling-stack acceptance; `ubx
+render` groups a blueprint call's own resources inside one dashed-border
+D2 container, labeled with the blueprint's own ref. See "Provenance:
+Slice 6" below for the full design.
+
 Not built here, named so it isn't assumed covered: a stack's own `uses:`
-key naming a blueprint by ref (UBI-121); provenance tagging and
-`why`/`render` integration (Slice 6); OCI/Strata push or pull (Slice 7);
-pulling FROM a bare, standalone tarball file — Slice 3's own `package`
-produces a tarball, but nothing built so far ever reads one back; that's
-Slice 8's own "offline/email delivery" scope, a separate concern from
-local-path/git distribution; the bound policy engine (UBI-118, split off
-UBI-74 entirely); a blueprint call participating in a diagram edge
-(Slice 5's own diagram parsing treats one as topologically inert, the
-same way an unresolved node already is — its own resource addresses
-aren't known until expansion, well after the diagram medium's own edge-
-translation pass runs).
+key naming a blueprint by ref (UBI-121); OCI/Strata push or pull
+(Slice 7); pulling FROM a bare, standalone tarball file — Slice 3's own
+`package` produces a tarball, but nothing built so far ever reads one
+back; that's Slice 8's own "offline/email delivery" scope, a separate
+concern from local-path/git distribution; the bound policy engine
+(UBI-118, split off UBI-74 entirely); the override mechanism and `render
+--sync-overrides` (UBI-86, a separate ticket); a blueprint call
+participating in a diagram edge (Slice 5's own diagram parsing treats one
+as topologically inert, the same way an unresolved node already is — its
+own resource addresses aren't known until expansion, well after the
+diagram medium's own edge-translation pass runs); nested blueprint calls
+(a blueprint calling another blueprint) — provenance stamping only ever
+records the ONE blueprint that directly produced a resource, never a
+chain, since nesting itself (UBI-121) isn't built; recording a
+blueprint's own build-time package/function name in `blueprint.lock.json`
+(named as a Slice-6 candidate in "Cross-medium calling" above, for a
+DIFFERENT limitation — deriving `blueprintNameFromCall`'s own function
+identifier — not attempted this slice, since it's a separate concern from
+provenance/why/render).
 
 ## The Ubxfile format
 
@@ -1127,6 +1158,203 @@ leg's own real-fakeprovider-resolved delta — not a live-AWS run itself,
 but a real, direct structural proof this session did complete, not a
 gap left unverified.
 
+## Provenance: Slice 6
+
+Slice 6's own scope is narrow and explicit: tag every blueprint-produced
+resource with which blueprint made it, render that provenance in `ubx
+why`, and visually group it in `ubx render`. It does NOT touch OCI/Strata
+(Slice 7), tarball redistribution (Slice 8), the override mechanism or
+`render --sync-overrides` (both UBI-86, a separate ticket), or nesting
+(UBI-121).
+
+### Tagging: reusing `core.IntentSource`, not inventing a new field
+
+`core.IntentSource` already exists — `document`/`intent_provider`/
+`dialogue`/`sdk`/`promotion`/`cloudtrail` kinds already coexist on
+`core.Intent.Sources`, a DOCUMENT-level field (docs/schema.md). Slice 6
+adds a new `"blueprint"` kind, but NOT on that document-level field — a
+document-level source can't express "resource A came from blueprint X,
+but sibling resource B in the same document didn't," a real, ordinary
+scenario once a diagram or md document mixes a blueprint call with a
+hand-authored resource (`diagram/parse_test.go`'s own
+`TestParse_UbxBlueprint_MixedWithOrdinaryResource` already proves this
+mixing is legal).
+
+So Slice 6 adds a new, purely additive, per-RESOURCE field instead:
+`resolver.ResourceIntent.Sources []core.IntentSource` — the exact same
+struct shape, just attached one level down. `resolveOnce` threads it into
+each create node's own `"sources"` JSON key (a sibling of `stack`/`type`/
+`name`/`config`/`depends_on`, the identical "ride along, resolver has zero
+special awareness of what it means" posture `depends_on` itself already
+has). Every producer except `blueprint.ExpandCalls` leaves it nil —
+`ExpandCalls` is the ONE place that ever populates it, stamping every
+resource a call produces with exactly one entry:
+
+```json
+{"kind": "blueprint", "ref": "ci-platform:sha256:f893af6e945f..."}
+```
+
+`ref` is `"<blueprint_name>:<content_hash>"` — the SAME `buildManifest`
+Slice 3's own `package`/`verify` machinery already uses, computed FRESH
+over the pulled blueprint directory's own current files at every call
+(never requiring the blueprint to have already been explicitly
+`package`d first — `blueprint.lock.json` need not exist at all). This is
+"version" without inventing a separate versioning scheme: two calls to
+the identical blueprint content get the identical ref; a changed
+blueprint gets a different one, automatically.
+
+Because `blueprintRef` is computed once per `invokeCall` and stamped onto
+every resource that ONE call produces, it's identical regardless of which
+medium (diagram/md, via `BlueprintCalls`) or which language
+(`callLanguagePreference`: ts, py, go) actually executed it — the ref
+describes the blueprint itself, never the calling mechanism.
+
+**A real, named scope boundary**: this only covers the `BlueprintCalls`
+mechanism (Slice 5). A stack that imports a generated blueprint package
+DIRECTLY (Slice 1/2's own original calling convention —
+`writeBlueprintCallingStack`'s own pattern, `ubx resolve --from-code`
+against a hand-written program that calls the blueprint's function
+inline, in the SAME compiled binary) produces resources with NO
+`sources` at all — there is no `BlueprintCalls`/`ExpandCalls` step in
+that path to stamp anything, by Slice 1/2's own original design (the
+call IS native language composition, not a separate expansion step).
+Confirmed directly: `ubx resolve --from-code` against
+`writeBlueprintCallingStack`'s own fixture produces a resolved proposal
+with zero `"sources"` entries. Closing this gap — if it's even wanted,
+since the direct-import path's whole point was "it's just a normal Go/TS/
+Python program, no blueprint machinery of its own" — is not attempted
+here.
+
+### `ubx why`: the provenance chain, dual-signature honesty
+
+`renderCreates` (`cli/why.go`) decodes each create entry's own `sources`
+field (alongside its existing `type`/`name`/`config` decode) and renders
+each one via `renderIntentSource`'s existing kind-switch, now with a new
+`case "blueprint":` branch:
+
+```
++ aws_ecr_repository.container-repo create
+  source: blueprint ci-platform:sha256:f893af6e945f…
+  (this resource's own creation is signed by the CALLING stack's own
+  acceptance below; the blueprint's own authorship has no separate
+  signing ceremony in this build yet)
+  name: payments-ci-artifacts-md
+  ...
+```
+
+UBI-74's own design record names a "dual-signature" story: the blueprint
+AUTHOR's own original signing, kept separate from the CALLING stack's own
+instantiation signing. This build has no real ceremony for the FIRST
+half at all — no `ubx blueprint accept`, no ledger entry for a blueprint's
+own definition independent of any call — so Slice 6 renders this
+HONESTLY rather than fabricating a signature: the note above names the
+gap explicitly, and only the SECOND half (the calling stack's own real
+`core.Acceptance` — `Approvers`/`Method`/`AcceptedAt`) is rendered, as the
+surrounding proposal's own "accepted by [...] via ... at ..." line.
+
+That line was previously only rendered by the bare-proposal-ID view
+(`renderProposal`) — the address-chain view (`renderProposalCompact`,
+what `ubx why <stack>.<type>.<name>` actually uses) never rendered
+Acceptance at all before Slice 6. Fixed so both views show it: a
+blueprint-created resource's own full provenance chain needs the real
+calling-stack signature visible, not just which blueprint made it.
+
+### `ubx render`: dashed-border grouping
+
+`diagram/emit.go`'s own stated principle — "no synthetic containers... no
+canonical grouping basis to invent" — is about not GUESSING at structure
+the diagram medium has no way to know. Blueprint-sourced grouping doesn't
+violate this: it's real, resolved-time truth pulled from the resource's
+own creating proposal (the same `sources` field `ubx why` reads), exactly
+the same posture `depends_on`-derived edges already have.
+
+`emitResource` gained a `blueprintRef string` field (`""` for an ordinary
+resource); a new `blueprintSourceFor` helper mirrors `dependsOnFor`
+exactly, extracting `sources[].ref` where `kind == "blueprint"` from the
+resource's own creating proposal. Resources sharing the same
+`blueprintRef` group into one D2 container (`bp0`, `bp1`, ... in
+ref-sorted order), styled:
+
+```d2
+bp0: "ci-platform:sha256:f893af6e945f…" {
+  style.stroke-dash: 3
+  style.fill: transparent
+  r0: "container-repo" {
+    class: aws_ecr_repository
+  }
+  ...
+}
+```
+
+— verified empirically that `style.stroke-dash`/`style.fill: transparent`
+parse and reformat cleanly through this project's own real
+`d2parser`/`d2format` pipeline before committing to this styling; no
+prior "dashed" convention existed anywhere in this codebase, so this is a
+genuinely new (but validated) styling choice, not a literal reuse of an
+existing pattern. The container's own label uses a short-hash form of the
+ref (12-char truncation + "…", mirroring `cli/why.go`'s own `displayHash`
+convention — `diagram` can't import `cli` to reuse it directly, since
+`cli` already imports `diagram`, so `shortBlueprintRef` is a small,
+deliberately independent mirror of that one rule, not a shared helper).
+An ordinary resource (`blueprintRef == ""`) renders top-level, unchanged
+— a stack with zero blueprint-sourced resources produces byte-identical
+output to pre-Slice-6 `Emit`.
+
+**A real, pre-existing bug found and fixed along the way, not introduced
+by this slice**: `Emit` originally read `depends_on`/`sources` from
+`core.FleetEntry.ProposalID` — Fleet's own documented "the LATEST
+proposal that touched this address," NOT necessarily the proposal that
+CREATED it. For the standard two-resource blueprint fixture (`primary` +
+`mirror`, mirror's own `$ref` reading primary's post-apply state), ship
+generates a later reconciliation touch on `primary` whose own
+`Delta.Creates` is empty — silently dropping `primary`'s own `depends_on`
+AND `sources` data, since `entry.ProposalID` no longer pointed at the
+create. This was ALREADY latent in `dependsOnFor` before this slice (no
+existing fixture happened to exercise it — no shipped resource with both
+a real `depends_on` and a later touching proposal), only surfacing once a
+real, live end-to-end blueprint-call render test
+(`TestRender_BlueprintCall_GroupsInDashedContainer_RealFakeProvider`)
+exercised exactly that shape. Fixed with a new `creatingProposalFor`
+helper: walks `core.Ledger.ProposalsForAddress` (the address's own full
+recorded history, oldest-first) to find the ONE proposal whose own
+`Delta.Creates` actually contains the address, independent of whatever
+touched it most recently — `dependsOn`/`blueprintRef` now both read from
+that, while `crossPins` (correctly "most recent touch," since a
+cross-stack pin IS re-recorded on every resolve/ship that reads it) stays
+on `entry.ProposalID` as before.
+
+### Hermetic tests
+
+`cli/blueprint_provenance_test.go`: a real shipped-create ledger fixture
+(via `core.Accept`/`BeginApply`/`SaveApplyProgress`/`SealApply`, matching
+`core/ubi29_test.go`'s own pattern) with a per-resource `sources` field —
+confirms `ubx why <id>` AND `ubx why <address>` both render the blueprint
+source line, the honest dual-signature note, and the real acceptance
+line; confirms an ordinary resource (no `sources`) renders unchanged.
+
+`diagram/emit_test.go`: `TestEmitD2_BlueprintSourcedResources_
+GroupInDashedContainer` (two blueprint-sourced resources nest under one
+`bp0`, the depends_on edge uses the container-qualified path),
+`TestEmitD2_MixedBlueprintAndOrdinaryResources_OnlyBlueprintOnesGroup`
+(an ordinary resource stays top-level even in a stack that also has a
+blueprint call), `TestEmitD2_NoBlueprintResources_NoContainer_
+ByteIdenticalToBefore` (zero blueprint resources → zero container
+syntax).
+
+`cli/render_blueprint_test.go`:
+`TestRender_BlueprintCall_GroupsInDashedContainer_RealFakeProvider` — a
+real diagram-medium blueprint call (`diagram.Parse`'s own `ubx_blueprint`
+recognition, real `ExpandCalls` invocation, a real locally-built Go-only
+blueprint package, no synthetic shortcuts) resolves, accepts, and ships
+two real resources through the real `fakeprovider` pipeline end to end,
+then confirms `ubx render` groups both inside one dashed container with
+the real depends_on edge drawn between container-qualified paths — the
+exact test that caught the `creatingProposalFor` bug above.
+
+Full account of exactly which tests, and the real-AWS live verification
+this slice required, is in this file's own "Implementation slices" entry
+below.
+
 ## Implementation slices
 
 - 2026-08-04 (UBI-74 Slice 1): built and live-verified. `blueprint/`
@@ -1595,3 +1823,110 @@ gap left unverified.
   Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
   ./...` clean. `make build` run and `ubx version` checked before every
   live verification step. Committed this session -- see STATE.md.
+
+- 2026-08-05 (UBI-74 Slice 6): built and live-verified against real
+  `hashicorp/aws@6.54.0`, per "Provenance: Slice 6" above.
+  `core/resolver/resolver.go` (`ResourceIntent.Sources`),
+  `blueprint/invoke.go` (`ExpandCalls`'s own stamping), `cli/why.go`
+  (`renderCreates`'s own `sources` decode, the new `case "blueprint":` in
+  `renderIntentSource`, `renderProposalCompact`'s own new Acceptance
+  line), and `diagram/emit.go` (`emitResource.blueprintRef`,
+  `blueprintSourceFor`, the container-grouping restructure of `emitD2`,
+  `shortBlueprintRef`) match the design above.
+
+  **A real, live-found bug, not predicted in advance**: the ticket's own
+  premise ("Slice 4 or 5's playground stack is still live") turned out to
+  be false -- checked directly against both ledgers' own `applies/`
+  records and, independently, real read-only `aws` CLI calls before
+  trusting either: Slice 4 was fully shipped AND already terminated by
+  the founder; Slice 5 was only ever resolved+accepted, `ubx ship` never
+  run (no `applies/` directory at all). Surfaced to the founder rather
+  than silently substituting a synthetic fixture for the required
+  real-AWS leg -- the founder chose "prepare a new real-AWS leg, I'll
+  ship it," the same prepare/hand-off/verify pattern Slices 2 and 5
+  already established.
+
+  **A second real, live-found bug, this one in code, not premise**: the
+  first live render against the real shipped result grouped only ONE of
+  the two resources in the initial hermetic fixture (`primary`/`mirror`)
+  under its own blueprint container -- `primary` rendered top-level,
+  ungrouped, despite carrying the identical `sources` entry in its own
+  accepted proposal (confirmed by reading the accepted ledger proposal
+  directly before assuming the tagging code itself was at fault). Traced
+  to `Emit` resolving `depends_on`/provenance via `core.FleetEntry.
+  ProposalID` -- Fleet's own documented "the LATEST proposal that
+  touched this address," not necessarily its CREATING one. `mirror`'s own
+  `$ref` read of `primary`'s real post-apply state during ship generates
+  a later touch on `primary` (a resolution-inputs entry, zero
+  `Delta.Creates`) that becomes Fleet's own "latest," silently emptying
+  what `dependsOnFor`/`blueprintSourceFor` could find. This was ALREADY
+  latent in `dependsOnFor` before this slice -- no existing fixture
+  happened to combine a real `depends_on` with a later touching proposal
+  -- only surfaced once a real end-to-end blueprint-call render test
+  exercised exactly that shape. Fixed with `creatingProposalFor` (walks
+  `core.Ledger.ProposalsForAddress`, oldest-first, to find the one
+  proposal whose own `Delta.Creates` actually contains the address);
+  `crossPins` deliberately stays on the ORIGINAL "latest touch" source,
+  since a cross-stack pin genuinely IS re-recorded on every resolve/ship
+  that reads it, unlike `depends_on`/`sources`, which only ever exist on
+  the create itself.
+
+  **Hermetic tests**: `cli/blueprint_provenance_test.go` (new -- a real
+  shipped-create ledger fixture via `core.Accept`/`BeginApply`/
+  `SaveApplyProgress`/`SealApply`, matching `core/ubi29_test.go`'s own
+  pattern, confirms `ubx why` renders the blueprint source line, the
+  honest dual-signature note, and the real acceptance line, both by
+  bare proposal-id and by address; an ordinary resource with no
+  `sources` renders unchanged); `diagram/emit_test.go` (three new tests:
+  two blueprint-sourced resources group under one container with
+  container-qualified edges; an ordinary resource in a mixed stack stays
+  top-level; a stack with zero blueprint resources produces zero
+  container syntax); `cli/render_blueprint_test.go` (new -- a real
+  diagram-medium blueprint call, real `ExpandCalls` invocation, a real
+  Go-only locally-built package, ships two real resources through
+  `fakeprovider` end to end and confirms the render grouping -- the exact
+  test that caught the `creatingProposalFor` bug above, before any real
+  AWS leg was attempted).
+
+  **Live verification, the ticket's own required bar, genuinely met
+  against real signed data from a real playground stack**: the real
+  CI-platform blueprint (ECR+SQS+IAM role+policy+attachment, the same
+  blueprint content Slices 2/4/5 already live-verified), called once more
+  for the `payments` stack via the SAME real `.md`-drafted `blueprint_
+  calls` document Slice 5's own real-AWS leg produced (re-resolved fresh
+  against today's Slice-6-carrying binary rather than re-drafted --
+  the draft itself was already real and unchanged, only the resolve
+  needed to be a fresh run) -- resolved against the REAL
+  `hashicorp/aws@6.54.0` provider's own schema (`payments: 5 create(s),
+  0 change(s), 0 terminate(s)`, all five creates carrying the identical
+  `{"kind": "blueprint", "ref": "ci-platform:sha256:f893af6e945f..."}`
+  entry), accepted into a fresh real ledger
+  (`~/ubx-playground-ubi74-slice6/ledger`, change id
+  `6ece75b09ee254fd00db903d5a15932e2571338f66d4399bf69754a73afe05d9`) --
+  then `ubx ship` itself run by the founder (per CLAUDE.md's own standing
+  rule), all five resources shipped clean. `ubx why` against both the
+  bare proposal id and the `payments.aws_ecr_repository.container-repo`
+  address confirmed the real provenance chain -- the blueprint ref, the
+  honest dual-signature note, the real `accepted by [roozbeh] via local
+  at ...` line, and (address form) the real ship history. `ubx render
+  --stack payments` confirmed all five real resources correctly grouped
+  under one `bp0` container with real AWS ARNs in their tooltips and the
+  real `depends_on` edges (the IAM policy's own real references to the
+  ECR repo and SQS queue) drawn between container-qualified paths. The
+  playground ledger is left for the founder's own `ubx terminate` (per
+  standing doctrine) once this session's verification is recorded.
+
+  Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+  ./...` clean. `make build` run and `ubx version` checked before every
+  live verification step. `mint validate`/`mint broken-links` both clean
+  on `ubiquex-docs`. Committed this session -- see STATE.md.
+
+  **Docs debt, NOT closed this session (flagged, not silently skipped)**:
+  ubiquex-docs has never had a dedicated blueprints guide across ANY of
+  Slices 1-6 -- `cli/why.mdx` and `cli/render.mdx` gained scoped sections
+  for this slice's own new behavior (blueprint provenance, dashed-border
+  grouping), but the full calling-convention/multi-language/package-pull-
+  verify/cross-medium story (Slices 1-5) remains undocumented in
+  ubiquex-docs entirely, a pre-existing gap this session did not
+  originate and a full write-up of which is out of this slice's own
+  scope.

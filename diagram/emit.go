@@ -30,6 +30,17 @@ type emitResource struct {
 	attrs     map[string]interface{}
 	dependsOn []string // canonical addresses, this resource's own stack only (a $ref-derived depends_on could in principle be empty; a $cross-derived one never contributes here, see below)
 	crossPins []core.ResolutionInput
+	// blueprintRef is "" for an ordinary resource; otherwise the
+	// "<name>:<content_hash>" blueprint.ExpandCalls stamped this
+	// resource's own creating create-node with (UBI-74 Slice 6,
+	// resolver.ResourceIntent.Sources -> the "sources" key). Real
+	// resolved-time truth pulled from the resource's own creating
+	// proposal, the same posture dependsOn/crossPins already have --
+	// this is what makes grouping by it consistent with this file's own
+	// "no synthetic containers... no canonical grouping basis to invent"
+	// principle above, not an exception to it: the grouping basis isn't
+	// invented, it's read off the exact same real proposal data.
+	blueprintRef string
 }
 
 // Emit walks stack's own live resources in l and produces the canonical
@@ -96,10 +107,35 @@ func Emit(l *core.Ledger, stack string) ([]byte, error) {
 			return nil, fmt.Errorf("diagram: emit %s: read proposal %s: %w", entry.Address, entry.ProposalID, err)
 		}
 
+		// entry.ProposalID is Fleet's own "latest proposal that touched
+		// this address" (core/fleet.go's own doc comment) -- exactly
+		// right for crossPins below (a cross-stack pin is re-recorded on
+		// every resolve that reads the neighbor, so "most recent touch"
+		// is the correct source for it), but WRONG for depends_on/
+		// blueprintRef: both live only on the address's own CREATE node,
+		// which a later proposal touching the SAME address (a
+		// drift_adopt reconciling a sibling resource's own $computed ref
+		// against this one's real post-apply state, say) never carries
+		// at all -- that later proposal's own Delta.Creates is simply
+		// empty. Emit's own doc comment above already promises "pulled
+		// from the resource's own creating... proposal" for exactly this
+		// data; creatingProposalFor walks the address's full recorded
+		// history (core.Ledger.ProposalsForAddress, oldest first) to
+		// find the one proposal that actually created it, independent
+		// of whatever touched it most recently.
+		creating, err := creatingProposalFor(l, entry.Address)
+		if err != nil {
+			return nil, fmt.Errorf("diagram: emit %s: %w", entry.Address, err)
+		}
+
 		var dependsOn []string
 		var crossPins []core.ResolutionInput
+		var blueprintRef string
+		if creating != nil {
+			dependsOn = dependsOnFor(creating, entry.Address)
+			blueprintRef, _ = blueprintSourceFor(creating, entry.Address)
+		}
 		if p != nil {
-			dependsOn = dependsOnFor(p, entry.Address)
 			addrStr := entry.Address.String()
 			for _, in := range p.Resolution.Inputs {
 				if in.Kind == "cross_stack_pin" && in.From == addrStr {
@@ -109,14 +145,56 @@ func Emit(l *core.Ledger, stack string) ([]byte, error) {
 		}
 
 		resources = append(resources, emitResource{
-			addr:      entry.Address,
-			attrs:     attrs,
-			dependsOn: dependsOn,
-			crossPins: crossPins,
+			addr:         entry.Address,
+			attrs:        attrs,
+			dependsOn:    dependsOn,
+			crossPins:    crossPins,
+			blueprintRef: blueprintRef,
 		})
 	}
 
 	return emitD2(stack, resources)
+}
+
+// creatingProposalFor finds addr's own creating proposal -- the one
+// change proposal, anywhere in addr's own recorded history, whose own
+// Delta.Creates actually contains addr -- independent of which proposal
+// most recently TOUCHED addr (Fleet's own ProposalID, an unrelated
+// concept documented on core.FleetEntry). Walks
+// core.Ledger.ProposalsForAddress (oldest-first, addr's own full genesis
+// chain) rather than assuming entry.ProposalID already IS the creating
+// proposal, since a later drift_adopt/modify recorded against addr
+// itself (a real, ordinary occurrence, not an edge case -- e.g.
+// reconciling a sibling resource's own $computed ref against addr's real
+// post-apply state) makes that assumption false. nil, nil if addr was
+// never created via a change proposal's own Delta.Creates at all (e.g.
+// purely adopted) -- not an error, callers already treat "no creating
+// proposal" as "no depends_on/blueprintRef to report," never a
+// diagram-emit failure.
+func creatingProposalFor(l *core.Ledger, addr core.Address) (*core.Proposal, error) {
+	chain, err := l.ProposalsForAddress(addr)
+	if err != nil {
+		return nil, fmt.Errorf("creating proposal for %s: %w", addr, err)
+	}
+	for _, p := range chain {
+		if p.Kind != core.KindChange {
+			continue
+		}
+		for _, raw := range p.Delta.Creates {
+			var node struct {
+				Stack string `json:"stack"`
+				Type  string `json:"type"`
+				Name  string `json:"name"`
+			}
+			if err := json.Unmarshal(raw, &node); err != nil {
+				continue
+			}
+			if node.Stack == addr.Stack && node.Type == addr.Type && node.Name == addr.Name {
+				return p, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // dependsOnFor finds addr's own depends_on list within p's Delta -- a
@@ -154,6 +232,42 @@ func dependsOnFor(p *core.Proposal, addr core.Address) []string {
 	return nil
 }
 
+// blueprintSourceFor mirrors dependsOnFor exactly (same ad hoc decode of
+// p.Delta.Creates, same stack/type/name match), extracting addr's own
+// per-resource blueprint provenance instead (UBI-74 Slice 6,
+// resolver.ResourceIntent.Sources -> the create node's own "sources"
+// key) -- the "blueprint" kind entry blueprint.ExpandCalls stamps every
+// resource a blueprint call produces with. false whenever addr wasn't
+// created by a blueprint call at all (the common case: an ordinary
+// hand-authored create, or any Delta.Modifies touch -- per-resource
+// Sources is only ever populated at creation time).
+func blueprintSourceFor(p *core.Proposal, addr core.Address) (string, bool) {
+	if p.Kind != core.KindChange {
+		return "", false
+	}
+	for _, raw := range p.Delta.Creates {
+		var node struct {
+			Stack   string              `json:"stack"`
+			Type    string              `json:"type"`
+			Name    string              `json:"name"`
+			Sources []core.IntentSource `json:"sources"`
+		}
+		if err := json.Unmarshal(raw, &node); err != nil {
+			continue
+		}
+		if node.Stack != addr.Stack || node.Type != addr.Type || node.Name != addr.Name {
+			continue
+		}
+		for _, s := range node.Sources {
+			if s.Kind == "blueprint" {
+				return s.Ref, true
+			}
+		}
+		return "", false
+	}
+	return "", false
+}
+
 // emitD2 builds the actual D2 source text (deterministic key assignment,
 // classes block, node blocks, edges) and runs it through d2parser ->
 // d2format.Format for the canonical byte form -- reusing D2's own
@@ -170,9 +284,47 @@ func emitD2(stack string, resources []emitResource) ([]byte, error) {
 	// found and avoided on the parse side). The resource's own name still
 	// renders in full, as the node's own D2 label -- nothing about
 	// readability is lost, only the internal key is synthetic.
-	keyOf := make(map[string]string, len(resources)) // addr.String() -> D2 key
+	keyOf := make(map[string]string, len(resources)) // addr.String() -> D2 key (bare, no container prefix)
 	for i, r := range resources {
 		keyOf[r.addr.String()] = fmt.Sprintf("r%d", i)
+	}
+
+	// Blueprint containers (UBI-74 Slice 6): resources sharing the same
+	// blueprintRef group into one dashed-border D2 container per ref,
+	// container keys assigned "bp0", "bp1", ... in ref-sorted order for
+	// determinism. A stack with zero blueprint-sourced resources has
+	// blueprintRefs empty, so every resource stays top-level exactly as
+	// emitD2 rendered it before this slice -- byte-identical output,
+	// never a behavior change for a stack that never called a blueprint.
+	seenRefs := map[string]bool{}
+	var blueprintRefs []string
+	for _, r := range resources {
+		if r.blueprintRef == "" || seenRefs[r.blueprintRef] {
+			continue
+		}
+		seenRefs[r.blueprintRef] = true
+		blueprintRefs = append(blueprintRefs, r.blueprintRef)
+	}
+	sort.Strings(blueprintRefs)
+	containerKeyOf := make(map[string]string, len(blueprintRefs))
+	for i, ref := range blueprintRefs {
+		containerKeyOf[ref] = fmt.Sprintf("bp%d", i)
+	}
+
+	// fullKeyOf is keyOf's own edge-drawing counterpart: a grouped
+	// resource's real D2 address is its container's dotted path
+	// ("bpK.rN"), the only address D2 edge syntax can actually reach a
+	// nested node through -- keyOf's own bare "rN" stays the node's own
+	// LOCAL key (used when writing its block, nested or not), fullKeyOf
+	// is always what an edge referencing it must use.
+	fullKeyOf := make(map[string]string, len(resources))
+	for _, r := range resources {
+		bare := keyOf[r.addr.String()]
+		if r.blueprintRef == "" {
+			fullKeyOf[r.addr.String()] = bare
+		} else {
+			fullKeyOf[r.addr.String()] = containerKeyOf[r.blueprintRef] + "." + bare
+		}
 	}
 
 	// Reference nodes: one per distinct neighbor address any resource's
@@ -221,12 +373,44 @@ func emitD2(stack string, resources []emitResource) ([]byte, error) {
 		b.WriteString("}\n")
 	}
 
+	// Ungrouped resources render top-level, exactly as this loop always
+	// has -- unchanged for any resource with no blueprintRef.
 	for i, r := range resources {
+		if r.blueprintRef != "" {
+			continue
+		}
 		key := fmt.Sprintf("r%d", i)
 		fmt.Fprintf(&b, "%s: %s {\n", key, d2Quote(r.addr.Name))
 		fmt.Fprintf(&b, "  class: %s\n", r.addr.Type)
 		if tooltip := attrTooltip(r.attrs); tooltip != "" {
 			fmt.Fprintf(&b, "  tooltip: %s\n", d2Quote(tooltip))
+		}
+		b.WriteString("}\n")
+	}
+	// Blueprint-sourced resources nest inside their own container block
+	// (dashed border, transparent fill -- verified against this
+	// project's real d2parser/d2format pipeline before use here), one
+	// container per distinct blueprintRef, labeled with the ref itself
+	// (short-hash form, matching cli/why.go's own 12-char truncation
+	// convention -- diagram can't import cli to reuse displayHash
+	// directly, cli already imports diagram, so shortBlueprintRef below
+	// is a small, deliberately independent mirror of that one rule).
+	for _, ref := range blueprintRefs {
+		ckey := containerKeyOf[ref]
+		fmt.Fprintf(&b, "%s: %s {\n", ckey, d2Quote(shortBlueprintRef(ref)))
+		b.WriteString("  style.stroke-dash: 3\n")
+		b.WriteString("  style.fill: transparent\n")
+		for i, r := range resources {
+			if r.blueprintRef != ref {
+				continue
+			}
+			key := fmt.Sprintf("r%d", i)
+			fmt.Fprintf(&b, "  %s: %s {\n", key, d2Quote(r.addr.Name))
+			fmt.Fprintf(&b, "    class: %s\n", r.addr.Type)
+			if tooltip := attrTooltip(r.attrs); tooltip != "" {
+				fmt.Fprintf(&b, "    tooltip: %s\n", d2Quote(tooltip))
+			}
+			b.WriteString("  }\n")
 		}
 		b.WriteString("}\n")
 	}
@@ -241,9 +425,9 @@ func emitD2(stack string, resources []emitResource) ([]byte, error) {
 	type edge struct{ from, to string }
 	var edges []edge
 	for _, r := range resources {
-		from := keyOf[r.addr.String()]
+		from := fullKeyOf[r.addr.String()]
 		for _, dep := range r.dependsOn {
-			to, ok := keyOf[dep]
+			to, ok := fullKeyOf[dep]
 			if !ok {
 				// A depends_on target outside this stack's own live fleet
 				// (shouldn't happen -- resolve-time validation already
@@ -318,6 +502,29 @@ func scalarString(v interface{}) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return string(b)
+}
+
+// shortBlueprintRef renders a blueprint container's own label: ref's own
+// "<name>:sha256:<hex>" shape (blueprint.ExpandCalls' own stamping, see
+// blueprint/invoke.go) with the hash portion truncated to the same
+// 12-char short-hash convention cli/why.go's own displayHash already
+// established -- a deliberately independent mirror of that one rule
+// (diagram can't import cli to reuse displayHash directly; cli already
+// imports diagram, the reverse would cycle), not a shared helper. ref
+// with no ":" at all (shouldn't happen -- every real blueprintRef comes
+// from blueprint.ExpandCalls' own stamping -- but Emit never hard-fails a
+// diagram over an unexpected label shape) renders unmodified.
+func shortBlueprintRef(ref string) string {
+	name, hash, ok := strings.Cut(ref, ":")
+	if !ok {
+		return ref
+	}
+	hash = strings.TrimPrefix(hash, "sha256:")
+	const shortLen = 12
+	if len(hash) > shortLen {
+		hash = hash[:shortLen] + "…"
+	}
+	return name + ":sha256:" + hash
 }
 
 // d2Quote wraps s as a D2 double-quoted string literal -- backslash and

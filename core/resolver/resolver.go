@@ -295,13 +295,34 @@ type BlueprintCall struct {
 // completely unaffected -- see unionDependsOn (refs.go) for how it
 // merges into the identical dependency graph $ref/$cross scanning
 // already builds, not a second one.
+//
+// Sources was added 2026-08-05 (docs/blueprint.md's own "Provenance"
+// section, UBI-74 Slice 6): per-RESOURCE provenance, reusing
+// core.IntentSource's own existing multi-kind shape verbatim (a new
+// "blueprint" kind value, additive, the same way every prior kind --
+// dialogue/document/intent_provider/promotion/... -- was added, never a
+// new field shape) rather than the DOCUMENT-level core.Intent.Sources
+// this same type already populates. A document-level source can't
+// express "resource A came from blueprint X, but sibling resource B in
+// the SAME document didn't" -- a real, ordinary shape once a diagram or
+// md document mixes a blueprint call with hand-authored resources
+// (confirmed real, not hypothetical: diagram/parse_test.go's own
+// TestParse_UbxBlueprint_MixedWithOrdinaryResource). Purely additive and
+// optional, matching DependsOn's own precedent exactly: every producer
+// except blueprint.ExpandCalls (which stamps every resource IT produces
+// with exactly one {Kind: "blueprint", Ref: "<name>:<content-hash>"}
+// entry) leaves this nil. Threaded into the resolved create node's own
+// "sources" key by resolveOnce, below -- resolver.Resolve otherwise has
+// zero awareness this field means anything blueprint-specific; it's
+// just data that rides along, the same way DependsOn already does.
 type ResourceIntent struct {
-	Type      string          `json:"type"`
-	Name      string          `json:"name"`
-	Op        string          `json:"op"`
-	Config    json.RawMessage `json:"config"`
-	Provider  *ProviderHint   `json:"provider,omitempty"`
-	DependsOn []string        `json:"depends_on,omitempty"`
+	Type      string              `json:"type"`
+	Name      string              `json:"name"`
+	Op        string              `json:"op"`
+	Config    json.RawMessage     `json:"config"`
+	Provider  *ProviderHint       `json:"provider,omitempty"`
+	DependsOn []string            `json:"depends_on,omitempty"`
+	Sources   []core.IntentSource `json:"sources,omitempty"`
 }
 
 const (
@@ -812,6 +833,9 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			}
 			if len(dependsOn) > 0 {
 				node["depends_on"] = dependsOn
+			}
+			if len(e.ri.Sources) > 0 {
+				node["sources"] = e.ri.Sources
 			}
 			b, err := json.Marshal(node)
 			if err != nil {

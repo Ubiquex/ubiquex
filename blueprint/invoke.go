@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
 	"github.com/ubiquex/ubiquex/pyeval"
@@ -230,6 +231,23 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		return nil, fmt.Errorf("parse Ubxfile: %w", err)
 	}
 
+	// UBI-74 Slice 6: the provenance ref every resource this call
+	// produces gets stamped with, below -- "<name>:<content_hash>",
+	// reusing buildManifest (manifest.go, Slice 3's own `package`/
+	// `verify` mechanism) rather than requiring the blueprint to have
+	// already been explicitly `package`d (blueprint.lock.json need not
+	// exist at all -- computed fresh over the pulled copy's own current
+	// files every time, so this always works, not just for a packaged
+	// blueprint). The FULL "sha256:<hex>" form is stored here, matching
+	// every other content_hash in this codebase -- truncation to a
+	// short, readable form is a presentation concern for `ubx why`/`ubx
+	// render`, never baked into the stored ref itself.
+	manifest, err := buildManifest(dest, blueprintName)
+	if err != nil {
+		return nil, fmt.Errorf("compute blueprint content hash: %w", err)
+	}
+	blueprintRef := blueprintName + ":" + manifest.ContentHash
+
 	lang, err := pickCallLanguage(dest)
 	if err != nil {
 		return nil, err
@@ -271,6 +289,22 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	var result resolver.IntentFile
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("parse evaluated intent: %w", err)
+	}
+
+	// UBI-74 Slice 6: every resource THIS call produces is stamped with
+	// the SAME blueprint ref -- identically regardless of which medium
+	// (SDK/diagram/md) or which language (Go/TS/Python) actually
+	// executed it, since blueprintRef describes the blueprint itself
+	// (name + content hash), never the calling mechanism. A resource
+	// that already carried its own Sources (shouldn't happen -- no
+	// evaluator emits one today -- but appended rather than overwritten
+	// defensively, matching core.IntentSource's own established
+	// "multiple kinds coexist" posture).
+	for i := range result.Resources {
+		result.Resources[i].Sources = append(result.Resources[i].Sources, core.IntentSource{
+			Kind: "blueprint",
+			Ref:  blueprintRef,
+		})
 	}
 	return result.Resources, nil
 }

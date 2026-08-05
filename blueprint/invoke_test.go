@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core/resolver"
@@ -316,5 +317,74 @@ func TestExpandCalls_GitBlueprint(t *testing.T) {
 	}
 	if intent.Resources[0].Type != "aws_sqs_queue" {
 		t.Fatalf("unexpected resource: %+v", intent.Resources[0])
+	}
+}
+
+// TestExpandCalls_ProvenanceStamped is UBI-74 Slice 6's own required
+// hermetic proof: every resource ExpandCalls produces carries exactly
+// one {"kind": "blueprint", "ref": "<name>:<content_hash>"} entry in its
+// own Sources -- the SAME ref regardless of which language actually
+// executed the call (TS here; TestExpandCalls_ProvenanceStamped_Python
+// below confirms Python independently, not assumed identical).
+func TestExpandCalls_ProvenanceStamped(t *testing.T) {
+	requireDenoToolchain(t)
+	dir := writeCallableBlueprint(t, "ts")
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{
+				"queue_name": "payments-notifications", "max_receive_count": "5",
+			}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("ExpandCalls: %v", err)
+	}
+	if len(intent.Resources) != 1 {
+		t.Fatalf("expected exactly 1 resource, got %d", len(intent.Resources))
+	}
+	sources := intent.Resources[0].Sources
+	if len(sources) != 1 {
+		t.Fatalf("expected exactly 1 source, got %+v", sources)
+	}
+	if sources[0].Kind != "blueprint" {
+		t.Fatalf("Kind = %q, want %q", sources[0].Kind, "blueprint")
+	}
+	if !strings.HasPrefix(sources[0].Ref, "ci-platform:sha256:") {
+		t.Fatalf("Ref = %q, want it to start with \"ci-platform:sha256:\"", sources[0].Ref)
+	}
+}
+
+// TestExpandCalls_ProvenanceStamped_Python confirms the SAME provenance
+// ref is stamped regardless of which language actually executed the
+// call -- Python here, TS above -- since blueprintRef describes the
+// blueprint itself (name + content hash of the SAME pulled directory),
+// never the calling mechanism.
+func TestExpandCalls_ProvenanceStamped_Python(t *testing.T) {
+	requirePython3Toolchain(t)
+	dir := writeCallableBlueprint(t, "py")
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{
+				"queue_name": "payments-notifications", "max_receive_count": "5",
+			}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("ExpandCalls: %v", err)
+	}
+	sources := intent.Resources[0].Sources
+	if len(sources) != 1 || sources[0].Kind != "blueprint" {
+		t.Fatalf("Sources = %+v, want exactly one blueprint-kind source", sources)
+	}
+	if !strings.HasPrefix(sources[0].Ref, "ci-platform:sha256:") {
+		t.Fatalf("Ref = %q, want it to start with \"ci-platform:sha256:\"", sources[0].Ref)
 	}
 }
