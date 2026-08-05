@@ -154,6 +154,54 @@ class RuntimeTest(unittest.TestCase):
         c = sdk.Computed("demo.fake_widget.a.id")
         self.assertIn("demo.fake_widget.a.id", repr(c))
 
+    def test_override_round_trip(self):
+        def describe():
+            sdk.intent("s")
+            sdk.override("payments.aws_sqs_queue.pipeline-events", {"some_hardcoded_field": "new_value"})
+
+        doc = sdk.stack("payments", describe).evaluate()
+        self.assertEqual(len(doc["overrides"]), 1)
+        ov = doc["overrides"][0]
+        self.assertEqual(ov["address"], "payments.aws_sqs_queue.pipeline-events")
+        self.assertEqual(ov["config"]["some_hardcoded_field"], "new_value")
+
+    def test_override_computed_reference(self):
+        def describe():
+            sdk.intent("s")
+            primary = sdk.resource(WIDGET, "primary", WidgetConfig(name="primary-widget"))
+            sdk.override("payments.fake_widget.mirror", {"owner_ref": primary})
+
+        doc = sdk.stack("payments", describe).evaluate()
+        config = doc["overrides"][0]["config"]
+        self.assertEqual(config["owner_ref"]["$ref"]["to"], "payments.fake_widget.primary")
+
+    def test_override_no_overrides_omitted_from_wire(self):
+        def describe():
+            sdk.intent("s")
+
+        doc = sdk.stack("payments", describe).evaluate()
+        self.assertNotIn("overrides", doc)
+
+    def test_override_empty_address_is_hard_failure(self):
+        def describe():
+            sdk.intent("s")
+            sdk.override("", {"x": "y"})
+
+        with self.assertRaisesRegex(RuntimeError, "address is required"):
+            sdk.stack("payments", describe).evaluate()
+
+    def test_override_empty_config_is_hard_failure(self):
+        def describe():
+            sdk.intent("s")
+            sdk.override("payments.fake_widget.a", {})
+
+        with self.assertRaisesRegex(RuntimeError, "config is required"):
+            sdk.stack("payments", describe).evaluate()
+
+    def test_override_outside_stack_is_hard_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "called outside of an active stack"):
+            sdk.override("payments.fake_widget.a", {"x": "y"})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -228,6 +228,10 @@ export interface IntentDocument {
     readonly op: "create";
     readonly config: unknown;
   }>;
+  readonly overrides?: ReadonlyArray<{
+    readonly address: string;
+    readonly config: Record<string, unknown>;
+  }>;
 }
 
 // ---------------------------------------------------------------------
@@ -249,6 +253,7 @@ export interface StackDefinition {
 class Collector {
   readonly stackName: string;
   private resources: IntentDocument["resources"][number][] = [];
+  private overrides: NonNullable<IntentDocument["overrides"]>[number][] = [];
   private seenAddresses = new Set<string>();
   private intentInfo: IntentDocument["intent"] | undefined;
   private intentCalled = false;
@@ -286,19 +291,37 @@ class Collector {
     return makeComputed(address) as Computed<TAttrs>;
   }
 
+  addOverride(address: string, config: Record<string, unknown>): void {
+    if (!address || address.trim() === "") {
+      throw new Error("override(): address is required.");
+    }
+    if (!config || Object.keys(config).length === 0) {
+      throw new Error(`override("${address}"): config is required and cannot be empty.`);
+    }
+    const serialized: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(config)) {
+      serialized[k] = serializeOpaque(v, address);
+    }
+    this.overrides.push({ address, config: serialized });
+  }
+
   finish(): IntentDocument {
     if (!this.intentInfo) {
       throw new Error(
         "stack(): intent() was never called -- a missing summary is a collection-time hard failure, matching resources[].op's own \"always explicit, never inferred\" discipline.",
       );
     }
-    return {
+    const doc: IntentDocument = {
       schema_version: 1,
       kind: "ubx:intent/v1",
       stack: this.stackName,
       intent: this.intentInfo,
       resources: this.resources,
     };
+    if (this.overrides.length > 0) {
+      return { ...doc, overrides: this.overrides };
+    }
+    return doc;
   }
 }
 
@@ -356,6 +379,23 @@ export function resource<TConfig, TAttrs>(
  * stack() body (docs/sdk.md). */
 export function intent(info: { summary: string; sources?: readonly IntentSource[] }): void {
   requireCollector("intent").setIntent(info.summary, info.sources ?? []);
+}
+
+/** override(address, config) declares a caller-owned attribute patch
+ * against address (the canonical "<stack>.<type>.<name>" form) -- UBI-86
+ * Part 2's own mechanism, zero AI, a direct function call exactly like
+ * resource(). config's own keys are the target resource's own real WIRE
+ * attribute names (e.g. "message_retention_seconds"), never a
+ * ResourceBinding's own idiomatic (camelCase) config key -- there is no
+ * ResourceBinding for the TARGET resource in scope here, since it need
+ * not even be declared in this same document at all (the motivating
+ * case: overriding a field inside a called blueprint's own internal,
+ * unparameterized resource). Applied by blueprint.ApplyOverrides (the Go
+ * `blueprint` package) after any blueprint call in this document has
+ * already resolved, before ship -- see docs/blueprint.md's own "Override
+ * mechanism" section for the full design record. */
+export function override(address: string, config: Record<string, unknown>): void {
+  requireCollector("override").addOverride(address, config);
 }
 
 // ---------------------------------------------------------------------

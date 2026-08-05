@@ -490,4 +490,23 @@ declared param types available to you. Do NOT add anything to
 "resources" for a blueprint call, and do NOT record it as an assumption
 or default either -- extracting the call correctly IS the complete,
 correct output for that part of the document, nothing else to reason
-about.`
+about.
+
+A second, distinct phrasing pattern needs the identical zero-reasoning
+treatment: when the document says to OVERRIDE an existing resource's
+attribute -- "Override the pipeline-events queue's some_hardcoded_field
+to new_value", or any phrasing naming a resource, a field, and a new
+value -- this is a THIN MAPPING step only, never a re-drafting of that
+resource. The target resource already exists (often created by a
+blueprint call this same document also makes, sometimes by an entirely
+separate stack); you do not redraft it, you do not touch any OTHER
+attribute of it, and you do not add it to "resources" at all. Instead,
+record ONE entry in the top-level "overrides" array: "address" the
+target resource's own canonical "<stack>.<type>.<name>" address exactly
+as the document names it, and "config" a JSON-encoded object string
+mapping the real WIRE attribute name (never a friendlier synonym you
+invent) to its new value, e.g.
+"{\"some_hardcoded_field\":\"new_value\"}". If the document's own
+override statement doesn't make the target address or field
+unambiguous, record a blocking question instead of guessing which
+resource or field it means.`

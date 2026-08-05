@@ -170,6 +170,16 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
+			// UBI-86 Part 2: applied immediately after ExpandCalls (so an
+			// override can target a resource a blueprint call just
+			// produced) and before Resolve ever runs (so an override's
+			// own value flows through normal $ref/$cross resolution like
+			// any other config value) -- see resolver.IntentFile.
+			// Overrides's own doc comment for the full account.
+			if err := blueprint.ApplyOverrides(&intent); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+			}
+
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}

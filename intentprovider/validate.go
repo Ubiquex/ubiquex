@@ -45,6 +45,21 @@ type wireIntentFile struct {
 	Resources      []wireResourceIntent `json:"resources"`
 	Destroys       []string             `json:"destroys"`
 	BlueprintCalls []wireBlueprintCall  `json:"blueprint_calls"`
+	Overrides      []wireOverride       `json:"overrides"`
+}
+
+// wireOverride is UBI-86 Part 2's own md calling-convention wire shape --
+// mirrors wireResourceIntent's own "Config is a JSON-encoded STRING"
+// workaround exactly, for the identical reason (an override's own
+// config is fundamentally open-shaped, field name -> new raw value, and
+// a structured-output schema must close every object node -- schema.go's
+// own IntentDraftJSONSchema has the full account). This is the ONE call
+// site in this whole package that needs AI at all for UBI-86's override
+// mechanism (docs/blueprint.md's own "Override mechanism" section) -- a
+// thin mapping step, never a re-drafting of the target resource.
+type wireOverride struct {
+	Address string `json:"address"`
+	Config  string `json:"config"` // JSON-encoded object string, see wireIntentFile's own doc comment
 }
 
 // wireBlueprintCall is UBI-74 Slice 5's own md calling-convention wire
@@ -142,8 +157,8 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 	// context in the first place), not the original bug -- rejecting it
 	// would just reintroduce, one layer up, the exact "every unchanged
 	// resource drafts as a fresh create" defect UBI-85 exists to fix.
-	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 && len(wire.BlueprintCalls) == 0 && !allowEmptyDraft {
-		errs = append(errs, "draft has no resources, no destroys, and no blueprint_calls -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[] (or, for a blueprint invocation, to blueprint_calls[])")
+	if len(wire.Resources) == 0 && len(wire.Destroys) == 0 && len(wire.BlueprintCalls) == 0 && len(wire.Overrides) == 0 && !allowEmptyDraft {
+		errs = append(errs, "draft has no resources, no destroys, no blueprint_calls, and no overrides -- nothing to propose; if you described a resource in your reasoning, you must also add it to resources[] (or, for a blueprint invocation, to blueprint_calls[]; for an override statement, to overrides[])")
 	}
 
 	seen := map[string]bool{}
@@ -213,6 +228,26 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		})
 	}
 
+	overrides := make([]resolver.Override, 0, len(wire.Overrides))
+	for i, ov := range wire.Overrides {
+		path := fmt.Sprintf("overrides[%d]", i)
+		if ov.Address == "" {
+			errs = append(errs, path+".address: must not be empty")
+		} else if _, ok := core.ParseAddress(ov.Address); !ok {
+			errs = append(errs, fmt.Sprintf("%s.address: %q is not a well-formed <stack>.<type>.<name> address", path, ov.Address))
+		}
+		config := map[string]json.RawMessage{}
+		switch {
+		case ov.Config == "":
+			errs = append(errs, path+".config: must not be empty")
+		default:
+			if err := json.Unmarshal([]byte(ov.Config), &config); err != nil {
+				errs = append(errs, fmt.Sprintf("%s.config: not a valid JSON object: %v", path, err))
+			}
+		}
+		overrides = append(overrides, resolver.Override{Address: ov.Address, Config: config})
+	}
+
 	for i, a := range wire.Intent.Assumptions {
 		if a.Text == "" {
 			errs = append(errs, fmt.Sprintf("intent.assumptions[%d].text: must not be empty", i))
@@ -246,5 +281,6 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		Resources:      resources,
 		Destroys:       wire.Destroys,
 		BlueprintCalls: blueprintCalls,
+		Overrides:      overrides,
 	}, nil
 }

@@ -151,6 +151,199 @@ misrepresented) depth of live verification.
 
 ## Current phase
 
+**UBI-86 (2026-08-06) — TWO real features, both built and live-verified, reported explicitly and separately per the task's own instruction. Part 1: `ubx render --md`, a readable current-state markdown document sharing D2 render's own ledger walk, correctly groups a real blueprint-sourced stack and correctly redacts a real sensitive attribute. Part 2: the override mechanism (`override()` in Go/TS/Python/diagram/md) + `render --from-drift`/`--sync-overrides[--write]` (mechanical, zero AI, generates a real override statement from real drift) — a real drift→override round trip proved live: correct Go AND diagram statements generated, applied for real via `ubx plan --from-diagram`→`ubx ship`, confirmed the recreated resource carries the drifted-to value and shows clean. Depth differs by call site, named honestly below — do not read this line alone as "fully done."**
+
+Read UBI-86 fully, including the major design addition recorded in its
+own comment thread (2026-08-04): the override mechanism, `render
+--sync-overrides`, and the AI-vs-mechanical boundary already resolved
+there, before touching this again.
+
+### Part 1: `ubx render --md`
+
+`diagram/emit.go`'s own fleet walk extracted into a new, shared,
+exported `diagram.Walk` (new `diagram/walk.go`) — `diagram.Emit` (D2)
+now calls it and converts to its own `map[string]interface{}` shape;
+zero behavior change, confirmed by the full pre-existing D2 test suite
+staying green unchanged. New `mdrender` package (`mdrender/mdrender.go`)
+consumes the identical walk: header stating the CURRENT-STATE/generated/
+never-hand-edited principle (the ticket's own explicit requirement, in
+the rendered document itself, not just docs); grouping by blueprint
+origin first (reusing `diagram.Resource.BlueprintRef`, now exported
+`diagram.ShortBlueprintRef` too, one real grouping basis shared by both
+render targets, never a second one), then by type; attributes as
+readable, recursively-indented bullets (a nested `tags` map renders as
+real sub-bullets, never a squeezed inline JSON blob); `core.
+IsRedactedValue` checked per attribute, `(redacted)`, matching `why`/
+`revert-plan`'s own established wording — NOT `diagram/emit.go`'s own
+D2 tooltip renderer, which (a real, pre-existing, unrelated gap noted
+but not fixed here, out of this ticket's own scope) has no redaction
+check at all today. Deliberately does not attempt a "(computed)"
+annotation — schema metadata, not state data, and `Walk` stays
+provider-free by design. `--md` is a new bool flag on the existing
+`render` command (not a new verb); `--check` is fully format-agnostic
+and reused unchanged.
+
+Live-verified against the real Go blueprint fixture
+`render_blueprint_test.go` already established (Slice 6's own
+`ci_platform`-pattern proof, reused rather than a new one invented):
+correct `## Blueprint: platform:sha256:...` grouping, correct real
+applied attributes, correct real `depends on:` edges. Redaction
+confirmed against a real `Sensitive`-flagged attribute
+(`FAKEPROVIDER_SENSITIVE_ATTRS`) — `(redacted)`, never the real secret,
+never even the salted hash. Determinism confirmed (byte-identical
+repeated runs). Docs-first: new `docs/render-md.md`, `docs/blueprint.md`
+untouched by Part 1 (Part 2's own section covers the shared override
+material). Full hermetic suite: `cli/render_md_test.go`.
+
+### Part 2: the override mechanism + `render --sync-overrides`
+
+Full design + every real finding recorded in `docs/blueprint.md`'s own
+new "Override mechanism: UBI-86 Part 2" section — summarized here.
+
+**Wire shape**: `resolver.Override{Address, Config map[string]json.
+RawMessage}`, new `IntentFile.Overrides []Override`, additive, mirroring
+`BlueprintCalls`' own precedent exactly. `blueprint.ApplyOverrides`
+(new, `blueprint/override.go`) merges each entry into its target's
+`Config` — **found in `intent.Resources`, i.e. created within the SAME
+resolving document** — clears `Overrides`, called immediately after
+`blueprint.ExpandCalls` in both `cli/resolve.go` AND `cli/plan.go` (the
+latter never called `ExpandCalls` at all before this session — a
+pre-existing gap, closed here since the override round trip needs `ubx
+plan` too, confirmed the full `cli` suite stays green with it added).
+Policy-bypass requirement (the ticket's own REAL SECURITY REQUIREMENT):
+decided and stated explicitly, per the ticket's own offered choice — a
+real, always-permissive, single-call-site hook
+(`blueprint.checkOverridePolicy`), never silent, never full enforcement
+(UBI-118, the policy engine this would check against, remains split off
+and HELD with zero scaffolding anywhere in this codebase).
+
+**All five call sites built**: Go (`sdk.Override`, `sdk/go/runtime`),
+TypeScript (`override()`, `sdk/ts/runtime`), Python (`sdk.override()`,
+`sdk/py/ubx_sdk`) — all three, zero AI, identical shape, hermetically
+tested (5/6/6 new tests respectively, `go test`/`python3 -m unittest`/
+`deno test` all green). Diagram — a new `ubx_override`-classed node
+(`diagram/parse.go`), mirroring `ubx_blueprint`'s own reserved-class
+pattern exactly (not `ubx_required`'s nested-subtree shape), reusing
+`ubxRequiredAttrValue`'s own `"ref:<node>.<attr-path>"` sigil for a
+sibling-node reference value — zero AI, hermetically tested (6 new
+cases, `diagram/parse_override_test.go`), including the ref-sigil case
+and mixed-with-blueprint-call-and-resource coexistence. md —
+`intentprovider/schema.go`'s JSON Schema gained an `overrides` array,
+`intentprovider/claude/adapter.go`'s system prompt gained an explicit
+"thin mapping only, never a re-draft" rule, hermetically tested (3 new
+cases, `intentprovider/validate_test.go`) — **the one call site NOT
+live-round-tripped through a real Claude API call this session**, named
+here explicitly rather than silently claimed covered.
+
+**`render --from-drift`/`--sync-overrides[--write]`** (new
+`cli/drift.go` + `cli/overridetemplate.go`, wired into `cli/render.go`):
+confirmed, per the design comment's own item 10, **entirely mechanical,
+zero AI** — `scanDrift` reuses `status --drift`'s own EXACT mechanism
+(`core.RunScan`/`core.DiffAttributes`/`core.FilterNormalizationNoise`),
+never a second drift algorithm; the medium is auto-detected via
+`autodetectMedium` (`cli/plan.go`'s own existing file-sniffing, reused
+unchanged). `--write` appends safely for diagram/md authoring, REFUSES
+cleanly for a Go/TS/Python-authored stack (splicing into a describe
+function body needs real AST-aware editing, not attempted). 9 new
+hermetic tests (`cli/render_sync_overrides_test.go`), including a real,
+live-found bug fix caught by the session's own required live
+verification (below): `render`'s new provider flags didn't apply the
+`.ubx/config` file default the way every other provider-launching
+command (`status --drift`, `resolve`) already does — fixed at the actual
+cause (`applyProviderDefaults`/`applyProviderConfigDefault`, the exact
+calls `status.go` already makes), with a dedicated regression test.
+
+**A real, live-found nested-attribute correctness fix**: a naive
+per-PATH override render would have silently DROPPED every other key
+already in a live `tags` map the moment a nested drift (`tags.mutated`)
+got templated as a bare `{"tags": {"mutated": "yes"}}` patch —
+`resolver.Override.Config`'s own "top-level attribute, never a deep
+merge" contract means the WHOLE attribute must be overridden, so
+`topLevelOverrideFields` (`cli/overridetemplate.go`) pulls the
+attribute's own complete CURRENT value from the drift scan's own
+`Observed` state, never just the diffed sub-key. Caught while writing
+this session's own hermetic tests, before it ever reached live
+verification — fixed before it shipped wrong, not after.
+
+**A real, named, remaining scope boundary, found during this session's
+own required live verification, not assumed away**: `ApplyOverrides`
+only targets a resource created within the SAME resolving document — it
+does NOT yet retroactively patch an address that already exists in the
+ledger from a prior resolve/ship (confirmed live: `ubx plan
+--from-diagram` against an override-only diagram for an already-shipped
+address fails cleanly, `no such resource in this document`, never a
+silent no-op). This matches the mechanism's own real motivating framing
+on closer reading — "make it stick against a FUTURE RE-CALL" is
+forward-looking insurance for the next fresh create, not a retroactive
+ledger patch. A real, buildable, deferred extension (a ledger-aware
+`ApplyOverrides` synthesizing an `op: modify` for an existing address)
+is named in `docs/blueprint.md`, not attempted this session.
+
+**Live verification, the ticket's own required bar, genuinely met, live
+round trip**: a real fakeprovider resource drifted for real
+(`status --drift` confirmed it), `render --md --sync-overrides`
+generated the CORRECT statement in Go (exact text asserted) AND diagram
+(round-tripped through the real `diagram.Parse`, not just string-
+matched) — the ticket's own explicit "at least Go AND one other medium"
+bar. Applied for real: `ubx terminate` the drifted resource, `ubx plan
+--from-diagram` against a fresh diagram carrying both a baseline
+resource declaration and the override, `ubx ship` — the shipped
+resource's own real live value matched the override exactly (not the
+diagram's own baseline value), and a subsequent `ubx status --drift`
+showed it clean. **A real, live-found, UNRELATED fixture quirk surfaced
+and worked around along the way, named rather than silently absorbed**:
+a resource's own recorded `resolution.inputs.lookup` from a plain `ubx
+resolve`/`ubx ship` create is narrower than its full config (omits
+`tags` entirely) — confirmed live, causing ANY later drift-scan of a
+plain create-shipped resource to show spurious "phantom" drift on any
+attribute the lookup didn't carry; a pre-existing property of this
+project's own ship-time lookup recording, not something UBI-86
+introduced or fixed, worked around here via `ubx scan --propose
+drift_adopt` reconciliation before relying on a clean baseline.
+Separately confirmed live: fakeprovider's own `conformance-v6` mode has
+real `ApplyResourceChange` (UBI-123) but NOT `PlanResourceChange`, so it
+cannot `ubx ship` a create or destroy at all — usable for the
+text-correctness checks (real scalar-attribute drift via
+`FAKEPROVIDER_MUTATE_ATTR`) but not the full apply round trip, which
+used `ok-v6` mode instead.
+
+**Hermetic tests, full account**: `blueprint/override_test.go` (6),
+`sdk/go/runtime/runtime_test.go` (+5), `sdk/py/ubx_sdk/test_runtime.py`
+(+6), `sdk/ts/runtime/src/index_test.ts` (+6), `diagram/
+parse_override_test.go` (6), `intentprovider/validate_test.go` (+3),
+`cli/render_sync_overrides_test.go` (9), `cli/render_md_test.go` (9,
+Part 1). Full suite green everywhere: `go test ./... -count=1` (this
+repo, `sdk/go`'s own separate module), `python3 -m unittest`, `deno
+test`, `gofmt -l .`/`go vet ./...` clean. `make build` run and `ubx
+version` checked before every live-verification session in this run.
+
+**Docs-first, both repos, same session**: `docs/blueprint.md` gained
+"Override mechanism: UBI-86 Part 2" (written before code, per session
+protocol, then reconciled against what was actually built and every
+real finding above); new `docs/render-md.md` (Part 1). `ubiquex-docs`:
+`cli/render.mdx` gained `--md`/`--from-drift`/`--sync-overrides`/
+`--write` (real transcripts), new `guides/overrides.mdx` (the full
+mechanism + the real live round trip), cross-linked from `guides/
+blueprints.mdx` and `docs.json` navigation — `mint validate`/`mint
+broken-links` both clean, committed and pushed to `ubiquex-docs`' own
+`origin/main` (`787861e`).
+
+**Not done this session, named so it isn't assumed covered**: the md
+medium's own override recognition was built (schema + validation +
+system prompt) and hermetically tested, but never round-tripped through
+a REAL Claude API call — a real, separate gap from the Go/diagram legs,
+which WERE live-round-tripped. The ledger-aware "retroactively override
+an already-existing resource" extension (above) is designed-in-docs, not
+built. Blueprint-call provenance on an override-touched resource (does
+`ubx why` show the override happened at all?) was not attempted — a
+real, separate, un-scoped-here follow-up.
+
+Next: whichever the founder prioritizes — a real Claude-API round trip
+for md-medium overrides, the ledger-aware modify extension, or the other
+gaps named in UBI-74's own closing retrospective (further up this file).
+
+## Current phase (previous)
+
 **UBI-130 (2026-08-05) — Python blueprint dependency resolution, built and live-verified: `requirements.txt`'s own `<name> @ <url>` specifier (pip's real syntax, no new syntax invented) is now resolved at `ubx plan`/`ubx resolve --from-code <file>.py` time — pulled+verified into a new local cache (`~/.ubx/blueprints/by-spec/...`, mirroring `provider.Acquire`'s own discipline) and made importable via an extra WASI preopen + `PYTHONPATH` entry BEFORE the calling script ever runs, with a real, required receipt line (`pulled ci-platform @ oci://ghcr.io/ubiquex/ci-platform:v1, verified: ...`). Confirmed against the real, live `ghcr.io/ubiquex/ci-platform:v1` artifact and the real `hashicorp/aws@6.54.0` schema — Python's own first real proof of the OCI-pull path (Go/TS proved distribution live in Slices 3/7; Python's own blueprint-dependency resolution had never been proven end to end before this ticket).**
 
 Read UBI-130 fully (filed at UBI-74's own close, 2026-08-05, alongside

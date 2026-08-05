@@ -3003,3 +3003,211 @@ this whole arc has kept throughout.
   own `sdk/go`, matching this project's own established hermetic-testing
   convention, not a claim that the real published module already has
   this fix.
+
+## Override mechanism: UBI-86 Part 2
+
+Design comment on UBI-86 (2026-08-04), extending the ticket originally
+scoped for `ubx render --md` alone (see `docs/render-md.md` for that
+half). The real problem, precisely stated: a blueprint's own internal
+resource attributes are owned by the blueprint's AUTHOR, not the caller
+— only call-site parameters are editable by whoever instantiates it. If
+a caller drifts (via console/CLI) a value the blueprint never exposed as
+a parameter and adopts it, the ledger is correct but there's no
+source-of-truth text the caller owns to edit, so that adoption can't
+"stick" against a future re-call of the same blueprint.
+
+### The mechanism: same idea as Terraform's `*_override.tf`
+
+`override(address, {field: value, ...})` — a caller patches any resolved
+attribute by address, applied AFTER a blueprint call resolves
+(`blueprint.ExpandCalls`), BEFORE `resolver.Resolve` ever runs. Three
+call sites, matching `BlueprintCalls`' own "three mediums, one wire
+shape" precedent exactly:
+
+- **SDK (Go/TS/Python), zero AI** — a direct function call:
+  `sdk.Override("payments.aws_sqs_queue.pipeline-events", map[string]any{"some_hardcoded_field": "new_value"})`
+  (`sdk/go/runtime`, `sdk/ts/runtime`, `sdk/py/ubx_sdk` — all three,
+  identical shape, `config`'s own keys are the target's real WIRE
+  attribute names, never translated through any `ResourceBinding`'s own
+  `FieldMap`, since there is none in scope at override time — the target
+  need not even be declared in the calling document at all).
+- **Diagram, zero AI, structural attribute read** — a `ubx_override`-
+  classed node (`diagram/parse.go`), mirroring `ubx_blueprint`'s own
+  reserved-class/direct-children-read pattern exactly (not `ubx_required`'s
+  nested-subtree dance — an override node has nothing else on it to be
+  ordinary topology, the same reasoning `ubx_blueprint` already
+  established):
+  ```d2
+  fix: "fix pipeline-events" {
+    class: ubx_override
+    address: "payments.aws_sqs_queue.pipeline-events"
+    some_hardcoded_field: "new_value"
+  }
+  ```
+  `address` is the one reserved attribute; every other child is one
+  config field. A config value can reference a sibling node via the SAME
+  `"ref:<node>.<attr-path>"` sigil `ubx_required` already established
+  (UBI-95) — reused, not reinvented. A real, inherited scope boundary:
+  since every non-ref value is JSON-string-encoded (matching
+  `ubxRequiredAttrValue`'s own established rule), the diagram medium's
+  own override syntax only expresses STRING-valued overrides — a
+  number/bool/object drift target needs Go/TS/Python instead. Named
+  here, not silently worked around.
+- **md, the ONLY call site needing AI, thin mapping only** —
+  `intentprovider/schema.go`'s own JSON Schema gained an `overrides`
+  array (mirroring `blueprint_calls` exactly) and
+  `intentprovider/claude/adapter.go`'s own system prompt gained an
+  explicit rule: "Override the pipeline-events queue's
+  some_hardcoded_field to new_value" maps to one `overrides[]` entry,
+  never a re-draft of the target resource, never touching any other
+  attribute of it. Hermetically tested (`intentprovider/validate_test.go`);
+  not live-round-tripped through a real Claude API call this session — a
+  real, named gap, not silently claimed covered.
+
+### Wire shape and application
+
+`resolver.Override{Address, Config map[string]json.RawMessage}`, a new
+`IntentFile.Overrides []Override` field, additive and optional exactly
+like `BlueprintCalls`. `blueprint.ApplyOverrides` (new,
+`blueprint/override.go`) merges each entry into its target
+`ResourceIntent.Config` **by address, found in `intent.Resources` —
+i.e. a resource this SAME document creates** (a blueprint call's own
+just-expanded output, or an ordinary hand-authored create) — then clears
+`Overrides`, called immediately after `blueprint.ExpandCalls` in both
+`cli/resolve.go` and `cli/plan.go` (the latter previously never called
+`ExpandCalls` at all — a pre-existing gap, closed here since the
+override round trip needs to work via `ubx plan` too). Applied to the
+RAW (unresolved) config, before `resolver.Resolve` runs — an override's
+own value flows through ordinary `$ref`/`$cross` resolution like any
+other config value, never a bolted-on post-resolve patch (confirmed live:
+`sdk.Override("...", map[string]any{"owner_ref": primary})` — a real
+`*Computed` reference — resolves to a real `$ref` object end to end).
+
+`Config`'s own keys are TOP-LEVEL wire attribute names only, never a
+dot-path into a nested value — overriding one key of a nested object
+(a `tags` map, say) means supplying that whole top-level attribute's own
+complete new value, never a deep merge.
+
+### A real, named, remaining scope boundary — found during this
+### ticket's own required live verification, not assumed away
+
+`ApplyOverrides` only ever targets a resource **created within the same
+resolving document** — a blueprint call's own just-expanded output, or a
+fresh hand-authored create. It does **not** retroactively patch an
+address that already exists in the ledger from a PRIOR resolve/ship.
+Confirmed live: `ubx plan --from-diagram` against a diagram naming only
+an `ubx_override` node (no matching resource node) for an
+already-shipped address fails cleanly — `override "...": no such
+resource in this document` — never silently no-oping.
+
+This matches the mechanism's own real motivating framing on closer
+reading of the design comment: "make that adoption stick against a
+FUTURE RE-CALL of the blueprint" is forward-looking insurance (the
+override travels with the calling stack's own source, so the NEXT time
+this document creates that resource — a fresh stack, a disaster-recovery
+rebuild, a sibling environment — the drifted-to value is baked in from
+the start), not a retroactive ledger patch for an already-shipped
+resource. `render --sync-overrides`' own required live round trip
+(below) proves exactly this shape: terminate the drifted resource, then
+recreate it via a document carrying the override, confirmed clean
+afterward — never a same-address in-place patch.
+
+A real, separate, deferred extension this session identified but did
+NOT build: making `ApplyOverrides` ledger-aware (accepting a
+`*core.Ledger`, synthesizing an `op: modify` `ResourceIntent` — current
+state merged with the override's own patch — for an address found in
+the ledger but not in `intent.Resources`) would close this gap for real,
+letting an override apply in-place without a terminate/recreate cycle
+first. Real, buildable, not attempted here — named rather than silently
+assumed to already work.
+
+### REAL SECURITY REQUIREMENT: policy-bypass protection, documented, not yet enforced
+
+An override must not be able to bypass a field a blueprint's own BOUND
+POLICY protects (UBI-118's own future job). UBI-118 (the bound + org-wide
+policy engine) was split off UBI-74 entirely before Slice 1 even started
+and remains HELD — as of this ticket, zero policy-engine scaffolding
+exists anywhere in this codebase (`core/`, `blueprint/`) to enforce
+against. Per this ticket's own explicit instruction ("this may mean
+documenting the requirement and adding a TODO enforcement hook rather
+than full enforcement — decide and state explicitly which"): **decided
+here as documenting + a real, named, currently-permissive hook**,
+`blueprint.checkOverridePolicy(addr, field) error` (`blueprint/override.go`)
+— the ONE call site every field-level override ever routes through,
+always returning `nil` today. Wiring in real enforcement once UBI-118
+exists is a one-function change, not a redesign.
+
+### `render --sync-overrides`/`--from-drift`: mechanical generation, zero AI
+
+`ubx render --md --from-drift <address>` generates a single override
+statement for one drifted resource; `ubx render --md --sync-overrides
+[--write]` walks the WHOLE stack's drift and generates one per drifted
+resource, in whichever medium the calling stack is authored in
+(auto-detected — reuses `autodetectMedium`, `cli/plan.go`'s own
+established file-sniffing, unchanged, not a second detector). Both
+require `--md` (the design comment's own literal example command).
+Confirmed, as item 10 of the design comment required: **entirely
+mechanical, zero AI** — `cli/drift.go`'s `scanDrift` reuses `status
+--drift`'s own exact mechanism (`core.RunScan`/`core.DiffAttributes`/
+`core.FilterNormalizationNoise`), never a second drift algorithm;
+`cli/overridetemplate.go` only templates that already-computed data into
+each medium's own grammar (a real, live-found subtlety: a NESTED drifted
+path, e.g. `tags.mutated`, is collapsed to its whole CONTAINING
+top-level attribute's own complete CURRENT value, pulled from the scan's
+own `Observed` state, not just the diffed sub-key — otherwise a
+generated override would silently DROP every other key already in a
+live `tags` map the moment `ApplyOverrides` replaces it).
+
+`--write` appends the generated statement(s) directly into the calling
+stack's own source file for diagram/md authoring (always syntactically
+safe to append — a new top-level D2 node, a new prose paragraph) — and
+**refuses, clearly, for a Go/TS/Python-authored stack**: the statement
+belongs inside the stack's own describe-function body, which this
+command has no safe way to splice into without real AST-aware editing
+(`writeback/`'s own level of sophistication, not attempted here). A real,
+named limitation, never a silent bad write.
+
+### Live verification, the ticket's own required bar, genuinely met
+
+A real fakeprovider-shipped `fake_widget` (conformance mode for the
+text-correctness checks; ok-v6 mode — the only fixture mode with real
+`PlanResourceChange`/destroy support — for the full apply round trip,
+confirmed live: conformance mode's own `ApplyResourceChange` exists but
+`PlanResourceChange` does not, so `ubx ship` cannot destroy or otherwise
+plan-then-apply against it) drifted for real
+(`FAKEPROVIDER_MUTATE_ATTR`/`FAKEPROVIDER_EXTRA_TAG`, confirmed via a
+real `ubx status --drift`). `ubx render --md --sync-overrides` generated
+the correct statement in **Go** (exact byte match asserted hermetically)
+and in **diagram** (round-tripped through the real `diagram.Parse`,
+confirmed it parses back into the identical address+value). Applied for
+real: `ubx terminate` the drifted resource, `ubx plan --from-diagram`
+against a fresh diagram carrying both a baseline resource declaration
+and the override, `ubx ship` — the shipped resource's own live value
+matched the override exactly (`payments-widget-v2-drifted`, not the
+diagram's own baseline value), and a subsequent `ubx status --drift`
+showed it clean. A real, live-found, unrelated fixture quirk surfaced
+along the way and worked around, not silently absorbed: a resource's own
+recorded `resolution.inputs.lookup` from a plain `ubx resolve`/`ubx ship`
+create is narrower than its full config (omits `tags` entirely), so ANY
+later drift-scan of a plain create-shipped resource shows spurious
+"phantom" drift on any attribute the lookup didn't carry — confirmed
+live, unrelated to this ticket, worked around here by reconciling
+(`ubx scan --propose drift_adopt`) before relying on a clean baseline;
+named here since it's a real, pre-existing property of this project's
+own ship-time lookup recording, not something UBI-86 introduced or
+fixed.
+
+Hermetic tests: `blueprint/override_test.go` (6 cases — merge, no-op,
+cross-stack refusal, unknown-address refusal, malformed-address refusal,
+targeting-a-blueprint-produced-resource); `sdk/go/runtime/runtime_test.go`
+(5 new `TestOverride_*` cases, including a `*Computed` reference value);
+`sdk/py/ubx_sdk/test_runtime.py` (6 new); `sdk/ts/runtime/src/index_test.ts`
+(6 new); `diagram/parse_override_test.go` (6 cases, including the
+`ref:` sigil and mixed-with-blueprint-call-and-resource); `intentprovider/
+validate_test.go` (3 new); `cli/render_sync_overrides_test.go` (9 cases —
+Go/diagram text correctness, `--write` success and SDK-authored refusal,
+`--from-drift` single-address success/not-drifted, `--md` required,
+ambiguous-medium refusal, config-file provider default). Full suite
+green (`go test ./... -count=1`, this repo, `sdk/go`'s own separate
+module, `python3 -m unittest`, `deno test`), `gofmt -l .`/`go vet ./...`
+clean.

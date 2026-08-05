@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/intentprovider/claude"
@@ -263,6 +264,26 @@ propose-time PR trailer hash, etc.).`,
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse intent file: %w", err)}
 				}
 				sourceLabel = args[0]
+			}
+
+			// UBI-86: cli/resolve.go's own identical pair of calls,
+			// mirrored here -- a pre-existing gap (plan.go never called
+			// ExpandCalls at all, so `ubx plan --from-diagram` against a
+			// ubx_blueprint node would have hard-failed with
+			// ErrUnexpandedBlueprintCalls) closed as part of wiring
+			// overrides through plan.go too, since the override round
+			// trip needs to work via `ubx plan`, not only `ubx resolve`.
+			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+			}
+			if err := blueprint.ApplyOverrides(&intent); err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)

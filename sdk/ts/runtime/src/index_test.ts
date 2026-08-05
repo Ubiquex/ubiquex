@@ -11,6 +11,7 @@ import {
   cross,
   intent,
   isComputed,
+  override,
   resource,
   secret,
   stack,
@@ -279,4 +280,55 @@ Deno.test("evaluate() runs the describe function exactly once per call, and is r
   def.evaluate();
   def.evaluate();
   assertEquals(calls, 2);
+});
+
+Deno.test("override() round trip -- ticket's own worked example verbatim", () => {
+  const def = stack("payments", () => {
+    intent({ summary: "s" });
+    override("payments.aws_sqs_queue.pipeline-events", { some_hardcoded_field: "new_value" });
+  });
+  const doc = def.evaluate();
+  assertEquals(doc.overrides?.length, 1);
+  assertEquals(doc.overrides?.[0], {
+    address: "payments.aws_sqs_queue.pipeline-events",
+    config: { some_hardcoded_field: "new_value" },
+  });
+});
+
+Deno.test("override() config value can be a Computed<T> reference", () => {
+  const def = stack("payments", () => {
+    intent({ summary: "s" });
+    const primary = resource(Widget, "primary", { name: "primary-widget" });
+    override("payments.fake_widget.mirror", { owner_ref: primary.id as unknown as string });
+  });
+  const doc = def.evaluate();
+  assertEquals(doc.overrides?.[0].config, { owner_ref: { $ref: { to: "payments.fake_widget.primary.id" } } });
+});
+
+Deno.test("no override() calls -- \"overrides\" is entirely absent from the wire document", () => {
+  const def = stack("payments", () => {
+    intent({ summary: "s" });
+  });
+  const doc = def.evaluate();
+  assert(!("overrides" in doc));
+});
+
+Deno.test("override() with an empty address throws", () => {
+  const def = stack("payments", () => {
+    intent({ summary: "s" });
+    override("", { x: "y" });
+  });
+  assertThrows(() => def.evaluate(), Error, "address is required");
+});
+
+Deno.test("override() with empty config throws", () => {
+  const def = stack("payments", () => {
+    intent({ summary: "s" });
+    override("payments.fake_widget.a", {});
+  });
+  assertThrows(() => def.evaluate(), Error, "config is required");
+});
+
+Deno.test("override() called outside an active stack() evaluation throws", () => {
+  assertThrows(() => override("payments.fake_widget.a", { x: "y" }), Error, "called outside of an active stack");
 });

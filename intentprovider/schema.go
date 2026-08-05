@@ -114,10 +114,27 @@ func IntentDraftJSONSchema() map[string]any {
 			},
 		},
 	}
+	override := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"address", "config"},
+		"properties": map[string]any{
+			"address": map[string]any{
+				"type":        "string",
+				"description": "The canonical <stack>.<type>.<name> address of the resource to override, exactly as the document names it.",
+			},
+			"config": map[string]any{
+				"type": "string",
+				"description": "A JSON-encoded object string mapping each overridden attribute's own real WIRE name (never a guess at a friendlier synonym) " +
+					"to its new value, e.g. \"{\\\"some_hardcoded_field\\\":\\\"new_value\\\"}\" -- the identical \"config is a JSON-encoded string\" " +
+					"convention resources[].config already uses, for the identical reason (an open-shaped object a structured-output schema can't close).",
+			},
+		},
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"schema_version", "kind", "stack", "intent", "resources", "destroys", "blueprint_calls"},
+		"required":             []string{"schema_version", "kind", "stack", "intent", "resources", "destroys", "blueprint_calls", "overrides"},
 		"properties": map[string]any{
 			"schema_version": map[string]any{"type": "integer", "const": 1},
 			"kind":           map[string]any{"type": "string", "const": "ubx:intent/v1"},
@@ -165,6 +182,16 @@ func IntentDraftJSONSchema() map[string]any {
 				"description": "One entry per \"Use blueprint X with...\"-style invocation the document names -- empty array if none. " +
 					"NEVER draft resources[] entries for a blueprint call yourself; you have no way to know what resources the " +
 					"blueprint actually contains, and guessing would silently duplicate or contradict what its own build step already fixed.",
+			},
+			"overrides": map[string]any{
+				"type":  "array",
+				"items": override,
+				"description": "One entry per \"Override the X's Y to Z\"-style statement the document names -- empty array if none. " +
+					"This is a THIN MAPPING step only, never a re-drafting of the target resource: you already have the exact address, " +
+					"field name, and new value stated in the document -- do not add reasoning, do not touch any OTHER attribute of that " +
+					"resource, and do not draft a resources[] entry for the target (it already exists, created elsewhere -- often by a " +
+					"blueprint call this same document also makes). If the document's own override statement is ambiguous about which " +
+					"resource or field it means, record a blocking question instead of guessing.",
 			},
 		},
 	}

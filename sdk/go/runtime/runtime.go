@@ -145,6 +145,19 @@ type intentDoc struct {
 	Stack         string           `json:"stack"`
 	Intent        intentDocIntent  `json:"intent"`
 	Resources     []intentResource `json:"resources"`
+	Overrides     []intentOverride `json:"overrides,omitempty"`
+}
+
+// intentOverride is one Override() call's own wire shape -- mirrors
+// resolver.Override exactly (core/resolver/resolver.go): Config keys are
+// the target resource's own real WIRE attribute names, never this SDK's
+// own PascalCase Go Config-struct field names -- there is no
+// ResourceBinding in play at override time (the target is an
+// already-resolved resource reached by address, not a freshly-declared
+// one), so there is no FieldMap to translate through, unlike Resource().
+type intentOverride struct {
+	Address string         `json:"address"`
+	Config  map[string]any `json:"config"`
 }
 
 type intentDocIntent struct {
@@ -186,6 +199,7 @@ func Stack(name string, fn func()) *StackDefinition {
 type collector struct {
 	stackName     string
 	resources     []intentResource
+	overrides     []intentOverride
 	seenAddresses map[string]bool
 	intentInfo    *intentDocIntent
 }
@@ -244,6 +258,33 @@ func (c *collector) addResource(binding ResourceBinding, name string, config any
 	return newComputed(address)
 }
 
+// addOverride records one Override() call -- UBI-86 Part 2's own
+// mechanism: a caller-declared attribute patch against an already-named
+// resource, applied AFTER a blueprint call resolves and BEFORE ship
+// (blueprint.ApplyOverrides, the `blueprint` package -- this runtime
+// stays dependency-free of it, the same "sdk never imports a leaf
+// package" discipline every other seam in this codebase already
+// follows). config's own values are serialized via serializeOpaque, not
+// serializeConfig -- there is no ResourceBinding/FieldMap for the TARGET
+// resource in scope here (it may not even be declared in THIS document
+// at all -- the common case is a blueprint-produced resource), so
+// Computed/Secret/Cross markers are still recognized and nested
+// structures still walk correctly, but map keys pass through completely
+// unchanged as the real wire attribute names the caller wrote.
+func (c *collector) addOverride(address string, config map[string]any) {
+	if strings.TrimSpace(address) == "" {
+		panic("sdk.Override: address is required")
+	}
+	if len(config) == 0 {
+		panic(fmt.Sprintf("sdk.Override: %q: config is required and cannot be empty", address))
+	}
+	serialized := make(map[string]any, len(config))
+	for k, v := range config {
+		serialized[k] = serializeOpaque(v, address)
+	}
+	c.overrides = append(c.overrides, intentOverride{Address: address, Config: serialized})
+}
+
 // blueprintSourceStack is UBI-126's own fix: a compiled blueprint's own
 // generated function (blueprint/gogen.go's own renderGoFunction) wraps
 // its entire body in PushBlueprintSource(name)/defer PopBlueprintSource()
@@ -294,6 +335,7 @@ func (c *collector) finish() (*intentDoc, error) {
 		Stack:         c.stackName,
 		Intent:        *c.intentInfo,
 		Resources:     resources,
+		Overrides:     c.overrides,
 	}, nil
 }
 
@@ -342,6 +384,23 @@ func Resource(binding ResourceBinding, name string, config any) *Computed {
 // Required, called at most once per Stack() body.
 func Intent(info IntentInfo) {
 	requireCollector("Intent").setIntent(info.Summary, info.Sources)
+}
+
+// Override declares a caller-owned attribute patch against
+// address (the canonical "<stack>.<type>.<name>" form,
+// core.Address.String()'s own shape) -- UBI-86 Part 2's own mechanism,
+// zero AI, a direct function call exactly like Resource(). Config keys
+// are the target resource's own real wire attribute names (e.g.
+// "message_retention_seconds"), not this SDK's own PascalCase Go
+// Config-struct field names -- there is no ResourceBinding for the
+// TARGET resource in scope here, since it need not even be declared in
+// this same document (the motivating case: overriding a field inside a
+// called blueprint's own internal, unparameterized resource). Applied by
+// blueprint.ApplyOverrides after any blueprint call in this document has
+// already resolved, before ship -- see docs/blueprint.md's own "Override
+// mechanism" section for the full design record.
+func Override(address string, config map[string]any) {
+	requireCollector("Override").addOverride(address, config)
 }
 
 // Main is the standard entry point a Go SDK program's own main() calls:

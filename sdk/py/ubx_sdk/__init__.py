@@ -36,6 +36,7 @@ __all__ = [
     "secret",
     "cross",
     "intent",
+    "override",
     "run",
     "is_computed",
 ]
@@ -229,6 +230,7 @@ class _Collector:
     def __init__(self, stack_name: str):
         self.stack_name = stack_name
         self.resources: list = []
+        self.overrides: list = []
         self.seen_addresses: set = set()
         self.intent_info: Optional[dict] = None
 
@@ -260,19 +262,30 @@ class _Collector:
 
         return Computed(address)
 
+    def add_override(self, address: str, config: dict) -> None:
+        if not address or not address.strip():
+            raise RuntimeError("override(): address is required.")
+        if not config:
+            raise RuntimeError(f'override("{address}"): config is required and cannot be empty.')
+        serialized = {k: _serialize_opaque(v, address) for k, v in config.items()}
+        self.overrides.append({"address": address, "config": serialized})
+
     def finish(self) -> dict:
         if self.intent_info is None:
             raise RuntimeError(
                 f'stack("{self.stack_name}"): intent() was never called -- a missing summary is a '
                 'collection-time hard failure, matching resources[].op\'s own "always explicit, never inferred" discipline.'
             )
-        return {
+        doc = {
             "schema_version": 1,
             "kind": "ubx:intent/v1",
             "stack": self.stack_name,
             "intent": self.intent_info,
             "resources": self.resources,
         }
+        if self.overrides:
+            doc["overrides"] = self.overrides
+        return doc
 
 
 _current: Optional[_Collector] = None
@@ -328,6 +341,23 @@ def intent(summary: str, sources: Optional[list] = None) -> None:
     intent.summary/intent.sources. Required, called at most once per
     stack() body."""
     _require_collector("intent").set_intent(summary, sources)
+
+
+def override(address: str, config: dict) -> None:
+    """override(address, config) declares a caller-owned attribute patch
+    against address (the canonical "<stack>.<type>.<name>" form) -- UBI-86
+    Part 2's own mechanism, zero AI, a direct function call exactly like
+    resource(). config's own keys are the target resource's own real WIRE
+    attribute names (e.g. "message_retention_seconds"), never a Config
+    dataclass's own field name -- there is no ResourceBinding for the
+    TARGET resource in scope here, since it need not even be declared in
+    this same document at all (the motivating case: overriding a field
+    inside a called blueprint's own internal, unparameterized resource).
+    Applied by blueprint.ApplyOverrides (the Go `blueprint` package)
+    after any blueprint call in this document has already resolved,
+    before ship -- see docs/blueprint.md's own "Override mechanism"
+    section for the full design record."""
+    _require_collector("override").add_override(address, config)
 
 
 def run(name: str, fn: Callable[[], None]) -> None:

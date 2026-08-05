@@ -60,97 +60,37 @@ type emitResource struct {
 // human-editable-adjacent artifact" posture `ubx sdk gen`'s own bindings
 // already established).
 func Emit(l *core.Ledger, stack string) ([]byte, error) {
-	fleet, err := l.Fleet(stack)
+	walked, err := Walk(l, stack)
 	if err != nil {
-		return nil, fmt.Errorf("diagram: emit %s: %w", stack, err)
+		return nil, err
 	}
 
-	sort.Slice(fleet, func(i, j int) bool {
-		if fleet[i].Address.Type != fleet[j].Address.Type {
-			return fleet[i].Address.Type < fleet[j].Address.Type
-		}
-		return fleet[i].Address.Name < fleet[j].Address.Name
-	})
-
-	proposals := map[string]*core.Proposal{}
-	getProposal := func(id string) (*core.Proposal, error) {
-		if id == "" {
-			return nil, nil
-		}
-		if p, ok := proposals[id]; ok {
-			return p, nil
-		}
-		p, err := l.Read(id)
-		if err != nil {
-			return nil, err
-		}
-		proposals[id] = p
-		return p, nil
-	}
-
-	resources := make([]emitResource, 0, len(fleet))
-	for _, entry := range fleet {
-		state, found, err := l.FoldState(entry.Address)
-		if err != nil {
-			return nil, fmt.Errorf("diagram: emit %s: %w", entry.Address, err)
-		}
-		if !found {
-			return nil, fmt.Errorf("diagram: emit %s: reported live by Fleet but FoldState found nothing", entry.Address)
-		}
-		var attrs map[string]interface{}
-		if err := json.Unmarshal(state, &attrs); err != nil {
-			return nil, fmt.Errorf("diagram: emit %s: decode state: %w", entry.Address, err)
-		}
-
-		p, err := getProposal(entry.ProposalID)
-		if err != nil {
-			return nil, fmt.Errorf("diagram: emit %s: read proposal %s: %w", entry.Address, entry.ProposalID, err)
-		}
-
-		// entry.ProposalID is Fleet's own "latest proposal that touched
-		// this address" (core/fleet.go's own doc comment) -- exactly
-		// right for crossPins below (a cross-stack pin is re-recorded on
-		// every resolve that reads the neighbor, so "most recent touch"
-		// is the correct source for it), but WRONG for depends_on/
-		// blueprintRef: both live only on the address's own CREATE node,
-		// which a later proposal touching the SAME address (a
-		// drift_adopt reconciling a sibling resource's own $computed ref
-		// against this one's real post-apply state, say) never carries
-		// at all -- that later proposal's own Delta.Creates is simply
-		// empty. Emit's own doc comment above already promises "pulled
-		// from the resource's own creating... proposal" for exactly this
-		// data; creatingProposalFor walks the address's full recorded
-		// history (core.Ledger.ProposalsForAddress, oldest first) to
-		// find the one proposal that actually created it, independent
-		// of whatever touched it most recently.
-		creating, err := creatingProposalFor(l, entry.Address)
-		if err != nil {
-			return nil, fmt.Errorf("diagram: emit %s: %w", entry.Address, err)
-		}
-
-		var dependsOn []string
-		var crossPins []core.ResolutionInput
-		var blueprintRef string
-		if creating != nil {
-			dependsOn = dependsOnFor(creating, entry.Address)
-			blueprintRef, _ = blueprintSourceFor(creating, entry.Address)
-		}
-		if p != nil {
-			addrStr := entry.Address.String()
-			for _, in := range p.Resolution.Inputs {
-				if in.Kind == "cross_stack_pin" && in.From == addrStr {
-					crossPins = append(crossPins, in)
-				}
+	// emitD2 still wants map[string]interface{} attrs (its own tooltip/
+	// D2-quoting code predates UBI-86's shared Walk and has no need for
+	// per-field json.RawMessage the way mdrender's redaction check
+	// does) -- converted here, once, rather than threading a second
+	// attrs shape through emitD2 itself. Decoding each raw field into
+	// interface{} individually is exactly equivalent to Emit's own
+	// pre-UBI-86 single json.Unmarshal(state, &map[string]interface{}{})
+	// call: same decoder, same types out, just split into two steps so
+	// Walk itself can stay format-agnostic.
+	resources := make([]emitResource, len(walked))
+	for i, r := range walked {
+		attrs := make(map[string]interface{}, len(r.Attrs))
+		for k, raw := range r.Attrs {
+			var v interface{}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, fmt.Errorf("diagram: emit %s: decode attr %q: %w", r.Addr, k, err)
 			}
+			attrs[k] = v
 		}
-
-		resources = append(resources, emitResource{
-			addr:         entry.Address,
+		resources[i] = emitResource{
+			addr:         r.Addr,
 			attrs:        attrs,
-			dependsOn:    dependsOn,
-			crossPins:    crossPins,
-			blueprintRef: blueprintRef,
-		})
+			dependsOn:    r.DependsOn,
+			crossPins:    r.CrossPins,
+			blueprintRef: r.BlueprintRef,
+		}
 	}
 
 	return emitD2(stack, resources)
@@ -397,7 +337,7 @@ func emitD2(stack string, resources []emitResource) ([]byte, error) {
 	// is a small, deliberately independent mirror of that one rule).
 	for _, ref := range blueprintRefs {
 		ckey := containerKeyOf[ref]
-		fmt.Fprintf(&b, "%s: %s {\n", ckey, d2Quote(shortBlueprintRef(ref)))
+		fmt.Fprintf(&b, "%s: %s {\n", ckey, d2Quote(ShortBlueprintRef(ref)))
 		b.WriteString("  style.stroke-dash: 3\n")
 		b.WriteString("  style.fill: transparent\n")
 		for i, r := range resources {
@@ -504,7 +444,7 @@ func scalarString(v interface{}) string {
 	return string(b)
 }
 
-// shortBlueprintRef renders a blueprint container's own label: ref's own
+// ShortBlueprintRef renders a blueprint container's own label: ref's own
 // "<name>:sha256:<hex>" shape (blueprint.ExpandCalls' own stamping, see
 // blueprint/invoke.go) with the hash portion truncated to the same
 // 12-char short-hash convention cli/why.go's own displayHash already
@@ -513,8 +453,11 @@ func scalarString(v interface{}) string {
 // imports diagram, the reverse would cycle), not a shared helper. ref
 // with no ":" at all (shouldn't happen -- every real blueprintRef comes
 // from blueprint.ExpandCalls' own stamping -- but Emit never hard-fails a
-// diagram over an unexpected label shape) renders unmodified.
-func shortBlueprintRef(ref string) string {
+// diagram over an unexpected label shape) renders unmodified. Exported
+// (UBI-86) so mdrender -- which already imports diagram for Walk/Resource
+// -- reuses this exact truncation rule too, rather than a THIRD
+// independent mirror of it.
+func ShortBlueprintRef(ref string) string {
 	name, hash, ok := strings.Cut(ref, ":")
 	if !ok {
 		return ref

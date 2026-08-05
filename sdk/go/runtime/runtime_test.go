@@ -214,3 +214,88 @@ func TestResourceOutsideStackIsHardFailure(t *testing.T) {
 	}()
 	Resource(widgetBinding, "a", widgetConfig{Name: "a"})
 }
+
+// TestOverride_RoundTrip proves UBI-86 Part 2's own ticket example
+// verbatim: Config keys are the real WIRE attribute name, unchanged,
+// never translated through any ResourceBinding's own FieldMap -- there
+// is none in scope at override time.
+func TestOverride_RoundTrip(t *testing.T) {
+	def := Stack("payments", func() {
+		Intent(IntentInfo{Summary: "s"})
+		Override("payments.aws_sqs_queue.pipeline-events", map[string]any{
+			"some_hardcoded_field": "new_value",
+		})
+	})
+	out := evalJSON(t, def)
+	overrides, ok := out["overrides"].([]any)
+	if !ok || len(overrides) != 1 {
+		t.Fatalf("expected exactly one override, got %v", out["overrides"])
+	}
+	ov := overrides[0].(map[string]any)
+	if ov["address"] != "payments.aws_sqs_queue.pipeline-events" {
+		t.Fatalf("unexpected address: %v", ov["address"])
+	}
+	config := ov["config"].(map[string]any)
+	if config["some_hardcoded_field"] != "new_value" {
+		t.Fatalf("expected the wire attribute name unchanged, got %v", config)
+	}
+}
+
+// TestOverride_ComputedReference proves an override's own value can be a
+// *Computed handle (a $ref into a sibling resource, exactly like an
+// ordinary Resource() config value) -- overrides flow through the SAME
+// resolution machinery any other config value does (blueprint.
+// ApplyOverrides applies BEFORE resolver.Resolve ever runs), not a
+// separate, weaker mechanism.
+func TestOverride_ComputedReference(t *testing.T) {
+	def := Stack("payments", func() {
+		Intent(IntentInfo{Summary: "s"})
+		primary := Resource(widgetBinding, "primary", widgetConfig{Name: "primary-widget"})
+		Override("payments.fake_widget.mirror", map[string]any{
+			"owner_ref": primary,
+		})
+	})
+	out := evalJSON(t, def)
+	overrides := out["overrides"].([]any)
+	config := overrides[0].(map[string]any)["config"].(map[string]any)
+	ref := config["owner_ref"].(map[string]any)["$ref"].(map[string]any)
+	if ref["to"] != "payments.fake_widget.primary" {
+		t.Fatalf("expected a $ref to primary, got %v", config)
+	}
+}
+
+// TestOverride_NoOverrides_OmittedFromWire proves the zero-overrides
+// case is byte-identical to before Override() existed -- "overrides"
+// never appears in the emitted document at all, matching Resource()'s
+// own "unaffected if unused" precedent for every other additive field.
+func TestOverride_NoOverrides_OmittedFromWire(t *testing.T) {
+	def := Stack("payments", func() {
+		Intent(IntentInfo{Summary: "s"})
+	})
+	out := evalJSON(t, def)
+	if _, present := out["overrides"]; present {
+		t.Fatalf("expected \"overrides\" to be entirely absent from the wire document, got %v", out["overrides"])
+	}
+}
+
+func TestOverride_EmptyAddress_HardFailure(t *testing.T) {
+	def := Stack("payments", func() {
+		Intent(IntentInfo{Summary: "s"})
+		Override("", map[string]any{"x": "y"})
+	})
+	_, err := def.Evaluate()
+	if err == nil || !strings.Contains(err.Error(), "address is required") {
+		t.Fatalf("expected an address-required error, got %v", err)
+	}
+}
+
+func TestOverride_EmptyConfig_HardFailure(t *testing.T) {
+	def := Stack("payments", func() {
+		Intent(IntentInfo{Summary: "s"})
+		Override("payments.fake_widget.a", map[string]any{})
+	})
+	_, err := def.Evaluate()
+	if err == nil || !strings.Contains(err.Error(), "config is required") {
+		t.Fatalf("expected a config-required error, got %v", err)
+	}
+}

@@ -237,6 +237,56 @@ type IntentFile struct {
 	// resolveOnce hard-refuses to run against a document that still
 	// carries an unexpanded entry, rather than silently ignoring it.
 	BlueprintCalls []BlueprintCall `json:"blueprint_calls,omitempty"`
+
+	// Overrides was added 2026-08-06 (UBI-86 Part 2, design comment on
+	// UBI-86 2026-08-04): one entry per caller-declared attribute patch
+	// against an already-resolved resource, by address -- the answer to
+	// "a blueprint's own internal resource attributes are owned by the
+	// blueprint's AUTHOR, not the caller; only call-site parameters are
+	// editable" (the design comment's own framing). An SDK program's
+	// direct `override(address, {...})` call (Go/TS/Python, zero AI), a
+	// diagram's own ubx_override-classed node (structural read, zero
+	// AI), or an md draft's "Override the X's Y to Z" prose (the ONLY
+	// call site needing AI, and only a thin mapping step -- never
+	// re-drafting the blueprint's own resources) all compile down to
+	// this SAME shape, mirroring BlueprintCalls' own "three mediums, one
+	// wire shape" precedent exactly.
+	//
+	// Purely additive and optional, matching BlueprintCalls' own
+	// precedent: every OTHER producer of an intent file leaves this nil
+	// and is completely unaffected. blueprint.ApplyOverrides expands
+	// every entry here into a patch against its own target
+	// ResourceIntent's Config BEFORE Resolve (below) ever sees them --
+	// applied immediately after blueprint.ExpandCalls (so an override
+	// can target a resource a blueprint call just produced), before ship
+	// (docs/blueprint.md's own "Override mechanism" section). Unlike
+	// BlueprintCalls, resolveOnce does NOT hard-refuse an unexpanded
+	// entry left here -- a hand-written intent file naming an override
+	// against one of its OWN plain resources is legitimate even without
+	// ever going through blueprint.ApplyOverrides, so nothing here forces
+	// every caller through that one function the way ExpandCalls is
+	// forced.
+	Overrides []Override `json:"overrides,omitempty"`
+}
+
+// Override is one caller-declared attribute patch against an
+// already-named resource, applied by address -- see IntentFile.
+// Overrides's own doc comment for the full account. Address is the
+// canonical "<stack>.<type>.<name>" form (core.Address.String()), always
+// within the SAME document's own Stack -- an override cannot reach into
+// a different stack (core.Address has no cross-stack concept at all;
+// docs/architecture.md's own stack-isolation boundary applies here
+// unchanged). Config maps a TOP-LEVEL wire attribute name (a bare key,
+// never a dot-path into a nested value) to its own new raw JSON value --
+// merged into the target resource's existing Config by key, replacing
+// whatever was there, never a deep merge: overriding one field of a
+// nested object (e.g. one key of a "tags" map) means supplying that
+// whole top-level attribute's own complete new value, not a dotted
+// sub-path -- the same "$ref"-shaped resolution values already receive
+// no special deep-merge treatment either.
+type Override struct {
+	Address string                     `json:"address"`
+	Config  map[string]json.RawMessage `json:"config"`
 }
 
 // BlueprintCall is one blueprint invocation an intent/v1 document names

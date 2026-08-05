@@ -92,7 +92,7 @@ func TestParseAndValidate_RejectsCases(t *testing.T) {
 			// about a change and never actually recorded it.
 			name:    "empty resources and empty destroys",
 			raw:     `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"provision a database like staging but smaller","assumptions":[{"text":"chose db.t3.small","affects":["aws_db_instance.payments.instance_class"]}],"defaults":[],"questions":[]},"resources":[],"destroys":[]}`,
-			wantErr: "no resources, no destroys, and no blueprint_calls",
+			wantErr: "no resources, no destroys, no blueprint_calls, and no overrides",
 		},
 	}
 
@@ -189,5 +189,76 @@ func TestParseAndValidate_BlueprintCallMissingBlueprint(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected an error naming blueprint_calls[0].blueprint, got: %v", errs)
+	}
+}
+
+// TestParseAndValidate_Override is UBI-86 Part 2's own required hermetic
+// proof for the md calling convention's own thin-mapping wire shape --
+// mirrors TestParseAndValidate_BlueprintCall exactly: a draft naming
+// ONLY an overrides entry, no resources[] at all, is a legitimate,
+// complete draft (the target resource already exists elsewhere -- often
+// via a blueprint call this same document also makes), and config
+// decodes from its own JSON-encoded string form into a real
+// map[string]json.RawMessage.
+func TestParseAndValidate_Override(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"override the pipeline-events queue's some_hardcoded_field","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[],"overrides":[{"address":"payments.aws_sqs_queue.pipeline-events","config":"{\"some_hardcoded_field\":\"new_value\"}"}]}`
+	draft, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	if draft == nil {
+		t.Fatal("expected a non-nil draft")
+	}
+	if len(draft.Resources) != 0 {
+		t.Fatalf("expected zero resources[] for an override-only draft, got %+v", draft.Resources)
+	}
+	if len(draft.Overrides) != 1 {
+		t.Fatalf("expected exactly one override, got %d", len(draft.Overrides))
+	}
+	ov := draft.Overrides[0]
+	if ov.Address != "payments.aws_sqs_queue.pipeline-events" {
+		t.Errorf("Address = %q, want %q", ov.Address, "payments.aws_sqs_queue.pipeline-events")
+	}
+	if string(ov.Config["some_hardcoded_field"]) != `"new_value"` {
+		t.Fatalf("Config decoded wrong: %+v", ov.Config)
+	}
+}
+
+// TestParseAndValidate_OverrideMalformedAddress confirms an overrides
+// entry with a malformed address is a hard, named validation error --
+// never silently dropped or defaulted.
+func TestParseAndValidate_OverrideMalformedAddress(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[],"overrides":[{"address":"not-a-valid-address","config":"{\"x\":1}"}]}`
+	_, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) == 0 {
+		t.Fatal("expected a validation error for a malformed override address, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "overrides[0].address") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error naming overrides[0].address, got: %v", errs)
+	}
+}
+
+// TestParseAndValidate_OverrideEmptyConfig confirms an overrides entry
+// with an empty config is a hard, named validation error.
+func TestParseAndValidate_OverrideEmptyConfig(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[],"overrides":[{"address":"payments.aws_sqs_queue.q","config":""}]}`
+	_, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) == 0 {
+		t.Fatal("expected a validation error for an empty override config, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "overrides[0].config") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error naming overrides[0].config, got: %v", errs)
 	}
 }

@@ -75,6 +75,26 @@ const (
 	blueprintPathAttr   = "blueprint_path"
 )
 
+// ubxOverrideClass is UBI-86 Part 2's own diagram calling convention,
+// mirroring ubxBlueprintClass exactly: a node classed exactly this is
+// never a resource-create -- its own attributes (read directly, the
+// identical structural-attribute-reading mechanism ubx_blueprint already
+// established, zero AI) name a target resource address plus the
+// attribute patch to apply against it. Reuses ubxRequiredAttrValue's own
+// "ref:<node>.<attr-path>" sigil (UBI-95) for a config value that needs
+// to reference a sibling node, never a second value-parsing mechanism.
+const ubxOverrideClass = "ubx_override"
+
+// overrideAddressAttr is the one reserved attribute name a ubx_override
+// node's own children may use -- required (the target resource's own
+// canonical "<stack>.<type>.<name>" address). Every OTHER child on the
+// node is one config field to override, keyed by its own D2 identifier
+// -- the real WIRE attribute name, matching how sdk.Override's own
+// config map keys already work (never this document's own Config-struct
+// field-name translation, since there is no ResourceBinding for the
+// override's own target in scope here).
+const overrideAddressAttr = "address"
+
 // Options configures Parse. NeighborLedgers maps a referenced stack name
 // to an explicit ledger_dir override (docs/diagram-medium.md's own
 // "--neighbor-ledger <stack>=<path>", repeatable on the CLI, slice 3 --
@@ -142,6 +162,16 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 	pending := make(map[string]pendingResource, len(objs))
 	var pendingOrder []string
 
+	// pendingOverrideObjs holds every ubx_override-classed node's own
+	// d2graph.Object, in objs' own deterministic order -- UBI-86 Part 2's
+	// own mirror of pendingOrder above: an override's own config value
+	// may carry a "ref:<node>.<attr-path>" sigil (the same escape hatch
+	// ubx_required already established, UBI-95) naming another node not
+	// yet reached here, so building the actual resolver.Override waits
+	// for the identical second pass that resolves ubx_required's own
+	// $ref values, below.
+	var pendingOverrideObjs []*d2graph.Object
+
 	var questions []core.Question
 	var defaults []core.AmbiguityNote
 
@@ -175,6 +205,17 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			}
 			kind[absID] = nodeKindBlueprintCall
 			intent.BlueprintCalls = append(intent.BlueprintCalls, call)
+			continue
+		}
+
+		if hasClass(obj.Classes, ubxOverrideClass) {
+			// UBI-86 Part 2: zero AI, a structural attribute read exactly
+			// like ubx_blueprint above -- deferred to the second pass
+			// (below, alongside ubx_required) since a config value here
+			// may name a sibling node via the same "ref:<node>.<attr-path>"
+			// sigil ubx_required already supports.
+			kind[absID] = nodeKindOverride
+			pendingOverrideObjs = append(pendingOverrideObjs, obj)
 			continue
 		}
 
@@ -259,6 +300,19 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 		intent.Resources[resourceIndex[absID]].Config = config
 	}
 
+	// UBI-86 Part 2: every ubx_override node's own resolver.Override,
+	// built here (not the first pass) for the identical reason
+	// ubx_required's own config is -- a "ref:<node>.<attr-path>" value
+	// may name a sibling node whose type/name is only fully known once
+	// every node in the diagram has been classified.
+	for _, obj := range pendingOverrideObjs {
+		ov, err := overrideFromNode(obj, stack, resolveRefTarget)
+		if err != nil {
+			return nil, fmt.Errorf("diagram: %s: %w", absID(obj), err)
+		}
+		intent.Overrides = append(intent.Overrides, ov)
+	}
+
 	// Third pass: edges -> DependsOn (docs/schema.md's UBI-47
 	// amendment) for a resource-to-resource edge, or a visible,
 	// non-blocking note for a resource-to-reference edge (see
@@ -333,6 +387,15 @@ const (
 	// edge to/from one isn't supported this slice, silently a no-op,
 	// same as an edge touching an unresolved node already is.
 	nodeKindBlueprintCall
+	// nodeKindOverride (UBI-86 Part 2) is inert everywhere the existing
+	// edge-translation logic already treats "anything that isn't
+	// nodeKindResource/nodeKindReference" as having no ubx-legible
+	// meaning as an edge endpoint -- the identical reasoning
+	// nodeKindBlueprintCall's own doc comment already gives, no changes
+	// needed there either: an override targets an address by NAME, not
+	// by diagram topology, so wiring a topology edge to/from an override
+	// node isn't a thing this design needs at all.
+	nodeKindOverride
 )
 
 // pendingResource carries what Parse's first pass already knows about a
@@ -378,6 +441,14 @@ func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 		// same reasoning onlyUbxRequiredChild already applies to an
 		// ordinary resource node's own reserved ubx_required subtree.
 		if hasClass(obj.Classes, ubxBlueprintClass) {
+			leaves = append(leaves, obj)
+			continue
+		}
+		// A ubx_override node's own children are likewise always just its
+		// own literal attribute values (overrideFromNode reads them
+		// directly, below) -- never real topology, same reasoning as
+		// ubx_blueprint immediately above.
+		if hasClass(obj.Classes, ubxOverrideClass) {
 			leaves = append(leaves, obj)
 			continue
 		}
@@ -479,6 +550,45 @@ func blueprintCallFromNode(obj *d2graph.Object, label string, opts Options) (res
 	}
 	call.Blueprint = resolveBlueprintRefBaseDir(call.Blueprint, opts.BaseDir)
 	return call, nil
+}
+
+// overrideFromNode reads a ubx_override-classed node's own children
+// directly (the identical D2 dotted-path-shorthand mechanism
+// blueprintCallFromNode already reads) into a resolver.Override:
+// overrideAddressAttr (required) is the target resource's own address,
+// read as a plain string (never a "ref:" sigil -- an address names a
+// resource by its own resolved identity, not a value to resolve). Every
+// OTHER child is one config field to override, its own raw D2 text
+// resolved via ubxRequiredAttrValue -- the SAME value-parsing
+// ubx_required already uses (an ordinary JSON string literal, or a
+// "ref:<node>.<attr-path>" sigil resolved into a real wire $ref object
+// via resolveTarget), never a second, parallel value-parsing mechanism.
+func overrideFromNode(obj *d2graph.Object, stack string, resolveTarget func(identifier string) (targetType, targetName string, ok bool)) (resolver.Override, error) {
+	var address string
+	var haveAddress bool
+	config := map[string]json.RawMessage{}
+	for _, child := range obj.ChildrenArray {
+		if child.ID == overrideAddressAttr {
+			address = child.Label.Value
+			haveAddress = true
+			continue
+		}
+		raw, err := ubxRequiredAttrValue(child.Label.Value, child.ID, stack, resolveTarget)
+		if err != nil {
+			return resolver.Override{}, err
+		}
+		config[child.ID] = raw
+	}
+	if !haveAddress || strings.TrimSpace(address) == "" {
+		return resolver.Override{}, fmt.Errorf("ubx_override node is missing a %q attribute naming the resource to override", overrideAddressAttr)
+	}
+	if _, ok := core.ParseAddress(address); !ok {
+		return resolver.Override{}, fmt.Errorf("ubx_override node: %q is not a valid <stack>.<type>.<name> address", address)
+	}
+	if len(config) == 0 {
+		return resolver.Override{}, fmt.Errorf("ubx_override node %q has no config attributes to override -- add at least one besides %q", address, overrideAddressAttr)
+	}
+	return resolver.Override{Address: address, Config: config}, nil
 }
 
 // resolveBlueprintRefBaseDir joins a relative local blueprint reference
