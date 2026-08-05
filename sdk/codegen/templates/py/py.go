@@ -153,18 +153,19 @@ func pyModuleIdent(name string) string {
 }
 
 // pyprojectTOML renders the repo-shaped tree's own manifest stub -- a
-// real, consumer-ready shape (were it ever published; it isn't, matching
-// ubx_sdk's own "not yet published" posture), not consulted by anything
-// this codebase's own hermetic verification actually reads (a real
-// import resolves via PYTHONPATH directly against the on-disk tree, the
-// same mechanism cli/sdk_test.go's own assertPyFileImports already
-// uses).
+// real, consumer-ready shape, not consulted by anything this codebase's
+// own hermetic verification actually reads (a real import resolves via
+// PYTHONPATH directly against the on-disk tree, the same mechanism
+// cli/sdk_test.go's own assertPyFileImports already uses). `ubx_sdk`
+// pins to the real published PyPI package (UBI-107,
+// https://pypi.org/project/ubx-sdk/) -- caret-equivalent range, matching
+// @ubx/sdk's own `^0.1.0` JSR pin.
 func pyprojectTOML(shortName, source, version string) string {
 	return fmt.Sprintf(`[project]
 name = "ubx-sdk-%s"
 version = "0.0.0"
 description = "Generated Python bindings for %s@%s (ubx sdk gen). DO NOT EDIT."
-dependencies = ["ubx_sdk"]
+dependencies = ["ubx_sdk>=0.1.0,<0.2.0"]
 `, shortName, source, version)
 }
 

@@ -50,9 +50,14 @@ const PyRequirementsFileName = "requirements.txt"
 
 // PyDependency is one requirements.txt "<name> @ <url>" line naming a
 // blueprint package dependency. An ordinary requirements.txt line with no
-// " @ " (a plain PyPI pin, e.g. a future published `ubx_sdk` per UBI-107)
-// is left alone entirely -- this file only ever interprets "@ url"
-// entries, never takes over the whole file's meaning.
+// " @ " (a plain PyPI pin, e.g. the real published `ubx_sdk` runtime,
+// UBI-107) is left alone entirely -- this file only ever interprets
+// "@ url" entries, never takes over the whole file's meaning. `ubx_sdk`
+// itself is never resolved through this mechanism at all inside
+// `ubx plan`/`ubx resolve --from-code`'s own WASI sandbox -- pyeval
+// embeds it directly (sdk/py/embed.go), independent of PyPI publish
+// status; the real PyPI package matters only outside that sandbox (the
+// standalone generated ubx-sdk-*-py bindings repos).
 type PyDependency struct {
 	// Name is the declared LHS distribution name -- checked against the
 	// pulled blueprint's own declared blueprint.lock.json name (a real

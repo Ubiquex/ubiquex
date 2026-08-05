@@ -1,9 +1,10 @@
 // Package pyassets embeds ubx_sdk's own runtime source
 // (ubx_sdk/__init__.py) directly into the `ubx` binary, so evaluating a
 // Python SDK program never depends on the user having separately
-// installed `ubx_sdk` (not published to PyPI yet -- UBI-36's own "Out of
-// scope", mirroring @ubx/sdk's own not-yet-published state) or on any
-// file living alongside the binary at a predictable path. pyeval (the
+// installed `ubx_sdk` (real, published to PyPI as of UBI-107 -- but
+// `ubx`'s own hermetic WASI evaluator never relies on that install
+// existing) or on any file living alongside the binary at a predictable
+// path. pyeval (the
 // Go-side harness, a sibling top-level package) extracts this to a temp
 // directory once per process and preopens it into the WASI sandbox at a
 // fixed guest path.
