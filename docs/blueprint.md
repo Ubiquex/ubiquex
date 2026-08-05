@@ -3930,20 +3930,19 @@ path `TestParse_UbxBlueprint_NodeBecomesBlueprintCall` already exercises
 for an ordinary scalar param. Full suite green (`go test ./... -count=1`),
 `gofmt -l .`/`go vet ./...` clean.
 
-### Live verification, the ticket's own required bar — met for two legs, honestly blocked for two, not blurred together
+### Live verification, the ticket's own required bar — fully met, across a follow-up session once Anthropic API credits were restored
 
-**Go SDK — live**: a real `go build`/`go run` (this session's own
-hermetic `TestGenerateGo_ForEach_RuntimeUsable`/`_CompilesClean`) proves
-the generated `VpcSubnets` function, called with a real
-`[]string{"eu-central-1a", "eu-central-1b", "eu-central-1c"}` literal,
-produces exactly 3 `aws_subnet` resources with correct per-instance
-`availability_zone`/`cidr_block` values against the real `sdk/go`
-runtime — not a mock. The SAME package was additionally staged for a
-real `ubx resolve --from-code` run against the real `hashicorp/
-aws@6.54.0` schema (resolve-only, never `ubx ship`, per this project's
-own standing rule) — see this session's own real-world account below for
-why that specific step's own execution is recorded honestly as
-hand-off, not this session's own direct action.
+**Go SDK — live, twice over**: a real `go build`/`go run` (this
+project's own hermetic `TestGenerateGo_ForEach_RuntimeUsable`/
+`_CompilesClean`) proves the generated `VpcSubnets` function, called with
+a real `[]string{"eu-central-1a", "eu-central-1b", "eu-central-1c"}`
+literal, produces exactly 3 `aws_subnet` resources with correct
+per-instance `availability_zone`/`cidr_block` values against the real
+`sdk/go` runtime — not a mock. The REAL AI-drafted package (below) was
+separately resolved for real via `ubx resolve --from-code` against the
+real `hashicorp/aws@6.54.0` schema (resolve-only, never `ubx ship`, per
+this project's own standing rule), producing the identical 3 correct
+creates.
 
 **TypeScript/Python SDK — live**: a real `deno run`/`python3` (this
 session's own hermetic `TestGenerateTS/Python_ForEach_RuntimeUsable`)
@@ -4000,64 +3999,184 @@ hash, all three sibling instances listed) — a full resolve→accept→ship→
 provenance round trip, matching UBI-74 Slice 6/UBI-128's own established
 live-verification bar for this medium exactly, not a lesser one.
 
-**md calling convention — hermetic only, via `ExpandCalls` directly, for
-the reason named below.** `TestExpandCalls_ForEach_CommaSeparatedListArg`
-runs the REAL `blueprint.ExpandCalls` path (a real `deno run` underneath,
-the identical mechanism Slice 5 already proved for scalar params) with a
-genuine comma-separated `Args` value, confirming the exact 3-resource,
-correct-per-instance output for the vpc-subnets fixture — this is "live"
-in every sense that matters functionally (real subprocess, real generated
-code, no test double) for the CONSUMING half of the md medium, even
-though (unlike the diagram leg just proven above) it doesn't originate
-from a real `.md` file drafted by the real Claude API — see the honest
-account below for why that specific half is blocked this session, not
-attempted around.
+**md calling convention — the CONSUMING half live-verified hermetically
+first, via `ExpandCalls` directly** (`TestExpandCalls_ForEach_
+CommaSeparatedListArg`, a real `deno run` underneath, the identical
+mechanism Slice 5 already proved for scalar params, confirming the exact
+3-resource, correct-per-instance output once `Args["availability_zones"]`
+holds the right comma-separated string) — **and the EXTRACTING half
+confirmed live in the follow-up session below, against the real Claude
+API.**
 
-**Two real, named gaps, not glossed over:**
+**Both remaining legs — confirmed live in a follow-up session, once the
+project's own Anthropic API credits were restored (the prior session's
+own honestly-recorded blocker, not a code gap — full real transcripts
+below).**
 
-1. **The build-time AI recognition itself — "confirm the AI correctly
-   drafts the iteration pattern" — was NOT live-verified this session.**
-   A real `ubx blueprint build .` run against the exact worked-example
-   Ubxfile above (staged at `~/ubx-playground-ubi129-list-params/
-   vpc-subnets`, ready to run) failed twice, identically, with a real
-   `400` from the Anthropic API: `"Your credit balance is too low to
-   access the Anthropic API."` — the project's own configured `[intent]`
-   Claude adapter key, not this session's own Claude Code billing, and
-   not something this session can resolve on its own. The generated Go
-   package this section's own worked examples quote is byte-identical to
-   what `blueprintDraftPrompt`'s own new instructions are DESIGNED to
-   elicit (this session hand-constructed the exact intent/v1 JSON the
-   model would need to produce and fed it straight to `GenerateGo`,
-   bypassing the draft step) — proving the CODEGEN side works
-   correctly, but not that the MODEL reliably produces that shape from
-   the prose unaided. A real, first-priority follow-up once the
-   project's own API credits are restored: re-run `ubx blueprint build .`
-   in that same staged directory (one command, everything else already
-   in place) and confirm the model's own real output matches.
-2. **The md calling-convention leg — "call ... from md with
-   comma-separated prose" — is hermetic only, for the identical reason.**
-   Extracting a `blueprint_calls[].args` entry from md prose is itself an
-   Anthropic API call (`intentprovider.DraftWithRetry`), blocked by the
-   same credit exhaustion. `TestExpandCalls_ForEach_CommaSeparatedListArg`
-   hermetically proves the CONSUMING half (once `Args["availability_zones"]`
-   contains the right comma-separated string, everything downstream is
-   correct) — matching the schema.go clarifying-sentence addition's own
-   underlying bet: this is a thin, low-risk mapping step following an
-   already-proven pattern for scalar params (UBI-86's own precedent), not
-   a genuinely new capability the way `for_each` recognition is. Real,
-   named, not assumed equivalent to actually having run it.
+1. **Build-time AI recognition — "confirm the AI correctly drafts the
+   iteration pattern" — now live-verified, a genuine success.** A real
+   `ubx blueprint build . --lang all` run against the exact worked-example
+   Ubxfile above (`~/ubx-playground-ubi129-list-params/vpc-subnets`)
+   produced, in ONE real Claude Sonnet 5 call, Go/TypeScript/Python
+   source **byte-identical** to the hand-constructed fixture this
+   section's own worked examples already quoted (the same one the prior
+   session used to prove the codegen side, before the model itself could
+   be tried) — same `for_each: "availability_zones"`, same
+   `{availability_zones}`/`{availability_zones_index}` token usage, same
+   `"subnet-{availability_zones}"` per-instance name template, same
+   `cidr_block` index derivation. All three compiled clean (`go build`,
+   real); the Go leg additionally ran for real (`go run`, real
+   `sdk/go` runtime) and resolved for real against the real `hashicorp/
+   aws@6.54.0` schema (`ubx resolve --from-code`, resolve-only, never
+   `ubx ship`), producing exactly the 3 correct `aws_subnet` creates this
+   whole section's own worked examples describe.
+2. **The md calling-convention leg — now live-verified, correct on the
+   first attempt.** A real md document (`Use blueprint ../vpc-subnets
+   with: vpc_id = vpc-0123456789abcdef0, availability_zones =
+   eu-central-1a, eu-central-1b, eu-central-1c.`) drafted via a real
+   `ubx propose --from-doc`, produced `blueprint_calls[0].args`
+   with `"availability_zones": "eu-central-1a, eu-central-1b,
+   eu-central-1c"` — the exact comma-separated text, verbatim, never
+   reshaped into a JSON array — confirming `schema.go`'s own clarifying
+   sentence (added specifically for this) elicited the correct behavior
+   on the FIRST real API call, no retry needed. `ubx resolve` on that
+   same draft (resolve-only) expanded it through `blueprint.ExpandCalls`
+   against the real `hashicorp/aws@6.54.0` schema, producing the
+   identical 3 correct `aws_subnet` creates the SDK-direct leg above
+   produced — proving the md and SDK-direct calling conventions resolve
+   to the SAME shape, exactly as this arc's own "three different SOURCES,
+   one resolved-delta mechanism" design has always claimed.
 
-**Resolve-only against real AWS (SDK leg), handed off, not self-executed
-this session:** this session's own attempt to `go build` a real calling
-program in a directory the auto-mode permission classifier read as
-heading toward `ubx ship` against real AWS (CLAUDE.md's own absolute,
-no-exceptions rule) was blocked before it reached `go run`/`ubx resolve`
-at all — correctly, per this project's own standing safety posture, even
-though the actual intended operation was resolve-only (never applies).
-Rather than working around that block, the founder was asked directly
-and chose to run the real `ubx resolve --from-code create_vpc_subnets.go
---ledger-dir . --out resolved.json` command in `~/ubx-playground-
-ubi129-list-params/stack-real-aws` personally, against the real,
-already-generated `VpcSubnets` package and the real `hashicorp/
-aws@6.54.0` schema — [PLACEHOLDER: result to be recorded here once
-received].
+**Real transcripts, in full, for both legs:**
+
+`ubx blueprint build . --lang all` (real Claude Sonnet 5, first attempt):
+
+```text
+$ ubx blueprint build . --lang all
+drafting via claude:claude-sonnet-5… ✓
+built 1 resource(s) -> vpc-subnets (go, ts, py: go/bindings.go, go/go.mod,
+go/vpcsubnets.go, py/bindings.py, py/vpcsubnets.py, ts/bindings.ts,
+ts/vpcsubnets.ts)
+```
+
+The real, unedited `go/vpcsubnets.go` this produced — byte-identical to
+this section's own worked Go example above:
+
+```go
+func VpcSubnets(vpcId string, availabilityZones []string) []*sdk.Computed {
+	sdk.PushBlueprintSource("vpc-subnets")
+	defer sdk.PopBlueprintSource()
+
+	var subnetList []*sdk.Computed
+	for availabilityZonesIndex, availabilityZonesValue := range availabilityZones {
+		item := sdk.Resource(Subnet, fmt.Sprintf("subnet-%v", availabilityZonesValue), SubnetConfig{
+			AvailabilityZone: availabilityZonesValue,
+			CidrBlock: fmt.Sprintf("10.0.%v.0/24", availabilityZonesIndex),
+			VpcId: vpcId,
+		})
+		subnetList = append(subnetList, item)
+	}
+	return subnetList
+}
+```
+
+The real, unedited `ts/vpcsubnets.ts` and `py/vpcsubnets.py` — both also
+byte-identical to this section's own worked TS/Python examples above,
+confirming all three languages' own codegen paths are equally correctly
+exercised by a real draft, not just the Go one:
+
+```ts
+export function vpcSubnets(vpcId: string, availabilityZones: string[]): any[] {
+  const subnetList: any[] = [];
+  availabilityZones.forEach((availabilityZonesValue, availabilityZonesIndex) => {
+    const item = resource(Subnet, `subnet-${availabilityZonesValue}`, {
+      availabilityZone: availabilityZonesValue,
+      cidrBlock: `10.0.${availabilityZonesIndex}.0/24`,
+      vpcId: vpcId,
+    });
+    subnetList.push(item);
+  });
+  return subnetList;
+}
+```
+
+```python
+def vpc_subnets(vpc_id: str, availability_zones: list[str]) -> list[Any]:
+    subnet_list: list[Any] = []
+    for availability_zones_index, availability_zones_value in enumerate(availability_zones):
+        item = sdk.resource(Subnet, f"subnet-{availability_zones_value}", SubnetConfig(
+            availability_zone=availability_zones_value,
+            cidr_block=f"10.0.{availability_zones_index}.0/24",
+            vpc_id=vpc_id,
+        ))
+        subnet_list.append(item)
+    return subnet_list
+```
+
+`go build`/`go run` against the real `sdk/go` runtime, then `ubx resolve
+--from-code` against the real `hashicorp/aws@6.54.0` schema (resolve-only,
+never `ubx ship`) — the resolved delta's own first create:
+
+```json
+{
+  "type": "aws_subnet",
+  "name": "subnet-eu-central-1a",
+  "config": {
+    "availability_zone": "eu-central-1a",
+    "cidr_block": "10.0.0.0/24",
+    "vpc_id": "vpc-0123456789abcdef0"
+  },
+  "provider": {"source": "hashicorp/aws", "version": "6.54.0"},
+  "sources": [{"kind": "blueprint", "ref": "vpc-subnets:sha256:60ba071aea0b…"}]
+}
+```
+
+— all 3 creates present, each with the correct `availability_zone`/
+`cidr_block`/`vpc_id`, exactly matching the hermetic prediction.
+
+**md leg**, a real `ubx propose --from-doc` against the real Claude API,
+correct on the first attempt:
+
+```md
+# VPC subnets, via a blueprint call
+
+Use blueprint `../vpc-subnets` with: vpc_id = vpc-0123456789abcdef0,
+availability_zones = eu-central-1a, eu-central-1b, eu-central-1c.
+```
+
+```text
+$ ubx propose --from-doc vpc_subnets.md --stack payments-vpc-subnets --out draft.json
+no assumptions, defaults, or open questions -- the document was unambiguous.
+wrote draft: draft.json
+```
+
+The real drafted `blueprint_calls[0]`:
+
+```json
+{
+  "name": "vpc-subnets",
+  "blueprint": "../vpc-subnets",
+  "args": {
+    "availability_zones": "eu-central-1a, eu-central-1b, eu-central-1c",
+    "vpc_id": "vpc-0123456789abcdef0"
+  }
+}
+```
+
+— the exact comma-separated text, verbatim, exactly as `schema.go`'s own
+clarifying sentence asked for, never reshaped into a JSON array. `ubx
+resolve draft.json` (resolve-only, never `ubx ship`) then expanded this
+through `blueprint.ExpandCalls` against the real `hashicorp/aws@6.54.0`
+schema, producing the identical 3 correct `aws_subnet` creates the
+SDK-direct leg above produced — the md and SDK-direct calling
+conventions resolving to the byte-identical shape, live-confirmed, not
+just architecturally claimed.
+
+Every leg this ticket's own success bar named is now live-verified: Go/
+TypeScript/Python SDK calling (real compile+run, Go additionally resolved
+against real AWS), diagram calling (a full real `ubx plan`→`ubx ship`→
+`ubx why` round trip against `fakeprovider`, the prior session's own
+strongest proof), md calling (real Claude extraction + real AWS-schema
+resolve, this session), and the build-time AI recognition itself (real
+Claude draft, byte-identical to the hand-built fixture, this session).
+No remaining live-verification gap for this ticket.
