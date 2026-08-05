@@ -1838,13 +1838,115 @@ boundary, isn't supported yet — a real, honest limitation, refused with
 a clear, named error rather than silently producing a wrong or missing
 ref.
 
-**Go only, for now.** This whole mechanism — the module-graph walk
-specifically — is inherently Go-specific. TS/Python's own direct-import
-calling paths still have the ORIGINAL gap (no provenance at all);
-extending this to them needs an analogous, language-appropriate discovery
-mechanism (TS: its own import-map/`package.json` resolution; Python:
-`sys.path`/module resolution) — real, separate future work, not attempted
-here, named rather than silently left unaddressed.
+**All three languages now (UBI-126, 2026-08-06).** The account above is
+Go's own mechanism, unchanged since the original fix — TS and Python
+each needed a genuinely different EXTERNAL discovery half (the internal
+push/pop scope is identical in spirit across all three, ported almost
+verbatim), covered in their own subsection below.
+
+### TS: `deno info --json`, no module manifest needed at all
+
+Inside the evaluated program: `sdk/ts/runtime`'s own
+`pushBlueprintSource(name)`/`popBlueprintSource()`, a module-level string
+stack, byte-identical in spirit to Go's (an `IntentDocument["resources"]`
+element gains an optional `sources` field TypeScript's own `readonly`
+properties require setting at construction time, not via a later
+assignment — the one real language-specific wrinkle). `blueprint/tsgen.go`'s
+own `renderTSFunction` wraps the generated function's entire body in
+`pushBlueprintSource(blueprintName); try { ... } finally {
+popBlueprintSource(); }` — TS's own equivalent of Go's `defer`, needing an
+actual nested block (unlike `defer`, which needs no re-indentation) — a
+small shared `indentLines` helper re-indents the already-rendered body one
+level deeper when splicing it into the `try` block, keeping every existing
+rendering line's own logic completely unchanged.
+
+Outside the evaluated program: **`StampDirectCallProvenanceTS`**
+(`blueprint/tsprovenance.go`, new) uses `deno info --json --no-remote
+entryFile` — a real, built-in Deno introspection command that resolves
+every static import in the program's own module graph (recursively,
+transitive imports included) to a real local file path, WITHOUT ever
+running the program — confirmed empirically to tolerate an unrelated
+unresolvable import (e.g. the calling program's own `"@ubx/sdk"`
+specifier, resolved however THAT program's own `deno.json` says, which
+`deno info` run standalone knows nothing about) gracefully: exit 0,
+that one dependency reported as an unresolved node, every other resolvable
+import still returned normally. For every resolved LOCAL module whose own
+file lives inside a `ts/` directory whose own PARENT contains a real
+`Ubxfile` (mirroring Go's own "module directory's parent" check exactly,
+one directory level deeper here since a TS blueprint's own generated files
+sit directly inside `ts/`, with no further module-root nesting the way
+Go's `go.mod` introduces one), computes its real content hash via
+`buildManifest` — the same function every other mechanism already calls —
+and rewrites the matching incomplete ref, sharing the exact same
+`applyBlueprintRefs` completion helper Go's own `StampDirectCallProvenance`
+uses (refactored out of `sdkprovenance.go` this session, zero behavior
+change for Go).
+
+**A real structural simplification versus Go, not a coincidence**: TS
+needs no equivalent of Go's own "local directory or `go.mod` `replace`
+directive" scope boundary at all — Deno resolves a literal relative or
+absolute import specifier regardless of which directory it points at (no
+module manifest, no version pin, no local-override concept to carry
+forward), so the ONLY unsupported case is a blueprint reached exclusively
+through a remote/bare specifier (`jsr:`, `npm:`, an import-map entry with
+no local file behind it) — refused with a clear, named error, mirroring
+Go's own "standalone published module" boundary in spirit.
+
+### Python: reusing UBI-130's own already-resolved dependency hashes, no new discovery step at all
+
+Inside the evaluated program: `sdk/py/ubx_sdk`'s own
+`push_blueprint_source(name)`/`pop_blueprint_source()`, a module-level
+list stack, and `resource()`'s own `add_resource` stamps the same
+incomplete `{"kind": "blueprint", "ref": "<bare-name>"}` dict entry.
+`blueprint/pygen.go`'s own `renderPyFunction` wraps the generated
+function's entire body in `sdk.push_blueprint_source(name); try: ...
+finally: sdk.pop_blueprint_source()` — Python's own `try`/`finally`,
+needing the same body re-indentation `indentLines` (shared with TS's own
+codegen) already handles.
+
+Outside the evaluated program, Python's own completion mechanism is
+genuinely, structurally different from Go/TS, not merely a differently-
+named port of the same idea — confirmed by first investigating whether an
+analogous "module graph" concept even exists for Python's own WASI
+sandbox before designing anything: **pyeval's own sandbox mounts ONLY the
+entry script's own directory tree by default** (UBI-130's own doc
+comment) — there is no Go-`go.mod`/Deno-`deno info` equivalent to walk at
+all, because a Python program has no way to reach a blueprint living
+anywhere ELSE on disk in the first place, UNLESS that dependency was
+declared via UBI-130's own real, already-shipped mechanism
+(`requirements.txt`'s `"<name> @ <url>"` syntax, resolved by
+`blueprint.ResolvePyDependencies` BEFORE the script ever runs, pulled and
+verified into the exact same cache/mount pyeval's own `ExtraDep`
+preopens). That resolution step ALREADY computes each dependency's real
+content hash (`Verify`/`buildManifest`, the SAME function every other
+mechanism calls) as a byproduct of establishing trust before ever mounting
+it — so Python needs no separate discovery subprocess at all:
+`EvaluatePythonWithDeps` (`blueprint/pydeps.go`) now also returns a
+`name -> "name:content_hash"` ref map built directly from its own already-
+resolved `PyDepMount`s, and **`StampDirectCallProvenancePy`** completes
+every incomplete ref from that map directly, sharing the same
+`applyBlueprintRefs` helper TS/Go use.
+
+**A real, named, remaining scope boundary, distinct from Go/TS's own**: a
+Python program that colocates a blueprint's built `py/` package as a bare
+subdirectory of its own, with NO `requirements.txt` entry naming it at all
+— mechanically still possible, since pyeval mounts the whole entry
+directory tree, and the ONLY calling convention that existed before
+UBI-130 shipped — has no entry in the resolved-dependency map and gets the
+exact same clear, named refusal Go's own "standalone published module"
+boundary produces, rather than a silently-permanent incomplete ref. Real,
+not hypothetical: confirmed by first checking whether this pattern is
+even reachable (it is) before deciding how to handle it, rather than
+assuming it away.
+
+**Verification depth, stated explicitly, per this arc's own honesty
+standard**: TS's own real depth matches Go's exactly (a genuinely
+"local directory blueprint" call, zero extra declaration needed). Python's
+own real depth is narrower in ONE specific way — full provenance requires
+the blueprint to be declared via `requirements.txt` (any of its three real
+source kinds: local path, git, or OCI, all uniformly) — a real, structural
+consequence of Python's own stricter WASI sandbox, not an arbitrarily
+lower bar.
 
 ### A real regression found and fixed along the way
 
@@ -1873,6 +1975,30 @@ being published — fixed by also carrying forward an optional `replace`
 line if the blueprint's own go.mod has one, matching (and never
 overriding) production behavior, where no such `replace` exists at all.
 
+**Both regression classes checked explicitly for TS/Python before trusting
+either was fine by analogy, per the handoff's own explicit instruction —
+neither reproduces, for two different real reasons, not assumed.** The
+double-tagging/container-label regression: `invokeCall`'s own dedup-and-
+replace loop (above) is LANGUAGE-INDEPENDENT code, run once on
+`result.Resources` after whichever evaluator just ran, never gated on
+`lang` — so it already covered TS/Python automatically the moment their
+own generated code started pushing a scope too; confirmed live, not just
+read, by re-running the pre-existing `TestExpandCalls_ProvenanceStamped`
+(TS) and `TestExpandCalls_ProvenanceStamped_Python` (Python) — both
+already passed BEFORE this session touched anything, and both still pass
+after `tsgen.go`/`pygen.go`'s own push/pop wrapping was added, real,
+direct proof of no regression, not an inference. The stale-SDK-resolution
+regression (Go's own `writeGoCaller` needing a `replace`-forwarding fix,
+above): TS/Python have no analogous risk AT ALL, by construction, not by
+luck — TS always resolves `"@ubx/sdk"` through `tseval`'s OWN embedded
+`deno.json` (config-file discovery walks up from the RUNNER script's own
+directory, which `tseval` itself controls, never from wherever the real
+entry file or the blueprint's own generated code happens to live), and
+Python's `ubx_sdk` is embedded directly into the `ubx` binary
+(`sdk/py/embed.go`'s own `go:embed`) regardless of blueprint origin —
+neither language has anything resembling Go's own per-repo `go.mod`
+`require`/`replace` pin for the shared runtime to fail to carry forward.
+
 ### Hermetic tests
 
 `cli/blueprint_call_test.go` (new):
@@ -1891,6 +2017,39 @@ the double-tagging bug above). `cli/blueprint_cross_medium_test.go`:
 identical-delta proof to provenance specifically — the SAME shared
 on-disk blueprint called via all three mediums produces BYTE-IDENTICAL
 `sources`, not merely same-shaped).
+
+**TS/Python's own new tests, mirroring the Go tests above exactly, added
+this session**: `sdk/ts/runtime/src/index_test.ts` (4 new — a resource
+stamped inside a `pushBlueprintSource` scope, no `sources` at all outside
+one, the innermost of two nested scopes winning, `popBlueprintSource`'s
+own unbalanced-call error) and `sdk/py/ubx_sdk/test_runtime.py` (4 new,
+byte-identical coverage in spirit). `blueprint/tsgen_test.go`'s own
+`TestGenerateTS_CiPlatform` and `blueprint/pygen_test.go`'s own
+`TestGeneratePython_CiPlatform` each gained new assertions confirming the
+real generated `ci-platform` source literally contains the
+push/try-finally/pop wrapping, not just that it compiles.
+`blueprint/pydeps_test.go`'s new `TestEvaluatePythonWithDeps_
+ProvenanceCompleted` closes a real, specific gap the pre-existing
+`TestEvaluatePythonWithDeps_RealPullBeforeImport` fixture couldn't: that
+fixture's own `widgetlib.py` predates this fix and is hand-written (never
+calls `push_blueprint_source`), so it stays correctly unaffected but
+proves nothing new — the new test instead pulls a blueprint built via the
+REAL `GeneratePython` codegen path, whose own generated function genuinely
+pushes/pops a scope, proving `EvaluatePythonWithDeps`'s real ref map and
+`StampDirectCallProvenancePy` actually connect end to end.
+`cli/blueprint_call_ts_test.go`/`cli/blueprint_call_py_test.go` (new,
+mirroring `cli/blueprint_call_test.go`'s own two Go tests one for one):
+`TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance_TS`/`_Py` and
+`TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance_TS`/`_Py` —
+full resolve→accept→ship→why→render round trips against real
+`fakeprovider`, for both TS (a bare local-path import, no manifest at all,
+via `writeBlueprintPackageTS`/`writeBlueprintCallingStackTS`) and Python
+(a real `requirements.txt`-declared local dependency, via
+`writeBlueprintPackagePy`/`writeBlueprintCallingStackPy` — named
+`widgetplatform`, not `platform`, specifically to avoid colliding with
+Python's own real `platform` stdlib module, since this fixture's own
+generated module/function names derive directly from the blueprint's own
+directory name).
 
 ### Live verification
 
@@ -1951,6 +2110,94 @@ A resource created by a direct SDK import now shows EXACTLY the same
 provenance shape a diagram or md call's own identical resource already
 did (Slice 6) — the calling convention that started this whole arc
 (Slice 2) is, at last, no longer the one silently missing it.
+
+### TS/Python live verification (2026-08-06), same real `ci-platform` blueprint, per-language depth stated honestly
+
+The real `ci-platform` blueprint (the SAME real, on-disk blueprint every
+prior session's own live verification used) was rebuilt via a real
+`ubx blueprint build . --lang all` (one real Claude Sonnet 5 draft call,
+compiling Go/TS/Python together from it) — its own real, freshly
+generated `ts/ciplatform.ts` and `py/ciplatform.py` both confirmed to
+genuinely contain the `pushBlueprintSource`/`push_blueprint_source`
+wrapping around their own function bodies, real 5-resource output (the
+same ECR/SQS/IAM/IAM-policy/attachment shape prior sessions established),
+not a synthetic fixture:
+
+```ts
+export function ciPlatform(repoName: string, queueName: string, retentionDays: number = 1): { repoArn: any; queueUrl: any } {
+  pushBlueprintSource("ci-platform");
+  try {
+    ...
+  } finally {
+    popBlueprintSource();
+  }
+}
+```
+
+```python
+def ci_platform(repo_name: str, queue_name: str, retention_days: int = 1) -> tuple[Any, Any]:
+    sdk.push_blueprint_source("ci-platform")
+    try:
+        ...
+    finally:
+        sdk.pop_blueprint_source()
+```
+
+A real, hand-written direct-SDK-import calling stack in each language
+(TS: a bare absolute-path import to `ciplatform.ts`, no manifest of any
+kind; Python: a real `requirements.txt` declaring `ci-platform @
+<the real on-disk ci-platform directory>`, re-`ubx blueprint package`d
+first to refresh its own `blueprint.lock.json` against the just-rebuilt
+content) resolved for real against the REAL `hashicorp/aws@6.54.0`
+schema (`ubx resolve --from-code`, resolve-only, never `ubx ship`, per
+this project's own standing rule) — both produced the identical real
+5-create result, EVERY resource carrying the SAME real
+`{"kind":"blueprint","ref":"ci-platform:sha256:5c9ed937..."}`, matching
+the freshly-repackaged blueprint's own real content hash exactly (Python's
+own resolve additionally printed a real, required receipt line: `pulled
+ci-platform @ /Users/.../ci-platform, verified: content hash
+sha256:5c9ed937... matches (11 file(s))`).
+
+The full resolve→accept→ship→why→render depth (matching Go's own
+fakeprovider-ship proof) comes from the SEPARATE `cli/blueprint_call_ts_
+test.go`/`cli/blueprint_call_py_test.go` tests above, not from `ci-platform`
+itself — `ci-platform`'s own resources are real AWS types `fakeprovider`
+has no schema for, the same substitution precedent UBI-128/129 already
+established for this exact reason. Stated explicitly, not blurred
+together: this two-leg structure (real blueprint + real schema,
+resolve-only; a substitute fake-provider-typed blueprint, full ship) is
+IDENTICAL in shape to Go's own original UBI-126 verification, now
+completed for all three languages, not a lesser proof for TS/Python.
+
+**Per-language depth, named honestly, matching this arc's own standing
+discipline**: TS's real depth is IDENTICAL to Go's in every respect (a
+genuinely local-directory blueprint call, zero extra declaration). Python's
+own real depth required `requirements.txt` where Go/TS needed nothing —
+a real, structural consequence of Python's own stricter WASI sandbox
+(see the design section above), not a gap in this session's own testing.
+
+**A real, load-bearing check, not assumed**: `sdk/go`'s own UBI-126 fix
+was RE-confirmed still not published to the real `github.com/ubiquex/
+ubx-sdk-go` module (`proxy.golang.org` still resolves the pre-fix
+`v0.0.0`/2026-08-03 commit) — unchanged since UBI-107's own session,
+named again here so it doesn't quietly become "assumed fixed." **Neither
+is TS/Python's own new fix, and this is genuinely new information this
+session**: `sdk/ts/runtime/deno.json`'s and `sdk/py/pyproject.toml`'s own
+version were bumped locally (0.1.0 → 0.1.1, both) to reflect that the
+runtime's own real, exported surface changed, but NEITHER manifest was
+actually published — `jsr.io/@ubx/sdk/meta.json` and `pypi.org/pypi/
+ubx-sdk/json` both still report `0.1.0` live, confirmed by direct query,
+not assumed. This means **all four real Python bindings repos
+(`ubx-sdk-{aws,google,kubernetes,azure}-py`, switched to the real PyPI
+package this same day, UBI-107) and all four real TS bindings repos
+(`ubx-sdk-{aws,google,kubernetes,azure}-ts`, on JSR since UBI-110) still
+resolve the OLD runtime with no `push_blueprint_source`/
+`pushBlueprintSource` at all** — a real blueprint built against any of
+those eight repos' own published dependency today cannot get direct-
+SDK-import provenance until a founder-driven publish cycle happens for
+each runtime (JSR: a real `deno publish`; PyPI: a real `twine upload`
+with a fresh token) — a genuinely open, named follow-up, not something
+"committed" already implies.
 
 ## Python blueprint dependency resolution: UBI-130
 

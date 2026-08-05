@@ -202,6 +202,46 @@ class RuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "called outside of an active stack"):
             sdk.override("payments.fake_widget.a", {"x": "y"})
 
+    # --- push_blueprint_source()/pop_blueprint_source() (UBI-126) ---
+
+    def test_resource_inside_blueprint_source_scope_stamps_incomplete_source(self):
+        def describe():
+            sdk.intent("s")
+            sdk.push_blueprint_source("ci-platform")
+            try:
+                sdk.resource(WIDGET, "primary", WidgetConfig(name="x"))
+            finally:
+                sdk.pop_blueprint_source()
+
+        doc = sdk.stack("platform", describe).evaluate()
+        self.assertEqual(doc["resources"][0]["sources"], [{"kind": "blueprint", "ref": "ci-platform"}])
+
+    def test_resource_outside_any_blueprint_source_scope_has_no_sources(self):
+        def describe():
+            sdk.intent("s")
+            sdk.resource(WIDGET, "primary", WidgetConfig(name="x"))
+
+        doc = sdk.stack("platform", describe).evaluate()
+        self.assertNotIn("sources", doc["resources"][0])
+
+    def test_innermost_blueprint_source_scope_wins_when_nested(self):
+        def describe():
+            sdk.intent("s")
+            sdk.push_blueprint_source("outer")
+            sdk.push_blueprint_source("inner")
+            try:
+                sdk.resource(WIDGET, "primary", WidgetConfig(name="x"))
+            finally:
+                sdk.pop_blueprint_source()
+                sdk.pop_blueprint_source()
+
+        doc = sdk.stack("platform", describe).evaluate()
+        self.assertEqual(doc["resources"][0]["sources"], [{"kind": "blueprint", "ref": "inner"}])
+
+    def test_pop_blueprint_source_with_no_matching_push_raises(self):
+        with self.assertRaisesRegex(RuntimeError, "no matching push_blueprint_source"):
+            sdk.pop_blueprint_source()
+
 
 if __name__ == "__main__":
     unittest.main()

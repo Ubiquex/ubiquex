@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ubx_sdk"
-version = "0.1.0"
+version = "0.1.1"
 description = "ubx_sdk -- the describe-only Python runtime for Ubiquex SDK programs (stack/resource/secret/cross/intent)."
 readme = "README.md"
 license = "Apache-2.0"

@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/pyeval"
 )
 
@@ -191,6 +192,18 @@ type PyDepMount struct {
 	Dep     PyDependency
 	HostDir string // <cache-or-source-dir>/py -- the blueprint's own built Python package
 	Receipt string
+	// Ref is UBI-126's own real, complete "<name>:<content_hash>" ref for
+	// this dependency -- already known for free at this point (Verify,
+	// above, already computed it to establish trust before ever mounting
+	// this dependency), never a second hashing pass. Used to complete any
+	// incomplete "blueprint" source a direct sdk.push_blueprint_source
+	// call inside the evaluated program may have left behind (see
+	// StampDirectCallProvenancePy, below) -- Python's own external
+	// completion half of the mechanism sdk/go/runtime's own doc comment
+	// describes, needing no separate discovery step the way Go's
+	// `go list -m all`/TS's `deno info` do, since this dependency
+	// resolution step already produced it as a byproduct.
+	Ref string
 }
 
 // ResolvePyDependencies reads entryFile's own sibling requirements.txt
@@ -295,7 +308,7 @@ func finishPyDepMount(dep PyDependency, dir string, manifest *Manifest, fromCach
 	receipt := fmt.Sprintf("pulled %s @ %s%s, verified: content hash %s matches (%d file(s))",
 		dep.Name, dep.URL, cacheNote, manifest.ContentHash, len(manifest.Files))
 
-	return PyDepMount{Dep: dep, HostDir: pyDir, Receipt: receipt}, nil
+	return PyDepMount{Dep: dep, HostDir: pyDir, Receipt: receipt, Ref: dep.Name + ":" + manifest.ContentHash}, nil
 }
 
 // pyDepCacheDir returns the local cache directory for dep, keyed by its
@@ -338,19 +351,51 @@ func pyEvalDeps(mounts []PyDepMount) []pyeval.ExtraDep {
 // script until every dependency it declared is already pulled, verified,
 // and mounted. Returns the evaluated, canonical intent/v1 document
 // alongside every dependency's own receipt line, in declared order, for
-// the CLI layer to print.
-func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte, receipts []string, err error) {
+// the CLI layer to print, and (UBI-126) a name -> "name:content_hash" ref
+// map -- every declared dependency's own real content hash, already
+// computed as a byproduct of resolving it above, for
+// StampDirectCallProvenancePy (below) to complete any incomplete
+// "blueprint" source the evaluated program's own
+// sdk.push_blueprint_source call may have left behind. Empty (never nil)
+// when entryFile has no requirements.txt at all -- the common case pays
+// nothing extra to build or consult this map.
+func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte, receipts []string, refs map[string]string, err error) {
 	mounts, err := ResolvePyDependencies(ctx, entryFile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	canon, err = pyeval.Evaluate(ctx, entryFile, pyEvalDeps(mounts)...)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	receipts = make([]string, len(mounts))
+	refs = map[string]string{}
 	for i, m := range mounts {
 		receipts[i] = m.Receipt
+		refs[m.Dep.Name] = m.Ref
 	}
-	return canon, receipts, nil
+	return canon, receipts, refs, nil
+}
+
+// StampDirectCallProvenancePy is StampDirectCallProvenance's own Python
+// sibling (sdkprovenance.go's own doc comment has the shared design
+// account) -- but needs no discovery step of its own at all, unlike Go's
+// `go list -m all`/TS's `deno info`: refs (EvaluatePythonWithDeps, above)
+// already names every requirements.txt-declared blueprint dependency's
+// real content hash, computed as a byproduct of resolving it BEFORE the
+// script ever ran. A Python program that instead colocates a blueprint's
+// built py/ package as a bare subdirectory of its own, with no
+// requirements.txt entry naming it at all -- Python's own calling
+// convention before UBI-130 existed, still mechanically possible since
+// pyeval mounts the entry file's own whole directory tree -- has no
+// entry in refs and gets the same clear, named refusal Go's own
+// "standalone published module, not supported yet" boundary does, rather
+// than a silent, permanently-incomplete ref: a real, honest limitation,
+// not a gap this fix pretends to close.
+func StampDirectCallProvenancePy(intent *resolver.IntentFile, refs map[string]string) error {
+	if len(pendingBlueprintNames(intent)) == 0 {
+		return nil
+	}
+	hint := "no requirements.txt entry (the \"<name> @ <url>\" syntax, UBI-130) declares a blueprint dependency with that name -- this works for a blueprint declared that way (local, git, or OCI source, all uniformly); a blueprint whose py/ package is imported via a bare colocated copy with no requirements.txt entry isn't supported yet"
+	return applyBlueprintRefs(intent, refs, hint)
 }

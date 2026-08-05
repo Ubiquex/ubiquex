@@ -59,6 +59,21 @@ func TestGenerateTS_CiPlatform(t *testing.T) {
 	if !strings.Contains(fn, "export function ciPlatform(repoName: string, queueName: string, retentionDays: number = 1): void {") {
 		t.Fatalf("ciplatform.ts missing expected signature (native default parameter):\n%s", fn)
 	}
+	// UBI-126: every generated blueprint function wraps its own body in
+	// pushBlueprintSource(name)/popBlueprintSource() (a try/finally, TS's
+	// own equivalent of Go's defer) -- mirrors gogen's own
+	// PushBlueprintSource/PopBlueprintSource wrapping, proven end-to-end
+	// (not just as generated text) by TestGenerateTS_CompilesClean/
+	// cli/blueprint_call_test.go's own TS sibling.
+	if !strings.Contains(fn, `import { popBlueprintSource, pushBlueprintSource, resource`) {
+		t.Fatalf("ciplatform.ts should import pushBlueprintSource/popBlueprintSource from @ubx/sdk:\n%s", fn)
+	}
+	if !strings.Contains(fn, `pushBlueprintSource("ci-platform");`) {
+		t.Fatalf("ciplatform.ts should push its own bare declared name at the top of its body:\n%s", fn)
+	}
+	if !strings.Contains(fn, "  try {\n") || !strings.Contains(fn, "  } finally {\n    popBlueprintSource();\n  }\n") {
+		t.Fatalf("ciplatform.ts should wrap its body in try/finally, popping in finally:\n%s", fn)
+	}
 	if !strings.Contains(fn, "name: repoName,") {
 		t.Fatalf("ciplatform.ts should substitute the repoName param directly:\n%s", fn)
 	}

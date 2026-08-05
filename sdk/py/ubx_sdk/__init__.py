@@ -39,6 +39,8 @@ __all__ = [
     "override",
     "run",
     "is_computed",
+    "push_blueprint_source",
+    "pop_blueprint_source",
 ]
 
 # ---------------------------------------------------------------------
@@ -258,7 +260,25 @@ class _Collector:
         self.seen_addresses.add(address)
 
         serialized = _serialize_config(binding.fields, config, address)
-        self.resources.append({"type": binding.wire_type, "name": name, "op": "create", "config": serialized})
+        resource = {"type": binding.wire_type, "name": name, "op": "create", "config": serialized}
+        if _blueprint_source_stack:
+            # UBI-126: this resource() call is executing from inside a
+            # compiled blueprint's own generated function body
+            # (push_blueprint_source, below, called only by `ubx blueprint
+            # build`'s own generated code -- never by a stack author
+            # directly). The innermost (most recently pushed) scope wins,
+            # matching ordinary lexical-scoping intuition. ref is
+            # deliberately the blueprint's own bare declared name here, NOT
+            # yet "name:content_hash" -- this WASI-sandboxed evaluator has
+            # no way to compute a real content hash for itself (see
+            # push_blueprint_source's own doc comment) -- ubx resolve's own
+            # external completion step (blueprint.EvaluatePythonWithDeps,
+            # reusing UBI-130's own already-resolved requirements.txt
+            # dependency hashes rather than a second discovery mechanism)
+            # resolves the bare name to a real content hash afterward,
+            # mirroring sdk/go/runtime's own identical mechanism.
+            resource["sources"] = [{"kind": "blueprint", "ref": _blueprint_source_stack[-1]}]
+        self.resources.append(resource)
 
         return Computed(address)
 
@@ -358,6 +378,55 @@ def override(address: str, config: dict) -> None:
     before ship -- see docs/blueprint.md's own "Override mechanism"
     section for the full design record."""
     _require_collector("override").add_override(address, config)
+
+
+# ---------------------------------------------------------------------
+# push_blueprint_source()/pop_blueprint_source(): UBI-126's own fix,
+# mirroring sdk/go/runtime's identical blueprintSourceStack mechanism
+# (and sdk/ts/runtime's identical pushBlueprintSource/popBlueprintSource)
+# exactly -- see runtime.go's own doc comment for the full design
+# account. An implicit, module-level scope stack (never a new parameter
+# on resource() itself, which would force every existing caller,
+# blueprint or not, to change) that a compiled blueprint's own generated
+# function (blueprint/pygen.go's own renderPyFunction) wraps its entire
+# body in, using the blueprint's own bare, unsanitized declared name. A
+# plain stack that never imports a blueprint never pushes anything, so
+# this stack stays empty and a resource's own "sources" stays unset --
+# zero wire-format change for the overwhelming majority of ordinary SDK
+# programs.
+# ---------------------------------------------------------------------
+
+_blueprint_source_stack: list = []
+
+
+def push_blueprint_source(name: str) -> None:
+    """push_blueprint_source(name) marks every resource() call for the
+    duration of the current scope (until the matching
+    pop_blueprint_source()) as produced by the blueprint named name --
+    name is the blueprint's own declared name (Ubxfile directory
+    basename, the SAME identifier buildManifest/ubx why/ubx render
+    already use), never a Python module name, and never (cannot be) a
+    content hash -- this WASI-sandboxed evaluator has no way to compute
+    its own blueprint's real content hash (it doesn't know its own
+    on-disk blueprint directory, and baking a hash into source that then
+    gets hashed itself is circular, the same reasoning
+    blueprint.lock.json's own hash-exclusion already establishes).
+    Called only by generated blueprint code, never meant to be called by
+    a stack author's own code directly."""
+    _blueprint_source_stack.append(name)
+
+
+def pop_blueprint_source() -> None:
+    """pop_blueprint_source() ends the innermost still-open
+    push_blueprint_source() scope. Raises on an unbalanced call (more
+    pops than pushes) -- a real bug in generated code, not something to
+    silently tolerate."""
+    if not _blueprint_source_stack:
+        raise RuntimeError(
+            "pop_blueprint_source(): called with no matching push_blueprint_source() -- "
+            "this should only ever be called by `ubx blueprint build`'s own generated code."
+        )
+    _blueprint_source_stack.pop()
 
 
 def run(name: str, fn: Callable[[], None]) -> None:

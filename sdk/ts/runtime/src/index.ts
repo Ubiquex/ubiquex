@@ -227,6 +227,7 @@ export interface IntentDocument {
     readonly name: string;
     readonly op: "create";
     readonly config: unknown;
+    readonly sources?: readonly IntentSource[];
   }>;
   readonly overrides?: ReadonlyArray<{
     readonly address: string;
@@ -286,7 +287,24 @@ class Collector {
     this.seenAddresses.add(address);
 
     const serialized = serializeConfig(binding.fields, config, address);
-    this.resources.push({ type: binding.wireType, name, op: "create", config: serialized });
+    // UBI-126: this resource() call may be executing from inside a
+    // compiled blueprint's own generated function body
+    // (pushBlueprintSource, below, called only by ubx blueprint build's
+    // own generated code -- never by a stack author directly). The
+    // innermost (most recently pushed) scope wins, matching ordinary
+    // lexical-scoping intuition. ref is deliberately the blueprint's own
+    // bare declared name here, NOT yet "name:content_hash" -- this
+    // sandboxed evaluator has no way to compute a real content hash for
+    // itself (see pushBlueprintSource's own doc comment) -- ubx resolve's
+    // own external StampDirectCallProvenanceTS step (blueprint package)
+    // resolves the bare name to a real content hash afterward, mirroring
+    // sdk/go/runtime's own identical mechanism.
+    const base = { type: binding.wireType, name, op: "create" as const, config: serialized };
+    if (blueprintSourceStack.length > 0) {
+      this.resources.push({ ...base, sources: [{ kind: "blueprint", ref: blueprintSourceStack[blueprintSourceStack.length - 1] }] });
+    } else {
+      this.resources.push(base);
+    }
 
     return makeComputed(address) as Computed<TAttrs>;
   }
@@ -396,6 +414,51 @@ export function intent(info: { summary: string; sources?: readonly IntentSource[
  * mechanism" section for the full design record. */
 export function override(address: string, config: Record<string, unknown>): void {
   requireCollector("override").addOverride(address, config);
+}
+
+// ---------------------------------------------------------------------
+// pushBlueprintSource/popBlueprintSource: UBI-126's own fix, mirroring
+// sdk/go/runtime's identical blueprintSourceStack mechanism exactly --
+// see that file's own doc comment for the full design account. An
+// implicit, module-level scope stack (never a new parameter on
+// resource() itself, which would force every existing caller, blueprint
+// or not, to change) that a compiled blueprint's own generated function
+// (blueprint/tsgen.go's own renderTSFunction) wraps its entire body in,
+// using the blueprint's own bare, unsanitized declared name. A plain
+// stack that never imports a blueprint never pushes anything, so this
+// stack stays empty and a resource's own `sources` stays unset -- zero
+// wire-format change for the overwhelming majority of ordinary SDK
+// programs.
+// ---------------------------------------------------------------------
+
+let blueprintSourceStack: string[] = [];
+
+/** pushBlueprintSource marks every resource() call for the duration of
+ * the current scope (until the matching popBlueprintSource) as produced
+ * by the blueprint named name -- name is the blueprint's own declared
+ * name (Ubxfile directory basename, the SAME identifier
+ * buildManifest/ubx why/ubx render already use), never a module
+ * specifier, and never (cannot be) a content hash -- this sandboxed
+ * evaluator has no way to compute its own blueprint's real content hash
+ * (it doesn't know its own on-disk blueprint directory, and baking a
+ * hash into source that then gets hashed itself is circular, the same
+ * reasoning blueprint.lock.json's own hash-exclusion already
+ * establishes). Called only by generated blueprint code, never meant to
+ * be called by a stack author's own code directly. */
+export function pushBlueprintSource(name: string): void {
+  blueprintSourceStack.push(name);
+}
+
+/** popBlueprintSource ends the innermost still-open pushBlueprintSource
+ * scope. Throws on an unbalanced call (more pops than pushes) -- a real
+ * bug in generated code, not something to silently tolerate. */
+export function popBlueprintSource(): void {
+  if (blueprintSourceStack.length === 0) {
+    throw new Error(
+      "popBlueprintSource: called with no matching pushBlueprintSource -- this should only ever be called by ubx blueprint build's own generated code.",
+    );
+  }
+  blueprintSourceStack.pop();
 }
 
 // ---------------------------------------------------------------------

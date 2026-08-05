@@ -12,6 +12,8 @@ import {
   intent,
   isComputed,
   override,
+  popBlueprintSource,
+  pushBlueprintSource,
   resource,
   secret,
   stack,
@@ -331,4 +333,50 @@ Deno.test("override() with empty config throws", () => {
 
 Deno.test("override() called outside an active stack() evaluation throws", () => {
   assertThrows(() => override("payments.fake_widget.a", { x: "y" }), Error, "called outside of an active stack");
+});
+
+// --- pushBlueprintSource/popBlueprintSource (UBI-126) ---
+
+Deno.test("resource() called inside a pushBlueprintSource scope stamps an incomplete blueprint source", () => {
+  const def = stack("platform", () => {
+    intent({ summary: "s" });
+    pushBlueprintSource("ci-platform");
+    try {
+      resource(Widget, "primary", { name: "x" });
+    } finally {
+      popBlueprintSource();
+    }
+  });
+  const doc = def.evaluate();
+  assertEquals(doc.resources[0].sources, [{ kind: "blueprint", ref: "ci-platform" }]);
+});
+
+Deno.test("resource() called outside any pushBlueprintSource scope has no sources at all", () => {
+  const def = stack("platform", () => {
+    intent({ summary: "s" });
+    resource(Widget, "primary", { name: "x" });
+  });
+  const doc = def.evaluate();
+  assertEquals(doc.resources[0].sources, undefined);
+  assert(!("sources" in doc.resources[0]));
+});
+
+Deno.test("the innermost pushBlueprintSource scope wins when nested", () => {
+  const def = stack("platform", () => {
+    intent({ summary: "s" });
+    pushBlueprintSource("outer");
+    pushBlueprintSource("inner");
+    try {
+      resource(Widget, "primary", { name: "x" });
+    } finally {
+      popBlueprintSource();
+      popBlueprintSource();
+    }
+  });
+  const doc = def.evaluate();
+  assertEquals(doc.resources[0].sources, [{ kind: "blueprint", ref: "inner" }]);
+});
+
+Deno.test("popBlueprintSource with no matching pushBlueprintSource throws", () => {
+  assertThrows(() => popBlueprintSource(), Error, "no matching pushBlueprintSource");
 });

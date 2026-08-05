@@ -61,7 +61,7 @@ func GeneratePython(blueprintName string, ubxfile *Ubxfile, intent *resolver.Int
 	files := map[string]string{
 		"py/bindings.py": renderPyBindings(g.ordered()),
 	}
-	fnSrc, err := renderPyFunction(funcName, ubxfile.Params, g)
+	fnSrc, err := renderPyFunction(funcName, blueprintName, ubxfile.Params, g)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +550,19 @@ func renderPyBindings(resources []*pyResource) string {
 // resource in TOPOLOGICAL order, assigning a local variable only for a
 // resource a sibling actually references (matching GenerateGo/GenerateTS's
 // own convention for consistency across languages).
-func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, error) {
+//
+// blueprintName (UBI-126, mirroring GenerateGo/GenerateTS's own
+// identical parameter) wraps the function body in
+// sdk.push_blueprint_source(blueprintName)/sdk.pop_blueprint_source()
+// (a try/finally, Python's own equivalent of Go's defer) -- the SAME
+// raw, unsanitized name (never pkgName, a Python-identifier-sanitized
+// derivative) buildManifest/ubx why/ubx render already use, so every
+// sdk.resource() call inside this function -- direct SDK import, the
+// ONLY calling convention that previously had no provenance mechanism at
+// all (diagram/md get theirs externally, from blueprint.ExpandCalls) --
+// self-tags without the calling stack's own code needing to change in
+// any way.
+func renderPyFunction(funcName, blueprintName string, params []Param, g *pyGenerator) (string, error) {
 	if err := checkPyIdentCollisions(g, params); err != nil {
 		return "", err
 	}
@@ -632,10 +644,22 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 	}
 
 	fmt.Fprintf(&b, "%s\n", sig.String())
+	fmt.Fprintf(&b, "    sdk.push_blueprint_source(%s)\n", jsonStringLiteral(blueprintName))
+	b.WriteString("    try:\n")
 	if len(g.blueprint.Resources) == 0 && len(g.blueprint.Outputs) == 0 {
-		b.WriteString("    pass\n")
+		b.WriteString("        pass\n")
+		b.WriteString("    finally:\n")
+		b.WriteString("        sdk.pop_blueprint_source()\n")
 		return b.String(), nil
 	}
+
+	// The function's own real body is built into a separate buffer first,
+	// at its ordinary (unwrapped) indentation, then re-indented one level
+	// deeper (indentLines, tsgen.go) when spliced into the try: block
+	// below -- keeps every existing rendering line above completely
+	// unchanged (no per-line indentation bookkeeping threaded through the
+	// loop itself), mirroring renderTSFunction's own identical technique.
+	var body strings.Builder
 	for _, pr := range g.topoOrdered() {
 		if pr.dr.ForEach != "" {
 			// UBI-129: a real loop (enumerate, Python's own idiomatic
@@ -651,10 +675,10 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 				fmt.Fprintf(&call, "            %s=%s,\n", f.idiomatic, pr.valueExprs[f.idiomatic])
 			}
 			call.WriteString("        ))")
-			fmt.Fprintf(&b, "    %s: list[Any] = []\n", forEach.accumIdent)
-			fmt.Fprintf(&b, "    for %s, %s in enumerate(%s):\n", forEach.indexIdent, forEach.valueIdent, forEach.paramIdent)
-			fmt.Fprintf(&b, "        item = %s\n", call.String())
-			fmt.Fprintf(&b, "        %s.append(item)\n", forEach.accumIdent)
+			fmt.Fprintf(&body, "    %s: list[Any] = []\n", forEach.accumIdent)
+			fmt.Fprintf(&body, "    for %s, %s in enumerate(%s):\n", forEach.indexIdent, forEach.valueIdent, forEach.paramIdent)
+			fmt.Fprintf(&body, "        item = %s\n", call.String())
+			fmt.Fprintf(&body, "        %s.append(item)\n", forEach.accumIdent)
 			continue
 		}
 		varName, err := pyLocalVarName(pr.dr)
@@ -668,9 +692,9 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 		}
 		call.WriteString("    ))")
 		if g.blueprint.Referenced[pr.dr.Address] {
-			fmt.Fprintf(&b, "    %s = %s\n", varName, call.String())
+			fmt.Fprintf(&body, "    %s = %s\n", varName, call.String())
 		} else {
-			fmt.Fprintf(&b, "    %s\n", call.String())
+			fmt.Fprintf(&body, "    %s\n", call.String())
 		}
 	}
 	switch {
@@ -683,10 +707,14 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 			}
 			exprs[i] = expr
 		}
-		fmt.Fprintf(&b, "    return %s\n", strings.Join(exprs, ", "))
+		fmt.Fprintf(&body, "    return %s\n", strings.Join(exprs, ", "))
 	case forEach != nil:
-		fmt.Fprintf(&b, "    return %s\n", forEach.accumIdent)
+		fmt.Fprintf(&body, "    return %s\n", forEach.accumIdent)
 	}
+
+	b.WriteString(indentLines(body.String(), "    "))
+	b.WriteString("    finally:\n")
+	b.WriteString("        sdk.pop_blueprint_source()\n")
 	return b.String(), nil
 }
 

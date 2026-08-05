@@ -111,7 +111,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 
 			var intent resolver.IntentFile
 			if fromCode != "" {
-				canon, receipts, err := evaluateSDKProgram(ctx, fromCode)
+				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 				}
@@ -135,16 +135,29 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				// below, which only ever fires for a diagram/md call) gets
 				// each of its own blueprint-produced resources' bare,
 				// incomplete "sources" entry (sdk/go/runtime's own
-				// PushBlueprintSource, set by generated code with zero
-				// changes needed to the calling stack's own code)
-				// resolved to a real "name:content_hash" ref here -- Go
-				// only for now (this mechanism walks the entry program's
-				// own Go module graph; TS/Python have no analogous
-				// mechanism yet, a real, named, remaining gap). A no-op,
-				// and never runs `go list`, for any program that never
-				// imports a blueprint.
-				if strings.EqualFold(filepath.Ext(fromCode), ".go") {
+				// PushBlueprintSource / sdk/ts/runtime's own
+				// pushBlueprintSource / sdk/py/ubx_sdk's own
+				// push_blueprint_source, set by generated code with zero
+				// changes needed to the calling stack's own code) resolved
+				// to a real "name:content_hash" ref here, one discovery
+				// mechanism per language (a Go program's own module graph
+				// via `go list`; a TS program's own module graph via `deno
+				// info`; a Python program's own already-resolved
+				// requirements.txt dependency hashes, UBI-130, needing no
+				// separate discovery step at all). A no-op, and never
+				// spawns a subprocess, for any program that never imports a
+				// blueprint.
+				switch strings.ToLower(filepath.Ext(fromCode)) {
+				case ".go":
 					if err := blueprint.StampDirectCallProvenance(ctx, fromCode, &intent); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+					}
+				case ".ts":
+					if err := blueprint.StampDirectCallProvenanceTS(ctx, fromCode, &intent); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+					}
+				case ".py":
+					if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 					}
 				}
@@ -241,19 +254,26 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 // nothing downstream of this function needs to know which language
 // produced it. The returned receipt lines are non-empty only for a Python
 // program that declared at least one blueprint dependency -- every other
-// case returns nil, printing nothing.
-func evaluateSDKProgram(ctx context.Context, entryFile string) ([]byte, []string, error) {
+// case returns nil, printing nothing. The returned blueprintRefs map
+// (UBI-126) is non-nil only for Python -- Go/TS complete their own
+// incomplete blueprint sources via a separate discovery step
+// (StampDirectCallProvenance/StampDirectCallProvenanceTS, called
+// directly by the two --from-code handlers below after unmarshaling,
+// never through this shared dispatch function) since neither needs
+// anything ELSE this function already computed the way Python's own
+// already-resolved dependency hashes are.
+func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, receipts []string, blueprintRefs map[string]string, err error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
 		canon, err := goeval.Evaluate(ctx, entryFile)
-		return canon, nil, err
+		return canon, nil, nil, err
 	case ".py":
 		return blueprint.EvaluatePythonWithDeps(ctx, entryFile)
 	case ".ts":
 		canon, err := tseval.Evaluate(ctx, entryFile)
-		return canon, nil, err
+		return canon, nil, nil, err
 	default:
-		return nil, nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
+		return nil, nil, nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}
 }
 

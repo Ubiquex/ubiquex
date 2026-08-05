@@ -47,8 +47,7 @@ import (
 // has no incomplete blueprint sources to begin with -- an ordinary Go
 // SDK program (the overwhelming majority) pays nothing extra.
 func StampDirectCallProvenance(ctx context.Context, entryFile string, intent *resolver.IntentFile) error {
-	pending := pendingBlueprintNames(intent)
-	if len(pending) == 0 {
+	if len(pendingBlueprintNames(intent)) == 0 {
 		return nil
 	}
 
@@ -57,6 +56,21 @@ func StampDirectCallProvenance(ctx context.Context, entryFile string, intent *re
 		return fmt.Errorf("blueprint: resolve direct-call provenance: %w", err)
 	}
 
+	hint := fmt.Sprintf("no imported Go module in %s resolves to a real blueprint directory (an Ubxfile-bearing parent of a go.mod'd package) with that name -- this works for a blueprint imported via a local directory or a local `replace` directive (the pattern every direct-SDK-import example in this project uses today); a blueprint distributed as a standalone published Go module with no adjacent Ubxfile/blueprint.lock.json isn't supported yet", entryFile)
+	return applyBlueprintRefs(intent, found, hint)
+}
+
+// applyBlueprintRefs is the language-independent second half every
+// StampDirectCallProvenance* variant shares (Go, TS -- see
+// tsprovenance.go; Python's own equivalent completes refs directly from
+// its already-resolved requirements.txt dependencies, blueprint/pydeps.go,
+// never needing this helper since it has no bare-name "discovery" step
+// of its own to run): rewrites every resource's own incomplete
+// "blueprint" source in place using found (name -> "name:content_hash"),
+// or fails with a clear, named error -- never a silent no-op -- naming
+// notFoundHint (the language-specific reason a name might not resolve)
+// for whichever bare name found doesn't cover.
+func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]string, notFoundHint string) error {
 	for i := range intent.Resources {
 		ri := &intent.Resources[i]
 		for j := range ri.Sources {
@@ -66,8 +80,8 @@ func StampDirectCallProvenance(ctx context.Context, entryFile string, intent *re
 			}
 			ref, ok := found[s.Ref]
 			if !ok {
-				return fmt.Errorf("blueprint: resolve direct-call provenance: %s.%s.%s names blueprint %q, but no imported Go module in %s resolves to a real blueprint directory (an Ubxfile-bearing parent of a go.mod'd package) with that name -- this works for a blueprint imported via a local directory or a local `replace` directive (the pattern every direct-SDK-import example in this project uses today); a blueprint distributed as a standalone published Go module with no adjacent Ubxfile/blueprint.lock.json isn't supported yet",
-					intent.Stack, ri.Type, ri.Name, s.Ref, entryFile)
+				return fmt.Errorf("blueprint: resolve direct-call provenance: %s.%s.%s names blueprint %q, but %s",
+					intent.Stack, ri.Type, ri.Name, s.Ref, notFoundHint)
 			}
 			s.Ref = ref
 		}

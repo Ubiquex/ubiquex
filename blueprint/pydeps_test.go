@@ -2,12 +2,15 @@ package blueprint
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // writeSamplePyDepBlueprint writes a real, on-disk, buildable blueprint
@@ -365,7 +368,7 @@ if __name__ == "__main__":
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // matching pyeval's own evalCtx budget
 	defer cancel()
 
-	canon, receipts, err := EvaluatePythonWithDeps(ctx, entryFile)
+	canon, receipts, _, err := EvaluatePythonWithDeps(ctx, entryFile)
 	if err != nil {
 		t.Fatalf("EvaluatePythonWithDeps: %v", err)
 	}
@@ -374,5 +377,111 @@ if __name__ == "__main__":
 	}
 	if !strings.Contains(string(canon), "fake_widget") || !strings.Contains(string(canon), "from-pulled-dependency") {
 		t.Fatalf("evaluated output missing the resource the PULLED dependency's own add_widget() call should have produced:\n%s", canon)
+	}
+}
+
+// TestEvaluatePythonWithDeps_ProvenanceCompleted is UBI-126's own
+// required success-bar proof for Python: unlike
+// writeSamplePyDepBlueprint's own HAND-WRITTEN widgetlib.py (predates
+// this fix, never calls sdk.push_blueprint_source, and stays correctly
+// unaffected), this test pulls a blueprint built via the REAL
+// GeneratePython codegen path (byte-identical to what `ubx blueprint
+// build` itself produces) -- its own generated function genuinely wraps
+// itself in sdk.push_blueprint_source/pop_blueprint_source, so the
+// resource it produces carries an incomplete "blueprint" source THIS
+// dependency's own already-resolved content hash must complete, proving
+// EvaluatePythonWithDeps' real refs map and StampDirectCallProvenancePy
+// (called by cli/resolve.go, exercised end to end by
+// cli/blueprint_call_test.go's own Python sibling) actually connect.
+func TestEvaluatePythonWithDeps_ProvenanceCompleted(t *testing.T) {
+	requireWasmtimeForBlueprintTests(t)
+
+	intent := mustIntentFile(t, `{
+	  "schema_version": 1,
+	  "kind": "ubx:intent/v1",
+	  "stack": "platform",
+	  "intent": {"summary": "widget-lib-real fixture"},
+	  "resources": [
+	    {"type": "fake_widget", "name": "primary", "op": "create", "config": {"name": "{widget_name}"}}
+	  ]
+	}`)
+	ubxfile := &Ubxfile{
+		Dir:    "testdata",
+		Lang:   "py",
+		Params: []Param{{Name: "widget_name", Type: ParamString, Required: true}},
+	}
+	files, err := GeneratePython("widget-lib-real", ubxfile, intent)
+	if err != nil {
+		t.Fatalf("GeneratePython: %v", err)
+	}
+
+	bpDir := filepath.Join(t.TempDir(), "widget-lib-real")
+	pyDir := filepath.Join(bpDir, "py")
+	if err := os.MkdirAll(pyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bpDir, UbxfileName), []byte("lang: py\n\nparams:\n  widget_name: string, required\n\nresources: |\n  A trivial fake widget.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for fname, content := range files {
+		rel := strings.TrimPrefix(fname, "py/")
+		if err := os.WriteFile(filepath.Join(pyDir, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Package(bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+		t.Fatalf("Package: %v", err)
+	}
+
+	progDir := t.TempDir()
+	writeRequirementsTxt(t, progDir, "widget-lib-real @ "+bpDir+"\n")
+	driver := `import ubx_sdk as sdk
+from widgetlibreal import widget_lib_real
+
+
+def describe():
+    sdk.intent("UBI-126: provenance from a pulled Python blueprint dependency")
+    widget_lib_real("from-pulled-dependency")
+
+
+if __name__ == "__main__":
+    sdk.run("platform", describe)
+`
+	entryFile := filepath.Join(progDir, "main.py")
+	if err := os.WriteFile(entryFile, []byte(driver), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	canon, _, refs, err := EvaluatePythonWithDeps(ctx, entryFile)
+	if err != nil {
+		t.Fatalf("EvaluatePythonWithDeps: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("refs = %v, want exactly one entry", refs)
+	}
+	ref, ok := refs["widget-lib-real"]
+	if !ok || !strings.HasPrefix(ref, "widget-lib-real:sha256:") {
+		t.Fatalf("refs[%q] = %q, ok=%v, want a real \"widget-lib-real:sha256:...\" ref", "widget-lib-real", ref, ok)
+	}
+
+	var doc resolver.IntentFile
+	if err := json.Unmarshal(canon, &doc); err != nil {
+		t.Fatalf("parse evaluated intent: %v\nraw: %s", err, canon)
+	}
+	if len(doc.Resources) != 1 {
+		t.Fatalf("expected exactly 1 resource, got %d: %s", len(doc.Resources), canon)
+	}
+	if len(doc.Resources[0].Sources) != 1 || doc.Resources[0].Sources[0].Kind != "blueprint" || doc.Resources[0].Sources[0].Ref != "widget-lib-real" {
+		t.Fatalf("resource should carry the evaluated program's own INCOMPLETE (bare-name) blueprint source before stamping: %+v", doc.Resources[0].Sources)
+	}
+
+	if err := StampDirectCallProvenancePy(&doc, refs); err != nil {
+		t.Fatalf("StampDirectCallProvenancePy: %v", err)
+	}
+	if got := doc.Resources[0].Sources[0].Ref; got != ref {
+		t.Fatalf("after stamping, resource's own ref = %q, want the real resolved ref %q", got, ref)
 	}
 }

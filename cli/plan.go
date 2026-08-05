@@ -239,7 +239,13 @@ propose-time PR trailer hash, etc.).`,
 				intent = *draft
 				sourceLabel = fromDiagram
 			case fromCode != "":
-				canon, receipts, err := evaluateSDKProgram(ctx, fromCode)
+				// blueprintRefs (UBI-126) is deliberately unused here --
+				// `ubx plan --from-code` has never wired blueprint
+				// direct-call provenance stamping in for ANY language (a
+				// real, pre-existing gap distinct from this ticket's own
+				// scope, predating it for Go too); not fixed in this
+				// session, named rather than silently perpetuated further.
+				canon, receipts, _, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}

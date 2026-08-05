@@ -57,6 +57,19 @@ func TestGeneratePython_CiPlatform(t *testing.T) {
 	if !strings.Contains(fn, "def ci_platform(repo_name: str, queue_name: str, retention_days: int = 1) -> None:") {
 		t.Fatalf("ciplatform.py missing expected signature (native default argument):\n%s", fn)
 	}
+	// UBI-126: every generated blueprint function wraps its own body in
+	// sdk.push_blueprint_source(name)/sdk.pop_blueprint_source() (a
+	// try/finally, Python's own equivalent of Go's defer) -- mirrors
+	// gogen's own PushBlueprintSource/PopBlueprintSource wrapping, proven
+	// end-to-end (not just as generated text) by
+	// TestGeneratePython_CompilesClean/cli/blueprint_call_test.go's own
+	// Python sibling.
+	if !strings.Contains(fn, `sdk.push_blueprint_source("ci-platform")`) {
+		t.Fatalf("ciplatform.py should push its own bare declared name at the top of its body:\n%s", fn)
+	}
+	if !strings.Contains(fn, "    try:\n") || !strings.Contains(fn, "    finally:\n        sdk.pop_blueprint_source()\n") {
+		t.Fatalf("ciplatform.py should wrap its body in try/finally, popping in finally:\n%s", fn)
+	}
 	if !strings.Contains(fn, "name=repo_name,") {
 		t.Fatalf("ciplatform.py should substitute the repo_name param directly:\n%s", fn)
 	}
