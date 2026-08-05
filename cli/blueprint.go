@@ -26,6 +26,7 @@ func newBlueprintCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newBlueprintBuildCmd())
 	cmd.AddCommand(newBlueprintPackageCmd())
+	cmd.AddCommand(newBlueprintPushCmd())
 	cmd.AddCommand(newBlueprintPullCmd())
 	cmd.AddCommand(newBlueprintVerifyCmd())
 	return cmd
@@ -201,20 +202,67 @@ doesn't build anything itself.`,
 	return cmd
 }
 
-// newBlueprintPullCmd is `ubx blueprint pull` (docs/blueprint.md, Slice
-// 3): resolves a blueprint reference (a local path, or a git repo+ref)
-// into a real local directory. OCI/Strata sources aren't supported yet
-// (Slice 7).
+// newBlueprintPushCmd is `ubx blueprint push` (docs/blueprint.md, Slice
+// 7): uploads a tarball `ubx blueprint package` already produced to a
+// real OCI registry as a real OCI artifact -- the founder's own ORAS
+// design (UBI-74 Linear comment 2026-08-04), one manifest wrapping the
+// tarball as its one content-addressed blob layer, authenticated using
+// the SAME credentials a real "docker login"/"oras login" already
+// established.
+func newBlueprintPushCmd() *cobra.Command {
+	var to string
+
+	cmd := &cobra.Command{
+		Use:   "push <tarball>",
+		Short: "Push a packaged blueprint tarball to a real OCI registry",
+		Long: `Uploads tarball (ubx blueprint package's own output, unmodified) to --to (an "oci://registry/repo:tag"
+reference, e.g. "oci://ghcr.io/ubiquex/ci-platform:v1") as a real OCI artifact via ORAS -- one manifest, the
+tarball as its one blob layer. Authenticates using the SAME credentials a real "docker login"/"oras login" against
+that registry already established (read from the real Docker credential store) -- this project never asks for a
+second, ubx-specific login.
+
+tarball must be a real "ubx blueprint package" output (it must contain blueprint.lock.json) -- pushing an
+unpackaged directory isn't supported; package it first.`,
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if to == "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint push: --to is required")}
+			}
+			manifest, err := blueprint.Push(cmd.Context(), args[0], to)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: err}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "pushed %q -> %s (%d file(s), content hash %s)\n", manifest.Name, to, len(manifest.Files), manifest.ContentHash)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&to, "to", "", "OCI destination, e.g. oci://ghcr.io/ubiquex/ci-platform:v1 (required)")
+
+	return cmd
+}
+
+// newBlueprintPullCmd is `ubx blueprint pull` (docs/blueprint.md, Slices
+// 3 and 7): resolves a blueprint reference (a local path, a git repo+ref,
+// or a real OCI artifact) into a real local directory. Strata itself
+// (the eventual registry service) isn't built yet.
 func newBlueprintPullCmd() *cobra.Command {
 	var ref, path string
 
 	cmd := &cobra.Command{
 		Use:   "pull <source> <dest>",
-		Short: "Pull a blueprint from a local path or a git repo into dest",
-		Long: `source is either an existing local directory (copied into dest as-is, --ref/--path unused) or a git
-repository URL (cloned, checked out at --ref -- branch/tag/commit, default the repo's own default branch -- then
-the directory at --path within it, default ".", copied into dest). OCI/Strata sources aren't supported yet
-(Slice 7).
+		Short: "Pull a blueprint from a local path, a git repo, or an OCI registry into dest",
+		Long: `source is one of three real forms:
+
+  - an existing local directory: copied into dest as-is, --ref/--path unused.
+  - a git repository URL: cloned, checked out at --ref (branch/tag/commit, default the repo's own default branch),
+    then the directory at --path within it (default ".") copied into dest.
+  - an OCI artifact reference, "oci://registry/repo:tag" (e.g. "oci://ghcr.io/ubiquex/ci-platform:v1"): pulled via
+    ORAS (oras.land/oras-go/v2), authenticated using the SAME credentials a real "docker login"/"oras login"
+    already established (this project never asks for a second, ubx-specific login) -- --ref/--path are git-specific
+    and refused if set, since the tag is already embedded in the oci:// reference itself.
 
 dest must not already exist, or must be empty -- pull never overwrites existing content.`,
 		Args:          cobra.ExactArgs(2),

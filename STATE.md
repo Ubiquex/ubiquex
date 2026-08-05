@@ -4,6 +4,157 @@
 
 ## Current phase
 
+**UBI-74 Slice 7 (2026-08-05) — OCI push/pull, closed, live-verified against real `ghcr.io`: `ubx blueprint push <tarball> --to oci://registry/repo:tag` uploads Slice 3's own tarball as a real OCI artifact via ORAS (`oras.land/oras-go/v2`); `ubx blueprint pull` gained a third `oci://` source type. Authenticated via the founder's own real `docker login` credentials. The real CI-platform blueprint pushed to `ghcr.io/ubiquex/ci-platform:v1`, independently confirmed via `docker manifest inspect`, pulled into a separate directory, content hash verified, real `go build`/`go vet` against the pulled copy succeeded.**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 7's
+own authoritative scope) and Slice 3's own closing report (package/pull/
+verify — the tarball + content-hash mechanism this slice pushes over OCI
+unmodified) before touching this arc again.
+
+**Scope, exactly as scoped, nothing more**: `ubx blueprint push` (item
+1), a third `oci://` source type on `ubx blueprint pull` (item 2),
+content-hash verification reusing the existing scheme, never a second one
+(item 3), real library choice confirmed live (item 4). Explicitly did NOT
+touch: tarball-as-standalone-offline-delivery/redistribution (Slice 8),
+nesting (UBI-121), the override mechanism (UBI-86).
+
+**Library choice, confirmed against real current API, not memory.**
+`oras.land/oras-go/v2` v2.6.2 — the actively maintained ORAS Go SDK (v1
+exists but is legacy) — confirmed via `go doc` against the actual
+downloaded module before writing any production code.
+`github.com/oras-project/oras-credentials-go` (the credential-helper
+package memory would reach for first) turned out deprecated in favor of
+the identical functionality now built into `oras-go/v2` itself
+(`oras.land/oras-go/v2/registry/remote/credentials`) — caught via that
+package's own `go doc` output stating so explicitly; the dependency was
+added, then dropped again (`go mod tidy`) once the non-deprecated path
+was confirmed.
+
+**1. `Push` (`blueprint/oci.go`, new) — the tarball, pushed unmodified,
+as one OCI manifest's one blob layer.** `Push(ctx, tarballPath, ociRef)`:
+reads the blueprint's own `Manifest` back out of the tarball
+(`manifestFromTarball`, extracting into a throwaway temp dir and reading
+`blueprint.lock.json`), builds a local `file.Store` over the tarball,
+`fs.Add`s it as a blob (media type `application/vnd.ubx.blueprint.v1.
+tar+gzip`, the founder's own literal example), `oras.PackManifest`
+(OCI 1.1, no config blob, `artifactType: "application/vnd.ubx.
+blueprint.v1"`) wraps it, `fs.Tag`s the manifest, `oras.Copy` pushes the
+whole DAG to a real, authenticated `remote.Repository`. Split into a
+target-agnostic `pushToTarget(ctx, tarballPath, m, target oras.Target,
+tag)` specifically so the real ORAS mechanics are hermetically testable
+against `oras-go`'s own real local target (`content/oci.Store`), not a
+hand-rolled fake.
+
+**2. `Pull`'s third source type (`blueprint/pull.go`) — `oci://` detected
+before the existing local-path/git dispatch.** `--ref`/`--path`
+(git-specific) are refused if set against an `oci://` source rather than
+silently ignored, since the tag is already embedded in the reference
+itself. `pullOCI`/`pullFromTarget` (`blueprint/oci.go`) pull the
+manifest+blob into a throwaway local `file.Store`, then a new
+`extractTarGz` (genuinely new code — nothing before this slice ever read
+a tarball back) expands the one pulled blob into `dest`, guarding against
+a tar entry naming a path that escapes `dest` (checked BEFORE `Verify`'s
+own content-hash check would ever get a chance to reject tampered
+content). `dest` ends up indistinguishable from Slice 3's own local-path/
+git output.
+
+**3. Content-hash verification — one scheme, not two, exactly as
+scoped.** OCI's own native blob digest (computed by `oras-go` from the
+tarball's real bytes, verified by the registry on every push/pull) is a
+TRANSPORT-integrity check — zero new code needed, entirely `oras-go`'s
+own job. `content_hash` (`blueprint.lock.json`'s own field,
+`core.CanonicalJSON`-based, unchanged since Slice 3) stays the
+APPLICATION-level check `Verify` already performs after extraction —
+travels inside the tarball unchanged, since the tarball itself is pushed
+as-is. The one real addition: `content_hash`/`name` are ALSO recorded as
+OCI manifest annotations (`dev.ubiquex.blueprint.content_hash`/
+`dev.ubiquex.blueprint.name`, plus a fixed `org.opencontainers.
+image.created` epoch value for determinism, matching `writeTarGz`'s own
+zeroed-`ModTime` convention) — pure visibility (a `docker manifest
+inspect` can cross-check without pulling+extracting first), never a
+second, competing verification path.
+
+**Confirmed before writing any production code, not assumed.** The
+founder's own real `docker login ghcr.io` credential genuinely works
+(re-run, "Login Succeeded," reusing the cached credential — checked
+directly, not trusted from the handoff's own claim) and a real pull
+against a nonexistent GHCR tag returns "not found" (not "denied") — the
+actual signal distinguishing "auth is fine, the tag just doesn't exist"
+from "auth is broken." `oras-go/v2`'s own real API mechanics confirmed
+via two standalone throwaway Go programs before either was wired into
+production code: one tracing a full local push/pull round trip through a
+real on-disk `oci.Store` (zero network), one confirming
+`credentials.NewStoreFromDocker` genuinely resolves the founder's real
+GHCR credential (`Username: roozbehshafiee`, `PasswordSet: true`).
+
+**Hermetic tests.** `blueprint/oci_test.go` (new): `stripOCIScheme`
+table test; `extractTarGz` round-trips byte-for-byte with a real
+`Package`-produced tarball and rejects a hand-crafted path-traversal tar
+entry; `manifestFromTarball` refuses a tarball with no
+`blueprint.lock.json` inside; `soleFile`'s zero/multiple-file refusals;
+`pushToTarget`/`pullFromTarget` round-trip a real packaged blueprint
+through a real local `oci.Store` end to end, `Verify` confirmed passing
+on the pulled result with the identical `ContentHash`; a direct check
+that the pushed manifest's own raw JSON carries the content-hash/name
+annotations. `cli/blueprint_oci_test.go` (new): CLI-level flag
+validation — missing `--to`, a `--to` missing the `oci://` scheme, an
+unpackaged tarball, `--ref`/`--path` refused against an `oci://` source,
+a tagless `oci://` reference — all hermetic, refused before any network
+attempt.
+
+**Live verification, the ticket's own required bar, genuinely met
+against a real OCI registry.** The real CI-platform blueprint (the
+identical directory proven live across Slices 1-6,
+`~/ubx-playground-ubi74-slice4/ci-platform/`) packaged fresh — content
+hash `sha256:f893af6e945fe1e708af03dd60fe5372b76969579b3bdc8b70
+c3b4238968c885`, the EXACT same hash Slice 6's own real render output
+already stamped onto real shipped AWS resources, confirming this is
+genuinely the same proven content — and pushed for real to
+`ghcr.io/ubiquex/ci-platform:v1`. Independently confirmed landed via a
+real `docker manifest inspect ghcr.io/ubiquex/ci-platform:v1` (not just
+trusting `ubx blueprint push`'s own success message): real manifest
+JSON, `artifactType: "application/vnd.ubx.blueprint.v1"`, one layer at
+`application/vnd.ubx.blueprint.v1.tar+gzip`, the `dev.ubiquex.
+blueprint.content_hash` annotation visible natively and matching. Pulled
+back via `ubx blueprint pull oci://ghcr.io/ubiquex/ci-platform:v1` into
+a genuinely separate directory (`~/ubx-playground-ubi74-slice7/pulled`)
+— `ubx blueprint verify` confirmed the content hash matches (11 files,
+identical hash), and a real `go build ./...`/`go vet ./...` against the
+pulled copy's own `go/` subdirectory succeeded cleanly — real network,
+the actual published `github.com/ubiquex/ubx-sdk-go` module, no local
+`replace` directive, the identical bar Slice 3 met for git, now met for
+a real OCI registry.
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before the live
+verification above. Committed and pushed to `origin/main`, per
+CLAUDE.md's own standing commit+push authorization.
+
+**Not done this session, named so it isn't assumed covered.**
+`ghcr.io/ubiquex/ci-platform:v1` is left published deliberately — this
+slice's own real deliverable, not a transient test resource requiring
+teardown (unlike a real-AWS playground stack). Slice 6's own playground
+(`~/ubx-playground-ubi74-slice6/`) was independently confirmed already
+terminated by the founder (a second, destroy apply record exists; real
+AWS confirms the ECR repo gone) — no longer outstanding, noted here only
+because the prior session's own STATE.md entry had flagged it. **Docs
+debt, updated not newly created**: `ubiquex-docs` still has no dedicated
+blueprints guide across ANY of Slices 1-7 (a pre-existing gap, STATE.md
+first flagged in Slice 6) — this session's own explicit task instruction
+scoped docs work to `docs/blueprint.md` only (unlike Slice 6's own
+instruction, which explicitly named `ubiquex-docs`), so the new `ubx
+blueprint push` command and `pull`'s new `oci://` source type are NOT
+yet reflected in any user-facing `ubiquex-docs` page — the gap is now
+larger (5 subcommands entirely undocumented there, not 3), still
+honestly flagged, not silently skipped.
+
+Next: Slice 8 (tarball/offline delivery — pulling FROM a bare standalone
+tarball file, real fork/re-tag/mirror redistribution workflows) is the
+natural next session for this arc, per UBI-74's own implementation-
+breakdown comment. Not started this session.
+
+## Current phase (previous)
+
 **UBI-74 Slice 6 (2026-08-05) — provenance + `why`/`render` integration, closed, live-verified against real `hashicorp/aws@6.54.0`: every resource a blueprint call produces is stamped `{"kind": "blueprint", "ref": "<name>:<content_hash>"}` on a new per-resource `Sources` field; `ubx why` renders the full chain with an honest dual-signature account; `ubx render` groups blueprint-sourced resources inside a dashed-border D2 container. A real CI-platform blueprint call, resolved/accepted against real AWS, shipped by the founder, then `why`/`render` both confirmed correct against the real shipped result.**
 
 Read UBI-74's own Linear "Implementation breakdown" comment (Slice 6's

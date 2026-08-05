@@ -17,6 +17,7 @@ require (
 	github.com/google/go-github/v78 v78.0.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.18.1
 	gocloud.dev v0.46.0
@@ -26,6 +27,7 @@ require (
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
+	oras.land/oras-go/v2 v2.6.2
 	oss.terrastruct.com/d2 v0.7.1
 )
 
@@ -88,6 +90,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mazznoer/csscolorparser v0.1.5 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

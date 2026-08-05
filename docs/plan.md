@@ -2,6 +2,40 @@
 
 ## Changelog
 
+- 2026-08-05 — UBI-74 Slice 7 (Strata blueprints, OCI push/pull): `ubx
+  blueprint push <tarball> --to oci://<registry>/<repo>:<tag>` uploads
+  Slice 3's own tarball, unmodified, as a real OCI artifact via ORAS
+  (`oras.land/oras-go/v2`, confirmed the current, actively maintained API
+  surface via `go doc` against its own real downloaded source, not
+  memory) -- one manifest, the tarball as its one content-addressed blob
+  layer; `ubx blueprint pull` gained a third `oci://` source type
+  alongside Slice 3's local-path and git. Authenticated via the SAME
+  credentials a real `docker login`/`oras login` already established
+  (confirmed working first: a real `docker login ghcr.io` re-run,
+  "Login Succeeded" -- never a second, ubx-specific login). Content-hash
+  verification stays ONE scheme: OCI's own native blob digest is a
+  transport-integrity check (the registry's own job, zero new code);
+  `content_hash` (`core.CanonicalJSON`-based, unchanged since Slice 3)
+  stays the application-level check `Verify` already performs after
+  pull+extract -- also recorded as an OCI manifest annotation purely for
+  `docker manifest inspect`-level visibility, never a competing
+  verification path. One real correction caught before it shipped wrong:
+  `github.com/oras-project/oras-credentials-go` turned out deprecated in
+  favor of the identical functionality already built into `oras-go/v2`
+  itself, caught via that package's own `go doc` output. Live-verified
+  against real `ghcr.io`: the real CI-platform blueprint (proven live
+  across Slices 1-6, confirmed via an IDENTICAL content hash to Slice 6's
+  own real render output) packaged and pushed to
+  `ghcr.io/ubiquex/ci-platform:v1`, independently confirmed via a real
+  `docker manifest inspect`, pulled back into a separate directory,
+  content hash verified, and a real `go build`/`go vet` against the
+  pulled copy succeeded -- real network, no local `replace`, the
+  identical bar Slice 3 met for git, now met for a real OCI registry.
+  Full account: docs/blueprint.md's "OCI push/pull: Slice 7" section
+  (new) and its own Slice 7 implementation-slices entry; this file's own
+  "Strata blueprints" subsection updated in place. Slice 8 remains a
+  future session.
+
 - 2026-08-05 — UBI-74 Slice 6 (Strata blueprints, provenance + `why`/
   `render` integration): every resource a blueprint call produces is
   stamped with a `{"kind": "blueprint", "ref": "<name>:<content_hash>"}`
@@ -5813,12 +5847,52 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slices 1–6 (UBI-74) — Slice 6 closed
+### Strata blueprints: Slices 1–7 (UBI-74) — Slice 7 closed
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
 rejected intermediate designs); docs/blueprint.md is the authoritative
-build doc for Slices 1–6. This section is a pointer, not a duplicate.
+build doc for Slices 1–7. This section is a pointer, not a duplicate.
+
+Slice 7 (OCI push/pull) built: `ubx blueprint push <tarball> --to
+oci://<registry>/<repo>:<tag>` (uploads Slice 3's own tarball, unmodified,
+as a real OCI artifact via ORAS -- `oras.land/oras-go/v2`, confirmed as
+the current, actively maintained API surface via `go doc` against its own
+real downloaded source before use, not assumed from memory; one manifest
+wrapping the tarball as its one content-addressed blob layer, no separate
+config blob) and a third `oci://` source-type branch on `ubx blueprint
+pull` (alongside Slice 3's local-path and git), authenticated via the
+SAME credentials a real `docker login`/`oras login` already established
+(read from the real Docker credential store -- confirmed working first,
+`docker login ghcr.io` re-run, "Login Succeeded" -- never a second,
+ubx-specific login). Content-hash verification resolved as one hash
+scheme, not two: OCI's own native blob digest (computed by `oras-go` from
+the tarball's real bytes, verified by the registry) is a transport-
+integrity check, completely separate from `content_hash`
+(`core.CanonicalJSON`-based, unchanged since Slice 3, `Verify` after
+pull+extract still the same check) -- also recorded as an OCI manifest
+annotation, purely for `docker manifest inspect`-level visibility, never
+a competing verification path. A real, pre-existing-package correction
+caught along the way: `github.com/oras-project/oras-credentials-go`
+turned out to be deprecated in favor of the identical functionality now
+built into `oras-go/v2` itself, caught via that package's own `go doc`
+output before committing to it. `pushToTarget`/`pullFromTarget` are
+deliberately target-agnostic (any `oras.Target`, not hardcoded to a real
+registry) specifically so the real ORAS mechanics are hermetically tested
+against `oras-go`'s own real local `oci.Store`, never a hand-rolled fake.
+Live-verified against real `ghcr.io`: the real CI-platform blueprint
+(the identical content proven live across Slices 1-6, confirmed by an
+IDENTICAL content hash to Slice 6's own real render output) packaged and
+pushed to `ghcr.io/ubiquex/ci-platform:v1`, independently confirmed
+landed via a real `docker manifest inspect` (not just the push command's
+own success message), pulled back into a separate directory, `ubx
+blueprint verify` confirmed the content hash matches, and a real `go
+build`/`go vet` against the pulled copy succeeded -- real network, no
+local `replace`, the identical bar Slice 3 met for git, now met for a
+real OCI registry. `ghcr.io/ubiquex/ci-platform:v1` is left published
+deliberately -- this slice's own real deliverable, not a transient test
+resource. Full account: docs/blueprint.md's "OCI push/pull: Slice 7"
+section and its own Slice 7 implementation-slices entry.
 
 Slice 6 (provenance + `why`/`render` integration) built: every resource a
 blueprint call produces (any medium, any language) is stamped with a
@@ -5923,8 +5997,9 @@ CanonicalJSON`, the same JCS-style approach `core.Hash` already uses for
 a Proposal) recorded in a `blueprint.lock.json` manifest that travels
 with the directory through any distribution mechanism; a gzipped,
 content-addressed tarball (`package`); local-path and git+ref pull
-(`pull`, OCI/Strata deferred to Slice 7); and tamper-evident hash
-re-verification (`verify`). Live-verified against a real, newly created
+(`pull` -- a third, OCI, source type was added in Slice 7, see above);
+and tamper-evident hash re-verification (`verify`). Live-verified against
+a real, newly created
 GitHub repository (`github.com/Ubiquex/ubx-sdk-blueprints`) — packaged,
 pushed with real commit history, pulled into a separate local directory
 via a real HTTPS clone, verified, and a real `go build`/`go vet` against
@@ -5963,10 +6038,10 @@ already know how to substitute later. Full account, including the
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
 Slices 2 (local call), 3 (package/distribute), 4 (multi-language), 5
-(cross-medium calling), and 6 (provenance + `why`/`render`) are all
-closed, per this section's own updated heading and the Slice 3/4/5/6
-paragraphs above. Slices 7–8 (OCI push, tarball delivery) are each their
-own future session, tracked in UBI-74's own implementation-breakdown
+(cross-medium calling), 6 (provenance + `why`/`render`), and 7 (OCI push/
+pull) are all closed, per this section's own updated heading and the
+Slice 3/4/5/6/7 paragraphs above. Slice 8 (tarball/offline delivery) is
+its own future session, tracked in UBI-74's own implementation-breakdown
 comment. Nesting is UBI-121; the bound policy engine is UBI-118; the
 override mechanism and `render --sync-overrides` are UBI-86 — all three
 split off UBI-74 already, tracked separately.

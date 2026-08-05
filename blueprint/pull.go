@@ -11,23 +11,36 @@ import (
 )
 
 // Pull resolves source into a real local blueprint directory at dest,
-// supporting exactly the two source types UBI-74 Slice 3 scopes (OCI/
-// Strata is Slice 7): a local filesystem path (source already exists on
-// disk -- resolved and copied into dest, ref/path unused), or a git
-// repository (cloned into a scratch directory, checked out at ref --
-// branch/tag/commit, default the repo's own default branch when ref is
-// "" -- with path naming the blueprint's own location within that repo,
-// default "." for a repo whose root IS the blueprint). Either way, dest
-// ends up holding an ordinary local blueprint directory, indistinguishable
-// afterward from one authored locally to begin with -- including
-// blueprint.lock.json if the source already carried one; Verify reads it
-// from dest exactly the same way regardless of how it got there.
+// supporting all three source types UBI-74 scopes across Slices 3 and 7:
+// a local filesystem path (source already exists on disk -- resolved and
+// copied into dest, ref/path unused), a git repository (cloned into a
+// scratch directory, checked out at ref -- branch/tag/commit, default the
+// repo's own default branch when ref is "" -- with path naming the
+// blueprint's own location within that repo, default "." for a repo
+// whose root IS the blueprint), or a real OCI artifact ("oci://registry/
+// repo:tag", Slice 7 -- ref/path are git-specific and refused if set,
+// since the tag is already embedded in the oci:// reference itself).
+// Either way, dest ends up holding an ordinary local blueprint directory,
+// indistinguishable afterward from one authored locally to begin with --
+// including blueprint.lock.json if the source already carried one;
+// Verify reads it from dest exactly the same way regardless of how it
+// got there.
 //
 // dest must not already exist, or must be empty -- Pull never overwrites
 // existing content.
 func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 	if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
 		return "", fmt.Errorf("blueprint pull: %s already exists and is not empty", dest)
+	}
+
+	if strings.HasPrefix(source, "oci://") {
+		if ref != "" || path != "" {
+			return "", fmt.Errorf("blueprint pull: --ref/--path are git-specific and meaningless for an oci:// source -- drop them (the tag is already embedded in %s)", source)
+		}
+		if err := pullOCI(ctx, source, dest); err != nil {
+			return "", fmt.Errorf("blueprint pull: %w", err)
+		}
+		return dest, nil
 	}
 
 	if info, err := os.Stat(source); err == nil {
