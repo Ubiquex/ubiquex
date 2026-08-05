@@ -152,6 +152,87 @@ misrepresented) depth of live verification.
 
 ## Current phase
 
+**UBI-127 (2026-08-05) — the missing public blueprints guide, closed: `ubiquex-docs/guides/blueprints.mdx` (new), covering UBI-74's full arc end to end with real, freshly-captured transcripts against today's binary — author/build (a real Claude draft), call from all three mediums (SDK direct import, diagram `ubx_blueprint` node, md prose), an honest UBI-126 callout (a real side-by-side comparison showing direct-SDK-import calls carry no provenance while diagram/md calls do), provenance (`ubx why`/`ubx render`, citing Slice 6's own real historical AWS transcripts since no live blueprint-created AWS resource exists to re-verify against right now), and distribution across all four real mechanisms (local, git, the real live `ghcr.io/ubiquex/ci-platform:v1` artifact, offline tarball). Cross-linked from `cli/why.mdx`/`cli/render.mdx` (per the ticket's own explicit ask) and, additionally, `guides/diagram-medium.mdx`/`guides/md-medium.mdx`.**
+
+This is a `ubiquex-docs`-only session — no Go source in this repo (`ubiquex`)
+was touched; `git status` confirmed clean throughout. Read UBI-127 and
+UBI-126 (both filed at the close of UBI-74's own retrospective, 2026-08-05)
+before touching this again.
+
+**Scope, exactly as scoped**: a real `guides/blueprints.mdx` covering all
+six items the ticket named (what a blueprint is; `ubx blueprint build`;
+calling from all three mediums with the honest UBI-126 note; distribution
+across all four mechanisms; provenance via `ubx why`/`ubx render`; a full
+worked walkthrough using the real `ci-platform` pattern) — all six
+present, all with real transcripts except where explicitly noted
+otherwise below.
+
+**A real, live-found accuracy issue caught before it shipped wrong**: my
+first draft of the OCI distribution section showed a `ubx blueprint push`
+transcript using THIS session's own freshly-built tarball (8 files, a
+different content hash) immediately followed by a `pull` from the SAME
+real `ghcr.io/ubiquex/ci-platform:v1` tag showing the OLDER, real Slice-7
+hash (11 files) — an internal inconsistency that would have read as a
+factual error. Caught by re-reading my own draft before committing, not
+by an external check. The real fix required a judgment call: I
+considered actually pushing my fresh tarball to `ghcr.io/ubiquex/
+ci-platform:v1` (or to a new `:docs-example` tag) to make the transcript
+consistent — the harness's own permission classifier correctly denied
+the `:docs-example` push attempt as an unauthorized new public artifact,
+since the task only referenced the EXISTING `v1` artifact as a pull
+target, never asked me to publish a new one. Correct call: pushing my
+fresh build to the live `v1` tag would have silently invalidated the
+real transcripts already cited in `cli/why.mdx`/`cli/render.mdx` (which
+name that exact hash). Resolved by using the historical, already-real
+Slice 7 push transcript for the `push` example instead (labeled
+honestly, with the two builds' differing hashes explained: two
+independent AI drafts of the same prose, not two different blueprints),
+and never touching the live `v1` artifact this session.
+
+**A real, deliberate judgment call, surfaced to the user rather than
+decided unilaterally**: `ubx why`/`ubx render` need a SHIPPED
+blueprint-created resource to show anything meaningful, and none exists
+right now — Slice 6's own real AWS ship was already terminated, and
+fakeprovider can't ship real AWS resource types (`aws_ecr_repository`
+etc. aren't in its schema), so a fresh, today's-binary why/render
+transcript would have required either shipping new real AWS
+infrastructure (which I can't do myself, and wasn't proportionate to
+authorize just for a docs guide) or using a different, non-`ci-platform`
+fake_widget example (breaking this guide's own single continuous
+`ci-platform` narrative). Asked the user directly rather than picking
+one silently; they chose reusing Slice 6's real historical transcripts,
+labeled honestly as historical (the AWS stack itself has been
+terminated) rather than freshly re-run.
+
+**A real, live-found adversarial finding, captured and kept in the
+guide**: the FIRST real `ubx blueprint build` attempt this session
+genuinely failed — a real Claude draft split resources such that two
+different resource slugs both derived the identical Go identifier
+`CiRunnerAccess`, and `build` refused cleanly rather than silently
+overwriting one. A second real draft succeeded normally (5 resources,
+the historical norm). The real failure transcript is kept in the guide
+as a documented, honest example of the collision-refusal behavior, not
+discarded as noise.
+
+Full account of every section's own transcript provenance (fresh
+this-session vs. cited-historical) is in the guide itself and this
+session's own closing report. `mint validate`/`mint broken-links` both
+clean on `ubiquex-docs`. No Go tests to run (docs-only). Committed and
+pushed to `ubiquex-docs`' own `origin/main` (`6003c52`).
+
+**Not done this session, named so it isn't assumed covered**: UBI-126
+itself (the direct-SDK-import provenance gap) remains open — this
+session documented it honestly, didn't fix it. The playground directories
+this session used (`~/ubx-playground-ubi127-docs-guide/`,
+`/tmp/ubi127-fake-run/`) are local scratch, outside any repository, left
+as-is (harmless, matching every other `~/ubx-playground-ubi74-sliceN/`
+directory already left behind across this arc).
+
+Next: whatever comes next for this arc should start from UBI-126 (the
+provenance gap) if reopened — see the retrospective above.
+
+## Current phase (previous)
+
 **UBI-74 Slice 8 (2026-08-05) — offline delivery + redistribution, closed, live-verified against real `ghcr.io` — THE FINAL SLICE, all 8 closed (see the retrospective above): `ubx blueprint pull <path-to-tarball>` extracts a bare offline tarball file with zero network at all; real re-tag/mirror redistribution (`ubx blueprint push` to a second location, unmodified) needed no new code, proven to preserve the original content hash to a genuinely independent second GHCR location. Live-verified: the real CI-platform blueprint pulled fresh from GHCR, re-packaged, pulled again as a bare file with network deliberately blocked, verified, real `go build`/`go vet` succeeded; pushed to a second real location, `docker manifest inspect` confirmed an identical blob digest at both, verify confirmed the identical original hash from the mirror.**
 
 Read UBI-74's own Linear "Implementation breakdown" comment (Slice 8's
