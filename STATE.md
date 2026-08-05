@@ -152,6 +152,133 @@ misrepresented) depth of live verification.
 
 ## Current phase
 
+**UBI-107 (2026-08-05) — `ubx_sdk` genuinely published to PyPI for real, closing this ticket's own long-open Python half (TS/JSR half already closed UBI-110). All four real vendored Python bindings repos switched, real dispatched CI runs green on each, UBI-130 confirmed orthogonal.**
+
+Read the ticket fully AND its own comment thread per the handoff's own
+explicit instruction, which corrects the ticket's own title: the real
+resolution for TypeScript was JSR (`@ubx/sdk`, UBI-110), not npm
+natively — already closed, unchanged this session. This session's own
+real, remaining scope was exactly the ticket's own Python half: publish
+`ubx_sdk` to PyPI for real, then switch every real vendored Python
+bindings repo to depend on it.
+
+**PyPI status re-checked live before touching anything** (both
+`pypi.org/pypi/ubx_sdk/json` and the hyphen variant, both `/simple/`
+endpoints): still real 404s, UBI-117's own last finding held.
+
+**New real packaging**: `sdk/py/pyproject.toml` (hatchling backend,
+project name `ubx_sdk` per the ticket's own explicit description) +
+`sdk/py/README.md`. Verified hermetically before any publish attempt --
+`python -m build` (sdist+wheel), `twine check` clean, and a genuinely
+fresh venv installing the built wheel resolving `ubx_sdk.__file__` to
+its own `site-packages/` (a first naive check from `sdk/py/` itself was
+silently shadowed by cwd-on-`sys.path` -- caught, re-run from `/tmp` to
+confirm for real).
+
+**Founder set up the real PyPI account/token personally, same division
+of labor as every credential step in this project's history** (JSR,
+npm placeholder, GHCR): an account-scoped API token (no project existed
+yet to scope narrower), handed to this session directly. Used once via
+a private temp file outside the repo (never printed, never committed,
+shredded immediately after the one `twine upload`) -- real upload
+succeeded first try: **https://pypi.org/project/ubx-sdk/0.1.0/**. Real
+live confirmation: `pypi.org/pypi/ubx_sdk/json` now resolves; a
+genuinely fresh venv, `pip install ubx-sdk`, real import/construction,
+zero local source on `sys.path`. Follow-up not done automatically,
+flagged for the founder: create a project-scoped token now that the
+project exists, revoke the account-wide one.
+
+**The actual source-of-truth fix, found before touching any external
+repo**: `sdk/codegen/templates/py/py.go`'s own `pyprojectTOML` template
+was still emitting an unpinned, aspirational `dependencies = ["ubx_sdk"]`
+with a doc comment reading "were it ever published; it isn't" -- fixed
+at the source (`dependencies = ["ubx_sdk>=0.1.0,<0.2.0"]`, a
+caret-equivalent range matching `@ubx/sdk`'s own `^0.1.0` JSR pin)
+rather than hand-patching each external repo independently, so every
+FUTURE `ubx sdk gen --lang py` regeneration (including UBI-99's own
+automated version-watch bumps) emits the correct pin automatically --
+closing the exact drift risk this ticket's own comment thread named as
+the reason not to let vendoring scale past the first repo.
+
+**All four real vendored Python bindings repos switched, confirmed to
+be the FULL real list via the GitHub API** (`gh repo list Ubiquex`, not
+assumed from the ticket's own enumeration -- which turned out exactly
+right): `ubx-sdk-aws-py`, `ubx-sdk-google-py`, `ubx-sdk-kubernetes-py`,
+`ubx-sdk-azure-py`. Same mechanical change each time, mirroring
+UBI-110's own TS switch: dependency pin, `vendor/ubx_sdk/` removed,
+`version-watch.yml`'s sanity-check step installs the real dependency
+(reading the pin straight out of `pyproject.toml` via `tomllib`, so it
+can never drift from the declared range) instead of a `vendor/`
+`sys.path` insert, `pyproject.toml` no longer excluded from the
+regeneration `rsync` (it's real codegen output now), README updated. A
+real, live-found gotcha along the way: `pip install .` on any of these
+repos fails outright -- setuptools' own flat-layout auto-discovery
+correctly refuses to build one distribution out of 100+ top-level
+service-directory packages (`s3/`, `iam/`, `lambda_/`, ...) -- these
+repos were never meant to be `pip install`-able as themselves (consumed
+via `PYTHONPATH` against the source tree directly, unchanged); only the
+runtime dependency itself needs installing.
+
+**Live verification, real dispatched CI runs per repo, not assumed from
+a green local check**: `ubx-sdk-aws-py`
+([PR #3](https://github.com/Ubiquex/ubx-sdk-aws-py/pull/3), run
+[31046850652](https://github.com/Ubiquex/ubx-sdk-aws-py/actions/runs/31046850652),
+green -- `VERSION` was genuinely behind real registry latest, so the
+dispatch naturally exercised the full path) and `ubx-sdk-google-py`
+([PR #2](https://github.com/Ubiquex/ubx-sdk-google-py/pull/2), run
+[31047255384](https://github.com/Ubiquex/ubx-sdk-google-py/actions/runs/31047255384),
+green, same natural trigger). `ubx-sdk-kubernetes-py` and
+`ubx-sdk-azure-py` were both already at the real registry's own latest
+version, so a plain dispatch would no-op before reaching the new steps
+-- each got a second, disposable branch with `VERSION` rolled back to
+the immediately-prior REAL published version (confirmed real via the
+registry API first, not guessed) purely to force the path, mirroring
+UBI-110's own "disposable branch" technique: `ubx-sdk-kubernetes-py`
+([PR #2](https://github.com/Ubiquex/ubx-sdk-kubernetes-py/pull/2), run
+[31047661327](https://github.com/Ubiquex/ubx-sdk-kubernetes-py/actions/runs/31047661327),
+green), `ubx-sdk-azure-py`
+([PR #2](https://github.com/Ubiquex/ubx-sdk-azure-py/pull/2), run
+[31048009382](https://github.com/Ubiquex/ubx-sdk-azure-py/actions/runs/31048009382),
+green). Every disposable side-effect regen PR each dispatch opened was
+closed with an explanation, never merged, same UBI-106/UBI-110
+precedent. None of the four real switch PRs were merged either --
+left for founder review, same protocol as every prior repo in this
+rollout.
+
+**UBI-130 orthogonality, checked directly, not assumed from similar-
+sounding names**: UBI-130 (Python blueprint DEPENDENCY resolution --
+`requirements.txt`'s own `<name> @ <url>` syntax) is genuinely
+unaffected. `blueprint/pydeps.go`'s own parser only interprets `"@ url"`
+lines; a plain `ubx_sdk` line is left alone, and more fundamentally
+`ubx_sdk` is never resolved through UBI-130's mechanism at all inside
+`ubx plan`/`ubx resolve --from-code`'s own WASI sandbox -- `pyeval`
+embeds it directly (`sdk/py/embed.go`), independent of PyPI status,
+both before and after this ticket. Both files' own stale "not published
+yet" doc comments corrected (comment-only, zero behavior change).
+
+**Zero `ubiquex`-core behavior changes beyond the codegen template
+fix** -- `go build ./...`/`gofmt -l .`/`go vet ./...` clean; full
+`go test ./...` green; `sdk/py/ubx_sdk`'s own hermetic
+`python3 -m unittest` suite (18 tests) re-run directly, unaffected.
+
+Docs-first, per protocol: `docs/sdk.md` gained a new "UBI-107" amendment
+AND its own up-front "Runtime package publish status" summary corrected
+in place (so a new reader hits the accurate status first, matching
+UBI-100's own standing policy for this document) -- committed and
+pushed (`ubiquex` `5cdc001`). `ubiquex-docs`' `cli/sdk-gen.mdx` and
+`sdk/index.mdx` both corrected (three separate stale "not published to
+PyPI yet" claims found and fixed) -- `mint validate`/`mint broken-links`
+both clean, committed and pushed (`0e0d1fc`).
+
+Linear UBI-107 marked Done, closing comment posted with the full real
+account and all four PR links.
+
+Next: whichever the founder prioritizes -- reviewing/merging the four
+real switch PRs above, rotating the PyPI token to a project-scoped one,
+or any other item from UBI-74's own closing retrospective.
+
+## Current phase (previous)
+
 **UBI-125 (2026-08-05) — Terraform module → blueprint converter, deterministic, no AI for the mechanical parts. Real, closed, per every item the ticket itemized, with two real, named, honestly-stated gaps (TS/Python `cidrsubnet()` porting).** Depended on UBI-129 (list-typed params + `for_each`, closed same day) for `count`/`for_each` conversion specifically — confirmed the real shipped shape (`list(string)`/`list(number)` params:, the `for_each` resource field, the `{param}`/`{param}_index` synthetic-token grammar) directly against `blueprint/decode.go` before building against it, per the handoff's own explicit instruction, rather than assuming the Linear ticket's own description was still accurate.
 
 **The core design insight, confirmed true before committing to it, not assumed**: HCL's own expression primitives — a `var.x` reference, a `<type>.<name>.<attr>` resource reference, a string template mixing literal text with either — correspond EXACTLY to the wire primitives a resolved blueprint draft already uses (`blueprint/decode.go`'s `{param_name}` token grammar, `core/resolver/refs.go`'s `$ref` marker). This is what makes "no AI for the mechanical parts" genuinely true rather than aspirational: a new `tfconvert/` package (named for the CLI verb it implements one-to-one, `ubx blueprint convert`, matching `writeback/`'s own precedent, CLAUDE.md) parses a real module's HCL directly via `hashicorp/hcl/v2/hclsyntax` (the same library `writeback/` already uses — zero new dependency) and walks each resource attribute's own expression tree into the SAME decoded shape (`{param}` tokens / `$ref` markers / literals) `blueprint/decode.go` already expects — never a second rendering path, never an intent-provider call.
