@@ -328,6 +328,42 @@ func refTarget(v any) (string, bool) {
 	return to, true
 }
 
+// fnCallMarker reports whether v is exactly a {"$fn": {"name": "...",
+// "args": [...]}} marker -- a blueprint-package-private convention (not
+// one of core/resolver/refs.go's own $ref/$cross/$secret/$computed/
+// $ephemeral wire markers, since a ported built-in function call is a
+// build-time-only, blueprint-codegen-only concept with no meaning to the
+// resolver at all) produced exclusively by tfconvert (UBI-125) for a
+// Terraform built-in function it recognized and ported (cidrsubnet(),
+// currently the only one -- see blueprint/cidrsubnet.go). An ordinary
+// AI-drafted blueprint never produces this shape (nothing in
+// blueprintDraftPrompt, cli/blueprint.go, ever tells the model about
+// it), so recognizing it in renderAny is purely additive -- zero
+// behavior change for every blueprint built before UBI-125.
+func fnCallMarker(v any) (name string, args []any, ok bool) {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) != 1 {
+		return "", nil, false
+	}
+	inner, ok := m["$fn"]
+	if !ok {
+		return "", nil, false
+	}
+	innerMap, ok := inner.(map[string]any)
+	if !ok {
+		return "", nil, false
+	}
+	name, ok = innerMap["name"].(string)
+	if !ok {
+		return "", nil, false
+	}
+	args, ok = innerMap["args"].([]any)
+	if !ok {
+		return "", nil, false
+	}
+	return name, args, true
+}
+
 // containsRefMarker reports whether v (an already-decoded JSON value)
 // carries a {"$ref": {...}} marker anywhere within it, at any depth --
 // the same shape-only walk core/resolver/refs.go's own containsMarker

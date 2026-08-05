@@ -2,6 +2,26 @@
 
 ## Changelog
 
+- 2026-08-05 — UBI-125 (Terraform module → blueprint converter,
+  deterministic, no AI): `ubx blueprint convert --from-terraform
+  <module-dir> --out <dir>` — a new `tfconvert/` package parses a real
+  Terraform module's HCL directly (`hashicorp/hcl/v2/hclsyntax`, the
+  same library `writeback/` already uses) and translates `variable`/
+  `resource`/`output` blocks mechanically into a blueprint's own
+  `params:`/resource calls/`outputs:`, including a real `count =
+  length(var.list)`/`for_each = var.list|toset(var.list)` → UBI-129's
+  own `for_each` shape, and a ported `cidrsubnet()` Go helper
+  (`blueprint/cidrsubnet.go`, a new additive `$fn` marker in
+  `gogen.go`'s `renderAny`) — Go codegen only so far, TS/Python a real,
+  named follow-up. Anything genuinely unhandled (a conditional, an
+  unported function, a data source, a `locals` cycle, ...) surfaces as
+  a `core.Question`, never a silent guess. Live-verified against the
+  real `hashicorp/aws@6.58.0` provider schema via `ubx resolve
+  --from-code` (resolve-only, never `ubx ship`) on two real fixtures — a
+  `count`-based module distilled from the real, live-fetched
+  `terraform-aws-modules/terraform-aws-vpc` module's own core idiom, and
+  a dedicated `for_each`-grammar module — full account: docs/
+  blueprint.md's own "Terraform module conversion (UBI-125)" section.
 - 2026-08-05 — UBI-128 (blueprint outputs: cross-medium references to a
   called blueprint's own resource attributes, all three calling
   mediums): `Ubxfile` gains an `outputs:` key
@@ -6143,9 +6163,10 @@ CLOSED — UBI-74's own original eight-slice plan, complete, per this
 section's own updated heading and the Slice 3/4/5/6/7/8 paragraphs
 above. Nesting is UBI-121; the bound policy engine is UBI-118; the
 override mechanism and `render --sync-overrides` are UBI-86; list-typed
-params/iteration and a Terraform converter (UBI-125) are separately
-scoped future work — none of the five were ever part of this eight-slice
-plan, tracked separately, not gaps in it. Fork-with-modification
+params/iteration (UBI-129) and a Terraform converter (UBI-125) were
+separately scoped future work and are now BOTH closed (see this
+changelog's own UBI-129/UBI-125 entries) — none of the five were ever
+part of this eight-slice plan, tracked separately, not gaps in it. Fork-with-modification
 redistribution (design record pattern 1) and alias/pointer
 redistribution (pattern 3) are the two real, named exceptions WITHIN the
 plan's own Slice 8 that stayed design-only/untouched respectively — see

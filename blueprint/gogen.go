@@ -71,6 +71,10 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 	}
 	files["go/"+pkgName+".go"] = fnSrc
 
+	if g.usesCidrsubnet {
+		files["go/cidrsubnet.go"] = fmt.Sprintf(cidrsubnetGoSource, pkgName)
+	}
+
 	return files, nil
 }
 
@@ -122,6 +126,15 @@ type goGenerator struct {
 	// structurally, just needed here too, transiently, for THIS
 	// language's own token resolution.
 	currentDR *decodedResource
+
+	// usesCidrsubnet (UBI-125) records whether this blueprint's own
+	// draft used the cidrsubnet() ported helper at least once (via
+	// tfconvert's own {"$fn":{"name":"cidrsubnet",...}} marker,
+	// fnCallMarker/renderFnCall below) -- GenerateGo only emits
+	// go/cidrsubnet.go when this is true, so an ordinary blueprint
+	// (every one before this ticket, and every one hand-drafted rather
+	// than converted) never carries dead, unused generated code.
+	usesCidrsubnet bool
 
 	// usedForEachValue/usedForEachIndex (UBI-129) record whether the
 	// for_each resource's own fields/name actually referenced the
@@ -252,6 +265,9 @@ func (g *goGenerator) renderAny(v any) (string, error) {
 		if to, ok := refTarget(t); ok {
 			return g.renderRef(to)
 		}
+		if name, args, ok := fnCallMarker(t); ok {
+			return g.renderFnCall(name, args)
+		}
 		keys := make([]string, 0, len(t))
 		for k := range t {
 			keys = append(keys, k)
@@ -288,6 +304,35 @@ func (g *goGenerator) renderAny(v any) (string, error) {
 		return b.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported JSON value type %T", v)
+	}
+}
+
+// renderFnCall renders one {"$fn":{...}} marker (UBI-125, tfconvert) --
+// currently the only recognized name is "cidrsubnet", matching
+// blueprint/cidrsubnet.go's own Go-only porting scope (docs/blueprint.md
+// names TS/Python as a real, separate, not-silently-done follow-up).
+// Args are rendered exactly like any other Config value, recursively via
+// renderAny -- a literal number, a {param} token, or another for_each
+// synthetic token all already produce valid Go expressions for
+// cidrsubnet's own (string, int, int) parameter types.
+func (g *goGenerator) renderFnCall(name string, args []any) (string, error) {
+	switch name {
+	case "cidrsubnet":
+		if len(args) != 3 {
+			return "", fmt.Errorf("cidrsubnet(): expected 3 arguments, got %d", len(args))
+		}
+		g.usesCidrsubnet = true
+		parts := make([]string, len(args))
+		for i, a := range args {
+			expr, err := g.renderAny(a)
+			if err != nil {
+				return "", err
+			}
+			parts[i] = expr
+		}
+		return fmt.Sprintf("cidrsubnet(%s)", strings.Join(parts, ", ")), nil
+	default:
+		return "", fmt.Errorf("unsupported ported function %q", name)
 	}
 }
 

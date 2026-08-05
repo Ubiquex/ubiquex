@@ -4180,3 +4180,298 @@ strongest proof), md calling (real Claude extraction + real AWS-schema
 resolve, this session), and the build-time AI recognition itself (real
 Claude draft, byte-identical to the hand-built fixture, this session).
 No remaining live-verification gap for this ticket.
+
+## Terraform module conversion (UBI-125)
+
+`ubx blueprint convert --from-terraform <module-dir> --out <dir> [--lang go|ts|py|all]`
+translates a REAL Terraform module directly into a built blueprint —
+deterministically, with **zero intent-provider/AI calls at all**, unlike
+every other blueprint-authoring path this document describes. UBI-125's
+own ticket named the reason this is possible: HCL's own expression
+primitives — a `var.X` reference, a `<type>.<name>.<attr>` resource
+reference, a string template mixing literal text with either — already
+correspond EXACTLY to the wire primitives a resolved blueprint draft
+already uses (`blueprint/decode.go`'s own `{param_name}` token grammar
+and `{"$ref":{"to":...}}` marker, "The build pipeline" section above).
+Where they genuinely correspond, translation is mechanical, the same
+class of schema-to-code translation this project already does elsewhere
+without AI (`ubx sdk gen`, CLAUDE.md's own package-naming discipline).
+Where they don't, this never guesses: it records a real `core.Question`
+— the SAME mechanism the intent provider already uses for genuine
+ambiguity, reused verbatim — and declines the ONE affected attribute/
+resource/output, continuing with everything else translatable rather
+than failing the whole conversion opaquely (mirroring `writeback/
+writeback.go`'s own established "decline the unsafe piece, not the whole
+document" precedent).
+
+New package: `tfconvert/` (named for the CLI verb it implements
+one-to-one, `ubx blueprint convert`, matching `writeback/`'s own
+identical precedent, CLAUDE.md). `tfconvert.Convert(dir, blueprintName)`
+parses every top-level `*.tf` file in `dir` directly via `hashicorp/hcl/
+v2/hclsyntax` (the same library `writeback/` already uses for surgical
+`.tf` edits — no new dependency) and returns a `Result`: `[]blueprint.
+Param`, `[]blueprint.Output`, a real `*resolver.IntentFile` (ready for
+`blueprint.GenerateGo/TS/Python` directly, the SAME stopping point `ubx
+blueprint build`'s own AI draft reaches — "The build pipeline" section
+above), the accumulated `core.Question`s, and every declared `terraform
+{ required_providers { ... } }` entry (informational only — never
+consulted during translation, matching this document's own "no provider
+schema fetch, deliberately" precedent for `build` itself: a resource's
+wire attribute names are read directly from the HCL, never derived from
+a live schema fetch).
+
+**What converts mechanically, exactly per the ticket's own itemized
+scope:**
+
+- **`variable` blocks → `params:`, direct 1:1.** `type = string|number|
+  bool|list(string)|list(number)` map onto blueprint's own five param
+  types exactly (`paramTypeFromExpr`, `tfconvert/params.go`); any other
+  type (`map(...)`, `object({...})`, `set(...)`, `tuple([...])`,
+  `list(bool)`/`list(any)`, or no `type:` at all — Terraform's own
+  implicit `any`) is a real, named target-format limitation, not a bug:
+  recorded as a Question, the param dropped, and any resource attribute
+  later referencing it becomes its own Question too (never silently
+  treated as an ordinary string). A literal `default:` converts
+  directly; a list-typed variable's own Terraform default (even `[]`)
+  can't carry over — `ubxfile.go`'s own `parseDefaultValue` permanently
+  refuses a default on a list-typed param (UBI-129: a list param is
+  always consumed by exactly one `for_each` resource, which has no
+  un-given-default concept) — so it's downgraded to `required`, a real
+  behavioral change surfaced as a non-blocking Question, not silently
+  applied. `sensitive = true` and a `validation {}` block are both
+  named via their own Questions (blueprint has no secret-handling or
+  validation-rule concept of its own for a param) without blocking
+  conversion.
+- **`resource` blocks → the blueprint's own resource calls.** Each
+  attribute's own HCL expression is walked directly (`tfconvert/expr.go`)
+  into the SAME decoded shape `blueprint/decode.go` already expects: a
+  bare `var.X` reference becomes the literal string `"{X}"` (blueprint's
+  own placeholder token, unchanged); a `<type>.<name>.<attr>` reference
+  becomes a real `{"$ref":{"to":"<stack>.<type>.<name>.<attr>"}}` marker
+  (mirroring `renderRef`'s own address form exactly); a template mixing
+  literal text with either (`"subnet-${var.name}"`,
+  `"arn:${aws_iam_role.x.arn}"`) is built into ONE Go string reusing the
+  EXACT SAME embedding conventions `gogen.go`'s `renderString`/
+  `renderEmbeddedRefString` already recognize — a var/each/count
+  reference as an inline `{param_name}` token, a cross-resource
+  reference as an inline `{"$ref":{"to":"..."}}` JSON-embedded marker
+  (the SAME "JSON-embedded ref" convention an IAM policy document's own
+  `Resource` field already relies on, `core/resolver/refs.go`) — codegen
+  splits and translates both at BUILD time; `tfconvert` never needs a
+  second rendering path of its own for mixed content. A `depends_on =
+  [...]` list of plain resource references converts to
+  `ResourceIntent.DependsOn` directly. A `lifecycle {}`/`provisioner {}`/
+  `connection {}`/any other nested block, or an explicit `provider =
+  ...` meta-argument, has no blueprint equivalent at all — named via its
+  own Question, the resource itself still converts (the loss is
+  attribute/behavior-level, not fatal).
+- **`output` blocks → the NOW-REAL `outputs:` mechanism (UBI-128).** An
+  output whose `value` is EXACTLY a plain, non-indexed `<type>.<name>.
+  <attr>` reference into one ordinary (non-`for_each`) resource converts
+  directly to `<resource-slug>.<attr>`, `blueprint/decode.go`'s own
+  `resolveOutputTarget` wire form. Anything else — a conditional, a
+  function call, an indexed reference into a `count`/`for_each`
+  resource's own per-instance attribute — can't be mechanically
+  represented (an output naming a `for_each` resource's own instance
+  isn't addressable that way, matching `decode.go`'s own permanent
+  boundary below) and is declined via a Question, the output simply
+  omitted.
+- **`count`/`for_each` → UBI-129's real `for_each` shape.** Two
+  deterministically-recognized idioms, both confirmed against REAL
+  practice before being chosen as the target patterns (see "Live
+  verification" below): `count = length(var.<list param>)` — the most
+  common real-world shape, confirmed live against the actual public
+  `terraform-aws-modules/terraform-aws-vpc` module's own private-subnet
+  resource while designing this feature — and `for_each = var.<list
+  param>` / `for_each = toset(var.<list param>)`, Terraform's own more
+  idiomatic form. Both become ONE `for_each` resource iterating that
+  param, with a synthesized per-instance name template
+  (`"<label>-{param}"`, satisfying `decode.go`'s own "must genuinely
+  vary per iteration" requirement). Inside that resource, `count.index`/
+  `each.value`/`each.key` become the SAME `{param}`/`{param}_index`
+  synthetic bare tokens UBI-129 already defined; `element(var.<source>,
+  count.index)` and `var.<source>[count.index]` (an alternative,
+  equally common spelling of the per-element value) and `index(var.
+  <source>, each.value)` (the per-element position) are recognized too.
+  Anything else driving `count`/`for_each` — a literal number, a
+  conditional, a `local`, an expression combining two variables — needs
+  real judgment this ticket explicitly reserves for a human: the WHOLE
+  resource is skipped (never silently mistranslated), loudly, via a
+  Question, and every other resource in the module still converts.
+  Blueprint's own blanket boundary — a blueprint with ANY `for_each`
+  resource can't ALSO declare `outputs:` (UBI-128/UBI-129,
+  `decode.go`) — is enforced at the WHOLE-MODULE level, not per-output:
+  once any resource converts to `for_each`, every `output {}` block in
+  the module is declined together, each with its own Question, rather
+  than discovering the same blanket refusal independently per output.
+- **`cidrsubnet()` ported as a real generated Go helper — Go only so
+  far, a real, named, NOT-silently-done gap for TS/Python.** The one
+  built-in function UBI-125's own ticket named explicitly as worth
+  porting. Recognized inside any expression (not just a `for_each`
+  resource's own fields) and translated into a new, additive,
+  blueprint-package-private marker, `{"$fn":{"name":"cidrsubnet","args":
+  [...]}}` (`fnCallMarker`, `blueprint/decode.go` — deliberately NOT one
+  of `core/resolver/refs.go`'s own `$ref`/`$cross`/`$secret`/`$computed`/
+  `$ephemeral` wire markers, since a ported built-in call is a
+  build-time-only, blueprint-codegen-only concept the resolver has zero
+  reason to know about). `gogen.go`'s `renderAny` recognizes this marker
+  and renders a real call to `cidrsubnet(prefix string, newbits, netnum
+  int) string` (`blueprint/cidrsubnet.go`), a deterministic Go port of
+  HashiCorp's own documented algorithm (extend the prefix's mask by
+  `newbits`, set `netnum` into the newly available high-order bits;
+  verified against HashiCorp's own doc examples — `cidrsubnet("10.0.0.0/
+  16", 8, 2)` → `"10.0.2.0/24"`, `cidrsubnet("10.1.2.0/24", 4, 15)` →
+  `"10.1.2.240/28"` — in a real `go run`, `blueprint/cidrsubnet_test.go`)
+  — emitted as `go/cidrsubnet.go` ONLY when a draft actually uses it (an
+  ordinary, non-converted blueprint never carries dead generated code).
+  Matches UBI-129's own established "zero new `sdk/go` runtime
+  construct" precedent exactly: a ported built-in is generated,
+  blueprint-package-private code, not a shared SDK primitive, the same
+  way each resource's own `ResourceBinding`/`Config` struct pair already
+  is. `GenerateTS`/`GeneratePython` hard-refuse a draft containing this
+  marker (a clear, named error naming `--lang go`) rather than silently
+  rendering the marker itself as a literal object/dict, which would
+  silently produce WRONG generated code.
+- **Anything genuinely unhandled surfaces as a `core.Question`, never a
+  silent guess or an opaque failure.** A `data.*` reference (data
+  sources are out of scope entirely, per the ticket); an unported
+  built-in (`merge()`, `format()`, `concat()`, `try()`, `coalesce()`,
+  `jsonencode()`, `lookup()`, `join()`, ...); a conditional expression
+  (its own condition value isn't known at blueprint BUILD time — build
+  time never resolves param VALUES, only structure, "The build
+  pipeline" section above — so a conditional is fundamentally
+  unresolvable mechanically, not merely unimplemented); a `local`
+  resolving through one of these, or participating in a dependency
+  cycle with another `local` (detected, not infinitely recursed) — every
+  one declines the ONE affected attribute/resource/output, with a
+  Question naming exactly what and why, continuing with everything else.
+
+**Ubxfile `resources:` after conversion — a real, deliberate design
+tension, named explicitly rather than silently resolved:** `ubx
+blueprint build`'s own contract is "`resources:` is ALWAYS re-drafted
+through the intent-provider pipeline, exactly once, every build" (the
+section above). `convert`'s own contract is "no AI, ever." These two
+can't both hold for the SAME field, so `convert` writes an Ubxfile whose
+`resources:` is a short, deterministic, human-readable SUMMARY —
+documentation for a human reading the directory, never re-parsed by
+`convert` itself. If a later `ubx blueprint build` is run against a
+converted directory, it re-drafts `resources:` through the AI pipeline
+like any other Ubxfile, and there is NO guarantee that re-draft
+reproduces `convert`'s own deterministic translation byte-for-byte —
+`convert`'s OWN output (the `go/`/`ts/`/`py/` packages it writes
+directly, alongside the Ubxfile, in the SAME invocation) is the source
+of truth for a converted blueprint, not a seed for a later AI rebuild.
+
+**Live verification, per-feature depth stated honestly:**
+
+The real, public `terraform-aws-modules/terraform-aws-vpc` module was
+fetched live (its own `main.tf`/`variables.tf`) while designing this
+feature, confirming its actual private-subnet resource's own real shape
+— `count = local.create_private_subnets ? local.len_private_subnets :
+0` (itself gated by ANOTHER conditional count on the VPC resource, plus
+IPv6/conditional branches throughout) — too gnarly, on its own terms, to
+serve as a clean worked example (nearly every attribute would decline as
+a conditional). Rather than use it verbatim, its OWN real, core idiom —
+`count = length(var.<list>)`, `element(var.azs, count.index)`,
+`cidrsubnet()` — was distilled into a hand-constructed, trimmed module
+reflecting that exact real-world shape, honestly labeled as such, not
+presented as a verbatim fetch:
+
+```hcl
+variable "name" { type = string; default = "app" }
+variable "cidr" { type = string; default = "10.0.0.0/16" }
+variable "azs"  { type = list(string) }
+variable "tags" { type = map(string); default = {} }   # unsupported -> Question
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  tags                 = merge({ Name = var.name }, var.tags)  # merge() unsupported -> Question
+}
+
+resource "aws_subnet" "private" {
+  count = length(var.azs)
+
+  vpc_id            = aws_vpc.this.id
+  availability_zone = element(var.azs, count.index)
+  cidr_block        = cidrsubnet(var.cidr, 8, count.index)
+
+  tags = { Name = var.name }
+}
+
+output "vpc_id" { value = aws_vpc.this.id }   # declined -- this module has a for_each resource
+```
+
+`ubx blueprint convert --from-terraform . --out vpc-out --lang go`
+converted 2 of 2 resources (0 skipped), with exactly 2 real Questions
+(the `map(string)` param and the `merge()` attribute — both real,
+correctly identified gaps, not false positives) and a third Question for
+the declined `vpc_id` output (the module's own `for_each`+`outputs:`
+combination, per the blanket boundary above). The generated Go compiled
+clean, hermetically, via the established `GOPROXY=off` + local `sdk/go`
+`replace` mechanism. A real driver program (`sdk.Stack("payments", func()
+{ VpcOut([]string{"eu-central-1a", "eu-central-1b", "eu-central-1c"}) })`)
+resolved via `ubx resolve --from-code` against the REAL `hashicorp/
+aws@6.58.0` provider schema (resolve-only, never `ubx ship`, per this
+project's own standing rule): **4 real creates** (1 VPC + 3 subnets),
+each subnet's own `cidr_block` exactly `10.0.0.0/24`/`10.0.1.0/24`/
+`10.0.2.0/24` — the ported `cidrsubnet()` helper's own real, runtime-
+computed output, confirmed against the real AWS provider schema, not
+just a hermetic assertion.
+
+A real, public module using `for_each` (rather than `count`) for its own
+subnet resources could not be found/constructed as cleanly within this
+session's own scope (per this project's own honesty standard, stated
+plainly rather than assumed) — so the `for_each`-SPECIFIC grammar (as
+opposed to the `count`-based idiom above) was proven via a second,
+smaller, purpose-built module, ALSO resolved against the real
+`hashicorp/aws` schema, not a hermetic substitute:
+
+```hcl
+variable "vpc_id"             { type = string }
+variable "availability_zones" { type = list(string) }
+
+resource "aws_subnet" "this" {
+  for_each = toset(var.availability_zones)
+
+  vpc_id            = var.vpc_id
+  availability_zone = each.value
+}
+```
+
+Converted with **zero Questions** (every construct in this module is
+directly supported), compiled clean, and resolved via `ubx resolve
+--from-code` against the same real `hashicorp/aws@6.58.0` schema: 3 real
+`aws_subnet` creates, each with its own correct `availability_zone` and
+the shared `vpc_id`.
+
+**Real, named scope boundaries, not silently dropped:** nested blocks
+inside a `resource` block (e.g. `aws_security_group`'s own `ingress {}`)
+aren't
+supported — only top-level attributes translate, a per-block Question
+names each one skipped; `for_each`/`count` over a MAP (as opposed to a
+list) isn't recognized (blueprint's own `for_each` design, UBI-129, only
+ever iterates a `list(string)`/`list(number)` param); at most one
+`for_each` resource per converted blueprint (the SAME limit
+`decode.go` already enforces for a hand-drafted blueprint, UBI-129); a
+`module {}` block (calling ANOTHER Terraform module) is out of scope
+entirely — nested composition is blueprints' own `uses:` concept
+(UBI-121), itself still unbuilt, not something this converter
+retroactively invents; TS/Python codegen for a converted blueprint using
+`cidrsubnet()` fails loudly (`--lang go` only) until that port lands.
+
+Hermetic tests: `tfconvert/tfconvert_test.go` (params/defaults/
+downgrades, resource `$ref`/param-token translation, both `count`/
+`for_each` recognized shapes, the unrecognized-shape skip path, the
+`cidrsubnet()` marker shape, outputs — plain and the `for_each` blanket
+conflict, `locals` inlining and cycle detection, `required_providers`
+parsing, `depends_on`, a declined conditional, a declined `lifecycle {}`
+block, a declined `data.*` reference), `blueprint/cidrsubnet_test.go`
+(the ported algorithm against HashiCorp's own doc examples, a real `go
+run` proving the FULL codegen integration produces the correct
+per-instance value, TS/Python's own hard refusal), `cli/
+blueprint_convert_test.go` (end-to-end conversion with real Questions
+asserted, the required-flags check, the skipped-resource path, a real
+hermetic `go build` of the converted package). `go build ./...`,
+`gofmt -l .`, `go vet ./...` clean; full `go test ./...` green.

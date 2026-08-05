@@ -25,6 +25,7 @@ func newBlueprintCmd() *cobra.Command {
 		Short: "Blueprint commands: build a signed, reusable, parameterized proposal template",
 	}
 	cmd.AddCommand(newBlueprintBuildCmd())
+	cmd.AddCommand(newBlueprintConvertCmd())
 	cmd.AddCommand(newBlueprintPackageCmd())
 	cmd.AddCommand(newBlueprintPushCmd())
 	cmd.AddCommand(newBlueprintPullCmd())

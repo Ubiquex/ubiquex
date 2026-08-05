@@ -215,6 +215,13 @@ func (g *pyGenerator) renderAny(v any) (string, error) {
 		if to, ok := refTarget(t); ok {
 			return g.renderRef(to)
 		}
+		if name, _, ok := fnCallMarker(t); ok {
+			// UBI-125: a ported built-in function (cidrsubnet(), currently
+			// the only one) is Go-only so far (blueprint/cidrsubnet.go) --
+			// a hard, named refusal here, never a silent (and WRONG)
+			// literal-dict rendering of the marker itself.
+			return "", fmt.Errorf("blueprint: this draft uses the ported function %q, which is only supported in Go so far (UBI-125) -- build --lang go, or wait for a Python port", name)
+		}
 		keys := make([]string, 0, len(t))
 		for k := range t {
 			keys = append(keys, k)
