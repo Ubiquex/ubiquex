@@ -15,7 +15,6 @@ import (
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
 	"github.com/ubiquex/ubiquex/provider"
-	"github.com/ubiquex/ubiquex/pyeval"
 	"github.com/ubiquex/ubiquex/tseval"
 )
 
@@ -112,9 +111,20 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 
 			var intent resolver.IntentFile
 			if fromCode != "" {
-				canon, err := evaluateSDKProgram(ctx, fromCode)
+				canon, receipts, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+				}
+				// UBI-130: a Python program's own requirements.txt-declared
+				// blueprint dependencies were already pulled+verified BEFORE
+				// evaluateSDKProgram ever ran the script -- this project's
+				// own "never a silent network call" discipline means every
+				// one of those pulls gets a real, visible receipt line here,
+				// printed before resolution even starts. Empty for every
+				// other language, and for a Python program with no
+				// requirements.txt.
+				for _, r := range receipts {
+					fmt.Fprintln(cmd.OutOrStdout(), r)
 				}
 				if err := json.Unmarshal(canon, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: parse evaluated intent: %w", err)}
@@ -215,19 +225,25 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 // evaluator named by entryFile's own extension -- .ts to tseval (the
 // hermetic Deno evaluator), .go to goeval (compile + run under this
 // platform's own OS-level sandbox), .py to pyeval (run under WASI via
-// wasmtime). All three return the identical canonical, provenance-
-// stamped intent/v1 shape; nothing downstream of this function needs to
-// know which language produced it.
-func evaluateSDKProgram(ctx context.Context, entryFile string) ([]byte, error) {
+// wasmtime), by way of blueprint.EvaluatePythonWithDeps (UBI-130: resolves
+// any requirements.txt-declared blueprint dependencies first). All three
+// return the identical canonical, provenance-stamped intent/v1 shape;
+// nothing downstream of this function needs to know which language
+// produced it. The returned receipt lines are non-empty only for a Python
+// program that declared at least one blueprint dependency -- every other
+// case returns nil, printing nothing.
+func evaluateSDKProgram(ctx context.Context, entryFile string) ([]byte, []string, error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
-		return goeval.Evaluate(ctx, entryFile)
+		canon, err := goeval.Evaluate(ctx, entryFile)
+		return canon, nil, err
 	case ".py":
-		return pyeval.Evaluate(ctx, entryFile)
+		return blueprint.EvaluatePythonWithDeps(ctx, entryFile)
 	case ".ts":
-		return tseval.Evaluate(ctx, entryFile)
+		canon, err := tseval.Evaluate(ctx, entryFile)
+		return canon, nil, err
 	default:
-		return nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
+		return nil, nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}
 }
 

@@ -1952,6 +1952,241 @@ provenance shape a diagram or md call's own identical resource already
 did (Slice 6) — the calling convention that started this whole arc
 (Slice 2) is, at last, no longer the one silently missing it.
 
+## Python blueprint dependency resolution: UBI-130
+
+Python has no native "import from a URL" mechanism — unlike Go modules
+resolving straight from git, or Deno's own import-map-based JSR
+resolution. A Python stack calling a blueprint published to a registry
+(git, OCI/GHCR, or a bare local path) needs a real, CI-pipeline-friendly
+way to declare and resolve that dependency, distinct from UBI-107
+(publishing the shared `ubx_sdk` RUNTIME to PyPI — a completely separate
+concern from resolving a blueprint PACKAGE dependency).
+
+### The design: pip's own `<name> @ <url>` syntax, resolved at plan time
+
+`requirements.txt`, sitting next to the entry `.py` file, is the primary
+— and for now the only — supported manifest format. A `pyproject.toml`
+`[tool.ubx.blueprints]` table was considered as an alternative and
+rejected for now: `requirements.txt` is already the ubiquitous, zero-
+config file every real Python CI pipeline reads with no extra tooling,
+and it's exactly the format this ticket's own resolved design commits to
+in its full worked example. A `pyproject.toml`-based path is a real,
+deferred alternative — it can be added later without changing
+`requirements.txt`'s own meaning at all.
+
+No new syntax is invented: a blueprint dependency is declared with pip's
+own real `<name> @ <url>` specifier (PEP 508 + pip's documented VCS-URL
+support), recognizing three forms:
+
+```
+ci-platform @ oci://ghcr.io/ubiquex/ci-platform:v3
+widget-lib  @ git+https://github.com/org/blueprints.git@v2#subdirectory=widget-lib
+widget-lib  @ ../shared/widget-lib
+```
+
+- `oci://registry/repo:tag` — passed straight through to `Pull`'s own
+  existing `oci://` branch (Slice 7).
+- `git+<transport>://...[@<ref>][#subdirectory=<path>]` — pip's own real
+  VCS-URL grammar. The `git+` prefix, `@<ref>`, and `#subdirectory=<path>`
+  are all stripped before handing the bare transport URL to `Pull`'s
+  existing git-clone branch (Slice 3) as `(source, ref, path)`. An `@` in
+  the URL's own user-info (`git+ssh://git@github.com/...`) is left
+  untouched — a ref never contains `/`, so only an `@` found in the URL's
+  *final path segment* is treated as `@<ref>`.
+  ("git" is the second of the ticket's own three named schemes; the
+  `git+` form was chosen over a bespoke `git://` scheme specifically
+  because it's pip's own real, already-documented syntax, not a new
+  invention.)
+- A bare local path, or an explicit `file://` URL — `Pull`'s existing
+  local-directory/tarball-file branch either way.
+
+Every one of these reuses `Pull`/`Verify`/`buildManifest`
+(`blueprint/pull.go`, `verify.go`, `manifest.go` — Slice 3/7/8's own
+mechanism) directly. There is deliberately no second, parallel pull
+mechanism.
+
+### Resolution happens inside `ubx plan`/`ubx resolve --from-code`, not a separate step
+
+`cli/resolve.go`'s and `cli/plan.go`'s own `--from-code` dispatch (both
+share `evaluateSDKProgram`) routes a `.py` entry file through
+`blueprint.EvaluatePythonWithDeps` (`blueprint/pydeps.go`) instead of
+calling `pyeval.Evaluate` directly:
+
+1. `ResolvePyDependencies` reads the entry file's own sibling
+   `requirements.txt` (if any) and, for each declared dependency, pulls
+   (or reuses an already-verified local-cache hit — see below) +
+   verifies it, in file order.
+2. Every resolved dependency's own built `py/` directory is handed to
+   `pyeval.Evaluate` as an `ExtraDep` — a new, minimal type
+   (`{HostDir string}`) `pyeval` itself understands with zero knowledge
+   of blueprints, pulling, or verification at all (`blueprint` already
+   depends on `pyeval`, so the reverse dependency would be an import
+   cycle). `pyeval`'s own WASI runner (`runOnce`, `pyeval/runner.go`)
+   mounts each one at its own fresh top-level guest preopen
+   (`/ubxdep0`, `/ubxdep1`, …, matching the same "one top-level preopen
+   per real directory tree" rule the `ubx_sdk` runtime mount already
+   established empirically) and prepends its guest path to `PYTHONPATH`
+   — all BEFORE the entry script itself ever runs, so a plain
+   `from <pkg> import <fn>` in the caller's own hand-written `.py`
+   resolves with zero special import syntax.
+3. Every dependency, cached or freshly pulled, produces a real,
+   non-empty receipt line, printed by the CLI (`cmd.OutOrStdout()`)
+   BEFORE resolution proceeds — this project's own "never a silent
+   network call" discipline, matching `provider.Acquire`'s own framing:
+
+   ```
+   pulled ci-platform @ oci://ghcr.io/ubiquex/ci-platform:v3, verified: content hash sha256:… matches (11 file(s))
+   ```
+
+   (a cache hit's own receipt names it explicitly: `... (cached), verified: ...`).
+
+A Python program with no `requirements.txt` — or one with no `"@ url"`
+entries — pays nothing extra: `ResolvePyDependencies` returns `(nil, nil)`
+and `pyeval.Evaluate` runs exactly as it always has.
+
+Note the entry `.py` file itself uses a PLAIN import, no URL at all —
+`requirements.txt`'s own declared LHS name is checked against the pulled
+blueprint's own `blueprint.lock.json` name (a real integrity check — a
+mismatch is a clear, named error, never silently accepted), but is
+otherwise just a label. Unlike `invokeCall`'s own synthesized callers
+(`blueprint/invoke.go`, Slice 5), nothing here generates any calling
+code — the calling script is hand-written by a real user, who is
+expected to already know the blueprint's own real, build-time-derived
+Python module/function names, exactly like any real pip package's
+distribution name and its importable module name are already allowed to
+differ.
+
+### Local cache: mirrors `provider.Acquire`'s own discipline
+
+`~/.ubx/blueprints/by-spec/<sha256 of the declared name+url>/` — the
+same `~/.ubx/<kind>/...` cache-root convention `provider/cache.go`'s own
+`~/.ubx/providers` already established, applied here to a pulled
+blueprint instead of a provider binary. Unlike a provider binary, a
+blueprint dependency has no registry-signed version to trust before ever
+pulling, so the cache is keyed by the declared spec itself (there is
+nothing else to key it by ahead of a real pull); `Verify`, run on every
+hit — cached or fresh — is what actually establishes trust, same as
+every other `Verify` call in this codebase. Once verified, a cache hit
+is never re-pulled or re-verified from the network again.
+
+A **local-path dependency is never cached** — unlike a git ref or an OCI
+tag, a bare local path names something a blueprint author may be
+actively editing; caching it under a spec-derived key would silently
+serve stale content after an edit. It's pulled into a fresh scratch
+directory and verified fresh on every resolve instead.
+
+### A real, live-found finding: CPython writes `__pycache__` into whatever it imports from
+
+Required live verification (below) surfaced a real bug, not a
+hypothetical one: wasmtime's own `--dir host::guest` preopen is
+read-write by default, and CPython's own import machinery writes
+`__pycache__/*.pyc` bytecode-cache files into the directory a module was
+imported FROM as a side effect of merely running the calling script.
+Harmless for `invoke.go`'s own throwaway scratch copies (discarded right
+after use) — but for a **cached** blueprint dependency, the very act of
+using it once mutated its own cache directory, so every subsequent
+`Verify` against that same cache entry failed content-hash comparison
+and forced a full re-pull on every single resolve, silently defeating
+the cache entirely (still correct, just never actually cached — the
+receipt line would never say `(cached)`).
+
+Fixed at the actual cause (`pyeval/runner.go`): `PYTHONDONTWRITEBYTECODE=1`
+is now set for every `pyeval` guest process, unconditionally — CPython
+never writes a bytecode cache into ANY mounted directory, not just a
+UBI-130 dependency mount. Pure performance optimization CPython
+otherwise does silently, so this has no other observable effect, and it
+required no change to `blueprint/manifest.go`'s own hashing contract —
+the real, already-published `ghcr.io/ubiquex/ci-platform:v1` artifact's
+own `blueprint.lock.json` still declares two `py/__pycache__/*.pyc`
+entries from whenever it was originally built (a real, pre-existing,
+harmless quirk of that one already-shipped artifact, left untouched
+rather than "fixed" by excluding `__pycache__` from `hashFiles`
+globally, which would have broken verification of that historical
+artifact instead).
+
+### Hermetic tests
+
+`blueprint/pydeps_test.go`: parsing (`ParsePyDependencies` — all three
+schemes, an ssh user-info `@` correctly NOT mistaken for a ref, ordinary
+non-`"@ url"` requirement lines and comments skipped, missing-file
+returns `(nil, nil)`, malformed lines and unrecognized schemes both
+error); resolution (`ResolvePyDependencies` — a local-path dependency
+mounts and verifies for real; a declared-name/manifest-name mismatch
+errors; a dependency built without a `py/` package errors by name;
+a real local git repository, tagged, with `#subdirectory=` — proves a
+first resolve is a fresh pull, a second is a cache hit, and — the
+strongest form of that proof — the cache hit still succeeds after the
+git repository itself is deleted entirely); one real end-to-end
+subprocess test (`TestEvaluatePythonWithDeps_RealPullBeforeImport`,
+gated on `wasmtime` being present) proving the actual pull-before-import
+sequencing against a real `wasmtime` run — a hand-written driver script
+in one directory genuinely imports a function from a dependency pulled
+from a completely separate directory, with the resulting resource
+present in the evaluated output.
+
+### Live verification, the ticket's own required bar, genuinely met
+
+The exact worked example named in the ticket, run for real: a real
+`requirements.txt` (`ci-platform @ oci://ghcr.io/ubiquex/ci-platform:v1`
+— the real, already-published tag; the ticket's own illustrative `:v3`
+never existed) and a real `create_ci_platform.py`, calling `ubx plan
+--from-code create_ci_platform.py`:
+
+- Against the real, live `ghcr.io/ubiquex/ci-platform:v1` artifact
+  (Slice 7's own real, already-published artifact — no new artifact was
+  pushed for this ticket), with the local blueprint cache cleared first:
+  a genuinely fresh pull, the real required receipt line rendered
+  (`pulled ci-platform @ oci://ghcr.io/ubiquex/ci-platform:v1, verified:
+  content hash sha256:f893af6e945fe1e708af03dd60fe5372b76969579b3bdc8b70c3b4238968c885
+  matches (11 file(s))`), and a second run of the identical command
+  showing the cache-hit form (`... (cached), verified: ...`) with an
+  IDENTICAL resolved delta either way.
+- Against `fakeprovider` first (a separate, minimal `widget-lib`
+  blueprint dependency, `fake_widget`-typed so fakeprovider's own schema
+  actually covers it — the real `ci-platform` blueprint's resources are
+  real AWS types fakeprovider has no schema for at all): a real, full
+  `ubx plan --from-code` → `ubx accept` → `ubx ship --yes` against a real
+  `fakeprovider` subprocess, confirmed shipped via `ubx why`.
+- Against the real `hashicorp/aws@6.54.0` provider's own real schema
+  (resolve/plan only, per this project's own standing "never `ubx ship`
+  against a real cloud provider" rule — `resolve`/`plan` are schema-fetch-
+  only and explicitly exempt): the real `ci-platform` blueprint's own
+  `ci_platform(...)` function, pulled from the real OCI artifact and
+  imported with zero special syntax in the calling script, executed for
+  real and produced all 5 real AWS resources
+  (`aws_ecr_repository`/`aws_sqs_queue`/`aws_iam_role`/`aws_iam_policy`/
+  `aws_iam_role_policy_attachment`) with correct cross-resource `$ref`s
+  and the blueprint's own documented days→seconds conversion
+  (`retention_days=7` → `message_retention_seconds: 604800`) — never
+  shipped.
+
+**A real, live-found discrepancy in the ticket's own worked example,
+confirmed against the real published artifact, not assumed**: the
+ticket's illustrative `.py` source (`from ci_platform import CiPlatform`)
+does not match the blueprint's own real, live Slice-4 codegen naming —
+`packageIdent`/`pythonIdentifier` (`blueprint/identifier.go`) actually
+produce `py/ciplatform.py` (no separator) and `def ci_platform(...)`
+(snake_case), confirmed both by this repo's own hermetic
+`pygen_test.go` fixtures and by pulling and inspecting the real
+`ghcr.io/ubiquex/ci-platform:v1` artifact directly. This is purely a
+naming detail in the ticket's own illustrative prose, not a design or
+mechanism issue — a distribution name (`requirements.txt`'s own LHS,
+`ci-platform`) and its importable module/function names are already
+allowed to differ in real Python packaging, exactly like any real pip
+package. The worked example above uses the real, correct names.
+
+### A real, named, remaining scope boundary
+
+UBI-130 resolves blueprint dependencies for Python; it does not add
+Python-side blueprint-call PROVENANCE (UBI-126's own concern, Go only)
+— a resource produced by a Python program's own pulled-dependency call
+carries ordinary `document`-kind source provenance (the calling script
+itself), not a `blueprint`-kind one, exactly the same real, already-named
+gap UBI-126's own retrospective called out: "TS/Python's own direct-
+import calling paths still have the ORIGINAL gap." Closing it for Python
+is real, separate, future work — matching the honest, un-glossed framing
+this whole arc has kept throughout.
+
 ## Implementation slices
 
 - 2026-08-04 (UBI-74 Slice 1): built and live-verified. `blueprint/`

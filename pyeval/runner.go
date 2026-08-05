@@ -32,7 +32,7 @@ const runtimeGuestPath = "/ubxsdk"
 // PYTHONHASHSEED is passed explicitly, for determinism -- wasmtime
 // forwards zero host env vars otherwise (confirmed empirically), so
 // there is nothing else to scrub.
-func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
+func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) ([]byte, error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, fmt.Errorf("entry file: %w", err)
@@ -63,15 +63,47 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 	entryDir := filepath.Dir(absEntry)
 	entryBase := filepath.Base(absEntry)
 
+	// UBI-130: each ExtraDep gets its own fresh top-level guest preopen
+	// (same "one top-level preopen per real directory tree, always" rule
+	// the ubx_sdk mount below already established empirically) and an
+	// entry on PYTHONPATH ahead of the entry script's own directory, so a
+	// pulled blueprint's own `from <pkg> import ...` resolves before the
+	// script's own code ever runs.
+	pythonPath := runtimeGuestPath
+	var depDirArgs []string
+	for i, d := range deps {
+		guest := fmt.Sprintf("/ubxdep%d", i)
+		depDirArgs = append(depDirArgs, "--dir", d.HostDir+"::"+guest)
+		pythonPath += ":" + guest
+	}
+
 	args := []string{
 		"run",
 		"--env", "PYTHONHASHSEED=0",
-		// Makes `import ubx_sdk` resolve inside the guest -- this is a
-		// GUEST env var (via --env), not a host one; wasmtime forwards
-		// zero host env vars otherwise (confirmed empirically), so the
-		// host process's own PYTHONPATH, if any, never reaches the
-		// sandbox regardless.
-		"--env", "PYTHONPATH=" + runtimeGuestPath,
+		// UBI-130, a real, live-found finding: CPython's own import
+		// machinery writes __pycache__/*.pyc bytecode-cache files into
+		// whatever directory a module was imported FROM -- and wasmtime's
+		// own "--dir host::guest" preopen is read-write by default, so
+		// without this, importing a blueprint dependency mutates its own
+		// host directory as a side effect of merely being USED. Harmless
+		// for a one-shot scratch copy (invoke.go's own throwaway callers),
+		// but fatal for a directory meant to be VERIFIED again later --
+		// caught empirically via UBI-130's own required live GHCR
+		// verification: a cached blueprint dependency's own re-Verify
+		// failed content-hash comparison after its first real use, because
+		// the very act of importing it had already changed two files
+		// inside it. PYTHONDONTWRITEBYTECODE=1 stops CPython from ever
+		// writing bytecode caches at all, for every mounted directory, not
+		// just UBI-130's own dependency mounts -- a pure performance
+		// optimization CPython otherwise does silently, so this has no
+		// other observable effect.
+		"--env", "PYTHONDONTWRITEBYTECODE=1",
+		// Makes `import ubx_sdk` (and any UBI-130 blueprint dependency)
+		// resolve inside the guest -- this is a GUEST env var (via
+		// --env), not a host one; wasmtime forwards zero host env vars
+		// otherwise (confirmed empirically), so the host process's own
+		// PYTHONPATH, if any, never reaches the sandbox regardless.
+		"--env", "PYTHONPATH=" + pythonPath,
 		"--dir", filepath.Join(wasiDir, "lib") + "::/lib",
 		// Mounts assetsDir itself (the parent of ubx_sdk/) at a single,
 		// TOP-LEVEL guest path -- found empirically, not assumed: a
@@ -87,10 +119,13 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 		// reachable at all). One top-level preopen per real directory
 		// tree, always.
 		"--dir", assetsDir + "::" + runtimeGuestPath,
-		"--dir", entryDir + "::/prog",
-		filepath.Join(wasiDir, "python.wasm"),
-		"/prog/" + entryBase,
 	}
+	args = append(args, depDirArgs...)
+	args = append(args,
+		"--dir", entryDir+"::/prog",
+		filepath.Join(wasiDir, "python.wasm"),
+		"/prog/"+entryBase,
+	)
 
 	cmd := exec.CommandContext(ctx, wasmtimePath, args...)
 	// The wasmtime HOST process itself gets an explicitly empty

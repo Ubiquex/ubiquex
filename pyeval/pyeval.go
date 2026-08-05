@@ -23,15 +23,32 @@ import (
 	"github.com/ubiquex/ubiquex/core"
 )
 
+// ExtraDep is one additional host directory pyeval's own WASI sandbox
+// preopens (at a fresh, pyeval-assigned top-level guest path, "/ubxdep<i>")
+// and adds to the guest's own PYTHONPATH, ahead of the entry script's own
+// directory being mounted. UBI-130's own blueprint-dependency mechanism
+// (blueprint.ResolvePyDependencies) is the one real caller: it pulls +
+// verifies a requirements.txt-declared blueprint into ubx's own local
+// cache and passes its built py/ directory here so the calling script's
+// own plain `from <pkg> import ...` resolves -- pyeval itself has zero
+// knowledge of blueprints, pulling, caching, or verification (blueprint
+// already depends on pyeval, so the reverse dependency would be a cycle);
+// it only ever mounts whatever real host directory it's handed.
+type ExtraDep struct {
+	HostDir string
+}
+
 // Evaluate spawns the evaluator harness against entryFile TWICE, via
 // core.DoubleRun, as two entirely separate `wasmtime` subprocesses --
 // PYTHONHASHSEED is pinned unconditionally (docs/sdk.md's own
 // PYTHONHASHSEED finding) so the common nondeterminism source never
 // even reaches this backstop, but DoubleRun still catches anything else
 // (mirrors tseval.Evaluate/goeval.Evaluate's own structure exactly).
-func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
+// deps is optional and empty for every caller except UBI-130's own
+// blueprint-dependency resolution.
+func Evaluate(ctx context.Context, entryFile string, deps ...ExtraDep) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, err := runOnce(ctx, entryFile)
+		raw, err := runOnce(ctx, entryFile, deps)
 		if err != nil {
 			return nil, err
 		}

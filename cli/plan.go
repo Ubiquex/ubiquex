@@ -238,9 +238,17 @@ propose-time PR trailer hash, etc.).`,
 				intent = *draft
 				sourceLabel = fromDiagram
 			case fromCode != "":
-				canon, err := evaluateSDKProgram(ctx, fromCode)
+				canon, receipts, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+				}
+				// UBI-130: see cli/resolve.go's own identical comment --
+				// every blueprint dependency a Python program's own
+				// requirements.txt declared was already pulled+verified
+				// before evaluateSDKProgram ran the script; print its
+				// receipt line(s) now, before planning proceeds.
+				for _, r := range receipts {
+					fmt.Fprintln(outWriter, r)
 				}
 				if err := json.Unmarshal(canon, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse evaluated intent: %w", err)}
