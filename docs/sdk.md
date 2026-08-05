@@ -26,11 +26,150 @@
 > languages, one CI) and **codegen'd bindings are generated locally,
 > never published** (`ubx sdk gen` runs against the config-pinned
 > provider version on the user's own machine; only the tiny `@ubx/sdk`
-> runtime ships to npm). Language order is also pre-decided: TypeScript,
-> then Go, then Python (`docs/architecture.md`'s own "What carries over
-> from v1" already names `Computed<T>`/`secret()`/typed refs as v1 design
-> worth keeping — this is where that design gets rebuilt, in code, for
-> the first time in v2).
+> runtime ships to npm). **This second constraint's own PREMISE — one
+> flat file per provider, with no reasonable path to becoming a real repo
+> at all — is superseded by UBI-98 (2026-08-03/04); read "Current,
+> authoritative summary (UBI-100)" immediately below before trusting
+> anything in this document about output shape, publishing, or import
+> paths.** The distinction itself (locally generated, never a Ubiquex-
+> maintained release) still holds, revised: generation is now
+> repo-*shaped*, not flat, specifically so it CAN become a real pushed
+> repo at the user's own discretion — and, in practice, already has, for
+> all 12 real provider/language pairs (UBI-99 and its own ports). Language
+> order is also pre-decided: TypeScript, then Go, then Python
+> (`docs/architecture.md`'s own "What carries over from v1" already names
+> `Computed<T>`/`secret()`/typed refs as v1 design worth keeping — this is
+> where that design gets rebuilt, in code, for the first time in v2).
+
+## Current, authoritative summary (2026-08-05, UBI-100) — read this first
+
+This document is a real, chronological engineering record — 20+ session
+amendments below, each with its own live-verified findings, none deleted
+or rewritten after the fact, per this project's own standing discipline.
+That makes it a poor *first* read for "what's actually true today." This
+section is that answer, in one place; the amendments below remain the
+full supporting narrative (why each decision was made, every real bug
+found along the way), not superseded, just not where a new reader should
+start.
+
+**The revised posture, stated precisely (UBI-98's own ticket language,
+reused verbatim, not re-derived)**: bindings are generated as a
+repo-**shaped** local directory (its own `go.mod`/`package.json`/
+`pyproject.toml` stub) — still 100% locally generated from the
+config-pinned provider version, still never a versioned/maintained
+release *by Ubiquex* — but now structured so it CAN become a real pushed
+repo at the user's own discretion. `ubx sdk gen` itself never pushes
+anywhere or needs git credentials; whether/how the local output becomes
+a real repo is left entirely to the user (or CI) — the same posture as
+any other generated code being reviewable before it's committed.
+
+**`--out`'s real behavior**: writes a full repo-shaped tree, never a
+single flat file. `ubx sdk gen --lang <go|ts|py> --out <dir>` writes
+`<dir>/<lang>/<source-sanitized>/` (`--lang` is its own path segment —
+generating multiple languages against one shared `--out` would otherwise
+interleave their manifests into one directory) — its own manifest stub,
+one directory per derived service boundary (`aws_iam_*` → `iam`,
+`aws_ecr_*` → `ecr`, ...), one file per resource type, every service
+package nested under one provider-namespace directory (`aws/iam/`, never
+`iam/` at the repo root — UBI-106, a real repo-browsing fix). The
+redundant `Aws<Service>` prefix is dropped from every generated type name
+since the import path already encodes provider+service.
+
+**The per-service-package import pattern, a real worked example pulled
+directly from the actual live repo** (`https://github.com/Ubiquex/
+ubx-sdk-aws-go`, `aws/iam/role.go`, fetched live via the GitHub API while
+writing this, not copied from an old transcript):
+
+```go
+import (
+	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
+	iam "github.com/ubiquex/ubx-sdk-aws-go/aws/iam"
+)
+
+sdk.Resource(iam.Role, "ci-runner", iam.RoleConfig{
+	AssumeRolePolicy: "...",
+})
+```
+
+`iam.Role`, never `generated.AwsIamRole` — the redundant prefix is gone,
+the import path itself (`aws/iam`) carries the provider+service context
+instead.
+
+**A real, load-bearing naming distinction, easy to conflate, checked
+directly rather than assumed**: `ubx sdk gen`'s own MECHANICAL module
+name (what it writes into a freshly-generated `go.mod`/`package.json`/
+`pyproject.toml`) is always `ubx-sdk-<shortName>` — e.g.
+`github.com/ubiquex/ubx-sdk-aws` for `hashicorp/aws` — with **no
+per-language suffix at all** (`sdk/codegen/templates/go/go.go`'s own
+`GeneratedRepo`, confirmed by reading the source directly). The REAL,
+separately-hosted repos this project actually publishes (below) carry a
+manually-chosen `-go`/`-ts`/`-py` suffix instead
+(`ubx-sdk-aws-go`/`ubx-sdk-aws-ts`/`ubx-sdk-aws-py`) — a one-time rename
+the founder applies before establishing each repo as its own real,
+independent (provider, language) pair, never something `ubx sdk gen`
+derives on its own. This is exactly why the version-watch automation
+(next) excludes each repo's own manifest file from its regeneration
+diff — regenerating it in place would silently revert the module path
+back to the mechanical, unsuffixed name.
+
+**12 real, live, separately-hosted provider-binding repos exist today**,
+one per (provider, language) pair, all seeded via a real `ubx sdk gen
+--out .` and kept current by UBI-99's own real GitHub Actions automation
+(a scheduled + manually-dispatchable workflow that queries the real
+Terraform Registry API for a newer provider version, regenerates, and
+opens a PR — never auto-merges):
+
+| Provider | Go | TypeScript | Python |
+| --- | --- | --- | --- |
+| AWS | [ubx-sdk-aws-go](https://github.com/Ubiquex/ubx-sdk-aws-go) | [ubx-sdk-aws-ts](https://github.com/Ubiquex/ubx-sdk-aws-ts) | [ubx-sdk-aws-py](https://github.com/Ubiquex/ubx-sdk-aws-py) |
+| Google | [ubx-sdk-google-go](https://github.com/Ubiquex/ubx-sdk-google-go) | [ubx-sdk-google-ts](https://github.com/Ubiquex/ubx-sdk-google-ts) | [ubx-sdk-google-py](https://github.com/Ubiquex/ubx-sdk-google-py) |
+| Kubernetes | [ubx-sdk-kubernetes-go](https://github.com/Ubiquex/ubx-sdk-kubernetes-go) | [ubx-sdk-kubernetes-ts](https://github.com/Ubiquex/ubx-sdk-kubernetes-ts) | [ubx-sdk-kubernetes-py](https://github.com/Ubiquex/ubx-sdk-kubernetes-py) |
+| Azure | [ubx-sdk-azure-go](https://github.com/Ubiquex/ubx-sdk-azure-go) | [ubx-sdk-azure-ts](https://github.com/Ubiquex/ubx-sdk-azure-ts) | [ubx-sdk-azure-py](https://github.com/Ubiquex/ubx-sdk-azure-py) |
+
+**Recommended way to keep a real pushed bindings repo current**: rely on
+UBI-99's own version-watch automation (already running, unchanged, in
+all 12 repos above) rather than re-running `ubx sdk gen` by hand — it
+already handles the version-detection/regenerate/PR/never-auto-merge
+cycle, with the manifest-exclusion behavior named above already built
+in.
+
+**Runtime package publish status, checked live against the real
+registries while writing this, not assumed from an old amendment**:
+TypeScript's `@ubx/sdk` is genuinely published — on **JSR**
+(`jsr:@ubx/sdk@0.1.0`, confirmed via `https://jsr.io/@ubx/sdk/meta.json`)
+— **not** on npm in any real sense: `@ubx/sdk` exists on the npm registry
+too, but as a deliberate placeholder (version `0.0.1`, its own
+description literally reads "Placeholder — see jsr.io/@ubx/sdk for the
+real package"), confirmed via a live `registry.npmjs.org` query. Go's
+`github.com/ubiquex/ubx-sdk-go` is genuinely published to the real public
+Go module proxy — confirmed live via `proxy.golang.org/github.com/
+ubiquex/ubx-sdk-go/@latest`, resolves `v0.0.0`, zero credentials, zero
+`replace` directive needed. **Both directly contradict this document's
+own Session-1-era "only the tiny `@ubx/sdk` runtime ships to npm" line
+above** — corrected here, not silently. Python's `ubx_sdk` runtime is
+genuinely still unpublished — confirmed live, a real `404` from
+`pypi.org/pypi/ubx_sdk/json` — every real live Python bindings repo
+(`ubx-sdk-*-py`) still vendors it under `vendor/ubx_sdk/`, not a stale
+claim.
+
+**Conformance fixtures, current real shape** (`sdk/conformance/programs/
+{go,ts,py}/generated/`, re-verified directly against the actual on-disk
+files while writing this, not trusted from prose alone): Go and
+TypeScript both nest under `hashicorp-aws/aws/db/` (a nested repo-shaped
+module/package, `db` being `aws_db_instance`'s own mechanically-derived
+service); Python's own fixture is `generated/aws/db/` directly, deliberately
+NOT nested under a hyphenated `hashicorp-aws/` intermediate directory —
+Python's dotted `import` syntax cannot traverse a hyphenated path segment
+at all, a real, load-bearing, already-documented deviation from the real
+CLI's own output shape (Amendment "UBI-98 session 2," below), not an
+inconsistency.
+
+**Consistency with `docs/blueprint.md`**: confirmed, no contradiction — that
+document's own generated `go.mod`s already correctly `require
+github.com/ubiquex/ubx-sdk-go v0.0.0` and repeatedly confirm real,
+credential-free resolution against the real published module (e.g. "the
+actual published `ubx-sdk-go` module — real network, no `replace`
+directive"), consistent with the real publish status confirmed above.
 
 ## Scope: what this session designs, and what it doesn't
 
@@ -574,6 +713,20 @@ not N generated ones. See `sdk/ts/runtime/src/index.ts`'s own `FieldSpec`/
 the real, built shape.
 
 ### `ubx sdk gen`: local, pinned, offline-after-generation
+
+> **Superseded — real output shape, UBI-98/99/106 (see "Current,
+> authoritative summary (UBI-100)" at the top of this document).** The
+> `sdk/generated/<source>/` single-directory path below, and the
+> unstated (implicitly single-file) shape it describes, are both Session
+> 1's own original, historical design intent — not what `ubx sdk gen`
+> actually writes today. The real path is `<out>/<lang>/<source-
+> sanitized>/`, a repo-shaped tree (own manifest, one directory per
+> service, one file per resource type, nested under one provider-
+> namespace directory), and the real output is routinely pushed to a
+> real, separately-hosted, per-(provider,language) GitHub repo — 12 of
+> them exist today, kept current by real automation (UBI-99). Preserved
+> below verbatim as the historical record of what was designed before any
+> of that existed.
 
 `ubx sdk gen` reads `.ubx/config`'s already-existing `[providers]` table
 (docs/architecture.md's own Multi-provider stacks decision — the exact
