@@ -11,20 +11,29 @@ import (
 )
 
 // Pull resolves source into a real local blueprint directory at dest,
-// supporting all three source types UBI-74 scopes across Slices 3 and 7:
-// a local filesystem path (source already exists on disk -- resolved and
-// copied into dest, ref/path unused), a git repository (cloned into a
-// scratch directory, checked out at ref -- branch/tag/commit, default the
-// repo's own default branch when ref is "" -- with path naming the
-// blueprint's own location within that repo, default "." for a repo
-// whose root IS the blueprint), or a real OCI artifact ("oci://registry/
-// repo:tag", Slice 7 -- ref/path are git-specific and refused if set,
-// since the tag is already embedded in the oci:// reference itself).
-// Either way, dest ends up holding an ordinary local blueprint directory,
-// indistinguishable afterward from one authored locally to begin with --
-// including blueprint.lock.json if the source already carried one;
-// Verify reads it from dest exactly the same way regardless of how it
-// got there.
+// supporting all four source types UBI-74 scopes across Slices 3, 7, and
+// 8: a local directory (source already exists on disk as a directory --
+// resolved and copied into dest, ref/path unused), a bare tarball FILE
+// (source exists on disk but is NOT a directory -- extracted directly
+// into dest, Slice 8's own offline/email/support-ticket delivery mode,
+// no network involved at all), a git repository (cloned into a scratch
+// directory, checked out at ref -- branch/tag/commit, default the repo's
+// own default branch when ref is "" -- with path naming the blueprint's
+// own location within that repo, default "." for a repo whose root IS
+// the blueprint), or a real OCI artifact ("oci://registry/repo:tag",
+// Slice 7 -- ref/path are git-specific and refused if set, since the tag
+// is already embedded in the oci:// reference itself). Either way, dest
+// ends up holding an ordinary local blueprint directory, indistinguishable
+// afterward from one authored locally to begin with -- including
+// blueprint.lock.json if the source already carried one; Verify reads it
+// from dest exactly the same way regardless of how it got there --
+// deliberately so for the tarball-file source specifically: Pull itself
+// neither trusts nor rejects the tarball's own declared content_hash, it
+// only extracts it, exactly like every other source type leaves hash
+// verification as a separate, explicit `ubx blueprint verify` step. This
+// is the one delivery mode with no git history or registry-native
+// integrity to lean on at all (the original design record's own
+// framing) -- Verify is what actually protects it.
 //
 // dest must not already exist, or must be empty -- Pull never overwrites
 // existing content.
@@ -45,7 +54,19 @@ func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 
 	if info, err := os.Stat(source); err == nil {
 		if !info.IsDir() {
-			return "", fmt.Errorf("blueprint pull: %s exists but isn't a directory -- pulling a bare tarball directly isn't supported yet (Slice 8)", source)
+			if ref != "" || path != "" {
+				return "", fmt.Errorf("blueprint pull: --ref/--path are git-specific and meaningless for a bare tarball file -- drop them")
+			}
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return "", fmt.Errorf("blueprint pull: %w", err)
+			}
+			if err := extractTarGz(source, dest); err != nil {
+				return "", fmt.Errorf("blueprint pull: %s doesn't look like a real gzipped blueprint tarball: %w", source, err)
+			}
+			if _, err := os.Stat(filepath.Join(dest, UbxfileName)); err != nil {
+				return "", fmt.Errorf("blueprint pull: %s has no %s after extraction -- not a real blueprint tarball", source, UbxfileName)
+			}
+			return dest, nil
 		}
 		absSrc, err := filepath.Abs(source)
 		if err != nil {

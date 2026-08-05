@@ -245,18 +245,23 @@ unpackaged directory isn't supported; package it first.`,
 }
 
 // newBlueprintPullCmd is `ubx blueprint pull` (docs/blueprint.md, Slices
-// 3 and 7): resolves a blueprint reference (a local path, a git repo+ref,
-// or a real OCI artifact) into a real local directory. Strata itself
-// (the eventual registry service) isn't built yet.
+// 3, 7, and 8): resolves a blueprint reference (a local directory, a bare
+// tarball file, a git repo+ref, or a real OCI artifact) into a real local
+// directory. Strata itself (the eventual registry service) isn't built
+// yet.
 func newBlueprintPullCmd() *cobra.Command {
 	var ref, path string
 
 	cmd := &cobra.Command{
 		Use:   "pull <source> <dest>",
-		Short: "Pull a blueprint from a local path, a git repo, or an OCI registry into dest",
-		Long: `source is one of three real forms:
+		Short: "Pull a blueprint from a local path, a tarball file, a git repo, or an OCI registry into dest",
+		Long: `source is one of four real forms:
 
   - an existing local directory: copied into dest as-is, --ref/--path unused.
+  - an existing local FILE (not a directory): treated as a bare "ubx blueprint package" tarball -- extracted directly
+    into dest, no network involved at all (Slice 8's own offline/email/support-ticket delivery mode). --ref/--path
+    unused; run "ubx blueprint verify" afterward -- this is the one delivery mode with no git history or
+    registry-native integrity to lean on, so verification is what actually protects it.
   - a git repository URL: cloned, checked out at --ref (branch/tag/commit, default the repo's own default branch),
     then the directory at --path within it (default ".") copied into dest.
   - an OCI artifact reference, "oci://registry/repo:tag" (e.g. "oci://ghcr.io/ubiquex/ci-platform:v1"): pulled via

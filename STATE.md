@@ -2,7 +2,286 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-74 retrospective: Strata blueprints, all 8 slices, closed 2026-08-05
+
+UBI-74's own original eight-slice plan (Linear "Implementation breakdown"
+comment, 2026-08-04) is now fully built and live-verified, slice by
+slice, across five sessions (2026-08-04/05). This section is the
+required closing pass: does the full pipeline genuinely hold together as
+ONE coherent system when looked at end to end, not just slice by slice?
+Honest answer: **mostly yes, with real, specific, named gaps below — not
+blanket completion.**
+
+**What genuinely holds as one coherent system, confirmed by tracing it
+end to end, not assumed from each slice's own isolated success bar:**
+
+- **Author → build → call → distribute → provenance → verify, all real,
+  all connected.** An Ubxfile (`lang`/`params`/`resources`) resolves
+  through the intent-provider pipeline EXACTLY ONCE (Slice 1) into real,
+  compilable SDK packages in up to three languages from that SAME draft
+  (Slice 4) — called from a hand-written SDK program (Slice 2), a
+  diagram's own `ubx_blueprint` node, or an md draft's "Use blueprint X"
+  prose (Slice 5, all three compiling to the SAME `BlueprintCalls` wire
+  field) — distributed via any of FOUR real mechanisms that all produce
+  IDENTICAL, `Verify`-compatible output regardless of path (a local
+  directory, a git repo+ref, a real OCI registry, or a bare offline
+  tarball file — Slices 3/7/8) — every resource a `BlueprintCalls`
+  invocation produces carries real provenance (`ubx why` renders the full
+  chain, `ubx render` visually groups it — Slice 6) — and ONE content-hash
+  scheme (`core.CanonicalJSON`-based, unchanged since Slice 3) verifies
+  integrity identically no matter which distribution mechanism delivered
+  the content, confirmed this session to survive real OCI redistribution
+  to a genuinely independent second registry location.
+- **Real infrastructure, real registries, repeatedly, not once.** The
+  SAME real CI-platform blueprint (ECR+SQS+IAM role+policy+attachment)
+  shipped real resources on real AWS FOUR separate times across this arc
+  (Slices 2, 4's TS leg, 5's md leg, 6) — Slice 2's and Slice 4's own
+  playground stacks confirmed terminated cleanly; Slice 6's playground
+  confirmed terminated cleanly (checked directly this session, both via
+  the ledger's own apply records and independently via real read-only
+  `aws` CLI calls); Slice 5's own playground was resolved+accepted but
+  never shipped, left inert, no real AWS resources ever created there.
+  The same blueprint's own content was pushed to a real OCI registry
+  (Slice 7) and later independently mirrored to a second one (Slice 8),
+  both still live on `ghcr.io/ubiquex/` as this arc's own real,
+  intentional deliverables.
+- **Determinism held throughout**, the project's own standing discipline
+  applied consistently, not just claimed: identical blueprint content
+  reproduces byte-identical tarballs (Slice 3), byte-identical OCI
+  manifests (Slice 7's fixed `org.opencontainers.image.created`
+  annotation), and identical resolved deltas across all three languages
+  and all three calling mediums (Slice 4/5's own hermetic
+  byte-comparison proofs).
+
+**Real, specific gaps — named honestly, not glossed over:**
+
+1. **Provenance tagging (Slice 6) only covers ONE of the two real calling
+   conventions.** A blueprint called via `BlueprintCalls` (diagram/md,
+   Slice 5's own new mechanism) gets full `ubx why`/`ubx render`
+   provenance. A blueprint called via a hand-written SDK program that
+   imports the generated package DIRECTLY (Slice 1/2's own ORIGINAL,
+   still-supported calling convention — `writeBlueprintCallingStack`'s
+   own pattern, `ubx resolve --from-code`) produces resources with ZERO
+   `sources` tagging at all — confirmed directly this arc (docs/
+   blueprint.md's own "Provenance: Slice 6" section names this
+   explicitly). This is the single most significant "not fully one
+   system" finding: two equally-real, equally-supported ways to call the
+   identical blueprint produce OBSERVABLY DIFFERENT downstream behavior
+   — one traceable via `ubx why`, one silently untraceable. Not fixed
+   across Slices 6-8; a real, closeable follow-up, not attempted here
+   since it was never in any of the eight slices' own explicit scope.
+2. **`blueprintNameFromCall`'s own build-time-name gap, never closed.**
+   Deriving a called blueprint's own exported function/package
+   identifier requires knowing its build-time directory basename, which
+   neither a diagram node nor an md draft actually records — a blueprint
+   renamed after building fails with a "function not found" error at
+   call time, not a silent wrong call, but still a real, named,
+   never-closed gap across Slices 5 through 8.
+3. **Breadth of real-world proof is narrow: only ONE real blueprint has
+   ever been built and exercised across all eight slices.** Every real
+   AWS ship, every real OCI push, every hermetic proof in this entire
+   arc reuses the SAME `ci-platform` (ECR+SQS+IAM role+policy+attachment)
+   content — param VALUES varied (repo/queue names, retention days), but
+   never a genuinely different SECOND blueprint shape. The mechanism is
+   proven; its behavior across a wide variety of REAL resource
+   topologies is not.
+4. **List-typed parameters/iteration is completely unexercised.** Every
+   blueprint proven across this entire arc creates a FIXED, single-
+   instance set of resources — the founder's own separate design session
+   (2026-08-04, recorded on UBI-74) explicitly named this as new,
+   unproven scope, never assumed part of Slices 1-8, and it wasn't
+   touched here either. A blueprint that needs to create N resources
+   (e.g. one subnet per availability zone) has no proven path today.
+5. **The "dual-signature" story is only half real, by design, honestly
+   rendered but genuinely incomplete relative to the original design
+   vision.** `ubx why` explicitly names the gap every time (`cli/why.go`'s
+   own `case "blueprint":` rendering) rather than fabricating a
+   signature — but the blueprint AUTHOR's own signing (as opposed to the
+   calling stack's own real acceptance) has no ceremony at all in this
+   build. Not a regression, not silently hidden, but a real, named,
+   still-open piece of the original design record.
+6. **Fork-with-modification (redistribution pattern 1) is designed in
+   full, not built.** An explicit Slice 8 stretch goal, named as such,
+   not silently left unaddressed — see docs/blueprint.md's own "Offline
+   delivery + redistribution: Slice 8" section for the complete,
+   buildable design (a new `Manifest.ForkedFrom` field, a new `ubx
+   blueprint fork` command, a parallel `ubx why` rendering line).
+7. **`content_hash` depends on the blueprint's own declared `name`
+   (from the directory's basename at `Package` time), not purely file
+   content — a real, live-found operational subtlety** (caught during
+   this session's own required Slice 8 verification, not predicted):
+   re-packaging identical files into a differently-named directory
+   produces a genuinely different hash. Not a bug (`name` genuinely
+   identifying WHICH blueprint this is is the correct design), but a
+   real, easy-to-trip-on interaction, now documented, never "fixed"
+   because there's nothing to fix — it's naming a real property, not a
+   defect.
+8. **Python was never independently taken to a real-AWS ship as the
+   EXECUTING language.** Go (Slice 2) and TypeScript (Slice 4) both were;
+   Python's own equivalence with both is proven hermetically (Slice 4's
+   own compile/typecheck/import proof, Slice 5's own
+   `TestExpandCalls_LocalBlueprint_Python`-style tests) but never against
+   real infrastructure directly. A real, narrower-but-acceptable gap in
+   proof depth, not a known behavioral difference.
+
+**Deliberately, correctly out of scope for all eight slices — confirmed
+here as never having slipped in, not gaps that were missed:** nesting
+(`uses:`, UBI-121) was excluded from EVERY slice's own design from the
+very first "Implementation breakdown" comment onward, never attempted;
+the bound policy engine (UBI-118) was split off UBI-74 entirely before
+Slice 1 even started; the override mechanism and `render
+--sync-overrides` (UBI-86) were split off separately; a real Strata
+registry SERVICE was never built at all — the founder's own OCI
+realization (Slice 7's own design comment) made a bespoke registry
+server unnecessary for v1, existing OCI registries (GHCR proven, Docker
+Hub/Artifactory/Harbor all work identically via the same ORAS mechanism)
+serve the identical role; a Terraform converter (UBI-125) is a separate,
+unrelated ticket.
+
+**Bottom line**: the pipeline this ticket set out to build — author once,
+call from any medium in any language, distribute via any real mechanism,
+with provenance and content-hash integrity throughout — genuinely works,
+proven against real AWS and real OCI registries repeatedly, not just
+hermetically. The gaps above are real and specific, not hedging: item 1
+(the direct-SDK-import provenance blind spot) is the one worth prioritizing
+first if this arc reopens, since it's the one place two supported code
+paths produce genuinely different, silently-different downstream
+behavior — everything else is either an explicit, already-scoped-out
+follow-up or a narrower-than-ideal (but honestly proven, not
+misrepresented) depth of live verification.
+
 ## Current phase
+
+**UBI-74 Slice 8 (2026-08-05) — offline delivery + redistribution, closed, live-verified against real `ghcr.io` — THE FINAL SLICE, all 8 closed (see the retrospective above): `ubx blueprint pull <path-to-tarball>` extracts a bare offline tarball file with zero network at all; real re-tag/mirror redistribution (`ubx blueprint push` to a second location, unmodified) needed no new code, proven to preserve the original content hash to a genuinely independent second GHCR location. Live-verified: the real CI-platform blueprint pulled fresh from GHCR, re-packaged, pulled again as a bare file with network deliberately blocked, verified, real `go build`/`go vet` succeeded; pushed to a second real location, `docker manifest inspect` confirmed an identical blob digest at both, verify confirmed the identical original hash from the mirror.**
+
+Read UBI-74's own Linear "Implementation breakdown" comment (Slice 8's
+own authoritative scope) and Slice 3's own closing report (package/pull/
+verify — the tarball + content-hash mechanism this slice pulls FROM
+directly, as a bare file) before touching this arc again. **This was the
+final slice of UBI-74's original eight-slice plan — read the
+retrospective section above this one before starting any new work on
+this arc.**
+
+**Scope, exactly as scoped, nothing more**: a fourth `Pull` source type,
+a bare tarball file (item 1); content-hash verification confirmed to
+fire correctly with no git/registry integrity to lean on (item 2); real
+re-tag/mirror redistribution, at least (item 3, built and live-verified;
+fork-with-modification designed only, an explicit stretch goal).
+Explicitly did NOT touch: nesting (UBI-121), the override mechanism
+(UBI-86), list-typed params/iteration, a Terraform converter (UBI-125).
+
+**1. A fourth `Pull` source type (`blueprint/pull.go`) — slotted into
+the exact gap the existing dispatch already implied.** `Pull`'s own
+`os.Stat`/`IsDir` check already distinguished "a local directory" (Slice
+3) from "everything else, tried as git," with a placeholder error
+literally saying "pulling a bare tarball directly isn't supported yet
+(Slice 8)" at the exact spot this slice needed to fill. No new
+heuristic, no ambiguity: a file can never satisfy `IsDir()`. Extracted
+via `extractTarGz` (Slice 7's own `writeTarGz` converse, reused
+verbatim), then checked for a real `Ubxfile` before trusting it's a
+blueprint at all. `--ref`/`--path` refused if set, mirroring the
+`oci://` branch's own refusal.
+
+**2. Content-hash verification — zero new code, and it's what actually
+protects this path.** `Pull` never trusts a bare tarball's own declared
+hash, exactly like every other source type; `Verify` (unchanged since
+Slice 3) is the real protection here specifically BECAUSE this delivery
+mode has no git history or registry-native integrity check at all (the
+original design record's own framing, confirmed correct by this
+session's own hermetic tamper test: a tarball corrupted after packaging
+extracts without complaint, `Verify` catches it every time).
+
+**3. Real re-tag/mirror redistribution — needed ZERO new production
+code.** `ubx blueprint push` (Slice 7) called a second time, against a
+second `--to`, with the identical tarball file never re-packaged or
+modified, IS the re-tag/mirror-unchanged pattern. Proven by composing
+already-built mechanisms, not by inventing a new one — matching this
+project's own established "don't build a second mechanism to prove a
+property the first one already has" discipline. Fork-with-modification
+(a genuine derivative with its own fork-lineage provenance) is designed
+in full in docs/blueprint.md (a new `Manifest.ForkedFrom` field, a new
+`ubx blueprint fork` command reusing `Pull` unchanged, a parallel `ubx
+why` rendering line) but explicitly not built — a named stretch goal, not
+silently left unaddressed. Alias/pointer redistribution (the design
+record's own third pattern) wasn't attempted at all: the re-tag/mirror
+case already proves the load-bearing "trust survives redistribution"
+property this slice's own success bar required.
+
+**A real, live-found subtlety, not predicted in advance.** `content_hash`
+turns out to be a function of the blueprint's own declared `name`
+(derived from `filepath.Base` at `Package` time), not purely file
+content. Caught live during this session's own required verification,
+BEFORE it could be mistaken for a real content discrepancy: pulling the
+real `ci-platform` blueprint from GHCR into a directory named
+`fresh-from-ghcr` and re-packaging it produced a genuinely DIFFERENT
+hash (`sha256:fe80b25...`) from the original (`sha256:f893af6e945f...`)
+— purely from the directory rename. Re-pulling into a directory correctly
+named `ci-platform` reproduced the exact original hash. Documented
+explicitly in docs/blueprint.md as a real operational detail for anyone
+re-exporting a blueprint for offline delivery — not a bug (`name`
+genuinely identifying WHICH blueprint this is is the correct design),
+but a real, easy-to-trip-on interaction worth naming rather than a silent
+surprise.
+
+**Hermetic tests.** `blueprint/pull_test.go` (four new tests):
+`TestPull_BareTarballFile_ExtractsWithoutNetwork` (a real
+`Package`-produced tarball, pulled by file path with
+`HTTP_PROXY`/`HTTPS_PROXY` pointed at an unreachable address — proving
+zero network dependency empirically, not just by code inspection);
+`TestPull_BareTarballFile_RefPathFlagsRefused`;
+`TestPull_BareTarballFile_MissingUbxfile_Errors`; `TestPull_
+BareTarballFile_TamperedContent_VerifyFails` (a real tarball's own
+tar-level bytes altered AFTER packaging extracts cleanly but fails
+`Verify`). `blueprint/oci_test.go`:
+`TestMirrorRedistribution_ContentHashSurvivesToASecondLocation` (the SAME
+tarball pushed to TWO independent local `oci.Store` targets, `Verify`
+against either reporting the identical original hash). `cli/
+blueprint_offline_test.go`: CLI-level package -> pull(bare file) ->
+verify round trip, `--ref` refusal.
+
+**Live verification, the ticket's own required bar, genuinely met.**
+Pulled the real, currently-live `ci-platform` blueprint fresh from
+`ghcr.io/ubiquex/ci-platform:v1` (into a directory correctly named
+`ci-platform`) and re-packaged it into a standalone tarball — content
+hash `sha256:f893af6e945fe1e708af03dd60fe5372b76969579b3bdc8b70
+c3b4238968c885`, the EXACT original hash, confirming a genuinely
+byte-identical export. Pulled that bare tarball FILE with
+`HTTP_PROXY`/`HTTPS_PROXY` pointed at `127.0.0.1:1` (nothing listens
+there) — succeeded, real proof of zero network dependency, not just code
+inspection. `ubx blueprint verify` confirmed the identical hash, and a
+real `go build ./...`/`go vet ./...` against the offline-pulled copy's
+own `go/` subdirectory succeeded cleanly (real network for module
+resolution only, no local `replace`). Then the real mirror: the same
+tarball pushed to `ghcr.io/ubiquex/ci-platform-mirror:v1` — `docker
+manifest inspect` against BOTH locations confirmed an IDENTICAL blob
+digest (`sha256:f22c6e87ed30cbcaa4300372d3a9b3f28df18c7e14c7115435291
+c8b349dd49c`), not merely an identical `content_hash` annotation,
+confirming the mirror is genuinely the same bytes. Pulled from the
+mirror into a separate directory — `ubx blueprint verify` confirmed the
+identical original content hash, proving content-hash-based trust
+survives redistribution to a real, independent second location.
+
+Full test suite green (`go test ./... -count=1`), `gofmt -l .`/`go vet
+./...` clean. `make build` run and `ubx version` checked before every
+live verification step. Committed and pushed to `origin/main`, per
+CLAUDE.md's own standing commit+push authorization.
+
+**Not done this session, named so it isn't assumed covered**:
+fork-with-modification (designed, not built — see above); alias/pointer
+redistribution (not attempted). `ghcr.io/ubiquex/ci-platform:v1` and
+`ghcr.io/ubiquex/ci-platform-mirror:v1` are both left published
+deliberately — this arc's own real deliverables, not transient test
+resources. Nothing this session touched real AWS at all (OCI/GHCR and
+local tarball files only) — no playground stack to terminate. **Docs
+debt, unchanged, still flagged**: `ubiquex-docs` still has no dedicated
+blueprints guide across ANY of Slices 1-8.
+
+Next: UBI-74's own original eight-slice plan is COMPLETE. Whatever comes
+next for this arc is new scope, not a continuation of a partially-built
+slice — read the retrospective above first, in particular gap #1 (the
+direct-SDK-import provenance blind spot), before deciding what to build.
+
+## Current phase (previous)
 
 **UBI-74 Slice 7 (2026-08-05) — OCI push/pull, closed, live-verified against real `ghcr.io`: `ubx blueprint push <tarball> --to oci://registry/repo:tag` uploads Slice 3's own tarball as a real OCI artifact via ORAS (`oras.land/oras-go/v2`); `ubx blueprint pull` gained a third `oci://` source type. Authenticated via the founder's own real `docker login` credentials. The real CI-platform blueprint pushed to `ghcr.io/ubiquex/ci-platform:v1`, independently confirmed via `docker manifest inspect`, pulled into a separate directory, content hash verified, real `go build`/`go vet` against the pulled copy succeeded.**
 

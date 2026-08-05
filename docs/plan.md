@@ -2,6 +2,36 @@
 
 ## Changelog
 
+- 2026-08-05 — UBI-74 Slice 8 (Strata blueprints, offline delivery +
+  redistribution — the FINAL slice of the original eight-slice plan,
+  now fully closed): `ubx blueprint pull <path-to-tarball>` -- a fourth
+  `Pull` source type, a bare tarball FILE, extracted with zero network
+  involved at all (offline/email/support-ticket delivery), slotted into
+  the exact gap the existing local-path/git/OCI dispatch already
+  implied. Real re-tag/mirror-unchanged redistribution needed no new
+  production code -- `ubx blueprint push` called a second time against a
+  second `--to`, proving trust-preserving redistribution by composing
+  already-built mechanisms. Content-hash verification stayed the one
+  existing scheme (`Verify`, unchanged since Slice 3) -- the delivery
+  mode this session's own required verification confirmed has no git
+  history or registry-native integrity to lean on at all. A real,
+  live-found subtlety: `content_hash` depends on the blueprint's own
+  declared `name` (from the directory's basename at package time) as
+  well as file content -- documented explicitly as a real operational
+  gotcha for offline re-export. Fork-with-modification is designed in
+  full but not built (an explicit stretch goal). Live-verified against
+  real `ghcr.io`: the real CI-platform blueprint pulled fresh,
+  re-packaged, pulled again as a bare file with network deliberately
+  blocked -- succeeded, verified, real `go build`/`go vet` succeeded;
+  pushed to a second real GHCR location, `docker manifest inspect`
+  confirmed an identical blob digest at both, `ubx blueprint verify`
+  against the mirror confirmed the identical original content hash.
+  Full account: docs/blueprint.md's "Offline delivery + redistribution:
+  Slice 8" section (new) and its own Slice 8 implementation-slices
+  entry; this file's own "Strata blueprints" subsection updated in
+  place -- ALL EIGHT SLICES closed. **A full closing retrospective
+  across all eight slices together is recorded in STATE.md.**
+
 - 2026-08-05 — UBI-74 Slice 7 (Strata blueprints, OCI push/pull): `ubx
   blueprint push <tarball> --to oci://<registry>/<repo>:<tag>` uploads
   Slice 3's own tarball, unmodified, as a real OCI artifact via ORAS
@@ -5847,12 +5877,51 @@ three sessions — design, build, and a real, live, closing proof of
 every claim the design session made. See STATE.md for the full
 account.
 
-### Strata blueprints: Slices 1–7 (UBI-74) — Slice 7 closed
+### Strata blueprints: Slices 1–8 (UBI-74) — ALL EIGHT SLICES CLOSED
 
 UBI-74's own Linear comment thread (2026-08-02/04) is the design record
 of the full arc (naming, trust model, the eight-slice breakdown, the
 rejected intermediate designs); docs/blueprint.md is the authoritative
-build doc for Slices 1–7. This section is a pointer, not a duplicate.
+build doc for Slices 1–8, the complete original plan. This section is a
+pointer, not a duplicate. **A full closing retrospective across all
+eight slices together (not just slice-by-slice) is recorded in
+STATE.md.**
+
+Slice 8 (offline delivery + redistribution, the FINAL slice) built: `ubx
+blueprint pull <path-to-tarball>` -- a fourth `Pull` source type, a bare
+tarball FILE, extracted directly with zero network involved at all
+(slotted into the exact gap the existing `os.Stat`/`IsDir` dispatch
+already implied -- no new heuristic needed, a file can never satisfy
+`IsDir()`); and real re-tag/mirror-unchanged redistribution, needing NO
+new production code at all -- `ubx blueprint push` (Slice 7) called a
+second time against a second `--to`, the identical tarball never
+re-packaged, proving trust-preserving redistribution by COMPOSING
+already-built mechanisms. Content-hash verification stayed exactly the
+one existing scheme -- `Pull` never trusts a bare tarball's own declared
+hash, `Verify` (unchanged since Slice 3) is what actually protects this
+delivery mode, since (per the original design record) it has no git
+history or registry-native integrity to lean on at all. A real,
+live-found subtlety caught during this session's own required
+verification: `content_hash` is a function of the blueprint's own
+declared `name` (from the directory's basename at `Package` time) as
+well as file content -- re-packaging identical files into a
+differently-named directory produces a genuinely different hash, a real
+operational gotcha now documented explicitly for offline redistribution.
+Fork-with-modification (the design record's own pattern 1, a genuine
+derivative with its own fork-lineage provenance) is designed in full
+(docs/blueprint.md) but not built -- an explicit stretch goal, named
+rather than silently left unaddressed. Live-verified against real
+`ghcr.io`: the real CI-platform blueprint pulled fresh, re-packaged,
+pulled again as a bare tarball file with network deliberately blocked
+(`HTTP_PROXY`/`HTTPS_PROXY` pointed nowhere reachable) -- succeeded,
+verified, real `go build`/`go vet` against the offline-pulled copy
+succeeded; then pushed to a SECOND real GHCR location
+(`ghcr.io/ubiquex/ci-platform-mirror:v1`), `docker manifest inspect`
+confirming an IDENTICAL blob digest at both locations, `ubx blueprint
+verify` against the mirror confirming the identical original content
+hash. Full account: docs/blueprint.md's "Offline delivery +
+redistribution: Slice 8" section and its own Slice 8 implementation-
+slices entry.
 
 Slice 7 (OCI push/pull) built: `ubx blueprint push <tarball> --to
 oci://<registry>/<repo>:<tag>` (uploads Slice 3's own tarball, unmodified,
@@ -6037,14 +6106,19 @@ already know how to substitute later. Full account, including the
 `params: default` (parsed, not yet load-bearing at Go-codegen time —
 Go has no native optional-argument syntax) open point: docs/blueprint.md.
 
-Slices 2 (local call), 3 (package/distribute), 4 (multi-language), 5
-(cross-medium calling), 6 (provenance + `why`/`render`), and 7 (OCI push/
-pull) are all closed, per this section's own updated heading and the
-Slice 3/4/5/6/7 paragraphs above. Slice 8 (tarball/offline delivery) is
-its own future session, tracked in UBI-74's own implementation-breakdown
-comment. Nesting is UBI-121; the bound policy engine is UBI-118; the
-override mechanism and `render --sync-overrides` are UBI-86 — all three
-split off UBI-74 already, tracked separately.
+Slices 1 (build) through 8 (offline delivery + redistribution) are ALL
+CLOSED — UBI-74's own original eight-slice plan, complete, per this
+section's own updated heading and the Slice 3/4/5/6/7/8 paragraphs
+above. Nesting is UBI-121; the bound policy engine is UBI-118; the
+override mechanism and `render --sync-overrides` are UBI-86; list-typed
+params/iteration and a Terraform converter (UBI-125) are separately
+scoped future work — none of the five were ever part of this eight-slice
+plan, tracked separately, not gaps in it. Fork-with-modification
+redistribution (design record pattern 1) and alias/pointer
+redistribution (pattern 3) are the two real, named exceptions WITHIN the
+plan's own Slice 8 that stayed design-only/untouched respectively — see
+docs/blueprint.md's own "Offline delivery + redistribution: Slice 8"
+section for exactly why each was scoped that way.
 
 ## Deferred (explicitly not now)
 

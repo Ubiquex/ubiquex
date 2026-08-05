@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/oci"
 )
 
@@ -243,6 +244,75 @@ func TestPushPullTarget_LocalOCIStoreRoundTrip(t *testing.T) {
 // against a real registry can cross-check it without pulling+extracting
 // first (never a second, competing hash scheme -- see oci.go's own doc
 // comment on annoContentHash).
+// TestMirrorRedistribution_ContentHashSurvivesToASecondLocation is UBI-74
+// Slice 8's own required hermetic proof for item 3, the re-tag/mirror-
+// unchanged redistribution case named in the design record ("content
+// hash unchanged, verify still confirms against the ORIGINAL author's
+// signature -- the trust-preserving default when no changes are needed,
+// e.g. air-gapped/compliance mirroring"). The SAME tarball -- the exact
+// bytes a real author's own `ubx blueprint package` produced, never
+// re-packaged or modified -- is pushed to TWO separate, independent OCI
+// targets (standing in for two real registries/locations, e.g. a
+// vendor's public GHCR and an internal air-gapped mirror). Pulling from
+// EITHER location and running Verify must report the IDENTICAL content
+// hash the original author's own package produced -- proving
+// content-hash-based trust survives redistribution unchanged, not just
+// that the mechanism works once against one location.
+func TestMirrorRedistribution_ContentHashSurvivesToASecondLocation(t *testing.T) {
+	ctx := context.Background()
+
+	dir := writeSampleBuiltBlueprint(t)
+	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
+	originalManifest, err := Package(dir, tarPath)
+	if err != nil {
+		t.Fatalf("Package: %v", err)
+	}
+
+	// Location A: the original author's own real publish.
+	locationA, err := oci.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("oci.New (location A): %v", err)
+	}
+	if err := pushToTarget(ctx, tarPath, originalManifest, locationA, "v1"); err != nil {
+		t.Fatalf("pushToTarget (location A): %v", err)
+	}
+
+	// Location B: a SECOND, independent location -- a real mirror would
+	// re-push the SAME tarball bytes (never re-package, never modify),
+	// exactly what's happening here.
+	locationB, err := oci.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("oci.New (location B): %v", err)
+	}
+	if err := pushToTarget(ctx, tarPath, originalManifest, locationB, "v1-mirror"); err != nil {
+		t.Fatalf("pushToTarget (location B, the mirror): %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		target oras.ReadOnlyTarget
+		tag    string
+	}{
+		{"location A (original)", locationA, "v1"},
+		{"location B (mirror)", locationB, "v1-mirror"},
+	} {
+		dest := filepath.Join(t.TempDir(), tc.name)
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := pullFromTarget(ctx, tc.target, tc.tag, dest); err != nil {
+			t.Fatalf("pullFromTarget (%s): %v", tc.name, err)
+		}
+		verified, err := Verify(dest)
+		if err != nil {
+			t.Fatalf("Verify (%s): %v", tc.name, err)
+		}
+		if verified.ContentHash != originalManifest.ContentHash {
+			t.Errorf("%s: ContentHash = %q, want %q (the ORIGINAL author's own hash, unchanged by redistribution)", tc.name, verified.ContentHash, originalManifest.ContentHash)
+		}
+	}
+}
+
 func TestPushToTarget_ManifestCarriesContentHashAnnotation(t *testing.T) {
 	ctx := context.Background()
 
