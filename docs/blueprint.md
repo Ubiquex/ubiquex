@@ -3566,3 +3566,498 @@ explicitly, not blurred with the Go SDK/diagram legs' own full
 resolve→accept→ship proof: one real API call confirming the PROMPT
 elicits correct behavior is meaningfully less coverage than a real ship
 against a real backend, even though both are "live."
+
+## List-typed parameters + iteration (UBI-129)
+
+**The gap this closes.** Every blueprint built and exercised across
+UBI-74's own 8 closed slices (and UBI-126/128/130's own follow-ons)
+creates a FIXED, single-instance set of resources — the founder's own
+separate design session (2026-08-04, recorded on UBI-74, filed as its own
+ticket at UBI-74's close so it wouldn't be lost) explicitly named this as
+real, unproven scope: a blueprint that needs to create N resources (one
+subnet per availability zone, say) had no proven path at all. This
+section closes it: a new `list(string)`/`list(number)` params: type, a
+genuinely new build-time AI recognition capability (an iteration pattern
+in prose compiles to a real loop, not N separately-resolved instances),
+and a decision — not a deferral — on how a lossy, no-list-attribute
+medium (D2 diagram) represents a list-typed call argument at all.
+
+**Core design insight, taken directly from UBI-129's own filed
+description**: in a real SDK language, "count"/"for_each" isn't a special
+construct ubx needs to invent the way Terraform did — Terraform needed
+dedicated loop syntax because HCL has none; a blueprint compiles to real
+Go/TypeScript/Python source, and all three already have a native `for`
+loop. The entire feature is "recognize the iteration pattern, then emit
+an ordinary loop" — no new runtime construct in `sdk/go`, `sdk/ts`, or
+`sdk/py` at all (confirmed by search before writing a line of this: zero
+changes needed to any of the three runtimes).
+
+### `params:` gains two list types
+
+```yaml
+params:
+  vpc_id: string, required
+  availability_zones: list(string), required
+```
+
+`list(string)`/`list(number)` (`blueprint/ubxfile.go`'s `ParamListString`/
+`ParamListNumber`) join the existing `string`/`number`/`bool` set —
+`list(bool)` is deliberately not added, matching this file's own
+established "extend when a real blueprint needs it, never speculatively"
+discipline (the identical reasoning `number`'s own "always Go `int`, no
+float" decision already used). **A list-typed param can only ever be
+declared `required`** — `params: default` is a hard parse error naming
+the reason (`parseDefaultValue`'s new explicit refusal, not a fallthrough
+to a generic "unrecognized type" message): a list param is always
+consumed by exactly one `for_each` resource, which has no notion of an
+un-given default to fall back to. `GoType()`/`TSType()`/`PyType()` gain
+the obvious per-language mappings (`[]string`/`string[]`/`list[str]`,
+`[]int`/`number[]`/`list[int]`) — and, because a param's declared TYPE is
+the only thing the outer function-signature-building code in
+`gogen.go`/`tsgen.go`/`pygen.go` ever consults, the required-param
+positional-argument codegen for a list param needed **zero changes at
+all** beyond those two methods returning the right string.
+
+### `resources:` gains a new `for_each` field, and a new synthetic-token grammar
+
+The wire shape this needs (`resolver.ResourceIntent.ForEach string`,
+`json:"for_each,omitempty"`) is purely additive, matching every prior
+blueprint-specific field's own precedent (`DependsOn`/`Sources`/
+`BlueprintCalls`/`Overrides`) — empty for an ordinary, non-iterating
+resource (every resource before this ticket, and the overwhelming common
+case after it), consumed exclusively by `blueprint/decode.go`'s own
+`decodeBlueprint` (never by `resolver.Resolve` itself, which has zero
+awareness this field means anything, exactly like `DependsOn`).
+
+```json
+{
+  "type": "aws_subnet",
+  "name": "subnet-{availability_zones}",
+  "op": "create",
+  "for_each": "availability_zones",
+  "config": {
+    "vpc_id": "{vpc_id}",
+    "availability_zone": "{availability_zones}",
+    "cidr_block": "10.0.{availability_zones_index}.0/24"
+  }
+}
+```
+
+`for_each` names a declared list-typed param's own bare name (never
+wrapped in braces — this is a structured field, not embedded prose).
+Inside THAT SAME resource's own `name`/`config` fields (never any other
+resource's), the placeholder grammar the build pipeline already
+established (`{param_name}` tokens, `blueprint/decode.go`'s
+`placeholderToken` regex, unchanged) gains two new, per-resource-scoped
+meanings, resolved by each language's own `paramRef`:
+
+- The bare `{availability_zones}` token — the SAME token that would
+  otherwise mean "the whole declared param" — means **the current loop
+  element's own value** while rendering the ONE resource whose own
+  `for_each` names it. This reuses the existing token grammar rather than
+  inventing a second one: a list param's bare token has no other legal
+  meaning anywhere else in a blueprint (a scalar Config field can't hold
+  a whole list any more than Terraform's own `each.key`/`each.value`
+  would make sense outside a `for_each` block), so there's no real
+  ambiguity to resolve.
+- `{availability_zones_index}` (that same param name, `_index` appended —
+  matched by the identical `[a-zA-Z0-9_]+` identifier regex with zero
+  changes, since an underscore was always a legal identifier character)
+  means the loop's own zero-based position.
+
+Both tokens are refused with a clear, specific error anywhere OUTSIDE
+their own `for_each` resource — referencing a list param's bare token on
+an ordinary resource (`decodeBlueprint` never expanded it into one), or
+referencing either synthetic token on a DIFFERENT resource than the one
+that declared `for_each` for it, or referencing a list param's bare token
+at all when NO resource declares `for_each` for it — every one of these
+is a hard build error, never a silent wrong substitution (`goGenerator.
+paramRef`/`tsGenerator.paramRef`/`pyGenerator.paramRef`, each
+independently, matching this file's own "each language re-derives/re-
+validates independently, self-contained" precedent). Deliberately,
+narrowly out of scope: the `{param op literal}` arithmetic form UBI-123
+added (`{retention_days * 86400}`) is refused on EITHER synthetic token
+with a clear message pointing at the plain form instead — a real,
+deliberate boundary (this ticket's own worked example needs no such
+conversion; supporting it would also need to know the list's own element
+type, genuinely more design than any real worked example has asked for
+yet).
+
+### A genuinely new build-time AI capability, scoped to `cli/blueprintDraftPrompt` only
+
+The system prompt teaching a model to recognize "for each value in
+`{list_param}`, create..." and draft a `for_each`-bearing resource lives
+entirely inside `blueprintDraftPrompt` (`cli/blueprint.go`) — the SAME
+place the param-preservation preamble already lives, added ONLY when at
+least one declared param is list-typed (`hasListParam`), never touching
+`intentprovider`'s own general system prompt (`claude/adapter.go`) or the
+general md-calling grammar at all. This mirrors the existing
+param-preservation preamble's own precedent exactly: a per-blueprint-
+build instruction, not a global one, since ordinary stack documents never
+declare list params in the first place. `intentprovider/schema.go`'s
+structured-output schema gains one new required-but-may-be-empty
+`for_each` string property on the `resource` object (mirroring
+`call_name`'s own "required, empty string legal" shape exactly);
+`intentprovider/validate.go`'s `wireResourceIntent`/`parseAndValidate`
+decode it straight through, unvalidated — real semantic validation (does
+this param exist, is it list-typed, is it declared on at most one
+resource) is deliberately deferred to `blueprint.decodeBlueprint`, the
+one place that already has the Ubxfile's own declared params in hand,
+matching `outputs:`'s own identical two-layer "shape here, existence
+there" validation split.
+
+### Go codegen: a real `for` loop, `[]*sdk.Computed` return
+
+```go
+func VpcSubnets(vpcId string, availabilityZones []string) []*sdk.Computed {
+	sdk.PushBlueprintSource("vpc-subnets")
+	defer sdk.PopBlueprintSource()
+
+	var subnetList []*sdk.Computed
+	for availabilityZonesIndex, availabilityZonesValue := range availabilityZones {
+		item := sdk.Resource(Subnet, fmt.Sprintf("subnet-%v", availabilityZonesValue), SubnetConfig{
+			AvailabilityZone: availabilityZonesValue,
+			CidrBlock:        fmt.Sprintf("10.0.%v.0/24", availabilityZonesIndex),
+			VpcId:            vpcId,
+		})
+		subnetList = append(subnetList, item)
+	}
+	return subnetList
+}
+```
+
+Go's own `for i, v := range slice` gives the index for free, matching
+`{list_param}`/`{list_param_index}`'s own two-token design exactly — the
+loop header's own variable names (`camelCase(param)+"Value"`/`+"Index"`,
+`newGoForEach`) are EXACTLY the identifiers `paramRef` resolves those two
+tokens to while rendering this one resource's fields, by construction,
+never re-derived independently. **Explicit per-instance resource
+naming, never Terraform-style indexed addressing** (the ticket's own
+explicit requirement): a `for_each` resource's own `Name` is a TEMPLATE
+(`"subnet-{availability_zones}"`), rendered through the SAME `renderString`
+mechanism an ordinary Config field value already uses (`renderResourceName`,
+new — byte-identical `%q`-literal behavior for every ordinary resource,
+completely unaffected). One real, load-bearing subtlety this surfaced:
+a `for_each` resource's own per-language IDENTIFIER (its `Subnet`/
+`SubnetConfig` binding name) can't be derived from its own templated Name
+directly (`pascalCase` rejects `{`/`}` outright) — `forEachIdentifierBasis`
+(`identifier.go`) strips every `{...}` token and collapses the separator
+left behind (`"subnet-{availability_zones}"` → `"subnet"`) before deriving
+the identifier, one binding shared by every instance regardless of its
+own per-iteration runtime name.
+
+**Deliberately, narrowly out of scope, checked and refused, not silently
+broken:** at most ONE `for_each` resource per blueprint (multiple
+simultaneous iterations is real, unproven complexity, never attempted
+here); a `for_each` resource can never be the target of a sibling's own
+`$ref`/`depends_on` OR of an `outputs:` entry (an individual iteration's
+own instance isn't addressable that way — only the compiled function's
+own returned LIST exposes instances to a caller); a blueprint with a
+`for_each` resource cannot ALSO declare `outputs:` at all (combining a
+per-iteration return list with named single-instance outputs is real,
+valid future work, not attempted this ticket — every one of these is a
+hard `decodeBlueprint`-time build error, reused unchanged by every
+language's own codegen, never re-checked independently three times).
+
+### TypeScript codegen: `Array.prototype.forEach`, `any[]` return
+
+```ts
+export function vpcSubnets(vpcId: string, availabilityZones: string[]): any[] {
+  const subnetList: any[] = [];
+  availabilityZones.forEach((availabilityZonesValue, availabilityZonesIndex) => {
+    const item = resource(Subnet, `subnet-${availabilityZonesValue}`, {
+      availabilityZone: availabilityZonesValue,
+      cidrBlock: `10.0.${availabilityZonesIndex}.0/24`,
+      vpcId: vpcId,
+    });
+    subnetList.push(item);
+  });
+  return subnetList;
+}
+```
+
+TS's own idiomatic index+value iteration form (`Array.prototype.forEach`'s
+own two-argument callback) needs no separate index-tracking variable the
+way a plain `for` loop would — chosen over a C-style `for` loop for
+exactly that idiomatic-fit reason. Unlike Go's named return VALUES (real
+declared variables sharing the function body's own scope, `newGoForEach`'s
+own reason to collision-check against every other identifier), pushing
+into a `const subnetList: any[]` needs no collision guard against
+resource/param identifiers the way Go's does — `newTSForEach`'s own
+collision check is correspondingly narrower (TS reserved words plus every
+resource/param identifier this same file derives), matching
+`checkTSIdentCollisions`' own already-smaller-than-Go's precedent.
+
+### Python codegen: `enumerate`, `list[Any]` return
+
+```python
+def vpc_subnets(vpc_id: str, availability_zones: list[str]) -> list[Any]:
+    subnet_list: list[Any] = []
+    for availability_zones_index, availability_zones_value in enumerate(availability_zones):
+        item = sdk.resource(Subnet, f"subnet-{availability_zones_value}", SubnetConfig(
+            availability_zone=availability_zones_value,
+            cidr_block=f"10.0.{availability_zones_index}.0/24",
+            vpc_id=vpc_id,
+        ))
+        subnet_list.append(item)
+    return subnet_list
+```
+
+Python's own native `enumerate()` mirrors Go's own free index exactly,
+matching the ticket's own "already have a for loop, no new construct"
+framing a third time. One real, live-found subtlety (caught by a real
+`GeneratePython` run, not assumed): `pyLocalVarName` (used everywhere
+ELSE this file derives a resource's own local-variable name) assumes an
+ordinary, non-templated `Name` and fails outright on a `for_each`
+resource's own `"subnet-{availability_zones}"` — `newPyForEach` derives
+its own accumulator variable name via the SAME `forEachIdentifierBasis`
+Go's `wrap()` already uses, never via `pyLocalVarName` directly.
+
+### SDK callers: a real list/array/slice, confirmed zero new mechanism
+
+```go
+vpcsubnets.VpcSubnets("vpc-123", []string{"eu-central-1a", "eu-central-1b", "eu-central-1c"})
+```
+
+```ts
+vpcSubnets("vpc-123", ["eu-central-1a", "eu-central-1b", "eu-central-1c"]);
+```
+
+```python
+vpc_subnets("vpc-123", ["eu-central-1a", "eu-central-1b", "eu-central-1c"])
+```
+
+Exactly as the ticket's own success bar predicted: a caller in any of the
+three languages passes a real, native list/array/slice literal directly
+— no new SDK mechanism, no wrapper type, confirmed live (below) in all
+three.
+
+### Cross-medium calling: a comma-separated string, the SAME `Args` shape every scalar param already uses
+
+**The diagram design decision, made this session, not deferred again.**
+The ticket named two candidates and flagged this as genuinely unresolved:
+a comma-separated string in a single D2 attribute value, or repeated
+child nodes. **Decision: comma-separated string.** Reasoning, checked
+against the real code before deciding, not assumed:
+
+1. **Zero new parsing code in `diagram/parse.go`.** `blueprintCallFromNode`'s
+   existing child-attribute loop already does `call.Args[child.ID] =
+   child.Label.Value` — a plain string, verbatim, for every non-reserved
+   attribute, exactly like every scalar param already works. A
+   comma-separated value (`availability_zones: "eu-central-1a,
+   eu-central-1b, eu-central-1c"`) needs this package to change NOTHING
+   AT ALL — confirmed by reading the function before deciding, not
+   assumed from the shape of the problem. Repeated child nodes would need
+   a genuinely new attribute-shape concept (parsing N children under one
+   attribute name into a list), new schema/parsing code, and a real
+   asymmetry with the md medium (which has no "repeated node" concept of
+   its own to mirror).
+2. **Symmetric with the md medium.** Both mediums already produce the
+   IDENTICAL `resolver.BlueprintCall.Args map[string]string` shape — a
+   comma-separated string keeps that symmetry exactly; repeated child
+   nodes would fork the wire representation across mediums for a
+   capability neither medium's own underlying model actually needs to
+   express two different ways.
+3. **`invoke.go`'s own real invocation mechanism makes this nearly free.**
+   `blueprint.ExpandCalls` doesn't string-substitute against a blueprint's
+   own raw prose at call time at all — it literally RUNS the blueprint's
+   own ALREADY-COMPILED function (Slice 5's own real mechanism,
+   unchanged) via a synthesized throwaway caller program. The real for
+   loop from the previous three sections already executes for free, at
+   RUNTIME, inside that synthesized program, the moment `renderArgLiteral`
+   (the ONE place this ticket needed to change in `invoke.go`) renders
+   the list-typed arg as a real language-native list literal.
+
+```d2
+platform: "vpc subnets call" {
+  class: ubx_blueprint
+  blueprint: "../vpc-subnets"
+  vpc_id: "vpc-0123456789abcdef0"
+  availability_zones: "eu-central-1a, eu-central-1b, eu-central-1c"
+}
+```
+
+```md
+Use blueprint `vpc-subnets` with:
+  vpc_id = vpc-0123456789abcdef0
+  availability_zones = eu-central-1a, eu-central-1b, eu-central-1c
+```
+
+`renderArgLiteral` (`blueprint/invoke.go`) gains two new cases —
+`ParamListString`/`ParamListNumber` — splitting the raw comma-separated
+text (`splitListArg`, tolerant of `"a,b,c"` and `"a, b, c"`
+interchangeably) and rendering each element per language
+(`[]string{...}`/`[]int{...}` for Go, `[...]` for TS/Python, reusing
+`jsonStringLiteral`/`numberLiteral` unchanged). Every OTHER function in
+`invoke.go` — `resolveCallArgs`, `argLiteralOrDefault`,
+`writeGoCaller`/`writeTSCaller`/`writePyCaller` — needed **zero changes**:
+a list-typed param is always `Required` (no default to fall back to), so
+it flows through the exact same "required param → positional literal"
+path every scalar required param already takes. The md medium's own
+system-prompt schema (`intentprovider/schema.go`'s `blueprintCall.args`
+description) gained one clarifying sentence — copy the comma-separated
+text verbatim as one string value, never a JSON array — a documentation
+addition only, since the underlying `Args map[string]string` shape
+already supported this without any code change at all.
+
+### Hermetic tests
+
+`blueprint/ubxfile_test.go`-adjacent coverage lives in a new
+`blueprint/foreach_test.go` (mirroring `gogen_test.go`'s own established
+per-language test-file convention): `TestGenerateGo/TS/Python_ForEach_
+SignatureAndReturn` (the exact rendered source, string-matched);
+`TestGenerateGo/TS_ForEach_CompilesClean` (a real `go build`/`deno check`);
+`TestGenerateGo/TS/Python_ForEach_RuntimeUsable` (a real `go run`/
+`deno run`/`python3` producing the correct 3 `aws_subnet` resources with
+correct per-instance `availability_zone`/`cidr_block` values, sharing one
+`assertVpcSubnetsDoc` assertion helper across all three languages — proof
+all three generated loops are behaviorally EQUIVALENT, not just
+independently plausible); seven validation-error tests (multiple
+`for_each` resources, a non-list-typed `for_each` param, an undeclared
+`for_each` param, `for_each`+`outputs:` combined, a sibling `$ref`
+targeting a `for_each` resource, a bare list token referenced outside its
+own `for_each` resource — both with and without any `for_each` resource
+declared at all — and an index token referenced outside its own
+`for_each` resource); `TestExpandCalls_ForEach_CommaSeparatedListArg`
+(the cross-medium proof: a real `deno run` through the FULL `ExpandCalls`
+path, a comma-separated `Args` value producing the correct 3 resources —
+UBI-129's own required "confirm this works with zero new mechanism"
+bar, for the calling-convention half). `diagram/parse_test.go` gained
+`TestParse_UbxBlueprint_ListParamCommaSeparated`, proving the design
+decision's own central claim directly: the comma-separated text survives
+`blueprintCallFromNode` completely unmodified, through the identical code
+path `TestParse_UbxBlueprint_NodeBecomesBlueprintCall` already exercises
+for an ordinary scalar param. Full suite green (`go test ./... -count=1`),
+`gofmt -l .`/`go vet ./...` clean.
+
+### Live verification, the ticket's own required bar — met for two legs, honestly blocked for two, not blurred together
+
+**Go SDK — live**: a real `go build`/`go run` (this session's own
+hermetic `TestGenerateGo_ForEach_RuntimeUsable`/`_CompilesClean`) proves
+the generated `VpcSubnets` function, called with a real
+`[]string{"eu-central-1a", "eu-central-1b", "eu-central-1c"}` literal,
+produces exactly 3 `aws_subnet` resources with correct per-instance
+`availability_zone`/`cidr_block` values against the real `sdk/go`
+runtime — not a mock. The SAME package was additionally staged for a
+real `ubx resolve --from-code` run against the real `hashicorp/
+aws@6.54.0` schema (resolve-only, never `ubx ship`, per this project's
+own standing rule) — see this session's own real-world account below for
+why that specific step's own execution is recorded honestly as
+hand-off, not this session's own direct action.
+
+**TypeScript/Python SDK — live**: a real `deno run`/`python3` (this
+session's own hermetic `TestGenerateTS/Python_ForEach_RuntimeUsable`)
+confirms direct runtime usability with the identical 3-AZ input and the
+identical correct-output assertion helper as the Go leg — the same "one
+level less depth than a full CLI pipeline" honesty this project's own
+Outputs/md precedent already established, named here rather than blurred
+with the Go leg's own additional real-AWS-schema staging.
+
+**Diagram — live, a full real `ubx plan`→`ubx ship`→`ubx why` round trip
+against the real, hermetic `fakeprovider` subprocess, the strongest proof
+this ticket produced.** A second, minimal blueprint (`widget-list` — one
+`fake_widget`-typed `for_each` resource, `fakeprovider`'s own real
+shippable type, since `aws_subnet` has no fakeprovider schema — the SAME
+UBI-128-established substitution pattern) and a real `.d2` file:
+
+```d2
+platform: "widget list call" {
+  class: ubx_blueprint
+  blueprint: "../widget-list"
+  widget_names: "alpha, beta, gamma"
+}
+```
+
+A real `ubx plan --from-diagram widgets.d2 --stack widget-list-demo`
+against the real `fakeprovider` subprocess produced, correctly, on the
+first attempt:
+
+```
+Plan  widget-list-demo · from widgets.d2
+
+  + fake_widget.widget-alpha create
+    source: blueprint widget-list:sha256:6485ca3e79b6…
+      name: "alpha"
+
+  + fake_widget.widget-beta create
+    source: blueprint widget-list:sha256:6485ca3e79b6…
+      name: "beta"
+
+  + fake_widget.widget-gamma create
+    source: blueprint widget-list:sha256:6485ca3e79b6…
+      name: "gamma"
+
+delta: +3 create(s), ~0 change(s), -0 terminate(s)
+```
+
+— three correctly-named, correctly-valued resources from ONE
+comma-separated D2 attribute value, exactly as designed. `ubx ship
+52604e58ff41 --yes` then shipped all 3 for real against the fakeprovider
+subprocess (`3 resource(s), 3 shipped, 0 failed`), and `ubx why
+widget-list-demo.fake_widget.widget-beta` confirmed correct provenance
+(the real blueprint content hash, the real diagram document's own content
+hash, all three sibling instances listed) — a full resolve→accept→ship→
+provenance round trip, matching UBI-74 Slice 6/UBI-128's own established
+live-verification bar for this medium exactly, not a lesser one.
+
+**md calling convention — hermetic only, via `ExpandCalls` directly, for
+the reason named below.** `TestExpandCalls_ForEach_CommaSeparatedListArg`
+runs the REAL `blueprint.ExpandCalls` path (a real `deno run` underneath,
+the identical mechanism Slice 5 already proved for scalar params) with a
+genuine comma-separated `Args` value, confirming the exact 3-resource,
+correct-per-instance output for the vpc-subnets fixture — this is "live"
+in every sense that matters functionally (real subprocess, real generated
+code, no test double) for the CONSUMING half of the md medium, even
+though (unlike the diagram leg just proven above) it doesn't originate
+from a real `.md` file drafted by the real Claude API — see the honest
+account below for why that specific half is blocked this session, not
+attempted around.
+
+**Two real, named gaps, not glossed over:**
+
+1. **The build-time AI recognition itself — "confirm the AI correctly
+   drafts the iteration pattern" — was NOT live-verified this session.**
+   A real `ubx blueprint build .` run against the exact worked-example
+   Ubxfile above (staged at `~/ubx-playground-ubi129-list-params/
+   vpc-subnets`, ready to run) failed twice, identically, with a real
+   `400` from the Anthropic API: `"Your credit balance is too low to
+   access the Anthropic API."` — the project's own configured `[intent]`
+   Claude adapter key, not this session's own Claude Code billing, and
+   not something this session can resolve on its own. The generated Go
+   package this section's own worked examples quote is byte-identical to
+   what `blueprintDraftPrompt`'s own new instructions are DESIGNED to
+   elicit (this session hand-constructed the exact intent/v1 JSON the
+   model would need to produce and fed it straight to `GenerateGo`,
+   bypassing the draft step) — proving the CODEGEN side works
+   correctly, but not that the MODEL reliably produces that shape from
+   the prose unaided. A real, first-priority follow-up once the
+   project's own API credits are restored: re-run `ubx blueprint build .`
+   in that same staged directory (one command, everything else already
+   in place) and confirm the model's own real output matches.
+2. **The md calling-convention leg — "call ... from md with
+   comma-separated prose" — is hermetic only, for the identical reason.**
+   Extracting a `blueprint_calls[].args` entry from md prose is itself an
+   Anthropic API call (`intentprovider.DraftWithRetry`), blocked by the
+   same credit exhaustion. `TestExpandCalls_ForEach_CommaSeparatedListArg`
+   hermetically proves the CONSUMING half (once `Args["availability_zones"]`
+   contains the right comma-separated string, everything downstream is
+   correct) — matching the schema.go clarifying-sentence addition's own
+   underlying bet: this is a thin, low-risk mapping step following an
+   already-proven pattern for scalar params (UBI-86's own precedent), not
+   a genuinely new capability the way `for_each` recognition is. Real,
+   named, not assumed equivalent to actually having run it.
+
+**Resolve-only against real AWS (SDK leg), handed off, not self-executed
+this session:** this session's own attempt to `go build` a real calling
+program in a directory the auto-mode permission classifier read as
+heading toward `ubx ship` against real AWS (CLAUDE.md's own absolute,
+no-exceptions rule) was blocked before it reached `go run`/`ubx resolve`
+at all — correctly, per this project's own standing safety posture, even
+though the actual intended operation was resolve-only (never applies).
+Rather than working around that block, the founder was asked directly
+and chose to run the real `ubx resolve --from-code create_vpc_subnets.go
+--ledger-dir . --out resolved.json` command in `~/ubx-playground-
+ubi129-list-params/stack-real-aws` personally, against the real,
+already-generated `VpcSubnets` package and the real `hashicorp/
+aws@6.54.0` schema — [PLACEHOLDER: result to be recorded here once
+received].

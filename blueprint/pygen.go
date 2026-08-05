@@ -40,7 +40,7 @@ func GeneratePython(blueprintName string, ubxfile *Ubxfile, intent *resolver.Int
 		return nil, fmt.Errorf("blueprint: %w", err)
 	}
 
-	b, err := decodeBlueprint(intent, ubxfile.Outputs)
+	b, err := decodeBlueprint(intent, ubxfile.Params, ubxfile.Outputs)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +81,13 @@ type pyResource struct {
 	ident      string // PascalCase binding/dataclass name, e.g. "ContainerRepo"
 	fields     []pyFieldEntry
 	valueExprs map[string]string // by idiomatic (snake_case) name
+
+	// nameExpr (UBI-129) mirrors goResource's own field of the same
+	// name -- a jsonStringLiteral-quoted literal for an ordinary
+	// resource (byte-identical to every prior slice), or a real runtime
+	// f-string/bare-reference expression for the one resource whose own
+	// dr.ForEach is set.
+	nameExpr string
 }
 
 type pyFieldEntry struct {
@@ -92,6 +99,10 @@ type pyGenerator struct {
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*pyResource
+
+	// currentDR (UBI-129) mirrors goGenerator's own field of the same
+	// name -- see its doc comment.
+	currentDR *decodedResource
 }
 
 func (g *pyGenerator) ordered() []*pyResource {
@@ -117,7 +128,15 @@ func (g *pyGenerator) topoOrdered() []*pyResource {
 func (g *pyGenerator) wrap() error {
 	seenIdent := map[string]string{}
 	for _, dr := range g.blueprint.Resources {
-		ident, err := pascalCase(dr.RI.Name)
+		identSource := dr.RI.Name
+		if dr.ForEach != "" {
+			basis, err := forEachIdentifierBasis(dr.RI.Name)
+			if err != nil {
+				return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
+			}
+			identSource = basis
+		}
+		ident, err := pascalCase(identSource)
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}
@@ -133,6 +152,14 @@ func (g *pyGenerator) wrap() error {
 func (g *pyGenerator) render() error {
 	for _, dr := range g.blueprint.Resources {
 		pr := g.byAddress[dr.Address]
+		g.currentDR = dr
+
+		nameExpr, err := g.renderResourceName(dr)
+		if err != nil {
+			return fmt.Errorf("blueprint: resource %s.%s: name: %w", dr.RI.Type, dr.RI.Name, err)
+		}
+		pr.nameExpr = nameExpr
+
 		for _, f := range dr.Fields {
 			idiomatic, err := pythonIdentifier(f.WireKey)
 			if err != nil {
@@ -147,7 +174,19 @@ func (g *pyGenerator) render() error {
 			pr.valueExprs[idiomatic] = expr
 		}
 	}
+	g.currentDR = nil
 	return nil
+}
+
+// renderResourceName mirrors goGenerator's own method of the same name
+// (UBI-129) -- byte-identical (jsonStringLiteral-quoted) for an
+// ordinary resource, run through renderString for the one resource
+// whose own dr.ForEach is set.
+func (g *pyGenerator) renderResourceName(dr *decodedResource) (string, error) {
+	if dr.ForEach == "" {
+		return jsonStringLiteral(dr.RI.Name), nil
+	}
+	return g.renderString(dr.RI.Name)
 }
 
 // renderAny renders one already-JSON-decoded value into a Python source
@@ -372,15 +411,52 @@ func (g *pyGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 	return strings.Join(parts, " + "), true, nil
 }
 
+// forEachTokenIdent mirrors goGenerator's own method of the same name
+// (UBI-129) -- see its doc comment for the full account.
+func (g *pyGenerator) forEachTokenIdent(name string) (ident string, matched bool, err error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return "", false, nil
+	}
+	base := fe.RI.ForEach
+	var suffix string
+	switch name {
+	case base:
+		suffix = "_value"
+	case base + "_index":
+		suffix = "_index"
+	default:
+		return "", false, nil
+	}
+	if g.currentDR != fe {
+		return "", true, fmt.Errorf("prose references {%s}, but that's only valid inside its own for_each resource (%s.%s)", name, fe.RI.Type, fe.RI.Name)
+	}
+	pname, err := pythonIdentifier(base)
+	if err != nil {
+		return "", true, err
+	}
+	return pname + suffix, true, nil
+}
+
 // paramRef returns the Python expression referencing param name's own
 // value -- a bare identifier either way: Python has NATIVE default
 // argument syntax (def f(a: str, b: int = 1)), so like TypeScript (and
 // unlike Go) a params: default value needs no functional-options
 // indirection at all.
+//
+// UBI-129: name is checked against the blueprint's own for_each
+// synthetic tokens first -- see forEachTokenIdent and goGenerator.paramRef's
+// own doc comment for the full account.
 func (g *pyGenerator) paramRef(name string) (string, error) {
+	if ident, matched, err := g.forEachTokenIdent(name); matched {
+		return ident, err
+	}
 	p, ok := g.params[name]
 	if !ok {
 		return "", fmt.Errorf("prose references {%s}, but no such param is declared in the Ubxfile's own params: block", name)
+	}
+	if p.Type.IsList() {
+		return "", fmt.Errorf("prose references {%s} directly, but %q is a list-typed param -- it can only be referenced inside its own for_each resource, as the per-element value (declare a for_each resource naming it first)", name, name)
 	}
 	return pythonIdentifier(p.Name)
 }
@@ -389,7 +465,21 @@ func (g *pyGenerator) paramRef(name string) (string, error) {
 // {param_name <op> <literal>} token match (UBI-123: the same
 // deliberately narrow "unit conversion or derived value" form
 // GenerateGo/GenerateTS's own paramExpr implements).
+//
+// UBI-129: a for_each synthetic token never supports the arithmetic
+// form -- matching goGenerator.paramExpr's own deliberately narrow scope.
 func (g *pyGenerator) paramExpr(name, op, literal string) (string, error) {
+	if _, matched, _ := g.forEachTokenIdent(name); matched {
+		ref, err := g.paramRef(name)
+		if err != nil {
+			return "", err
+		}
+		if op != "" {
+			return "", fmt.Errorf("prose references {%s %s %s} -- arithmetic on a for_each element/index token isn't supported; use a plain {%s} reference instead", name, op, literal, name)
+		}
+		return ref, nil
+	}
+
 	ref, err := g.paramRef(name)
 	if err != nil {
 		return "", err
@@ -457,10 +547,14 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 	if err := checkPyIdentCollisions(g, params); err != nil {
 		return "", err
 	}
+	forEach, err := newPyForEach(g, params)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	b.WriteString("# Code generated by `ubx blueprint build`. DO NOT EDIT.\n")
-	if len(g.blueprint.Outputs) > 0 {
+	if len(g.blueprint.Outputs) > 0 || forEach != nil {
 		b.WriteString("from typing import Any\n")
 	}
 	b.WriteString("import ubx_sdk as sdk\n")
@@ -513,17 +607,21 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 	// Python tuple for two or more (unpacked with "x, y = f(...)",
 	// Python's own native multi-value-return construct -- no new
 	// language feature, no wrapper class).
-	switch len(g.blueprint.Outputs) {
-	case 0:
-		sig.WriteString(") -> None:")
-	case 1:
+	switch {
+	case len(g.blueprint.Outputs) == 1:
 		sig.WriteString(") -> Any:")
-	default:
+	case len(g.blueprint.Outputs) > 1:
 		types := make([]string, len(g.blueprint.Outputs))
 		for i := range types {
 			types[i] = "Any"
 		}
 		fmt.Fprintf(&sig, ") -> tuple[%s]:", strings.Join(types, ", "))
+	case forEach != nil:
+		// UBI-129: mutually exclusive with the Outputs cases above --
+		// decodeBlueprint already refuses a blueprint declaring both.
+		sig.WriteString(") -> list[Any]:")
+	default:
+		sig.WriteString(") -> None:")
 	}
 
 	fmt.Fprintf(&b, "%s\n", sig.String())
@@ -532,12 +630,32 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 		return b.String(), nil
 	}
 	for _, pr := range g.topoOrdered() {
+		if pr.dr.ForEach != "" {
+			// UBI-129: a real loop (enumerate, Python's own idiomatic
+			// index+value iteration form), not a single sdk.resource()
+			// call -- pr's own fields/nameExpr (render, above) already
+			// reference the loop-variable identifiers below by
+			// construction (paramRef resolves {list_param}/
+			// {list_param_index} to these SAME names while rendering
+			// THIS resource).
+			var call strings.Builder
+			fmt.Fprintf(&call, "sdk.resource(%s, %s, %sConfig(\n", pr.ident, pr.nameExpr, pr.ident)
+			for _, f := range pr.fields {
+				fmt.Fprintf(&call, "            %s=%s,\n", f.idiomatic, pr.valueExprs[f.idiomatic])
+			}
+			call.WriteString("        ))")
+			fmt.Fprintf(&b, "    %s: list[Any] = []\n", forEach.accumIdent)
+			fmt.Fprintf(&b, "    for %s, %s in enumerate(%s):\n", forEach.indexIdent, forEach.valueIdent, forEach.paramIdent)
+			fmt.Fprintf(&b, "        item = %s\n", call.String())
+			fmt.Fprintf(&b, "        %s.append(item)\n", forEach.accumIdent)
+			continue
+		}
 		varName, err := pyLocalVarName(pr.dr)
 		if err != nil {
 			return "", err
 		}
 		var call strings.Builder
-		fmt.Fprintf(&call, "sdk.resource(%s, %s, %sConfig(\n", pr.ident, jsonStringLiteral(pr.dr.RI.Name), pr.ident)
+		fmt.Fprintf(&call, "sdk.resource(%s, %s, %sConfig(\n", pr.ident, pr.nameExpr, pr.ident)
 		for _, f := range pr.fields {
 			fmt.Fprintf(&call, "        %s=%s,\n", f.idiomatic, pr.valueExprs[f.idiomatic])
 		}
@@ -548,7 +666,8 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 			fmt.Fprintf(&b, "    %s\n", call.String())
 		}
 	}
-	if len(g.blueprint.Outputs) > 0 {
+	switch {
+	case len(g.blueprint.Outputs) > 0:
 		exprs := make([]string, len(g.blueprint.Outputs))
 		for i, o := range g.blueprint.Outputs {
 			expr, err := g.propertyExpr(o.Target, o.Path)
@@ -558,8 +677,70 @@ func renderPyFunction(funcName string, params []Param, g *pyGenerator) (string, 
 			exprs[i] = expr
 		}
 		fmt.Fprintf(&b, "    return %s\n", strings.Join(exprs, ", "))
+	case forEach != nil:
+		fmt.Fprintf(&b, "    return %s\n", forEach.accumIdent)
 	}
 	return b.String(), nil
+}
+
+// pyForEach mirrors goForEach (UBI-129) -- see its doc comment.
+type pyForEach struct {
+	paramIdent string
+	valueIdent string
+	indexIdent string
+	accumIdent string
+}
+
+func newPyForEach(g *pyGenerator, allParams []Param) (*pyForEach, error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return nil, nil
+	}
+
+	paramIdent, err := pythonIdentifier(fe.RI.ForEach)
+	if err != nil {
+		return nil, err
+	}
+	valueIdent := paramIdent + "_value"
+	indexIdent := paramIdent + "_index"
+	// UBI-129: pyLocalVarName assumes an ordinary, non-templated Name --
+	// a for_each resource's own Name is a template ("subnet-
+	// {availability_zones}"), so its own local-variable basis is derived
+	// the SAME placeholder-stripped way wrap() already derives its
+	// PascalCase binding identifier (forEachIdentifierBasis), never via
+	// pyLocalVarName directly.
+	basis, err := forEachIdentifierBasis(fe.RI.Name)
+	if err != nil {
+		return nil, err
+	}
+	varName, err := pythonIdentifier(basis)
+	if err != nil {
+		return nil, err
+	}
+	accumIdent := varName + "_list"
+
+	used := map[string]string{"item": "the generated for_each loop's own per-iteration temporary"}
+	for _, pr := range g.ordered() {
+		used[pr.ident] = fmt.Sprintf("resource %s.%s", pr.dr.RI.Type, pr.dr.RI.Name)
+	}
+	for _, p := range allParams {
+		pname, err := pythonIdentifier(p.Name)
+		if err != nil {
+			return nil, err
+		}
+		used[pname] = fmt.Sprintf("param %q", p.Name)
+	}
+
+	for _, candidate := range []string{valueIdent, indexIdent, accumIdent} {
+		if owner, ok := used[candidate]; ok {
+			return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives the generated identifier %q, which collides with %s -- rename one", fe.RI.Type, fe.RI.Name, candidate, owner)
+		}
+	}
+	if valueIdent == indexIdent || valueIdent == accumIdent || indexIdent == accumIdent {
+		return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives colliding generated identifiers (%q/%q/%q) -- rename the resource or its for_each param", fe.RI.Type, fe.RI.Name, valueIdent, indexIdent, accumIdent)
+	}
+
+	return &pyForEach{paramIdent: paramIdent, valueIdent: valueIdent, indexIdent: indexIdent, accumIdent: accumIdent}, nil
 }
 
 // pyDefaultLiteral renders a params: default entry's own already-parsed

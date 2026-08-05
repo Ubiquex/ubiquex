@@ -2,6 +2,7 @@ package blueprint
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -93,6 +94,34 @@ func goReservedIdent(name string) bool {
 		return true
 	}
 	return false
+}
+
+// placeholderStrip/repeatedSeparator back forEachIdentifierBasis below.
+var placeholderStrip = regexp.MustCompile(`\{[^}]*\}`)
+var repeatedSeparator = regexp.MustCompile(`[-_]{2,}`)
+
+// forEachIdentifierBasis derives the identifier-safe basis for a
+// for_each resource's own TEMPLATED Name (UBI-129) -- e.g.
+// "subnet-{availability_zones}" -> "subnet" -- by stripping every
+// {...} placeholder token and collapsing/trimming the separator left
+// behind. Needed because a for_each resource's own per-language
+// IDENTIFIER (its Go/TS/Python binding/config type name, derived via
+// pascalCase below) has no reason to vary per iteration the way its own
+// RUNTIME name does -- every instance shares the SAME binding -- but
+// pascalCase (via splitIdentifierParts) rejects "{"/"}" outright, so an
+// ordinary resource's "just pascalCase(RI.Name) directly" derivation
+// would hard-fail on a for_each resource's own templated Name. An
+// ordinary (non-for_each) resource never calls this at all -- its own
+// ident derivation is completely unaffected, byte-identical to every
+// prior slice.
+func forEachIdentifierBasis(name string) (string, error) {
+	stripped := placeholderStrip.ReplaceAllString(name, "")
+	stripped = repeatedSeparator.ReplaceAllString(stripped, "-")
+	stripped = strings.Trim(stripped, "-_")
+	if stripped == "" {
+		return "", fmt.Errorf("name %q has no identifier-safe text left once its own {param} tokens are removed -- give it a literal prefix, e.g. \"subnet-{list_param}\"", name)
+	}
+	return stripped, nil
 }
 
 // packageIdent derives a valid Go package identifier from a hyphen/

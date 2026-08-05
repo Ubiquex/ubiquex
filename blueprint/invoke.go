@@ -148,6 +148,15 @@ func resolveCallArgs(params []Param, given map[string]string) ([]resolvedArg, er
 // entirely to this point (neither the diagram medium nor the md medium
 // has this type information available when the call is first
 // extracted -- see resolver.BlueprintCall's own doc comment).
+//
+// UBI-129: a list-typed param's own raw value is the SAME kind of plain
+// string every other param's Args entry already is -- diagram/parse.go's
+// own generic "every non-reserved child attribute is one Arg, verbatim
+// raw text" capture and the md medium's own identical Args convention
+// both need ZERO changes to carry a comma-separated list value (e.g.
+// "eu-central-1a, eu-central-1b, eu-central-1c") -- this is the ONE
+// place that raw text is actually split and rendered as a real
+// language-native list literal, splitListArg below.
 func renderArgLiteral(lang string, p Param, raw string) (string, error) {
 	switch p.Type {
 	case ParamString:
@@ -173,9 +182,56 @@ func renderArgLiteral(lang string, p Param, raw string) (string, error) {
 			return "False", nil
 		}
 		return strconv.FormatBool(b), nil
+	case ParamListString:
+		items := splitListArg(raw)
+		rendered := make([]string, len(items))
+		for i, it := range items {
+			if lang == "go" {
+				rendered[i] = fmt.Sprintf("%q", it)
+			} else {
+				rendered[i] = jsonStringLiteral(it)
+			}
+		}
+		if lang == "go" {
+			return fmt.Sprintf("[]string{%s}", strings.Join(rendered, ", ")), nil
+		}
+		return fmt.Sprintf("[%s]", strings.Join(rendered, ", ")), nil
+	case ParamListNumber:
+		items := splitListArg(raw)
+		rendered := make([]string, len(items))
+		for i, it := range items {
+			f, err := strconv.ParseFloat(it, 64)
+			if err != nil {
+				return "", fmt.Errorf("param %q: element %q is not a valid number: %w", p.Name, it, err)
+			}
+			rendered[i] = numberLiteral(f)
+		}
+		if lang == "go" {
+			return fmt.Sprintf("[]int{%s}", strings.Join(rendered, ", ")), nil
+		}
+		return fmt.Sprintf("[%s]", strings.Join(rendered, ", ")), nil
 	default:
 		return "", fmt.Errorf("param %q: unrecognized type %q", p.Name, p.Type)
 	}
+}
+
+// splitListArg splits a list-typed param's own raw comma-separated call-
+// site value (the SAME plain string diagram/md both already capture
+// verbatim, e.g. "eu-central-1a, eu-central-1b, eu-central-1c") into its
+// own trimmed elements -- tolerant of the author writing "a,b,c" or
+// "a, b, c" interchangeably. An empty/whitespace-only raw value yields
+// an empty (never nil-vs-empty-ambiguous) slice, rendering as a real,
+// legal empty list literal in every language.
+func splitListArg(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		out[i] = strings.TrimSpace(p)
+	}
+	return out
 }
 
 // argLiteralOrDefault renders a's own given value if the call provided

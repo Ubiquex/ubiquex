@@ -711,3 +711,35 @@ platform: "ci-platform call" {
 		t.Fatalf("blueprint_calls = %+v, want exactly 1", intent.BlueprintCalls)
 	}
 }
+
+// TestParse_UbxBlueprint_ListParamCommaSeparated is UBI-129's own
+// required proof of the diagram-medium list-representation DECISION
+// (docs/blueprint.md's own "List-typed parameters + iteration" section
+// has the full reasoning): a comma-separated string in a single D2
+// attribute value, exactly like every OTHER call param already is --
+// never repeated child nodes, a second attribute shape this package
+// would otherwise need new code to parse. blueprintCallFromNode's own
+// existing "every non-reserved child is one Arg, verbatim raw text"
+// capture (parse.go) needs ZERO changes to carry this -- proven here by
+// asserting the comma-separated text survives completely unmodified,
+// through the SAME code path TestParse_UbxBlueprint_NodeBecomesBlueprintCall
+// already exercises for an ordinary scalar param.
+func TestParse_UbxBlueprint_ListParamCommaSeparated(t *testing.T) {
+	src := `
+platform: "vpc subnets call" {
+  class: ubx_blueprint
+  blueprint: "../vpc-subnets"
+  vpc_id: "vpc-123"
+  availability_zones: "eu-central-1a, eu-central-1b, eu-central-1c"
+}
+`
+	intent := mustParse(t, src, "payments", nil, Options{})
+	if len(intent.BlueprintCalls) != 1 {
+		t.Fatalf("blueprint_calls = %+v, want exactly 1", intent.BlueprintCalls)
+	}
+	call := intent.BlueprintCalls[0]
+	want := "eu-central-1a, eu-central-1b, eu-central-1c"
+	if call.Args["availability_zones"] != want {
+		t.Fatalf("Args[\"availability_zones\"] = %q, want %q verbatim (comma-separated text, never split or reshaped here -- splitting is blueprint.ExpandCalls' own job, at call-expansion time)", call.Args["availability_zones"], want)
+	}
+}

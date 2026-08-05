@@ -43,7 +43,7 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 		return nil, fmt.Errorf("blueprint: %w", err)
 	}
 
-	b, err := decodeBlueprint(intent, ubxfile.Outputs)
+	b, err := decodeBlueprint(intent, ubxfile.Params, ubxfile.Outputs)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +86,15 @@ type goResource struct {
 	configName string
 	fields     []fieldEntry
 	valueExprs map[string]string
+
+	// nameExpr (UBI-129) is this resource's own already-rendered Go
+	// expression for its sdk.Resource() call's own name argument -- a
+	// plain %q-quoted literal for an ordinary resource (byte-identical
+	// to every prior slice's own behavior), or a real runtime expression
+	// (an fmt.Sprintf call, or a bare loop-variable reference) for the
+	// one resource whose own dr.ForEach is set, since that resource's
+	// own name must vary per iteration (renderResourceName below).
+	nameExpr string
 }
 
 type fieldEntry struct {
@@ -102,6 +111,28 @@ type goGenerator struct {
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*goResource
+
+	// currentDR (UBI-129) is the resource whose own name/config fields
+	// are being rendered RIGHT NOW -- nil outside of render()'s own
+	// per-resource loop below. paramRef/paramExpr consult this to decide
+	// whether a bare {list_param}/{list_param_index} token is legal here
+	// (only inside the blueprint's own ForEach resource, if any) --
+	// exactly the same "which resource is this rendering for" context
+	// decodeBlueprint's own Referenced/Deps bookkeeping already tracks
+	// structurally, just needed here too, transiently, for THIS
+	// language's own token resolution.
+	currentDR *decodedResource
+
+	// usedForEachValue/usedForEachIndex (UBI-129) record whether the
+	// for_each resource's own fields/name actually referenced the
+	// per-element value/index token at least once -- set by
+	// forEachTokenIdent as rendering happens, consulted by
+	// newGoForEach/renderGoFunction's own loop-header emission, which
+	// substitutes Go's own blank identifier ("_") for whichever one
+	// never got referenced (Go, unlike TS/Python, hard-refuses to
+	// compile a declared-but-unused range variable).
+	usedForEachValue bool
+	usedForEachIndex bool
 }
 
 func (g *goGenerator) ordered() []*goResource {
@@ -129,7 +160,21 @@ func (g *goGenerator) topoOrdered() []*goResource {
 func (g *goGenerator) wrap() error {
 	seenIdent := map[string]string{} // ident -> the resource Name that first claimed it
 	for _, dr := range g.blueprint.Resources {
-		ident, err := pascalCase(dr.RI.Name)
+		identSource := dr.RI.Name
+		if dr.ForEach != "" {
+			// UBI-129: a for_each resource's own Name is a TEMPLATE
+			// ("subnet-{availability_zones}"), not plain text -- derive
+			// the shared binding/config identifier from its own
+			// placeholder-stripped basis instead (every instance shares
+			// ONE binding regardless of its own per-iteration runtime
+			// name).
+			basis, err := forEachIdentifierBasis(dr.RI.Name)
+			if err != nil {
+				return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
+			}
+			identSource = basis
+		}
+		ident, err := pascalCase(identSource)
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}
@@ -145,6 +190,14 @@ func (g *goGenerator) wrap() error {
 func (g *goGenerator) render() error {
 	for _, dr := range g.blueprint.Resources {
 		gr := g.byAddress[dr.Address]
+		g.currentDR = dr
+
+		nameExpr, err := g.renderResourceName(dr)
+		if err != nil {
+			return fmt.Errorf("blueprint: resource %s.%s: name: %w", dr.RI.Type, dr.RI.Name, err)
+		}
+		gr.nameExpr = nameExpr
+
 		for _, f := range dr.Fields {
 			goName, err := pascalCase(f.WireKey)
 			if err != nil {
@@ -159,7 +212,24 @@ func (g *goGenerator) render() error {
 			gr.valueExprs[goName] = expr
 		}
 	}
+	g.currentDR = nil
 	return nil
+}
+
+// renderResourceName renders dr's own sdk.Resource() name argument
+// (UBI-129). An ordinary resource (ForEach == "") renders byte-
+// identically to every prior slice: a plain %q-quoted literal, never
+// scanned for {param_name} tokens at all (a resource's own Name was
+// never templated before this ticket). The one resource with ForEach
+// set runs through the SAME renderString machinery Config field values
+// already use -- its own Name must genuinely vary per iteration
+// (docs/blueprint.md), using the bare {list_param}/{list_param_index}
+// tokens paramRef resolves specially while currentDR is this resource.
+func (g *goGenerator) renderResourceName(dr *decodedResource) (string, error) {
+	if dr.ForEach == "" {
+		return fmt.Sprintf("%q", dr.RI.Name), nil
+	}
+	return g.renderString(dr.RI.Name)
 }
 
 // renderAny renders one already-JSON-decoded value into a Go source
@@ -328,15 +398,78 @@ func (g *goGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 	return strings.Join(parts, " + "), true, nil
 }
 
+// forEachTokenIdent reports whether name is one of the two synthetic
+// per-iteration tokens a for_each resource's own name/config may
+// reference (UBI-129) -- the bare list param name itself (the current
+// loop element's own value) or that same name with "_index" appended
+// (its own zero-based position) -- and, if so, returns the Go loop-
+// variable identifier it resolves to. Only legal while g.currentDR IS
+// the blueprint's own ForEach resource; referencing either token from
+// any OTHER resource is refused with a clear error, never silently
+// treated as an ordinary (and undeclared) param name.
+func (g *goGenerator) forEachTokenIdent(name string) (ident string, matched bool, err error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return "", false, nil
+	}
+	base := fe.RI.ForEach
+	var suffix string
+	switch name {
+	case base:
+		suffix = "Value"
+	case base + "_index":
+		suffix = "Index"
+	default:
+		return "", false, nil
+	}
+	if g.currentDR != fe {
+		return "", true, fmt.Errorf("prose references {%s}, but that's only valid inside its own for_each resource (%s.%s)", name, fe.RI.Type, fe.RI.Name)
+	}
+	cname, err := camelCase(base)
+	if err != nil {
+		return "", true, err
+	}
+	// A real, live-found subtlety (caught by a real `ubx resolve
+	// --from-code` run against a for_each blueprint that only ever
+	// references the per-element VALUE, never the index -- e.g. one
+	// resource attribute per name, no index-derived value at all):
+	// unlike Python/TS, Go hard-refuses to compile a declared-but-unused
+	// range variable ("declared and not used"). Tracking which of the
+	// two loop variables a real reference actually used lets the loop
+	// header itself (newGoForEach/the emission in renderGoFunction)
+	// substitute Go's own blank identifier for whichever one never got
+	// referenced, instead of assuming both are always used just because
+	// a for_each resource exists.
+	if suffix == "Value" {
+		g.usedForEachValue = true
+	} else {
+		g.usedForEachIndex = true
+	}
+	return cname + suffix, true, nil
+}
+
 // paramRef returns the Go expression referencing param name's own value: a
 // bare identifier for a required param (a direct function argument), or
 // a cfg.<field> selector for a params: default (docs/blueprint.md's
 // "Resolved defaults" section -- a default param is no longer a bare
 // function argument, its value lives on the options struct instead).
+//
+// UBI-129: name is checked against the blueprint's own for_each
+// synthetic tokens FIRST -- see forEachTokenIdent above -- since neither
+// token is a real params: entry at all (g.params has no such key), and
+// the ordinary "no such param declared" error below would otherwise be
+// misleading for what's actually a scoping mistake (referencing an
+// iteration token outside its own for_each resource).
 func (g *goGenerator) paramRef(name string) (string, error) {
+	if ident, matched, err := g.forEachTokenIdent(name); matched {
+		return ident, err
+	}
 	p, ok := g.params[name]
 	if !ok {
 		return "", fmt.Errorf("prose references {%s}, but no such param is declared in the Ubxfile's own params: block", name)
+	}
+	if p.Type.IsList() {
+		return "", fmt.Errorf("prose references {%s} directly, but %q is a list-typed param -- it can only be referenced inside its own for_each resource, as the per-element value (declare a for_each resource naming it first)", name, name)
 	}
 	cname, err := camelCase(p.Name)
 	if err != nil {
@@ -354,7 +487,24 @@ func (g *goGenerator) paramRef(name string) (string, error) {
 // already-declared param, one integer literal constant, never a general
 // expression language). op/literal empty means an ordinary bare
 // reference, identical to paramRef's own existing behavior.
+//
+// UBI-129: a for_each synthetic token (either one) never supports the
+// arithmetic form -- a real, deliberately narrow scope boundary (this
+// ticket's own worked examples need only plain substitution; adding
+// arithmetic here would also need to know the list's own element type,
+// genuinely more design than a real worked example has asked for yet).
 func (g *goGenerator) paramExpr(name, op, literal string) (string, error) {
+	if _, matched, _ := g.forEachTokenIdent(name); matched {
+		ref, err := g.paramRef(name)
+		if err != nil {
+			return "", err
+		}
+		if op != "" {
+			return "", fmt.Errorf("prose references {%s %s %s} -- arithmetic on a for_each element/index token isn't supported; use a plain {%s} reference instead", name, op, literal, name)
+		}
+		return ref, nil
+	}
+
 	ref, err := g.paramRef(name)
 	if err != nil {
 		return "", err
@@ -434,6 +584,10 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 	if err := checkGoOutputIdentCollisions(g, params, hasOptions); err != nil {
 		return "", err
 	}
+	forEach, err := newGoForEach(g, params, hasOptions)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	b.WriteString("// Code generated by `ubx blueprint build`. DO NOT EDIT.\n")
@@ -441,6 +595,9 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 
 	usesSprintf := false
 	for _, gr := range g.byAddress {
+		if strings.HasPrefix(gr.nameExpr, "fmt.Sprintf(") {
+			usesSprintf = true
+		}
 		for _, expr := range gr.valueExprs {
 			if strings.HasPrefix(expr, "fmt.Sprintf(") {
 				usesSprintf = true
@@ -496,8 +653,15 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 		sig.WriteString("opts ...Option")
 	}
 	sig.WriteString(")")
-	if len(outputIdents) > 0 {
+	switch {
+	case len(outputIdents) > 0:
 		fmt.Fprintf(&sig, " (%s *sdk.Computed)", strings.Join(outputIdents, ", "))
+	case forEach != nil:
+		// UBI-129: mutually exclusive with outputIdents above --
+		// decodeBlueprint already refuses a blueprint that declares both
+		// outputs: and a for_each resource, so at most one of these two
+		// branches ever fires.
+		sig.WriteString(" []*sdk.Computed")
 	}
 
 	fmt.Fprintf(&b, "func %s {\n", sig.String())
@@ -516,8 +680,39 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 		b.WriteString("\tfor _, opt := range opts {\n\t\topt(&cfg)\n\t}\n\n")
 	}
 	for _, gr := range g.topoOrdered() {
+		if gr.dr.ForEach != "" {
+			// UBI-129: a real for loop, not a single sdk.Resource() call --
+			// forEach's own fields (below) are exactly the loop-variable
+			// identifiers paramRef already resolves {list_param}/
+			// {list_param_index} to while rendering THIS resource's own
+			// name/fields (render, above), so the loop header below and
+			// every reference inside the call agree by construction.
+			call := fmt.Sprintf("sdk.Resource(%s, %s, %s{\n", gr.ident, gr.nameExpr, gr.configName)
+			for _, f := range gr.fields {
+				call += fmt.Sprintf("\t\t\t%s: %s,\n", f.goName, gr.valueExprs[f.goName])
+			}
+			call += "\t\t})"
+			// UBI-129: Go hard-refuses to compile a declared-but-unused
+			// range variable -- substitute "_" for whichever of
+			// index/value this resource's own fields/name never actually
+			// referenced (g.usedForEachIndex/usedForEachValue, set live
+			// while render() ran, above).
+			headerIndex, headerValue := forEach.indexIdent, forEach.valueIdent
+			if !g.usedForEachIndex {
+				headerIndex = "_"
+			}
+			if !g.usedForEachValue {
+				headerValue = "_"
+			}
+			fmt.Fprintf(&b, "\tvar %s []*sdk.Computed\n", forEach.accumIdent)
+			fmt.Fprintf(&b, "\tfor %s, %s := range %s {\n", headerIndex, headerValue, forEach.paramIdent)
+			fmt.Fprintf(&b, "\t\titem := %s\n", call)
+			fmt.Fprintf(&b, "\t\t%s = append(%s, item)\n", forEach.accumIdent, forEach.accumIdent)
+			b.WriteString("\t}\n")
+			continue
+		}
 		varName := lowerFirst(gr.ident)
-		call := fmt.Sprintf("sdk.Resource(%s, %q, %s{\n", gr.ident, gr.dr.RI.Name, gr.configName)
+		call := fmt.Sprintf("sdk.Resource(%s, %s, %s{\n", gr.ident, gr.nameExpr, gr.configName)
 		for _, f := range gr.fields {
 			call += fmt.Sprintf("\t\t%s: %s,\n", f.goName, gr.valueExprs[f.goName])
 		}
@@ -528,15 +723,86 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 			fmt.Fprintf(&b, "\t%s\n", call)
 		}
 	}
-	if len(g.blueprint.Outputs) > 0 {
+	switch {
+	case len(g.blueprint.Outputs) > 0:
 		exprs := make([]string, len(g.blueprint.Outputs))
 		for i, o := range g.blueprint.Outputs {
 			exprs[i] = outputReturnExpr(g, o)
 		}
 		fmt.Fprintf(&b, "\treturn %s\n", strings.Join(exprs, ", "))
+	case forEach != nil:
+		fmt.Fprintf(&b, "\treturn %s\n", forEach.accumIdent)
 	}
 	b.WriteString("}\n")
 	return b.String(), nil
+}
+
+// goForEach holds the four Go identifiers a for_each resource's own
+// loop needs (UBI-129) -- computed once by newGoForEach and threaded
+// into both the loop-emission code above and its own collision check,
+// rather than re-derived at each use site independently.
+type goForEach struct {
+	paramIdent string // the source list param's own function-argument identifier, e.g. "availabilityZones"
+	valueIdent string // the loop's own per-element variable, e.g. "availabilityZonesValue"
+	indexIdent string // the loop's own index variable, e.g. "availabilityZonesIndex"
+	accumIdent string // the accumulator slice variable, e.g. "subnetList"
+}
+
+// newGoForEach returns nil, nil when this blueprint declares no
+// for_each resource at all (the overwhelming common case) -- otherwise
+// it derives every identifier the loop-emission code in
+// renderGoFunction needs and guards all four against collision with
+// every OTHER identifier this same generated file derives (resources,
+// params, outputs, and -- when present -- the functional-options
+// plumbing), matching checkGoOptionIdentCollisions/
+// checkGoOutputIdentCollisions' own established "hard build error,
+// never silently renamed" posture.
+func newGoForEach(g *goGenerator, allParams []Param, hasOptions bool) (*goForEach, error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return nil, nil
+	}
+
+	paramIdent, err := camelCase(fe.RI.ForEach)
+	if err != nil {
+		return nil, err
+	}
+	valueIdent := paramIdent + "Value"
+	indexIdent := paramIdent + "Index"
+	accumIdent := lowerFirst(g.byAddress[fe.Address].ident) + "List"
+
+	used := map[string]string{}
+	for _, dr := range g.blueprint.Resources {
+		gr := g.byAddress[dr.Address]
+		used[gr.ident] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
+		used[gr.configName] = fmt.Sprintf("resource %s.%s's own Config struct", gr.dr.RI.Type, gr.dr.RI.Name)
+		if g.blueprint.Referenced[dr.Address] {
+			used[lowerFirst(gr.ident)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
+		}
+	}
+	for _, p := range allParams {
+		cname, err := camelCase(p.Name)
+		if err != nil {
+			return nil, err
+		}
+		used[cname] = fmt.Sprintf("param %q", p.Name)
+	}
+	if hasOptions {
+		used["cfg"] = "the generated functional-options config local"
+		used["opts"] = "the generated functional-options parameter"
+	}
+
+	used["item"] = "the generated for_each loop's own per-iteration temporary"
+	for _, candidate := range []string{valueIdent, indexIdent, accumIdent} {
+		if owner, ok := used[candidate]; ok {
+			return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives the generated identifier %q, which collides with %s -- rename one", fe.RI.Type, fe.RI.Name, candidate, owner)
+		}
+	}
+	if valueIdent == indexIdent || valueIdent == accumIdent || indexIdent == accumIdent {
+		return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives colliding generated identifiers (%q/%q/%q) -- rename the resource or its for_each param", fe.RI.Type, fe.RI.Name, valueIdent, indexIdent, accumIdent)
+	}
+
+	return &goForEach{paramIdent: paramIdent, valueIdent: valueIdent, indexIdent: indexIdent, accumIdent: accumIdent}, nil
 }
 
 // outputReturnExpr renders one decodedOutput's own return expression --

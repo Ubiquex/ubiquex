@@ -60,14 +60,31 @@ func IntentDraftJSONSchema() map[string]any {
 	resource := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"type", "name", "op", "config"},
+		"required":             []string{"type", "name", "op", "config", "for_each"},
 		"properties": map[string]any{
 			"type": map[string]any{
 				"type":        "string",
 				"description": "The provider resource type name, e.g. \"aws_db_instance\". Never invent a plausible-sounding type you're not confident exists -- if uncertain, still pick your best answer here, but record the uncertainty as a question.",
 			},
-			"name": map[string]any{"type": "string"},
-			"op":   map[string]any{"type": "string", "enum": []string{"create", "modify"}},
+			"name": map[string]any{
+				"type": "string",
+				"description": "This resource's own slug. When for_each below is non-empty, this is a NAME TEMPLATE, not a fixed literal -- " +
+					"it must vary per iteration (e.g. \"subnet-{availability_zones}\"), never a fixed string and never a Terraform-style " +
+					"numeric index -- see for_each's own description for the full token convention.",
+			},
+			"op": map[string]any{"type": "string", "enum": []string{"create", "modify"}},
+			"for_each": map[string]any{
+				"type": "string",
+				"description": "Empty string \"\" for an ordinary resource -- the overwhelming common case. Set this to the bare name " +
+					"(never wrapped in braces, e.g. \"availability_zones\") of a declared list(string)/list(number) param ONLY when the " +
+					"document describes a real iteration pattern for THIS resource, e.g. \"For each value in {availability_zones}, " +
+					"create...\". A document may declare at most ONE such resource. Inside THIS SAME resource's own name/config fields " +
+					"(never any other resource's), the bare token \"{availability_zones}\" (matching whatever you set for_each to) refers " +
+					"to the CURRENT loop element's own value, and \"{availability_zones_index}\" (the SAME name with \"_index\" appended) " +
+					"refers to its own zero-based position in the list -- both substituted literally, exactly like an ordinary {param_name} " +
+					"token, never resolved to a concrete example value. Never reference a list-typed param's bare token on any resource " +
+					"whose own for_each isn't set to that exact param name.",
+			},
 			"config": map[string]any{
 				"type": "string",
 				"description": "A JSON-encoded object string -- the resource's full desired " +
@@ -126,7 +143,10 @@ func IntentDraftJSONSchema() map[string]any {
 				"type": "string",
 				"description": "A JSON-encoded object string mapping each parameter name to the exact string value the document gives it, " +
 					"e.g. \"{\\\"repo_name\\\":\\\"payments-ci-artifacts\\\"}\". Always string values here, regardless of the param's own real type -- " +
-					"you do not have the blueprint's own declared param types available, so never guess at a number or boolean literal.",
+					"you do not have the blueprint's own declared param types available, so never guess at a number or boolean literal. For a " +
+					"param the document gives multiple comma-separated values (a list-typed param, though you can't confirm that from here), " +
+					"copy the exact comma-separated text verbatim as ONE string value, e.g. " +
+					"\"{\\\"availability_zones\\\":\\\"eu-central-1a, eu-central-1b, eu-central-1c\\\"}\" -- never a JSON array.",
 			},
 		},
 	}

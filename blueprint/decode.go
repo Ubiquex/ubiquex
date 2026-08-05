@@ -41,6 +41,16 @@ type decodedResource struct {
 	Address string // "<type>.<name>" -- this blueprint's own resources are always same-stack
 	Fields  []decodedField
 	Deps    map[string]bool // sibling addresses this resource's own Config/depends_on references
+
+	// ForEach (UBI-129) mirrors RI.ForEach verbatim -- the bare declared
+	// list-typed param name this resource TEMPLATE iterates over, ""
+	// for an ordinary resource. Kept as its own field (rather than every
+	// caller re-reading RI.ForEach) purely for symmetry with every other
+	// decodedResource field already deriving from RI, and because
+	// decodeBlueprint is the one place that's already validated it names
+	// a real, list-typed param -- every later reader can trust it
+	// without re-checking.
+	ForEach string
 }
 
 // decodedOutput is one outputs: entry (UBI-128), already resolved
@@ -63,6 +73,17 @@ type decodedBlueprint struct {
 	Order      []*decodedResource // topological order (every dependency before its dependent)
 	Referenced map[string]bool    // address -> true if some sibling resource depends on it OR is targeted by an output
 	Outputs    []decodedOutput    // outputs:, in declaration order
+
+	// ForEach (UBI-129) is the AT MOST ONE resource in this blueprint
+	// whose own RI.ForEach is set -- nil for the overwhelming common
+	// case (no iteration at all). Validated here, once, shared by every
+	// language's own codegen exactly like every other decodeBlueprint
+	// invariant: names a real declared list-typed param, is never also
+	// combined with outputs: on the same blueprint, and is never
+	// targeted by a sibling $ref/depends_on (blueprint/decode.go's own
+	// "List-typed parameters + iteration" design account,
+	// docs/blueprint.md).
+	ForEach *decodedResource
 
 	byAddress map[string]*decodedResource
 }
@@ -87,11 +108,16 @@ type decodedBlueprint struct {
 // would be, since the generated function needs a local variable to
 // return its own .Field(...) from regardless of whether anything ELSE
 // inside the blueprint also references it.
-func decodeBlueprint(intent *resolver.IntentFile, outputs []Output) (*decodedBlueprint, error) {
+func decodeBlueprint(intent *resolver.IntentFile, params []Param, outputs []Output) (*decodedBlueprint, error) {
 	b := &decodedBlueprint{
 		Stack:      intent.Stack,
 		Referenced: map[string]bool{},
 		byAddress:  map[string]*decodedResource{},
+	}
+
+	paramByName := map[string]Param{}
+	for _, p := range params {
+		paramByName[p.Name] = p
 	}
 
 	for _, ri := range intent.Resources {
@@ -105,6 +131,59 @@ func decodeBlueprint(intent *resolver.IntentFile, outputs []Output) (*decodedBlu
 		dr := &decodedResource{RI: ri, Address: address, Deps: map[string]bool{}}
 		b.Resources = append(b.Resources, dr)
 		b.byAddress[address] = dr
+	}
+
+	// UBI-129: at most one resource may declare for_each, and only if it
+	// names a real, declared list-typed param -- validated once, here,
+	// shared by every language's own codegen (each generator's own
+	// paramRef trusts this without re-checking).
+	for _, dr := range b.Resources {
+		if dr.RI.ForEach == "" {
+			continue
+		}
+		if b.ForEach != nil {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: only one for_each resource is supported per blueprint (already have %s.%s) -- multiple simultaneous iterations aren't supported yet", dr.RI.Type, dr.RI.Name, b.ForEach.RI.Type, b.ForEach.RI.Name)
+		}
+		p, ok := paramByName[dr.RI.ForEach]
+		if !ok {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: for_each %q names no declared param", dr.RI.Type, dr.RI.Name, dr.RI.ForEach)
+		}
+		if !p.Type.IsList() {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: for_each %q must name a list(string)/list(number) param, got %q", dr.RI.Type, dr.RI.Name, dr.RI.ForEach, p.Type)
+		}
+		dr.ForEach = dr.RI.ForEach
+		b.ForEach = dr
+	}
+	if b.ForEach != nil {
+		indexName := b.ForEach.RI.ForEach + "_index"
+		if _, collide := paramByName[indexName]; collide {
+			return nil, fmt.Errorf("blueprint: for_each param %q derives the synthetic index-token name %q, which collides with a separately declared param -- rename one", b.ForEach.RI.ForEach, indexName)
+		}
+	}
+	if b.ForEach != nil && len(outputs) > 0 {
+		return nil, fmt.Errorf("blueprint: a blueprint with a for_each resource cannot also declare outputs: -- combining a per-iteration return list with named outputs isn't supported yet")
+	}
+	// A for_each resource's own Name must genuinely vary per iteration
+	// (docs/blueprint.md's own "explicit per-instance resource naming,
+	// never Terraform-style indexed addressing" requirement) -- a fixed
+	// literal Name would call sdk.Resource() with the IDENTICAL address
+	// on every iteration, a real runtime duplicate-resource bug that
+	// would otherwise only surface confusingly, at call time, far from
+	// its own real cause. Caught here, at build/decode time, by checking
+	// its own {param}/{param_index} tokens directly rather than waiting
+	// for it to misbehave.
+	if b.ForEach != nil {
+		base := b.ForEach.RI.ForEach
+		var usesToken bool
+		for _, m := range placeholderToken.FindAllStringSubmatch(b.ForEach.RI.Name, -1) {
+			if m[1] == base || m[1] == base+"_index" {
+				usesToken = true
+				break
+			}
+		}
+		if !usesToken {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: for_each is set, but its own name %q never references {%s} or {%s_index} -- every iteration would create the SAME resource name, colliding at call time; give it a name that genuinely varies per iteration", b.ForEach.RI.Type, b.ForEach.RI.Name, b.ForEach.RI.Name, base, base)
+		}
 	}
 
 	for _, dr := range b.Resources {
@@ -134,6 +213,10 @@ func decodeBlueprint(intent *resolver.IntentFile, outputs []Output) (*decodedBlu
 		}
 		b.Referenced[target.Address] = true
 		b.Outputs = append(b.Outputs, decodedOutput{Name: o.Name, Target: target, Path: path})
+	}
+
+	if b.ForEach != nil && b.Referenced[b.ForEach.Address] {
+		return nil, fmt.Errorf("blueprint: resource %s.%s is a for_each resource -- it cannot be targeted by a sibling $ref/depends_on (an individual iteration's own instance isn't addressable that way); only the compiled function's own returned list exposes its instances", b.ForEach.RI.Type, b.ForEach.RI.Name)
 	}
 
 	return b, nil

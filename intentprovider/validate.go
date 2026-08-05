@@ -85,10 +85,11 @@ type wireIntent struct {
 }
 
 type wireResourceIntent struct {
-	Type   string `json:"type"`
-	Name   string `json:"name"`
-	Op     string `json:"op"`
-	Config string `json:"config"` // JSON-encoded object string, see wireIntentFile's own doc comment
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Op      string `json:"op"`
+	Config  string `json:"config"`   // JSON-encoded object string, see wireIntentFile's own doc comment
+	ForEach string `json:"for_each"` // UBI-129: bare list-param name this resource template iterates over, "" for an ordinary resource
 }
 
 // parseAndValidate decodes raw against wireIntentFile, translates it into
@@ -192,10 +193,11 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		}
 
 		resources = append(resources, resolver.ResourceIntent{
-			Type:   r.Type,
-			Name:   r.Name,
-			Op:     r.Op,
-			Config: config,
+			Type:    r.Type,
+			Name:    r.Name,
+			Op:      r.Op,
+			Config:  config,
+			ForEach: r.ForEach,
 		})
 	}
 

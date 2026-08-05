@@ -28,7 +28,33 @@ const (
 	ParamString ParamType = "string"
 	ParamNumber ParamType = "number"
 	ParamBool   ParamType = "bool"
+
+	// ParamListString/ParamListNumber (UBI-129) are the two list-typed
+	// params: types -- "list(<element>)", the literal spelling
+	// parseParamSpec matches, matching this file's own "type is an
+	// opaque, exact-string literal, never parsed into parts" convention
+	// (ParamString/ParamNumber/ParamBool are handled identically). A
+	// list-typed param can ONLY be declared "required" -- see
+	// parseDefaultValue's own explicit refusal below -- since it's
+	// always consumed by exactly one for_each resource (docs/blueprint.md's
+	// own "List-typed parameters + iteration" section), never by a
+	// functional-options-style optional value. list(bool) is deliberately
+	// not added: no real worked example in this ticket's own design
+	// record needs one, matching this file's own established "extend
+	// when a real blueprint needs it, not speculatively" discipline
+	// (ParamNumber's own "always int, no float" precedent above).
+	ParamListString ParamType = "list(string)"
+	ParamListNumber ParamType = "list(number)"
 )
+
+// IsList reports whether t is one of the two list-typed params: types
+// (UBI-129) -- a list param is consumed exclusively via a for_each
+// resource's own synthetic per-element/index tokens (blueprint/decode.go),
+// never as an ordinary bare {param_name} reference the way a scalar
+// param is.
+func (t ParamType) IsList() bool {
+	return t == ParamListString || t == ParamListNumber
+}
 
 // GoType returns the Go type a param of this type compiles to in the
 // generated function's own signature. ParamNumber always compiles to
@@ -43,6 +69,10 @@ func (t ParamType) GoType() string {
 		return "int"
 	case ParamBool:
 		return "bool"
+	case ParamListString:
+		return "[]string"
+	case ParamListNumber:
+		return "[]int"
 	default:
 		return "any"
 	}
@@ -61,6 +91,10 @@ func (t ParamType) TSType() string {
 		return "number"
 	case ParamBool:
 		return "boolean"
+	case ParamListString:
+		return "string[]"
+	case ParamListNumber:
+		return "number[]"
 	default:
 		return "any"
 	}
@@ -81,6 +115,10 @@ func (t ParamType) PyType() string {
 		return "int"
 	case ParamBool:
 		return "bool"
+	case ParamListString:
+		return "list[str]"
+	case ParamListNumber:
+		return "list[int]"
 	default:
 		return "Any"
 	}
@@ -283,9 +321,9 @@ func parseParamSpec(name, spec string) (Param, error) {
 	}
 	typ := ParamType(strings.TrimSpace(typePart))
 	switch typ {
-	case ParamString, ParamNumber, ParamBool:
+	case ParamString, ParamNumber, ParamBool, ParamListString, ParamListNumber:
 	default:
-		return Param{}, fmt.Errorf("unrecognized type %q -- must be \"string\", \"number\", or \"bool\"", typePart)
+		return Param{}, fmt.Errorf("unrecognized type %q -- must be \"string\", \"number\", \"bool\", \"list(string)\", or \"list(number)\"", typePart)
 	}
 
 	rest = strings.TrimSpace(rest)
@@ -308,6 +346,8 @@ func parseParamSpec(name, spec string) (Param, error) {
 
 func parseDefaultValue(typ ParamType, text string) (any, error) {
 	switch typ {
+	case ParamListString, ParamListNumber:
+		return nil, fmt.Errorf("list-typed params don't support a default value yet -- declare it \"required\" instead (UBI-129: a list param is always consumed by exactly one for_each resource, which has no notion of an un-given default)")
 	case ParamNumber:
 		n, err := strconv.Atoi(text)
 		if err != nil {

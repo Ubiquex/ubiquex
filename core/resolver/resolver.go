@@ -414,6 +414,32 @@ type ResourceIntent struct {
 	Provider  *ProviderHint       `json:"provider,omitempty"`
 	DependsOn []string            `json:"depends_on,omitempty"`
 	Sources   []core.IntentSource `json:"sources,omitempty"`
+
+	// ForEach was added 2026-08-06 (UBI-129): the bare name of a
+	// declared list(string)/list(number) params: entry this resource
+	// TEMPLATE iterates over -- "" for an ordinary, non-iterating
+	// resource, the overwhelming common case and completely unaffected
+	// (every producer before this ticket leaves it empty, matching every
+	// other purely-additive ResourceIntent field's own precedent above).
+	// Set only by `ubx blueprint build`'s own intent-provider draft, when
+	// the Ubxfile's own resources: prose describes a "for each value in
+	// {list_param}, create..." iteration pattern (docs/blueprint.md's own
+	// "List-typed parameters + iteration" section) -- never by a hand-
+	// written intent file, never by resolver.Resolve itself (which has
+	// zero awareness this field means anything -- it rides along exactly
+	// like DependsOn/Sources already do). Consumed exclusively by
+	// blueprint/decode.go's own decodeBlueprint, which validates it names
+	// a real declared list-typed param and is set on AT MOST one resource
+	// per blueprint, then by each language's own codegen (gogen.go/
+	// tsgen.go/pygen.go), which compiles this ONE ResourceIntent into a
+	// real for loop rather than a single resource-creation call. Never
+	// survives past BUILD-time codegen: once a built blueprint is
+	// actually INVOKED (direct SDK import, or blueprint.ExpandCalls'
+	// own synthesized caller -- Slice 5), the real for loop already
+	// executed inside the compiled program, emitting N ordinary
+	// ResourceIntent values with ForEach empty on every one of them, the
+	// same as if a caller had hand-written N separate resource() calls.
+	ForEach string `json:"for_each,omitempty"`
 }
 
 const (

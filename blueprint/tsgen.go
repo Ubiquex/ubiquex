@@ -38,7 +38,7 @@ func GenerateTS(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 		return nil, fmt.Errorf("blueprint: blueprint name %q derives the TypeScript identifier %q, a reserved word -- rename the directory", blueprintName, funcName)
 	}
 
-	b, err := decodeBlueprint(intent, ubxfile.Outputs)
+	b, err := decodeBlueprint(intent, ubxfile.Params, ubxfile.Outputs)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +78,13 @@ type tsResource struct {
 	ident      string // PascalCase binding const name, e.g. "ContainerRepo"
 	fields     []tsFieldEntry
 	valueExprs map[string]string // by idiomatic (camelCase) name
+
+	// nameExpr (UBI-129) mirrors goResource's own field of the same
+	// name -- a jsonStringLiteral-quoted literal for an ordinary
+	// resource (byte-identical to every prior slice), or a real runtime
+	// template-literal/bare-reference expression for the one resource
+	// whose own dr.ForEach is set.
+	nameExpr string
 }
 
 type tsFieldEntry struct {
@@ -89,6 +96,10 @@ type tsGenerator struct {
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*tsResource
+
+	// currentDR (UBI-129) mirrors goGenerator's own field of the same
+	// name -- see its doc comment.
+	currentDR *decodedResource
 }
 
 func (g *tsGenerator) ordered() []*tsResource {
@@ -117,7 +128,15 @@ func (g *tsGenerator) topoOrdered() []*tsResource {
 func (g *tsGenerator) wrap() error {
 	seenIdent := map[string]string{}
 	for _, dr := range g.blueprint.Resources {
-		ident, err := pascalCase(dr.RI.Name)
+		identSource := dr.RI.Name
+		if dr.ForEach != "" {
+			basis, err := forEachIdentifierBasis(dr.RI.Name)
+			if err != nil {
+				return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
+			}
+			identSource = basis
+		}
+		ident, err := pascalCase(identSource)
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}
@@ -133,6 +152,14 @@ func (g *tsGenerator) wrap() error {
 func (g *tsGenerator) render() error {
 	for _, dr := range g.blueprint.Resources {
 		tr := g.byAddress[dr.Address]
+		g.currentDR = dr
+
+		nameExpr, err := g.renderResourceName(dr)
+		if err != nil {
+			return fmt.Errorf("blueprint: resource %s.%s: name: %w", dr.RI.Type, dr.RI.Name, err)
+		}
+		tr.nameExpr = nameExpr
+
 		for _, f := range dr.Fields {
 			idiomatic, err := camelCase(f.WireKey)
 			if err != nil {
@@ -147,7 +174,19 @@ func (g *tsGenerator) render() error {
 			tr.valueExprs[idiomatic] = expr
 		}
 	}
+	g.currentDR = nil
 	return nil
+}
+
+// renderResourceName mirrors goGenerator's own method of the same name
+// (UBI-129) -- byte-identical (jsonStringLiteral-quoted) for an
+// ordinary resource, run through renderString for the one resource
+// whose own dr.ForEach is set.
+func (g *tsGenerator) renderResourceName(dr *decodedResource) (string, error) {
+	if dr.ForEach == "" {
+		return jsonStringLiteral(dr.RI.Name), nil
+	}
+	return g.renderString(dr.RI.Name)
 }
 
 // renderAny renders one already-JSON-decoded value into a TypeScript
@@ -346,6 +385,33 @@ func (g *tsGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 	return strings.Join(parts, " + "), true, nil
 }
 
+// forEachTokenIdent mirrors goGenerator's own method of the same name
+// (UBI-129) -- see its doc comment for the full account.
+func (g *tsGenerator) forEachTokenIdent(name string) (ident string, matched bool, err error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return "", false, nil
+	}
+	base := fe.RI.ForEach
+	var suffix string
+	switch name {
+	case base:
+		suffix = "Value"
+	case base + "_index":
+		suffix = "Index"
+	default:
+		return "", false, nil
+	}
+	if g.currentDR != fe {
+		return "", true, fmt.Errorf("prose references {%s}, but that's only valid inside its own for_each resource (%s.%s)", name, fe.RI.Type, fe.RI.Name)
+	}
+	cname, err := camelCase(base)
+	if err != nil {
+		return "", true, err
+	}
+	return cname + suffix, true, nil
+}
+
 // paramRef returns the TS expression referencing param name's own value --
 // a bare identifier either way: TypeScript has NATIVE default parameter
 // syntax (function f(a: string, b: number = 1)), so unlike Go a
@@ -354,10 +420,20 @@ func (g *tsGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 // defaulted params alike (docs/blueprint.md's own "Multi-language
 // codegen" section names this as a real, deliberate simplification, not
 // an oversight).
+//
+// UBI-129: name is checked against the blueprint's own for_each
+// synthetic tokens first -- see forEachTokenIdent and goGenerator.paramRef's
+// own doc comment for the full account.
 func (g *tsGenerator) paramRef(name string) (string, error) {
+	if ident, matched, err := g.forEachTokenIdent(name); matched {
+		return ident, err
+	}
 	p, ok := g.params[name]
 	if !ok {
 		return "", fmt.Errorf("prose references {%s}, but no such param is declared in the Ubxfile's own params: block", name)
+	}
+	if p.Type.IsList() {
+		return "", fmt.Errorf("prose references {%s} directly, but %q is a list-typed param -- it can only be referenced inside its own for_each resource, as the per-element value (declare a for_each resource naming it first)", name, name)
 	}
 	return camelCase(p.Name)
 }
@@ -367,7 +443,21 @@ func (g *tsGenerator) paramRef(name string) (string, error) {
 // deliberately narrow "unit conversion or derived value" form
 // GenerateGo's own paramExpr implements -- exactly one operator, one
 // already-declared param, one integer literal constant).
+//
+// UBI-129: a for_each synthetic token never supports the arithmetic
+// form -- matching goGenerator.paramExpr's own deliberately narrow scope.
 func (g *tsGenerator) paramExpr(name, op, literal string) (string, error) {
+	if _, matched, _ := g.forEachTokenIdent(name); matched {
+		ref, err := g.paramRef(name)
+		if err != nil {
+			return "", err
+		}
+		if op != "" {
+			return "", fmt.Errorf("prose references {%s %s %s} -- arithmetic on a for_each element/index token isn't supported; use a plain {%s} reference instead", name, op, literal, name)
+		}
+		return ref, nil
+	}
+
 	ref, err := g.paramRef(name)
 	if err != nil {
 		return "", err
@@ -429,6 +519,10 @@ func renderTSBindings(resources []*tsResource) string {
 // TypeScript itself doesn't require it the way Go's compiler does).
 func renderTSFunction(funcName string, params []Param, g *tsGenerator) (string, error) {
 	if err := checkTSIdentCollisions(g, params); err != nil {
+		return "", err
+	}
+	forEach, err := newTSForEach(g, params)
+	if err != nil {
 		return "", err
 	}
 	// UBI-128: unlike Go's named RETURN VALUES (real declared variables,
@@ -507,9 +601,8 @@ func renderTSFunction(funcName string, params []Param, g *tsGenerator) (string, 
 		}
 	}
 	sig.WriteString("): ")
-	if len(outputIdents) == 0 {
-		sig.WriteString("void")
-	} else {
+	switch {
+	case len(outputIdents) > 0:
 		sig.WriteString("{ ")
 		for i, ident := range outputIdents {
 			if i > 0 {
@@ -518,13 +611,40 @@ func renderTSFunction(funcName string, params []Param, g *tsGenerator) (string, 
 			fmt.Fprintf(&sig, "%s: any", ident)
 		}
 		sig.WriteString(" }")
+	case forEach != nil:
+		// UBI-129: mutually exclusive with outputIdents above --
+		// decodeBlueprint already refuses a blueprint declaring both.
+		sig.WriteString("any[]")
+	default:
+		sig.WriteString("void")
 	}
 
 	fmt.Fprintf(&b, "export function %s {\n", sig.String())
 	for _, tr := range g.topoOrdered() {
+		if tr.dr.ForEach != "" {
+			// UBI-129: a real loop (Array.prototype.forEach, TS's own
+			// idiomatic index+value iteration form), not a single
+			// resource() call -- tr's own fields/nameExpr (render, above)
+			// already reference the loop-variable identifiers below by
+			// construction (paramRef resolves {list_param}/
+			// {list_param_index} to these SAME names while rendering
+			// THIS resource).
+			var call strings.Builder
+			fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, tr.nameExpr)
+			for _, f := range tr.fields {
+				fmt.Fprintf(&call, "      %s: %s,\n", f.idiomatic, tr.valueExprs[f.idiomatic])
+			}
+			call.WriteString("    })")
+			fmt.Fprintf(&b, "  const %s: any[] = [];\n", forEach.accumIdent)
+			fmt.Fprintf(&b, "  %s.forEach((%s, %s) => {\n", forEach.paramIdent, forEach.valueIdent, forEach.indexIdent)
+			fmt.Fprintf(&b, "    const item = %s;\n", call.String())
+			fmt.Fprintf(&b, "    %s.push(item);\n", forEach.accumIdent)
+			b.WriteString("  });\n")
+			continue
+		}
 		varName := lowerFirst(tr.ident)
 		var call strings.Builder
-		fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, jsonStringLiteral(tr.dr.RI.Name))
+		fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, tr.nameExpr)
 		for _, f := range tr.fields {
 			fmt.Fprintf(&call, "    %s: %s,\n", f.idiomatic, tr.valueExprs[f.idiomatic])
 		}
@@ -549,12 +669,15 @@ func renderTSFunction(funcName string, params []Param, g *tsGenerator) (string, 
 			fmt.Fprintf(&b, "  %s;\n", call.String())
 		}
 	}
-	if len(outputIdents) > 0 {
+	switch {
+	case len(outputIdents) > 0:
 		exprs := make([]string, len(outputIdents))
 		for i, o := range g.blueprint.Outputs {
 			exprs[i] = fmt.Sprintf("%s: %s", outputIdents[i], g.propertyExpr(o.Target, o.Path))
 		}
 		fmt.Fprintf(&b, "  return { %s };\n", strings.Join(exprs, ", "))
+	case forEach != nil:
+		fmt.Fprintf(&b, "  return %s;\n", forEach.accumIdent)
 	}
 	b.WriteString("}\n")
 	return b.String(), nil
@@ -620,4 +743,57 @@ func checkTSIdentCollisions(g *tsGenerator, params []Param) error {
 		seen[cname] = fmt.Sprintf("param %q", p.Name)
 	}
 	return nil
+}
+
+// tsForEach mirrors goForEach (UBI-129) -- see its doc comment. TS has
+// no functional-options plumbing to guard against (checkTSIdentCollisions'
+// own "simpler than Go" precedent), so this check is correspondingly
+// smaller: just the resources/params every generated file already
+// derives, plus TS's own reserved-word list.
+type tsForEach struct {
+	paramIdent string
+	valueIdent string
+	indexIdent string
+	accumIdent string
+}
+
+func newTSForEach(g *tsGenerator, allParams []Param) (*tsForEach, error) {
+	fe := g.blueprint.ForEach
+	if fe == nil {
+		return nil, nil
+	}
+
+	paramIdent, err := camelCase(fe.RI.ForEach)
+	if err != nil {
+		return nil, err
+	}
+	valueIdent := paramIdent + "Value"
+	indexIdent := paramIdent + "Index"
+	accumIdent := lowerFirst(g.byAddress[fe.Address].ident) + "List"
+
+	used := map[string]string{"item": "the generated for_each loop's own per-iteration temporary"}
+	for _, tr := range g.ordered() {
+		used[tr.ident] = fmt.Sprintf("resource %s.%s", tr.dr.RI.Type, tr.dr.RI.Name)
+	}
+	for _, p := range allParams {
+		cname, err := camelCase(p.Name)
+		if err != nil {
+			return nil, err
+		}
+		used[cname] = fmt.Sprintf("param %q", p.Name)
+	}
+
+	for _, candidate := range []string{valueIdent, indexIdent, accumIdent} {
+		if tsReservedIdent(candidate) {
+			return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives the TypeScript identifier %q, a reserved word -- rename the resource or its for_each param", fe.RI.Type, fe.RI.Name, candidate)
+		}
+		if owner, ok := used[candidate]; ok {
+			return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives the generated identifier %q, which collides with %s -- rename one", fe.RI.Type, fe.RI.Name, candidate, owner)
+		}
+	}
+	if valueIdent == indexIdent || valueIdent == accumIdent || indexIdent == accumIdent {
+		return nil, fmt.Errorf("blueprint: for_each resource %s.%s derives colliding generated identifiers (%q/%q/%q) -- rename the resource or its for_each param", fe.RI.Type, fe.RI.Name, valueIdent, indexIdent, accumIdent)
+	}
+
+	return &tsForEach{paramIdent: paramIdent, valueIdent: valueIdent, indexIdent: indexIdent, accumIdent: accumIdent}, nil
 }

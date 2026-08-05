@@ -396,6 +396,40 @@ func blueprintDraftPrompt(ubxfile *blueprint.Ubxfile) string {
 	b.WriteString("it to a concrete computed number, never combine two parameters, never write a more complex ")
 	b.WriteString("expression than one operator against one literal constant. Every other attribute not tied to a ")
 	b.WriteString("declared parameter should be resolved normally, as usual.\n\n")
+
+	if hasListParam(ubxfile.Params) {
+		b.WriteString("One or more of the parameters above is list-typed (list(string)/list(number)). A list-typed ")
+		b.WriteString("parameter is NEVER referenced directly as an ordinary {param_name} token -- only via a resource ")
+		b.WriteString("that iterates over it. If (and only if) the prose below describes a real iteration pattern for ")
+		b.WriteString("a resource -- \"For each value in {list_param}, create...\", or an equivalent phrasing -- set that ")
+		b.WriteString("resource's own for_each field to the list param's bare name (never wrapped in braces). At most one ")
+		b.WriteString("resource in this document may do this. Within THAT SAME resource's own name/config fields (never ")
+		b.WriteString("any other resource's), refer to the current loop element's own value with the ordinary bare ")
+		b.WriteString("{list_param} token (the SAME name you set for_each to), and to its own zero-based position in the ")
+		b.WriteString("list with {list_param_index} (that same name with \"_index\" appended) -- both substituted ")
+		b.WriteString("literally, exactly like any other {param_name} token, never resolved to a concrete example value. ")
+		b.WriteString("This resource's own name must genuinely vary per iteration using one of these two tokens (e.g. ")
+		b.WriteString("\"subnet-{availability_zones}\") -- never a fixed literal, and never a Terraform-style numeric ")
+		b.WriteString("index scheme of your own invention. A resource with for_each set cannot be referenced by any ")
+		b.WriteString("sibling resource, and this document cannot declare outputs: at all if it declares a for_each ")
+		b.WriteString("resource. If the prose doesn't actually describe an iteration pattern, leave every resource's own ")
+		b.WriteString("for_each as \"\" as usual, even though a list param is declared.\n\n")
+	}
+
 	b.WriteString(ubxfile.Resources)
 	return b.String()
+}
+
+// hasListParam reports whether any of params is list-typed (UBI-129) --
+// blueprintDraftPrompt only pays the extra preamble cost (and the model
+// only needs the for_each recognition instructions at all) when a
+// blueprint actually declares one; every blueprint before this ticket
+// declares none and is completely unaffected.
+func hasListParam(params []blueprint.Param) bool {
+	for _, p := range params {
+		if p.Type.IsList() {
+			return true
+		}
+	}
+	return false
 }
