@@ -37,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newPromoteCmd())
 	root.AddCommand(newTerminateCmd())
 	root.AddCommand(newDestroyCmd())
+	root.AddCommand(newProvidersCmd())
 
 	return root
 }

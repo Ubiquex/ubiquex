@@ -21,6 +21,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.18.1
 	gocloud.dev v0.46.0
+	golang.org/x/mod v0.37.0
 	golang.org/x/term v0.44.0
 	google.golang.org/api v0.287.1
 	google.golang.org/genproto v0.0.0-20260715232425-e75dac1f907d
@@ -118,7 +119,6 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/image v0.20.0 // indirect
-	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
