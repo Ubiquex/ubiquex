@@ -48,8 +48,15 @@ func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) error {
 		seen[ri.Type+"."+ri.Name] = "resources[]"
 	}
 
+	// UBI-128: aggregated across every call in this document, keyed
+	// "<CallName>:<outputKey>" -- rewriteBlueprintOutputRefs (outputs.go)
+	// consumes this ONCE, below, after every call has been expanded (a
+	// PROVISIONAL output $ref can legitimately be embedded in ANY
+	// resource's own config, not only ones the SAME call produced).
+	outputAddr := map[string]string{}
+
 	for _, call := range intent.BlueprintCalls {
-		resources, err := invokeCall(ctx, intent.Stack, call)
+		resources, callOutputs, err := invokeCall(ctx, intent.Stack, call)
 		if err != nil {
 			return fmt.Errorf("blueprint call %q (%s): %w", call.Name, call.Blueprint, err)
 		}
@@ -61,8 +68,17 @@ func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) error {
 			seen[addr] = fmt.Sprintf("blueprint call %q", call.Name)
 			intent.Resources = append(intent.Resources, ri)
 		}
+		if call.CallName != "" {
+			for outputKey, real := range callOutputs {
+				outputAddr[call.CallName+":"+outputKey] = real
+			}
+		}
 	}
 	intent.BlueprintCalls = nil
+
+	if err := rewriteBlueprintOutputRefs(intent, outputAddr); err != nil {
+		return fmt.Errorf("blueprint output reference: %w", err)
+	}
 	return nil
 }
 
@@ -207,28 +223,30 @@ func blueprintNameFromCall(call resolver.BlueprintCall) string {
 }
 
 // invokeCall resolves, invokes, and returns the resources one
-// BlueprintCall produces. The blueprint is ALWAYS pulled into a fresh,
-// ephemeral temp directory first (Pull, UBI-74 Slice 3's own mechanism,
-// reused unconditionally for both local and git references) and that
-// whole temp directory is removed before this function returns --
-// invoking a blueprint never mutates its own source, local or git,
-// under any circumstance.
-func invokeCall(ctx context.Context, callingStack string, call resolver.BlueprintCall) ([]resolver.ResourceIntent, error) {
+// BlueprintCall produces, plus (UBI-128) that call's own declared
+// outputs, resolved into real addresses (resolveCallOutputs, outputs.go)
+// now that the blueprint's real resource types/names are finally known.
+// The blueprint is ALWAYS pulled into a fresh, ephemeral temp directory
+// first (Pull, UBI-74 Slice 3's own mechanism, reused unconditionally
+// for both local and git references) and that whole temp directory is
+// removed before this function returns -- invoking a blueprint never
+// mutates its own source, local or git, under any circumstance.
+func invokeCall(ctx context.Context, callingStack string, call resolver.BlueprintCall) (resources []resolver.ResourceIntent, outputAddr map[string]string, err error) {
 	scratch, err := os.MkdirTemp("", "ubx-blueprint-call-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(scratch)
 
 	blueprintName := blueprintNameFromCall(call)
 	dest := filepath.Join(scratch, blueprintName)
 	if _, err := Pull(ctx, call.Blueprint, dest, call.Ref, call.Path); err != nil {
-		return nil, fmt.Errorf("pull: %w", err)
+		return nil, nil, fmt.Errorf("pull: %w", err)
 	}
 
 	ubxfile, err := ParseUbxfile(dest)
 	if err != nil {
-		return nil, fmt.Errorf("parse Ubxfile: %w", err)
+		return nil, nil, fmt.Errorf("parse Ubxfile: %w", err)
 	}
 
 	// UBI-74 Slice 6: the provenance ref every resource this call
@@ -244,18 +262,18 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	// render`, never baked into the stored ref itself.
 	manifest, err := buildManifest(dest, blueprintName)
 	if err != nil {
-		return nil, fmt.Errorf("compute blueprint content hash: %w", err)
+		return nil, nil, fmt.Errorf("compute blueprint content hash: %w", err)
 	}
 	blueprintRef := blueprintName + ":" + manifest.ContentHash
 
 	lang, err := pickCallLanguage(dest)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	args, err := resolveCallArgs(ubxfile.Params, call.Args)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	summary := fmt.Sprintf("blueprint call: %s", call.Name)
@@ -270,7 +288,7 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		entry, err = writeGoCaller(scratch, dest, blueprintName, callingStack, summary, args)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("prepare %s caller: %w", lang, err)
+		return nil, nil, fmt.Errorf("prepare %s caller: %w", lang, err)
 	}
 
 	var raw []byte
@@ -283,12 +301,12 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		raw, err = goeval.Evaluate(ctx, entry)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("evaluate (%s): %w", lang, err)
+		return nil, nil, fmt.Errorf("evaluate (%s): %w", lang, err)
 	}
 
 	var result resolver.IntentFile
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("parse evaluated intent: %w", err)
+		return nil, nil, fmt.Errorf("parse evaluated intent: %w", err)
 	}
 
 	// UBI-74 Slice 6: every resource THIS call produces is stamped with
@@ -329,7 +347,12 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 			Ref:  blueprintRef,
 		})
 	}
-	return result.Resources, nil
+
+	callOutputs, err := resolveCallOutputs(callingStack, ubxfile, result.Resources)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve outputs: %w", err)
+	}
+	return result.Resources, callOutputs, nil
 }
 
 // writeTSCaller writes a throwaway TypeScript entry program into

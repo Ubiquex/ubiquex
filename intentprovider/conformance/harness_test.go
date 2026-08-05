@@ -28,9 +28,10 @@ func (f *fakeAdapter) Model() string { return "fake-model" }
 // rather than every fixture getting the same single draft back
 // regardless of its own doc.
 var scriptedDrafts = map[string]string{
-	"payments":            goodPaymentsDraft,
-	"platform":            goodPlatformDraft,
-	"platform-iam-attach": goodPlatformIAMAttachDraft,
+	"payments":                  goodPaymentsDraft,
+	"platform":                  goodPlatformDraft,
+	"platform-iam-attach":       goodPlatformIAMAttachDraft,
+	"platform-blueprint-output": goodPlatformBlueprintOutputDraft,
 }
 
 func (f *fakeAdapter) Draft(_ context.Context, req intentprovider.DraftRequest) (json.RawMessage, error) {
@@ -118,6 +119,37 @@ const goodPlatformIAMAttachDraft = `{
     {"type": "aws_iam_role_policy_attachment", "name": "ci-runner-access-attach", "op": "create", "config": "{\"role\":{\"$ref\":{\"to\":\"platform-iam-attach.aws_iam_role.ci-runner.name\"}},\"policy_arn\":{\"$ref\":{\"to\":\"platform-iam-attach.aws_iam_policy.ci-runner-access.arn\"}}}"}
   ],
   "destroys": []
+}`
+
+// goodPlatformBlueprintOutputDraft is the FOURTH fixture's own scripted
+// response (UBI-128): the fixture doc names a blueprint call with an
+// explicit "as 'platform'" alias, then references that alias's own
+// repo_arn output from a later, unrelated sentence -- the scripted draft
+// carries the real wire shape both halves of that grammar are supposed
+// to produce: "call_name":"platform" on the blueprint_calls[] entry, and
+// a real, nested {"$ref":{"to":"$blueprint_output:platform:repo_arn"}}
+// object one level inside the policy's own JSON-encoded string content
+// (the identical "JSON-embedded ref" shape goodPlatformDraft already
+// exercises for an ordinary resource-to-resource reference, just with a
+// blueprint-output "to" value instead of a <stack>.<type>.<name>.<attr>
+// address).
+const goodPlatformBlueprintOutputDraft = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "platform-blueprint-output",
+  "intent": {
+    "summary": "call the ci-platform blueprint as 'platform', attach a downstream policy using its own repo_arn output",
+    "assumptions": [],
+    "defaults": [],
+    "questions": []
+  },
+  "resources": [
+    {"type": "aws_iam_role_policy", "name": "downstream-access", "op": "create", "config": "{\"role\":\"downstream-role\",\"policy\":\"{\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\",\\\"Action\\\":\\\"s3:GetObject\\\",\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"$blueprint_output:platform:repo_arn\\\"}}}]}\"}"}
+  ],
+  "destroys": [],
+  "blueprint_calls": [
+    {"name": "ci-platform call", "call_name": "platform", "blueprint": "ci-platform", "ref": "", "path": "", "args": "{\"repo_name\":\"payments-ci-artifacts\",\"queue_name\":\"payments-notifications\"}"}
+  ]
 }`
 
 func TestRun_FakeAdapterPasses(t *testing.T) {

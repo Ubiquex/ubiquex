@@ -43,6 +43,17 @@ type decodedResource struct {
 	Deps    map[string]bool // sibling addresses this resource's own Config/depends_on references
 }
 
+// decodedOutput is one outputs: entry (UBI-128), already resolved
+// against this blueprint's own resources -- shared by every codegen
+// target exactly like decodedResource's own fields are, so "which
+// resource+path does this output name" is answered once, not
+// re-derived independently per language.
+type decodedOutput struct {
+	Name   string
+	Target *decodedResource
+	Path   []string
+}
+
 // decodedBlueprint is one resolved intent draft's own language-neutral
 // decode -- shared by every codegen target (GenerateGo/GenerateTS/
 // GeneratePython).
@@ -50,7 +61,8 @@ type decodedBlueprint struct {
 	Stack      string
 	Resources  []*decodedResource // declaration order
 	Order      []*decodedResource // topological order (every dependency before its dependent)
-	Referenced map[string]bool    // address -> true if some sibling resource depends on it
+	Referenced map[string]bool    // address -> true if some sibling resource depends on it OR is targeted by an output
+	Outputs    []decodedOutput    // outputs:, in declaration order
 
 	byAddress map[string]*decodedResource
 }
@@ -65,7 +77,17 @@ type decodedBlueprint struct {
 // while rendering a Field's own Value already resolves cleanly -- this
 // is the ONE place that validation happens, not re-done independently by
 // every language's own renderer.
-func decodeBlueprint(intent *resolver.IntentFile) (*decodedBlueprint, error) {
+//
+// outputs (UBI-128) is the Ubxfile's own outputs: declaration, resolved
+// here against the SAME resources (by slug, resolveOutputTarget below,
+// never repeating the stack/type prefix an ordinary $ref address needs
+// -- an output's own Target already names its resource unambiguously by
+// the blueprint author's own declared slug) -- every output's own
+// target resource is marked Referenced exactly like a sibling $ref
+// would be, since the generated function needs a local variable to
+// return its own .Field(...) from regardless of whether anything ELSE
+// inside the blueprint also references it.
+func decodeBlueprint(intent *resolver.IntentFile, outputs []Output) (*decodedBlueprint, error) {
 	b := &decodedBlueprint{
 		Stack:      intent.Stack,
 		Referenced: map[string]bool{},
@@ -104,7 +126,46 @@ func decodeBlueprint(intent *resolver.IntentFile) (*decodedBlueprint, error) {
 		return nil, err
 	}
 	b.Order = order
+
+	for _, o := range outputs {
+		target, path, err := b.resolveOutputTarget(o.Target)
+		if err != nil {
+			return nil, fmt.Errorf("blueprint: output %q: %w", o.Name, err)
+		}
+		b.Referenced[target.Address] = true
+		b.Outputs = append(b.Outputs, decodedOutput{Name: o.Name, Target: target, Path: path})
+	}
+
 	return b, nil
+}
+
+// resolveOutputTarget parses one outputs: entry's own "<resource-slug>.
+// <attribute>[.<nested>...]" Target against this blueprint's own
+// resources, by SLUG (RI.Name) -- distinct from resolveAddress's own
+// "<stack>.<type>.<name>[.path]" address form: an output's own Target
+// never repeats the stack/type prefix, since the blueprint author
+// already knows which resource they mean by its own declared slug
+// alone (docs/blueprint.md's own "outputs:" section has the full
+// account).
+func (b *decodedBlueprint) resolveOutputTarget(target string) (dr *decodedResource, path []string, err error) {
+	parts := strings.Split(target, ".")
+	if len(parts) < 2 {
+		return nil, nil, fmt.Errorf("malformed output target %q -- want \"<resource-slug>.<attribute>\"", target)
+	}
+	slug := parts[0]
+	var found *decodedResource
+	for _, r := range b.Resources {
+		if r.RI.Name == slug {
+			if found != nil {
+				return nil, nil, fmt.Errorf("target %q: resource slug %q is ambiguous -- more than one resource in this blueprint shares that name", target, slug)
+			}
+			found = r
+		}
+	}
+	if found == nil {
+		return nil, nil, fmt.Errorf("target %q: no resource with slug %q in this blueprint", target, slug)
+	}
+	return found, parts[1:], nil
 }
 
 func (b *decodedBlueprint) decodeFields(dr *decodedResource) error {

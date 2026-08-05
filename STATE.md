@@ -151,6 +151,114 @@ misrepresented) depth of live verification.
 
 ## Current phase
 
+**UBI-128 (2026-08-06) — blueprint `outputs:`, all three calling mediums, closed and live-verified. `Ubxfile` gains an `outputs:` key (`<name>: <resource-slug>.<attribute>`); Go/TS/Python codegen all return declared outputs as NATIVE multi-value returns (Go named `*sdk.Computed` returns, a TS object literal, a Python bare value/tuple) — zero new runtime mechanism, confirmed live in Go via a real `ubx resolve --from-code`/full `ubx ship`, and via real `deno run`/`python3` drivers for TS/Python. The diagram medium's EXISTING `ref:` sigil (UBI-95) now also resolves a `ubx_blueprint` node's own declared output, via a new provisional `$blueprint_output:<CallName>:<outputKey>` wire marker rewritten into a real address by `blueprint.ExpandCalls` before `resolver.Resolve` ever runs — live-verified end to end (resolve→accept→ship) against real `fakeprovider`, AND separately (resolve/plan-only, real AWS schema) against the real `ci-platform` blueprint itself. A real, pre-existing `diagram/parse.go` bug (a `ubx_blueprint`/`ubx_override` node's own attribute children spuriously refused as unresolved topology nodes, present since Slice 5/UBI-86 Part 2) was found and fixed along the way, caught only because this ticket's own live verification checked `intent.Intent.Questions`, not just `intent.Resources`. The md medium gained real new grammar — "Call blueprint X as 'name' with:" plus a later "name's own output_key output" reference — live-verified ONCE against the real Claude API (correct on the first attempt, no retry needed), hermetic otherwise; this is deliberately less depth than the Go SDK/diagram legs' own full resolve→accept→ship proof, stated explicitly per this project's own verification-depth-honesty standard, not blurred together. Deliberately, structurally distinct from `@stack.type.name` (UBI-47) throughout — an output never crosses a ledger/trust boundary and carries no staleness concept.**
+
+Full design account: `docs/blueprint.md`'s new "Outputs: cross-medium
+blueprint output references (UBI-128)" section (worked examples for all
+three languages and all three calling mediums, the `@stack`-vs-outputs
+distinction, the full hermetic-test list, and the per-medium
+live-verification depth below, stated once more there in full). Real
+public-facing docs updated in the SAME session, per protocol:
+`ubiquex-docs/guides/blueprints.mdx` gained its own "Outputs" section
+(worked examples using the same real transcripts), the `Ubxfile`
+"three keys only" line corrected to "four keys," and the diagram
+section's own now-stale "4 blocking questions" transcript replaced with
+the real, current, zero-questions one (a direct consequence of the
+`sortedLeaves` fix below — the old transcript would otherwise have kept
+teaching users to expect noise that no longer happens). `mint
+validate`/`mint broken-links` both clean. The pre-existing "UBI-126,
+open" warning in that same guide was deliberately left untouched — a
+prior session's own considered decision (not updating a PUBLIC warning
+until `sdk/go`'s own fix is actually published, still true as of this
+session) — checked, not blindly touched just because this session was
+already in the file.
+
+**A real, pre-existing bug found by this ticket's own required live
+diagram verification, not a unit test, and fixed:** `diagram/parse.go`'s
+`sortedLeaves` only ever matched a `ubx_blueprint`/`ubx_override` node's
+own hasClass check against the classed node ITSELF — its own attribute
+children (`platform.blueprint`, `platform.widget_name`, ...) are
+SEPARATE `*d2graph.Object` values with no class of their own, so they
+fell through to the ordinary "no `class:` attribute" leaf classification
+and were refused as spurious blocking `Question`s — present since Slice
+5/UBI-86 Part 2, silently undetected because every prior test asserted
+only that `intent.Resources` stayed empty (true either way), never that
+`intent.Intent.Questions` was ALSO empty. First surfaced live against
+the REAL `ci-platform` blueprint (`ubx plan --from-diagram` produced two
+"no class:" blocking questions on a document that should have had none),
+fixed with a new `inBlueprintOrOverrideSubtree` check, confirmed fixed
+by re-running the exact same live command (zero questions) and by two
+new regression tests.
+
+Hermetic tests, full list in `docs/blueprint.md`'s own new section
+(20+ new test functions across `blueprint/`, `diagram/`,
+`intentprovider/`) — `go test ./... -count=1` green, `gofmt -l .`/
+`go vet ./...` clean, both this repo and `sdk/go`'s own separate module
+untouched (no sdk/go changes this ticket — outputs needed nothing new
+from the shared runtime, `.Field()`/property-drilling already existed).
+
+**Live verification, the ticket's own required bar, met — per-medium
+depth stated explicitly, never blurred:**
+- **Go SDK**: live twice — the real `ci-platform` blueprint (extended
+  with a real `outputs:` block, rebuilt via a real, live
+  `ubx blueprint build --lang go`) resolved via a real
+  `ubx resolve --from-code` against the real `hashicorp/aws@6.54.0`
+  schema (resolve-only, never `ubx ship`, per this project's own
+  standing rule); and a separate, minimal `fake_widget`-typed
+  `widget-lib` blueprint (the real `ci-platform`'s own resources are
+  real AWS types `fakeprovider` has no schema for — the same
+  UBI-130-established substitution) shipped for real, full
+  `ubx plan`→`ubx accept`→`ubx ship --yes` against real `fakeprovider`,
+  confirmed via `ubx why`.
+- **Diagram**: live twice, mirroring the Go SDK's own two legs exactly —
+  `ref:platform.repo_arn` against the real `ci-platform` blueprint,
+  real AWS schema, resolve/plan-only; `ref:platform.widget_id` against
+  the widget-lib substitute, a real, full resolve→accept→ship round trip
+  against real `fakeprovider`, confirmed via `ubx why`.
+- **TypeScript SDK**: live via the real `deno` toolchain (`deno check` +
+  a real `deno run` driver using the returned output directly) — direct
+  runtime verification of the generated module, NOT a full CLI
+  resolve/ship pipeline (TS has no `ubx ship`-level proof in this
+  session) — one level less depth than the Go SDK/diagram legs above,
+  named so explicitly.
+- **Python SDK**: live via the real `python3` toolchain (a real import +
+  a real driver unpacking the tuple return and using it directly) — same
+  depth as TypeScript: direct runtime verification, not a full CLI
+  pipeline.
+- **md**: live ONCE, a real Claude Sonnet 5 API call via
+  `intentprovider.DraftWithRetry` against the exact worked-example
+  document, correct `call_name`/output-reference shape on the FIRST
+  attempt — the full extent of live coverage for this medium; everything
+  else about it (schema, `validate.go`, the new duplicate-`call_name`
+  refusal) is hermetic only, per this project's own standing "hermetic
+  acceptable for md, but say so" allowance (UBI-86's own precedent). One
+  real API call confirming the prompt elicits correct behavior is
+  meaningfully less coverage than a real ship against a real backend,
+  even though both are technically "live" — stated once more here so it
+  isn't conflated with the Go SDK/diagram legs' own full-pipeline proof.
+
+**Real, named, remaining scope boundaries, not silently dropped:**
+`rewriteBlueprintOutputRefs` (`blueprint/outputs.go`) walks a resource's
+own top-level config recursively but does NOT walk one level deeper into
+a JSON-embedded string (an output reference nested inside a stringified
+IAM policy document via the DIAGRAM or Go/TS/Python SDK path — the MD
+path's own worked example above genuinely exercises this exact shape
+successfully, since the md medium's own embedded-ref convention already
+routes through the SAME top-level walk correctly; the gap is specific to
+`ubx_required`'s own diagram-side embedded-string convention, not
+exercised by this ticket's own worked examples). Named in `outputs.go`'s
+own doc comment, not fixed — real, future work if a diagram/SDK caller
+ever needs it. TS/Python direct-import calls still lack blueprint-CALL
+provenance (UBI-126's own still-open TS/Python half, unrelated to and
+unaffected by this ticket).
+
+Next: whichever the founder prioritizes — TS/Python provenance parity
+(UBI-126's remaining half), `blueprintNameFromCall`'s build-time-name gap
+(UBI-74 retrospective item 2), or the JSON-embedded output-ref gap named
+above.
+
+## Current phase (previous)
+
 **UBI-86 (2026-08-06) — TWO real features, both built and live-verified, reported explicitly and separately per the task's own instruction. Part 1: `ubx render --md`, a readable current-state markdown document sharing D2 render's own ledger walk, correctly groups a real blueprint-sourced stack and correctly redacts a real sensitive attribute. Part 2: the override mechanism (`override()` in Go/TS/Python/diagram/md) + `render --from-drift`/`--sync-overrides[--write]` (mechanical, zero AI, generates a real override statement from real drift) — a real drift→override round trip proved live: correct Go AND diagram statements generated, applied for real via `ubx plan --from-diagram`→`ubx ship`, confirmed the recreated resource carries the drifted-to value and shows clean. Depth differs by call site, named honestly below — do not read this line alone as "fully done."**
 
 Read UBI-86 fully, including the major design addition recorded in its

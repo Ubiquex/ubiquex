@@ -172,6 +172,73 @@ func TestParseAndValidate_BlueprintCall(t *testing.T) {
 	}
 }
 
+// TestParseAndValidate_BlueprintCall_CallName is UBI-128's own required
+// hermetic proof of the md medium's new named-call grammar: a
+// blueprint_calls[] entry's own "call_name" (populated when the document
+// gives the call an explicit "as '<name>'" alias) decodes into
+// resolver.BlueprintCall.CallName untouched, and a SIBLING resource's own
+// config, carrying an embedded {"$ref":{"to":"$blueprint_output:..."}}
+// referencing that alias's own output, survives parseAndValidate
+// completely opaque -- the identical "config is just a JSON-encoded
+// string, $ref is never inspected here" discipline an ordinary
+// resource-to-resource $ref already gets (TestParseAndValidate_ResourceRef,
+// if present, or any resource config test in this file).
+func TestParseAndValidate_BlueprintCall_CallName(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"call the ci-platform blueprint as 'platform', attach its repo_arn output","assumptions":[],"defaults":[],"questions":[]},"resources":[{"type":"aws_iam_role_policy","name":"downstream","op":"create","config":"{\"policy_arn\":{\"$ref\":{\"to\":\"$blueprint_output:platform:repo_arn\"}}}"}],"destroys":[],"blueprint_calls":[{"name":"ci-platform call","call_name":"platform","blueprint":"../ci-platform","ref":"","path":"","args":"{\"repo_name\":\"payments-ci-artifacts\"}"}]}`
+	draft, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	if len(draft.BlueprintCalls) != 1 || draft.BlueprintCalls[0].CallName != "platform" {
+		t.Fatalf("expected exactly one blueprint call with CallName %q, got %+v", "platform", draft.BlueprintCalls)
+	}
+	if len(draft.Resources) != 1 {
+		t.Fatalf("expected exactly one resource, got %+v", draft.Resources)
+	}
+	if !strings.Contains(string(draft.Resources[0].Config), `"$blueprint_output:platform:repo_arn"`) {
+		t.Fatalf("expected the embedded blueprint-output $ref to survive parseAndValidate untouched, got: %s", draft.Resources[0].Config)
+	}
+}
+
+// TestParseAndValidate_BlueprintCall_NoCallName_DefaultsEmpty confirms a
+// document that never gives a call an "as '<name>'" alias leaves
+// CallName the empty string -- every blueprint_calls[] producer before
+// UBI-128 (every existing fixture/test in this package) stays completely
+// unaffected.
+func TestParseAndValidate_BlueprintCall_NoCallName_DefaultsEmpty(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[{"name":"ci-platform call","blueprint":"../ci-platform","ref":"","path":"","args":"{}"}]}`
+	draft, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	if draft.BlueprintCalls[0].CallName != "" {
+		t.Fatalf("CallName = %q, want \"\" (no alias given)", draft.BlueprintCalls[0].CallName)
+	}
+}
+
+// TestParseAndValidate_BlueprintCall_DuplicateCallName_Refused confirms
+// two calls sharing one call_name is a hard, named validation error --
+// blueprint.ExpandCalls (blueprint/invoke.go) aggregates every call's own
+// outputs into one document-wide map keyed by call_name, so a silent
+// collision there would produce a wrong (last-write-wins) output
+// resolution with no clear cause; caught here instead, at draft time.
+func TestParseAndValidate_BlueprintCall_DuplicateCallName_Refused(t *testing.T) {
+	raw := `{"schema_version":1,"kind":"ubx:intent/v1","stack":"payments","intent":{"summary":"x","assumptions":[],"defaults":[],"questions":[]},"resources":[],"destroys":[],"blueprint_calls":[{"name":"first call","call_name":"platform","blueprint":"../ci-platform","ref":"","path":"","args":"{}"},{"name":"second call","call_name":"platform","blueprint":"../other-platform","ref":"","path":"","args":"{}"}]}`
+	_, errs := parseAndValidate(json.RawMessage(raw), "payments", false)
+	if len(errs) == 0 {
+		t.Fatal("expected a validation error for two blueprint_calls sharing one call_name, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "blueprint_calls[1].call_name") && strings.Contains(e, "platform") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error naming blueprint_calls[1].call_name and the colliding alias, got: %v", errs)
+	}
+}
+
 // TestParseAndValidate_BlueprintCallMissingBlueprint confirms a
 // blueprint_calls entry with no blueprint reference is a hard, named
 // validation error -- never silently dropped or defaulted.

@@ -205,3 +205,61 @@ func TestParseUbxfile_MissingFile(t *testing.T) {
 		t.Fatal("expected an error when no Ubxfile exists, got nil")
 	}
 }
+
+func TestParseUbxfile_Outputs(t *testing.T) {
+	dir := writeUbxfile(t, `lang: go
+
+resources: |
+  An ECR repository.
+
+outputs:
+  repo_arn: container-repo.arn
+  queue_url: pipeline-events.url
+`)
+	uf, err := ParseUbxfile(dir)
+	if err != nil {
+		t.Fatalf("ParseUbxfile: %v", err)
+	}
+	if len(uf.Outputs) != 2 {
+		t.Fatalf("len(Outputs) = %d, want 2", len(uf.Outputs))
+	}
+	// Declaration order must be preserved, not map order.
+	if uf.Outputs[0].Name != "repo_arn" || uf.Outputs[0].Target != "container-repo.arn" {
+		t.Fatalf("Outputs[0] = %+v, want {repo_arn container-repo.arn}", uf.Outputs[0])
+	}
+	if uf.Outputs[1].Name != "queue_url" || uf.Outputs[1].Target != "pipeline-events.url" {
+		t.Fatalf("Outputs[1] = %+v, want {queue_url pipeline-events.url}", uf.Outputs[1])
+	}
+}
+
+func TestParseUbxfile_NoOutputs(t *testing.T) {
+	dir := writeUbxfile(t, "lang: go\nresources: hello\n")
+	uf, err := ParseUbxfile(dir)
+	if err != nil {
+		t.Fatalf("ParseUbxfile: %v", err)
+	}
+	if len(uf.Outputs) != 0 {
+		t.Fatalf("len(Outputs) = %d, want 0", len(uf.Outputs))
+	}
+}
+
+func TestParseUbxfile_DuplicateOutput(t *testing.T) {
+	dir := writeUbxfile(t, "lang: go\nresources: hello\noutputs:\n  repo_arn: a.arn\n  repo_arn: b.arn\n")
+	if _, err := ParseUbxfile(dir); err == nil || !strings.Contains(err.Error(), "declared more than once") {
+		t.Fatalf("expected a duplicate-output error, got %v", err)
+	}
+}
+
+func TestParseUbxfile_MalformedOutputTarget(t *testing.T) {
+	dir := writeUbxfile(t, "lang: go\nresources: hello\noutputs:\n  repo_arn: not-dotted\n")
+	if _, err := ParseUbxfile(dir); err == nil || !strings.Contains(err.Error(), `must be "<resource-slug>.<attribute>"`) {
+		t.Fatalf("expected a malformed-target error, got %v", err)
+	}
+}
+
+func TestParseUbxfile_OutputsNotAMapping(t *testing.T) {
+	dir := writeUbxfile(t, "lang: go\nresources: hello\noutputs: not-a-mapping\n")
+	if _, err := ParseUbxfile(dir); err == nil || !strings.Contains(err.Error(), "outputs: must be a mapping") {
+		t.Fatalf("expected an outputs-not-a-mapping error, got %v", err)
+	}
+}

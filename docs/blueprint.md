@@ -3211,3 +3211,358 @@ ambiguous-medium refusal, config-file provider default). Full suite
 green (`go test ./... -count=1`, this repo, `sdk/go`'s own separate
 module, `python3 -m unittest`, `deno test`), `gofmt -l .`/`go vet ./...`
 clean.
+
+## Outputs: cross-medium blueprint output references (UBI-128)
+
+**The gap this closes.** Every calling medium (Go/TS/Python SDK import,
+diagram `ubx_blueprint`, md's own "Use blueprint... with:" phrasing) could
+already CALL a blueprint and let its own internal resources be referenced
+INSIDE that blueprint (one resource pointing at a sibling via an ordinary
+`$ref`, entirely within `blueprint.ExpandCalls`'s own expansion). What was
+missing: a way for something OUTSIDE the blueprint — a sibling resource
+the calling stack itself declares — to reference one of the blueprint's
+own resource attributes, by a name the blueprint itself chooses to expose,
+rather than the caller having to know (and hardcode) the blueprint's own
+internal resource slugs and types. `outputs:` is that declaration.
+
+```yaml
+# Ubxfile
+outputs:
+  repo_arn: container-repo.arn
+  queue_url: pipeline-events.url
+```
+
+Each entry maps a caller-facing output name to `<resource-slug>.<attribute>`
+— the SAME internal resource slugs `resources:`'s own prose already fixes
+(`ubxfile.go`'s own doc comment), never the `{param_name}` tokens. Parsed
+by `blueprint.parseOutputs` (`ubxfile.go`) as an ordered mapping (a raw
+`yaml.Node` walk, mirroring `params:`'s own order-preserving parse — never
+a plain Go map, whose iteration order this project's own determinism
+discipline never allows near anything that reaches codegen or a hash).
+Validated for SHAPE only at parse time (`"<slug>.<attr>"`, non-empty
+halves, no duplicate output names) — the slug's own EXISTENCE can't be
+checked yet, since `ParseUbxfile` has zero resource-type knowledge at all
+(`resources:` is free-form prose at that stage); that's checked later,
+independently, by whichever consumer actually has real resources in hand
+(`decodeBlueprint` for Go/TS/Python codegen, `resolveCallOutputs` for a
+diagram/md call — see below).
+
+**Deliberately, structurally distinct from `@stack.type.name` (UBI-47)
+cross-stack references — never unified, on purpose.** `@stack` crosses a
+real trust boundary: a DIFFERENT team's separately-signed ledger, pinned
+to their own current head at accept time, with its own staleness-by-
+neighbor-advance model (`ubx accept`'s own pin re-verification). An
+output stays entirely WITHIN the same proposal being resolved right now —
+no separate ledger, nothing pinned, no staleness concept at all, because
+there's nothing separately-signed to go stale relative to: the blueprint
+call and the resource referencing its output are both part of the SAME
+document, expanded and resolved in the SAME pass. Using `@stack` syntax
+for an output, or resolving an output through `@stack`'s own cross-ledger
+machinery, would silently claim a trust/staleness property that doesn't
+exist here — kept visibly and mechanically separate instead: different
+sigil (`ref:`/an ordinary embedded `$ref` vs. `@`), different wire marker
+(`$blueprint_output:<CallName>:<outputKey>` vs. a real
+`<stack>.<type>.<name>` address), different resolution code path
+(`blueprint.ExpandCalls`/`blueprint/outputs.go`, entirely before
+`resolver.Resolve` ever runs, vs. `core/resolver/refs.go`'s own
+`resolveCross`, which never sees an output reference at all — by the time
+`resolveRef`/`resolveCross` run, an output marker has always already been
+rewritten into a real address).
+
+### Go codegen: native named return values
+
+`GenerateGo` (`gogen.go`) emits one named `*sdk.Computed` return value per
+declared output, in declaration order — Go's own idiomatic collapsed
+multi-name-same-type syntax, no wrapper type:
+
+```go
+func CiPlatform(repoName string, queueName string, opts ...Option) (repoArn, queueUrl *sdk.Computed) {
+	...
+	containerRepo := sdk.Resource(ContainerRepo, "container-repo", ContainerRepoConfig{...})
+	pipelineEvents := sdk.Resource(PipelineEvents, "pipeline-events", PipelineEventsConfig{...})
+	...
+	return containerRepo.Field("arn"), pipelineEvents.Field("url")
+}
+```
+
+A caller uses the return values exactly like any other Go function's —
+zero new runtime mechanism, confirmed live (below):
+
+```go
+repoArn, _ := ciplatform.CiPlatform("payments-ci-artifacts", "payments-notifications")
+sdk.Resource(Downstream, "downstream-attachment", DownstreamConfig{PolicyArn: repoArn})
+```
+
+The output-target resource (`container-repo` above) gets a local variable
+assigned even if nothing INSIDE the blueprint references it — `decodeBlueprint`
+marks an output's own target address `Referenced` (the same flag an
+ordinary internal `$ref` sets), so `renderGoFunction`'s existing "only
+assign a local var to a referenced resource" logic picks it up for free,
+no separate codegen path. `checkGoOutputIdentCollisions` guards each
+output's own derived camelCase identifier against every other identifier
+this same file derives (resource vars, `Config` struct names, param
+names, the functional-options `cfg`/`opts` locals) and against each other
+— a hard build error, never silently renamed around.
+
+### TypeScript codegen: a plain object literal
+
+TS has no separate named-return-value construct — a plain object literal
+IS the native multi-value return:
+
+```ts
+export function ciPlatform(repoName: string, queueName: string, retentionDays: number = 1): { repoArn: any; queueArn: any } {
+  ...
+  const ciArtifacts = resource(CiArtifacts, "ci-artifacts", { ... }) as any;
+  ...
+  return { repoArn: ciArtifacts.arn, queueArn: ciNotifications.arn };
+}
+```
+
+Unlike Go's named return VALUES (real declared variables sharing the
+function body's own scope), an object-literal key is never a new
+identifier declared into scope — so a TS output can't collide with a
+resource/param identifier the way a Go one can; the only real risk left
+is two DIFFERENT outputs deriving the same camelCase key (a silent
+last-write-wins object literal), guarded separately. Confirmed with a
+real `deno check` (the outputs-bearing return type itself typechecks) and
+a real `deno run` driver that destructures `{ repoArn }` from the call
+and passes it straight into another `resource()` call.
+
+### Python codegen: a bare value or a native tuple
+
+Python's own multi-value return is a plain tuple — no wrapper class
+needed there either. Exactly one output returns a bare value (unpacked
+`x = f(...)`, matching Go's own single-named-return ergonomics); two or
+more return a real tuple (unpacked `x, y = f(...)`):
+
+```python
+def ci_platform(repo_name: str, queue_name: str, retention_days: int = 1) -> tuple[Any, Any]:
+    ...
+    ci_artifacts = sdk.resource(CiArtifacts, "ci-artifacts", CiArtifactsConfig(...))
+    ...
+    return ci_artifacts.arn, ci_notifications.arn
+```
+
+Confirmed with a real Python import (the `tuple[Any, Any]` return-type
+annotation itself needs no `from __future__ import annotations` on the
+pinned CPython this project targets — checked live, not assumed) and a
+real driver that unpacks the tuple and uses `repo_arn` directly as
+another `sdk.resource()`'s own config value.
+
+### Diagram: the EXISTING `ref:` sigil, extended — never a second mechanism
+
+A blueprint call node's own CallName (`resolver.BlueprintCall.CallName`,
+new field) is, for the diagram medium, always its bare D2 identifier —
+implicit, the SAME identifier `ref:` already resolves an ordinary sibling
+resource by. `ref:<blueprint-node>.<output-key>` reuses `ubxRequiredAttrValue`/
+`resolveRefTarget` (`diagram/parse.go`) completely unchanged in shape —
+only the resolved `to` value differs: a real
+`<stack>.<type>.<name>.<attr>` address for an ordinary resource, or the
+provisional `$blueprint_output:<CallName>:<outputKey>` marker for a
+blueprint-call node (a new `blueprintCallRefTargetType` sentinel lets
+`resolveRefTarget` tell the two apart without a second reference-parsing
+path).
+
+```d2
+platform: "ci-platform call" {
+  class: ubx_blueprint
+  blueprint: "../ci-platform"
+  repo_name: "payments-ci-artifacts"
+  queue_name: "payments-notifications"
+}
+downstream: "downstream attachment" {
+  class: aws_iam_role_policy_attachment
+  ubx_required.policy_arn: "ref:platform.repo_arn"
+  ubx_required.role: "downstream-role"
+}
+```
+
+**A real, pre-existing bug found and fixed by this ticket's own required
+live verification, not a unit test:** `sortedLeaves`'s existing
+`hasClass(obj.Classes, ubxBlueprintClass)`/`ubxOverrideClass` branches only
+ever matched the CLASSED NODE ITSELF — a `ubx_blueprint`/`ubx_override`
+node's own attribute children (`platform.blueprint`, `platform.widget_name`,
+...) are SEPARATE `*d2graph.Object` values in the underlying graph, with
+no class of their own, so they fell through to the ordinary "no `class:`
+attribute" leaf classification and were refused as unresolved topology
+nodes — a spurious BLOCKING `Question` on every diagram ever using either
+node kind, since the day Slice 5/UBI-86 Part 2 shipped. Silently
+undetected until now because every prior test asserted only that
+`intent.Resources` stayed empty (true either way — `nodeKindUnresolved`
+never appends to `Resources` either), never that `intent.Intent.Questions`
+was ALSO empty. Fixed with a new `inBlueprintOrOverrideSubtree` check
+(walks `obj.Parent` upward looking for either class), added to
+`sortedLeaves` alongside the existing `ubx_required`-subtree exclusion;
+regression-tested directly (`TestParse_UbxBlueprint_ChildrenNeverIndependentlyClassified`/
+`TestParse_UbxOverride_ChildrenNeverIndependentlyClassified`,
+`diagram/parse_output_test.go`).
+
+### md: a real, new grammar — "Call blueprint X as 'name' with:"
+
+Honestly flagged as real new scope in the ticket itself, and it is:
+nothing like this existed before UBI-128. `wireBlueprintCall`
+(`intentprovider/validate.go`) gains `call_name` (wire name, JSON key
+`call_name`); the structured-output schema's own `blueprintCall` node
+(`intentprovider/schema.go`) gains a matching required-but-may-be-empty
+`call_name` string property. The system prompt
+(`intentprovider/claude/adapter.go`) gains two new paragraphs, immediately
+after the existing blueprint-call rule:
+
+1. Recognize an explicit `as '<name>'`/`as "<name>"` alias clause on the
+   SAME sentence as a blueprint call, and extract it verbatim into
+   `call_name` — explicitly distinguished from the pre-existing `name`
+   field (a free-text label for error messages only; `call_name` is a
+   real identifier other prose can reference). Empty string when no such
+   alias is given — never invented, never a fallback to `name`.
+2. Recognize LATER prose referencing that alias's own output — "platform's
+   own repo_arn output," or similar — and emit the IDENTICAL
+   `{"$ref": {"to": "..."}}` object an ordinary `@<address>` reference
+   already uses (including one level inside a JSON-embedded string, the
+   same embedding rule), but with `to` set to the literal string
+   `"$blueprint_output:<call_name>:<output_key>"` instead of a
+   `<stack>.<type>.<name>.<attr>` address.
+
+No change needed to how a resource's own `config` is validated at all —
+`config`/`args` stay a JSON-encoded string all the way through
+`parseAndValidate`, exactly as opaque to the md-medium layer as an
+ordinary `$ref` already is; the marker is only ever interpreted later, by
+`blueprint.ExpandCalls`. `validate.go` gained one new check specific to
+`call_name`: two calls in the same document sharing one alias is a hard,
+named validation error (`blueprint_calls[N].call_name: ... is also used
+by blueprint_calls[M]`) — `blueprint.ExpandCalls` aggregates every call's
+own outputs into one document-wide map keyed by `call_name`, so a silent
+collision there would produce a wrong, last-write-wins output resolution
+with no clear cause; caught here instead, at draft time.
+
+```md
+# Platform CI, via a named blueprint call
+
+Call blueprint `ci-platform` as `platform` with: repo_name =
+payments-ci-artifacts, queue_name = payments-notifications.
+
+We also need an IAM role policy granting a downstream service access to
+that repository -- attach a policy to the `downstream-role` role using
+platform's own `repo_arn` output as the `Resource` in an inline policy
+granting `s3:GetObject`.
+```
+
+A real, live Claude Sonnet 5 run against this exact document (below)
+produced, on the FIRST attempt, no retry needed:
+
+```json
+{
+  "blueprint_calls": [
+    {"name": "Platform CI blueprint call", "call_name": "platform", "blueprint": "ci-platform",
+     "args": {"repo_name": "payments-ci-artifacts", "queue_name": "payments-notifications"}}
+  ],
+  "resources": [
+    {"type": "aws_iam_role_policy", "name": "downstream-role-repo-access", "op": "create",
+     "config": {"name": "downstream-role-repo-access", "role": "downstream-role",
+       "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":{\"$ref\":{\"to\":\"$blueprint_output:platform:repo_arn\"}}}]}"}}
+  ]
+}
+```
+
+### Hermetic tests
+
+`blueprint/ubxfile_test.go` (5 new — `outputs:` parsing, no-outputs
+no-op, duplicate-output refusal, malformed-target refusal, non-mapping
+refusal); `blueprint/gogen_test.go` (4 new — signature/return,
+no-outputs unaffected, `go build` compiles clean, a real `go run`
+proving the return value usable by a sibling resource); `blueprint/
+outputs_test.go` (9 unit tests for `resolveCallOutputs`/
+`rewriteBlueprintOutputRefs` plus a real end-to-end
+`blueprint.ExpandCalls` integration test against a real on-disk Go
+blueprint package); `blueprint/tsgen_output_test.go` (5 new, including a
+real `deno check` and a real `deno run` proving runtime usability);
+`blueprint/pygen_output_test.go` (5 new, including a real Python import
+and a real driver proving runtime usability); `diagram/parse_output_test.go`
+(9 new — `ref:` resolving a blueprint-call output for both `ubx_required`
+and `ubx_override`, nested-in-container resolution, the CallName-is-
+bare-ID rule, the `sortedLeaves` regression fix above, still-refused for
+a genuinely unknown identifier); `intentprovider/validate_test.go` (3
+new — `call_name` decoding, empty-by-default, duplicate-`call_name`
+refusal); `intentprovider/conformance/` (1 new fixture,
+`platform-blueprint-output.md` + `checkPlatformBlueprintOutputNamedCall`,
+run through the full hermetic fake-adapter harness). Full suite green
+(`go test ./... -count=1`), `gofmt -l .`/`go vet ./...` clean.
+
+### Live verification, the ticket's own required bar, genuinely met — per-medium depth stated explicitly, not blurred
+
+**Go SDK — live, twice, against two real backends:**
+
+1. The real `ci-platform` blueprint (`~/ubx-playground-ubi74-slice4/ci-platform`,
+   the same blueprint every prior UBI-74 session used), extended with a
+   real `outputs:` block (`repo_arn: container-repo.arn`,
+   `queue_url: pipeline-events.url`), rebuilt via a real
+   `ubx blueprint build --lang go` (a real, live Claude Sonnet 5 draft
+   call). A hand-written Go stack program imported the built package,
+   called `CiPlatform(...)`, and passed the returned `repoArn` DIRECTLY
+   as another resource's own config value — resolved via a real
+   `ubx resolve --from-code` against the real, live
+   `hashicorp/aws@6.54.0` schema (resolve-only, never `ubx ship`, per
+   this project's own standing rule against a real cloud apply). The
+   resolved proposal's own `downstream-attachment.policy_arn` correctly
+   showed `{"$computed":{"from":"payments.aws_ecr_repository.container-repo.arn"}}`.
+2. A separate, minimal `fake_widget`-typed `widget-lib` blueprint (the
+   real `ci-platform` blueprint's own resources are real AWS types
+   `fakeprovider` has no schema for at all — the same substitution
+   UBI-130's own live verification already established, for the
+   identical reason) with a real `widget_id: primary-widget.id` output,
+   also built via a real `ubx blueprint build --lang go`. A real, full
+   `ubx plan --from-code` → `ubx accept` → `ubx ship --yes` round trip
+   against a real `fakeprovider` subprocess (`UBX_PROVIDER_MIRROR`,
+   `FAKEPROVIDER_MODE=ok-v6`) — the downstream widget's own `name`
+   attribute, the blueprint's own returned `widgetId` used directly,
+   shipped as `{"$computed":{"from":"payments.fake_widget.primary-widget.id"}}`,
+   confirmed via a real `ubx why`.
+
+**Diagram — live, twice, mirroring the Go SDK's own two legs exactly:**
+
+1. `ref:platform.repo_arn` against the real `ci-platform` blueprint and
+   the real `hashicorp/aws@6.54.0` schema, via a real
+   `ubx plan --from-diagram` (resolve/plan only, never `ubx ship`, same
+   real-AWS-provider rule as the Go SDK leg above) — the resulting
+   `downstream attachment.policy_arn` correctly showed
+   `$ref:payments.aws_ecr_repository.container-repo.arn`, zero blocking
+   questions (confirming the `sortedLeaves` fix above holds against the
+   real blueprint, not just the widget-lib fixture).
+2. `ref:platform.widget_id` against the widget-lib substitute, a real,
+   full `ubx plan --from-diagram` → `ubx accept` → `ubx ship --yes`
+   round trip against real `fakeprovider` — `downstream widget.name`
+   shipped as `{"$computed":{"from":"payments.fake_widget.primary-widget.id"}}`,
+   confirmed via a real `ubx why`.
+
+**TypeScript SDK — live, via the real `deno` toolchain (not a stub):** a
+real `deno check` against the outputs-bearing generated module, and a
+real `deno run` driver that calls the generated function, destructures
+its own returned outputs, and passes one directly into another
+`resource()` call — the emitted document's own `$ref` resolved to the
+correct address. NOT run against a real cloud provider or fakeprovider
+apply (TS has no CLI-level `ubx ship` path exercised in this session);
+this is direct-runtime verification of the generated module itself, one
+level below the Go SDK leg's own full CLI-pipeline proof.
+
+**Python SDK — live, via the real `python3` toolchain (not a stub):** a
+real Python import of the outputs-bearing generated module, and a real
+driver script that calls the generated function, unpacks the returned
+tuple, and uses one value directly as another `sdk.resource()`'s own
+config value — the emitted document's own `$ref` resolved to the correct
+address. Same depth as the TypeScript leg: direct-runtime verification of
+the generated module, not a full CLI pipeline run.
+
+**md — live, once, against the real Claude Sonnet 5 API, hermetic
+otherwise:** the exact worked-example document above, run through the
+real `intentprovider.DraftWithRetry` against the real Claude API
+(`UBX_TEST_SLOW`-gated in the committed test suite; run manually this
+session), produced the correct `call_name`/output-reference shape on the
+FIRST attempt, no retry needed. This single live run is the full extent
+of live verification for the md medium this session — the rest of its
+coverage (schema, `validate.go`, the new duplicate-`call_name` refusal)
+is hermetic only, run against the fake adapter and direct wire-JSON, per
+this project's own standing "hermetic acceptable, but say so" allowance
+for the md medium specifically (UBI-86's own precedent). Stated
+explicitly, not blurred with the Go SDK/diagram legs' own full
+resolve→accept→ship proof: one real API call confirming the PROMPT
+elicits correct behavior is meaningfully less coverage than a real ship
+against a real backend, even though both are "live."

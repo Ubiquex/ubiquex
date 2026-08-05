@@ -324,7 +324,48 @@ type BlueprintCall struct {
 	Path string `json:"path,omitempty"`
 	// Args maps a declared param name to its own raw string value.
 	Args map[string]string `json:"args"`
+	// CallName was added 2026-08-06 (UBI-128): the caller-chosen name
+	// this specific call's own declared outputs (blueprint/ubxfile.go's
+	// outputs: key) can be referenced by, WITHIN THIS SAME DOCUMENT --
+	// the diagram medium's own ubx_blueprint node identifier (implicit,
+	// always present), or the md medium's own explicit "Call blueprint X
+	// as 'name' with:" clause (a real, new grammar addition, never part
+	// of Name above, which is a free-text label only). Empty is legal --
+	// a call whose own outputs are never referenced needs no CallName at
+	// all, and every producer of a BlueprintCall before this ticket
+	// (a direct SDK-import call has none of these at all; Slice 2's own
+	// calling convention isn't a BlueprintCall in the first place) leaves
+	// this empty and is completely unaffected. Purely additive, matching
+	// every other BlueprintCall field's own precedent -- resolveOnce
+	// itself has zero awareness this exists; blueprint.ExpandCalls is
+	// the only place it's ever read (blueprint/outputs.go).
+	//
+	// Deliberately NOT the same mechanism as @stack.type.name (UBI-47)
+	// cross-stack references: a CallName only ever resolves an output
+	// WITHIN the same proposal being resolved right now, never crosses a
+	// ledger/trust boundary, and carries no staleness/pinning concept at
+	// all -- see docs/blueprint.md's own "outputs:" section for the full
+	// account of why these two are kept visibly, structurally distinct.
+	CallName string `json:"call_name,omitempty"`
 }
+
+// BlueprintOutputRefPrefix marks a PROVISIONAL $ref.to value -- not yet a
+// real resolved address -- naming a blueprint call's own declared output
+// (blueprint/ubxfile.go's outputs: key) rather than an ordinary resource
+// attribute. The full value is BlueprintOutputRefPrefix + "<CallName>:
+// <outputKey>". Exported here (rather than living privately in blueprint/
+// outputs.go, its only original owner) because BOTH producers of this
+// marker -- diagram/parse.go's own ref: sigil resolution (UBI-128) and
+// the md medium's own named-call grammar -- already depend on
+// core/resolver for BlueprintCall itself, while diagram deliberately does
+// NOT depend on the much heavier blueprint package (its own zero-I/O
+// parsing discipline, docs/diagram-medium.md). blueprint.ExpandCalls
+// (blueprint/outputs.go) is the sole CONSUMER, rewriting every instance
+// of this marker into a real resolved address once a call's own outputs
+// are actually known -- by the time core/resolver's own resolveRef (refs.
+// go) ever sees a $ref.to value, this marker has always already been
+// rewritten away.
+const BlueprintOutputRefPrefix = "$blueprint_output:"
 
 // ResourceIntent is one entry of IntentFile.Resources. Op is always
 // explicit ("create" | "modify"), never inferred from ledger presence --

@@ -77,6 +77,12 @@ var Fixtures = []Fixture{
 		Stack:   "platform-iam-attach",
 		Check:   checkPlatformIAMPolicyAttachShape,
 	},
+	{
+		Name:    "platform-blueprint-output-named-call",
+		DocFile: "platform-blueprint-output.md",
+		Stack:   "platform-blueprint-output",
+		Check:   checkPlatformBlueprintOutputNamedCall,
+	},
 }
 
 func checkPaymentsLikeStagingButSmaller(t *testing.T, draft *resolver.IntentFile) {
@@ -198,6 +204,81 @@ func scanForIAMPolicyShape(resources []resolver.ResourceIntent) (sawStandalonePo
 // itself decodes as JSON -- the "JSON-embedded refs" case, walked
 // exactly like core/resolver's own scanRefEdges does) versus the broken
 // "$ref:<address>.<path>" string literal this ticket found live.
+// checkPlatformBlueprintOutputNamedCall is UBI-128's own permanent
+// conformance fixture: fixtures/platform-blueprint-output.md names a
+// blueprint call with an explicit "as 'platform'" alias, then references
+// that alias's own repo_arn output from a later, unrelated sentence --
+// this check fails loudly if either half of that grammar is missing:
+// the blueprint_calls[] entry's own CallName never populated (the alias
+// silently dropped), or no real {"$ref":{"to":"$blueprint_output:..."}}
+// object anywhere in the draft (the later reference silently dropped or
+// mis-encoded, e.g. as a plain string or a guessed <stack>.<type>.<name>
+// address this package has no business inventing).
+func checkPlatformBlueprintOutputNamedCall(t *testing.T, draft *resolver.IntentFile) {
+	t.Helper()
+
+	if len(draft.BlueprintCalls) != 1 {
+		t.Fatalf("expected exactly one blueprint call, got %d: %+v", len(draft.BlueprintCalls), draft.BlueprintCalls)
+	}
+	if draft.BlueprintCalls[0].CallName == "" {
+		t.Error(`expected blueprint_calls[0].call_name to be populated from the document's own "as 'platform'" alias -- got ""`)
+	}
+
+	sawOutputRef, err := scanForBlueprintOutputRef(draft.Resources, draft.BlueprintCalls[0].CallName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawOutputRef {
+		t.Errorf(`expected a real {"$ref":{"to":"$blueprint_output:%s:repo_arn"}} object referencing the blueprint call's own repo_arn output somewhere in the draft -- found none`, draft.BlueprintCalls[0].CallName)
+	}
+}
+
+// scanForBlueprintOutputRef is scanForRefShapes' own narrower sibling:
+// walks every resource's own config (recursively, including one level
+// into a JSON-embedded string -- the identical walk scanForRefShapes
+// already does) looking specifically for a real {"$ref":{"to":"..."}}
+// object whose own "to" value starts with
+// resolver.BlueprintOutputRefPrefix + callName + ":" -- confirming the
+// output reference is real AND names the right call, not just that SOME
+// $ref object exists somewhere.
+func scanForBlueprintOutputRef(resources []resolver.ResourceIntent, callName string) (found bool, err error) {
+	want := resolver.BlueprintOutputRefPrefix + callName + ":"
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			if inner, ok := t["$ref"]; ok && len(t) == 1 {
+				if innerMap, ok := inner.(map[string]interface{}); ok {
+					if to, ok := innerMap["to"].(string); ok && strings.HasPrefix(to, want) {
+						found = true
+					}
+				}
+				return
+			}
+			for _, vv := range t {
+				walk(vv)
+			}
+		case []interface{}:
+			for _, vv := range t {
+				walk(vv)
+			}
+		case string:
+			var decoded interface{}
+			if derr := json.Unmarshal([]byte(t), &decoded); derr == nil {
+				walk(decoded)
+			}
+		}
+	}
+	for _, r := range resources {
+		var cfg interface{}
+		if uerr := json.Unmarshal(r.Config, &cfg); uerr != nil {
+			return false, fmt.Errorf("resource %s.%s: config isn't valid JSON: %w", r.Type, r.Name, uerr)
+		}
+		walk(cfg)
+	}
+	return found, nil
+}
+
 func scanForRefShapes(resources []resolver.ResourceIntent) (sawRealRefObject, sawBrokenRefString bool, err error) {
 	var walk func(v interface{})
 	walk = func(v interface{}) {

@@ -96,8 +96,22 @@ type Param struct {
 	Default any
 }
 
-// Ubxfile is one parsed Ubxfile -- three keys only (lang, params,
-// resources), per docs/blueprint.md. uses: (UBI-121, nesting) is
+// Output is one outputs: entry (UBI-128), in the Ubxfile's own
+// declaration order -- never a map, matching Params' own determinism
+// discipline: a generated function's own return-value ORDER must be
+// stable across builds. Target is "<resource-slug>.<attribute>",
+// verbatim -- the resource slug is only checked against the blueprint's
+// own real resolved resources later (blueprint.ExpandCalls, once the
+// blueprint has actually been invoked and its real resources are
+// known); ParseUbxfile has no resource-slug knowledge of its own to
+// check against (resources: is free-form prose at this stage).
+type Output struct {
+	Name   string
+	Target string
+}
+
+// Ubxfile is one parsed Ubxfile -- four keys (lang, params, resources,
+// outputs), per docs/blueprint.md. uses: (UBI-121, nesting) is
 // explicitly out of scope and rejected as an unrecognized key.
 type Ubxfile struct {
 	// Dir is the directory this Ubxfile was loaded from -- resources:
@@ -122,18 +136,25 @@ type Ubxfile struct {
 	// ResourcesSource is "inline" or the resolved .md file path,
 	// recorded for provenance/logging only.
 	ResourcesSource string
+	// Outputs is outputs: (UBI-128), in file declaration order -- empty
+	// for a blueprint that declares none, the overwhelming common case
+	// until this ticket, and completely unaffected by it (every codegen
+	// path stays byte-identical to before Outputs existed when this is
+	// empty).
+	Outputs []Output
 }
 
 // rawUbxfile is the strict-decode target -- KnownFields(true) rejects
-// any key besides these three, which is what makes uses: (UBI-121) a
+// any key besides these four, which is what makes uses: (UBI-121) a
 // loud, immediate parse error rather than a silently-ignored key.
-// Params is captured as a raw yaml.Node, not map[string]string,
+// Params/Outputs are captured as raw yaml.Node, not map[string]string,
 // specifically to preserve declaration order (a Go map has none) --
-// ParseUbxfile walks its .Content pairs directly.
+// ParseUbxfile walks their own .Content pairs directly.
 type rawUbxfile struct {
 	Lang      string    `yaml:"lang"`
 	Params    yaml.Node `yaml:"params"`
 	Resources string    `yaml:"resources"`
+	Outputs   yaml.Node `yaml:"outputs"`
 }
 
 // ParseUbxfile reads and parses the Ubxfile in dir.
@@ -173,13 +194,53 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 		return nil, fmt.Errorf("blueprint: %s: %w", path, err)
 	}
 
+	outputs, err := parseOutputs(&raw.Outputs, path)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Ubxfile{
 		Dir:             dir,
 		Lang:            raw.Lang,
 		Params:          params,
 		Resources:       resources,
 		ResourcesSource: source,
+		Outputs:         outputs,
 	}, nil
+}
+
+// parseOutputs walks node's own key/value pairs in FILE ORDER (never a
+// map -- see rawUbxfile's own doc comment for why), each value a plain
+// "<resource-slug>.<attribute>" scalar string. outputs: entirely absent
+// is legal (node.Kind == 0) -- most blueprints declare none.
+func parseOutputs(node *yaml.Node, path string) ([]Output, error) {
+	if node.Kind == 0 {
+		return nil, nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("blueprint: %s: outputs: must be a mapping (key: value pairs)", path)
+	}
+
+	var outputs []Output
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode, valNode := node.Content[i], node.Content[i+1]
+		name := keyNode.Value
+		if seen[name] {
+			return nil, fmt.Errorf("blueprint: %s: outputs.%s: declared more than once", path, name)
+		}
+		seen[name] = true
+		if valNode.Kind != yaml.ScalarNode {
+			return nil, fmt.Errorf(`blueprint: %s: outputs.%s: expected a scalar "<resource-slug>.<attribute>" value, got a %s`, path, name, yamlKindName(valNode.Kind))
+		}
+		target := valNode.Value
+		slug, attr, ok := strings.Cut(target, ".")
+		if !ok || slug == "" || attr == "" {
+			return nil, fmt.Errorf(`blueprint: %s: outputs.%s: %q must be "<resource-slug>.<attribute>"`, path, name, target)
+		}
+		outputs = append(outputs, Output{Name: name, Target: target})
+	}
+	return outputs, nil
 }
 
 // parseParams walks node's own key/value pairs in FILE ORDER (never a

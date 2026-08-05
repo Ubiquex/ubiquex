@@ -752,3 +752,230 @@ func sdkGoModuleRoot(t *testing.T) string {
 	}
 	return root
 }
+
+// ciPlatformUbxfileWithOutputs is ciPlatformUbxfile's own params, plus
+// UBI-128's own outputs: declaration -- repo_arn/queue_arn, each naming
+// one of ciPlatformIntent's own real resource slugs (ci-artifacts,
+// ci-notifications) and a real attribute on it.
+func ciPlatformUbxfileWithOutputs() *Ubxfile {
+	uf := ciPlatformUbxfile()
+	uf.Outputs = []Output{
+		{Name: "repo_arn", Target: "ci-artifacts.arn"},
+		{Name: "queue_arn", Target: "ci-notifications.arn"},
+	}
+	return uf
+}
+
+// TestGenerateGo_Outputs_SignatureAndReturn is UBI-128's own required
+// hermetic proof of the ticket's literal worked example: the generated
+// function's own signature gains named *sdk.Computed return values, one
+// per declared output, and the function body returns the correct
+// resource-variable.Field(attr) expression for each -- native Go return
+// values, no new language construct.
+func TestGenerateGo_Outputs_SignatureAndReturn(t *testing.T) {
+	intent := mustIntentFile(t, ciPlatformIntent)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfileWithOutputs(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+	fn := files["go/ciplatform.go"]
+
+	if !strings.Contains(fn, "func CiPlatform(repoName string, queueName string, opts ...Option) (repoArn, queueArn *sdk.Computed) {") {
+		t.Fatalf("ciplatform.go missing the named-return-values signature:\n%s", fn)
+	}
+	if !strings.Contains(fn, `ciArtifacts := sdk.Resource(CiArtifacts, "ci-artifacts",`) {
+		t.Fatalf("ciplatform.go should assign a local variable to ci-artifacts (now output-referenced, even though nothing else in this blueprint references it):\n%s", fn)
+	}
+	if !strings.Contains(fn, `ciNotifications := sdk.Resource(CiNotifications, "ci-notifications",`) {
+		t.Fatalf("ciplatform.go should assign a local variable to ci-notifications:\n%s", fn)
+	}
+	if !strings.Contains(fn, `return ciArtifacts.Field("arn"), ciNotifications.Field("arn")`) {
+		t.Fatalf("ciplatform.go missing the real output return statement:\n%s", fn)
+	}
+}
+
+// TestGenerateGo_Outputs_NoOutputs_Unaffected confirms the zero-outputs
+// case stays byte-identical to before UBI-128 existed -- no signature
+// change, no return statement, matching the existing
+// TestGenerateGo_CiPlatform fixture's own already-asserted signature.
+func TestGenerateGo_Outputs_NoOutputs_Unaffected(t *testing.T) {
+	intent := mustIntentFile(t, ciPlatformIntent)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfile(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+	fn := files["go/ciplatform.go"]
+	if !strings.Contains(fn, "func CiPlatform(repoName string, queueName string, opts ...Option) {\n") {
+		t.Fatalf("expected the plain, no-return-values signature for a blueprint with no outputs:\n%s", fn)
+	}
+	if strings.Contains(fn, "sdk.Computed") {
+		t.Fatalf("expected no *sdk.Computed return-values clause for a blueprint with no outputs:\n%s", fn)
+	}
+}
+
+func TestGenerateGo_Outputs_CompilesClean(t *testing.T) {
+	requireGoToolchain(t)
+
+	intent := mustIntentFile(t, ciPlatformIntent)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfileWithOutputs(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+
+	dir := t.TempDir()
+	for name, content := range files {
+		rel := strings.TrimPrefix(name, "go/")
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sdkGoRoot := sdkGoModuleRoot(t)
+	goMod := files["go/go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "./...")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go build of the generated blueprint package (with outputs) failed:\n%s", out)
+	}
+}
+
+// TestGenerateGo_Outputs_RuntimeUsable is UBI-128's own required "confirm
+// this works with zero new runtime mechanism" proof (ticket item 3): a
+// real, hand-written Go caller (go run, real sdk/go runtime, not a mock)
+// calls the generated function and wires ONE of its two returned
+// *sdk.Computed values directly into a SECOND, sibling resource's own
+// config -- exactly the way any other Resource() return value already
+// gets used (Slice 2's own established calling convention) -- and the
+// emitted intent/v1 document's own resolved $ref carries the real
+// address the output actually names (ci-platform.aws_ecr_repository.
+// ci-artifacts.arn), never a placeholder or the wrong resource.
+func TestGenerateGo_Outputs_RuntimeUsable(t *testing.T) {
+	requireGoToolchain(t)
+	sdkGoRoot := sdkGoModuleRoot(t)
+
+	intent := mustIntentFile(t, ciPlatformIntent)
+	files, err := GenerateGo("ci-platform", ciPlatformUbxfileWithOutputs(), intent)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "ciplatform")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		rel := strings.TrimPrefix(name, "go/")
+		if rel == "go.mod" {
+			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stackDir := filepath.Join(dir, "stack")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stackGoMod := "module stack\n\ngo 1.23\n\n" +
+		"require github.com/ubiquex/ubx-sdk-go v0.0.0\nrequire ciplatform v0.0.0\n\n" +
+		"replace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n" +
+		"replace ciplatform => " + pkgDir + "\n"
+	if err := os.WriteFile(filepath.Join(stackDir, "go.mod"), []byte(stackGoMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A second, hand-authored resource (never part of the blueprint
+	// itself) whose own config wires the blueprint's own repoArn output
+	// value directly into it -- native Go, zero new mechanism: this is
+	// just an ordinary *sdk.Computed value returned from an ordinary Go
+	// function call.
+	mainSrc := `package main
+
+import (
+	ciplatform "ciplatform"
+	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
+)
+
+var Downstream = sdk.ResourceBinding{
+	WireType: "aws_iam_role_policy",
+	Fields:   sdk.FieldMap{"TargetArn": {WireName: "target_arn"}},
+}
+
+type DownstreamConfig struct {
+	TargetArn any
+}
+
+func main() {
+	sdk.Main(sdk.Stack("ci-platform", func() {
+		sdk.Intent(sdk.IntentInfo{Summary: "x"})
+		repoArn, _ := ciplatform.CiPlatform("payments-ci-artifacts", "payments-notifications")
+		sdk.Resource(Downstream, "downstream", DownstreamConfig{TargetArn: repoArn})
+	}))
+}
+`
+	if err := os.WriteFile(filepath.Join(stackDir, "main.go"), []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", ".")
+	cmd.Dir = stackDir
+	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+	out, err := cmd.Output()
+	if err != nil {
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		t.Fatalf("go run the calling stack failed: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+	}
+
+	var doc struct {
+		Resources []struct {
+			Type   string `json:"type"`
+			Name   string `json:"name"`
+			Config struct {
+				TargetArn struct {
+					Ref struct {
+						To string `json:"to"`
+					} `json:"$ref"`
+				} `json:"target_arn"`
+			} `json:"config"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("parse emitted intent/v1: %v\noutput: %s", err, out)
+	}
+	var downstream *struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Config struct {
+			TargetArn struct {
+				Ref struct {
+					To string `json:"to"`
+				} `json:"$ref"`
+			} `json:"target_arn"`
+		} `json:"config"`
+	}
+	for i := range doc.Resources {
+		if doc.Resources[i].Name == "downstream" {
+			downstream = &doc.Resources[i]
+		}
+	}
+	if downstream == nil {
+		t.Fatalf("expected a downstream resource in the emitted document, got: %s", out)
+	}
+	wantAddr := "ci-platform.aws_ecr_repository.ci-artifacts.arn"
+	if downstream.Config.TargetArn.Ref.To != wantAddr {
+		t.Fatalf("downstream.target_arn.$ref.to = %q, want %q (the blueprint's own real repoArn output address) -- output: %s", downstream.Config.TargetArn.Ref.To, wantAddr, out)
+	}
+}

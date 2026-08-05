@@ -492,6 +492,40 @@ or default either -- extracting the call correctly IS the complete,
 correct output for that part of the document, nothing else to reason
 about.
 
+If the SAME sentence also gives this call an explicit NAME to reference
+it by later -- "Call blueprint ci-platform as 'platform' with: ..." or
+"...as \"platform\" with: ..." -- extract that quoted name verbatim into
+"call_name" on the same blueprint_calls[] entry. This is a completely
+different thing from "name" above: "name" is a free-text label for error
+messages only; "call_name" is a real identifier later prose in the SAME
+document can reference by, to use one of that call's own outputs (the
+blueprint's own declared outputs: -- you have no way to know what
+outputs a blueprint declares any more than you know what resources it
+contains, so never guess whether one exists, only ever transcribe what
+the document itself says). Leave "call_name" as the empty string "" when
+the document gives this call no such alias -- never invent one, and
+never reuse "name" as a substitute even if it happens to look like a
+plausible identifier.
+
+Wherever LATER prose in the document references that alias's own
+output -- "platform's own repo_arn output", "using platform's repo_arn",
+or similar phrasing naming a call_name plus one of its outputs -- treat
+it exactly like an ordinary "@<address>" resource reference (the rule
+above this one): place a real, nested {"$ref": {"to": "..."}} object at
+the position the referenced value itself belongs (inside a resource's
+own "config", or one level deeper inside a string-valued attribute that
+itself holds JSON text, exactly like an ordinary reference), but with
+"to" set to the literal string "$blueprint_output:<call_name>:<output_key>"
+instead of a <stack>.<type>.<name>.<attr> address -- e.g.
+"{\"$ref\":{\"to\":\"$blueprint_output:platform:repo_arn\"}}". Never a
+<stack>.<type>.<name>.<attr> address for this case: a blueprint call's
+own real resource types are never available to you, only the calling
+document's own call_name and the output name it names. If the document
+references an alias that was never given a call_name anywhere in the
+same document, or references an output name the document itself never
+otherwise ties to that call, record a blocking question instead of
+guessing.
+
 A second, distinct phrasing pattern needs the identical zero-reasoning
 treatment: when the document says to OVERRIDE an existing resource's
 attribute -- "Override the pipeline-events queue's some_hardcoded_field

@@ -81,18 +81,34 @@ func IntentDraftJSONSchema() map[string]any {
 					"string-valued attribute that must itself hold JSON text (an IAM policy document, " +
 					"say): place the identical {\"$ref\": {\"to\": \"...\"}} object at that position " +
 					"inside the JSON you encode into the string, e.g. " +
-					"\"{\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"payments.aws_iam_role.ci-runner.arn\\\"}}}\".",
+					"\"{\\\"Resource\\\":{\\\"$ref\\\":{\\\"to\\\":\\\"payments.aws_iam_role.ci-runner.arn\\\"}}}\". " +
+					"A reference to a NAMED BLUEPRINT CALL's own declared output (the document says something " +
+					"like \"platform's own repo_arn output\", where \"platform\" is a call_name a blueprint_calls[] " +
+					"entry above was given) uses the IDENTICAL {\"$ref\": {\"to\": \"...\"}} shape, but with \"to\" " +
+					"set to the literal string \"$blueprint_output:<call_name>:<output_key>\", e.g. " +
+					"\"{\\\"$ref\\\":{\\\"to\\\":\\\"$blueprint_output:platform:repo_arn\\\"}}\" -- never a " +
+					"<stack>.<type>.<name>.<attr> address for this case (a blueprint call's own real resource " +
+					"types aren't known to you at all; only the calling document's own call_name and the output " +
+					"name it references are).",
 			},
 		},
 	}
 	blueprintCall := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"name", "blueprint", "ref", "path", "args"},
+		"required":             []string{"name", "call_name", "blueprint", "ref", "path", "args"},
 		"properties": map[string]any{
 			"name": map[string]any{
 				"type":        "string",
 				"description": "Short, human-readable label for this call -- never part of any resource's own address.",
+			},
+			"call_name": map[string]any{
+				"type": "string",
+				"description": "The alias the document itself gives this call for referencing its own outputs later on -- e.g. " +
+					"\"Call blueprint ci-platform as 'platform' with: ...\" makes call_name \"platform\". Empty string \"\" if the " +
+					"document never gives this call an explicit \"as '<name>'\"/\"as \\\"<name>\\\"\" alias -- never invent one, and " +
+					"never reuse the free-text \"name\" field above as a substitute (that field is a label only, this one is a real " +
+					"identifier other prose can reference).",
 			},
 			"blueprint": map[string]any{
 				"type":        "string",

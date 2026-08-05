@@ -162,6 +162,18 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 	pending := make(map[string]pendingResource, len(objs))
 	var pendingOrder []string
 
+	// pendingBlueprintCalls (UBI-128) is a ubx_blueprint node's own
+	// mirror of pending above -- populated in this same first pass so
+	// resolveRefTarget (below) can resolve a ref: sigil naming a
+	// blueprint call node's own bare D2 identifier, not just an ordinary
+	// resource node's. A blueprint call has no known resource address
+	// until it's actually expanded (blueprint.ExpandCalls, after this
+	// package returns) -- resolveRefTarget's own blueprintCallRefTargetType
+	// sentinel, below, lets ubxRequiredAttrValue emit a PROVISIONAL
+	// resolver.BlueprintOutputRefPrefix marker instead of an ordinary
+	// "<stack>.<type>.<name>.<attr>" address in this case.
+	pendingBlueprintCalls := make(map[string]pendingBlueprintCall)
+
 	// pendingOverrideObjs holds every ubx_override-classed node's own
 	// d2graph.Object, in objs' own deterministic order -- UBI-86 Part 2's
 	// own mirror of pendingOrder above: an override's own config value
@@ -203,8 +215,17 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 			if err != nil {
 				return nil, fmt.Errorf("diagram: %s: %w", absID, err)
 			}
+			// UBI-128: CallName is this node's own bare D2 identifier,
+			// implicit -- exactly the same identifier a ref: sigil already
+			// uses to name an ordinary sibling resource (resolveRefTarget,
+			// below), never a second naming scheme. Always set (D2 always
+			// gives every object a real ID), so a ref: naming this node
+			// always has a CallName to resolve against, whether or not
+			// this call's own outputs actually end up referenced.
+			call.CallName = obj.ID
 			kind[absID] = nodeKindBlueprintCall
 			intent.BlueprintCalls = append(intent.BlueprintCalls, call)
+			pendingBlueprintCalls[absID] = pendingBlueprintCall{obj: obj, callName: call.CallName}
 			continue
 		}
 
@@ -265,18 +286,33 @@ func Parse(filename string, r io.Reader, stack string, providers []resolver.Decl
 	// how every other node reference already reads in a diagram this
 	// size) rather than requiring its full absID, while still accepting
 	// the full absID directly for a node nested inside a container.
-	byBareID := make(map[string]string, len(pending))
+	byBareID := make(map[string]string, len(pending)+len(pendingBlueprintCalls))
 	for absID, pr := range pending {
 		if pr.obj.ID != absID {
 			byBareID[pr.obj.ID] = absID
 		}
 	}
+	for absID, pb := range pendingBlueprintCalls {
+		if pb.obj.ID != absID {
+			byBareID[pb.obj.ID] = absID
+		}
+	}
 	resolveRefTarget := func(identifier string) (targetType, targetName string, ok bool) {
 		targetAbsID := identifier
-		if _, direct := pending[identifier]; !direct {
+		_, directResource := pending[identifier]
+		_, directBlueprintCall := pendingBlueprintCalls[identifier]
+		if !directResource && !directBlueprintCall {
 			if viaBareID, found := byBareID[identifier]; found {
 				targetAbsID = viaBareID
 			}
+		}
+		// UBI-128: a ref: naming a blueprint call node resolves to its
+		// own CallName, tagged with blueprintCallRefTargetType so
+		// ubxRequiredAttrValue (below) knows attrPath names a DECLARED
+		// OUTPUT, never a real provider attribute -- checked first since
+		// a blueprint call node is never also in resourceIndex.
+		if pb, found := pendingBlueprintCalls[targetAbsID]; found {
+			return blueprintCallRefTargetType, pb.callName, true
 		}
 		idx, found := resourceIndex[targetAbsID]
 		if !found {
@@ -410,6 +446,24 @@ type pendingResource struct {
 	dp        resolver.DeclaredProvider
 }
 
+// pendingBlueprintCall (UBI-128) is a ubx_blueprint node's own mirror of
+// pendingResource -- carried from Parse's first pass to resolveRefTarget,
+// where a ref: sigil naming this node's own bare D2 identifier resolves
+// to its CallName rather than a resource type+name.
+type pendingBlueprintCall struct {
+	obj      *d2graph.Object
+	callName string
+}
+
+// blueprintCallRefTargetType is resolveRefTarget's own sentinel
+// targetType value (UBI-128): never a real provider type name (every
+// real one is a bare lowercase_with_underscores identifier; this is
+// deliberately not), so ubxRequiredAttrValue can tell a resolved
+// identifier apart from an ordinary resource ref without a second return
+// value threaded through every existing caller. targetName in this case
+// holds the blueprint call's own CallName, not a resource name.
+const blueprintCallRefTargetType = "\x00blueprint_call"
+
 // sortedLeaves returns every non-container object in g, sorted by its
 // own absolute ID path -- determinism is this package's own
 // responsibility to supply (d2graph.Graph.Objects is populated in parse
@@ -432,6 +486,25 @@ func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 	var leaves []*d2graph.Object
 	for _, obj := range g.Objects {
 		if inUbxRequiredSubtree(obj) {
+			continue
+		}
+		// A DESCENDANT of a ubx_blueprint/ubx_override-classed node (its
+		// own "blueprint:"/"widget_name:"/etc. attribute children) is
+		// excluded here too -- a real, pre-existing gap UBI-128's own
+		// live diagram verification caught: the hasClass checks just
+		// below only ever matched the classed node ITSELF (a real,
+		// separate *d2graph.Object in g.Objects, distinct from every one
+		// of its own children), so a child like "platform.blueprint" fell
+		// through to the ordinary "len(ChildrenArray) == 0" leaf check
+		// below, got independently classified as an ordinary resource
+		// node, and refused for having no class: attribute -- a spurious
+		// blocking Question on every diagram ever using either node kind,
+		// silently undetected until now because no prior test asserted
+		// on intent.Intent.Questions for one of these nodes, only that
+		// intent.Resources stayed empty (which it always did anyway,
+		// coincidentally, since nodeKindUnresolved never appends to
+		// Resources either).
+		if inBlueprintOrOverrideSubtree(obj) {
 			continue
 		}
 		// A ubx_blueprint node's own children are ALWAYS just its own
@@ -468,6 +541,21 @@ func sortedLeaves(g *d2graph.Graph) []*d2graph.Object {
 func inUbxRequiredSubtree(obj *d2graph.Object) bool {
 	for _, seg := range obj.AbsIDArray() {
 		if seg == ubxRequiredKey {
+			return true
+		}
+	}
+	return false
+}
+
+// inBlueprintOrOverrideSubtree reports whether obj is a DESCENDANT of a
+// ubx_blueprint- or ubx_override-classed node -- checked from obj.Parent
+// upward, never obj itself, so the classed node's own leaf-hood (matched
+// separately, by its own hasClass check in sortedLeaves) is untouched;
+// only its children (and their own children, if any) are excluded from
+// independent classification.
+func inBlueprintOrOverrideSubtree(obj *d2graph.Object) bool {
+	for p := obj.Parent; p != nil; p = p.Parent {
+		if hasClass(p.Classes, ubxBlueprintClass) || hasClass(p.Classes, ubxOverrideClass) {
 			return true
 		}
 	}
@@ -738,10 +826,27 @@ func ubxRequiredAttrValue(raw, attrName, stack string, resolveTarget func(identi
 
 	targetType, targetName, found := resolveTarget(identifier)
 	if !found {
-		return nil, fmt.Errorf("ubx_required.%s: %q references node %q, which is not a resource node in this same diagram (a reference must name another topology node's own D2 identifier, resolved as a real resource)", attrName, raw, identifier)
+		return nil, fmt.Errorf("ubx_required.%s: %q references node %q, which is not a resource or ubx_blueprint node in this same diagram (a reference must name another topology node's own D2 identifier)", attrName, raw, identifier)
 	}
 
-	to := stack + "." + targetType + "." + targetName + "." + attrPath
+	// UBI-128: a ref: naming a ubx_blueprint node means attrPath is a
+	// DECLARED OUTPUT name (blueprint/ubxfile.go's outputs: key), never a
+	// real provider attribute -- a PROVISIONAL resolver.
+	// BlueprintOutputRefPrefix marker, resolved into a real address later
+	// by blueprint.ExpandCalls (blueprint/outputs.go), once this call has
+	// actually been invoked and its own outputs are known. Deliberately
+	// the SAME ref: sigil and $ref wire shape an ordinary resource
+	// reference already uses -- only the "to" value's own shape differs,
+	// never a second reference mechanism. This is also deliberately NOT
+	// @stack.type.name (UBI-47): an output stays within this same
+	// document/proposal, no separate ledger, no staleness-by-neighbor-
+	// advance concept at all.
+	var to string
+	if targetType == blueprintCallRefTargetType {
+		to = resolver.BlueprintOutputRefPrefix + targetName + ":" + attrPath
+	} else {
+		to = stack + "." + targetType + "." + targetName + "." + attrPath
+	}
 	obj := map[string]interface{}{
 		"$ref": map[string]interface{}{"to": to},
 	}

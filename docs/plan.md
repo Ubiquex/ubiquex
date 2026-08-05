@@ -2,6 +2,38 @@
 
 ## Changelog
 
+- 2026-08-05 — UBI-128 (blueprint outputs: cross-medium references to a
+  called blueprint's own resource attributes, all three calling
+  mediums): `Ubxfile` gains an `outputs:` key
+  (`<name>: <resource-slug>.<attribute>`); Go/TS/Python codegen all
+  return declared outputs as native multi-value returns (Go named
+  `*sdk.Computed` returns, a TS object literal, a Python bare
+  value/tuple) -- zero new runtime mechanism, confirmed live in Go via a
+  real `ubx resolve --from-code`/`ubx ship` and in TS/Python via a real
+  `deno run`/`python3` driver. The diagram medium's own EXISTING `ref:`
+  sigil (UBI-95) now also resolves a `ubx_blueprint` node's own
+  declared output, via a new provisional `$blueprint_output:<CallName>:
+  <outputKey>` wire marker (`resolver.BlueprintOutputRefPrefix`),
+  rewritten into a real address by `blueprint.ExpandCalls` once the call
+  is actually invoked -- live-verified end to end (resolve→accept→ship)
+  against real `fakeprovider`, and separately (resolve/plan-only, real
+  AWS schema) against the real `ci-platform` blueprint. A real,
+  pre-existing `diagram/parse.go` bug (a `ubx_blueprint`/`ubx_override`
+  node's own attribute children spuriously refused as unresolved
+  topology nodes) was found and fixed along the way. The md medium
+  gains real new grammar -- "Call blueprint X as 'name' with:" plus a
+  later "name's own output_key output" reference -- live-verified once
+  against the real Claude API (correct on the first attempt), hermetic
+  otherwise. Deliberately, structurally distinct from `@stack.type.name`
+  (UBI-47) cross-stack references throughout -- an output never crosses
+  a ledger/trust boundary and carries no staleness concept, unlike
+  `@stack`. Full account: docs/blueprint.md's new "Outputs: cross-medium
+  blueprint output references (UBI-128)" section, including the exact
+  per-medium live-verification depth (Go SDK/diagram: full CLI pipeline
+  against two real backends each; TS/Python SDK: real toolchain,
+  direct-runtime, not a full CLI ship; md: one real API call, hermetic
+  otherwise) stated explicitly, never blurred together.
+
 - 2026-08-05 — UBI-74 Slice 8 (Strata blueprints, offline delivery +
   redistribution — the FINAL slice of the original eight-slice plan,
   now fully closed): `ubx blueprint pull <path-to-tarball>` -- a fourth

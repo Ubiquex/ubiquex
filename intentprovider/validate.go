@@ -70,6 +70,7 @@ type wireOverride struct {
 // IntentDraftJSONSchema has the full account).
 type wireBlueprintCall struct {
 	Name      string `json:"name"`
+	CallName  string `json:"call_name"` // UBI-128: the document's own "as '<name>'" alias, "" if none given
 	Blueprint string `json:"blueprint"`
 	Ref       string `json:"ref"`
 	Path      string `json:"path"`
@@ -205,6 +206,7 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 	}
 
 	blueprintCalls := make([]resolver.BlueprintCall, 0, len(wire.BlueprintCalls))
+	seenCallName := map[string]int{} // call_name -> the blueprint_calls[] index that first claimed it
 	for i, c := range wire.BlueprintCalls {
 		path := fmt.Sprintf("blueprint_calls[%d]", i)
 		if c.Name == "" {
@@ -212,6 +214,19 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		}
 		if c.Blueprint == "" {
 			errs = append(errs, path+".blueprint: must not be empty")
+		}
+		// UBI-128: two calls sharing one call_name would silently collide
+		// once blueprint.ExpandCalls aggregates every call's own outputs
+		// into one document-wide "<call_name>:<output_key> -> address" map
+		// (blueprint/invoke.go) -- caught here, at draft-validation time,
+		// rather than surfacing later as a wrong/overwritten output
+		// reference with no clear cause.
+		if c.CallName != "" {
+			if other, ok := seenCallName[c.CallName]; ok {
+				errs = append(errs, fmt.Sprintf("%s.call_name: %q is also used by blueprint_calls[%d] -- each call this document names for later output reference needs its own distinct call_name", path, c.CallName, other))
+			} else {
+				seenCallName[c.CallName] = i
+			}
 		}
 		args := map[string]string{}
 		if c.Args != "" {
@@ -221,6 +236,7 @@ func parseAndValidate(raw json.RawMessage, stack string, allowEmptyDraft bool) (
 		}
 		blueprintCalls = append(blueprintCalls, resolver.BlueprintCall{
 			Name:      c.Name,
+			CallName:  c.CallName,
 			Blueprint: c.Blueprint,
 			Ref:       c.Ref,
 			Path:      c.Path,
