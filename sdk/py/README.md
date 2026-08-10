@@ -10,9 +10,9 @@ still be wired into a sibling resource's config at describe time.
 
 This package is the runtime shared by every `ubx sdk gen --lang py`
 generated bindings package (e.g. `ubx-sdk-aws-py`, `ubx-sdk-google-py`) --
-generated code does `import ubx_sdk as sdk` and calls `sdk.resource(...)`,
-`sdk.stack(...)`, `sdk.run(...)` against the binding's own generated
-`ResourceBinding`/`Config` types.
+a program built against it does `import ubx_sdk as ubx` and calls
+`ubx.resource(...)`, `ubx.stack(...)`, `ubx.run(...)` against the
+binding's own generated `ResourceBinding`/`Config` types.
 
 See [docs.ubiquex.io](https://docs.ubiquex.io) for the full SDK guide.
 
