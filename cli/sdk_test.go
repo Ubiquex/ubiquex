@@ -263,11 +263,11 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	mustContainSDK(t, generated, "type WidgetConfig struct {")
 	mustContainSDK(t, generated, "Name any")
 	mustContainSDK(t, generated, "Tags any")
-	mustContainSDK(t, generated, `var Widget = sdk.ResourceBinding{`)
+	mustContainSDK(t, generated, `var Widget = ubx.ResourceBinding{`)
 	// WireType carries the REAL, full wire type -- never shortened.
 	mustContainSDK(t, generated, `WireType: "fake_widget",`)
-	mustContainSDK(t, generated, `"Name": sdk.FieldSpec{WireName: "name"},`)
-	mustContainSDK(t, generated, `"Tags": sdk.FieldSpec{WireName: "tags"},`)
+	mustContainSDK(t, generated, `"Name": ubx.FieldSpec{WireName: "name"},`)
+	mustContainSDK(t, generated, `"Tags": ubx.FieldSpec{WireName: "tags"},`)
 	mustNotContainSDK(t, generated, "FakeWidget")
 
 	// id is computed-only -- must never appear in the Config struct.
@@ -383,11 +383,11 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	mustContainSDK(t, generated, "class WidgetConfig:")
 	mustContainSDK(t, generated, "name: Any = None")
 	mustContainSDK(t, generated, "tags: Any = None")
-	mustContainSDK(t, generated, "Widget = sdk.ResourceBinding(")
+	mustContainSDK(t, generated, "Widget = ubx.ResourceBinding(")
 	// wire_type carries the REAL, full wire type -- never shortened.
 	mustContainSDK(t, generated, `wire_type="fake_widget",`)
-	mustContainSDK(t, generated, `"name": sdk.FieldSpec(wire_name="name"),`)
-	mustContainSDK(t, generated, `"tags": sdk.FieldSpec(wire_name="tags"),`)
+	mustContainSDK(t, generated, `"name": ubx.FieldSpec(wire_name="name"),`)
+	mustContainSDK(t, generated, `"tags": ubx.FieldSpec(wire_name="tags"),`)
 	mustNotContainSDK(t, generated, "FakeWidget")
 
 	// id is computed-only -- must never appear in the Config dataclass.

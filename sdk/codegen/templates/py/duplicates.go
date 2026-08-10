@@ -10,7 +10,7 @@ import (
 // classDeclRe / moduleAssignRe / fromImportRe match this package's own
 // three top-level declaration shapes: `class Name:` (always preceded by
 // `@dataclasses.dataclass` on its own line, but the class line itself is
-// what occupies the module namespace), a bare `Name = sdk.ResourceBinding(`
+// what occupies the module namespace), a bare `Name = ubx.ResourceBinding(`
 // module-level assignment (ResourceFile's own output), and `from .x
 // import A, B` (ServicePackageDoc's own re-export lines -- a service
 // package's __init__.py aggregates every resource type's own `Pascal`/
@@ -27,7 +27,7 @@ import (
 // separate type/value namespaces allow.
 var (
 	classDeclRe    = regexp.MustCompile(`(?m)^class (\w+):`)
-	moduleAssignRe = regexp.MustCompile(`(?m)^(\w+) = sdk\.ResourceBinding\(`)
+	moduleAssignRe = regexp.MustCompile(`(?m)^(\w+) = ubx\.ResourceBinding\(`)
 	fromImportRe   = regexp.MustCompile(`(?m)^from \.\w+ import (.+)$`)
 )
 

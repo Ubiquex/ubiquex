@@ -155,7 +155,7 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 	// still gets its own unqualified Config/ResourceBinding names,
 	// completely unaffected.
 	mustContain(t, loggingSrc, "type ThingLoggingConfig struct {")
-	mustContain(t, loggingSrc, "var ThingLogging = sdk.ResourceBinding{")
+	mustContain(t, loggingSrc, "var ThingLogging = ubx.ResourceBinding{")
 	mustNotContain(t, thingSrc, "type ThingLogging struct {")
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {

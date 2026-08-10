@@ -350,7 +350,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 	// must be written to the file BEFORE this descriptor references it
 	// by name.
 	var descriptor strings.Builder
-	fmt.Fprintf(&descriptor, "%s = sdk.ResourceBinding(\n", pascalName)
+	fmt.Fprintf(&descriptor, "%s = ubx.ResourceBinding(\n", pascalName)
 	fmt.Fprintf(&descriptor, "    wire_type=%q,\n", rt.WireType)
 	descriptor.WriteString("    fields={\n")
 	for _, f := range rt.Fields {
@@ -375,7 +375,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 	b.WriteString("from __future__ import annotations\n\n")
 	b.WriteString("import dataclasses\n")
 	b.WriteString("from typing import Any\n\n")
-	b.WriteString("import ubx_sdk as sdk\n\n")
+	b.WriteString("import ubx_sdk as ubx\n\n")
 
 	for _, decl := range r.nestedDecls {
 		b.WriteString(decl)
@@ -532,7 +532,7 @@ func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 }
 
 // fieldSpecLiteral renders one settable field's own runtime
-// sdk.FieldSpec(...) call literal, mirroring sdk/codegen/templates/go
+// ubx.FieldSpec(...) call literal, mirroring sdk/codegen/templates/go
 // and .../ts's own fieldSpecLiteral exactly. Now a resourceRenderer
 // method: the object/collection-of-object branches route through
 // r.objectFieldMapRef, which may hoist a shared module-level FieldMap
@@ -542,24 +542,24 @@ func (r *resourceRenderer) fieldSpecLiteral(f ir.Field, indent int) (string, err
 	innerPad := strings.Repeat("    ", indent+1)
 	switch f.Type.Kind {
 	case ir.KindScalar:
-		return fmt.Sprintf("sdk.FieldSpec(wire_name=%q)", f.WireName), nil
+		return fmt.Sprintf("ubx.FieldSpec(wire_name=%q)", f.WireName), nil
 	case ir.KindList, ir.KindSet, ir.KindMap:
 		if f.Type.Element.Kind != ir.KindObject {
-			return fmt.Sprintf("sdk.FieldSpec(wire_name=%q)", f.WireName), nil
+			return fmt.Sprintf("ubx.FieldSpec(wire_name=%q)", f.WireName), nil
 		}
 		kind := map[ir.TypeKind]string{ir.KindList: "list", ir.KindSet: "set", ir.KindMap: "map"}[f.Type.Kind]
 		fieldsRef, err := r.objectFieldMapRef(f.Type.Element.Object)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("sdk.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
+		return fmt.Sprintf("ubx.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
 			innerPad, f.WireName, innerPad, kind, innerPad, fieldsRef, pad), nil
 	case ir.KindObject:
 		fieldsRef, err := r.objectFieldMapRef(f.Type.Object)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("sdk.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
+		return fmt.Sprintf("ubx.FieldSpec(\n%swire_name=%q,\n%skind=%q,\n%sfields=%s,\n%s)",
 			innerPad, f.WireName, innerPad, "object", innerPad, fieldsRef, pad), nil
 	default:
 		return "", fmt.Errorf("field %q: unrecognized type kind %v", f.WireName, f.Type.Kind)

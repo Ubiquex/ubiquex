@@ -44,12 +44,12 @@ func TestResourceFile_FlatResource(t *testing.T) {
 	mustContain(t, out, "AllocatedStorage any")
 	mustContain(t, out, "MasterPassword any")
 
-	mustContain(t, out, `var Instance = sdk.ResourceBinding{`)
+	mustContain(t, out, `var Instance = ubx.ResourceBinding{`)
 	// WireType carries the REAL, full wire type -- never shortened, even
 	// though the Go identifier above dropped the "aws_db_" prefix.
 	mustContain(t, out, `WireType: "aws_db_instance",`)
-	mustContain(t, out, `"InstanceClass": sdk.FieldSpec{WireName: "instance_class"},`)
-	mustContain(t, out, `"AllocatedStorage": sdk.FieldSpec{WireName: "allocated_storage"},`)
+	mustContain(t, out, `"InstanceClass": ubx.FieldSpec{WireName: "instance_class"},`)
+	mustContain(t, out, `"AllocatedStorage": ubx.FieldSpec{WireName: "allocated_storage"},`)
 	// id never appears in the runtime fields map (not settable).
 	if strings.Contains(out, `"Id":`) {
 		t.Fatalf("generated fields map should not include the computed-only id field:\n%s", out)
@@ -71,7 +71,7 @@ func TestResourceFile_DropsProviderAndServicePrefix_FoundersLockedNamingScheme(t
 	}
 	mustContain(t, out, "package ecr")
 	mustContain(t, out, "type RepositoryConfig struct {")
-	mustContain(t, out, "var Repository = sdk.ResourceBinding{")
+	mustContain(t, out, "var Repository = ubx.ResourceBinding{")
 	mustContain(t, out, `WireType: "aws_ecr_repository",`)
 	mustNotContain(t, out, "AwsEcrRepository")
 	mustNotContain(t, out, "AwsRepository")
@@ -95,8 +95,8 @@ func TestResourceFile_ListSetMapOfScalar(t *testing.T) {
 	mustContain(t, out, "AvailabilityZones any")
 	mustContain(t, out, "Tags any")
 	// Scalar collections need no recursive fields map -- plain wire-name leaf.
-	mustContain(t, out, `"SecurityGroupIds": sdk.FieldSpec{WireName: "security_group_ids"},`)
-	mustContain(t, out, `"Tags": sdk.FieldSpec{WireName: "tags"},`)
+	mustContain(t, out, `"SecurityGroupIds": ubx.FieldSpec{WireName: "security_group_ids"},`)
+	mustContain(t, out, `"Tags": ubx.FieldSpec{WireName: "tags"},`)
 }
 
 func TestResourceFile_NestedObjectBlock(t *testing.T) {
@@ -116,7 +116,7 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 	mustContain(t, out, "Settings any")
 	mustContain(t, out, `WireName: "settings"`)
 	mustContain(t, out, `Kind: "object"`)
-	mustContain(t, out, `"Enabled": sdk.FieldSpec{WireName: "enabled"}`)
+	mustContain(t, out, `"Enabled": ubx.FieldSpec{WireName: "enabled"}`)
 }
 
 // TestResourceFile_RecursiveShape_DeduplicatesIdenticalStructs is the
@@ -204,7 +204,7 @@ func TestResourceFile_RecursiveShape_TrueRepeat(t *testing.T) {
 // TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared is
 // this session's own real, live-verified fix -- the struct-declaration
 // dedup above is COSMETIC (sdk/go/runtime never reads a nested value by
-// its declared Go type name), but the runtime sdk.FieldMap{...} literal
+// its declared Go type name), but the runtime ubx.FieldMap{...} literal
 // that ResourceBinding.Fields is actually built from is NOT cosmetic; it
 // is what the runtime reads. Confirmed live against the real
 // hashicorp/aws@6.54.0 schema: deduplicating only the struct
@@ -213,7 +213,7 @@ func TestResourceFile_RecursiveShape_TrueRepeat(t *testing.T) {
 // was still being re-inlined at every depth, unbounded. This test
 // asserts the actual mechanism: the SECOND occurrence of an identical
 // shape's FieldSpec must reference a shared top-level var (`Fields:
-// <Name>Fields`), never re-inline a second full `sdk.FieldMap{...}`
+// <Name>Fields`), never re-inline a second full `ubx.FieldMap{...}`
 // literal.
 func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testing.T) {
 	shape := ir.TypeRef{Kind: ir.KindObject, Object: []ir.Field{
@@ -230,16 +230,16 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 
 	// Exactly ONE hoisted shared FieldMap var for the shared shape (plus
 	// the top-level ResourceBinding.Fields map itself -- 2 total, not 3),
-	// and exactly ONE inline "Enabled": sdk.FieldSpec{...} entry anywhere
+	// and exactly ONE inline "Enabled": ubx.FieldSpec{...} entry anywhere
 	// in the file (inside that one shared var) -- never a second copy
 	// inlined directly into the second field's own FieldSpec.
-	if n := strings.Count(out, "sdk.FieldMap{"); n != 2 {
-		t.Fatalf("expected exactly 2 sdk.FieldMap{ literals (1 hoisted shared var + 1 top-level ResourceBinding.Fields), got %d:\n%s", n, out)
+	if n := strings.Count(out, "ubx.FieldMap{"); n != 2 {
+		t.Fatalf("expected exactly 2 ubx.FieldMap{ literals (1 hoisted shared var + 1 top-level ResourceBinding.Fields), got %d:\n%s", n, out)
 	}
-	if n := strings.Count(out, "var Thing_PrimaryStatementFields = sdk.FieldMap{"); n != 1 {
+	if n := strings.Count(out, "var Thing_PrimaryStatementFields = ubx.FieldMap{"); n != 1 {
 		t.Fatalf("expected exactly 1 hoisted shared var declaration, got %d:\n%s", n, out)
 	}
-	if n := strings.Count(out, `"Enabled": sdk.FieldSpec{WireName: "enabled"}`); n != 1 {
+	if n := strings.Count(out, `"Enabled": ubx.FieldSpec{WireName: "enabled"}`); n != 1 {
 		t.Fatalf("expected exactly 1 inline Enabled field spec (inside the shared var), got %d:\n%s", n, out)
 	}
 	// Both FieldSpecs reference the SAME shared var by name, not an
@@ -275,7 +275,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 	mustContain(t, out, "Rule any")
 	mustContain(t, out, `WireName: "rule"`)
 	mustContain(t, out, `Kind: "list"`)
-	mustContain(t, out, `"FromPort": sdk.FieldSpec{WireName: "from_port"}`)
+	mustContain(t, out, `"FromPort": ubx.FieldSpec{WireName: "from_port"}`)
 }
 
 func TestResourceFile_UnsupportedWireNameCharacters_Errors(t *testing.T) {
@@ -339,13 +339,13 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	mustContain(t, files["aws/ecr/doc.go"], "package ecr")
 	mustContain(t, files["aws/ecr/doc.go"], `Source: "hashicorp/aws", Version: "6.54.0"`)
 	mustContain(t, files["aws/ecr/repository.go"], "package ecr")
-	mustContain(t, files["aws/ecr/repository.go"], "var Repository = sdk.ResourceBinding{")
+	mustContain(t, files["aws/ecr/repository.go"], "var Repository = ubx.ResourceBinding{")
 	// aws/ecr/repository.go must NOT redeclare SourceProvenance -- that
 	// lives exactly once, in aws/ecr/doc.go, for the whole package.
 	mustNotContain(t, files["aws/ecr/repository.go"], "SourceProvenance")
 
-	mustContain(t, files["aws/iam/role.go"], "var Role = sdk.ResourceBinding{")
-	mustContain(t, files["aws/iam/role_policy_attachment.go"], "var RolePolicyAttachment = sdk.ResourceBinding{")
+	mustContain(t, files["aws/iam/role.go"], "var Role = ubx.ResourceBinding{")
+	mustContain(t, files["aws/iam/role_policy_attachment.go"], "var RolePolicyAttachment = ubx.ResourceBinding{")
 	mustContain(t, files["aws/iam/role_policy_attachment.go"], `WireType: "aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
@@ -415,7 +415,7 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 		t.Fatalf("GeneratedRepo: expected aws/vpc/vpc.go for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
 	mustContain(t, files["aws/vpc/vpc.go"], "package vpc")
-	mustContain(t, files["aws/vpc/vpc.go"], "var Vpc = sdk.ResourceBinding{")
+	mustContain(t, files["aws/vpc/vpc.go"], "var Vpc = ubx.ResourceBinding{")
 }
 
 func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {
@@ -481,14 +481,14 @@ func TestGeneratedRepo_SiblingConfigCollision_Escaped(t *testing.T) {
 	// already use for a keyword collision) -- never the bare
 	// "InstanceConfig" that would collide.
 	mustContain(t, instanceSrc, "type InstanceConfig_ struct {")
-	mustContain(t, instanceSrc, "var Instance = sdk.ResourceBinding{")
+	mustContain(t, instanceSrc, "var Instance = ubx.ResourceBinding{")
 	mustNotContain(t, instanceSrc, "type InstanceConfig struct {")
 
 	// "instance_config"'s own binding var and its OWN (unrelated) auto
 	// Config struct are both completely undisturbed -- the collision is
 	// resolved on the OTHER sibling's side, never by mangling a resource's
 	// own real, wire-derived identity.
-	mustContain(t, configSrc, "var InstanceConfig = sdk.ResourceBinding{")
+	mustContain(t, configSrc, "var InstanceConfig = ubx.ResourceBinding{")
 	mustContain(t, configSrc, "type InstanceConfigConfig struct {")
 	mustContain(t, configSrc, `WireType: "aws_svc_instance_config",`)
 

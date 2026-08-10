@@ -3807,3 +3807,59 @@ re-run unaffected — this fix is a pure no-op for every provider whose
 real schema never hits the collision, confirmed rather than assumed.
 `go build ./...`/`gofmt -l .`/`go vet ./...` clean, full
 `go test ./...` green.
+
+## Amendment (2026-08-10, later): generated Go/Python binding files themselves now import the runtime as `ubx`, not `sdk` — a prior session's own exclusion explicitly revoked
+
+No Linear ticket ID given in this session's handoff — none inferred.
+
+Two prior sessions the same day updated the `sdk` → `ubx` local-alias
+convention in READMEs, hand-written example prose, and the runtime's
+own panic/error message text, but each explicitly left the CODEGEN
+TEMPLATES' own emitted import line and every emitted `sdk.X` qualified
+reference untouched — reasoning that generated files are "the codegen's
+own output," a different category from human-facing example code. This
+session's own handoff explicitly revoked that exclusion: generated
+files are the visible bulk of every bindings repo's own code, so they
+get the same convention too.
+
+**Go (`sdk/codegen/templates/go/go.go`)**: the emitted import line
+(`import sdk "github.com/ubiquex/ubx-sdk-go/runtime"` →
+`import ubx "..."`) and every emitted qualified reference this template
+produces (`sdk.ResourceBinding{` → `ubx.ResourceBinding{`,
+`sdk.FieldMap{` → `ubx.FieldMap{`, `sdk.FieldSpec{` →
+`ubx.FieldSpec{`, in both `ResourceFile`'s own descriptor-builder and
+`fieldSpecLiteral`/`objectFieldMapLiteral`) — plus the doc comments in
+this same file that describe this exact emitted output (not illustrative
+prose about a caller's own convention choice, which is what the
+earlier, still-standing `runtime.go` panic-message exclusion was about
+— a real, load-bearing distinction, not the same case reopened).
+
+**Python (`sdk/codegen/templates/py/py.go`)**: `import ubx_sdk as sdk`
+→ `import ubx_sdk as ubx`, `X = sdk.ResourceBinding(` →
+`X = ubx.ResourceBinding(`, every `sdk.FieldSpec(...)` emission in
+`fieldSpecLiteral`, plus the matching doc comments.
+
+**A real, load-bearing bug found and fixed alongside this, not just a
+rename**: `duplicates.go`'s own `moduleAssignRe` regex
+(`^(\w+) = sdk\.ResourceBinding\(`) HARDCODED the old alias literally
+into its own collision-detection pattern — Go's own duplicate checker
+(`sdk/codegen/templates/go/duplicates.go`) parses a real Go AST and is
+alias-agnostic by construction, needing zero changes, but Python's own
+checker is regex-based text matching (this package's own long-standing,
+documented reason: no real Python AST tooling in this codebase). Left
+unfixed, `CheckRepoNoDuplicateDeclarations` would have silently stopped
+matching any real generated file's own `ResourceBinding` assignment the
+moment this rename shipped — the exact "detection quietly stops firing"
+failure class this project has repeatedly guarded against elsewhere.
+Fixed at the same time; the pattern now reads `ubx\.ResourceBinding\(`.
+
+**Verified for real**: every hermetic test in
+`sdk/codegen/templates/{go,py}` and `cli` asserting an exact emitted
+string updated to match (golden-string tests, by design, always need
+this when the template's own output text changes — not a sign of
+anything wrong). `go build ./...`/`gofmt -l .`/`go vet ./...` clean,
+full `go test ./...` green, AND all three languages' own
+`UBX_CONFORMANCE_LIVE=1` full-provider live tests re-run and green (Go:
+1,941 files, real `go build`; Python: 1,942 files, real recursive
+import; TS: 1,941 files, real `deno check` — TS untouched by this
+change, re-run only to confirm zero regression).

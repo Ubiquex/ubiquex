@@ -16,7 +16,7 @@ import (
 
 // TestCheckNoDuplicateDeclarations_DetectsRealCollision proves the checker
 // catches a genuine Python module-namespace collision WITHIN one file --
-// a `class Foo` followed by a `Foo = sdk.ResourceBinding(...)`
+// a `class Foo` followed by a `Foo = ubx.ResourceBinding(...)`
 // module-level assignment, which Python itself never errors on (the
 // second silently overwrites the first -- see this package's own
 // resourceRenderer doc comment for the full, live-verified account,
@@ -26,14 +26,14 @@ func TestCheckNoDuplicateDeclarations_DetectsRealCollision(t *testing.T) {
 class Foo:
     bar: Any = None
 
-Foo = sdk.ResourceBinding(
+Foo = ubx.ResourceBinding(
     wire_type="aws_foo",
     fields={},
 )
 `
 	err := CheckNoDuplicateDeclarations(src)
 	if err == nil {
-		t.Fatal("expected an error for `class Foo` + `Foo = sdk.ResourceBinding(...)` sharing one module name, got nil")
+		t.Fatal("expected an error for `class Foo` + `Foo = ubx.ResourceBinding(...)` sharing one module name, got nil")
 	}
 	mustContain(t, err.Error(), "Foo")
 }
@@ -43,7 +43,7 @@ func TestCheckNoDuplicateDeclarations_CleanSource_NoError(t *testing.T) {
 class Foo:
     bar: Any = None
 
-Baz = sdk.ResourceBinding(
+Baz = ubx.ResourceBinding(
     wire_type="aws_baz",
     fields={},
 )
@@ -73,7 +73,7 @@ func TestCheckRepoNoDuplicateDeclarations_SameNameDifferentFiles_NeverCollides(t
 func TestCheckRepoNoDuplicateDeclarations_WithinOneFile_StillCollides(t *testing.T) {
 	repo := map[string]string{
 		"pyproject.toml": `[project]`,
-		"iam/role.py":    "@dataclasses.dataclass\nclass Foo:\n    bar: Any = None\n\nFoo = sdk.ResourceBinding(\n    wire_type=\"aws_foo\",\n    fields={},\n)\n",
+		"iam/role.py":    "@dataclasses.dataclass\nclass Foo:\n    bar: Any = None\n\nFoo = ubx.ResourceBinding(\n    wire_type=\"aws_foo\",\n    fields={},\n)\n",
 	}
 	err := CheckRepoNoDuplicateDeclarations(repo)
 	if err == nil {
@@ -149,7 +149,7 @@ func TestGeneratedRepo_SiblingConfigCollision_Disambiguated(t *testing.T) {
 	mustContain(t, reportSrc, "class CenterReportConfig_:")
 	mustNotContain(t, reportSrc, "class CenterReportConfig:")
 	mustContain(t, configSrc, "class CenterReportConfigConfig:")
-	mustContain(t, configSrc, "CenterReportConfig = sdk.ResourceBinding(")
+	mustContain(t, configSrc, "CenterReportConfig = ubx.ResourceBinding(")
 
 	initSrc, ok := files["ubx/google/migration/__init__.py"]
 	if !ok {
@@ -198,7 +198,7 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 
 	mustContain(t, thingSrc, "class Thing_Logging:\n    enabled: Any = None")
 	mustContain(t, loggingSrc, "class ThingLoggingConfig:")
-	mustContain(t, loggingSrc, "ThingLogging = sdk.ResourceBinding(")
+	mustContain(t, loggingSrc, "ThingLogging = ubx.ResourceBinding(")
 	mustNotContain(t, thingSrc, "class ThingLogging:\n")
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {

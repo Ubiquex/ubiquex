@@ -42,13 +42,13 @@ func TestResourceFile_FlatResource(t *testing.T) {
 	mustContain(t, out, "allocated_storage: Any = None")
 	mustContain(t, out, "master_password: Any = None")
 
-	mustContain(t, out, "Instance = sdk.ResourceBinding(")
+	mustContain(t, out, "Instance = ubx.ResourceBinding(")
 	// wire_type carries the REAL, full wire type -- never shortened, even
 	// though the class name above dropped the "aws_db_" prefix.
 	mustContain(t, out, `wire_type="aws_db_instance",`)
-	mustContain(t, out, `"instance_class": sdk.FieldSpec(wire_name="instance_class"),`)
-	mustContain(t, out, `"allocated_storage": sdk.FieldSpec(wire_name="allocated_storage"),`)
-	if strings.Contains(out, `"id": sdk.FieldSpec`) {
+	mustContain(t, out, `"instance_class": ubx.FieldSpec(wire_name="instance_class"),`)
+	mustContain(t, out, `"allocated_storage": ubx.FieldSpec(wire_name="allocated_storage"),`)
+	if strings.Contains(out, `"id": ubx.FieldSpec`) {
 		t.Fatalf("generated fields dict should not include the computed-only id field:\n%s", out)
 	}
 }
@@ -68,7 +68,7 @@ func TestResourceFile_DropsProviderAndServicePrefix_FoundersLockedNamingScheme(t
 		t.Fatalf("ResourceFile: %v", err)
 	}
 	mustContain(t, out, "class RepositoryConfig:")
-	mustContain(t, out, "Repository = sdk.ResourceBinding(")
+	mustContain(t, out, "Repository = ubx.ResourceBinding(")
 	mustContain(t, out, `wire_type="aws_ecr_repository",`)
 	mustNotContain(t, out, "AwsEcrRepository")
 	mustNotContain(t, out, "AwsRepository")
@@ -91,8 +91,8 @@ func TestResourceFile_ListSetMapOfScalar(t *testing.T) {
 	mustContain(t, out, "security_group_ids: Any = None")
 	mustContain(t, out, "availability_zones: Any = None")
 	mustContain(t, out, "tags: Any = None")
-	mustContain(t, out, `"security_group_ids": sdk.FieldSpec(wire_name="security_group_ids"),`)
-	mustContain(t, out, `"tags": sdk.FieldSpec(wire_name="tags"),`)
+	mustContain(t, out, `"security_group_ids": ubx.FieldSpec(wire_name="security_group_ids"),`)
+	mustContain(t, out, `"tags": ubx.FieldSpec(wire_name="tags"),`)
 }
 
 func TestResourceFile_NestedObjectBlock(t *testing.T) {
@@ -112,7 +112,7 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 	mustContain(t, out, "settings: Any = None")
 	mustContain(t, out, `wire_name="settings"`)
 	mustContain(t, out, `kind="object"`)
-	mustContain(t, out, `"enabled": sdk.FieldSpec(wire_name="enabled")`)
+	mustContain(t, out, `"enabled": ubx.FieldSpec(wire_name="enabled")`)
 }
 
 func TestResourceFile_ListOfNestedObject(t *testing.T) {
@@ -132,7 +132,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 	mustContain(t, out, "rule: Any = None")
 	mustContain(t, out, `wire_name="rule"`)
 	mustContain(t, out, `kind="list"`)
-	mustContain(t, out, `"from_port": sdk.FieldSpec(wire_name="from_port")`)
+	mustContain(t, out, `"from_port": ubx.FieldSpec(wire_name="from_port")`)
 }
 
 func TestResourceFile_PythonKeywordCollision_GetsTrailingUnderscore(t *testing.T) {
@@ -142,7 +142,7 @@ func TestResourceFile_PythonKeywordCollision_GetsTrailingUnderscore(t *testing.T
 		t.Fatalf("ResourceFile: %v", err)
 	}
 	mustContain(t, out, "class_: Any = None")
-	mustContain(t, out, `"class_": sdk.FieldSpec(wire_name="class")`)
+	mustContain(t, out, `"class_": ubx.FieldSpec(wire_name="class")`)
 }
 
 func TestResourceFile_UnsupportedWireNameCharacters_Errors(t *testing.T) {
@@ -220,14 +220,14 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	mustContain(t, files["ubx/aws/iam/__init__.py"], "from .role import Role, RoleConfig")
 	mustContain(t, files["ubx/aws/iam/__init__.py"], "from .role_policy_attachment import RolePolicyAttachment, RolePolicyAttachmentConfig")
 
-	mustContain(t, files["ubx/aws/ecr/repository.py"], "Repository = sdk.ResourceBinding(")
+	mustContain(t, files["ubx/aws/ecr/repository.py"], "Repository = ubx.ResourceBinding(")
 	// ubx/aws/ecr/repository.py must NOT redeclare SOURCE_PROVENANCE --
 	// that lives exactly once, in ubx/aws/ecr/__init__.py, for the whole
 	// package.
 	mustNotContain(t, files["ubx/aws/ecr/repository.py"], "SOURCE_PROVENANCE")
 
-	mustContain(t, files["ubx/aws/iam/role.py"], "Role = sdk.ResourceBinding(")
-	mustContain(t, files["ubx/aws/iam/role_policy_attachment.py"], "RolePolicyAttachment = sdk.ResourceBinding(")
+	mustContain(t, files["ubx/aws/iam/role.py"], "Role = ubx.ResourceBinding(")
+	mustContain(t, files["ubx/aws/iam/role_policy_attachment.py"], "RolePolicyAttachment = ubx.ResourceBinding(")
 	mustContain(t, files["ubx/aws/iam/role_policy_attachment.py"], `wire_type="aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
@@ -246,7 +246,7 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if _, ok := files["ubx/aws/vpc/vpc.py"]; !ok {
 		t.Fatalf("GeneratedRepo: expected ubx/aws/vpc/vpc.py for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["ubx/aws/vpc/vpc.py"], "Vpc = sdk.ResourceBinding(")
+	mustContain(t, files["ubx/aws/vpc/vpc.py"], "Vpc = ubx.ResourceBinding(")
 	mustContain(t, files["ubx/aws/vpc/__init__.py"], "from .vpc import Vpc, VpcConfig")
 }
 
@@ -355,7 +355,7 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 	if n := strings.Count(out, "_Thing_PrimaryStatementFields = {"); n != 1 {
 		t.Fatalf("expected exactly 1 hoisted shared module-level variable, got %d:\n%s", n, out)
 	}
-	if n := strings.Count(out, `"enabled": sdk.FieldSpec(wire_name="enabled")`); n != 1 {
+	if n := strings.Count(out, `"enabled": ubx.FieldSpec(wire_name="enabled")`); n != 1 {
 		t.Fatalf("expected exactly 1 inline enabled field spec (inside the shared var), got %d:\n%s", n, out)
 	}
 	mustContain(t, out, "fields=_Thing_PrimaryStatementFields,")
