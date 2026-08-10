@@ -3753,3 +3753,57 @@ re-export shape until their own version-watch regen (or a dedicated
 follow-up session) runs against the now-fixed codegen — a real,
 named, not-yet-closed gap, not silently assumed covered by "the
 codegen is fixed."
+
+## Amendment (2026-08-10): Python re-export aggregation hits UBI-108's own real `*_config` collision class — found live on the first non-AWS regen, fixed at the source
+
+No Linear ticket ID given in this session's handoff — none inferred,
+per CLAUDE.md's own rule. Direct follow-up to the immediately preceding
+amendment: replicating the `ubx.<provider>` namespace-package fix to
+Google, Azure, and Kubernetes surfaced a real bug the AWS-only rollout
+never could have — `hashicorp/aws`'s own 1,687 real types happened to
+contain zero examples of the collision class described below; Google's
+1,330 real types contain a real one, found the moment a genuine
+`ubx sdk gen --lang py` regen was attempted against Google, not
+hypothesized in advance.
+
+**The collision**: `ServicePackageDoc`'s own re-export aggregation
+(previous amendment) gives every service package's `__init__.py` ONE
+shared namespace across every resource type in that service — a real,
+new collision class its own doc comment already named as a risk,
+structurally analogous to UBI-108's real, live-verified Go finding
+(STATE.md, `ubx-sdk-google-go`): an independent SIBLING resource in the
+SAME service whose own wire name is exactly `<other>_config` (a real,
+top-level resource, not a nested block) has a Pascal class name
+identical to `<other>`'s own auto-derived `<Pascal>Config` dataclass.
+Confirmed real, not synthetic: `google_migration_center_report` +
+`google_migration_center_report_config`, live against
+`hashicorp/google@7.42.0` — a real `ubx sdk gen --lang py` run failed
+its own self-check exactly as designed
+(`CheckRepoNoDuplicateDeclarations`'s own `fromImportRe`, added by the
+immediately preceding amendment, working as intended on its very first
+non-AWS provider).
+
+**The fix, mirroring `sdk/codegen/templates/go`'s own UBI-108
+resolution exactly**: `GeneratedRepo` now computes each service's own
+sibling Pascal-name set up front; when a resource's own auto-derived
+`<Pascal>Config` collides with a real sibling's own Pascal name, that
+resource's OWN Config class (never the sibling's real identity) gets a
+disambiguating trailing underscore (`CenterReportConfig_`), exactly
+Go's own convention. `ResourceFile` gained a `configTypeNameOverride`
+parameter (mirroring Go's own parameter of the same name);
+`exportedName` gained a `config` field so `ServicePackageDoc`'s
+re-export line uses the real, disambiguated name.
+
+**Verified for real, both hermetically and live**: a new permanent
+regression test (`TestGeneratedRepo_SiblingConfigCollision_Disambiguated`)
+reproduces the exact real pair above; re-ran a genuine
+`ubx sdk gen --lang py` against the full, real
+`hashicorp/google@7.42.0` schema (1,330 real types) — clean self-check,
+zero collisions, `ubx/google/migration/center_report.py` correctly
+declares `CenterReportConfig_`, `center_report_config.py` keeps its own
+real `CenterReportConfig`/`CenterReportConfigConfig` names untouched.
+`UBX_CONFORMANCE_LIVE=1`'s existing AWS full-schema test (1,687 types)
+re-run unaffected — this fix is a pure no-op for every provider whose
+real schema never hits the collision, confirmed rather than assumed.
+`go build ./...`/`gofmt -l .`/`go vet ./...` clean, full
+`go test ./...` green.

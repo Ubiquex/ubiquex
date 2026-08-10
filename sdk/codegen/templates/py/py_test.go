@@ -29,7 +29,7 @@ func TestResourceFile_FlatResource(t *testing.T) {
 		scalarField("allocated_storage", ir.ScalarNumber, false, true, false, false),
 		scalarField("master_password", ir.ScalarString, true, false, false, true),
 	)
-	out, err := ResourceFile("instance", rt)
+	out, err := ResourceFile("instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestResourceFile_DropsProviderAndServicePrefix_FoundersLockedNamingScheme(t
 		scalarField("id", ir.ScalarString, false, false, true, false),
 		scalarField("name", ir.ScalarString, false, true, false, false),
 	)
-	out, err := ResourceFile("repository", rt)
+	out, err := ResourceFile("repository", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestResourceFile_ListSetMapOfScalar(t *testing.T) {
 		Type: ir.TypeRef{Kind: ir.KindMap, Element: &ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString}}}
 
 	rt := rt("aws_db_instance", listField, setField, mapField)
-	out, err := ResourceFile("instance", rt)
+	out, err := ResourceFile("instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 		}},
 	}
 	rt := rt("aws_thing", nested)
-	out, err := ResourceFile("thing", rt)
+	out, err := ResourceFile("thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 		}}},
 	}
 	rt := rt("aws_security_group", nested)
-	out, err := ResourceFile("security_group", rt)
+	out, err := ResourceFile("security_group", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 
 func TestResourceFile_PythonKeywordCollision_GetsTrailingUnderscore(t *testing.T) {
 	rt := rt("aws_thing", scalarField("class", ir.ScalarString, false, true, false, false))
-	out, err := ResourceFile("thing", rt)
+	out, err := ResourceFile("thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestResourceFile_PythonKeywordCollision_GetsTrailingUnderscore(t *testing.T
 
 func TestResourceFile_UnsupportedWireNameCharacters_Errors(t *testing.T) {
 	rt := rt("aws_thing", scalarField("Weird-Name!", ir.ScalarString, false, true, false, false))
-	if _, err := ResourceFile("thing", rt); err == nil {
+	if _, err := ResourceFile("thing", rt, ""); err == nil {
 		t.Fatal("ResourceFile: got nil error for an unsupported wire-name character, want an error")
 	}
 }
@@ -157,12 +157,12 @@ func TestResourceFile_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 		scalarField("id", ir.ScalarString, false, false, true, false),
 		scalarField("instance_class", ir.ScalarString, false, true, false, false),
 	)
-	first, err := ResourceFile("instance", rt)
+	first, err := ResourceFile("instance", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		again, err := ResourceFile("instance", rt)
+		again, err := ResourceFile("instance", rt, "")
 		if err != nil {
 			t.Fatalf("ResourceFile (run %d): %v", i, err)
 		}
@@ -314,7 +314,7 @@ func TestResourceFile_RecursiveShape_DeduplicatesIdenticalStructs(t *testing.T) 
 		{WireName: "child", Type: level2},
 	}}
 	rt := rt("aws_thing", ir.Field{WireName: "statement", Type: level1})
-	out, err := ResourceFile("thing", rt)
+	out, err := ResourceFile("thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 		ir.Field{WireName: "primary_statement", Type: shape},
 		ir.Field{WireName: "secondary_statement", Type: shape},
 	)
-	out, err := ResourceFile("thing", rt)
+	out, err := ResourceFile("thing", rt, "")
 	if err != nil {
 		t.Fatalf("ResourceFile: %v", err)
 	}

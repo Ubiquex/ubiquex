@@ -105,6 +105,64 @@ func TestCheckNoDuplicateDeclarations_ReExportCleanSource_NoError(t *testing.T) 
 	}
 }
 
+// TestGeneratedRepo_SiblingConfigCollision_Disambiguated reproduces
+// UBI-108's own real, live-verified collision class -- first found on
+// Go (STATE.md, ubx-sdk-google-go), and reconfirmed live on Python this
+// session (hashicorp/google@7.42.0's real
+// google_migration_center_report + google_migration_center_report_config
+// pair, discovered when a real `ubx sdk gen --lang py` regen against
+// Google failed its own self-check with exactly this collision, not
+// hypothesized in advance): an independent sibling resource in the SAME
+// service whose own wire name is exactly "<other>_config" has a Pascal
+// name identical to <other>'s own auto-derived "<Pascal>Config" class.
+// GeneratedRepo must disambiguate the COLLIDING resource's own Config
+// class (a trailing underscore), never rename the real, independent
+// sibling resource.
+func TestGeneratedRepo_SiblingConfigCollision_Disambiguated(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("google_migration_center_report",
+			scalarField("id", ir.ScalarString, false, false, true, false),
+			scalarField("name", ir.ScalarString, false, true, false, false),
+		),
+		rt("google_migration_center_report_config",
+			scalarField("id", ir.ScalarString, false, false, true, false),
+			scalarField("display_name", ir.ScalarString, false, true, false, false),
+		),
+	}
+	files, err := GeneratedRepo("google", "hashicorp/google", "7.42.0", types)
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+
+	reportSrc, ok := files["ubx/google/migration/center_report.py"]
+	if !ok {
+		t.Fatalf("expected ubx/google/migration/center_report.py, got paths: %v", keys(files))
+	}
+	configSrc, ok := files["ubx/google/migration/center_report_config.py"]
+	if !ok {
+		t.Fatalf("expected ubx/google/migration/center_report_config.py, got paths: %v", keys(files))
+	}
+
+	// The colliding resource (center_report) gets a disambiguated Config
+	// class; its sibling (center_report_config, a real independent
+	// resource) keeps its own real, unmangled name.
+	mustContain(t, reportSrc, "class CenterReportConfig_:")
+	mustNotContain(t, reportSrc, "class CenterReportConfig:")
+	mustContain(t, configSrc, "class CenterReportConfigConfig:")
+	mustContain(t, configSrc, "CenterReportConfig = sdk.ResourceBinding(")
+
+	initSrc, ok := files["ubx/google/migration/__init__.py"]
+	if !ok {
+		t.Fatalf("expected ubx/google/migration/__init__.py, got paths: %v", keys(files))
+	}
+	mustContain(t, initSrc, "from .center_report import CenterReport, CenterReportConfig_")
+	mustContain(t, initSrc, "from .center_report_config import CenterReportConfig, CenterReportConfigConfig")
+
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has a real declaration collision even after disambiguation: %v", err)
+	}
+}
+
 // TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision
 // reproduces UBI-96's own real, live-verified shape directly, now scoped
 // to ONE FILE (UBI-98's own restructure) -- see

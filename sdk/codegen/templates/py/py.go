@@ -130,13 +130,40 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	}
 	for _, service := range services {
 		entries := byService[service]
+
+		// UBI-108's own real, live-verified collision class hashicorp/aws
+		// never surfaced but hashicorp/google@7.40.0 did (3 real hits,
+		// migration/center_report+center_report_config among them,
+		// reconfirmed live against hashicorp/google@7.42.0 this session):
+		// a sibling resource in this SAME service whose own wire name is
+		// exactly "<this>_config" (a real, independent resource, not a
+		// nested block) has a Pascal name identical to this resource's
+		// own auto-derived "<Pascal>Config" class -- which Python's new
+		// re-export aggregation (ServicePackageDoc) would silently shadow,
+		// exactly the class fromImportRe exists to catch. Mirrors
+		// sdk/codegen/templates/go's own GeneratedRepo fix exactly: the
+		// COLLIDING resource's own Config class gets a disambiguating
+		// trailing underscore, never the sibling (whose own identity is a
+		// real, independent resource and shouldn't be mangled).
+		siblingPascalNames := map[string]bool{}
+		for _, e := range entries {
+			siblingPascalNames[e.pascal] = true
+		}
+
 		names := make([]exportedName, len(entries))
 		for i, e := range entries {
-			names[i] = exportedName{local: e.local, pascal: e.pascal}
+			names[i] = exportedName{local: e.local, pascal: e.pascal, config: e.pascal + "Config"}
+			if siblingPascalNames[e.pascal+"Config"] {
+				names[i].config = e.pascal + "Config_"
+			}
 		}
 		files[root+"/"+service+"/__init__.py"] = ServicePackageDoc(source, version, names)
-		for _, e := range entries {
-			content, err := ResourceFile(e.local, e.rt)
+		for i, e := range entries {
+			configOverride := ""
+			if names[i].config != e.pascal+"Config" {
+				configOverride = names[i].config
+			}
+			content, err := ResourceFile(e.local, e.rt, configOverride)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
 			}
@@ -237,13 +264,17 @@ func PackageDoc(source, version string) string {
 
 // exportedName is one resource type's own re-export identity within a
 // service package's __init__.py -- local (the module/file basename,
-// already passed through pyModuleIdent) and pascal (that same name's
+// already passed through pyModuleIdent), pascal (that same name's
 // PascalCase class-name form, identical to what ResourceFile derives
 // internally for the SAME resource, since both start from the same
-// post-pyModuleIdent local name).
+// post-pyModuleIdent local name), and config (the Config dataclass's own
+// name -- normally pascal+"Config", but a disambiguated pascal+"Config_"
+// when GeneratedRepo detects the sibling-collision class its own doc
+// comment describes).
 type exportedName struct {
 	local  string
 	pascal string
+	config string
 }
 
 // ServicePackageDoc renders one service package's own __init__.py:
@@ -272,7 +303,7 @@ func ServicePackageDoc(source, version string, names []exportedName) string {
 		b.WriteString("\n")
 	}
 	for _, n := range names {
-		fmt.Fprintf(&b, "from .%s import %s, %sConfig\n", n.local, n.pascal, n.pascal)
+		fmt.Fprintf(&b, "from .%s import %s, %s\n", n.local, n.pascal, n.config)
 	}
 	return b.String()
 }
@@ -285,10 +316,21 @@ func ServicePackageDoc(source, version string, names []exportedName) string {
 // identically to Go/TS: `Repository`, never `AwsEcrRepository`, since
 // the package already encodes provider+service). rt.WireType itself is
 // rendered into the runtime ResourceBinding call completely unchanged.
-func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
+//
+// configTypeNameOverride mirrors sdk/codegen/templates/go's own
+// ResourceFile parameter of the same name exactly (see GeneratedRepo's
+// own doc comment for the real, live-verified collision class this
+// resolves): empty string means "no collision, use the default
+// <Pascal>Config"; a non-empty override (always <Pascal>Config_, a
+// trailing underscore) is used instead.
+func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverride string) (string, error) {
 	pascalName, err := pascalCase(localWireName)
 	if err != nil {
 		return "", fmt.Errorf("%s: local name %q: %w", rt.WireType, localWireName, err)
+	}
+	configTypeName := pascalName + "Config"
+	if configTypeNameOverride != "" {
+		configTypeName = configTypeNameOverride
 	}
 
 	r := &resourceRenderer{pascalName: pascalName}
@@ -346,7 +388,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 
 	// Config dataclass: settable fields only (same fieldIsSettable rule
 	// sdk/codegen/templates/ts and .../go use).
-	fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %sConfig:\n", pascalName)
+	fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %s:\n", configTypeName)
 	var anyField bool
 	for _, f := range rt.Fields {
 		if !fieldIsSettable(f) {
