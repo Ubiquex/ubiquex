@@ -7,20 +7,28 @@ import (
 	"strings"
 )
 
-// classDeclRe / moduleAssignRe match this package's own two top-level
-// declaration shapes (renderResource, above): `class Name:` (always
-// preceded by `@dataclasses.dataclass` on its own line, but the class
-// line itself is what occupies the module namespace) and a bare
-// `Name = sdk.ResourceBinding(` module-level assignment. Unlike TS,
-// Python has ONE flat module namespace for both -- a later `class Foo`
-// or `Foo = ...` silently REPLACES an earlier one with the same name,
-// no error at all (see sdk/codegen/templates/py's own resourceRenderer
-// doc comment for the full account) -- so both shapes are checked
-// together here, not independently the way TS's separate type/value
-// namespaces allow.
+// classDeclRe / moduleAssignRe / fromImportRe match this package's own
+// three top-level declaration shapes: `class Name:` (always preceded by
+// `@dataclasses.dataclass` on its own line, but the class line itself is
+// what occupies the module namespace), a bare `Name = sdk.ResourceBinding(`
+// module-level assignment (ResourceFile's own output), and `from .x
+// import A, B` (ServicePackageDoc's own re-export lines -- a service
+// package's __init__.py aggregates every resource type's own `Pascal`/
+// `PascalConfig` names into ONE shared namespace, a real, new collision
+// class this restructure introduces: two different resource types whose
+// local names pascalCase identically would silently shadow each other
+// here, structurally analogous to the moduleAssignRe/classDeclRe
+// collision below, just one level up). Unlike TS, Python has ONE flat
+// module namespace for all three -- a later `class Foo`, `Foo = ...`, or
+// `from .bar import Foo` silently REPLACES an earlier one with the same
+// name, no error at all (see sdk/codegen/templates/py's own
+// resourceRenderer doc comment for the full account) -- so all three
+// shapes are checked together here, not independently the way TS's
+// separate type/value namespaces allow.
 var (
 	classDeclRe    = regexp.MustCompile(`(?m)^class (\w+):`)
 	moduleAssignRe = regexp.MustCompile(`(?m)^(\w+) = sdk\.ResourceBinding\(`)
+	fromImportRe   = regexp.MustCompile(`(?m)^from \.\w+ import (.+)$`)
 )
 
 // CheckNoDuplicateDeclarations reports every Python identifier ONE
@@ -49,6 +57,11 @@ func CheckNoDuplicateDeclarations(src string) error {
 	}
 	for _, m := range moduleAssignRe.FindAllStringSubmatch(src, -1) {
 		counts[m[1]]++
+	}
+	for _, m := range fromImportRe.FindAllStringSubmatch(src, -1) {
+		for _, name := range strings.Split(m[1], ",") {
+			counts[strings.TrimSpace(name)]++
+		}
 	}
 	var dupes []string
 	for name, count := range counts {

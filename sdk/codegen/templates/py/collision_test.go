@@ -82,6 +82,29 @@ func TestCheckRepoNoDuplicateDeclarations_WithinOneFile_StillCollides(t *testing
 	mustContain(t, err.Error(), "iam/role.py")
 }
 
+// TestCheckNoDuplicateDeclarations_ReExportCollision reproduces the new
+// collision class ServicePackageDoc's own re-export aggregation
+// introduces (see its doc comment): two DIFFERENT resource types in the
+// SAME service whose local names pascalCase identically would silently
+// shadow each other in one shared __init__.py -- Python raises no error
+// for `from .a import Foo` followed by `from .b import Foo`, exactly
+// like the class/ResourceBinding collision above.
+func TestCheckNoDuplicateDeclarations_ReExportCollision(t *testing.T) {
+	src := "from .role import Role, RoleConfig\nfrom .role_ import Role, RoleConfig\n"
+	err := CheckNoDuplicateDeclarations(src)
+	if err == nil {
+		t.Fatal("expected an error for two re-export lines both binding \"Role\"/\"RoleConfig\", got nil")
+	}
+	mustContain(t, err.Error(), "Role")
+}
+
+func TestCheckNoDuplicateDeclarations_ReExportCleanSource_NoError(t *testing.T) {
+	src := "from .role import Role, RoleConfig\nfrom .role_policy_attachment import RolePolicyAttachment, RolePolicyAttachmentConfig\n"
+	if err := CheckNoDuplicateDeclarations(src); err != nil {
+		t.Fatalf("expected no error for collision-free re-export lines, got: %v", err)
+	}
+}
+
 // TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision
 // reproduces UBI-96's own real, live-verified shape directly, now scoped
 // to ONE FILE (UBI-98's own restructure) -- see
@@ -106,13 +129,13 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	thingSrc, ok := files["aws/svc/thing.py"]
+	thingSrc, ok := files["ubx/aws/svc/thing.py"]
 	if !ok {
-		t.Fatalf("expected aws/svc/thing.py, got paths: %v", keys(files))
+		t.Fatalf("expected ubx/aws/svc/thing.py, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["aws/svc/thing_logging.py"]
+	loggingSrc, ok := files["ubx/aws/svc/thing_logging.py"]
 	if !ok {
-		t.Fatalf("expected aws/svc/thing_logging.py, got paths: %v", keys(files))
+		t.Fatalf("expected ubx/aws/svc/thing_logging.py, got paths: %v", keys(files))
 	}
 
 	mustContain(t, thingSrc, "class Thing_Logging:\n    enabled: Any = None")

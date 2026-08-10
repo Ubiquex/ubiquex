@@ -48,22 +48,42 @@ import (
 	"github.com/ubiquex/ubiquex/sdk/codegen/ir"
 )
 
+// pythonNamespaceRoot is the shared, real PEP 420 implicit namespace
+// package every provider's Python bindings repo nests under -- "ubx",
+// matching real, strong precedent for a multi-package namespace
+// (google.cloud.*, azure.mgmt.*). GeneratedRepo deliberately never emits
+// "ubx/__init__.py": a directory WITH an __init__.py is a regular
+// package, ownable by exactly one distribution, which would make
+// ubx-sdk-aws-py's own install permanently claim the "ubx" name and
+// block ubx-sdk-google-py/-azure-py/-kubernetes-py from each
+// independently contributing their own ubx.google/ubx.azure/
+// ubx.kubernetes sibling later. "ubx/<ns>/__init__.py" (one level down,
+// e.g. "ubx/aws/__init__.py") is a real, ordinary package and always
+// gets one, same as every service package below it.
+const pythonNamespaceRoot = "ubx"
+
 // GeneratedRepo renders every file for one provider's repo-shaped Python
 // output tree: a pyproject.toml stub (name "ubx-sdk-<shortName>", not
 // published -- matching Go/TS's own "not yet published" posture), one
-// __init__.py per derived service package (PackageDoc), and one
-// <local>.py per resource type (ResourceFile) inside its own service
-// package. Returns a map of path, relative to the repo root using "/"
-// always -> file content -- mirrors sdk/codegen/templates/go's own
-// GeneratedRepo exactly in shape.
+// __init__.py per derived service package (ServicePackageDoc: the shared
+// provenance banner plus a re-export line per resource type in that
+// service), and one <local>.py per resource type (ResourceFile) inside
+// its own service package. The re-export is what makes the real, final
+// import `from ubx.<ns>.<service> import <Pascal>, <Pascal>Config` --
+// never the redundant `from ubx.<ns>.<service>.<local> import ...`
+// stutter a bare PackageDoc-only __init__.py would require. Returns a
+// map of path, relative to the repo root using "/" always -> file
+// content -- mirrors sdk/codegen/templates/go's own GeneratedRepo
+// exactly in shape.
 func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].WireType < sorted[j].WireType })
 
 	type entry struct {
-		rt    *ir.ResourceType
-		local string
+		rt     *ir.ResourceType
+		local  string
+		pascal string
 	}
 	byService := map[string][]entry{}
 	var services []string
@@ -74,10 +94,14 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		}
 		service = pyModuleIdent(service)
 		local = pyModuleIdent(local)
+		pascal, err := pascalCase(local)
+		if err != nil {
+			return nil, fmt.Errorf("sdk/codegen/templates/py: %s: local name %q: %w", rt.WireType, local, err)
+		}
 		if _, ok := byService[service]; !ok {
 			services = append(services, service)
 		}
-		byService[service] = append(byService[service], entry{rt, local})
+		byService[service] = append(byService[service], entry{rt, local, pascal})
 	}
 	sort.Strings(services)
 
@@ -99,18 +123,24 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// confirmed posture pyModuleIdent's own leading-digit guard already
 	// established.
 	ns := pyShortNameIdent(shortName)
+	root := pythonNamespaceRoot + "/" + ns
 	files := map[string]string{
-		"pyproject.toml":    pyprojectTOML(shortName, source, version),
-		ns + "/__init__.py": PackageDoc(source, version),
+		"pyproject.toml":      pyprojectTOML(shortName, source, version),
+		root + "/__init__.py": PackageDoc(source, version),
 	}
 	for _, service := range services {
-		files[ns+"/"+service+"/__init__.py"] = PackageDoc(source, version)
-		for _, e := range byService[service] {
+		entries := byService[service]
+		names := make([]exportedName, len(entries))
+		for i, e := range entries {
+			names[i] = exportedName{local: e.local, pascal: e.pascal}
+		}
+		files[root+"/"+service+"/__init__.py"] = ServicePackageDoc(source, version, names)
+		for _, e := range entries {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
 			}
-			files[ns+"/"+service+"/"+e.local+".py"] = content
+			files[root+"/"+service+"/"+e.local+".py"] = content
 		}
 	}
 	return files, nil
@@ -159,14 +189,28 @@ func pyModuleIdent(name string) string {
 // cli/sdk_test.go's own assertPyFileImports already uses). `ubx_sdk`
 // pins to the real published PyPI package (UBI-107,
 // https://pypi.org/project/ubx-sdk/) -- caret-equivalent range, matching
-// @ubx/sdk's own `^0.1.0` JSR pin.
+// @ubx/sdk's own `^0.1.0` JSR pin. The [build-system]/
+// [tool.setuptools.packages.find] tables are what make "ubx" resolve as
+// a real PEP 420 implicit namespace package rather than an ordinary one
+// on a real `pip install` -- `namespaces = true` is the load-bearing
+// line; `include` scopes discovery to this distribution's own "ubx*"
+// tree instead of scanning the whole repo (dist/, .github/, ...).
 func pyprojectTOML(shortName, source, version string) string {
 	return fmt.Sprintf(`[project]
 name = "ubx-sdk-%s"
 version = "0.0.0"
 description = "Generated Python bindings for %s@%s (ubx sdk gen). DO NOT EDIT."
 dependencies = ["ubx_sdk>=0.1.0,<0.2.0"]
-`, shortName, source, version)
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["%s*"]
+namespaces = true
+`, shortName, source, version, pythonNamespaceRoot)
 }
 
 // PackageDoc renders one service package's own __init__.py -- Python's
@@ -177,7 +221,10 @@ dependencies = ["ubx_sdk>=0.1.0,<0.2.0"]
 // offline-after-generation") plus SOURCE_PROVENANCE, declared exactly
 // once per package -- never repeated (or, worse, silently redefined
 // with no error at all, Python's own worst-of-three failure mode UBI-96
-// first found) in every resource type's own file.
+// first found) in every resource type's own file. Also the namespace
+// root's own "ubx/<ns>/__init__.py" (unlike "ubx/__init__.py" itself,
+// which GeneratedRepo deliberately never emits -- see
+// pythonNamespaceRoot's own doc comment).
 func PackageDoc(source, version string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code generated by `ubx sdk gen` from %s@%s. DO NOT EDIT.\n", source, version)
@@ -185,6 +232,48 @@ func PackageDoc(source, version string) string {
 	b.WriteString("# (docs/sdk.md — \"ubx sdk gen: local, pinned, offline-after-generation\") --\n")
 	b.WriteString("# re-run `ubx sdk gen` to regenerate after a provider version bump.\n")
 	fmt.Fprintf(&b, "SOURCE_PROVENANCE = {%q: %q, %q: %q}\n", "source", source, "version", version)
+	return b.String()
+}
+
+// exportedName is one resource type's own re-export identity within a
+// service package's __init__.py -- local (the module/file basename,
+// already passed through pyModuleIdent) and pascal (that same name's
+// PascalCase class-name form, identical to what ResourceFile derives
+// internally for the SAME resource, since both start from the same
+// post-pyModuleIdent local name).
+type exportedName struct {
+	local  string
+	pascal string
+}
+
+// ServicePackageDoc renders one service package's own __init__.py:
+// PackageDoc's existing provenance banner, plus one re-export line per
+// resource type in this service -- `from .<local> import <Pascal>,
+// <Pascal>Config` -- so the real, final import a consumer writes is
+// `from ubx.<ns>.<service> import <Pascal>, <Pascal>Config`, never the
+// redundant `from ubx.<ns>.<service>.<local> import ...` stutter the
+// pre-restructure layout required. names must already be in a
+// deterministic order (GeneratedRepo passes them in the same
+// WireType-sorted order byService itself was built in).
+//
+// A real, new collision class this re-export aggregation introduces,
+// structurally analogous to Go's own single-package-namespace problem
+// (STATE.md's ubx-sdk-google-go `*_config` finding) even though Python
+// still gives every FILE its own independent namespace: two DIFFERENT
+// resource types in the SAME service whose local names pascalCase to
+// the SAME identifier would silently shadow each other in this shared
+// __init__.py. CheckNoDuplicateDeclarations' own fromImportRe now
+// checks every re-export line for exactly this, uniformly with every
+// other module-level declaration it already checks.
+func ServicePackageDoc(source, version string, names []exportedName) string {
+	var b strings.Builder
+	b.WriteString(PackageDoc(source, version))
+	if len(names) > 0 {
+		b.WriteString("\n")
+	}
+	for _, n := range names {
+		fmt.Fprintf(&b, "from .%s import %s, %sConfig\n", n.local, n.pascal, n.pascal)
+	}
 	return b.String()
 }
 

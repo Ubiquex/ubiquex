@@ -168,6 +168,16 @@ at all, a real, load-bearing, already-documented deviation from the real
 CLI's own output shape (Amendment "UBI-98 session 2," below), not an
 inconsistency.
 
+**Python's real package layout, superseding every earlier `aws/iam/role.py`-
+style example in this document for Python specifically**: every provider's
+Python bindings nest under a shared `ubx` PEP 420 implicit namespace
+package (no `ubx/__init__.py` — real precedent, `google.cloud.*`/
+`azure.mgmt.*`), so the real import is `from ubx.aws.iam import Role,
+RoleConfig` — never `aws.iam.role`, and never the file-stutter
+`ubx.aws.iam.role`. See this document's own newest amendment, near the end of this
+document ("Python namespace-package layout"), for the full account;
+the Go/TS worked examples above are unaffected.
+
 **Consistency with `docs/blueprint.md`**: confirmed, no contradiction — that
 document's own generated `go.mod`s already correctly `require
 github.com/ubiquex/ubx-sdk-go v0.0.0` and repeatedly confirm real,
@@ -2429,6 +2439,14 @@ own leading-digit guard already established. Python also gets a new
 namespace-level `aws/__init__.py` (a real package marker, not relying
 on PEP 420 implicit namespace packages) — Go/TS need no analogous
 marker (directories with no `package`/module-init requirement).
+**Superseded — see this document's own "Python namespace-package
+layout" amendment near the end of this document**: `aws/` (this
+UBI-106 amendment's own namespace segment) is itself now nested one
+level further under a shared `ubx` PEP 420 implicit namespace package
+(`ubx/aws/`), which DOES rely on PEP 420 (deliberately, at that outer
+level only) — this paragraph's own `aws/__init__.py` claim is still
+accurate for the `aws/` level itself, just no longer the outermost
+namespace segment.
 
 **Existing tests updated, not just the generator**: every unit test in
 `sdk/codegen/templates/{go,ts,py}` and `cli/sdk_test.go` asserting a
@@ -3624,3 +3642,114 @@ the bottom, so a new reader hits the accurate status first — matching
 UBI-100's own standing policy for this exact document. `ubiquex-docs`
 updated in the same session (see its own commit for the guide-facing
 account).
+
+## Amendment (2026-08-10): Python namespace-package layout — `ubx.<provider>`, real precedent (`google.cloud.*`, `azure.mgmt.*`), fixes the `aws.alb.alb` file-stutter
+
+No Linear ticket ID given in this session's handoff — per CLAUDE.md's
+own rule, none inferred and none referenced here.
+
+**The founder's own finding**: `ubx-sdk-aws-py`'s real, already-live
+package (0.1.0, genuinely published to PyPI as `ubx-sdk-aws`, see the
+UBI-107 amendment above for how that publish happened) had a package
+root of bare `aws/` — `from aws.alb.alb import Alb, AlbConfig`. Two
+real problems named together: (1) `aws` as a bare top-level import name
+has no room for `ubx-sdk-google-py`/`-azure-py`/`-kubernetes-py` to
+each contribute their own sibling later without every provider
+colliding in the SAME flat namespace; (2) `aws.alb.alb` repeats the
+resource-file's own name twice (module path `alb.alb`, since
+UBI-98/UBI-106's per-resource-type file is named after the resource
+itself) — a real, visible awkwardness real strong precedent
+(`google.cloud.storage.Bucket`, `azure.mgmt.compute.ComputeManagementClient`)
+doesn't have, because those libraries' own `__init__.py`s re-export.
+
+**Both fixed together, at the source (`sdk/codegen/templates/py/py.go`),
+not hand-patched in the live repo alone**:
+
+1. **A shared `ubx` PEP 420 implicit namespace package root.**
+   `GeneratedRepo` now emits `ubx/<ns>/...` instead of `<ns>/...`, and
+   deliberately never writes `ubx/__init__.py` — a directory WITH an
+   `__init__.py` is a *regular* package, ownable by exactly one
+   distribution; a directory WITHOUT one, discovered via
+   `[tool.setuptools.packages.find]`'s new `namespaces = true`, is a
+   real PEP 420 implicit namespace package multiple independently
+   installed distributions can each contribute a piece of. Confirmed
+   this is the correct mechanism, not just asserted: built the real
+   wheel and inspected it directly — `ubx/aws/__init__.py` present,
+   `ubx/__init__.py` absent, `top_level.txt` declares `ubx`. This
+   directly supersedes the prior UBI-106 amendment's own claim (above,
+   now cross-referenced with a pointer at that exact paragraph, per
+   this document's own "never rewrite historical prose, add a
+   superseding pointer" policy) that Python's namespace segment "is not
+   relying on PEP 420 implicit namespace packages" — that claim was
+   correct at the `aws/` level itself; the new `ubx/` level above it now
+   does rely on PEP 420, deliberately.
+2. **Service `__init__.py` re-exports its own resource classes.** A new
+   `ServicePackageDoc` (replacing a bare `PackageDoc` call for service
+   packages specifically — `PackageDoc` itself is unchanged, still used
+   for the namespace-root `ubx/<ns>/__init__.py`) emits one `from
+   .<local> import <Pascal>, <Pascal>Config` line per resource type in
+   that service, so the real, final import is `from ubx.aws.alb import
+   Alb, AlbConfig` — never the `ubx.aws.alb.alb` stutter.
+
+**A real, new collision class this re-export aggregation introduces,
+found and closed before it could ship silently broken, not assumed
+safe by analogy to Go/TS**: two different resource types in the SAME
+service whose local (file-basename) names `pascalCase` identically
+would silently shadow each other in one shared `__init__.py` — Python
+raises no error for `from .a import Foo` followed by `from .b import
+Foo`, structurally analogous to UBI-96's own original flat-module
+collision bug, and to the `*_config` collision UBI-108 found in Go's
+single-package-per-directory namespace (STATE.md). `duplicates.go`'s
+own `CheckNoDuplicateDeclarations` gained a third regex
+(`fromImportRe`) checking every re-export line uniformly alongside the
+two it already checked (`class X:` / `X = sdk.ResourceBinding(`) — a
+new hermetic test (`TestCheckNoDuplicateDeclarations_ReExportCollision`)
+proves it fires; the real, live check that matters more, run against
+the actual full `hashicorp/aws@6.57.1` schema (`UBX_CONFORMANCE_LIVE=1`,
+1,687 real resource types, `TestFullProvider_Py_ImportsClean`), found
+**zero real collisions** — 1,942 files across 259 service packages, all
+importing clean.
+
+**Regenerated for real, not hand-edited**: `ubx-sdk-aws-py`'s own
+`aws/` tree was fully replaced by a real `ubx sdk gen --lang py --out`
+run against the same pinned `hashicorp/aws@6.57.1` (`VERSION`
+unchanged) — 1,947 real generated modules, confirmed importing clean
+both via a direct recursive `importlib` sweep and via a real
+`python3 -m build` + fresh-venv `pip install` of the built wheel
+(`from ubx.aws.alb import Alb, AlbConfig` succeeds; `ubx_sdk` resolves
+from the real PyPI index as an ordinary dependency). Version bumped
+0.1.0 → **0.2.0** (a real, deliberate breaking change to every existing
+import statement — more than a patch bump). Landed as
+[PR #7](https://github.com/Ubiquex/ubx-sdk-aws-py/pull/7), merged to
+`main` this session (not left open for later review — the founder's
+own handoff was an explicit, itemized, in-session directive to land and
+publish, a different posture from the automated weekly regen sweeps
+this repo's own prior amendments describe, which stay unmerged for
+founder review by design).
+
+**`ubiquex`-core changes**: `sdk/codegen/templates/py/py.go`
+(`GeneratedRepo`, `pyprojectTOML`, new `ServicePackageDoc`/
+`exportedName`), `duplicates.go` (`fromImportRe`), and every existing
+test in `sdk/codegen/templates/py` and `cli/sdk_test.go` asserting an
+exact `aws/...`-rooted path or dotted-import string, updated to the new
+`ubx/aws/...` shape — `go build ./...`/`gofmt -l .`/`go vet ./...`
+clean, full `go test ./...` green, `UBX_CONFORMANCE_LIVE=1` full-schema
+test green (above).
+
+**Deliberately not done this session, per the founder's own explicit
+instruction**: `ubiquex-docs`' existing per-resource Python-tab
+examples are NOT updated here — the founder wants to review and update
+those personally once this landed live, and separately wants to decide
+whether TS's already-namespaced `@ubx/sdk-aws` import shape deserves a
+similar consistency pass. Flagged back directly, not silently deferred.
+
+**Google/Azure/Kubernetes's own Python repos are NOT yet switched to
+this layout** — only `ubx-sdk-aws-py` was in this session's explicit
+scope. The codegen fix is real and applies to every future regen of
+any provider automatically (same "fix once at the source" precedent as
+UBI-106/UBI-108), but the other three live Python repos' `main`
+branches still serve the OLD `<ns>/<service>/<local>.py`-with-no-
+re-export shape until their own version-watch regen (or a dedicated
+follow-up session) runs against the now-fixed codegen — a real,
+named, not-yet-closed gap, not silently assumed covered by "the
+codegen is fixed."

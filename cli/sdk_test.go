@@ -97,7 +97,7 @@ func TestSDKGen_MultipleLanguagesSameOut_DoNotCollide(t *testing.T) {
 
 	assertGoRepoCompiles(t, filepath.Join(outDir, "go", "fake-widget"))
 	assertTSRepoChecks(t, filepath.Join(outDir, "ts", "fake-widget"))
-	assertPyRepoImports(t, filepath.Join(outDir, "py", "fake-widget"), "widget.widget.widget", "Widget", "WidgetConfig")
+	assertPyRepoImports(t, filepath.Join(outDir, "py", "fake-widget"), "ubx.widget.widget.widget", "Widget", "WidgetConfig")
 }
 
 // TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror covers UBI-98's
@@ -358,17 +358,25 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 		t.Fatalf("reading pyproject.toml: %v", err)
 	}
 	mustContainSDK(t, string(pyproject), `name = "ubx-sdk-widget"`)
+	mustContainSDK(t, string(pyproject), "namespaces = true")
 
-	initContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "__init__.py"))
-	if err != nil {
-		t.Fatalf("reading widget/widget/__init__.py: %v", err)
+	// "ubx" itself never gets an __init__.py -- a real PEP 420 implicit
+	// namespace package.
+	if _, err := os.Stat(filepath.Join(repoDir, "ubx", "__init__.py")); err == nil {
+		t.Fatalf("ubx/__init__.py must not exist (would make \"ubx\" a regular package, not a namespace package)")
 	}
-	mustContainSDK(t, string(initContent), `SOURCE_PROVENANCE = {"source": "fake/widget", "version": "0.1.0"}`)
 
-	genPath := filepath.Join(repoDir, "widget", "widget", "widget.py")
+	serviceInitContent, err := os.ReadFile(filepath.Join(repoDir, "ubx", "widget", "widget", "__init__.py"))
+	if err != nil {
+		t.Fatalf("reading ubx/widget/widget/__init__.py: %v", err)
+	}
+	mustContainSDK(t, string(serviceInitContent), `SOURCE_PROVENANCE = {"source": "fake/widget", "version": "0.1.0"}`)
+	mustContainSDK(t, string(serviceInitContent), "from .widget import Widget, WidgetConfig")
+
+	genPath := filepath.Join(repoDir, "ubx", "widget", "widget", "widget.py")
 	content, err := os.ReadFile(genPath)
 	if err != nil {
-		t.Fatalf("reading widget/widget/widget.py: %v", err)
+		t.Fatalf("reading ubx/widget/widget/widget.py: %v", err)
 	}
 	generated := string(content)
 
@@ -391,10 +399,17 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 
 	// Not just string matching -- the generated repo tree must actually
 	// import and run against the real sdk/py/ubx_sdk runtime, exactly
-	// as a real SDK program would. "widget.widget.widget" (not
+	// as a real SDK program would. "ubx.widget.widget.widget" (not
 	// "widget.widget"): UBI-106 nests the service package one level
-	// deeper, under the provider's own shortName directory.
-	assertPyRepoImports(t, repoDir, "widget.widget.widget", "Widget", "WidgetConfig")
+	// deeper, under the provider's own shortName directory, which itself
+	// nests under the shared "ubx" namespace-package root (PEP 420
+	// implicit namespace package, no __init__.py at the "ubx" level
+	// itself -- google.cloud.*/azure.mgmt.*-style precedent).
+	assertPyRepoImports(t, repoDir, "ubx.widget.widget.widget", "Widget", "WidgetConfig")
+
+	// The real, final import a consumer writes goes through the service
+	// package's own re-export, never the file-stutter path.
+	assertPyRepoImports(t, repoDir, "ubx.widget.widget", "Widget", "WidgetConfig")
 }
 
 // requirePython3 skips a test when python3 isn't on PATH -- this
@@ -409,16 +424,19 @@ func requirePython3(t *testing.T) {
 	}
 }
 
-// assertPyRepoImports imports dottedModule (e.g. "widget.widget", a
+// assertPyRepoImports imports dottedModule (e.g. "ubx.widget.widget", a
 // module inside repoDir -- UBI-98's own repo-shaped tree, package
-// directories with their own __init__.py) as a real Python module (with
-// both sdk/py and repoDir itself on PYTHONPATH, the same shape a real
-// end user's own program would need) and constructs its own generated
-// Config dataclass via bindingName/configName -- proof the generated
-// source is not just textually plausible but real, importable Python,
-// through the real dotted-package import path a per-service directory
-// restructure specifically requires (unlike the old flat single-file
-// shape, which needed no package machinery at all).
+// directories with their own __init__.py, rooted under the shared "ubx"
+// PEP 420 namespace package -- no __init__.py at the "ubx" level itself,
+// resolved via repoDir on PYTHONPATH the same as any real namespace
+// package) as a real Python module (with both sdk/py and repoDir itself
+// on PYTHONPATH, the same shape a real end user's own program would
+// need) and constructs its own generated Config dataclass via
+// bindingName/configName -- proof the generated source is not just
+// textually plausible but real, importable Python, through the real
+// dotted-package import path a per-service directory restructure
+// specifically requires (unlike the old flat single-file shape, which
+// needed no package machinery at all).
 func assertPyRepoImports(t *testing.T, repoDir, dottedModule, bindingName, configName string) {
 	t.Helper()
 	sdkPyDir, err := filepath.Abs(filepath.Join("..", "sdk", "py"))
