@@ -1,4 +1,4 @@
-.PHONY: build install
+.PHONY: build install submodules
 
 # build and install both print `ubx version` immediately after rebuilding
 # (UBI-63 session 4): a real live finding was a founder re-test that
@@ -17,12 +17,24 @@
 # printed the OLD binary's own, unrelated version, giving no signal
 # anything was wrong). This fails loudly instead of printing a
 # version that isn't the one you're about to run.
+#
+# submodules (UBI-139): sdk/ts/ and sdk/py/ are real git submodules
+# (github.com/Ubiquex/ubx-sdk-typescript, ubx-sdk-python) -- their own
+# real source is a go:embed build input for tseval/pyeval (the runtime
+# ubx's own hermetic evaluator actually executes against), so a plain
+# `git clone` (no --recurse-submodules) leaves both empty and `go
+# build` fails with a confusing "no required module provides package"
+# error that never mentions submodules at all -- live-verified this
+# session, not a hypothetical. build/install both depend on this target
+# so the fix is automatic, not a remembered extra step.
+submodules:
+	git submodule update --init --recursive
 
-build:
+build: submodules
 	go build -o ./ubx ./cmd/ubx
 	./ubx version
 
-install:
+install: submodules
 	go install ./cmd/ubx
 	@installed="$$(go env GOPATH)/bin/ubx"; \
 	onpath="$$(command -v ubx || true)"; \
