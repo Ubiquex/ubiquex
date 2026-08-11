@@ -2,6 +2,23 @@
 
 ## Changelog
 
+- 2026-08-12 — UBI-139: the shared SDK runtime (Go/TypeScript/Python)
+  consolidated into one-repo-per-language, matching `ubx-sdk-go`'s own
+  existing shape. `sdk/ts/` and `sdk/py/` both turned out to be real
+  `go:embed` build inputs for `ubx` itself (confirmed by breaking the
+  build on purpose and restoring it, not inferred from reading code) --
+  extracted to `github.com/Ubiquex/ubx-sdk-typescript` and `ubx-sdk-
+  python` (real git history preserved via `git filter-repo`), then
+  wired back into `ubiquex` as git submodules per the founder's own
+  explicit decision (presented three real mechanisms, didn't guess).
+  Published package identities (`ubx-sdk` on PyPI, `@ubx/sdk` on JSR)
+  are unchanged, no rename, confirmed with the founder after checking
+  the alternative names were genuinely free -- so none of the four
+  provider bindings repos needed any dependency-file edits. Found and
+  fixed a real new hazard along the way: a plain `git clone` silently
+  left both submodules empty and broke the build with a confusing
+  error; `Makefile`'s `build`/`install` now auto-init submodules. Full
+  account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 — UBI-138 Phase 2 COMPLETE (Azure, fourth and final
   provider): `github.com/Ubiquex/ubx-sdk-azure`, same corrected process.
   `0.1.0` already taken on PyPI/JSR; published `0.2.0`, unified across

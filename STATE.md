@@ -2,6 +2,118 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-139: shared SDK runtime consolidated into one-repo-per-language, git submodules, live and verified, 2026-08-12
+
+**Mandatory investigation done first, before touching anything, per the
+founder's own explicit instruction.** Read `sdk/ts/embed.go` directly --
+confirmed real, and found a SECOND embed the handoff didn't name:
+`sdk/py/embed.go` does the identical thing for Python. Both `go:embed`
+directives compile real source (`sdk/ts/evaluator/guards.ts` +
+`sdk/ts/runtime/src/index.ts`; `sdk/py/ubx_sdk/__init__.py`) directly
+into the `ubx` binary -- `tseval`/`pyeval` extract them to a temp dir
+per process and use THAT (never an installed npm/JSR/PyPI package) for
+real hermetic evaluation. **Proved this is a hard compile-time
+dependency, not inferred from reading code**: temporarily moved
+`sdk/ts/runtime/src/index.ts` out and ran `go build ./...` -- failed
+immediately with `pattern runtime/src/index.ts: no matching files
+found`; restored immediately, build clean again. `sdk/go/` itself,
+checked rather than assumed, needs no structural change -- it's a
+fully independent Go module, never `go:embed`ded (Go's own hermeticity
+model sandboxes the whole compiled binary via the OS, not an embedded
+interpreter runtime, so it never needed this). Found real, unprompted
+content drift while verifying: the monorepo's own `sdk/go/runtime/
+runtime.go` panic messages say `"sdk.XXX: ..."`; the live published
+`ubx-sdk-go` repo says `"ubx.XXX: ..."` -- `go.mod` matches exactly,
+only this cosmetic difference, not fixed, flagged only.
+
+**Real design decision surfaced, not guessed** -- since
+`runtime/src/index.ts`/`ubx_sdk/__init__.py` are simultaneously (a) the
+literal embedded build input and (b) the source published to JSR/PyPI,
+extracting them needed an explicit choice of canonical-source
+mechanism. Presented three real options (git submodule / monorepo-
+stays-canonical-with-sync / vendored-copy-with-fetch-script); founder
+chose **git submodule**.
+
+**A second real decision surfaced and confirmed before publishing
+anything**: checked whether `ubx-sdk-python` (PyPI) and
+`ubx-sdk-typescript`/`@ubx/sdk-typescript` (npm/JSR) exist as package
+names -- confirmed genuinely unused, matching the founder's own
+prediction. This would have been a REAL RENAME away from the existing
+live `ubx-sdk` (PyPI, 0.1.1) and `@ubx/sdk` (JSR, 0.1.1) every provider
+bindings repo depends on -- flagged explicitly rather than assumed;
+founder confirmed **no rename** -- new repos are source-location-only,
+continue publishing under the existing package names. This meant the
+four provider bindings repos' own dependency declarations (`go.mod`,
+`package.json`/`deno.json`, `pyproject.toml`) needed ZERO edits --
+they already reference package identity, not source location.
+
+**Extraction, real git history preserved via `git filter-repo`** (never
+mutated the real working ubiquex checkout -- all destructive rewriting
+done in throwaway `--no-local` scratch clones): `sdk/py/` -> new
+`github.com/Ubiquex/ubx-sdk-python` (5 real commits, `fc4e053`..
+`7bc0cfd`, path-rewritten to repo root). `sdk/ts/` -> new
+`github.com/Ubiquex/ubx-sdk-typescript` (6 real commits, `4acb386`..
+`b58d0a9`). Both diffed byte-identical against the monorepo source pre-
+extraction (only untracked `__pycache__`/`.DS_Store` cruft excluded).
+Both repos got a real README explaining their own dual role (published
+package + `go:embed` build input for `ubiquex`) and a `.gitignore`.
+`sdk/ts/`'s own stale, orphaned `package.json` (claimed `0.0.0`/"not
+yet published", contradicted by the real live `@ubx/sdk@0.1.1`, never
+referenced by any build/publish tooling -- found during the
+investigation) was removed as part of this same move.
+
+**Submodules wired up in the real ubiquex repo**: `sdk/py/`, `sdk/ts/`
+replaced with real `git submodule add` entries. Verified `go build
+./...` and the FULL test suite (`go test ./... -count=1`, all packages
+including `pyeval`/`tseval` which directly exercise the embedded
+assets) pass clean against the submodule checkout. **Real, new
+operational hazard found and fixed, not left for someone to hit
+cold**: a plain `git clone` (no `--recurse-submodules`) leaves `sdk/
+ts/`, `sdk/py/` empty, and `go build` then fails with a confusing "no
+required module provides package" error that never mentions
+submodules at all -- live-verified (a genuine fresh clone, not
+inferred). Fixed at the `Makefile` level: `build`/`install` now depend
+on a new `submodules` target (`git submodule update --init
+--recursive`), matching this project's own standing "make correctness
+automatic, not a remembered step" discipline (UBI-63's own precedent).
+Re-verified from a second genuinely fresh plain clone after the fix --
+`make build` now succeeds unattended.
+
+**Provider bindings repos verified unaffected, real fresh checks, not
+assumed from "nothing changed"**: fresh `go get`/`deno run`/`pip
+install` against the real live `ubx-sdk-go` + `ubx-sdk-aws` (Go),
+`jsr:@ubx/sdk` + `jsr:@ubx/sdk-aws` (TS), `ubx-sdk` + `ubx-sdk-aws`
+(Python) -- all resolve and execute correctly, exactly as before
+today's session (expected, since nothing about the published artifacts
+themselves changed -- only their future source location).
+
+**Documentation sweep, real finding: nothing needed changing.**
+Grepped every page referencing the shared runtime packages
+(`resource-reference/install.mdx` + every tutorial page) -- all install
+commands, version numbers, and package identities were already correct
+and remain correct, since no package was renamed and no version was
+republished. Confirmed rather than assumed via a real, exhaustive grep,
+not skipped.
+
+**Constraints honored**: no self-merge needed or used -- both new repos
+are brand-new (no existing content to PR against, matching UBI-138's
+own initial-generation precedent of direct push), and `ubiquex` itself
+allows direct commit/push per this project's own standing rule; no PR
+was opened or merged anywhere this session. Real credentials: none
+needed (no registry publish happened -- the runtime packages were not
+republished, since their content didn't change). Real directory
+structure verified before any state-changing step, matching the
+mandatory discipline UBI-138's AWS phase skipped once.
+
+**Not done this session, named so it isn't assumed covered**: no new
+version of `ubx-sdk`/`@ubx/sdk`/`ubx-sdk-go` was published from the new
+repos (their content is byte-identical to what's already live, so
+there was nothing new to publish); the `sdk/go/runtime/runtime.go`
+panic-message drift found during investigation was flagged, not fixed;
+no CI (`version-watch`/`publish`-style workflow) was set up for the two
+new runtime repos, unlike the UBI-138 provider bindings repos -- not
+requested this session.
+
 ## UBI-138 Phase 2 COMPLETE: fourth and final provider (Azure), all four providers now consolidated and verified, 2026-08-12
 
 Same corrected process as AWS/Google/Kubernetes, same mandatory checks
