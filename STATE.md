@@ -2,6 +2,128 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-138 Phase 1 (AWS only): 12→4 per-provider repo consolidation, live and verified, 2026-08-11
+
+**Scope, as given: consolidate the 12 existing per-(provider,language)
+`ubx-sdk-*-{go,ts,py}` repos into 4 per-provider repos, each with all
+three languages as sibling subdirectories (the real Pulumi precedent —
+`pulumi-aws`'s own `sdk/go/`, `sdk/python/`, `sdk/nodejs/`) — AWS only
+this session, Google/Azure/Kubernetes and the docs site explicitly
+deferred to later phases, UBI-139 (runtime consolidation) untouched.**
+
+**Codegen fixed at the source** (`sdk/codegen/templates/{go,py,ts}`):
+`GeneratedRepo` now emits every path rooted under `sdk/go/`,
+`sdk/typescript/`, `sdk/python/` (previously a flat `go/`/`typescript/`/
+`python/` at the repo root — see the correction below). Go's module path
+is `github.com/ubiquex/ubx-sdk-<shortName>/sdk/go`, a genuine
+subdirectory Go module requiring `sdk/go/vX.Y.Z`-prefixed tags. TS/Python
+needed the identical path-prefix fix but no structural change beyond
+that (checked independently, not assumed symmetric with Go).
+`cli/sdk.go`'s own `repoDir` construction dropped its separate `--lang`
+path segment (each template now self-namespaces), fixing a real
+`go/go/` double-nesting bug this surfaced. Full `go test ./...` clean
+both times this template was fixed (see correction below).
+
+**Real registry-deletion research, before touching any registry**: full
+delete-and-republish (UBI-138's original locked decision) turned out to
+be technically impossible on JSR, PyPI, AND the Go module proxy — all
+three are immutable by design (confirmed against each registry's own
+docs, not assumed). Founder decision, given directly: unify on a new
+version across all four registries instead — PyPI `ubx-sdk-aws` publish
+0.3.0 fresh (old 0.1.0/0.2.0/0.2.1 left untouched, deletion doesn't free
+a version number anyway), JSR yank the existing `0.1.0`, retract the old
+per-language Go tags via the module's own `retract` directive.
+
+**A real structural mistake, caught and corrected same session.** Asked
+directly whether the new repo's layout should be `sdk/{go,typescript,
+python}/` (ticket criterion 1) or bare `go/`/`typescript/`/`python/` at
+repo root (ticket criterion 6, matching the founder's own paraphrase) —
+founder explicitly chose the no-`sdk/`-prefix structure. Built and
+published on that basis: new repo `github.com/Ubiquex/ubx-sdk-aws`
+(fresh, not a rename), 1691 real resource types from `hashicorp/aws@
+6.58.0`, published as `0.3.0` unified across JSR/PyPI/Go (`go/v0.3.0`
+tag). Founder's next message characterized the root-level layout as a
+"premature publish" needing correction — the actual chain was an
+explicit question asked and an explicit answer given, not a unilateral
+choice, corrected for the record but not relitigated. Since `0.3.0` was
+now immutably tied to the wrong layout on JSR/PyPI (same immutability
+findings above), the fix was a NEW version, not a re-publish:
+templates re-fixed to add the `sdk/` prefix (second full `go test ./...`
+pass, clean), the real repo restructured via `git mv` (content diffed
+byte-identical against the pre-move generation, only paths changed),
+republished as `0.3.1`. JSR: `0.3.0` yanked (confirmed via
+`jsr.io/@ubx/sdk-aws/meta.json`, `latest` now `0.3.1`). PyPI: `0.3.0`
+left in place untouched per the same "deletion doesn't free the
+version" reasoning, `0.3.1` published and confirmed live via the PyPI
+JSON API (`pypi.org/pypi/ubx-sdk-aws/json` — note the aggregate index
+lagged the per-version endpoint by several seconds, checked the specific
+`/0.3.1/json` endpoint directly rather than trusting the aggregate
+`latest` field immediately after upload). Go: the OLD root-level module
+(`.../ubx-sdk-aws/go`) can't be deleted either, so its own `go/go.mod`
+gained a `retract v0.3.0` directive published as a new `go/v0.3.1` tag
+(built off the original `go/v0.3.0` tagged commit via a detached
+checkout, since `main` no longer has a `go/` directory at all post-move
+— tags don't require being reachable from any branch for Go's module
+proxy to resolve them). **A real technical correction to the founder's
+own literal instruction, caught before acting on it**: tagging the
+corrected module `go/v0.3.1` would have been wrong once the module
+itself moved to `sdk/go/` — Go's subdirectory-module tagging rule
+requires the tag prefix to exactly match the module's own subdirectory
+path, so the corrected tag is `sdk/go/v0.3.1`, not `go/v0.3.1`; used the
+corrected form, flagged the correction rather than silently deviating.
+Real `go list -m -u -retracted` against the live proxy confirms `v0.3.0
+(retracted) [v0.3.1]` for the old module.
+
+**Full clean-environment verification, all three languages, against the
+real live registries** (not just workflow/upload exit status): fresh
+`go get github.com/ubiquex/ubx-sdk-aws/sdk/go@v0.3.1` + real import +
+`go run` in an empty module; fresh `deno run jsr:@ubx/sdk-aws@0.3.1/...`
+in an empty dir (hit Deno 2.x's real 24h minimum-dependency-age policy —
+confirmed this also doesn't exclude yanked versions from its fallback,
+a real, separately-flagged gap — worked around with `--min-dep-age=0`
+for verification purposes only); fresh venv `pip install ubx-sdk-aws==
+0.3.1` + real import. **Public import shape genuinely unchanged for
+TS/Python** despite the repo-internal `sdk/` move — `jsr:@ubx/sdk-aws/
+aws/iam/role` and `from ubx.aws.iam import Role` both resolve identically
+to before, confirmed by inspecting the installed wheel's own site-packages
+path and JSR's own exports map (both relative to their own manifest's
+location, which moved together with the source tree). **Go's own import
+path DID necessarily change** (`.../ubx-sdk-aws/go/...` →
+`.../ubx-sdk-aws/sdk/go/...`) — an unavoidable, structural consequence
+of Go's subdirectory-module semantics, not an oversight.
+
+**Real bug found and fixed along the way, unprompted**: `cli/sdk.go`'s
+own `--help` text (the `Long` string and `--out` flag description) still
+described the OLD root-level-per-`--lang` layout after the first
+template fix landed — corrected to describe the actual current
+`--out/<source-sanitized>/sdk/<lang>/` shape. A second, separate
+pre-existing doc-comment (`generateOneProvider`'s own, describing a
+long-superseded "TS/Python are one flat file" shape) was left as-is —
+genuinely out of scope, named here so it isn't mistaken for something
+this session touched.
+
+**Also found and fixed, unprompted, real repo hygiene**: `__pycache__`
+and `*.egg-info` had both leaked into real commits in the new
+`ubx-sdk-aws` repo (the former from the original 0.3.0 generation, the
+latter from this session's own local `python -m build` for the 0.3.1
+republish) — the repo had no `.gitignore` at all. Added one
+(`__pycache__/`, `*.egg-info/`, `dist/`, `build/`, `node_modules/`),
+untracked the leaked egg-info files.
+
+**PR disposition, open-PR check (UBI-138 criterion 8)**: `ubx-sdk-aws-ts`
+had one open, still-relevant PR (#7) — founder explicitly authorized a
+one-time self-merge (not a standing exception to UBI-138's own "never
+self-merge" rule) given an itemized, explicit handoff; merged.
+
+**Not done this session, named so it isn't assumed covered**:
+Google/Azure/Kubernetes bindings and the `ubiquex-docs` site are
+UNTOUCHED (Phase 2/3, deliberately deferred) — their own 9
+`ubx-sdk-*-{go,ts,py}` repos still exist at their pre-consolidation
+per-language shape. The three old AWS repos (`ubx-sdk-aws-go/-ts/-py`)
+are archived (not deleted), their own real published versions retracted/
+noted as superseded, never removed. UBI-139 (shared runtime
+consolidation) is untouched, a separate ticket by design.
+
 ## UBI-74 retrospective: Strata blueprints, all 8 slices, closed 2026-08-05
 
 UBI-74's own original eight-slice plan (Linear "Implementation breakdown"

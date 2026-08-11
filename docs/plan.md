@@ -2,6 +2,18 @@
 
 ## Changelog
 
+- 2026-08-11 — UBI-138 Phase 1 (AWS only): the 12 per-(provider,language)
+  `ubx-sdk-*-{go,ts,py}` bindings repos consolidate into 4 per-provider
+  repos, each with all three languages as sibling subdirectories under
+  `sdk/` (`sdk/go/`, `sdk/typescript/`, `sdk/python/` — the real Pulumi
+  precedent this project cites). `sdk/codegen/templates/{go,py,ts}`
+  fixed at the source to emit this shape; new repo
+  `github.com/Ubiquex/ubx-sdk-aws` live, verified fresh-install/import
+  across all three languages against the real registries (JSR/PyPI/Go
+  proxy) at `0.3.1`. A real mid-session structural correction (root-level
+  vs. `sdk/`-nested layout) is the full story, not this one line — see
+  STATE.md's own 2026-08-11 entry. Google/Azure/Kubernetes (Phase 2/3)
+  and the docs site are explicitly deferred, untouched this session.
 - 2026-08-05 — UBI-125 (Terraform module → blueprint converter,
   deterministic, no AI): `ubx blueprint convert --from-terraform
   <module-dir> --out <dir>` — a new `tfconvert/` package parses a real

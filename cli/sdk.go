@@ -89,11 +89,12 @@ credentials needed -- a pure local gRPC call against the launched binary), and w
 --out in the language named by --lang ("ts", "go", or "py") whose generated field map maps back to the provider's
 real wire attribute names at evaluation time.
 
-Every --lang writes a repo-shaped tree per provider source: --out/<lang>/<source-sanitized>/, its own manifest
+Every --lang writes a repo-shaped tree per provider source: --out/<source-sanitized>/sdk/<lang>/, its own manifest
 stub (go.mod / package.json / pyproject.toml), one directory per derived AWS-service boundary (iam/, ecr/, sqs/,
 ...), one file per resource type, the redundant Aws<Service> prefix dropped from every generated identifier.
---lang is its own path segment (not folded into <source-sanitized>) so generating multiple languages against the
-same --out never interleaves their manifests/source trees into one directory.
+Each template self-namespaces under its own "sdk/<lang>/" (UBI-138: the real Pulumi precedent, pulumi-aws's own
+sdk/go/, sdk/python/, sdk/nodejs/) so generating multiple languages against the same --out never interleaves
+their manifests/source trees into one directory.
 
 Always regenerates from the exact config-pinned version's real, freshly-acquired schema -- never a stale cache
 from a different version (the same provider.Acquire version-pinned cache discipline "ubx scan"/"ubx accept
@@ -133,7 +134,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		},
 	}
 
-	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<lang>/`)
+	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<source-sanitized>/sdk/<lang>/`)
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 
