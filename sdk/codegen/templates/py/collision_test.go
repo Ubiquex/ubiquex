@@ -134,11 +134,11 @@ func TestGeneratedRepo_SiblingConfigCollision_Disambiguated(t *testing.T) {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	reportSrc, ok := files["python/ubx/google/migration/center_report.py"]
+	reportSrc, ok := files["sdk/python/ubx/google/migration/center_report.py"]
 	if !ok {
 		t.Fatalf("expected ubx/google/migration/center_report.py, got paths: %v", keys(files))
 	}
-	configSrc, ok := files["python/ubx/google/migration/center_report_config.py"]
+	configSrc, ok := files["sdk/python/ubx/google/migration/center_report_config.py"]
 	if !ok {
 		t.Fatalf("expected ubx/google/migration/center_report_config.py, got paths: %v", keys(files))
 	}
@@ -151,7 +151,7 @@ func TestGeneratedRepo_SiblingConfigCollision_Disambiguated(t *testing.T) {
 	mustContain(t, configSrc, "class CenterReportConfigConfig:")
 	mustContain(t, configSrc, "CenterReportConfig = ubx.ResourceBinding(")
 
-	initSrc, ok := files["python/ubx/google/migration/__init__.py"]
+	initSrc, ok := files["sdk/python/ubx/google/migration/__init__.py"]
 	if !ok {
 		t.Fatalf("expected ubx/google/migration/__init__.py, got paths: %v", keys(files))
 	}
@@ -187,11 +187,11 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	thingSrc, ok := files["python/ubx/aws/svc/thing.py"]
+	thingSrc, ok := files["sdk/python/ubx/aws/svc/thing.py"]
 	if !ok {
 		t.Fatalf("expected ubx/aws/svc/thing.py, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["python/ubx/aws/svc/thing_logging.py"]
+	loggingSrc, ok := files["sdk/python/ubx/aws/svc/thing_logging.py"]
 	if !ok {
 		t.Fatalf("expected ubx/aws/svc/thing_logging.py, got paths: %v", keys(files))
 	}

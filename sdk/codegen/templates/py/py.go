@@ -76,13 +76,13 @@ const pythonNamespaceRoot = "ubx"
 // relative to the repo root using "/" always -> file content -- mirrors
 // sdk/codegen/templates/go's own GeneratedRepo exactly in shape.
 //
-// UBI-138: every returned path is now rooted under "python/" -- the real
-// Pulumi-precedent sibling-subdirectory structure (see
+// UBI-138: every returned path is now rooted under "sdk/python/" -- the
+// real Pulumi-precedent sibling-subdirectory structure (see
 // sdk/codegen/templates/go's own GeneratedRepo doc comment for the full
 // account). pyproject.toml's own `[tool.setuptools.packages.find]`
 // `where = ["."]` is relative to pyproject.toml's own location, not the
 // repo root, so moving pyproject.toml and the `ubx/` tree under
-// "python/" TOGETHER, preserving their relative position to each other,
+// "sdk/python/" TOGETHER, preserving their relative position to each other,
 // needs no further packaging-config change -- confirmed by reasoning
 // through setuptools' own discovery semantics, re-verified with a real
 // build in this migration's own end-to-end proof, not assumed correct
@@ -138,10 +138,10 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// confirmed posture pyModuleIdent's own leading-digit guard already
 	// established.
 	ns := pyShortNameIdent(shortName)
-	root := "python/" + pythonNamespaceRoot + "/" + ns
+	root := "sdk/python/" + pythonNamespaceRoot + "/" + ns
 	files := map[string]string{
-		"python/pyproject.toml": pyprojectTOML(shortName, source, version),
-		root + "/__init__.py":   PackageDoc(source, version),
+		"sdk/python/pyproject.toml": pyprojectTOML(shortName, source, version),
+		root + "/__init__.py":       PackageDoc(source, version),
 	}
 	for _, service := range services {
 		entries := byService[service]

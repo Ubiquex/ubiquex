@@ -253,8 +253,8 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 	}
 	requireGoToolchain(t)
 	buildGeneratedRepo(t, map[string]string{
-		"go/go.mod":     "module github.com/ubiquex/ubx-sdk-aws/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n",
-		"go/thing/a.go": out,
+		"sdk/go/go.mod": "module github.com/ubiquex/ubx-sdk-aws/sdk/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n",
+		"sdk/go/thing/a.go": out,
 	})
 }
 
@@ -320,9 +320,9 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"go/go.mod",
-		"go/aws/ecr/doc.go", "go/aws/ecr/repository.go",
-		"go/aws/iam/doc.go", "go/aws/iam/role.go", "go/aws/iam/role_policy_attachment.go",
+		"sdk/go/go.mod",
+		"sdk/go/aws/ecr/doc.go", "sdk/go/aws/ecr/repository.go",
+		"sdk/go/aws/iam/doc.go", "sdk/go/aws/iam/role.go", "sdk/go/aws/iam/role_policy_attachment.go",
 	}
 	for _, p := range wantPaths {
 		if _, ok := files[p]; !ok {
@@ -333,20 +333,20 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 		t.Errorf("GeneratedRepo: got %d files, want %d: %v", len(files), len(wantPaths), keys(files))
 	}
 
-	mustContain(t, files["go/go.mod"], "module github.com/ubiquex/ubx-sdk-aws/go")
-	mustContain(t, files["go/go.mod"], "require github.com/ubiquex/ubx-sdk-go v0.0.0")
+	mustContain(t, files["sdk/go/go.mod"], "module github.com/ubiquex/ubx-sdk-aws/sdk/go")
+	mustContain(t, files["sdk/go/go.mod"], "require github.com/ubiquex/ubx-sdk-go v0.0.0")
 
-	mustContain(t, files["go/aws/ecr/doc.go"], "package ecr")
-	mustContain(t, files["go/aws/ecr/doc.go"], `Source: "hashicorp/aws", Version: "6.54.0"`)
-	mustContain(t, files["go/aws/ecr/repository.go"], "package ecr")
-	mustContain(t, files["go/aws/ecr/repository.go"], "var Repository = ubx.ResourceBinding{")
+	mustContain(t, files["sdk/go/aws/ecr/doc.go"], "package ecr")
+	mustContain(t, files["sdk/go/aws/ecr/doc.go"], `Source: "hashicorp/aws", Version: "6.54.0"`)
+	mustContain(t, files["sdk/go/aws/ecr/repository.go"], "package ecr")
+	mustContain(t, files["sdk/go/aws/ecr/repository.go"], "var Repository = ubx.ResourceBinding{")
 	// aws/ecr/repository.go must NOT redeclare SourceProvenance -- that
 	// lives exactly once, in aws/ecr/doc.go, for the whole package.
-	mustNotContain(t, files["go/aws/ecr/repository.go"], "SourceProvenance")
+	mustNotContain(t, files["sdk/go/aws/ecr/repository.go"], "SourceProvenance")
 
-	mustContain(t, files["go/aws/iam/role.go"], "var Role = ubx.ResourceBinding{")
-	mustContain(t, files["go/aws/iam/role_policy_attachment.go"], "var RolePolicyAttachment = ubx.ResourceBinding{")
-	mustContain(t, files["go/aws/iam/role_policy_attachment.go"], `WireType: "aws_iam_role_policy_attachment",`)
+	mustContain(t, files["sdk/go/aws/iam/role.go"], "var Role = ubx.ResourceBinding{")
+	mustContain(t, files["sdk/go/aws/iam/role_policy_attachment.go"], "var RolePolicyAttachment = ubx.ResourceBinding{")
+	mustContain(t, files["sdk/go/aws/iam/role_policy_attachment.go"], `WireType: "aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
@@ -368,10 +368,10 @@ func TestGeneratedRepo_ServiceNameIsGoKeyword_Escaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["go/aws/default_/vpc.go"]; !ok {
+	if _, ok := files["sdk/go/aws/default_/vpc.go"]; !ok {
 		t.Fatalf("GeneratedRepo: expected aws/default_/vpc.go (escaped Go keyword), got paths: %v", keys(files))
 	}
-	mustContain(t, files["go/aws/default_/vpc.go"], "package default_")
+	mustContain(t, files["sdk/go/aws/default_/vpc.go"], "package default_")
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
 	}
@@ -394,10 +394,10 @@ func TestGeneratedRepo_ServiceNameIsGoBuildSpecial_Escaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["go/aws/main_/route_table_association.go"]; !ok {
+	if _, ok := files["sdk/go/aws/main_/route_table_association.go"]; !ok {
 		t.Fatalf("GeneratedRepo: expected aws/main_/route_table_association.go (escaped go-tool-special name), got paths: %v", keys(files))
 	}
-	mustContain(t, files["go/aws/main_/route_table_association.go"], "package main_")
+	mustContain(t, files["sdk/go/aws/main_/route_table_association.go"], "package main_")
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
 	}
@@ -411,11 +411,11 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["go/aws/vpc/vpc.go"]; !ok {
+	if _, ok := files["sdk/go/aws/vpc/vpc.go"]; !ok {
 		t.Fatalf("GeneratedRepo: expected aws/vpc/vpc.go for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["go/aws/vpc/vpc.go"], "package vpc")
-	mustContain(t, files["go/aws/vpc/vpc.go"], "var Vpc = ubx.ResourceBinding{")
+	mustContain(t, files["sdk/go/aws/vpc/vpc.go"], "package vpc")
+	mustContain(t, files["sdk/go/aws/vpc/vpc.go"], "var Vpc = ubx.ResourceBinding{")
 }
 
 func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {
@@ -467,11 +467,11 @@ func TestGeneratedRepo_SiblingConfigCollision_Escaped(t *testing.T) {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	instanceSrc, ok := files["go/aws/svc/instance.go"]
+	instanceSrc, ok := files["sdk/go/aws/svc/instance.go"]
 	if !ok {
 		t.Fatalf("expected aws/svc/instance.go, got paths: %v", keys(files))
 	}
-	configSrc, ok := files["go/aws/svc/instance_config.go"]
+	configSrc, ok := files["sdk/go/aws/svc/instance_config.go"]
 	if !ok {
 		t.Fatalf("expected aws/svc/instance_config.go, got paths: %v", keys(files))
 	}

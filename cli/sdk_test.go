@@ -84,7 +84,7 @@ func TestSDKGen_MultipleLanguagesSameOut_DoNotCollide(t *testing.T) {
 	}
 
 	// UBI-138: all three languages now land side by side under ONE
-	// shared source directory (<outDir>/fake-widget/{go,typescript,python}/)
+	// shared source directory (<outDir>/fake-widget/sdk/{go,typescript,python}/)
 	// -- no per-language top-level segment any more, superseded by each
 	// template's own self-namespacing output (cli/sdk.go's own repoDir
 	// doc comment has the full account). Every language's own repo tree
@@ -92,19 +92,19 @@ func TestSDKGen_MultipleLanguagesSameOut_DoNotCollide(t *testing.T) {
 	// another's -- that's the real property this test proves, the
 	// mechanism just moved one level down.
 	genDir := filepath.Join(outDir, "fake-widget")
-	if _, err := os.Stat(filepath.Join(genDir, "go", "go.mod")); err != nil {
+	if _, err := os.Stat(filepath.Join(genDir, "sdk", "go", "go.mod")); err != nil {
 		t.Errorf("go.mod missing after all three languages generated to the same --out: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(genDir, "typescript", "package.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(genDir, "sdk", "typescript", "package.json")); err != nil {
 		t.Errorf("package.json missing after all three languages generated to the same --out: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(genDir, "python", "pyproject.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(genDir, "sdk", "python", "pyproject.toml")); err != nil {
 		t.Errorf("pyproject.toml missing after all three languages generated to the same --out: %v", err)
 	}
 
-	assertGoRepoCompiles(t, filepath.Join(genDir, "go"))
-	assertTSRepoChecks(t, filepath.Join(genDir, "typescript"))
-	assertPyRepoImports(t, filepath.Join(genDir, "python"), "ubx.widget.widget.widget", "Widget", "WidgetConfig")
+	assertGoRepoCompiles(t, filepath.Join(genDir, "sdk", "go"))
+	assertTSRepoChecks(t, filepath.Join(genDir, "sdk", "typescript"))
+	assertPyRepoImports(t, filepath.Join(genDir, "sdk", "python"), "ubx.widget.widget.widget", "Widget", "WidgetConfig")
 }
 
 // TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror covers UBI-98's
@@ -125,11 +125,11 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 `)
 
 	// UBI-138: genDir is the printed top-level path (no language segment
-	// any more -- superseded by GeneratedRepo's own "typescript/" self-
-	// namespacing, cli/sdk.go's own GeneratedRepo doc comment has the
+	// any more -- superseded by GeneratedRepo's own "sdk/typescript/"
+	// self-namespacing, cli/sdk.go's own GeneratedRepo doc comment has the
 	// full account); repoDir is where package.json etc. actually land.
 	genDir := filepath.Join(outDir, "fake-widget")
-	repoDir := filepath.Join(genDir, "typescript")
+	repoDir := filepath.Join(genDir, "sdk", "typescript")
 	out, err := runUbx(t, []string{
 		"FAKEPROVIDER_MODE=ok-v6",
 		"UBX_PROVIDER_MIRROR=" + mirrorDir,
@@ -218,13 +218,13 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 // "fake_widget" (tokens "fake"/"widget", no third token -- the same
 // bare-two-token shape 11 real hashicorp/aws@6.54.0 types hit, e.g.
 // "aws_vpc") derives service AND local name both "widget", so the
-// expected tree is <outDir>/fake-widget/go/{go.mod,widget/widget/{doc.go,widget.go}}
+// expected tree is <outDir>/fake-widget/sdk/go/{go.mod,widget/widget/{doc.go,widget.go}}
 // (UBI-106: every service package nests under the provider's own
 // shortName directory, "widget/" here, never at the repo root; UBI-138:
-// the whole tree additionally nests under "go/" now, the real Pulumi-
+// the whole tree additionally nests under "sdk/go/" now, the real Pulumi-
 // precedent sibling-language-directory structure, GeneratedRepo's own
 // doc comment has the full account) -- module
-// github.com/ubiquex/ubx-sdk-widget/go, package widget, type Widget
+// github.com/ubiquex/ubx-sdk-widget/sdk/go, package widget, type Widget
 // (never FakeWidget/generated.FakeWidget -- the founder's own locked
 // naming scheme, checked here against the real CLI path, not just
 // sdk/codegen/templates/go's own unit tests).
@@ -241,9 +241,9 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 `)
 
 	// UBI-138: genDir is the printed top-level path (no language segment
-	// any more); repoDir (genDir/go) is where go.mod etc. actually land.
+	// any more); repoDir (genDir/sdk/go) is where go.mod etc. actually land.
 	genDir := filepath.Join(outDir, "fake-widget")
-	repoDir := filepath.Join(genDir, "go")
+	repoDir := filepath.Join(genDir, "sdk", "go")
 	out, err := runUbx(t, []string{
 		"FAKEPROVIDER_MODE=ok-v6",
 		"UBX_PROVIDER_MIRROR=" + mirrorDir,
@@ -260,7 +260,7 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading go.mod: %v", err)
 	}
-	mustContainSDK(t, string(goMod), "module github.com/ubiquex/ubx-sdk-widget/go")
+	mustContainSDK(t, string(goMod), "module github.com/ubiquex/ubx-sdk-widget/sdk/go")
 	mustContainSDK(t, string(goMod), "require github.com/ubiquex/ubx-sdk-go v0.0.0")
 
 	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "doc.go"))
@@ -359,10 +359,10 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 `)
 
 	// UBI-138: genDir is the printed top-level path (no language segment
-	// any more); repoDir (genDir/python) is where pyproject.toml etc.
+	// any more); repoDir (genDir/sdk/python) is where pyproject.toml etc.
 	// actually land.
 	genDir := filepath.Join(outDir, "fake-widget")
-	repoDir := filepath.Join(genDir, "python")
+	repoDir := filepath.Join(genDir, "sdk", "python")
 	out, err := runUbx(t, []string{
 		"FAKEPROVIDER_MODE=ok-v6",
 		"UBX_PROVIDER_MIRROR=" + mirrorDir,

@@ -166,13 +166,13 @@ func buildGeneratedRepoAtFullScale(t *testing.T, files map[string]string) {
 		}
 	}
 
-	// UBI-138: the Go module now lives in the tree's own "go/"
+	// UBI-138: the Go module now lives in the tree's own "sdk/go/"
 	// subdirectory (GeneratedRepo's own doc comment has the full
 	// account), so both the go.mod rewrite and the build itself target
-	// dir/go, never dir's own root.
-	goModDir := filepath.Join(dir, "go")
+	// dir/sdk/go, never dir's own root.
+	goModDir := filepath.Join(dir, "sdk", "go")
 	sdkGoRoot := sdkGoModuleRoot(t)
-	goMod := files["go/go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
+	goMod := files["sdk/go/go.mod"] + "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 	if err := os.WriteFile(filepath.Join(goModDir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}

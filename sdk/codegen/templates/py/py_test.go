@@ -187,10 +187,10 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"python/pyproject.toml",
-		"python/ubx/aws/__init__.py",
-		"python/ubx/aws/ecr/__init__.py", "python/ubx/aws/ecr/repository.py",
-		"python/ubx/aws/iam/__init__.py", "python/ubx/aws/iam/role.py", "python/ubx/aws/iam/role_policy_attachment.py",
+		"sdk/python/pyproject.toml",
+		"sdk/python/ubx/aws/__init__.py",
+		"sdk/python/ubx/aws/ecr/__init__.py", "sdk/python/ubx/aws/ecr/repository.py",
+		"sdk/python/ubx/aws/iam/__init__.py", "sdk/python/ubx/aws/iam/role.py", "sdk/python/ubx/aws/iam/role_policy_attachment.py",
 	}
 	for _, p := range wantPaths {
 		if _, ok := files[p]; !ok {
@@ -203,32 +203,32 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 
 	// "ubx" itself never gets an __init__.py -- a real PEP 420 implicit
 	// namespace package, not a regular one any single distribution owns.
-	if _, ok := files["python/ubx/__init__.py"]; ok {
+	if _, ok := files["sdk/python/ubx/__init__.py"]; ok {
 		t.Fatalf("GeneratedRepo: must NOT emit ubx/__init__.py (would make \"ubx\" a regular package, not a namespace package): %v", keys(files))
 	}
 
-	mustContain(t, files["python/pyproject.toml"], `name = "ubx-sdk-aws"`)
-	mustContain(t, files["python/pyproject.toml"], "namespaces = true")
-	mustContain(t, files["python/pyproject.toml"], `include = ["ubx*"]`)
+	mustContain(t, files["sdk/python/pyproject.toml"], `name = "ubx-sdk-aws"`)
+	mustContain(t, files["sdk/python/pyproject.toml"], "namespaces = true")
+	mustContain(t, files["sdk/python/pyproject.toml"], `include = ["ubx*"]`)
 
-	mustContain(t, files["python/ubx/aws/ecr/__init__.py"], `SOURCE_PROVENANCE = {"source": "hashicorp/aws", "version": "6.54.0"}`)
+	mustContain(t, files["sdk/python/ubx/aws/ecr/__init__.py"], `SOURCE_PROVENANCE = {"source": "hashicorp/aws", "version": "6.54.0"}`)
 	// The service package's own __init__.py re-exports each resource
 	// type's Pascal/PascalConfig names -- the real, final import is
 	// `from ubx.aws.ecr import Repository, RepositoryConfig`, never the
 	// `....ecr.repository import ...` stutter.
-	mustContain(t, files["python/ubx/aws/ecr/__init__.py"], "from .repository import Repository, RepositoryConfig")
-	mustContain(t, files["python/ubx/aws/iam/__init__.py"], "from .role import Role, RoleConfig")
-	mustContain(t, files["python/ubx/aws/iam/__init__.py"], "from .role_policy_attachment import RolePolicyAttachment, RolePolicyAttachmentConfig")
+	mustContain(t, files["sdk/python/ubx/aws/ecr/__init__.py"], "from .repository import Repository, RepositoryConfig")
+	mustContain(t, files["sdk/python/ubx/aws/iam/__init__.py"], "from .role import Role, RoleConfig")
+	mustContain(t, files["sdk/python/ubx/aws/iam/__init__.py"], "from .role_policy_attachment import RolePolicyAttachment, RolePolicyAttachmentConfig")
 
-	mustContain(t, files["python/ubx/aws/ecr/repository.py"], "Repository = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/ecr/repository.py"], "Repository = ubx.ResourceBinding(")
 	// ubx/aws/ecr/repository.py must NOT redeclare SOURCE_PROVENANCE --
 	// that lives exactly once, in ubx/aws/ecr/__init__.py, for the whole
 	// package.
-	mustNotContain(t, files["python/ubx/aws/ecr/repository.py"], "SOURCE_PROVENANCE")
+	mustNotContain(t, files["sdk/python/ubx/aws/ecr/repository.py"], "SOURCE_PROVENANCE")
 
-	mustContain(t, files["python/ubx/aws/iam/role.py"], "Role = ubx.ResourceBinding(")
-	mustContain(t, files["python/ubx/aws/iam/role_policy_attachment.py"], "RolePolicyAttachment = ubx.ResourceBinding(")
-	mustContain(t, files["python/ubx/aws/iam/role_policy_attachment.py"], `wire_type="aws_iam_role_policy_attachment",`)
+	mustContain(t, files["sdk/python/ubx/aws/iam/role.py"], "Role = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/iam/role_policy_attachment.py"], "RolePolicyAttachment = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/iam/role_policy_attachment.py"], `wire_type="aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real declaration collisions: %v", err)
@@ -243,11 +243,11 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["python/ubx/aws/vpc/vpc.py"]; !ok {
+	if _, ok := files["sdk/python/ubx/aws/vpc/vpc.py"]; !ok {
 		t.Fatalf("GeneratedRepo: expected ubx/aws/vpc/vpc.py for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["python/ubx/aws/vpc/vpc.py"], "Vpc = ubx.ResourceBinding(")
-	mustContain(t, files["python/ubx/aws/vpc/__init__.py"], "from .vpc import Vpc, VpcConfig")
+	mustContain(t, files["sdk/python/ubx/aws/vpc/vpc.py"], "Vpc = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/vpc/__init__.py"], "from .vpc import Vpc, VpcConfig")
 }
 
 // TestGeneratedRepo_ServiceNameIsPythonKeyword_Escaped is a real, live-
@@ -262,7 +262,7 @@ func TestGeneratedRepo_ServiceNameIsPythonKeyword_Escaped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["python/ubx/aws/lambda_/function.py"]; !ok {
+	if _, ok := files["sdk/python/ubx/aws/lambda_/function.py"]; !ok {
 		t.Fatalf("GeneratedRepo: expected ubx/aws/lambda_/function.py (escaped Python keyword), got paths: %v", keys(files))
 	}
 }

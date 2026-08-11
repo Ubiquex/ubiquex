@@ -108,11 +108,11 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 
-	thingSrc, ok := files["typescript/aws/svc/thing.ts"]
+	thingSrc, ok := files["sdk/typescript/aws/svc/thing.ts"]
 	if !ok {
 		t.Fatalf("expected aws/svc/thing.ts, got paths: %v", keys(files))
 	}
-	loggingSrc, ok := files["typescript/aws/svc/thing_logging.ts"]
+	loggingSrc, ok := files["sdk/typescript/aws/svc/thing_logging.ts"]
 	if !ok {
 		t.Fatalf("expected aws/svc/thing_logging.ts, got paths: %v", keys(files))
 	}

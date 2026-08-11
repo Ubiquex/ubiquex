@@ -184,9 +184,9 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"typescript/package.json",
-		"typescript/aws/ecr/doc.ts", "typescript/aws/ecr/repository.ts",
-		"typescript/aws/iam/doc.ts", "typescript/aws/iam/role.ts", "typescript/aws/iam/role_policy_attachment.ts",
+		"sdk/typescript/package.json",
+		"sdk/typescript/aws/ecr/doc.ts", "sdk/typescript/aws/ecr/repository.ts",
+		"sdk/typescript/aws/iam/doc.ts", "sdk/typescript/aws/iam/role.ts", "sdk/typescript/aws/iam/role_policy_attachment.ts",
 	}
 	for _, p := range wantPaths {
 		if _, ok := files[p]; !ok {
@@ -197,17 +197,17 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 		t.Errorf("GeneratedRepo: got %d files, want %d: %v", len(files), len(wantPaths), keys(files))
 	}
 
-	mustContain(t, files["typescript/package.json"], `"name": "@ubx/sdk-aws"`)
+	mustContain(t, files["sdk/typescript/package.json"], `"name": "@ubx/sdk-aws"`)
 
-	mustContain(t, files["typescript/aws/ecr/doc.ts"], `__ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0" }`)
-	mustContain(t, files["typescript/aws/ecr/repository.ts"], "export const Repository:")
+	mustContain(t, files["sdk/typescript/aws/ecr/doc.ts"], `__ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0" }`)
+	mustContain(t, files["sdk/typescript/aws/ecr/repository.ts"], "export const Repository:")
 	// aws/ecr/repository.ts must NOT redeclare __ubxSourceProvenance --
 	// that lives exactly once, in aws/ecr/doc.ts, for the whole directory.
-	mustNotContain(t, files["typescript/aws/ecr/repository.ts"], "__ubxSourceProvenance")
+	mustNotContain(t, files["sdk/typescript/aws/ecr/repository.ts"], "__ubxSourceProvenance")
 
-	mustContain(t, files["typescript/aws/iam/role.ts"], "export const Role:")
-	mustContain(t, files["typescript/aws/iam/role_policy_attachment.ts"], "export const RolePolicyAttachment:")
-	mustContain(t, files["typescript/aws/iam/role_policy_attachment.ts"], `wireType: "aws_iam_role_policy_attachment",`)
+	mustContain(t, files["sdk/typescript/aws/iam/role.ts"], "export const Role:")
+	mustContain(t, files["sdk/typescript/aws/iam/role_policy_attachment.ts"], "export const RolePolicyAttachment:")
+	mustContain(t, files["sdk/typescript/aws/iam/role_policy_attachment.ts"], `wireType: "aws_iam_role_policy_attachment",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real declaration collisions: %v", err)
@@ -222,10 +222,10 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
-	if _, ok := files["typescript/aws/vpc/vpc.ts"]; !ok {
+	if _, ok := files["sdk/typescript/aws/vpc/vpc.ts"]; !ok {
 		t.Fatalf("GeneratedRepo: expected aws/vpc/vpc.ts for the bare \"aws_vpc\" type, got paths: %v", keys(files))
 	}
-	mustContain(t, files["typescript/aws/vpc/vpc.ts"], "export const Vpc:")
+	mustContain(t, files["sdk/typescript/aws/vpc/vpc.ts"], "export const Vpc:")
 }
 
 func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {
