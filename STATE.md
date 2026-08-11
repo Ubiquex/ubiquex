@@ -2,6 +2,101 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-138 Phase 2 COMPLETE: fourth and final provider (Azure), all four providers now consolidated and verified, 2026-08-12
+
+Same corrected process as AWS/Google/Kubernetes, same mandatory checks
+(structure pasted and confirmed BEFORE any commit/publish, all three
+registries checked directly for real live state before computing a
+version, nothing assumed from earlier in the session or day).
+
+**Real version check**: both `pypi.org/pypi/ubx-sdk-azure/json` and
+`jsr.io/@ubx/sdk-azure/meta.json` already showed `0.1.0` live (from the
+old per-language repos). Computed `0.2.0`, unified across PyPI/JSR/the
+Go module tag, same reasoning as Google/Kubernetes.
+
+**Provider version**: `hashicorp/azurerm@5.0.1` — the old
+`ubx-sdk-azure-go`'s own `VERSION` file, the real Terraform Registry,
+and the OpenTofu mirror all agreed. No mirror-lag fallback needed.
+
+**A real, provider-specific naming gotcha, anticipated from memory and
+handled correctly, not rediscovered the hard way**: the provider source
+is `hashicorp/azurerm`, whose mechanically-derived shortName is
+`azurerm` — but this project's own real, established package/repo name
+is `azure` (already live on both registries, confirmed by checking for
+an `azurerm`-named package first: genuinely not found on either). This
+is the exact bug already found and fixed once for the old
+`ubx-sdk-azure-{go,ts,py}` repos (mechanical `@ubx/sdk-azurerm`
+silently clobbering the hand-corrected `@ubx/sdk-azure` on every
+automated regen). Handled correctly this time: `go.mod`'s module path /
+`package.json`'s `name` / `pyproject.toml`'s `name` were all corrected
+from the mechanical `azurerm` to the real `azure` — but the internal
+directory nesting under `sdk/go/`, `sdk/typescript/`, and
+`sdk/python/ubx/` correctly stays `azurerm/` (it reflects the real
+provider source, not the package identity — confirmed this is what the
+founder's own handoff explicitly expected: `sdk/go/azurerm/...`).
+Critically, this correction is baked into the new repo's own
+`version-watch.yml` as an explicit, every-run, clearly-commented step
+(not just a one-time manual fix at initial generation) — the exact
+thing that made this bug recur silently in the old per-language repo's
+own automated regen cycle.
+
+**Structure verified live, pasted before publishing anything**:
+`sdk/go/azurerm/`, `sdk/typescript/azurerm/` both correctly WITHOUT the
+`ubx` wrapper; `sdk/python/ubx/azurerm/` correctly WITH it
+(`sdk/python/azurerm` bare confirmed absent). 1103 real resource types
+from `hashicorp/azurerm@5.0.1` (matching this project's own prior real
+count for Azure, cross-checked, not assumed) — Go and Python both
+exactly 1103 resource files, TypeScript 1246 total `.ts` files (1103
+resources + 143 service `doc.ts`), matching the `deno.json` exports-map
+count exactly. Go builds clean, all 1246 `.ts` files `deno check`
+clean, all 1247 Python modules import clean — all three checked before
+the initial commit.
+
+**PR disposition**: zero open PRs across all three old per-language
+repos (`ubx-sdk-azure-go`/`-ts`/`-py`) — nothing to close or merge.
+
+**CI workflows** ported from `ubx-sdk-kubernetes`'s own corrected files
+(the most recently proven-clean reference, per the founder's own
+instruction), referencing `sdk/go/`, `sdk/typescript/`,
+`sdk/python/` and `hashicorp/azurerm` throughout, plus the new
+azurerm-vs-azure naming-correction step described above. Lint clean via
+`actionlint` (same single pre-existing shellcheck style nit as every
+prior repo's own files).
+
+**Fresh install+import verified, all three languages, clean
+environments, against the real live registries**: `go get .../sdk/go@
+v0.2.0` + real import (`github.com/ubiquex/ubx-sdk-azure/sdk/go/
+azurerm/storage`, confirming both halves of the naming split resolve
+correctly together) + `go run`; `deno run jsr:@ubx/sdk-azure@0.2.0/
+azurerm/storage/account`; fresh venv `pip install ubx-sdk-azure==0.2.0`
++ `from ubx.azurerm.storage import Account` (installed path confirmed
+`site-packages/ubx/azurerm/...`). All three printed the real wire type
+(`azurerm_storage_account`) correctly. PyPI's own aggregate JSON index
+lagged the real per-version endpoint by roughly 40 seconds this time
+(the specific `/0.2.0/json` endpoint returned 200 well before the
+aggregate index updated) — checked the specific endpoint directly
+rather than concluding failure from the early aggregate-index checks,
+same discipline as Kubernetes's own real lag.
+
+**Registry state, confirmed via direct fetch**: JSR `@ubx/sdk-azure`
+`latest: 0.2.0` (`0.1.0` untouched). PyPI `ubx-sdk-azure`
+`latest: 0.2.0` (`0.1.0` untouched). Go proxy:
+`github.com/ubiquex/ubx-sdk-azure/sdk/go@v0.2.0` resolves directly.
+
+**Old repos archived (not deleted), confirmed via the GitHub API**:
+`ubx-sdk-azure-go`/`-ts`/`-py` all `archived: true`.
+
+**UBI-138 Phase 2 is now genuinely, fully complete: all four providers
+consolidated.** AWS (Phase 1) + Google + Kubernetes + Azure (Phase 2),
+each its own real, fresh, correctly-structured `ubx-sdk-<provider>`
+repo (`sdk/go/`, `sdk/typescript/`, `sdk/python/`), each verified live
+against real registries, each with working `version-watch.yml`/
+`publish.yml` CI. All 12 original per-language repos across all four
+providers are archived, none deleted. Per the founder's own explicit
+instruction, Phase 3 (documentation sweep across `ubiquex-docs`) and
+UBI-139 (shared runtime consolidation) are NOT started this session —
+named explicitly, not silently deferred.
+
 ## UBI-138 Phase 2 (Kubernetes): third per-provider repo, correct structure from the start, live and verified, 2026-08-12
 
 Same process as Google's own correction (immediately above), applied

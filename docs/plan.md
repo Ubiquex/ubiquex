@@ -2,6 +2,20 @@
 
 ## Changelog
 
+- 2026-08-12 — UBI-138 Phase 2 COMPLETE (Azure, fourth and final
+  provider): `github.com/Ubiquex/ubx-sdk-azure`, same corrected process.
+  `0.1.0` already taken on PyPI/JSR; published `0.2.0`, unified across
+  all three registries. Provider `hashicorp/azurerm@5.0.1`. A real,
+  provider-specific naming gotcha handled correctly (mechanical
+  shortName `azurerm` vs. this project's own established package name
+  `azure` — the same bug already found and fixed once for the old
+  per-language repos, now closed at the source with an explicit,
+  every-run correction step baked into the new repo's own
+  `version-watch.yml`). All four providers (AWS/Google/Kubernetes/Azure)
+  are now consolidated into their own `ubx-sdk-<provider>` repo, each
+  verified live against real registries, each with working CI. Phase 3
+  (docs sweep) and UBI-139 (runtime consolidation) deliberately NOT
+  started. Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 — UBI-138 Phase 2 (Kubernetes, final Phase 2 provider):
   third per-provider repo, `github.com/Ubiquex/ubx-sdk-kubernetes`,
   same corrected process as Google. `0.1.0` already taken on both PyPI
