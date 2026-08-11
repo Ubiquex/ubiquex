@@ -2,7 +2,7 @@
 
 ## Changelog
 
-- 2026-08-12 — UBI-139: the shared SDK runtime (Go/TypeScript/Python)
+- 2026-08-12 -- UBI-139: the shared SDK runtime (Go/TypeScript/Python)
   consolidated into one-repo-per-language, matching `ubx-sdk-go`'s own
   existing shape. `sdk/ts/` and `sdk/py/` both turned out to be real
   `go:embed` build inputs for `ubx` itself (confirmed by breaking the
