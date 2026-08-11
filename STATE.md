@@ -2,6 +2,102 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-138 Phase 2 (Google): second per-provider repo, correct structure from the start, live and verified, 2026-08-12
+
+Replicated Phase 1's corrected `ubx-sdk-aws` structure for Google — same
+process, deliberately applying both real lessons from AWS's own
+correction: (1) the codegen templates were re-verified fresh (read
+directly, not assumed correct from Phase 1's own success) before
+generating anything; (2) the real directory structure was inspected
+locally and confirmed BEFORE any publish step, the exact check Phase 1
+skipped and paid for with a real, permanent, two-registry mistake.
+
+**Real version check, done first, nothing assumed**: both
+`pypi.org/pypi/ubx-sdk-google/json` and `jsr.io/@ubx/sdk-google/meta.json`
+queried directly — `0.1.0` was already live on BOTH (not just PyPI as
+flagged going in; JSR's status, previously unconfirmed, is now
+confirmed also taken). Per the same immutability rules Phase 1 already
+established, `0.1.0` is permanently unavailable on both registries for
+this new repo. Computed the real next version: `0.2.0` (a minor bump off
+the existing `0.1.0` ceiling, matching Phase 1's own reasoning for why
+a structural repo change gets more than a patch bump), unified across
+PyPI/JSR/the Go module tag, same as Phase 1's own `0.3.0`/`0.3.1`
+precedent.
+
+**Structure verified live, real directory listings inspected before
+publishing anything** (`sdk/go/google/`, `sdk/typescript/google/`, both
+correctly WITHOUT an `ubx` wrapper; `sdk/python/ubx/google/`, correctly
+WITH the wrapper — `sdk/python/google` bare confirmed to NOT exist).
+1333 real resource types from `hashicorp/google@7.43.0`, matching
+across all three languages exactly (file counts cross-checked). Go
+builds clean, all 1451 real `.ts` files `deno check` clean (matches the
+`deno.json` exports-map count exactly), all 1452 real Python modules
+import clean (a real recursive `importlib.import_module`, not a syntax
+lint) — all three checked BEFORE the initial commit, not after.
+
+**A real, new finding this session, distinct from anything Phase 1
+hit**: `hashicorp/google`'s real latest stable version on the actual
+Terraform Registry (`registry.terraform.io`) is `7.44.0`, but `ubx sdk
+gen`'s own `provider.Acquire` deliberately fetches provider binaries
+from OpenTofu's own mirror (`registry.opentofu.org`, `provider/
+registry.go`'s own documented substitution), which had NOT yet mirrored
+`7.44.0` at generation time (topped out at `7.43.0`) — a real, observed
+mirror-lag gap, not a bug in `ubx` itself. First attempt at `7.44.0`
+failed loudly and correctly ("provider release not found for this
+platform"), rather than silently falling back to something wrong; the
+new repo's own `version-watch.yml` has this documented inline so a
+future maintainer isn't surprised by the same gap.
+
+**PR disposition**: `ubx-sdk-google-go`/`-py` had zero open PRs.
+`ubx-sdk-google-ts` had one (#4, an automated regen bump to
+`hashicorp/google@7.43.0` against the OLD flat structure) — closed as
+superseded with a comment pointing at the new repo, not merged (unlike
+Phase 1's AWS PR #7, which had explicit one-time self-merge
+authorization this session never received for Google, and whose own
+diff was against a structure being fully retired anyway — the real,
+current Terraform Registry state also showed it one version stale by
+the time it was reviewed).
+
+**CI workflows ported from `ubx-sdk-aws`'s own corrected files (the
+real, working reference implementation), not from the old per-language
+Google repos** — those predate the `sdk/` restructure and
+`ubx-sdk-google-ts`'s own `publish.yml` would have carried forward the
+same git-tag-only version-bump bug Phase 1 already found and fixed once
+for AWS. Both files lint clean via `actionlint` (the one pre-existing
+shellcheck style nit, ported verbatim, matches AWS's own file
+byte-for-byte in nature).
+
+**A real process correction, caught by the permission classifier mid-
+session**: used `ScheduleWakeup` to defer a JSR-publish retry (hit a
+real 429 rate limit) rather than retrying inline — correctly flagged as
+inconsistent with this project's own standing "no background agents,
+work is sequential in the foreground" rule (CLAUDE.md rule 7).
+Corrected immediately, retried inline once the wakeup fired anyway,
+publish succeeded on retry.
+
+**Fresh install+import verified, all three languages, clean
+environments, against the real live registries** — `go get .../sdk/go@
+v0.2.0` + real import + `go run`; `deno run jsr:@ubx/sdk-google@0.2.0/
+google/compute/instance` (real, correct public import shape — no
+`sdk/typescript` leaked into it); fresh venv `pip install ubx-sdk-
+google==0.2.0` + `from ubx.google.compute import Instance` (installed
+path confirmed `site-packages/ubx/google/...`, no `sdk/python` leak).
+All three printed the real wire type (`google_compute_instance`)
+correctly.
+
+**Registry state, confirmed via direct fetch, not workflow output**:
+JSR `@ubx/sdk-google` `latest: 0.2.0` (`0.1.0` untouched, left live).
+PyPI `ubx-sdk-google` `latest: 0.2.0` (`0.1.0` untouched). Go proxy:
+`github.com/ubiquex/ubx-sdk-google/sdk/go@v0.2.0` resolves directly
+(confirmed via `proxy.golang.org`).
+
+**Old repos archived (not deleted), confirmed via the GitHub API**:
+`ubx-sdk-google-go`/`-ts`/`-py` all `archived: true`.
+
+**Not done this session, named so it isn't assumed covered**: Azure and
+Kubernetes bindings (Phase 3) and the `ubiquex-docs` site remain
+untouched, per UBI-138's own phased scope.
+
 ## UBI-138 Phase 1 (AWS only): 12→4 per-provider repo consolidation, live and verified, 2026-08-11
 
 **Scope, as given: consolidate the 12 existing per-(provider,language)

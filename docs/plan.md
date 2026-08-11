@@ -2,6 +2,18 @@
 
 ## Changelog
 
+- 2026-08-12 — UBI-138 Phase 2 (Google): second per-provider repo,
+  `github.com/Ubiquex/ubx-sdk-google`, generated directly into the
+  correct `sdk/go/`, `sdk/typescript/`, `sdk/python/` structure from the
+  start (Phase 1's own root-level mistake deliberately not repeated —
+  the real directory listing was inspected and confirmed before any
+  publish step this time). `0.1.0` was already taken on both PyPI and
+  JSR (from the old per-language repos); published `0.2.0`, unified
+  across PyPI/JSR/the Go module tag, verified fresh-install/import
+  across all three languages against the real live registries. Old
+  `ubx-sdk-google-go/-ts/-py` archived. Full account: STATE.md's own
+  2026-08-12 entry, including a real OpenTofu-mirror-lag finding and a
+  process self-correction (background-agent use, corrected mid-session).
 - 2026-08-11 — UBI-138 Phase 1 (AWS only): the 12 per-(provider,language)
   `ubx-sdk-*-{go,ts,py}` bindings repos consolidate into 4 per-provider
   repos, each with all three languages as sibling subdirectories under
