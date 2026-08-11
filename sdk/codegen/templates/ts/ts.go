@@ -34,13 +34,23 @@ import (
 
 // GeneratedRepo renders every file for one provider's repo-shaped
 // TypeScript output tree: a package.json stub (name "@ubx/sdk-<shortName>",
-// not published -- docs/sdk.md's own "No runtime package is published
-// yet" posture, now joined by "no generated bindings package either"),
-// one doc.ts per derived service directory (PackageDoc), and one
-// <local>.ts per resource type (ResourceFile) inside its own service
-// directory. Returns a map of path, relative to the repo root using "/"
-// always (never the host OS separator) -> file content -- mirrors
+// the real, already-published package name, unchanged by UBI-138 --
+// only its source location within the combined repo moves), one doc.ts
+// per derived service directory (PackageDoc), and one <local>.ts per
+// resource type (ResourceFile) inside its own service directory. Returns
+// a map of path, relative to the repo root using "/" always (never the
+// host OS separator) -> file content -- mirrors
 // sdk/codegen/templates/go's own GeneratedRepo exactly in shape.
+//
+// UBI-138: every returned path is now rooted under "typescript/" -- the
+// real Pulumi-precedent sibling-subdirectory structure (see
+// sdk/codegen/templates/go's own GeneratedRepo doc comment for the full
+// account). Unlike Go, this is NOT a new module/package boundary in any
+// TypeScript-specific sense (`deno.json`'s own import map -- hand/
+// tooling-maintained, never this template's own output -- is what
+// actually anchors "typescript/" as its own publishable root at publish
+// time); package.json's own "name"/"version" fields are untouched by
+// this move, only the file's own location is.
 func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
@@ -65,24 +75,24 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	sort.Strings(services)
 
 	files := map[string]string{
-		"package.json": packageJSON(shortName, source, version),
+		"typescript/package.json": packageJSON(shortName, source, version),
 	}
 	// UBI-106: every service directory nests under shortName/ (e.g.
-	// aws/iam/, never iam/ at the repo root) -- fixes a real repo-
-	// browsing problem (200+ service directories at hashicorp/aws's own
-	// repo root sorted ahead of README.md by GitHub's file browser).
-	// package.json stays at the true root. ES module resolution is
-	// purely path-based (confirmed live, UBI-98 session 2) -- no
-	// identifier-validity guard needed for shortName as a path segment,
-	// unlike Python's own dotted-import requirement below.
+	// aws/iam/, never iam/ directly under typescript/) -- fixes a real
+	// repo-browsing problem (200+ service directories at hashicorp/aws's
+	// own repo root sorted ahead of README.md by GitHub's file browser).
+	// package.json stays at typescript/'s own true root. ES module
+	// resolution is purely path-based (confirmed live, UBI-98 session 2)
+	// -- no identifier-validity guard needed for shortName as a path
+	// segment, unlike Python's own dotted-import requirement below.
 	for _, service := range services {
-		files[shortName+"/"+service+"/doc.ts"] = PackageDoc(source, version)
+		files["typescript/"+shortName+"/"+service+"/doc.ts"] = PackageDoc(source, version)
 		for _, e := range byService[service] {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: %w", e.rt.WireType, err)
 			}
-			files[shortName+"/"+service+"/"+e.local+".ts"] = content
+			files["typescript/"+shortName+"/"+service+"/"+e.local+".ts"] = content
 		}
 	}
 	return files, nil

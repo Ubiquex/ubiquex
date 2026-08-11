@@ -231,20 +231,22 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		return "", 0, fmt.Errorf("%s@%s: generated repo failed self-check: %w", source, version, checkErr)
 	}
 
-	// lang is its own path segment, not folded into the source-sanitized
-	// directory name -- a real gap found live testing all three languages
-	// end to end this session, not assumed safe: --out defaults IDENTICALLY
-	// across --lang go/ts/py, and (unlike the old flat-file scheme, where
-	// each language's own file EXTENSION naturally disambiguated
-	// "hashicorp-aws.go" from "hashicorp-aws.ts" from "hashicorp_aws.py"
-	// sharing one directory) a repo-shaped TREE has no such built-in
-	// per-language distinction at the top level -- generating go then ts
-	// then py into the same --out would otherwise interleave three
-	// different ecosystems' manifests (go.mod/package.json/pyproject.toml)
-	// and source trees into ONE directory, breaking the "ready to become
-	// its OWN real repo" promise this whole restructure exists to keep
-	// (docs/sdk.md).
-	repoDir := filepath.Join(out, lang, sanitizeSourceForFilename(source))
+	// UBI-138: lang is NO LONGER its own path segment here -- superseded,
+	// not just changed, by each template's own GeneratedRepo now
+	// self-namespacing its output under "go/"/"typescript/"/"python/"
+	// (the real Pulumi-precedent sdk/{go,typescript,python}/ layout, one
+	// combined repo per provider instead of one repo per (provider,
+	// language) pair). That per-language prefix is what now keeps three
+	// languages' own manifests (go/go.mod, typescript/package.json,
+	// python/pyproject.toml) from interleaving when generated to the same
+	// --out -- the original reason `lang` was added as a separate path
+	// segment (see git blame for the UBI-98-era account) -- so folding it
+	// back into the source-sanitized directory name is no longer the
+	// collision risk it used to be; it now produces exactly the target
+	// combined-repo shape directly: <out>/<source-sanitized>/go/,
+	// .../typescript/, .../python/, side by side, ready to become one
+	// real repo's own root.
+	repoDir := filepath.Join(out, sanitizeSourceForFilename(source))
 	for relPath, content := range files {
 		fullPath := filepath.Join(repoDir, filepath.FromSlash(relPath))
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {

@@ -32,15 +32,29 @@ import (
 )
 
 // GeneratedRepo renders every file for one provider's repo-shaped Go
-// output tree: a go.mod stub for module "github.com/ubiquex/ubx-sdk-<shortName>"
-// (shortName is the caller's own concern -- cli/sdk.go derives it from
-// the declared provider source, e.g. "hashicorp/aws" -> "aws" -- this
-// package only ever renders Go source, never parses a provider source
-// string), one doc.go per derived service package (PackageDoc -- the
-// shared banner + SourceProvenance var every file in that package would
-// otherwise need to redeclare, which Go forbids), and one <local>.go per
-// resource type (ResourceFile) inside its own service package's own
-// subdirectory.
+// output tree: a go.mod stub for module
+// "github.com/ubiquex/ubx-sdk-<shortName>/go" (shortName is the caller's
+// own concern -- cli/sdk.go derives it from the declared provider source,
+// e.g. "hashicorp/aws" -> "aws" -- this package only ever renders Go
+// source, never parses a provider source string), one doc.go per derived
+// service package (PackageDoc -- the shared banner + SourceProvenance var
+// every file in that package would otherwise need to redeclare, which Go
+// forbids), and one <local>.go per resource type (ResourceFile) inside
+// its own service package's own subdirectory.
+//
+// UBI-138: every returned path is now rooted under "go/" -- Go, TypeScript,
+// and Python each publish independently from their own sibling
+// subdirectory of one combined per-provider repo (ubx-sdk-<shortName>),
+// the real Pulumi precedent UBI-138 cites (pulumi-aws's own sdk/go/,
+// sdk/python/, sdk/nodejs/). This makes "go/" itself the real Go module
+// boundary: module path "github.com/ubiquex/ubx-sdk-<shortName>/go", a
+// genuine SUBDIRECTORY Go module (go.mod lives at "go/go.mod", never bare
+// "go.mod"), requiring path-prefixed tags at publish time (e.g. "go/v0.3.0",
+// never a bare "v0.3.0" -- confirmed against the Go modules reference
+// before this change, not assumed). The shared runtime module
+// (github.com/ubiquex/ubx-sdk-go, a wholly separate repo, UBI-139's own
+// later scope) is untouched by this -- every generated file's own
+// "github.com/ubiquex/ubx-sdk-go/runtime" import stays exactly as it was.
 //
 // Returns a map of path, relative to the repo root using "/" always
 // (never the host OS separator -- a logical path, not a filesystem one;
@@ -74,21 +88,21 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	sort.Strings(services)
 
 	files := map[string]string{
-		"go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName),
+		"go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName),
 	}
 	// UBI-106: every service package nests under shortName/ (e.g.
-	// aws/iam/, never iam/ at the repo root) -- a real repo-browsing
+	// aws/iam/, never iam/ directly under go/) -- a real repo-browsing
 	// finding, not a design nicety: a bare-root layout put 200+ service
 	// directories directly at hashicorp/aws's own repo root, alphabetically
 	// sorted ahead of README.md by GitHub's own file browser, burying it
-	// below the fold. go.mod itself stays at the true root (a Go module's
-	// own go.mod is never optional-location) -- only service packages
-	// move. Directory names need no Go-identifier validity (only Go
-	// PACKAGE declarations do), so shortName needs no guarding here the
+	// below the fold. go.mod itself stays at go/'s own true root (a Go
+	// module's own go.mod is never optional-location) -- only service
+	// packages move. Directory names need no Go-identifier validity (only
+	// Go PACKAGE declarations do), so shortName needs no guarding here the
 	// way pyModuleIdent guards it for Python's own dotted-import
 	// requirement, below.
 	for _, service := range services {
-		files[shortName+"/"+service+"/doc.go"] = PackageDoc(service, source, version)
+		files["go/"+shortName+"/"+service+"/doc.go"] = PackageDoc(service, source, version)
 
 		// UBI-108: a real, live-verified collision class hashicorp/aws
 		// never surfaced -- a sibling resource in this SAME service
@@ -121,7 +135,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: %w", e.rt.WireType, err)
 			}
-			files[shortName+"/"+service+"/"+e.local+".go"] = content
+			files["go/"+shortName+"/"+service+"/"+e.local+".go"] = content
 		}
 	}
 	return files, nil
