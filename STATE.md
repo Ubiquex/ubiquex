@@ -124,6 +124,37 @@ are archived (not deleted), their own real published versions retracted/
 noted as superseded, never removed. UBI-139 (shared runtime
 consolidation) is untouched, a separate ticket by design.
 
+**CI workflows, checked and ported same session, not left silently
+missing.** `ubx-sdk-aws` had NO `.github/workflows/` at all until this
+check — the old per-language repos' own `version-watch.yml` (UBI-99:
+weekly Terraform Registry check, regen PR, never auto-merges) and
+`publish.yml` (UBI-135: manual `workflow_dispatch`-gated, the version
+bump itself computed automatically) were read as the reference
+implementation and ported, adapted for the combined `sdk/go/`,
+`sdk/typescript/`, `sdk/python/` layout — one regen PR covering all
+three languages (previously three separate repos/PRs), one unified
+version published across JSR/PyPI/the Go module tag together (matching
+this session's own real "unified across all four registries"
+precedent), rather than three independently-bumped versions. Two real
+issues found in the reference implementation, fixed rather than carried
+forward: (1) `ubx-sdk-aws-ts`'s own `publish.yml` determined its version
+bump from git tags alone, never checking the real live JSR registry —
+the same bug class `ubx-sdk-aws-py`'s own UBI-131 fix already closed for
+PyPI specifically; the ported `publish.yml` checks both registries' real
+live state (PyPI's JSON API, JSR's `meta.json`) for both languages, not
+just Python. (2) all three old repos' `version-watch.yml` generates a
+`.ubx/config.hcl` (HCL `providers = {...}` syntax) — real, current
+`cli/config.go` only ever reads `.ubx/config` (TOML `[providers]`
+syntax, `configFileName` constant) — the old workflows would fail
+against today's `ubx` binary if actually triggered; the ported
+`version-watch.yml` uses the real current format instead (the same one
+this session's own manual `sdk gen` regeneration used and verified
+working). Both new files lint clean (`actionlint`, one pre-existing-
+pattern shellcheck style nit ported verbatim from the reference).
+Live on `main`, commit `300a5bc`, confirmed via the real GitHub API —
+not run yet (both require `workflow_dispatch`/the weekly cron, neither
+triggered this session).
+
 ## UBI-74 retrospective: Strata blueprints, all 8 slices, closed 2026-08-05
 
 UBI-74's own original eight-slice plan (Linear "Implementation breakdown"
