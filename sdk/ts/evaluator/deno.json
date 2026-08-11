@@ -1,6 +1,0 @@
-{
-  "tasks": {
-    "test": "deno test --no-remote guards_test.ts",
-    "check": "deno check --no-remote guards.ts"
-  }
-}

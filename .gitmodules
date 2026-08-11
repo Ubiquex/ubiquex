@@ -1,0 +1,6 @@
+[submodule "sdk/py"]
+	path = sdk/py
+	url = https://github.com/Ubiquex/ubx-sdk-python.git
+[submodule "sdk/ts"]
+	path = sdk/ts
+	url = https://github.com/Ubiquex/ubx-sdk-typescript.git
