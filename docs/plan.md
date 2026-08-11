@@ -2,6 +2,17 @@
 
 ## Changelog
 
+- 2026-08-12 — UBI-138 Phase 2 (Kubernetes, final Phase 2 provider):
+  third per-provider repo, `github.com/Ubiquex/ubx-sdk-kubernetes`,
+  same corrected process as Google. `0.1.0` already taken on both PyPI
+  and JSR; published `0.2.0`, unified across all three registries.
+  Provider version `hashicorp/kubernetes@3.2.1` — real Terraform
+  Registry, OpenTofu mirror, and the old repo's own pin all agreed, no
+  mirror-lag fallback needed this time. Directory structure inspected
+  and confirmed BEFORE publishing (now mandatory). Zero open PRs across
+  the three old per-language repos. Old repos archived. UBI-138 Phase 2
+  is now complete (AWS/Phase 1 + Google + Kubernetes); Azure remains.
+  Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 — UBI-138 Phase 2 (Google): second per-provider repo,
   `github.com/Ubiquex/ubx-sdk-google`, generated directly into the
   correct `sdk/go/`, `sdk/typescript/`, `sdk/python/` structure from the

@@ -2,6 +2,75 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-138 Phase 2 (Kubernetes): third per-provider repo, correct structure from the start, live and verified, 2026-08-12
+
+Same process as Google's own correction (immediately above), applied
+to the final Phase 2 provider. Both real lessons from AWS's own mistake
+held: the directory structure was inspected and pasted BEFORE any
+commit or publish step (now treated as mandatory, not optional), and
+the real live state of all three registries was checked directly before
+computing a version — nothing assumed carried over from earlier in the
+day.
+
+**Real version check**: both `pypi.org/pypi/ubx-sdk-kubernetes/json` and
+`jsr.io/@ubx/sdk-kubernetes/meta.json` already showed `0.1.0` live (from
+the old per-language repos), and the Go proxy/repo itself didn't exist
+yet. Computed `0.2.0` — the same minor-bump reasoning as Google,
+unified across PyPI/JSR/the Go module tag.
+
+**Provider version**: `hashicorp/kubernetes@3.2.1` — the old
+`ubx-sdk-kubernetes-go`'s own `VERSION` file, the real Terraform
+Registry, AND the OpenTofu mirror all agreed on this exact version (no
+mirror-lag fallback needed this time, unlike Google's real `7.44.0`-vs-
+`7.43.0` gap — checked directly rather than assumed absent).
+
+**Structure verified live, pasted before publishing anything**:
+`sdk/go/kubernetes/`, `sdk/typescript/kubernetes/` both correctly
+WITHOUT the `ubx` wrapper; `sdk/python/ubx/kubernetes/` correctly WITH
+it (`sdk/python/kubernetes` bare confirmed absent). 81 real resource
+types from `hashicorp/kubernetes@3.2.1` — Go and Python both exactly 81
+resource files, TypeScript 118 total `.ts` files (81 resources + 37
+service `doc.ts` files), matching the `deno.json` exports-map count
+exactly. Go builds clean, all 118 `.ts` files `deno check` clean, all
+119 Python modules import clean (a real recursive
+`importlib.import_module`) — all three checked before the initial
+commit.
+
+**PR disposition**: zero open PRs across all three old per-language
+repos (`ubx-sdk-kubernetes-go`/`-ts`/`-py`) — nothing to close or merge.
+
+**CI workflows** ported from `ubx-sdk-google`'s own corrected files (not
+the old per-language repos), referencing `sdk/go/`, `sdk/typescript/`,
+`sdk/python/` and `hashicorp/kubernetes` throughout. Lint clean via
+`actionlint` (same single pre-existing shellcheck style nit as
+AWS/Google's own files).
+
+**Fresh install+import verified, all three languages, clean
+environments, against the real live registries**: `go get .../sdk/go@
+v0.2.0` + real import + `go run`; `deno run jsr:@ubx/sdk-kubernetes@
+0.2.0/kubernetes/service/service` (correct public import shape, no
+`sdk/typescript` leak); fresh venv `pip install ubx-sdk-kubernetes==
+0.2.0` + `from ubx.kubernetes.service import Service` (installed path
+confirmed `site-packages/ubx/kubernetes/...`). All three printed the
+real wire type (`kubernetes_service`) correctly. PyPI's own aggregate
+JSON index lagged the real per-version endpoint by roughly 15-20
+seconds this time (longer than AWS's own few-second lag) — checked the
+specific `/0.2.0/json` endpoint directly rather than assuming failure
+from an early aggregate-index check.
+
+**Registry state, confirmed via direct fetch**: JSR `@ubx/sdk-kubernetes`
+`latest: 0.2.0` (`0.1.0` untouched). PyPI `ubx-sdk-kubernetes`
+`latest: 0.2.0` (`0.1.0` untouched). Go proxy:
+`github.com/ubiquex/ubx-sdk-kubernetes/sdk/go@v0.2.0` resolves directly.
+
+**Old repos archived (not deleted), confirmed via the GitHub API**:
+`ubx-sdk-kubernetes-go`/`-ts`/`-py` all `archived: true`.
+
+**UBI-138 Phase 2 is now genuinely complete**: AWS (Phase 1) + Google +
+Kubernetes (Phase 2) all consolidated, live, verified. Azure (the
+original Phase 3 scope) and the `ubiquex-docs` site remain untouched —
+named explicitly, not assumed covered.
+
 ## UBI-138 Phase 2 (Google): second per-provider repo, correct structure from the start, live and verified, 2026-08-12
 
 Replicated Phase 1's corrected `ubx-sdk-aws` structure for Google — same
