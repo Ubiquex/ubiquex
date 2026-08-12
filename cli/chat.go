@@ -79,6 +79,11 @@ func runChat(cmd *cobra.Command, ledgerDir, stack, out string, timeout time.Dura
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("chat: %w", err)}
 	}
 
+	// UBI-81 v1: real, deliberately narrow read-only context (stack name
+	// + a safe .ubx/config subset, stackcontext.go) -- computed once,
+	// stack/cfg don't change across turns.
+	stackConfig := buildStackConfigContext(cfg, stack)
+
 	outWriter := cmd.OutOrStdout()
 	errWriter := cmd.ErrOrStderr()
 
@@ -121,7 +126,7 @@ func runChat(cmd *cobra.Command, ledgerDir, stack, out string, timeout time.Dura
 			// --from-doc, deliberately never opens a ledger (this
 			// session's own scope decision, documented in STATE.md);
 			// every resource still drafts as op=create as before.
-			draft, raw, err := intentprovider.DraftWithRetry(ctx, adapter, stack, dlg.Transcript(), nil)
+			draft, raw, err := intentprovider.DraftWithRetry(ctx, adapter, stack, dlg.Transcript(), nil, stackConfig)
 			cancel()
 			if err != nil {
 				// A single bad turn doesn't lose the conversation --

@@ -2,6 +2,138 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-81 v1: context-aware drafting -- one real, read-only tool, markdown/chat only, 2026-08-12
+
+**Scope held exactly to what was asked, nothing from the ticket's own
+broader list.** Shipped the one thing named: the intent-drafting adapter
+can read the target stack's own name and a deliberately narrow slice of
+its real `.ubx/config` values before drafting, via one real Anthropic
+tool-use round trip. No FoldState reads, no schema lookups, no cost
+estimates -- not even stubbed. Blueprint-authored drafting untouched:
+`blueprint/` was never opened; `cli/blueprint.go`'s own `DraftWithRetry`
+call site passes a literal `nil` for the new parameter, verified by a
+real hermetic test (`TestPlanFromDoc_UBI81_BlueprintDrafting_
+NeverGetsStackConfig`), not just by review.
+
+**Real design: a genuine tool call, not context always dumped into the
+prompt.** `DraftRequest.Stack` was already in the system prompt before
+this session (`buildUserPrompt`, `intentprovider/claude/adapter.go`) --
+so the real, new capability is `.ubx/config` VALUES, which the adapter
+had zero access to before. Added `DraftRequest.StackConfig
+json.RawMessage` (`intentprovider/adapter.go`) -- still just plain,
+pre-computed DATA the caller hands over before drafting begins, the
+IDENTICAL "never a live capability" relationship UBI-85's own
+`KnownResources` already established, extended to a real tool-use round
+trip rather than always-injected text: `intentprovider/claude/
+adapter.go`'s `Draft` now runs a real, bounded loop (`maxToolRounds = 4`)
+around the Anthropic SDK's own `Tools`/`StopReasonToolUse` machinery
+(previously entirely unused in this codebase -- confirmed via a
+repo-wide grep before writing any of it), answering the model's own
+`read_stack_config` tool_use turn with `req.StackConfig` verbatim (or an
+honest "not available" string) via `resp.ToParam()` + a real
+`tool_result` turn, never a second, parallel mechanism.
+
+**cli/stackcontext.go's own real, deliberate exclusions.** `.ubx/config`
+values reach the tool through a real, narrow projection
+(`buildStackConfigContext`), not the whole `*Config` JSON-marshaled:
+`Config.Intent` (KeyRef/Auth/Vertex are credential-adjacent) and
+`ProviderConfig`/`ProviderConfigs`/`K8sAudit` (freeform, user-authored
+tables this project makes no promise are secret-free) are both
+deliberately never included. Wired into both real callers that have a
+`*Config` in scope without opening a ledger -- `cli/propose.go`'s
+`draftFromDoc` (shared by `ubx propose --from-doc` and `ubx plan
+--from-doc`) and `cli/chat.go`'s `runChat` -- neither's own existing
+"never touches a ledger" boundary is affected, this needs no ledger read
+at all.
+
+**Real test results, both required paths, run against the real Claude
+API (a resolvable `ant auth` credential was available this session) --
+not simulated.**
+
+- Happy path (`intentprovider/claude/stackcontext_live_test.go`,
+  `TestReadStackConfig_ProductionStackName_ResolvesConditionalAsNamedDefault`):
+  a real conditional document ("if this is a production environment,
+  enable KMS encryption and 14-day retention, else default encryption
+  and 1-day retention") against stack `payments-prod` with real
+  `StackConfig` JSON -- the real API resolved the branch (KMS + 14-day),
+  recorded it as a real `intent.defaults` entry naming the real
+  reasoning, zero blocking questions. PASS.
+- Fallback path (`TestReadStackConfig_NoEnvironmentSignal_
+  StillBlocksOnQuestion`): the identical document against stack
+  `widgets-api` with a `StackConfig` carrying no real environment
+  signal -- the real API still produced a real, blocking question,
+  never a guess. PASS.
+- Regression check: the full, pre-existing live conformance suite
+  (`TestAdapter_Conformance_RealAPI`, 4 fixtures, none context-related)
+  still passes unchanged against the real API with the tool-use loop
+  added -- 235s, all 4 subtests PASS, confirming the change is inert
+  for ordinary drafting.
+- Receipt rendering, proven at the CLI layer, not assumed
+  (`cli/plan_from_doc_stackcontext_test.go`,
+  `TestPlanFromDoc_UBI81_StackConfigThreadedAndReceiptShowsNamedDefault`):
+  a hermetic `ubx plan --from-doc` run confirms `fake.lastReq.
+  StackConfig` is genuinely populated AND that the rendered receipt's
+  own "AI defaults" block actually contains the named, context-derived
+  text -- `renderAmbiguityStyled` needed zero changes (it already
+  renders whatever's in `intent.defaults`), but this was VERIFIED, per
+  the ticket's own explicit instruction, not assumed from reading the
+  renderer's own code.
+
+**A real, honest, non-obvious finding from building the docs
+transcripts.** The FIRST motivating case tried (stack literally named
+`payments-prod`) turned out to already resolve correctly even against
+the PRE-UBI-81 binary -- because the stack NAME alone (already in the
+prompt before this session) was sufficient signal on its own, this
+session's own new capability added nothing observable for that specific
+case. Caught by actually building and running the real pre-UBI-81
+binary (a `git worktree add` at the prior commit, submodules initialized
+there only, never touching this session's own uncommitted `sdk/ts`/
+`sdk/py` submodule state) side by side with the real current binary,
+not assumed from the code. The real, honest before/after demonstration
+uses a stack named `app3` (no signal in the name itself) whose real
+`.ubx/config` `github_repo = "acme/app3-production-infra"` is what
+actually resolves it -- the before binary genuinely blocks on this
+exact case, the after binary genuinely resolves it, both real,
+verified, captured transcripts, used directly in both the STATE.md
+account here and the real ubiquex-docs pages.
+
+**ubiquex-docs, done in-session per the ticket's own non-negotiable
+requirement, not deferred.** Confirmed `~/Ubiquex/ubiquex-docs`'s own
+`.git`/remote points at the real `github.com/Ubiquex/ubiquex-docs`
+before editing (this session's own hard-learned discipline, UBI-131).
+New `concepts/context-aware-drafting.mdx` (the "Authoring" group,
+alongside `trust-boundary`/`mediums`/the per-medium `-depth` pages) and
+a new 4th Markdown-track tutorial, `tutorial/markdown/context.mdx`,
+using the SAME real before/after transcripts above -- the "before" half
+captured from a real binary built at the prior commit (`d834f85`), not
+hand-authored from the ticket's own description. Cross-linked from
+`concepts/mediums.mdx`, `concepts/trust-boundary.mdx`, and
+`tutorial/markdown/index.mdx`/`ambiguity.mdx`, both directions. `mint
+validate` clean; real DOM overflow verification via `mint dev` + a
+headless Chrome tab's own `scrollWidth` measurement (not assumed clean)
+found REAL overflow in the first draft of both new pages (code-block
+lines too wide for the rendered column) -- fixed by rewrapping, then
+re-measured at zero overflow. The same real measurement pass ALSO found
+two pre-existing, unrelated overflow bugs on pages this session merely
+added a cross-link to (`concepts/trust-boundary.mdx`,
+`tutorial/markdown/ambiguity.mdx`) -- fixed those two since they were
+already open in this session's own edits, but did NOT sweep the rest of
+the site looking for more; a real, named, separate docs-debt item for a
+future session (see below). Committed and pushed directly to
+`ubiquex-docs` main (`e99f758`), confirmed live via a direct,
+authenticated `gh api repos/Ubiquex/ubiquex-docs/contents/...` fetch for
+both new files, not just a local push exit code.
+
+**Real, named docs-debt from this session, not a silent gap:** the DOM
+overflow issue found in `trust-boundary.mdx`/`ambiguity.mdx` (both now
+fixed) suggests other, unaudited pages across the site may carry the
+identical, pre-existing bug -- a real, separate sweep is worth a future
+session's own explicit scope, not assumed absent just because these two
+are now clean.
+
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./...`
+clean throughout.
+
 ## UBI-134: ParamCrossRef -- blueprint call arguments can now carry a real $ref/$cross reference, 2026-08-12
 
 **The design decision, made explicit before any code.** A new

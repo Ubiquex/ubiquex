@@ -200,7 +200,14 @@ func draftFromDoc(cmd *cobra.Command, cfg *Config, docPath, stack string, timeou
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
-	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted, knownResources)
+	// UBI-81 v1: real, deliberately narrow read-only context (stack name
+	// + a safe .ubx/config subset, stackcontext.go) for both callers --
+	// unlike knownResources above, this needs no ledger open at all, so
+	// `ubx propose --from-doc`'s own "never touches a ledger" boundary is
+	// completely unaffected by handing this in too.
+	stackConfig := buildStackConfigContext(cfg, stack)
+
+	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, stack, redacted, knownResources, stackConfig)
 	if err != nil {
 		return nil, err
 	}

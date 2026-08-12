@@ -118,4 +118,32 @@ type DraftRequest struct {
 	// caller decided to hand over, the identical relationship Content
 	// already has to the source document's own file.
 	KnownResources map[string]json.RawMessage
+
+	// StackConfig is UBI-81 v1's own read-only context: the target
+	// stack's own name plus a deliberately narrow, pre-computed subset of
+	// its .ubx/config values (cli/stackcontext.go's own
+	// buildStackConfigContext -- the CLI layer, which alone has a real
+	// *Config, decides exactly what's safe to hand over; credential-
+	// adjacent fields like [intent]'s own key_ref are never included).
+	// An Adapter implementation MAY expose this as an answer to a real,
+	// model-initiated tool call (intentprovider/claude's own
+	// read_stack_config tool is the first) so a draft can use better-
+	// informed context (e.g. inferring "production" from a stack named
+	// "payments-prod") -- but this remains exactly the SAME kind of
+	// fixed, pre-computed DATA KnownResources already is above, never a
+	// live filesystem/config read the Adapter performs itself. Nil means
+	// no context is available for this draft at all (a blueprint build,
+	// or any caller that hasn't opted in) -- an Adapter must then answer
+	// a tool call, if the model makes one, by honestly saying so, never
+	// by guessing or fabricating a plausible-looking value.
+	//
+	// A context-derived decision must still render as a named default in
+	// the resolved receipt (intent.defaults), exactly like any other
+	// interpretation the model makes -- this makes better-informed
+	// guesses, it does not remove the review ceremony. And when this
+	// data genuinely doesn't resolve the ambiguity (absent, or itself
+	// ambiguous), the model must still ask a real, blocking Question,
+	// never silently guess -- see intentprovider/claude's own system
+	// prompt for the exact instruction.
+	StackConfig json.RawMessage
 }

@@ -2,6 +2,32 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-81 v1: context-aware drafting, scoped to exactly one
+  read-only tool. The intent-drafting adapter can call a real, bounded
+  Anthropic tool-use round trip (`read_stack_config`) to read the target
+  stack's own name and a deliberately narrow `.ubx/config` subset
+  (`cli/stackcontext.go`'s own real exclusions: `Config.Intent` and
+  every freeform provider-config table) before drafting -- markdown/chat
+  only, blueprint-authored drafting untouched (verified by a real
+  hermetic test, not just by review). New `DraftRequest.StackConfig`
+  (`intentprovider/adapter.go`), the same "pre-computed DATA, never a
+  live capability" posture `KnownResources` already established. Real,
+  live tests against the real Claude API prove both required paths: a
+  real conditional document resolves via context when a real config
+  value settles it (named as a real `intent.defaults` entry), and still
+  blocks with a real question when nothing resolves it -- plus the full,
+  unrelated live conformance suite stays green, confirming the change is
+  inert for ordinary drafting. Receipt rendering verified at the CLI
+  layer, not assumed. A real before/after (a stack named `app3`, only
+  resolvable via its own `.ubx/config`) was captured from two REAL
+  binaries, built at the prior commit and at this session's own HEAD,
+  both run live -- used directly in a new ubiquex-docs concepts page and
+  a new 4th Markdown-track tutorial, committed and pushed the same
+  session, per the ticket's own non-negotiable requirement (found and
+  fixed two real, unrelated, pre-existing DOM overflow bugs on pages
+  this session cross-linked, via real `mint dev` + DOM measurement, not
+  a sweep of the whole site). Full account: STATE.md's own 2026-08-12
+  entry.
 - 2026-08-12 -- UBI-134: blueprint call arguments can now carry a real
   $ref/$cross reference. New `ParamCrossRef` param type (`cross_ref`,
   `blueprint/ubxfile.go`) -- a call-site value must be a real

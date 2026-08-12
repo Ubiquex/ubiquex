@@ -331,7 +331,7 @@ func Run(t *testing.T, a intentprovider.Adapter) {
 		t.Run(f.Name, func(t *testing.T) {
 			// UBI-85: nil knownResources -- every conformance fixture
 			// drafts against a fresh, never-seen stack.
-			draft, _, err := intentprovider.DraftWithRetry(context.Background(), a, f.Stack, f.Doc(t), nil)
+			draft, _, err := intentprovider.DraftWithRetry(context.Background(), a, f.Stack, f.Doc(t), nil, nil)
 			if err != nil {
 				t.Fatalf("DraftWithRetry: %v", err)
 			}

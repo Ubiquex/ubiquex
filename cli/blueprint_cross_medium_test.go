@@ -256,7 +256,7 @@ platform: "platform call" {
 	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + jsonQuote(string(mdArgs)) + `}]
 	}`
 	fake := &fakeIntentAdapter{draft: mdDraftJSON}
-	mdIntent, _, err := intentprovider.DraftWithRetry(context.Background(), fake, "platform", []byte("Use blueprint platform with: primary_name = widget1"), nil)
+	mdIntent, _, err := intentprovider.DraftWithRetry(context.Background(), fake, "platform", []byte("Use blueprint platform with: primary_name = widget1"), nil, nil)
 	if err != nil {
 		t.Fatalf("intentprovider.DraftWithRetry: %v", err)
 	}
@@ -383,7 +383,7 @@ platform: "platform call" {
 	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + jsonQuote(string(mdArgs)) + `}]
 	}`
 	fake := &fakeIntentAdapter{draft: mdDraftJSON}
-	mdIntent, _, err := intentprovider.DraftWithRetry(context.Background(), fake, "platform", []byte("Use blueprint platform with: primary_name = widget1"), nil)
+	mdIntent, _, err := intentprovider.DraftWithRetry(context.Background(), fake, "platform", []byte("Use blueprint platform with: primary_name = widget1"), nil, nil)
 	if err != nil {
 		t.Fatalf("intentprovider.DraftWithRetry: %v", err)
 	}

@@ -190,7 +190,7 @@ func TestScanForRefShapes_RejectsLiteralRefString(t *testing.T) {
 // directly and JSON-embedded) as real -- goodPlatformDraft's own exact
 // content, decoded, rather than re-declared here.
 func TestScanForRefShapes_AcceptsRealRefObjects(t *testing.T) {
-	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: goodPlatformDraft}, "platform", []byte("irrelevant"), nil)
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: goodPlatformDraft}, "platform", []byte("irrelevant"), nil, nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v", err)
 	}
@@ -237,7 +237,7 @@ const badPlatformIAMAttachDraft = `{
 // presence of the inline resource -- proving the harness would have
 // caught this miss, not just that a fixed model now passes it.
 func TestScanForIAMPolicyShape_RejectsInlinePolicy(t *testing.T) {
-	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: badPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"), nil)
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: badPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"), nil, nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestScanForIAMPolicyShape_RejectsInlinePolicy(t *testing.T) {
 // shape as real -- goodPlatformIAMAttachDraft's own exact content,
 // decoded, rather than re-declared here.
 func TestScanForIAMPolicyShape_AcceptsStandaloneShape(t *testing.T) {
-	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: goodPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"), nil)
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: goodPlatformIAMAttachDraft}, "platform-iam-attach", []byte("irrelevant"), nil, nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v", err)
 	}

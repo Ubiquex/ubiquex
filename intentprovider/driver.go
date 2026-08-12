@@ -82,7 +82,14 @@ func (e *DraftError) Error() string {
 // existing-state context was actually given, "everything already
 // matches, nothing to propose" becomes a legitimate, correct outcome
 // rather than a sign the model forgot to declare something.
-func DraftWithRetry(ctx context.Context, a Adapter, stack string, content []byte, knownResources map[string]json.RawMessage) (*resolver.IntentFile, json.RawMessage, error) {
+//
+// stackConfig (UBI-81 v1) is threaded verbatim into every
+// DraftRequest.StackConfig this call makes (see that field's own doc
+// comment) -- nil from a caller with no context to offer (a blueprint
+// build, intentprovider/conformance's own fixtures), a real,
+// deliberately narrow JSON blob from cli/stackcontext.go's own
+// buildStackConfigContext otherwise.
+func DraftWithRetry(ctx context.Context, a Adapter, stack string, content []byte, knownResources map[string]json.RawMessage, stackConfig json.RawMessage) (*resolver.IntentFile, json.RawMessage, error) {
 	var attempts []AttemptError
 	var priorOutput json.RawMessage
 	var priorErrors []string
@@ -93,6 +100,7 @@ func DraftWithRetry(ctx context.Context, a Adapter, stack string, content []byte
 			Stack:          stack,
 			Content:        content,
 			KnownResources: knownResources,
+			StackConfig:    stackConfig,
 			Attempt:        attempt,
 			PriorOutput:    priorOutput,
 			PriorErrors:    priorErrors,

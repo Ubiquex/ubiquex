@@ -358,7 +358,7 @@ func draftBlueprint(cmd *cobra.Command, cfg *Config, ubxfile *blueprint.Ubxfile,
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
-	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, blueprintName, redacted, nil)
+	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, blueprintName, redacted, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -107,11 +107,78 @@ func (a *Adapter) Name() string { return "claude" }
 
 func (a *Adapter) Model() string { return a.model }
 
+// readStackConfigToolName is UBI-81 v1's own one, deliberately narrow
+// read-only tool -- the intent provider's first (and, this session,
+// only) capability to poke a small, well-justified hole through this
+// package's own "no filesystem access" boundary (intentprovider/
+// adapter.go's own doc comment). Answered entirely from
+// req.StackConfig, itself just plain, pre-computed DATA the caller
+// handed over before drafting began (cli/stackcontext.go) -- Draft
+// never performs a live read of anything to answer this tool call, the
+// identical "still just data, never a live capability" relationship
+// KnownResources already has to a ledger read.
+const readStackConfigToolName = "read_stack_config"
+
+// maxToolRounds bounds how many tool-use round trips one Draft call will
+// make before giving up -- a real, small ceiling (there is exactly one
+// tool, and a well-behaved model calls it at most once before producing
+// its final draft), not an unbounded loop that could burn an unbounded
+// number of billed requests against a model that keeps calling it.
+const maxToolRounds = 4
+
+func readStackConfigTool() anthropic.ToolUnionParam {
+	return anthropic.ToolUnionParam{
+		OfTool: &anthropic.ToolParam{
+			Name: readStackConfigToolName,
+			Description: anthropic.String(
+				"Read the target stack's own name and a small, fixed set of its real " +
+					".ubx/config values (its provider source, ledger store location, GitHub " +
+					"repo, and similar). Use this when the document's own phrasing depends on " +
+					"which real environment this stack is (\"if this is production...\"), or on " +
+					"a naming convention (a stack named \"payments-prod\"), or on any other " +
+					"config-derived fact you would otherwise have to guess. Takes no input, " +
+					"always returns immediately. It never returns live infrastructure state, " +
+					"resource data, or cost information -- only static configuration, and it " +
+					"may have nothing useful to say. If the returned data doesn't actually " +
+					"resolve what you needed, you must not guess -- record a blocking question " +
+					"instead, exactly as you would with no tool at all. Calling this tool never " +
+					"replaces recording a named default: whenever you DO use this data to " +
+					"resolve something the document left ambiguous, you must still record that " +
+					"resolution as a normal intent.defaults entry, naming the real value you " +
+					"chose and the config fact that justified it.",
+			),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{},
+			},
+		},
+	}
+}
+
+// stackConfigToolResult is the ONLY answer Draft ever gives
+// read_stack_config -- req.StackConfig verbatim when the caller supplied
+// any, or an honest "not available" string otherwise (a blueprint build,
+// intentprovider/conformance's own fixtures, or any future caller that
+// hasn't opted in) -- never a guessed or fabricated value.
+func stackConfigToolResult(stackConfig json.RawMessage) string {
+	if len(stackConfig) == 0 {
+		return "no stack context is available for this drafting session -- do not guess; " +
+			"if resolving this genuinely needs it, record a blocking question instead"
+	}
+	return string(stackConfig)
+}
+
 // Draft issues one structured-output request per docs/intent-provider.md's
 // own "The Claude adapter" section: output_config.format constrains the
-// response to schema.go's own IntentDraftJSONSchema (the API-level half
-// of DraftWithRetry's two-layer validation -- never trusted alone; see
-// intentprovider/driver.go).
+// final response to schema.go's own IntentDraftJSONSchema (the API-level
+// half of DraftWithRetry's two-layer validation -- never trusted alone;
+// see intentprovider/driver.go). UBI-81 v1 extends this into a real,
+// bounded tool-use loop (maxToolRounds): the model may call
+// read_stack_config zero or more times before producing that final
+// structured draft -- each call is answered, in the SAME request-response
+// cycle Anthropic's own tool-use protocol defines (resp.ToParam() replays
+// the model's own tool_use turn verbatim, a tool_result turn answers it,
+// then the SAME conversation continues), never a second, parallel
+// mechanism.
 //
 // On req.Attempt > 1, the prior attempt's own rejected output and
 // validation errors are appended as further turns in the SAME
@@ -150,26 +217,56 @@ func (a *Adapter) Draft(ctx context.Context, req intentprovider.DraftRequest) (j
 		outputConfig.Effort = defaultEffort
 	}
 
-	resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:        a.model,
-		MaxTokens:    maxTokens,
-		System:       system,
-		Messages:     messages,
-		OutputConfig: outputConfig,
-	})
-	if err != nil {
-		return nil, classifyError(err)
-	}
-	if resp.StopReason == anthropic.StopReasonRefusal {
-		return nil, fmt.Errorf("claude adapter: refused (%s): %s", resp.StopDetails.Category, resp.StopDetails.Explanation)
+	tools := []anthropic.ToolUnionParam{readStackConfigTool()}
+
+	for round := 0; round < maxToolRounds; round++ {
+		resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:        a.model,
+			MaxTokens:    maxTokens,
+			System:       system,
+			Messages:     messages,
+			Tools:        tools,
+			OutputConfig: outputConfig,
+		})
+		if err != nil {
+			return nil, classifyError(err)
+		}
+		if resp.StopReason == anthropic.StopReasonRefusal {
+			return nil, fmt.Errorf("claude adapter: refused (%s): %s", resp.StopDetails.Category, resp.StopDetails.Explanation)
+		}
+
+		if resp.StopReason != anthropic.StopReasonToolUse {
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					return json.RawMessage(block.Text), nil
+				}
+			}
+			return nil, errors.New("claude adapter: response had no text content block")
+		}
+
+		// A real tool-use turn: replay the model's own turn verbatim
+		// (resp.ToParam() -- the SDK's own round-trip converter, never a
+		// hand-built approximation of it), answer every tool_use block
+		// this response carries (in practice always exactly one call to
+		// read_stack_config, but a well-formed multi-block response is
+		// handled correctly regardless), then loop back into the SAME
+		// conversation for the model's own next turn.
+		messages = append(messages, resp.ToParam())
+		var results []anthropic.ContentBlockParamUnion
+		for _, block := range resp.Content {
+			if block.Type != "tool_use" {
+				continue
+			}
+			if block.Name != readStackConfigToolName {
+				results = append(results, anthropic.NewToolResultBlock(block.ID, fmt.Sprintf("unrecognized tool %q", block.Name), true))
+				continue
+			}
+			results = append(results, anthropic.NewToolResultBlock(block.ID, stackConfigToolResult(req.StackConfig), false))
+		}
+		messages = append(messages, anthropic.NewUserMessage(results...))
 	}
 
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			return json.RawMessage(block.Text), nil
-		}
-	}
-	return nil, errors.New("claude adapter: response had no text content block")
+	return nil, fmt.Errorf("claude adapter: exceeded %d tool-use round(s) without a final draft", maxToolRounds)
 }
 
 // classifyError names WHICH failure occurred, distinctly, per
@@ -259,6 +356,25 @@ ubx:intent/v1 draft. You are a transcription layer only: you never
 compute a real value, never resolve a reference, never touch a ledger or
 a cloud provider. Everything you produce is reviewed by a human before
 anything happens.
+
+You have access to one read-only tool, read_stack_config, which returns
+the target stack's own name plus a small, fixed set of its real
+.ubx/config values. Call it whenever the document's own phrasing depends
+on a fact about the real target environment you don't already have --
+most commonly a conditional naming an environment tier ("if this is
+production...", "in staging, use..."), or a convention implied by the
+stack's own name. Call it at most once; its answer does not change
+between calls in the same conversation. If its answer genuinely resolves
+the condition, use the resolved branch and record what you inferred and
+why as a normal intent.defaults entry, naming the real config fact that
+justified it -- exactly like any other default you fill in, never
+silently. If its answer does not resolve the condition (the fact you
+needed isn't in it, or its answer is itself ambiguous for this purpose),
+you still must not guess: record a blocking question naming exactly what
+you could not determine, precisely as you would if this tool did not
+exist at all. Calling the tool is never itself a substitute for either of
+those -- it only ever changes whether you're recording a default or a
+question, never removes the need to record one.
 
 The single most important rule: ambiguity is visible content, never a
 silent choice. Decide every concrete resource value FIRST -- reason

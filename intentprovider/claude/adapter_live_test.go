@@ -44,7 +44,7 @@ func TestAdapter_Draft_RealAPI(t *testing.T) {
 	a := claude.New(claude.Config{})
 	doc := []byte("# Payments database\n\nProvision a small Postgres database for the payments service, in the payments stack.\n")
 
-	draft, raw, err := intentprovider.DraftWithRetry(context.Background(), a, "payments", doc, nil)
+	draft, raw, err := intentprovider.DraftWithRetry(context.Background(), a, "payments", doc, nil, nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry against the real Claude API: %v", err)
 	}

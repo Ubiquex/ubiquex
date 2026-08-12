@@ -128,7 +128,7 @@ func (roleSchema) MissingRequiredKeys(t string, config map[string]interface{}) [
 //     naming both hallucinated keys with the correct real-key suggestion
 //     each (UBI-66's own fix).
 func TestPlatform_HallucinatedAttributeNames_PassesDraftValidation_ButRefusedByResolve(t *testing.T) {
-	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: badPlatformDraft}, "platform", []byte("irrelevant"), nil)
+	draft, _, err := intentprovider.DraftWithRetry(context.Background(), &fakeAdapter{draft: badPlatformDraft}, "platform", []byte("irrelevant"), nil, nil)
 	if err != nil {
 		t.Fatalf("DraftWithRetry: %v -- expected this draft to validate cleanly (UBI-66 point 4: neither the API-level JSON schema nor parseAndValidate has any way to catch a wrong attribute KEY name)", err)
 	}
