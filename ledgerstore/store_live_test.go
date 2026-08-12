@@ -25,12 +25,14 @@ const liveBucketURI = "s3://ubx-states?region=us-east-1"
 
 var lockprobeBinary string
 
-// requireLedgerStoreLive gates every test in this file behind the same
-// env var every other real-cloud-touching test in this codebase uses.
+// requireLedgerStoreLive gates every test in this file (and its GCS/Azure
+// siblings, store_live_gcs_test.go/store_live_azure_test.go) behind the
+// same env var every other real-cloud-touching test in this codebase
+// uses.
 func requireLedgerStoreLive(t *testing.T) {
 	t.Helper()
 	if os.Getenv("UBX_CONFORMANCE_LIVE") != "1" {
-		t.Skip("skipping: set UBX_CONFORMANCE_LIVE=1 to run LedgerStore conformance against real S3")
+		t.Skip("skipping: set UBX_CONFORMANCE_LIVE=1 to run LedgerStore conformance against a real remote store")
 	}
 }
 
@@ -56,7 +58,9 @@ func buildLockprobe(t *testing.T) string {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	bin := filepath.Join(dir, "lockprobe")
-	build := exec.Command("go", "build", "-o", bin, "./internal/lockprobe")
+	args := append([]string{"build", "-o", bin}, lockprobeBuildArgs...)
+	args = append(args, "./internal/lockprobe")
+	build := exec.Command("go", args...)
 	build.Dir = "."
 	out, err := build.CombinedOutput()
 	if err != nil {
@@ -66,14 +70,16 @@ func buildLockprobe(t *testing.T) string {
 	return bin
 }
 
-// liveTestPrefix returns a fresh, unique base store URI under
-// liveBucketURI for one test -- never shared across tests or runs, and
+// liveTestPrefixFor returns a fresh, unique base store URI under
+// bucketURI for one test -- never shared across tests or runs, and
 // cleaned up via t.Cleanup so a failed run doesn't leave permanent
-// clutter in the real bucket.
-func liveTestPrefix(t *testing.T) string {
+// clutter in the real bucket. Parameterized over any real bucket URI
+// (UBI-56): S3, GCS, and Azure all share this one implementation, never
+// three copies that could quietly drift apart.
+func liveTestPrefixFor(t *testing.T, bucketURI string) string {
 	t.Helper()
 	unique := fmt.Sprintf("ledgerstore-conformance/%d-%s", time.Now().UnixNano(), strings.ReplaceAll(t.Name(), "/", "-"))
-	storeURI, err := WithStack(liveBucketURI, unique)
+	storeURI, err := WithStack(bucketURI, unique)
 	if err != nil {
 		t.Fatalf("WithStack: %v", err)
 	}
@@ -100,13 +106,15 @@ func liveTestPrefix(t *testing.T) string {
 	return storeURI
 }
 
-// TestLive_S3_BasicRoundTrip proves the real driver, not just memblob,
-// end to end: Accept/Append/Read/Head and an apply record, through
-// core.Ledger exactly as any real command would use it.
-func TestLive_S3_BasicRoundTrip(t *testing.T) {
+// testLiveBasicRoundTrip proves the real driver, not just memblob, end to
+// end: Accept/Append/Read/Head and an apply record, through core.Ledger
+// exactly as any real command would use it. Shared by every real backend
+// (UBI-56: S3/GCS/Azure all call this identically) so "the same real
+// scenario" is literally the same code, not a re-derived copy.
+func testLiveBasicRoundTrip(t *testing.T, bucketURI string) {
 	requireLedgerStoreLive(t)
 	ctx := context.Background()
-	storeURI := liveTestPrefix(t)
+	storeURI := liveTestPrefixFor(t, bucketURI)
 
 	store, closeFn, err := Open(ctx, storeURI)
 	if err != nil {
@@ -151,15 +159,20 @@ func TestLive_S3_BasicRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLive_S3_CASRace_RealConcurrentProcesses is docs/ledgerstore-
-// adversarial.md's row 1, against real S3, as two genuinely independent
-// OS processes rather than goroutines -- the actual claim being tested is
-// that S3's own native conditional write (If-None-Match) decides the
-// winner, not anything cooperating in-process code arranges.
-func TestLive_S3_CASRace_RealConcurrentProcesses(t *testing.T) {
+func TestLive_S3_BasicRoundTrip(t *testing.T) { testLiveBasicRoundTrip(t, liveBucketURI) }
+
+// testLiveCASRace is docs/ledgerstore-adversarial.md's row 1, against a
+// real remote store, as two genuinely independent OS processes rather
+// than goroutines -- the actual claim being tested is that the store's
+// own native conditional write (S3's If-None-Match, GCS's
+// ifGenerationMatch=0, Azure's If-None-Match ETag condition) decides the
+// winner, not anything cooperating in-process code arranges. Shared
+// across every real backend (UBI-56) -- "the same real crash-injected
+// orphan scenario" is literally the same code, not a re-derived one.
+func testLiveCASRace(t *testing.T, bucketURI string) {
 	requireLedgerStoreLive(t)
 	bin := buildLockprobe(t)
-	storeURI := liveTestPrefix(t)
+	storeURI := liveTestPrefixFor(t, bucketURI)
 
 	headA := strings.Repeat("a", 64)
 	headB := strings.Repeat("b", 64)
@@ -198,14 +211,16 @@ func TestLive_S3_CASRace_RealConcurrentProcesses(t *testing.T) {
 	}
 }
 
-// TestLive_S3_LockContention_RealConcurrentProcesses is row 2: one real
-// process holds the lock for a real, measurable duration; a second real
-// process must block until the first releases, never both proceeding
-// unsynchronized.
-func TestLive_S3_LockContention_RealConcurrentProcesses(t *testing.T) {
+func TestLive_S3_CASRace_RealConcurrentProcesses(t *testing.T) { testLiveCASRace(t, liveBucketURI) }
+
+// testLiveLockContention is row 2: one real process holds the lock for a
+// real, measurable duration; a second real process must block until the
+// first releases, never both proceeding unsynchronized. Shared across
+// every real backend (UBI-56).
+func testLiveLockContention(t *testing.T, bucketURI string) {
 	requireLedgerStoreLive(t)
 	bin := buildLockprobe(t)
-	storeURI := liveTestPrefix(t)
+	storeURI := liveTestPrefixFor(t, bucketURI)
 
 	holdMillis := 3000
 	first := exec.Command(bin, "-store", storeURI, "-action", "lock", "-ttl-ms", "60000", "-hold-ms", strconv.Itoa(holdMillis))
@@ -239,17 +254,23 @@ func TestLive_S3_LockContention_RealConcurrentProcesses(t *testing.T) {
 	}
 }
 
-// TestLive_S3_LockTTLExpiry_RealReclaim is row 3: a real process acquires
-// a short-TTL lock and exits without releasing (a real crash simulation,
-// not a mocked one), and a second real process must still be able to
-// acquire once that TTL has genuinely elapsed -- there is no
-// process-liveness signal available across two real, independent OS
-// processes (potentially on different machines in a real deployment), so
-// only the TTL itself can ever justify the reclaim.
-func TestLive_S3_LockTTLExpiry_RealReclaim(t *testing.T) {
+func TestLive_S3_LockContention_RealConcurrentProcesses(t *testing.T) {
+	testLiveLockContention(t, liveBucketURI)
+}
+
+// testLiveLockTTLExpiry is row 3: a real process acquires a short-TTL
+// lock and exits without releasing (a real crash simulation, not a
+// mocked one), and a second real process must still be able to acquire
+// once that TTL has genuinely elapsed -- there is no process-liveness
+// signal available across two real, independent OS processes
+// (potentially on different machines in a real deployment), so only the
+// TTL itself can ever justify the reclaim. Shared across every real
+// backend (UBI-56) -- this is the "real crash-injected orphan scenario"
+// UBI-56 requires GCS/Azure to exercise identically to S3.
+func testLiveLockTTLExpiry(t *testing.T, bucketURI string) {
 	requireLedgerStoreLive(t)
 	bin := buildLockprobe(t)
-	storeURI := liveTestPrefix(t)
+	storeURI := liveTestPrefixFor(t, bucketURI)
 
 	const ttlMillis = 2000
 	crashed := exec.Command(bin, "-store", storeURI, "-action", "lock-and-crash", "-ttl-ms", strconv.Itoa(ttlMillis))
@@ -280,3 +301,5 @@ func TestLive_S3_LockTTLExpiry_RealReclaim(t *testing.T) {
 		t.Errorf("reclaimed after only %v, want it to have waited out roughly the %dms TTL first -- an instant success here would mean this proved nothing about TTL expiry", elapsed, ttlMillis)
 	}
 }
+
+func TestLive_S3_LockTTLExpiry_RealReclaim(t *testing.T) { testLiveLockTTLExpiry(t, liveBucketURI) }

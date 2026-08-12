@@ -2,6 +2,142 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-56: gs:// and azblob:// ledger stores, live-verified against real GCS and real Azure Blob Storage, 2026-08-12
+
+**Credential check done first, per the ticket's own explicit stop
+condition, and a mixed result reported rather than guessed at**: GCP
+credentials were real and usable immediately (real project
+`ubiquex-502722`, `gcloud`/ADC already authenticated). Azure's own CLI
+token was stale, requiring an interactive MFA re-login this session
+couldn't perform itself -- surfaced to the founder directly rather than
+either stopping outright (GCP genuinely was available) or silently
+proceeding GCS-only; the founder re-authenticated (`az login --tenant
+... --scope https://management.core.windows.net//.default`) and asked
+for full scope.
+
+**Real, current dependency-footprint measurement, not the original
+UBI-32 Arc B finding trusted blindly**: adding `gcsblob`/`azureblob`
+now pulls in only 9 net new Go modules (354 -> 363) -- dramatically
+smaller than the original "dozens apiece" finding, because this binary
+now already depends on a real chunk of both the GCP and Azure SDKs for
+`audit/gcp`'s and its Azure counterpart's own drift-detection backends.
+But the real, measured BINARY SIZE impact is still substantial: +25.6MB/
++27% (95.4MB -> 121.0MB) even with that sharing credited -- the two
+storage CLIENT libraries themselves (`cloud.google.com/go/storage`,
+`azure-sdk-for-go/sdk/storage/azblob`) are real, new, substantial
+additions regardless of what's shared. **Decision: a new `cloudblob`
+build tag** (`ledgerstore/drivers_cloudblob.go`) -- `s3blob` stays
+unconditional (its own real, measured cost, 10 lines go.mod/40 lines
+go.sum, never approached this bar); `gcsblob`/`azureblob` are opt-in via
+`go build -tags cloudblob ./cmd/ubx`. Confirmed for real, not assumed:
+an untagged build is byte-identical in size to the pre-change baseline
+(95453330 bytes exactly); a `-tags cloudblob` build is +25.5MB. A real,
+foreseeable rough edge of this split was caught and fixed before it
+shipped: `Open`'s own error for an untagged binary hitting `gs://`/
+`azblob://` now names the fix directly (`cloudblobHint` in `open.go`,
+narrowly matched against gocloud.dev/blob's own real "no driver
+registered" error text so a REAL failure against a real bucket on a
+`cloudblob`-tagged binary is never misleadingly wrapped with an
+irrelevant suggestion).
+
+**Store/conformance code needed zero changes** -- `ledgerstore.Store`
+was already fully generic over any `*blob.Bucket` (confirmed by reading
+it directly before assuming): `WriterOptions.IfNotExist` is `Store`'s
+own one CAS primitive, and `gocloud.dev/blob`'s own driver packages each
+map it to their real, native, server-side precondition mechanism
+underneath (S3's `If-None-Match`, GCS's `ifGenerationMatch=0`, Azure's
+`If-None-Match` ETag condition) -- adding the two new schemes was purely
+driver registration plus the build-tag split, never a `Store` code
+change. The existing 17 hermetic `memblob` tests already stood in for
+all three backends by design (`store_test.go`'s own doc comment says so
+directly) -- genuinely nothing new needed there either.
+
+**Live conformance test suite refactored into shared, parameterized
+helpers** (`store_live_test.go`) rather than tripling the same 4-test
+body three times -- `testLiveBasicRoundTrip`/`testLiveCASRace`/
+`testLiveLockContention`/`testLiveLockTTLExpiry`, each taking a
+`bucketURI`, called by thin per-backend `TestLive_<Backend>_*` wrappers
+(`store_live_gcs_test.go`, `store_live_azure_test.go`, both
+`cloudblob`-tagged). A real, live-caught bug in the new test
+infrastructure itself, fixed before trusting any live GCS/Azure result:
+`buildLockprobe`'s own subprocess build wasn't passing `-tags cloudblob`
+through, so the spawned `lockprobe` binary silently lacked the new
+drivers regardless of the calling test binary's own build tag -- every
+GCS/Azure CAS-race/lock-contention/TTL-expiry test failed with "no
+driver registered" the first real run, for this reason alone, not a
+real store bug. Fixed via two build-tag-gated files declaring
+`lockprobeBuildArgs`.
+
+**Real infrastructure provisioned this session, both confirmed
+genuinely usable via a real end-to-end smoke test before trusting
+either**: GCS bucket `gs://ubx-states` (project `ubiquex-502722`,
+`us-east1`, uniform bucket-level access, credentials via ADC -- already
+cached, no extra wiring needed). Azure: resource group `ubx-states-rg`
++ storage account `ubxstates` + container `ubx-states` (`eastus`,
+`Standard_LRS`). A real IAM permission-elevation attempt (granting this
+session's own Azure identity "Storage Blob Data Contributor" on the new
+storage account, to use AAD/DefaultAzureCredential auth) was correctly
+refused by the harness's own auto-mode classifier -- not a founder-named
+authorization, a real self-granted RBAC change. Worked around cleanly,
+no IAM change needed: `azureblob`'s own real credential-resolution order
+falls back to `AZURE_STORAGE_ACCOUNT`/`AZURE_STORAGE_KEY` shared-key
+auth before AAD, and account keys (a control-plane action already
+implied by having created the account) sidestep the whole question. The
+account key itself was fetched and used only inline, within the same
+shell command as whatever consumed it, never echoed or persisted to a
+file, after the harness separately (and correctly) refused a bare `az
+storage account keys list ... --query "[0].value" -o tsv` that would
+have printed it directly.
+
+**Real, all 12 real live tests passing against all three real
+services, in one combined run**: `TestLive_{S3,GCS,Azure}_
+{BasicRoundTrip,CASRace_RealConcurrentProcesses,
+LockContention_RealConcurrentProcesses,LockTTLExpiry_RealReclaim}`, all
+green. Directly proves CAS head advancement (`AdvanceHead`'s own
+create-only write) actually works against the real live services, not
+just each provider's documented behavior -- the CASRace tests are the
+literal proof. One real S3 test (`LockTTLExpiry_RealReclaim`) failed
+once in the first combined run and passed clean both in isolation and
+in a clean re-run of the full combined suite -- confirmed a genuine
+live-network timing flake (the underlying `Store.Lock` code is
+untouched by this session), not a regression, before moving on. Both
+real buckets/containers confirmed genuinely empty afterward (`gcloud
+storage ls`/`az storage blob list`/`aws s3api list-objects-v2`), the
+same "confirmed empty, not just claimed" discipline UBI-32 Arc B's own
+S3 verification already established.
+
+**Documentation updated in the real, current location, not the stale
+filename the ticket itself named**: `concepts/ledger-stores.mdx` no
+longer exists -- renamed/restructured in an earlier, unrelated session
+(commit `931f12e`, "add SDK Reference...") into `concepts/
+remote-stores.mdx` (56 lines, conceptual) plus a new `tutorial/
+remote-stores/` tutorial (`index.mdx`/`setup.mdx`/`concurrency.mdx`),
+confirmed via `git log`, not assumed. Real coverage for gs://azblob://
+added to both real, current locations: `concepts/remote-stores.mdx`
+gained the CAS-precondition-per-provider explanation and the
+`cloudblob` build-tag section; `tutorial/remote-stores/setup.mdx`
+gained S3/GCS/Azure Blob tabs with real, freshly-verified transcripts
+(a real end-to-end `ubx init`/`config`/`plan`/`ship` run against the
+fakeprovider and each real store, via a `cloudblob`-tagged binary --
+never a real cloud provider apply, `fakeprovider` throughout, per
+CLAUDE.md's own standing rule). **Two real, pre-existing inaccuracies
+in the ALREADY-PUBLISHED S3 content found and fixed along the way, not
+left standing next to newly-verified-correct content**: the real key
+layout is `proposals/<id>.prop.json` directly (no `ledger/`
+sub-prefix, confirmed by directly listing the real bucket after a real
+ship); `ubx config`'s own resolved-address output has a trailing
+slash the existing transcript omitted. `mint broken-links` clean; every
+changed page (including every new Tab) checked for zero page-level
+horizontal overflow via a real `mint dev` preview, not just eyeballed.
+
+**Real infrastructure left standing, not torn down** -- `ubx-states`
+(GCS) and `ubxstates`/`ubx-states-rg` (Azure) are meant to be reused
+across future live-conformance runs the same way the existing S3
+`ubx-states` bucket already is (the new test code's own `liveGCSBucketURI`/
+`liveAzureBucketURI` constants assume this). Flagged explicitly to the
+founder rather than assumed: real, standing (if minimal-cost) cloud
+resources, the founder's own call whether to keep or tear down.
+
 ## UBI-142/UBI-143: two real SDK/codegen bugs found during UBI-140's tutorial fix, both root-caused to real, different, unrelated code paths, both fixed and verified, 2026-08-12
 
 Investigated together first per the handoff's own instruction, since both

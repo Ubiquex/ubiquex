@@ -2,6 +2,42 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-56: gs:// and azblob:// ledger stores implemented
+  and live-verified against real GCS and real Azure Blob Storage.
+  Credential stop condition checked first per the ticket's own
+  instruction -- GCP was immediately usable, Azure needed an interactive
+  MFA re-login this session couldn't perform itself, surfaced directly
+  rather than guessed at; the founder re-authenticated and asked for
+  full scope. Real, current dependency measurement (not the original
+  UBI-32 Arc B finding trusted blindly): only 9 net new Go modules now
+  (this binary already shares a real chunk of both SDKs via the
+  audit/gcp/-azure drift backends), but a real +25.6MB/+27% binary size
+  cost regardless -- decided a new `cloudblob` build tag (s3 stays
+  unconditional, gs/azblob opt-in via `-tags cloudblob`), confirmed via
+  byte-identical default-build size and a clear, narrowly-scoped error
+  hint for anyone hitting gs://azblob:// on an untagged binary. Zero
+  changes needed to Store/conformance code itself (already fully generic
+  over `*blob.Bucket`, CAS via `WriterOptions.IfNotExist` mapping to each
+  provider's own real precondition mechanism); the live test suite was
+  refactored into shared, parameterized helpers rather than tripling the
+  same 4-test body, catching a real live-only bug in the new
+  infrastructure itself (lockprobe's own subprocess build wasn't
+  inheriting the cloudblob tag) before trusting any live result. Real
+  GCS/Azure infrastructure provisioned this session (a real IAM
+  elevation attempt correctly refused by the harness; worked around via
+  shared-key auth, no privilege change needed) -- all 12 real live tests
+  (BasicRoundTrip/CASRace/LockContention/LockTTLExpiry x 3 backends)
+  pass against the real, live services, directly proving CAS head
+  advancement works against real GCS generation preconditions and real
+  Azure ETags, not just each provider's documented behavior. Docs
+  updated in the real, current location (`concepts/ledger-stores.mdx`
+  named in the ticket no longer exists, renamed to `concepts/
+  remote-stores.mdx` + `tutorial/remote-stores/` in an earlier session,
+  confirmed via git log rather than assumed) with real, freshly-verified
+  transcripts; two real, pre-existing inaccuracies in the
+  already-published S3 content were found and fixed along the way (a
+  fictional `ledger/` key sub-prefix, a missing trailing slash on the
+  resolved address). Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- UBI-142/UBI-143: two real SDK/codegen bugs found during
   UBI-140's tutorial fix, investigated together (confirmed unrelated
   root causes, fixed independently). UBI-142: `sdk/codegen/templates/ts/

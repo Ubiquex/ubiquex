@@ -3,6 +3,7 @@ package ledgerstore
 import (
 	"context"
 	neturl "net/url"
+	"strings"
 	"testing"
 
 	_ "gocloud.dev/blob/memblob"
@@ -87,5 +88,19 @@ func TestOpen_RealBucket(t *testing.T) {
 	}
 	if string(b) != "0123456789012345678901234567890a" {
 		t.Fatalf("got %q, want the written salt back", b)
+	}
+}
+
+// TestOpen_UnrelatedUnregisteredScheme_NoMisleadingHint confirms the hint
+// is scoped to gs/azblob specifically -- a genuine typo or unsupported
+// scheme must get gocloud.dev/blob's own plain error, not an irrelevant
+// "-tags cloudblob" suggestion that wouldn't actually fix anything.
+func TestOpen_UnrelatedUnregisteredScheme_NoMisleadingHint(t *testing.T) {
+	_, _, err := Open(context.Background(), "totallyfake://some-bucket/prefix/")
+	if err == nil {
+		t.Fatal("Open(totallyfake://...): expected an error, got nil")
+	}
+	if strings.Contains(err.Error(), "cloudblob") {
+		t.Errorf("Open(totallyfake://...) error = %q, must not mention cloudblob for an unrelated scheme", err)
 	}
 }
