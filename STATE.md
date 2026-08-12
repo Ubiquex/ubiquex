@@ -2,6 +2,110 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: new SDK Reference template, Phase 1 + Phase 2 -- 30 real AWS resource pages live, GCP not yet started, 2026-08-13
+
+**A real gap found before anything else**: the actual generator that
+produced all 4649 resource-reference pages (`gen_provider_docs.py`)
+only ever existed as an uncommitted scratch script, and its own
+`DOCS_ROOT` pointed at `~/Ubiquex/documentation`, the exact
+disconnected, non-git leftover copy CLAUDE.md already warns about by
+name. Fixed to target the real `ubiquex-docs` checkout before running
+anything real against it. Still not committed to either repo as of
+this session's own close -- a real, separate gap worth closing
+(tracked informally here, not yet its own ticket).
+
+**Phase 1 (`aws_iam_role`, one resource, a real checkpoint requiring
+explicit approval before proceeding)**: chosen over `aws_sqs_queue`
+because it has a real required field and a real nested list-of-objects
+field (`inline_policy`), a fairer generator stress test.
+`sdk/codegen/ir.FromSchema` (the real, already-committed shared IR
+translator, the SAME one Go/TS/Python bindings codegen uses) against
+the real, cached `hashicorp/aws@6.54.0` schema -- never a hand-typed
+field list. Complete, runnable Go/TS/Python programs (matching
+`tutorial/sdk/first-program.mdx`/`cross-language.mdx`'s own real
+conventions exactly), 8 real fields instead of 2, a real multi-resource
+markdown scenario reused verbatim from `tutorial/markdown/
+references.mdx`'s own already-published one. Every code block piped
+through the real `gofmt`/`deno fmt` binaries. Spliced ONLY the `##
+Example` section into the existing page -- a full-page regenerate would
+have silently overwritten this page's own hand-tuned Input/Output
+property descriptions with the mechanical tier's generic
+"Optional."/"Required." text, a real regression caught and avoided
+before it shipped, not after. Real overflow found (640/640 baseline,
+zero margin used, to 768/640 after, +128px, Go/TS/Python identically),
+contained (page-level `scrollWidth === clientWidth` throughout, never
+broke layout) -- reported honestly as a real, structural finding (deep
+nesting from the required `func main(){ Stack(func(){ ... }) }`
+wrapping plus a real trust-policy JSON literal, not further reducible
+without cutting either "complete program" or "richer params"). Founder
+approved as-is; the container-width question itself spun out as
+UBI-150 (filed, not blocking this rollout).
+
+**Phase 2 (29 more AWS resources, a real, deliberately diverse batch
+spanning 15+ services -- IAM, SQS, SNS, S3, Lambda, DynamoDB, RDS, ECS,
+ECR, KMS, ACM, Route53, VPC networking, CloudWatch, Auto Scaling,
+ELB/ALB, API Gateway, Secrets Manager, SSM)**, same generator, same
+splice-only discipline, same verification bar:
+
+- **A real, second bug found by this batch's own diversity, not the
+  first resource**: `aws_iam_policy`'s bare `policy` field got the
+  SAME trust-policy JSON template `assume_role_policy` uses
+  (`Principal`/`sts:AssumeRole`) -- real, but semantically WRONG content
+  for a plain access policy, which has no `Principal` and never
+  `AssumeRole`. Fixed with a second, separate, correctly-shaped
+  access-policy heuristic (`Statement`/`Effect`/`Action`/`Resource`,
+  no `Principal`) -- deliberately NOT folded into the trust-policy one,
+  and deliberately NOT extended to other `*_policy`-suffixed fields
+  (`redrive_policy` has yet another real shape, already documented in
+  Input properties -- guessing wrong there would be worse than the
+  generic placeholder fallback).
+- **A real, aws_iam_role-specific hardcoded value ("CI pipeline
+  execution role") caught leaking into every OTHER resource's
+  description field** before the batch ran -- fixed to a resource-
+  neutral "Managed by ubx." (aws_iam_role's own already-committed page
+  keeps its original text; only the shared heuristic changed).
+- **A real compile-breaking bug caught by go build, NOT by gofmt**:
+  the new access-policy preamble also needs `encoding/json`, but the
+  import-detection only checked for a `trustPolicy`-prefixed preamble.
+  gofmt only checks syntax, never unresolved imports -- would have
+  shipped a real, broken Go example silently. Found and fixed only
+  because this session added a genuine `go build` verification pass
+  (a real throwaway module requiring+replacing the real local
+  `ubx-sdk-go`/`ubx-sdk-aws` checkouts) on top of gofmt, after this
+  exact bug slipped through gofmt once already.
+- **Verification, all real, all 30 pages**: 30/30 real `go build`
+  clean, 30/30 real `deno fmt` clean (enforced at generation time,
+  same as Phase 1), 30/30 real `ast.parse` clean, zero em dashes,
+  `mint validate` clean.
+- **Real overflow, measured per tab per page via an extended Playwright
+  crawler (UBI-148's own `crawl.js`, adapted to click through all four
+  tabs instead of only measuring whichever one is active by default)**:
+  120 real measurements (30 pages x 4 tabs). Zero page-level overflow,
+  zero uncontained cases -- every one of them the SAME "code block's own
+  `overflow-x: auto` wrapper handles it" pattern Phase 1 and UBI-146/147
+  already established as acceptable. Go overflowed most often (29/30
+  pages, up to 208px), Python 6/30, TypeScript 11/30, Markdown 18/30
+  (trivial, up to 14px).
+- **Two real, NEW overflow-driving patterns found, beyond Phase 1's own
+  "deep nesting" finding** -- both inherent to AWS's own real naming,
+  not fixable by trimming shown content: (1) genuinely long real field
+  names (`ApplicationFailureFeedbackRoleArn`, `sns/topic`) compounded by
+  `gofmt`'s own struct-field alignment, which pads every field's own
+  line to match the longest name in the literal; (2) genuinely long
+  real service/package names (`secretsmanager`, 14 chars) inflating the
+  import line and the constructor call line specifically. Real,
+  generalizable findings for whichever session tackles UBI-150.
+
+Committed and pushed directly to `ubiquex-docs` main per this
+session's own explicit direction (Phase 1 `3742e28`, Phase 2
+`6ca0819`), confirmed live via `gh api`.
+
+**Not yet started: GCP.** Founder's own instruction was to report back
+after a meaningful AWS batch, before continuing -- this entry is that
+report. 30/1901 real AWS pages done (aws_iam_role + the 29-resource
+batch); the remaining ~1871 AWS pages, and the whole GCP/Azure/
+Kubernetes corpus, are still on the original mechanical-tier template.
+
 ## UBI-149: writeTSCaller/writeGoCaller argument-ordering bug, fixed for real, a SECOND real bug found and fixed along the way -- CLOSED, pushed to main, 2026-08-13
 
 **Decision made with reasoning, not just patched**: read `writeTSCaller`
