@@ -4,3 +4,6 @@
 [submodule "sdk/ts"]
 	path = sdk/ts
 	url = https://github.com/Ubiquex/ubx-sdk-typescript.git
+[submodule "sdk/go"]
+	path = sdk/go
+	url = https://github.com/Ubiquex/ubx-sdk-go.git
