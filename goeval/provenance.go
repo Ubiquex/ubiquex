@@ -6,18 +6,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // stampDocumentSource injects one intent.sources entry into raw
 // (already-evaluated, unstamped) intent/v1 JSON, naming entryFile
-// itself: {"kind": "document", "ref": "<basename>", "content_hash":
-// "sha256:<hex of the RAW entry file's own bytes>"} -- mirrors
-// tseval's own stampDocumentSource exactly (same "document" kind, same
-// Go-side-only hashing boundary, same additive-not-overwriting
-// behavior); duplicated rather than shared because it is small,
-// language-agnostic, and UBI-36 (Python) would make a third copy the
-// real trigger for extracting a shared package, not this one.
+// itself: {"kind": "document", "ref": "<entryFile, exactly as given>",
+// "content_hash": "sha256:<hex of the RAW entry file's own bytes>"} --
+// mirrors tseval's own stampDocumentSource exactly (same "document"
+// kind, same Go-side-only hashing boundary, same additive-not-
+// overwriting behavior); duplicated rather than shared because it is
+// small, language-agnostic, and UBI-36 (Python) would make a third copy
+// the real trigger for extracting a shared package, not this one.
+//
+// Ref is entryFile verbatim (UBI-60) -- was filepath.Base(entryFile)
+// (basename only) through UBI-55, which made an SDK-authored source
+// impossible for `ubx promote` to ever relocate, even from the exact
+// same working directory: any entry file outside the CWD itself lost
+// its own directory entirely, unlike a .md/.d2 "document" source, whose
+// Ref is always the path exactly as the caller typed it. Storing the
+// identical convention here is what makes `ubx promote` reusable
+// unchanged across all three "document" shapes (UBI-60, docs/schema.md's
+// own "Amendment: promotion evidence").
 func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 	data, err := os.ReadFile(entryFile)
 	if err != nil {
@@ -26,7 +35,7 @@ func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 	sum := sha256.Sum256(data)
 	source := map[string]interface{}{
 		"kind":         "document",
-		"ref":          filepath.Base(entryFile),
+		"ref":          entryFile,
 		"content_hash": "sha256:" + hex.EncodeToString(sum[:]),
 	}
 

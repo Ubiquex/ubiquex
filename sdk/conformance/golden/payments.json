@@ -7,7 +7,7 @@
     "sources": [
       {
         "kind": "document",
-        "ref": "payments.ts",
+        "ref": "../programs/ts/payments.ts",
         "content_hash": "sha256:0c164f63b866179c58fc30b85d71127d3ec1184819caf9c7090827d1d2d697e3"
       }
     ]

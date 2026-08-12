@@ -2,6 +2,37 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-60: `ubx promote` supports SDK- and dialogue-
+  authored proposals, both real, named refusals UBI-55 documented
+  honestly now closed. Real prerequisite found while verifying (not
+  assumed): SDK promotion was structurally impossible, not just
+  unchecked -- `stampDocumentSource` (goeval/tseval/pyeval) stamped a
+  `document` source's own `Ref` as `filepath.Base(entryFile)`,
+  basename only, discarding the directory needed to relocate the file
+  at all. Fixed to store the given path verbatim, the identical
+  convention `.md`/`.d2` sources already used -- a determinism-adjacent
+  change across all three evaluators, 6 real downstream tests/fixtures
+  updated as a real, expected consequence. SDK promotion: `content_hash`
+  checked first, a match re-runs the pinned program through the real
+  evaluator (the identical `evaluateSDKProgram` mechanism `ubx resolve/
+  plan --from-code` already use) against the TARGET's own real context;
+  a mismatch refuses outright, naming both hashes. Dialogue promotion:
+  the FINAL converged draft already captured in the `.dlg.json` is
+  re-resolved against the target, never re-run through the LLM a second
+  time; the dialogue capture itself carries forward as pinned evidence.
+  A real, pre-existing gap found and fixed along the way: `ubx promote`
+  never called `blueprint.ExpandCalls`/`ApplyOverrides` for ANY source,
+  unlike `resolve`/`plan` -- fixed once, for all four paths. Real tests
+  for all four required cases, including the ticket's own required
+  UBI-81-interaction proof (the same unchanged SDK program, promoted
+  against two real, independent remote-store targets via `sdk.CrossStack`,
+  UBI-134, resolves to two real, different values) and a genuine
+  `.dlg.json` built from a real `ubx chat` session, never a hand-
+  constructed shortcut. Docs (`cli-reference/promote.mdx`,
+  `tutorial/promotion/promote.mdx`) rewritten with real transcripts
+  captured from a real built binary, including the real mismatch
+  refusal, shown honestly. Full account: STATE.md's own 2026-08-12
+  entry.
 - 2026-08-12 -- UBI-81 v1: context-aware drafting, scoped to exactly one
   read-only tool. The intent-drafting adapter can call a real, bounded
   Anthropic tool-use round trip (`read_stack_config`) to read the target

@@ -42,8 +42,8 @@ func TestStampDocumentSource_AppendsDocumentEntry(t *testing.T) {
 	if src.Kind != "document" {
 		t.Fatalf("Kind = %q, want \"document\"", src.Kind)
 	}
-	if src.Ref != "payments.ts" {
-		t.Fatalf("Ref = %q, want \"payments.ts\"", src.Ref)
+	if src.Ref != entryPath {
+		t.Fatalf("Ref = %q, want the entry file's own given path %q (UBI-60: no longer basename-only)", src.Ref, entryPath)
 	}
 	sum := sha256.Sum256(content)
 	want := "sha256:" + hex.EncodeToString(sum[:])

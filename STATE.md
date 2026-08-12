@@ -2,6 +2,141 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-60: promotion support for SDK- and dialogue-authored proposals, both real gaps UBI-55 named closed, 2026-08-12
+
+**Real prerequisite verification done first, per the ticket's own
+instruction -- and it changed the design.** Read `cli/promote.go`
+(UBI-55) directly before writing anything: `findPromotableSource`
+refused an SDK-authored `document` source and a `dialogue` source both
+by name, each with a real, specific, honest reason recorded in
+`docs/schema.md`'s own "Amendment: promotion evidence." Confirmed the
+real `content_hash` mechanism (`goeval`/`tseval`/`pyeval`'s
+`stampDocumentSource`, Go-side, sha256 of the entry file's own raw
+bytes) and found the REAL blocker: `Ref` was stamped as
+`filepath.Base(entryFile)` -- basename only, discarding the directory
+entirely. A `.md`/`.d2` source's own `Ref` was always the full given
+path. This wasn't just "SDK promotion needs a hash check" as the
+ticket's own "what to build" section implied -- SDK promotion was
+STRUCTURALLY IMPOSSIBLE until this was fixed, since promote has no way
+to relocate a file it only knows the basename of. **Real fix, all three
+languages**: `stampDocumentSource` now stores `entryFile` verbatim,
+the identical convention `.md`/`.d2` already used -- no new convention
+invented, existing one applied consistently. This is a determinism-
+adjacent, cross-package change (touches every SDK-authored proposal's
+own `intent.sources` shape going forward) -- flagged here prominently,
+not slipped in quietly. Broke and fixed 6 real, pre-existing tests
+across `goeval`/`tseval`/`pyeval`/`cli`/`sdk/conformance/runner`
+(3 unit tests asserting basename, 3 CLI integration tests, 3 golden
+JSON fixtures) -- every one confirmed as a real, expected consequence
+of the fix, not a regression, before updating.
+
+**Dialogue verification (the ticket's own step 2) confirmed the
+`.dlg.json` format is NOT missing anything the resolver needs** -- the
+real gap was purely mechanical (a ledger-dir-relative `Ref`, no
+re-drafting helper existed yet), not a missing field, so no "stop and
+report" was needed; built directly.
+
+**The two real design decisions, confirmed and NOT relitigated, built
+exactly as specified:**
+
+- **SDK**: `content_hash` checked FIRST (before any evaluation) --
+  match means re-run the pinned program through the real evaluator
+  (`evaluateSDKProgram`, the identical mechanism `ubx resolve
+  --from-code`/`ubx plan --from-code` already use, matched step for
+  step: evaluate, unmarshal, per-language `StampDirectCallProvenance*`)
+  against the TARGET's own real context; mismatch refuses outright,
+  naming both hashes, real error text, no silent guess.
+- **Dialogue**: the FINAL, converged draft already captured in the
+  `.dlg.json` (`Dialogue.Draft`) is re-resolved against the target --
+  never re-run through the LLM a second time. The dialogue capture
+  itself (plus its own `intent_provider` sibling) is carried FORWARD
+  from the original accepted proposal's own `intent.sources` as pinned
+  evidence, confirmed correct rather than reconstructed from
+  `authSource` alone.
+
+**A real, pre-existing gap found and fixed while building the SDK
+path, not originally in scope but directly blocking it done correctly:**
+`cli/promote.go`'s existing `.md`/`.d2` paths never called
+`blueprint.ExpandCalls`/`blueprint.ApplyOverrides` at all -- unlike
+`resolve.go`/`plan.go`, which call both unconditionally right after
+obtaining the intent, regardless of medium. A blueprint-calling
+document/diagram promoted via `ubx promote` was silently skipping
+expansion entirely. Fixed once, for all four paths together, at the
+one shared convergence point every path already passes through (mirrors
+resolve.go/plan.go exactly). Also forced `intent.Stack = targetStack`
+uniformly after dispatch -- needed for SDK/dialogue (whose own natural
+stack name can be the SOURCE stack's, baked in at authoring/capture
+time, never dynamically target-aware the way `draftFromDoc`/
+`draftFromDiagram` already are) but harmless for `.md`/`.d2` (already
+correct by construction).
+
+**Real test results, all four required cases, real fixtures, no
+shortcuts:**
+
+- SDK match/re-run (`TestPromote_SDKAuthoredSource_
+  ReResolvesAgainstTarget`): reuses the real, existing
+  `testdata/sdk_resolve/create_widget.ts` fixture (its own real sha256
+  confirmed via `shasum`), a real `tseval` re-run, a real fresh
+  `document` source stamped on the result. PASS.
+- SDK mismatch refusal
+  (`TestPromote_SDKAuthoredSource_ContentHashMismatch_Refused`): a
+  deliberately stale recorded hash against the same real file, real
+  refusal naming both hashes. PASS.
+- **The ticket's own explicitly required UBI-81-interaction proof**
+  (`TestPromote_SDKAuthoredSource_ContextAwareDrafting_
+  DiffersByTarget`) -- a real, honest design note: UBI-81's own
+  `read_stack_config` tool is LLM-only, an SDK program has no direct
+  equivalent. The real, concrete mechanism used instead: `sdk.CrossStack`
+  (UBI-134) -- a `$cross` "stack"-mode reference resolved against
+  WHICHEVER ledger `resolver.Resolve` actually runs against, never a
+  value baked in at evaluation time. A new real fixture
+  (`testdata/sdk_promote_crossstack/main.go`) referencing a "networking"
+  neighbor by stack name; the SAME unchanged program promoted against
+  two real, independent remote-store targets (each its own real
+  in-memory bucket, real seeded neighbor, real distinct vpc id) resolves
+  to two REAL, DIFFERENT values, confirmed byte-different, never a
+  frozen copy. PASS.
+- Dialogue promotion (`TestPromote_DialogueSource_
+  ReResolvesAgainstTarget`): a GENUINE `.dlg.json`, built via a real
+  `ubx chat` session (`runUbxWithStdin`, a fake adapter, a real
+  `/save`, real `finalizeChat`) -- never a hand-marshaled `Dialogue`
+  struct standing in for one. Real resolve+accept of the emitted draft,
+  then a real promote confirming the dialogue+intent_provider sources
+  carry forward as pinned evidence. PASS.
+- Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./...`
+  clean throughout, including all 10 promote tests together and every
+  test touched by the `stampDocumentSource` ref fix.
+
+**Documentation, done in-session, real transcripts from a real built
+binary, not narrated from the ticket.** Built the current binary
+directly (`go build`, bypassing the Makefile's own `submodules` target
+deliberately -- it would have run `git submodule update --init
+--recursive`, discarding this session's own still-uncommitted `sdk/ts`/
+`sdk/py` changes left in place since UBI-134/81; confirmed intact
+before and after). A real Go SDK program (`aws_sqs_queue`, matching the
+existing promote tutorial's own resource choice) resolved via the real,
+already-cached `hashicorp/aws` provider schema (schema/resolve-only,
+never shipped, per this project's own standing ship-safety rule),
+accepted, promoted for real, then genuinely edited and re-promoted to
+capture the real mismatch refusal. A real `ubx chat` session against
+the real Claude API (a resolvable `ant auth` credential was available)
+captured the real dialogue promotion transcript. `cli-reference/
+promote.mdx` rewritten (all four sources, a new "Refusal cases" section
+with the real captured refusal); `tutorial/promotion/promote.mdx`
+gained two new real, verified sections. Real DOM overflow verification
+via `mint dev` + a headless Chrome tab's own `scrollWidth` measurement
+found real overflow in the first draft (long sha256 hashes, long
+proposal ids) -- fixed by truncating to this project's own established
+short-hash display convention, re-measured at zero overflow. `mint
+validate` clean. Committed and pushed directly to `ubiquex-docs` main
+(`4acdd90`), confirmed live via a direct, authenticated `gh api
+repos/Ubiquex/ubiquex-docs/contents/...` fetch for both files.
+
+`docs/schema.md`'s own "Amendment: promotion evidence" section updated
+in place -- both gaps' original, historical framing kept (what UBI-55
+found and correctly declined to work around), with the real UBI-60 fix
+recorded directly alongside each.
+
 ## UBI-81 v1: context-aware drafting -- one real, read-only tool, markdown/chat only, 2026-08-12
 
 **Scope held exactly to what was asked, nothing from the ticket's own

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // stampDocumentSource injects one intent.sources entry into raw
@@ -18,6 +17,16 @@ import (
 // own provenance.go doc comment gives -- this is the third copy, and
 // the real trigger to extract a shared package, deferred as a real,
 // named follow-up rather than done reflexively mid-arc.
+//
+// Ref is entryFile verbatim (UBI-60) -- was filepath.Base(entryFile)
+// (basename only) through UBI-55, which made an SDK-authored source
+// impossible for `ubx promote` to ever relocate, even from the exact
+// same working directory: any entry file outside the CWD itself lost
+// its own directory entirely, unlike a .md/.d2 "document" source, whose
+// Ref is always the path exactly as the caller typed it. Storing the
+// identical convention here is what makes `ubx promote` reusable
+// unchanged across all three "document" shapes (UBI-60, docs/schema.md's
+// own "Amendment: promotion evidence").
 func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 	data, err := os.ReadFile(entryFile)
 	if err != nil {
@@ -26,7 +35,7 @@ func stampDocumentSource(raw []byte, entryFile string) ([]byte, error) {
 	sum := sha256.Sum256(data)
 	source := map[string]interface{}{
 		"kind":         "document",
-		"ref":          filepath.Base(entryFile),
+		"ref":          entryFile,
 		"content_hash": "sha256:" + hex.EncodeToString(sum[:]),
 	}
 

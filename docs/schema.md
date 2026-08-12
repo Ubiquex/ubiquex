@@ -1698,42 +1698,80 @@ is evidence, not a pin.
 **New `IntentSource.Base string` field**, `omitempty`, populated only for
 `Kind == "promotion"`.
 
-**A real "document ref isn't always relocatable" gap, found while
-building this, recorded honestly rather than silently worked around.**
-`ubx propose --from-doc`/`--from-diagram` stamp a `document` source's
-`ref` as whatever path string the caller typed — not normalized to
-repo-root- or ledger-relative — and `ubx resolve --from-code`'s own
-`document` source (`goeval`/`tseval`/`pyeval`'s `stampDocumentSource`)
-stamps only `filepath.Base(entryFile)`, discarding the directory
-entirely. `ubx promote` needs to re-read that same file from disk to
-re-resolve it, so it inherits both gaps: a `.md`/`.d2` ref resolves
-correctly only if `ubx promote` is invoked from the same working
-directory the original `ubx propose` was; an SDK-authored (`.ts`/`.go`/
-`.py`) `document` ref can never be relocated at all, since its own
-directory was never recorded anywhere. `ubx promote` refuses cleanly
-and names this specific reason rather than silently failing or
-guessing a path — see cli/promote.go. Recommending a follow-up ticket to
-give every medium's `document` ref a genuinely portable (repo-root-
-relative, full-path) convention; out of scope for this session, which
-only consumes the existing convention, not changes it.
+**Both gaps below were closed 2026-08-12, UBI-60** -- recorded here in
+their original, historical form first (what UBI-55 found and correctly
+declined to work around), then how each was actually resolved.
 
-**Dialogue-kind sources are not yet promotable either, for a different,
-also-named reason**: a `dialogue` source's own `ref` is relative to the
-SOURCE ledger directory (`dialogues/<hash>.dlg.json`, docs/schema.md's
-own "Amendment: the chat medium," below), and re-stamping the identical
-ref string against a different target ledger directory would silently
-point at the wrong (or a nonexistent) file — a broken provenance claim
-worse than refusing outright. `ubx promote` refuses this case too,
-naming the reason, rather than emitting a `dialogue` source whose `ref`
-doesn't actually resolve in the target ledger.
+**The "document ref isn't always relocatable" gap (UBI-55, closed
+UBI-60).** `ubx propose --from-doc`/`--from-diagram` always stamped a
+`document` source's `ref` as whatever path string the caller typed --
+not normalized to repo-root- or ledger-relative -- but `ubx resolve
+--from-code`'s own `document` source (`goeval`/`tseval`/`pyeval`'s
+`stampDocumentSource`) stamped only `filepath.Base(entryFile)`,
+discarding the directory entirely. `ubx promote` needs to re-read that
+same file from disk to re-resolve it, so an SDK-authored (`.ts`/`.go`/
+`.py`) `document` ref could never be relocated at all, even from the
+original working directory -- `ubx promote` refused cleanly, by name,
+through UBI-55. **UBI-60 fix**: `stampDocumentSource` (all three
+languages) now stores `entryFile` verbatim, the identical "whatever the
+caller typed" convention a `.md`/`.d2` ref already used -- no new
+convention invented, the existing one simply applied consistently
+across all three `document` shapes. The pre-existing "resolvable from
+the same working directory" limitation (true of `.md`/`.d2` refs since
+UBI-55, never itself the thing this fix addresses) still applies
+identically to SDK refs now.
 
-**Real code landed 2026-07-30, UBI-55** (`core/proposal.go`'s new
-`Base` field; `cli/promote.go`, new; `cli/why.go`'s `renderIntentSource`
-gains a `case "promotion":` rendering "promoted from `<base>/<short
-id>`", matching docs/architecture.md's own example verbatim). Purely
-additive — same "no `schema_version` bump" reasoning as every prior
-amendment to this struct: a proposal recorded before this amendment
-simply has no `promotion`-kind source, never ambiguously.
+**With relocation solved, `ubx promote` re-runs the pinned SDK program
+through the real evaluator, against the target's own real context --
+never a frozen intent blob** (`cli/promote.go`'s `promoteSDKSource`).
+The real reasoning, confirmed 2026-08-12: UBI-81 (context-aware
+drafting) established that a document can legitimately produce
+different, correct results depending on which stack it's evaluated
+against, reading the target's own name/config. Promoting a frozen,
+already-evaluated intent blob would silently carry the ORIGINAL stack's
+own context-derived assumptions into a target where they might be
+wrong; re-running the real program against the target's real context
+(the identical `evaluateSDKProgram` mechanism `ubx resolve --from-code`/
+`ubx plan --from-code` already use, never a second implementation) is
+what stays consistent with that design. `content_hash` is checked
+FIRST, before any evaluation -- an unchanged program (hash still matches
+what the source proposal recorded) is an ordinary, safe re-run; a
+CHANGED program is refused outright, by name, naming both hashes: that's
+new intent, never silently promoted as if it were the same document.
+
+**Dialogue-kind sources were not promotable either, for a different
+reason (UBI-55, closed UBI-60).** A `dialogue` source's own `ref` is
+relative to the SOURCE ledger directory (`dialogues/<hash>.dlg.json`,
+docs/schema.md's own "Amendment: the chat medium," below), never
+portable to an arbitrary `--to` target directory the way a `.md`/`.d2`
+ref (read straight off the current working directory) already is --
+`ubx promote` refused cleanly, by name, through UBI-55. **UBI-60 fix**:
+unlike an SDK program, a dialogue is deliberately NOT re-run through the
+LLM a second time -- there is no clean way to replay a multi-turn
+conversation deterministically, and doing so could change the drafted
+STRUCTURE itself, not just a context-derived value within it, defeating
+the point of promoting a reviewed result. Instead, `ubx promote`
+(`promoteDialogueSource`) re-reads the `.dlg.json` relative to the
+SOURCE proposal's own `--ledger-dir` (which it already has, having just
+opened that ledger) and takes the FINAL, converged intent/v1 draft
+already captured inside it (`Dialogue.Draft`, embedded at `/save` time)
+-- re-resolving THAT against the target, the same "re-resolve the
+intent, don't copy the proposal" shape every other promotion path
+already has, just skipping the re-drafting step since there's nothing
+left to draft. The dialogue capture itself (and the `intent_provider`
+entry naming which model produced it) is carried forward from the
+ORIGINAL accepted proposal's own `intent.sources` onto the new intent --
+pinned evidence of how the draft was produced, never treated as
+something promote could re-run.
+
+**Real code landed 2026-07-30, UBI-55, extended 2026-08-12, UBI-60**
+(`core/proposal.go`'s new `Base` field; `cli/promote.go`, new in UBI-55,
+`promoteSDKSource`/`promoteDialogueSource` added in UBI-60; `cli/why.go`'s
+`renderIntentSource` gains a `case "promotion":` rendering "promoted
+from `<base>/<short id>`", matching docs/architecture.md's own example
+verbatim). Purely additive -- same "no `schema_version` bump" reasoning
+as every prior amendment to this struct: a proposal recorded before this
+amendment simply has no `promotion`-kind source, never ambiguously.
 
 ### Amendment: JSON-embedded `$ref`/`$cross`/etc. markers (2026-07-31, UBI-63)
 

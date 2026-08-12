@@ -7,7 +7,7 @@
     "sources": [
       {
         "kind": "document",
-        "ref": "payments.py",
+        "ref": "../programs/py/payments.py",
         "content_hash": "sha256:29b70cb07ffdaeb4fcc15758a8febd8f95b14b3f94b3d8409960507cf146ed26"
       }
     ]

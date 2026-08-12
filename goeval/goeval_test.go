@@ -83,8 +83,8 @@ func TestEvaluate_HappyPath_RealSandboxedSubprocess(t *testing.T) {
 	if !strings.Contains(string(doc.Resources[0].Config), `"name":"primary-widget"`) {
 		t.Fatalf("expected wire-name-mapped config, got: %s", doc.Resources[0].Config)
 	}
-	if len(doc.Intent.Sources) != 1 || doc.Intent.Sources[0].Kind != "document" || doc.Intent.Sources[0].Ref != "main.go" {
-		t.Fatalf("expected a stamped document source naming main.go, got: %+v", doc.Intent.Sources)
+	if len(doc.Intent.Sources) != 1 || doc.Intent.Sources[0].Kind != "document" || doc.Intent.Sources[0].Ref != "testdata/happy/main.go" {
+		t.Fatalf("expected a stamped document source naming the entry file's own given path (UBI-60: no longer basename-only, ubx promote needs the real path to relocate it), got: %+v", doc.Intent.Sources)
 	}
 }
 

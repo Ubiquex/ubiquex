@@ -67,8 +67,8 @@ func TestResolveFromCode_SimpleCreate(t *testing.T) {
 	if !strings.Contains(resolved, `"kind": "document"`) {
 		t.Fatalf("resolved proposal missing a document intent.sources entry: %s", resolved)
 	}
-	if !strings.Contains(resolved, `"ref": "create_widget.ts"`) {
-		t.Fatalf("resolved proposal's document source doesn't name the real entry file: %s", resolved)
+	if !strings.Contains(resolved, `"ref": "`+entryPath+`"`) {
+		t.Fatalf("resolved proposal's document source doesn't name the real entry file (UBI-60: the full given path, not just the basename): %s", resolved)
 	}
 	entryBytes, err := os.ReadFile(entryPath)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestResolveFromCode_SimpleCreate(t *testing.T) {
 	if !strings.Contains(whyOut, "change") {
 		t.Fatalf("why output missing change kind: %s", whyOut)
 	}
-	if !strings.Contains(whyOut, "document create_widget.ts") {
+	if !strings.Contains(whyOut, "document "+entryPath) {
 		t.Fatalf("why output missing the document provenance source: %s", whyOut)
 	}
 }
@@ -159,8 +159,8 @@ func TestResolveFromCode_Go_SimpleCreate(t *testing.T) {
 	if !strings.Contains(resolved, `"fake_widget"`) || !strings.Contains(resolved, `"widget1"`) {
 		t.Fatalf("resolved proposal missing the Go-authored fake_widget/widget1 resource: %s", resolved)
 	}
-	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "create_widget.go"`) {
-		t.Fatalf("resolved proposal missing a document intent.sources entry naming create_widget.go: %s", resolved)
+	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "`+entryPath+`"`) {
+		t.Fatalf("resolved proposal missing a document intent.sources entry naming %s: %s", entryPath, resolved)
 	}
 
 	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
@@ -173,7 +173,7 @@ func TestResolveFromCode_Go_SimpleCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why (from-code go change): %v\noutput: %s", err, whyOut)
 	}
-	if !strings.Contains(whyOut, "document create_widget.go") {
+	if !strings.Contains(whyOut, "document "+entryPath) {
 		t.Fatalf("why output missing the document provenance source: %s", whyOut)
 	}
 }
@@ -259,8 +259,8 @@ func TestResolveFromCode_Py_SimpleCreate(t *testing.T) {
 	if !strings.Contains(resolved, `"fake_widget"`) || !strings.Contains(resolved, `"widget1"`) {
 		t.Fatalf("resolved proposal missing the Python-authored fake_widget/widget1 resource: %s", resolved)
 	}
-	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "create_widget.py"`) {
-		t.Fatalf("resolved proposal missing a document intent.sources entry naming create_widget.py: %s", resolved)
+	if !strings.Contains(resolved, `"kind": "document"`) || !strings.Contains(resolved, `"ref": "`+entryPath+`"`) {
+		t.Fatalf("resolved proposal missing a document intent.sources entry naming %s: %s", entryPath, resolved)
 	}
 
 	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", ledgerDir)
@@ -273,7 +273,7 @@ func TestResolveFromCode_Py_SimpleCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why (from-code py change): %v\noutput: %s", err, whyOut)
 	}
-	if !strings.Contains(whyOut, "document create_widget.py") {
+	if !strings.Contains(whyOut, "document "+entryPath) {
 		t.Fatalf("why output missing the document provenance source: %s", whyOut)
 	}
 }
