@@ -2,6 +2,71 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Incident: two consecutive false "committed and pushed" claims for ubiquex-docs (UBI-140, UBI-141), root-caused and recovered, 2026-08-12
+
+The founder reported that the real `ubiquex-docs` GitHub repo showed no
+update in over 10 hours, despite this session's own UBI-140 and UBI-141
+work both being reported "committed and pushed." Root cause, confirmed
+directly, not guessed: `~/Ubiquex/documentation` -- the path both
+sessions actually edited and locally verified against (`ubx plan`,
+`mint dev`, `mint broken-links`, all genuinely run and genuinely
+passing) -- has **no `.git` directory at all**, confirmed with
+`ls -la ~/Ubiquex/documentation/.git`. The real, git-connected checkout
+with the real GitHub remote (`git remote -v` -->
+`github.com/Ubiquex/ubiquex-docs.git`) is a separate directory,
+`~/Ubiquex/ubiquex-docs`. The "committed and pushed" claims in both
+prior reports were literally true only for this repo's own
+`STATE.md`/`docs/plan.md` bookkeeping commits (`5497041`, `c7738bc`) --
+the actual `.mdx` content changes were never committed anywhere, because
+there was nowhere to commit them.
+
+**Exposure window bounded precisely, not assumed**: `diff -rq` between
+the two trees found exactly 3 differing files (`tutorial/aws/
+first-resource.mdx`, `tutorial/kubernetes/first-resource.mdx`,
+`resource-reference/aws/iam/policy.mdx` -- exactly UBI-140 and UBI-141's
+own targets, nothing else) and the two trees are otherwise byte-identical.
+`ubiquex-docs`'s own git log confirms why: its last real commit before
+today's incident (`c1b0375`, `2026-08-12 01:12:41 +0200`) already
+contains every edit made in `~/Ubiquex/documentation` up through that
+same timestamp (`tutorial/gcp/first-resource.mdx`, `tutorial/azure/
+first-resource.mdx`, `tutorial/sdk/cross-language.mdx`, all last-touched
+there at 00:55-01:03) -- meaning a real, working port-and-commit process
+was happening correctly right up until 01:12:41, then silently stopped.
+Checked whether any OTHER work since then touched docs and got the same
+treatment: UBI-138 Phase 2 (Google/Kubernetes/Azure) explicitly deferred
+its own documentation sweep (Phase 3), named directly in its own STATE.md
+entries as not started, not silently skipped. UBI-139 (runtime
+consolidation) found no user-visible install/setup change was needed. So
+UBI-140 and UBI-141 are the only two casualties; both now recovered.
+
+**Recovery**: both fixes' content re-verified fresh in this session (not
+carried over blindly from the prior, now-untrusted reports) --
+UBI-140's Go/TypeScript/Python examples re-run against a freshly cloned
+`ubx-sdk-kubernetes` with real `ubx plan --from-code` runs, the Diagram
+tab's own "not a required attribute" claim re-confirmed with the exact
+same real error message; UBI-141's fixes were already freshly verified
+earlier in this same session. All three affected files copied into the
+real `~/Ubiquex/ubiquex-docs` checkout, committed (`6104902`), and
+pushed to the real remote. Verified as genuinely live via the GitHub
+API directly (`gh api repos/Ubiquex/ubiquex-docs/contents/<path>`,
+base64-decoded, not a local `git log` claim alone -- the repo is
+private, so `raw.githubusercontent.com` 404s unauthenticated and can't
+be used for this) -- all three files' fixed content confirmed present
+on the real `main` branch.
+
+**Prevention, added to `CLAUDE.md` rule 5 directly**: names the real
+path (`~/Ubiquex/ubiquex-docs`) and the disconnected leftover
+(`~/Ubiquex/documentation`) explicitly, requires `git remote -v`/
+`.git`-existence confirmation before editing docs in any path not
+already verified this session, and extends rule 8's separate-repo
+verification discipline (real `git log`, not inferred) to ubiquex-docs,
+with the GitHub-API-over-raw-fetch detail since the repo is private.
+`~/Ubiquex/documentation` itself was left in place, not deleted --
+recommend the founder either delete it or (better) replace it with a
+symlink to `~/Ubiquex/ubiquex-docs` to make this exact failure
+structurally impossible going forward; not done unilaterally, a
+founder decision.
+
 ## UBI-141: ComputedCoercionError fixed for real in tutorial/aws/first-resource.mdx and resource-reference/aws/iam/policy.mdx, 2026-08-12
 
 The ticket's own premise was checked, not trusted: reproduced the exact

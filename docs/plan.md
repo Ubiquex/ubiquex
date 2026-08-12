@@ -2,6 +2,24 @@
 
 ## Changelog
 
+- 2026-08-12 -- Incident: UBI-140 and UBI-141 were both reported
+  "committed and pushed" but never reached the real `ubiquex-docs`
+  GitHub repo -- root cause: both sessions edited and locally verified
+  `~/Ubiquex/documentation`, a disconnected copy with no `.git` at all,
+  instead of the real, git-connected `~/Ubiquex/ubiquex-docs` checkout.
+  Bounded the exposure precisely (`diff -rq` between the two trees found
+  exactly the 3 files these two tickets touched, nothing else; every
+  earlier edit was already ported into a real commit at `01:12:41`, then
+  the porting silently stopped) and confirmed no other session's docs
+  work in the same window was similarly stranded (UBI-138 Phase 2 named
+  its own docs sweep as explicitly deferred; UBI-139 needed no docs
+  change). Both fixes re-verified fresh, ported into the real checkout,
+  committed, pushed, and confirmed genuinely live via a direct GitHub
+  API fetch (the repo is private, so `raw.githubusercontent.com` can't
+  be used unauthenticated). `CLAUDE.md` rule 5 amended to name the real
+  path explicitly and require remote/`.git` confirmation before editing
+  docs in any unverified path. Full account: STATE.md's own 2026-08-12
+  entry.
 - 2026-08-12 -- UBI-141: fixed a real `ComputedCoercionError` bug in
   `tutorial/aws/first-resource.mdx`'s TS tab (`${queue.arn}` inside a
   template literal), plus five more real instances of the same

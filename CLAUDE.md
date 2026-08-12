@@ -26,7 +26,22 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
    (transcripts real, flags from --help), mint validate clean, committed and
    pushed. If genuinely infeasible in-session, record a docs-debt entry in
    STATE.md as the exception — never skip silently. Internal docs (docs/ in
-   this repo) are updated immediately as before.
+   this repo) are updated immediately as before. The real, git-connected
+   ubiquex-docs checkout is `~/Ubiquex/ubiquex-docs` (remote:
+   `github.com/Ubiquex/ubiquex-docs`, confirm with `git remote -v` before
+   editing, not assumed) -- `~/Ubiquex/documentation` is a disconnected,
+   non-git leftover copy with no remote at all; check `ls -la <path>/.git`
+   before editing docs in ANY path whose name isn't verified first. "committed
+   and pushed" for a docs change is only true once `git log -1` in the real
+   checkout shows the commit AND the content is confirmed via the GitHub API
+   against the actual repo (it's private -- `raw.githubusercontent.com`
+   404s unauthenticated; use `gh api repos/Ubiquex/ubiquex-docs/contents/<path>`
+   instead), matching rule 8's discipline for shared runtimes/bindings repos.
+   (UBI-140 and UBI-141 were both genuinely fixed and verified locally, then
+   reported "committed and pushed" twice in a row -- both times the edits and
+   local verification were real, but landed in `~/Ubiquex/documentation`, never
+   in the real `ubiquex-docs` git repo; caught only when the founder checked
+   the real GitHub repo directly and found no update in over 10 hours.)
 6. Only reference Linear issue IDs given in the handoff prompt; never infer one.
    When filing new issues, verify the title against the Linear board.
 7. Background agents are not used in this project's sessions — work is sequential
