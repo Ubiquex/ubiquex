@@ -2,6 +2,128 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-140: kubernetes/first-resource.mdx fixed for real, using verified ground truth from the real generated bindings, 2026-08-12
+
+Real, deep re-verification against the actual generated
+`ubx-sdk-kubernetes` bindings (cloned fresh, read directly), not
+inferred -- the fictional `core`/`apps`/`ObjectMeta` bug flagged but
+never fixed across two earlier UBI-138 sessions is now genuinely
+closed, plus several NEW real findings surfaced along the way that
+weren't previously known.
+
+**Go: every level is `Kind: "list"`, confirmed by breaking it, not
+reading the code.** `Metadata`/`Spec`/`Template`/`Spec`/`Container`/
+`EnvFrom`/`SecretRef` are ALL slice-wrapped, all the way down --
+`kubernetes_deployment_v1`'s own container-env chain is genuinely 7
+levels deep from `Config`. Real, working syntax
+(`[]secret.SecretV1_Metadata{{Name: ..., Namespace: ...}}` for a
+`Kind: "list"` field) was derived from `sdk/go/runtime/runtime.go`'s
+own `serializeFieldValue`/`serializeConfig` reflection logic (which
+requires `reflect.Struct` per list element, ruling out `map[string]any`)
+-- since NO existing test in the whole repo exercises this path
+(confirmed by a real search), it was proven correct only by actually
+running `ubx plan --from-code` against the real published module, not
+by trusting the derivation. **Real, unprompted finding**:
+`Env.ValueFrom.SecretKeyRef` has no dedicated struct at all --
+`sdk/codegen/templates/go`'s own real dedup (structurally-identical
+shapes share one Go type, confirmed safe by the field-name-driven
+reflection) silently reuses `..._ConfigMapKeyRef`'s type instead.
+
+**The `any`-typing question, answered definitively from the codegen
+source, not assumed**: `sdk/codegen/templates/go/go.go:271,396` --
+every Config field is deliberately typed `any` regardless of shape,
+because the runtime walks by Go struct FIELD NAME via reflection,
+never by declared type. Confirmed intentional, not a bug; the tutorial
+now reflects this honestly instead of inventing typed structs.
+
+**TS and Python checked independently, real and different findings for
+each, not assumed symmetric with Go or each other**:
+- TypeScript's codegen computes REAL, specific types (named interfaces,
+  real arrays, `Record<string, string>`, ...), not `any` -- confirmed
+  from `sdk/codegen/templates/ts/ts.go`'s own `tsValueType`. Same deep
+  nesting depth as Go (same dedup, same fully-qualified names), but
+  genuinely more ergonomic to author. **Two real, new TS-specific
+  codegen gaps found and NOT silently routed around**: nested
+  block-derived interface fields (`SecretV1_Metadata`'s own fields)
+  are never marked optional, unlike top-level Config fields which are;
+  and nested fields never accept `Computed<T>`, unlike top-level Config
+  fields which do -- confirmed via real `deno check` failures, not
+  eyeballed. The tutorial's own TS example is genuinely correct and
+  verified-resolving via a real `ubx plan --from-code` run, but does
+  NOT cleanly pass `deno check` because of this real, pre-existing gap
+  -- flagged as its own follow-up, not papered over with `as` casts in
+  the docs.
+- Python matches Go's own `Any`-typed pattern (dataclasses, all fields
+  `Any`). **Real, separate finding**: nested types (`..._Metadata`,
+  `..._EnvFrom`, ...) are NOT re-exported at the service-package level
+  (`ubx.kubernetes.deployment`), only the resource binding + its own
+  `Config` are -- importing them requires the real submodule path
+  directly (`ubx.kubernetes.deployment.deployment_v1`), confirmed by a
+  real `ImportError` before fixing it.
+- **A third real, cross-language finding**: `replicas` is typed
+  `string` in TS's own derived types (real schema signal, `ir.
+  ScalarString`), not a number -- Go/Python's own blanket `any`/`Any`
+  hid this from Go's own attempt with an int literal (which "worked"
+  only because `ubx plan` doesn't validate types at plan time, not
+  because it was actually correct). All three languages now use
+  `"1"`, matching the real schema.
+
+**A real, unplanned, deeper finding: `ubx.Secret()` genuinely cannot
+target `kubernetes_secret_v1.data`.** The original (and this session's
+own first draft) used a secret-manager reference there; real
+verification found `ubx`'s own secret-placement validation requires
+the provider schema to flag the target field `Sensitive`, and `data`
+isn't flagged `Sensitive` anywhere in the real generated `FieldSpec` --
+confirmed by grep, then by a real failing `ubx plan --from-code` run.
+This was a real, pre-existing bug in the ORIGINAL tutorial content too
+(predates this session), not something introduced by the fix. Switched
+to a plain string value; the secret-manager-reference angle is gone
+from this tutorial, named explicitly rather than silently dropped.
+
+**A judgment call, made explicitly, not silently**: the maximum-depth
+real path (`Container.Env[].ValueFrom.SecretKeyRef`) is 7 levels deep
+and was deliberately NOT used. Used `Container.EnvFrom[].SecretRef[]`
+instead (6 levels, and reuses `ConfigMapRef`'s real dedup'd type) --
+genuinely shallower AND arguably more idiomatic Kubernetes for "import
+a secret's keys as env vars," not just simplified/invented for
+brevity. The secret's own data key was renamed to `DB_PASSWORD`
+(uppercase) specifically so `envFrom.secretRef` produces the exact
+same real-world env var name the original tutorial's own narrative
+promised, with less nesting.
+
+**Diagram tab, a real structural finding, not a workaround**: neither
+`kubernetes_secret_v1` nor `kubernetes_deployment_v1` has a single
+genuinely required top-level attribute in the real schema -- confirmed
+directly (`ubx_required.metadata`/`ubx_required.spec` both real-error
+with `"... is not a required attribute"`, and `diagram/parse.go`'s own
+error message confirms `ubx_required` is deliberately restricted to
+required-only attributes by design). The diagram medium genuinely
+cannot express this tutorial's own reference for these two resource
+types -- named honestly on its own tab, not hidden or faked with an
+unused import.
+
+**Verification**: real `ubx plan --from-code` runs (not eyeballed) for
+Go, TypeScript, and Python, all three producing the IDENTICAL real
+resolved delta (down to field ordering) against the real published
+`ubx-sdk-kubernetes` module; a real `ubx plan --from-diagram` run
+confirming the diagram's own real limitation; `deno check --no-remote`
+run separately (surfaced the real TS-specific gaps above, not
+resolved by casting). `mint dev` + real DOM overflow checks (`document.
+documentElement.scrollWidth - window.innerWidth`) confirm 0 page-level
+overflow on every tab despite the Go code block's own real 475px
+INTERNAL scroll (expected, correct code-block behavior, not a page
+bug -- same precedent as UBI-138 Phase 3's own AWS
+`serverlessapplicationrepository` finding). `mint broken-links` clean.
+
+**Not done this session, named so it isn't assumed covered**: the
+Markdown tab's own prose was updated for accuracy but not re-verified
+against a live Claude API round-trip (out of this session's explicit
+scope, which named Go/TS/Python/Diagram specifically). The real TS
+codegen gaps (missing optional markers + missing `Computed<T>` on
+nested interface fields) and the Go/TS `SecretKeyRef` type-dedup
+naming are real, confirmed findings, not fixed at the codegen source
+this session -- worth their own follow-up ticket.
+
 ## UBI-139: shared SDK runtime consolidated into one-repo-per-language, git submodules, live and verified, 2026-08-12
 
 **Mandatory investigation done first, before touching anything, per the

@@ -2,6 +2,25 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-140: `tutorial/kubernetes/first-resource.mdx` fixed
+  for real against the actual generated `ubx-sdk-kubernetes` bindings
+  (cloned fresh, read directly) -- the fictional `core`/`apps`/
+  `ObjectMeta` bug flagged across two earlier UBI-138 sessions but
+  never fixed is now closed. Real, deep nesting confirmed (`Kind:
+  "list"` at every level, `[]Type{{...}}` syntax proven by an actual
+  `ubx plan --from-code` run, not derived and trusted). New findings
+  along the way: the `any`-typing is confirmed intentional codegen
+  behavior; TS has two real gaps (nested fields missing `?` and missing
+  `Computed<T>`) that make the tutorial's own TS example resolve
+  correctly but not pass `deno check` cleanly; Python's nested types
+  aren't re-exported at the service-package level; `ubx.Secret()`
+  genuinely cannot target `kubernetes_secret_v1.data` (not
+  `Sensitive`-flagged) -- a real, pre-existing bug in the original
+  tutorial too; the Diagram medium genuinely cannot express this
+  tutorial's own reference (neither resource has a required top-level
+  attribute). A deliberate, explicit simplification was made
+  (`envFrom.secretRef` instead of the 7-level-deep `env[].valueFrom.
+  secretKeyRef` path). Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- UBI-139: the shared SDK runtime (Go/TypeScript/Python)
   consolidated into one-repo-per-language, matching `ubx-sdk-go`'s own
   existing shape. `sdk/ts/` and `sdk/py/` both turned out to be real
