@@ -107,6 +107,7 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 		WireName: "settings",
 		Type: ir.TypeRef{Kind: ir.KindObject, Object: []ir.Field{
 			{WireName: "enabled", Optional: true, Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarBool}},
+			{WireName: "label", Required: true, Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString}},
 		}},
 	}
 	rt := rt("aws_thing", nested)
@@ -115,7 +116,13 @@ func TestResourceFile_NestedObjectBlock(t *testing.T) {
 		t.Fatalf("ResourceFile: %v", err)
 	}
 
-	mustContain(t, out, "export interface Thing_Settings {\n  enabled: boolean;\n}")
+	// UBI-142: a nested interface's own fields must get identical
+	// optional-marking and Computed<T> acceptance to a top-level Config
+	// field -- confirmed real gap (deno check failed on otherwise-correct,
+	// ubx plan-resolvable code), fixed via the shared configFieldLine
+	// helper both ResourceFile's own top-level loop and this nested loop
+	// now route through.
+	mustContain(t, out, "export interface Thing_Settings {\n  enabled?: boolean | Computed<boolean>;\n  label: string | Computed<string>;\n}")
 	mustContain(t, out, "settings?: Thing_Settings | Computed<Thing_Settings>;")
 	mustContain(t, out, `wireName: "settings"`)
 	mustContain(t, out, `kind: "object"`)
@@ -135,7 +142,8 @@ func TestResourceFile_ListOfNestedObject(t *testing.T) {
 		t.Fatalf("ResourceFile: %v", err)
 	}
 
-	mustContain(t, out, "export interface SecurityGroup_Rule {\n  fromPort: number;\n}")
+	// UBI-142: same fix, exercised through a List<Object> field this time.
+	mustContain(t, out, "export interface SecurityGroup_Rule {\n  fromPort?: number | Computed<number>;\n}")
 	mustContain(t, out, "rule?: SecurityGroup_Rule[] | Computed<SecurityGroup_Rule[]>;")
 	mustContain(t, out, `wireName: "rule"`)
 	mustContain(t, out, `kind: "list"`)

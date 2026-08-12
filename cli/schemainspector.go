@@ -130,16 +130,32 @@ func (s resourceTypeSchemaInspector) MissingRequiredKeys(typeName string, config
 
 // attributeAt walks a dot-notation path into a schema Block, recursing
 // into NestedBlocks the same way provider.Redact/blockObjectType already
-// do -- a path can only ever bottom out at a plain Attribute (a nested
-// block itself, named alone with nothing after it, has no Computed/
-// Sensitive flag of its own to report).
+// do. A NestedBlock's own bare name (nothing left of the path) has no
+// Computed/Sensitive flag of its own to report, so that case still
+// misses. A plain Attribute match, though, is always the path's own
+// terminal schema node regardless of any remaining segments: ir.go's
+// own typeRefFromCty confirms a real provider Attribute's Type is
+// always primitive/list/set/map, never an object needing further
+// schema-described descent (object shapes only ever arise from
+// NestedBlocks, handled by the second loop below) -- so a segment past
+// a matched Attribute is always a map key or list index the schema
+// doesn't itself describe further, and the Attribute's own
+// Computed/Sensitive flags genuinely apply to its whole value, keys and
+// all. (UBI-143: kubernetes_secret_v1.data is a real, live-schema-
+// confirmed Sensitive map[string]string attribute -- verified directly
+// via a real schema fetch, Sensitive=true survives correctly all the
+// way through provider.Attribute; the bug was here, not in ingestion --
+// this function used to require an EXACT match with nothing left over,
+// so `ubx.Secret()` targeting one specific key, "data.DB_PASSWORD",
+// looked up "data" with `hasRest=true` and returned not-found even
+// though "data" itself is genuinely Sensitive, reproduced with a real
+// `ubx plan --from-code` run before this fix: "resolve: $secret placed
+// at an attribute the provider schema does not flag Sensitive:
+// kubernetes_secret_v1.data.DB_PASSWORD".)
 func attributeAt(block provider.Block, path string) (provider.Attribute, bool) {
 	name, rest, hasRest := strings.Cut(path, ".")
 	for _, a := range block.Attributes {
 		if a.Name == name {
-			if hasRest {
-				return provider.Attribute{}, false
-			}
 			return a, true
 		}
 	}

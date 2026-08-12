@@ -207,15 +207,11 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		optionalMark := ""
-		if !f.Required {
-			optionalMark = "?"
-		}
 		valueType, err := r.tsValueType(f.Type, pascalName, f.WireName)
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "  %s%s: %s | Computed<%s>;\n", idiomatic, optionalMark, valueType, valueType)
+		b.WriteString(configFieldLine(idiomatic, f.Required, valueType))
 	}
 	b.WriteString("}\n\n")
 
@@ -242,6 +238,29 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 	b.WriteString(descriptor.String())
 
 	return b.String(), nil
+}
+
+// configFieldLine renders one Config-shaped interface member line -- `?`
+// when the field isn't required, always unioned with Computed<T> since
+// either position may legally be assigned a live Computed<T> reference
+// (a not-yet-resolved sibling resource's own attribute), the same
+// acceptance a top-level Config field already needs. UBI-142: this
+// SAME shape is needed both by the top-level %sConfig interface
+// (ResourceFile, above) and by every nested interface tsValueType's own
+// KindObject case declares (a nested block's own inner fields carry
+// real per-field Required/Optional/Computed flags from the schema too,
+// via ir.go's blockFields -- identical in kind to a top-level field's
+// own, not a degenerate case). Both call sites route through this one
+// function so they cannot independently drift out of sync again --
+// exactly how UBI-142 happened the first time: the nested case was
+// simply never given the top-level case's own treatment when it was
+// added.
+func configFieldLine(idiomatic string, required bool, valueType string) string {
+	optionalMark := ""
+	if !required {
+		optionalMark = "?"
+	}
+	return fmt.Sprintf("  %s%s: %s | Computed<%s>;\n", idiomatic, optionalMark, valueType, valueType)
 }
 
 // fieldIsSettable reports whether a field belongs in a Config interface
@@ -395,7 +414,7 @@ func (r *resourceRenderer) tsValueType(t ir.TypeRef, pathPrefix, wireName string
 			if err != nil {
 				return "", err
 			}
-			fmt.Fprintf(&body, "  %s: %s;\n", innerIdiomatic, innerType)
+			body.WriteString(configFieldLine(innerIdiomatic, inner.Required, innerType))
 		}
 		body.WriteString("}\n")
 		r.nestedDecls = append(r.nestedDecls, body.String())

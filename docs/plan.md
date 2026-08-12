@@ -2,6 +2,41 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-142/UBI-143: two real SDK/codegen bugs found during
+  UBI-140's tutorial fix, investigated together (confirmed unrelated
+  root causes, fixed independently). UBI-142: `sdk/codegen/templates/ts/
+  ts.go`'s nested-interface-emission code path never applied the same
+  optional-marking/`Computed<T>` union treatment the top-level Config
+  loop already correctly had -- two separate code paths, one updated
+  when Computed<T> support landed, the other never touched. Fixed via a
+  shared `configFieldLine` helper both paths now route through; two
+  existing tests that had codified the broken behavior as expected
+  output were corrected. `ubx-sdk-kubernetes` regenerated for real (all
+  three languages, against the real pinned `hashicorp/kubernetes@3.2.1`,
+  not a wrong version an earlier scratch run had used), real `deno check
+  --frozen` clean across all 81 files against the published `jsr:@ubx/sdk`
+  runtime, opened as ubx-sdk-kubernetes#1 (never self-merged). A
+  genuinely separate, pre-existing gap (the runtime's own generic
+  `Computed<T>` type not collapsing array element access,
+  `dbSecret.metadata.name`) was found, isolated from this fix's own
+  effect via paired before/after tests, and explicitly left out of
+  scope (already flagged during UBI-140). AWS/GCP/Azure's own bindings
+  carry the same latent template bug but zero currently-published docs
+  exercise it -- left for their own next natural regeneration cycle, a
+  deliberate, stated scope decision. UBI-143: `ubx.Secret()` couldn't
+  target `kubernetes_secret_v1.data` -- NOT an upstream schema gap
+  (confirmed via a real live schema fetch: `Sensitive: true` genuinely
+  present) and NOT the `provider.SensitiveOverrides` mechanism's
+  business (confirmed that table only feeds output redaction, never the
+  resolver's own `$secret`-placement gate). Real root cause:
+  `cli/schemainspector.go`'s `attributeAt` required an exact path match,
+  so a sub-path into a flat map-typed Sensitive attribute (`data.
+  DB_PASSWORD`) reported not-found even though `data` itself is
+  Sensitive. Fixed by letting a flat Attribute match apply regardless of
+  any remaining path segment (a NestedBlock's own bare-name case is
+  unchanged). No design decision needed -- a real, fixable bug, verified
+  with a rebuilt `ubx` and the same real repro now resolving cleanly.
+  Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- Incident: UBI-140 and UBI-141 were both reported
   "committed and pushed" but never reached the real `ubiquex-docs`
   GitHub repo -- root cause: both sessions edited and locally verified

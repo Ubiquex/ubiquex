@@ -2,6 +2,161 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-142/UBI-143: two real SDK/codegen bugs found during UBI-140's tutorial fix, both root-caused to real, different, unrelated code paths, both fixed and verified, 2026-08-12
+
+Investigated together first per the handoff's own instruction, since both
+trace back to UBI-140's own Kubernetes tutorial work -- confirmed they do
+NOT share a root cause: UBI-142 is a `sdk/codegen/templates/ts` gap,
+UBI-143 is a `cli/schemainspector.go` gap, unrelated packages, unrelated
+mechanisms. Fixed independently, on their own merits.
+
+**UBI-142 -- TS nested interface fields weren't optional, didn't accept
+Computed<T>.** Root cause found by reading `sdk/codegen/templates/ts/
+ts.go` directly, not guessed: `ResourceFile`'s own top-level Config loop
+(lines ~202-219) correctly computed an `optionalMark` (`?` when
+`!f.Required`) and unioned every field's type with `| Computed<%s>` --
+but `tsValueType`'s own `KindObject` case (the ENTIRE separate code path
+that emits a nested interface's own body, lines ~387-400) never did
+either, unconditionally emitting `  %s: %s;\n` for every inner field
+regardless of its own real `Required`/`Optional` schema flags. Two
+genuinely separate code paths, one updated when Computed<T> support was
+added, the other never touched -- confirmed by `ir.go`'s own `blockFields`
+that nested fields carry real, meaningful per-field `Required`/
+`Optional`/`Computed` data (a leaf attribute inside a NestedBlock is
+walked by the exact same recursive function as a top-level one), so
+there was no structural reason for the gap, only an oversight.
+
+Fixed by extracting a shared `configFieldLine(idiomatic, required,
+valueType) string` helper and routing BOTH the top-level Config loop and
+the nested `KindObject` loop through it -- deliberately, so the two paths
+can't independently drift out of sync again the way this bug happened in
+the first place. Two existing tests (`TestResourceFile_NestedObjectBlock`,
+`TestResourceFile_ListOfNestedObject`, plus
+`TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision`
+in collision_test.go) had themselves codified the broken behavior as
+their own expected output -- updated to the correct expected shape, not
+just the new production code.
+
+**Real regeneration + verification, not just a unit-test claim**:
+regenerated `ubx-sdk-kubernetes`'s real TS/Go/Python bindings (all three
+languages in one PR, matching this repo's own established
+`version-watch.yml` convention exactly -- rsync with the same
+hand-maintained-file exclusions, package.json/pyproject.toml version
+fields restored, deno.json's exports map refreshed) against the real,
+currently-pinned `hashicorp/kubernetes@3.2.1` (confirmed via the repo's
+own `VERSION` file first -- an earlier scratch regen had used the wrong
+version, `2.31.0`, caught before it reached the real repo). Diff scope
+confirmed exactly the intended change class before committing: 81 files,
+6557 line-for-line replacements, purely `?`/`| Computed<T>` additions --
+a stray, unrelated `sdk/go/go.mod` "go 1.23" vs "go 1.26.3" diff (a
+long-standing, pre-existing template constant unrelated to this fix,
+confirmed via `git log -p` on the template) was reverted out before
+committing, not silently folded in. Real `deno check --frozen` clean
+across the entire regenerated tree (81 files) against the real published
+`jsr:@ubx/sdk` runtime; `go build`/`go vet` clean; a real recursive
+Python import of all 119 generated modules, zero errors. Opened as
+[ubx-sdk-kubernetes#1](https://github.com/Ubiquex/ubx-sdk-kubernetes/pull/1)
+-- confirmed via a real, authenticated GitHub API call (`state: OPEN`,
+`mergeable: MERGEABLE`, 81 changed files, 6557/6557 matching the local
+diff exactly), left open for founder review, never self-merged.
+
+**Isolated the fix's own real effect from a genuinely separate, already-
+known gap, not conflated**: the tutorial's own real `dbSecret.metadata.
+name` chain still fails `deno check` after this fix (confirmed present
+in the PRE-fix baseline too, same error) -- `metadata` is a List-kind
+Attrs field, and the runtime's own generic `Computed<T>` mapped type
+(`sdk/ts/runtime/src/index.ts`, a SEPARATE repo, `ubx-sdk-typescript`)
+doesn't collapse array element access the way the RUNTIME'S OWN proxy
+apparently does at evaluation time. This is NOT a codegen-template bug
+and genuinely out of this ticket's own stated scope (already flagged as
+a known follow-up during UBI-140, per that session's own report: "flagged
+as its own follow-up, not papered over with `as` casts"). Confirmed via
+two isolated, uncast `deno check` tests (a genuine `Computed<string>`
+value assigned into a nested Config field, no type-bypass cast): clean
+pass on the fixed bindings, a real `TS2322: Type 'ComputedMarker' is not
+assignable to type 'string'` failure on the pre-fix baseline -- proves
+the fix's own effect precisely, isolated from the separate array gap.
+
+**Regeneration scope, decided on real evidence, not guessed**: grepped
+every TS code block across the whole `ubiquex-docs` site (not just
+Kubernetes) for the pattern this bug affects (a property-chain value
+assigned into a NESTED object literal within a `resource()` call) --
+AWS/GCP/Azure's own published tutorials all assign their one live
+reference (`role.name`, `topic.id`, `account.name`) directly to a
+TOP-LEVEL Config field, never a nested one; Kubernetes' own tutorial is
+the only real, live doc exposure. Regenerated Kubernetes now; AWS/GCP/
+Azure's own checked-in bindings carry the identical LATENT template bug
+for any hand-written SDK program using one of their own nested fields,
+even though no currently-published doc example exercises it -- flagged
+explicitly as a real, deliberate scope decision (not silently regenerate-
+everything, not silently do-nothing), left for those three repos' own
+next natural regeneration cycle rather than an urgent tonight-only fix,
+since zero live doc content is broken by leaving them as-is.
+
+**UBI-143 -- `ubx.Secret()` couldn't target `kubernetes_secret_v1.data`.**
+Reproduced for real BEFORE investigating further (per this session's own
+now-standing discipline): a real `ubx plan --from-code` run using
+`ubx.Secret("vault", "payments/db-password")` assigned into `Data:
+map[string]any{"DB_PASSWORD": ...}` failed with `resolve: $secret placed
+at an attribute the provider schema does not flag Sensitive:
+kubernetes_secret_v1.data.DB_PASSWORD`.
+
+Checked the real, live upstream schema directly first (a small scratch
+Go program using the exact real `provider.Acquire`/`provider.Launch`/
+`client.Provider.Schema(ctx)` chain `ubx sdk gen` itself uses, per the
+handoff's own instruction) -- `hashicorp/kubernetes@2.31.0`'s own real
+`kubernetes_secret_v1.data` attribute genuinely IS `Sensitive: true` on
+the wire, contrary to the ticket's own speculated "upstream gap" branch.
+Also found and ruled out a second real candidate mechanism along the
+way: `provider/overrides.go`'s own `SensitiveOverrides` table (a REAL,
+pre-existing override mechanism, seeded from UBI-22/UBI-24/UBI-37's own
+findings) looked like exactly the kind of thing the ticket speculated
+might be needed -- but it's consulted ONLY by `provider/redact.go` (a
+completely different consumer, gating OUTPUT redaction of already-
+resolved ledger content), never by `core/resolver`'s own `$secret`-
+placement gate (`cli/schemainspector.go`'s `schemaInspectorAdapter.
+IsSensitive`, which reads ONLY the live wire schema's own `Attribute.
+Sensitive` directly) -- confirmed by grepping every real caller of
+`OverridePathsFor`, not assumed from the name alone. An override entry
+would NOT have fixed this bug even if kubernetes_secret_v1.data genuinely
+needed one (it doesn't).
+
+**Real root cause, found by reading the actual failing call chain**:
+`attributeAt` (`cli/schemainspector.go`) required an EXACT path match
+with nothing left over -- a plain (non-NestedBlock) Attribute match with
+any remaining path segment (`hasRest`) was unconditionally treated as
+not-found. `ubx.Secret()` targets one specific KEY inside `data` (a real
+`map[string]string`-typed attribute), so the resolver's own recursive
+`resolveValue` computes the exact schema path `"data.DB_PASSWORD"` for
+where the marker sits -- `attributeAt` looked up `"data"` with
+`hasRest=true` and reported not-found, even though `"data"` itself is
+genuinely Sensitive. `ir.go`'s own `typeRefFromCty` confirms a real
+provider Attribute's Type is always primitive/list/set/map, never an
+object needing further schema-described descent (object shapes only
+ever arise from NestedBlocks) -- so any path segment past a matched
+flat Attribute is always a map key or list index the schema doesn't
+itself describe further, and the Attribute's own Sensitive/Computed
+flags genuinely apply regardless. Fixed by dropping the `hasRest`
+disqualification for the flat-Attribute-match branch specifically (the
+NestedBlock branch's own `hasRest` requirement is untouched -- a bare
+NestedBlock name still correctly has no Sensitive/Computed of its own to
+report). New `cli/schemainspector_test.go` (previously no dedicated test
+file existed for this function) covers: the fixed sub-path-into-flat-
+attribute case; NestedBlock path resolution unchanged; NestedBlock bare
+name still not-found; an unrecognized name still refused; and the real
+production `schemaInspectorAdapter.IsSensitive` path directly, not just
+the lower-level `attributeAt` helper.
+
+No design decision was needed -- confirmed a genuine, fixable code bug
+(the path-walker, not schema ingestion, which was already proven clean),
+never reached the "propose an override mechanism, stop and ask" branch
+the handoff itself flagged as a live possibility. Verified with a real,
+rebuilt `ubx` binary (`make build`) and the SAME real `ubx plan
+--from-code` reproduction, now resolving cleanly with the `$secret`
+marker persisting correctly in the plan output, no `ErrSecretNotSensitive`.
+This is a `ubiquex` binary fix only -- no bindings regeneration needed,
+since the bug lived in `ubx` itself, not in any generated code.
+
 ## Incident: two consecutive false "committed and pushed" claims for ubiquex-docs (UBI-140, UBI-141), root-caused and recovered, 2026-08-12
 
 The founder reported that the real `ubiquex-docs` GitHub repo showed no

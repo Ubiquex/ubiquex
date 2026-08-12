@@ -117,7 +117,7 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 		t.Fatalf("expected aws/svc/thing_logging.ts, got paths: %v", keys(files))
 	}
 
-	mustContain(t, thingSrc, "export interface Thing_Logging {\n  enabled: boolean;\n}")
+	mustContain(t, thingSrc, "export interface Thing_Logging {\n  enabled?: boolean | Computed<boolean>;\n}")
 	mustContain(t, loggingSrc, "export interface ThingLoggingConfig {")
 	mustContain(t, loggingSrc, "export const ThingLogging:")
 	mustNotContain(t, thingSrc, "export interface ThingLogging {")
