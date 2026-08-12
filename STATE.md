@@ -2,6 +2,64 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-148: site-wide overflow re-verification -- CLOSED, zero real overflow found across all 4775 pages, 2026-08-12
+
+**A real, automated, complete sweep, not a spot check.** Built a
+reusable Playwright crawl script (`crawl.js`, scratch, not committed --
+see below) driven against a real `mint dev` instance, run against
+every single real `.mdx` page in `ubiquex-docs` (4775, derived by
+`find -iname '*.mdx'`, cross-checked byte-for-byte against the crawl's
+own coverage afterward -- zero missing, zero extra). For every page:
+the same page-level `document.documentElement.scrollWidth` vs
+`clientWidth` check this session's own prior tickets (UBI-146/UBI-147)
+used by hand, plus every `main pre` block's own `scrollWidth` vs
+`clientWidth`, flagged as a REAL bug only when no ancestor within 6
+levels actually scrolls it (`overflow-x: auto`/`scroll`) -- a wide
+`<pre>` correctly contained by its own established scroll wrapper
+(UBI-146/147's own precedent) is working as designed, never flagged.
+
+**Result: zero real overflow found, zero page-level, zero uncontained
+`<pre>`, zero load errors, across all 4775 pages** -- resource-reference/
+aws (1901), gcp (1426), azure (1211), kubernetes (109), tutorial (59),
+concepts (38), cli-reference (27), plus `index`/`install`/
+`resource-reference` (4). Nothing needed fixing. Sampled real `<pre>`
+widths across all three cloud providers landed 620-690px against a
+636-672px container throughout, comfortably inside the scroll
+wrapper's own bounds, not near the edge -- the `--tw-ring-inset` fix
+(custom.css) plus the per-page fixes UBI-56/UBI-81/UBI-146/UBI-147
+already landed this session appear to have genuinely closed this bug
+class, not just the specific instances each session happened to hit.
+No signal here that the resource-reference generator templates
+themselves need adjusting -- the real overflow instances found in
+EARLIER sessions were all in hand-authored tutorial/cli-reference
+prose (long `@stack.type.name.attr` references, long CLI error
+messages), never in the generated resource-reference pages, which
+this sweep now confirms clean at full scale, not just via the samples
+each earlier session happened to touch.
+
+**A real gap the sweep itself caught, not hidden**: the first full
+pass under-counted by 38 -- `concepts/` was listed
+(`concepts_pages.txt` built) but never actually run through the crawl
+script before the "done" tally was first computed. Caught by cross-
+checking the aggregate result set's own path list against the real,
+complete page list (`comm -23`) before reporting anything as final,
+not assumed complete from the per-batch summaries alone. Concepts run
+afterward, also zero overflow, then the full cross-check re-run clean.
+
+**Tooling**: `crawl.js` (Playwright, `waitUntil: 'load'` not
+`'networkidle'` -- the dev server's own HMR websocket never lets
+`networkidle` resolve, this was the first real failure mode hit and
+fixed before any real sweep data was trustworthy) at concurrency 8,
+~0.6-1.3s/page depending on section. Left in scratch
+(`/private/tmp/.../scratchpad/ubi148/crawl.js`), not committed to
+either repo -- a one-off audit tool, not offered as a standing part of
+either repo's own tooling unless asked for.
+
+**Verify**: no docs.json/mdx content changed at all this session (there
+was nothing to fix), so no `mint validate`/commit/push/live-verify
+cycle applies here -- `ubiquex-docs`' own `git status` confirmed clean
+before closing.
+
 ## UBI-146: store gc and the real pin-chain rendering, documented -- CLOSED, docs live, 2026-08-12
 
 **New `cli-reference/store-gc.mdx`** (ubiquex-docs), documenting UBI-57
