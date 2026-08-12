@@ -2,6 +2,76 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: new SDK Reference template, Phase 3 -- 68 real AWS resource pages live, generator now real tracked tooling, GCP not yet started, 2026-08-13
+
+**The generator is real, tracked tooling now, not scratch.** Split the
+old scratch `gen_provider_docs.py` into a shared library (no
+`__main__`, no hardcoded `DOCS_ROOT`/`SCRATCH` globals) plus two real
+CLI entry points -- `gen_mechanical_pages.py` (the original full-
+provider tier) and `gen_complete_pages.py` (UBI-144's own richer,
+splice-only template) -- plus the real verification tooling this
+session built (`verify_go_blocks.py`, `verify_py_blocks.py`,
+`crawl_overflow.js`, `dump_schema.go`, `extract_idents.py`), a
+`README.md` documenting the full real pipeline, and a scoped
+`package.json`/`.gitignore`. Verified byte-identical against the
+already-committed Phase 1/2 pages before committing (regenerated
+`aws_iam_policy`/`aws_sqs_queue`/`aws_lambda_function` through the
+refactored tooling, zero diff). Committed and pushed
+(`ubiquex-docs` `3cf7a39`).
+
+**Phase 3: 38 more resources, deliberately spanning 30+ services never
+touched before** (EKS, EFS, CloudFront, SES, Step Functions,
+EventBridge, Glue, Athena, Redshift, ElastiCache, Batch, CodeBuild,
+CodePipeline, WAF, Organizations, Backup, Config, Kinesis, MSK,
+Neptune, DocumentDB, Transfer Family, AppSync, Cognito, Directory
+Service, Elastic Beanstalk, CloudTrail, GuardDuty, Security Hub, SSM
+documents, Global Accelerator, Direct Connect, Transit Gateway, VPN,
+WorkSpaces, MediaLive) -- diversity over raw count, per direction,
+because diversity is what's been catching real bugs, confirmed again
+this round:
+
+- **A real bug this diversity caught**: `pick_richer_example_fields`'s
+  own "name" inclusion checked only `WireName == "name"`, never real
+  settability. `aws_efs_file_system`'s own "name" is PURE COMPUTED
+  (derived from a tag, never a real field in the generated Config
+  struct) -- produced a real Go compile error ("unknown field Name in
+  struct literal"), caught by the same real `go build` pass, not
+  gofmt. Fixed to check `f["Optional"]` too, the exact same real
+  settability test this file's own Input properties selection
+  (`eff_flags`) already used elsewhere -- one check, reused, not
+  reinvented a second, looser way.
+- **A real accidental regression caught before it shipped, not
+  after**: test-regenerating `aws_iam_role` through the newly
+  refactored, committed tooling (to confirm the refactor itself was
+  safe) produced a real, DIFFERENT result from Phase 1's own approved
+  page -- the exact intent-summary text and the hand-tuned companion
+  markdown from Phase 1's own driver were never carried into the
+  shared library, only the description/policy heuristic fixes were.
+  Reverted that one file before committing anything else; Phase 1's
+  own approved `aws_iam_role` page is untouched. Real, open follow-up,
+  not silently resolved: `KNOWN_FAMILY_MARKDOWN`'s own mechanical
+  rendering is a real, honest, but rougher scenario than what was
+  hand-approved for `aws_iam_role` specifically -- whoever next
+  regenerates that one page should know it won't reproduce byte-for-
+  byte, and should decide whether to freeze its exact prose as a
+  literal or accept the mechanical version.
+- **Verification, all real, all 38 pages**: 38/38 real `go build`
+  clean, 38/38 real `deno fmt` clean (inline at generation), 38/38
+  real `ast.parse` clean, `mint validate` clean, zero em dashes.
+- **Overflow, 152 more real measurements** (38 pages x 4 tabs): zero
+  page-level overflow, zero uncontained cases, same standard as Phase
+  1/2. Go overflowed on all 38/38 pages this round (up to 319px,
+  `aws_globalaccelerator_accelerator` -- 17-character service name
+  repeated three times in one constructor-call line). Confirms Phase
+  2's own "long real AWS service/field names inflate specific lines"
+  finding at a MORE extreme data point, not a new pattern -- more real
+  evidence for UBI-150, not its own new ticket.
+
+Committed and pushed (`ubiquex-docs` `b8fe544`), confirmed live via
+`gh api`. **68/1901 real AWS pages done total** (Phase 1: 1, Phase 2:
+29, Phase 3: 38). GCP/Azure/Kubernetes still entirely on the original
+mechanical tier.
+
 ## UBI-144: new SDK Reference template, Phase 1 + Phase 2 -- 30 real AWS resource pages live, GCP not yet started, 2026-08-13
 
 **A real gap found before anything else**: the actual generator that
