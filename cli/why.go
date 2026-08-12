@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
@@ -91,6 +93,7 @@ func newWhyCmd() *cobra.Command {
 
 				if !jsonOut {
 					renderProposal(out, st, p)
+					renderPinChain(out, st, cmd.Context(), p)
 					renderApplies(out, attempts)
 					if dialogue {
 						renderDialogue(out, p, dlg)
@@ -207,6 +210,53 @@ func renderProposal(out io.Writer, st *styler, p *core.Proposal) {
 	renderCreates(out, st, p.Delta.Creates, "")
 	renderModifies(out, st, p.Delta.Modifies, "")
 	renderDestroys(out, st, p.Delta.Destroys, "", true)
+}
+
+// renderPinChain is UBI-57 Part 2's own addition: renders the FULL,
+// walked cross-stack pin chain p depends on (A pins B, which itself
+// pins C, ...), via resolver.WalkPinChain -- purely informational, never
+// a reason `ubx why` itself would fail or refuse anything. Silence for
+// the common case (no cross-stack pin at all), matching this file's own
+// existing terseness elsewhere (renderApplies).
+//
+// A real error walking the chain (a neighbor 2+ hops away being
+// unreachable, say) is rendered as its own line rather than aborting
+// the rest of `ubx why`'s otherwise-working output -- this is
+// visibility, not the real blocking check (VerifyPins, called from `ubx
+// accept`/`ubx ship`, an entirely separate code path this never touches
+// or influences).
+func renderPinChain(out io.Writer, st *styler, ctx context.Context, p *core.Proposal) {
+	hops, err := resolver.WalkPinChain(ctx, p)
+	if err != nil {
+		fmt.Fprintf(out, "pin chain: %v\n", err)
+		return
+	}
+	if len(hops) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "pin chain (%d hop%s):\n", len(hops), plural(len(hops)))
+	for i, h := range hops {
+		status := st.Green("fresh")
+		if h.Stale {
+			status = st.Red(fmt.Sprintf("STALE (pinned %s, now %s)", st.Hash(h.PinnedHead), st.Hash(h.CurrentHead)))
+		}
+		fmt.Fprintf(out, "  %d. %s -> %s: %s\n", i+1, h.Resource, h.LedgerDir, status)
+	}
+	for _, h := range hops {
+		if h.Stale {
+			fmt.Fprintf(out, "  (an indirect ancestor has moved -- informational only, this never blocks %s itself; only its own direct neighbor's staleness does)\n", st.Hash(p.ID))
+			break
+		}
+	}
+}
+
+// plural is a tiny, local pluralization helper -- "1 hop" vs "2 hops",
+// no dependency worth adding for a single call site.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // renderApplies is UBI-26's own addition to `ubx why`'s single-proposal

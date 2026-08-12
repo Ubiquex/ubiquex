@@ -41,20 +41,30 @@ import (
 // single-stack fixture.
 
 // remoteStoreFixture wires cfg.Ledger.Store at storeName and installs
-// openRemoteLedgerStore so every openLedgerForStack call for the
-// remainder of the test (regardless of how many times it's called)
-// resolves to the SAME shared, real in-memory bucket -- restoring the
-// original seam on cleanup.
+// openRemoteLedgerStore AND openRemoteStoreGC (cli/storegc.go's own,
+// separate test seam -- UBI-57: gc's own real work needs the concrete
+// *ledgerstore.Store core.LedgerStore's minimal interface deliberately
+// never exposes, so it opens the store directly rather than through
+// openLedgerForStack) so every call for the remainder of the test
+// (regardless of how many times either is called) resolves to the SAME
+// shared, real in-memory bucket -- restoring both original seams on
+// cleanup.
 func remoteStoreFixture(t *testing.T) (storeName string, bucket *blob.Bucket) {
 	t.Helper()
 	bucket = memblob.OpenBucket(nil)
 	t.Cleanup(func() { bucket.Close() })
 
-	origSeam := openRemoteLedgerStore
-	openRemoteLedgerStore = func(ctx context.Context, storeURI string) (*ledgerstore.Store, func() error, error) {
+	opener := func(ctx context.Context, storeURI string) (*ledgerstore.Store, func() error, error) {
 		return ledgerstore.New(bucket), func() error { return nil }, nil
 	}
-	t.Cleanup(func() { openRemoteLedgerStore = origSeam })
+
+	origLedgerSeam := openRemoteLedgerStore
+	openRemoteLedgerStore = opener
+	t.Cleanup(func() { openRemoteLedgerStore = origLedgerSeam })
+
+	origGCSeam := openRemoteStoreGC
+	openRemoteStoreGC = opener
+	t.Cleanup(func() { openRemoteStoreGC = origGCSeam })
 
 	return "mem://acme-ledger", bucket
 }

@@ -2,6 +2,122 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-57: two real, independent housekeeping items named in UBI-32, both closed on their own merits, 2026-08-12
+
+**Part 1 -- orphan GC for remote stores.** Verified the real, current
+verb-naming convention first (`cli/sdk.go`'s `newSDKCmd`/`newProvidersCmd`
+both a parent command with subcommand(s)) before assuming `ubx store
+gc` was final -- it matches the established pattern exactly. Root cause
+confirmed by reading `core/ledger.go`'s own `Append` directly:
+`WriteProposalIfAbsent` lands, then `AdvanceHead` -- a crash between the
+two leaves the just-written proposal object permanently unreferenced
+unless the exact same proposal is later retried (the existing
+"interrupted append" resume). `core.LedgerStore`'s own interface
+deliberately has no "list every proposal" method (its own doc comment:
+object stores are worst at making that cheap and strongly consistent) --
+so GC's real work (`ledgerstore.Store.OrphanedProposals`/
+`.DeleteProposal`, new `ledgerstore/gc.go`) lives entirely on the
+concrete `*ledgerstore.Store`, never touching that interface. Reachability
+is walked from GENESIS, never from `Head()`'s own best-effort cached
+hint -- a stale hint here would silently truncate the reachable set and
+misclassify a genuinely early, chained proposal as orphaned, the one
+mistake this function must never make.
+
+Dry-run by default (the ticket's own explicit requirement); `--yes` is
+the one, explicit flag that authorizes real deletion, matching this
+codebase's own "a flag itself is a real confirmation" pattern
+(`ship.go`'s `--confirm-destroys`) rather than layering a redundant
+interactive prompt on top. The "absolute safety property" was VERIFIED,
+not just asserted: `ubx store gc --yes` recomputes the orphan set FRESH
+immediately before deleting anything, and only ever deletes an id
+present in BOTH the originally-displayed list and that fresh
+recomputation -- a real TOCTOU guard for a store other callers may still
+be writing to. 7 hermetic tests (`ledgerstore/gc_test.go`), including a
+5-hop-chain transitive-safety test proving nothing chain-reachable, at
+any depth, is ever misclassified; 5 CLI-level hermetic tests
+(`cli/storegc_test.go`, extending the existing `remoteStoreFixture` to
+also cover the new `openRemoteStoreGC` seam).
+
+**Real, live crash-injected orphan against real S3** (`ubx-states`, the
+same bucket UBI-56's own live conformance already uses): a real,
+legitimately chained proposal plus a real orphan (a genuine
+`WriteProposalIfAbsent`-without-`AdvanceHead`, the exact real crash
+shape) written via a small Go program against the real store. `ubx
+store gc --stack payments` (dry run) correctly found exactly the one
+real orphan and nothing else; independently reconfirmed via a fresh
+`aws s3api list-objects-v2` that nothing was deleted; `ubx store gc
+--stack payments --yes` deleted exactly the orphan; independently
+reconfirmed via fresh, separate `aws s3api` calls afterward that the
+orphan is permanently gone, the real chained proposal's own content is
+byte-identical and uncorrupted, and the `heads/genesis` edge is
+completely untouched -- a re-run of `store gc` then correctly reports
+"no orphaned proposals." Swept fully clean afterward (`aws s3 rm
+--recursive`, confirmed empty).
+
+**Part 2 -- multi-hop pin chains.** The real semantics question answered
+FIRST, with evidence, before any code was written: `resolver.VerifyPins`
+(read directly, `core/resolver/resolver.go`) only ever walks `p`'s own
+`resolution.inputs` -- it never opens a neighbor's own proposal to check
+ITS pins, structurally single-hop by construction, not by an explicit,
+recorded design choice. Searched every design doc for an explicit
+"per-pair only, no cascade" statement and found none -- the closest is
+`docs/resolver-adversarial.md`'s own honest framing: a multi-hop pin
+chain is named as NOT YET COVERED, "a candidate for a later extension,"
+never a settled "it cascades" (or "it never will") claim. Code and
+design AGREE on today's actual behavior (single-hop only), but the
+ticket's own "design intent says per-pair" framing implied a more
+deliberate, closed decision than what the docs actually record -- a real
+nuance, surfaced plainly rather than silently assumed either way. Also
+found: neither `ubx why` nor `ubx addresses` render ANY cross-stack pin
+information today, even for the existing single-hop case -- "annotate
+transitive pins" meant building pin visibility from scratch, a larger
+scope than the ticket's own phrasing implied.
+
+Given that, confirmed directly with the founder (in-conversation, given
+the real ambiguity) before implementing: **visibility only, no new
+blocking**. `VerifyPins`' own blocking logic is completely untouched.
+New `resolver.WalkPinChain` (`core/resolver/pinchain.go`) walks the full
+chain purely for rendering -- recurses into each neighbor's own proposal
+AT ITS PINNED HEAD to discover further pins, with a real cycle guard.
+5 real, hermetic THREE-LEDGER tests (`core/resolver/pinchain_test.go`,
+the ticket's own explicit ask), including the key one:
+`TestWalkPinChain_IndirectAncestorStale_NeverBlocksVerifyPins` --
+stack C (security) genuinely advances after stack B (networking) was
+pinned against it; the resulting hop correctly shows `Stale: true`, but
+`VerifyPins(pA)` (the real, unmodified blocking check) still returns
+nil, since A only ever directly pinned B, which itself never moved. A
+sibling test (`TestWalkPinChain_DirectNeighborStale_StillCaughtByVerifyPins`)
+reconfirms the OTHER half is unaffected: a DIRECT neighbor's own
+staleness is still caught by `VerifyPins`, exactly as it always was.
+
+**Wired into rendering, both places named in the ticket.** `ubx why`
+gains a new "pin chain (N hops)" section (silent for the common no-pin
+case), each hop's own fresh/stale status shown, with an explicit note
+when an indirect ancestor is stale that this is informational only and
+never blocks the proposal itself. `ubx addresses` gains a compact
+per-resource annotation ("pinned via a N-hop cross-stack chain") for any
+address whose own creating proposal directly recorded a cross-stack
+pin, pointing at `ubx why <id>` for the full walk rather than
+duplicating the whole render there -- both human and `--json` output.
+6 new CLI-level hermetic tests (`cli/why_pinchain_test.go`), git-local
+three-stack fixtures (cross-stack pins work identically for a
+git-local neighbor via `ledger_dir`, no remote-store machinery needed),
+proving both the 2-hop-fresh and indirect-ancestor-stale-but-not-shown-
+as-blocking cases render correctly, and that the no-pin case stays
+completely silent, no new noise, on both commands.
+
+One real attempt to ALSO live-verify Part 2 against real S3 (mirroring
+Part 1's own precedent) was correctly refused by the harness's own auto-
+mode classifier: the ticket's own explicit ask for Part 2 was hermetic
+tests only (unlike Part 1's explicit live-verification ask) -- a real,
+unrequested live-cloud write, stopped before it happened, not worked
+around.
+
+Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test ./...`
+clean throughout (the same one pre-existing, unrelated `gofmt` finding
+in `sdk/codegen/templates/go/go_test.go` already confirmed present on a
+clean checkout earlier tonight -- not touched, out of scope).
+
 ## UBI-58: probe 3 (destroy honesty) confirmed live against real cloud for the first time, UBI-44 reproduced through the real harness itself, 2026-08-12
 
 **The standing tension confirmed, not glossed over, before anything was

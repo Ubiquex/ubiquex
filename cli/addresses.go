@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/provider"
 )
 
@@ -65,7 +66,7 @@ func newAddressesCmd() *cobra.Command {
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			listing, err := buildAddressListing(ctx, entries)
+			listing, err := buildAddressListing(ctx, ledger, entries)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("addresses: %w", err)}
 			}
@@ -184,6 +185,14 @@ type addressListingEntry struct {
 	core.AddressEntry
 	Attributes    []addressAttribute
 	SchemaMissing string // non-empty explains why Attributes is empty despite an active address (no recorded provider, or that provider@version failed to launch)
+
+	// PinChainHops is UBI-57 Part 2's own annotation -- non-empty only
+	// when this entry's own creating/touching proposal directly recorded
+	// a cross_stack_pin FOR THIS address, walked via resolver.WalkPinChain.
+	// Purely informational (see WalkPinChain's own doc comment): never
+	// changes whether this address is listed, never a reason this
+	// command would fail.
+	PinChainHops []resolver.PinHop
 }
 
 type addressAttribute struct {
@@ -206,13 +215,27 @@ type addressAttribute struct {
 // shipped create) or whose provider fails to launch degrades to an empty
 // attribute list with SchemaMissing explaining why, rather than failing
 // the whole command over one resource's own gap.
-func buildAddressListing(ctx context.Context, entries []core.AddressEntry) (*addressListing, error) {
+//
+// Also annotates each entry with its own transitive pin chain (UBI-57
+// Part 2), if any -- ledger.Read(e.ProposalID) (cached across entries
+// sharing the same proposal, a common shape for a multi-resource batch)
+// plus resolver.WalkPinChain, filtered down to hops actually reachable
+// from THIS entry's own address (a batch proposal can carry more than
+// one, unrelated, cross_stack_pin). A real error walking a chain
+// degrades that one entry's own PinChainHops to empty rather than
+// failing the whole listing -- the identical "one resource's own gap
+// never blocks the rest" posture the schema-fetch branch above already
+// holds to.
+func buildAddressListing(ctx context.Context, ledger *core.Ledger, entries []core.AddressEntry) (*addressListing, error) {
 	cache := map[string]*provider.Schemas{}
 	failed := map[string]error{}
+	proposalCache := map[string]*core.Proposal{}
+	chainCache := map[string][]resolver.PinHop{}
 
 	listing := &addressListing{Entries: make([]addressListingEntry, 0, len(entries))}
 	for _, e := range entries {
 		le := addressListingEntry{AddressEntry: e}
+		le.PinChainHops = pinChainForEntry(ctx, ledger, e, proposalCache, chainCache)
 		if e.Provider == nil {
 			le.SchemaMissing = "no recorded provider -- adopted or drift-recorded resource, never a shipped create"
 			listing.Entries = append(listing.Entries, le)
@@ -256,6 +279,50 @@ func buildAddressListing(ctx context.Context, entries []core.AddressEntry) (*add
 	return listing, nil
 }
 
+// pinChainForEntry returns e's own transitive pin chain, if e's
+// creating/touching proposal directly recorded a cross_stack_pin for
+// e's own address -- nil for the overwhelmingly common case (no
+// cross-stack pin at all), never an error (degrades to nil, logged
+// nowhere -- this is a pure annotation, `ubx why <proposal-id>` is the
+// real place a genuine walk failure is surfaced loudly). proposalCache/
+// chainCache are keyed by ProposalID so a multi-resource batch proposal
+// (several entries sharing one ProposalID) only ever reads and walks
+// once, not once per entry.
+func pinChainForEntry(ctx context.Context, ledger *core.Ledger, e core.AddressEntry, proposalCache map[string]*core.Proposal, chainCache map[string][]resolver.PinHop) []resolver.PinHop {
+	if e.ProposalID == "" {
+		return nil
+	}
+	hops, ok := chainCache[e.ProposalID]
+	if !ok {
+		p, cached := proposalCache[e.ProposalID]
+		if !cached {
+			var err error
+			p, err = ledger.Read(e.ProposalID)
+			if err != nil {
+				p = nil
+			}
+			proposalCache[e.ProposalID] = p
+		}
+		if p == nil {
+			chainCache[e.ProposalID] = nil
+			return nil
+		}
+		walked, err := resolver.WalkPinChain(ctx, p)
+		if err != nil {
+			walked = nil
+		}
+		chainCache[e.ProposalID] = walked
+		hops = walked
+	}
+	if len(hops) == 0 || hops[0].Resource != e.Address.String() {
+		// Either no pin at all, or this proposal's own first pin belongs
+		// to a DIFFERENT resource in the same batch -- never attribute a
+		// sibling resource's own chain to this address.
+		return nil
+	}
+	return hops
+}
+
 func fetchProviderSchemas(ctx context.Context, source, version string) (*provider.Schemas, error) {
 	parsed, err := provider.ParseSource(source)
 	if err != nil {
@@ -293,6 +360,20 @@ func renderAddressesHuman(out io.Writer, listing *addressListing) {
 		if e.Provider != nil {
 			fmt.Fprintf(out, "  provider: %s@%s\n", e.Provider.Source, e.Provider.Version)
 		}
+		if len(e.PinChainHops) > 0 {
+			staleCount := 0
+			for _, h := range e.PinChainHops {
+				if h.Stale {
+					staleCount++
+				}
+			}
+			staleNote := ""
+			if staleCount > 0 {
+				staleNote = fmt.Sprintf(", %d stale", staleCount)
+			}
+			fmt.Fprintf(out, "  pinned via a %d-hop cross-stack chain%s (ubx why %s for the full walk)\n",
+				len(e.PinChainHops), staleNote, displayHash(e.ProposalID, false))
+		}
 		if e.SchemaMissing != "" {
 			fmt.Fprintf(out, "  attributes unknown: %s\n", e.SchemaMissing)
 			continue
@@ -321,6 +402,7 @@ type addressListingJSON struct {
 	Provider      *providerRefJSON       `json:"provider,omitempty"`
 	SchemaMissing string                 `json:"schema_missing,omitempty"`
 	Attributes    []addressAttributeJSON `json:"attributes,omitempty"`
+	PinChain      []pinHopJSON           `json:"pin_chain,omitempty"`
 }
 
 type providerRefJSON struct {
@@ -332,6 +414,16 @@ type addressAttributeJSON struct {
 	Name      string `json:"name"`
 	Computed  bool   `json:"computed"`
 	CrossForm string `json:"cross_form"`
+}
+
+// pinHopJSON is UBI-57 Part 2's own JSON mirror of resolver.PinHop --
+// informational only, see PinChainHops' own doc comment.
+type pinHopJSON struct {
+	Resource    string `json:"resource"`
+	LedgerDir   string `json:"ledger_dir"`
+	PinnedHead  string `json:"pinned_head"`
+	CurrentHead string `json:"current_head"`
+	Stale       bool   `json:"stale"`
 }
 
 func addressesToJSON(listing *addressListing) addressesJSON {
@@ -348,6 +440,12 @@ func addressesToJSON(listing *addressListing) addressesJSON {
 		}
 		for _, attr := range e.Attributes {
 			entry.Attributes = append(entry.Attributes, addressAttributeJSON{Name: attr.Name, Computed: attr.Computed, CrossForm: attr.CrossForm})
+		}
+		for _, h := range e.PinChainHops {
+			entry.PinChain = append(entry.PinChain, pinHopJSON{
+				Resource: h.Resource, LedgerDir: h.LedgerDir,
+				PinnedHead: h.PinnedHead, CurrentHead: h.CurrentHead, Stale: h.Stale,
+			})
 		}
 		payload.Entries = append(payload.Entries, entry)
 	}

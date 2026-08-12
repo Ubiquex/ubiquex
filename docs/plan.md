@@ -2,6 +2,39 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-57: two independent housekeeping items from UBI-32,
+  closed on their own merits. Part 1 (orphan GC): `ubx store gc` (matches
+  the existing `sdk`/`providers` parent-command convention), finds and
+  removes real proposal objects orphaned by a crash between
+  `WriteProposalIfAbsent` and `AdvanceHead` -- new `ledgerstore.Store.
+  OrphanedProposals`/`.DeleteProposal`, walking reachability from
+  genesis (never `Head()`'s own cached hint, which would misclassify an
+  early proposal). Dry-run by default, `--yes` for real deletion, the
+  orphan set re-verified fresh immediately before each delete (a real
+  TOCTOU guard, not just asserted). 7 hermetic + 5 CLI-level tests, plus
+  a real, live crash-injected orphan against real S3 (`ubx-states`):
+  correctly found, correctly deleted, the real chain and its content
+  independently reconfirmed completely untouched via fresh `aws s3api`
+  calls, swept fully clean afterward. Part 2 (multi-hop pins): verified
+  first, with evidence, that `VerifyPins` is structurally single-hop by
+  construction (never reads a neighbor's own resolution.inputs) -- and
+  that no design doc anywhere explicitly commits to "per-pair only,
+  forever" the way the ticket's own framing implied (docs/resolver-
+  adversarial.md instead honestly names this as an open, uncovered
+  question). Code and design agree on today's actual behavior; the
+  founder confirmed, given that nuance, to build visibility only, never
+  new blocking. New `resolver.WalkPinChain` walks the full chain for
+  rendering; `VerifyPins` itself is completely untouched. 5 real,
+  hermetic three-ledger tests prove the actual semantics directly
+  (an indirect ancestor's own staleness never blocks the proposal that
+  only directly pins its immediate neighbor; a direct neighbor's own
+  staleness still is caught, unchanged). Wired into `ubx why` (a new
+  "pin chain" section) and `ubx addresses` (a compact per-resource
+  annotation), both silent for the common no-pin case, both covered by
+  new CLI-level hermetic tests. A live-verification attempt for Part 2
+  was correctly refused by the harness (the ticket only asked for
+  hermetic tests there, unlike Part 1). Full account: STATE.md's own
+  2026-08-12 entry.
 - 2026-08-12 -- UBI-58: probe 3 (destroy honesty) confirmed live against
   real cloud for the first time -- `docs/conformance-harness.md`'s own
   "Amendment (session 4, closing)" had deliberately left this open,
