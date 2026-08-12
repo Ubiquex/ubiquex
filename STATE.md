@@ -2,6 +2,75 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-146: store gc and the real pin-chain rendering, documented -- CLOSED, docs live, 2026-08-12
+
+**New `cli-reference/store-gc.mdx`** (ubiquex-docs), documenting UBI-57
+Part 1's `ubx store gc` (dry-run by default, `--yes` for real deletion,
+orphan set re-verified fresh immediately before deleting anything).
+`cli-reference/why.mdx` and `cli-reference/addresses.mdx` (confirmed
+the only two real pages documenting those commands, no others found)
+both updated with UBI-57 Part 2's real pin-chain rendering -- `why`'s
+new "pin chain (N hops)" section with per-hop fresh/stale status and
+the "informational only" note for an indirect ancestor, `addresses`'
+new "pinned via a N-hop cross-stack chain" annotation plus its real
+`--json` `pin_chain` shape.
+
+**Every example built and run for real, hermetically** -- a throwaway
+`cli/zz_ubi146_doctest_test.go` reusing this package's own real UBI-57
+fixtures verbatim (`storegc_test.go`'s `remoteStoreFixture`/
+`storeGCFixtureAppend`/`storeGCFixtureOrphan`, `why_pinchain_test.go`'s
+`seedLedgerWithPinForTest`) -- a real in-memory remote store for gc,
+three real git-local ledgers (`payments` -> `networking` -> `security`,
+UBI-57's own real test topology) for the pin chain, both fresh and an
+indirect-ancestor-stale variant. Deleted before finishing, never
+committed. Illustrative simplifications made deliberately, consistent
+with this project's own established placeholder convention (call-
+sdk.mdx's `sha256:a1b2c3...`): the real `mem://acme-ledger/...`
+fixture URI shown as `s3://acme-infra-ledger/payments` (this repo's
+own already-established illustrative bucket, config.mdx/concepts/
+remote-stores.mdx) since `mem://` isn't a real supported store scheme;
+real absolute tmp-directory `LedgerDir` paths shown as `../networking`/
+`../security`. Every count, hash, fresh/stale marker, and status
+string is the real captured value, unmodified.
+
+**A real, worth-noting distinction found, not assumed**: `ubx store
+gc`'s own orphan-id lines are NOT truncated (`fmt.Fprintf(out, "  %s\n",
+id)`, the raw id), unlike `ubx why`'s hash rendering, which truncates
+via `styler.Hash()`. Documented with the real, full-length hash shape,
+not a truncated one, matching actual output.
+
+**A real discrepancy from the ticket's own framing, reported honestly
+rather than silently worked around**: the ticket asked for
+`store-gc.mdx` to be added to docs.json's nav "alongside the other
+store-related commands" -- there ARE no other store-related command
+pages. `ubx store gc` is the only subcommand under the `store` parent
+(`cli/store.go`), and no `store.mdx`/sibling page exists in docs.json
+at all. Placed it next to `blame`/`stats` (the existing audit/
+maintenance cluster) as the most sensible available position, not a
+literal "alongside its siblings" placement, since no siblings exist
+yet.
+
+**Verified, non-negotiable items all real:** `mint validate` passed
+clean, twice (once before, once after a readability pass that wrapped
+two real one-line CLI outputs across multiple lines -- the `why` STALE/
+informational-only lines and `addresses`' "attributes unknown" line --
+same manual-wrap-for-readability convention UBI-147 already
+established, content unchanged, just line breaks inserted). DOM
+overflow checked for real (`mint dev` + headless Chrome) on all three
+touched pages: no page-level horizontal overflow on any
+(`document.documentElement.scrollWidth === clientWidth`, 1668/1668
+throughout), every wide code block confirmed contained by its own
+`overflow-x: auto` wrapper, not just eyeballed -- the pin-chain STALE
+block was initially the widest (1327px against a 640px container)
+before the wrap pass brought it back to matching the rest of the page.
+Committed and pushed directly to `ubiquex-docs` main (confirmed via
+this session's own fresh `git log -5` check that direct push is still
+the real, current convention) -- `8df133fde5b45c734704e103618b8c65659a46d6`.
+Confirmed live via a real `gh api repos/Ubiquex/ubiquex-docs/commits/
+main` call (SHA matches) and a real `gh api .../contents/cli-reference/
+store-gc.mdx` fetch of the file's own live content, not inferred from
+local push exit code.
+
 ## UBI-147: call-other-mediums.mdx documents UBI-134's real ParamCrossRef call args -- CLOSED, docs live, 2026-08-12
 
 **Real section added to `tutorial/blueprints/call-other-mediums.mdx`**
