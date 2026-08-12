@@ -466,12 +466,25 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 // script that imports IT, so the blueprint's own ts/ directory never
 // needs to be copied at all, unlike Python's own WASI sandbox
 // constraint below) and calls it with every declared param, in
-// declaration order, using EVERY param's own resolved value (a given
-// override, or its own declared default rendered as a literal) --
-// TypeScript function calls are positional-only, no native keyword-
-// argument syntax, so a later param can't be overridden while an
-// earlier defaulted one is silently skipped; passing all of them
+// requiredFirstOrder (ubxfile.go), using EVERY param's own resolved
+// value (a given override, or its own declared default rendered as a
+// literal) -- TypeScript function calls are positional-only, no native
+// keyword-argument syntax, so a later param can't be overridden while
+// an earlier defaulted one is silently skipped; passing all of them
 // explicitly sidesteps that entirely.
+//
+// UBI-149: args arrives in raw Ubxfile declaration order
+// (resolveCallArgs), but the generated function's own real signature
+// (renderTSFunction, tsgen.go) is required-first, defaulted-trailing --
+// TypeScript itself refuses to compile a required param after a
+// defaulted one, so the signature can't stay in declaration order when
+// the two are interleaved. Reordering args here, via the EXACT same
+// requiredFirstOrder the signature itself uses, is what makes this
+// positional call line up with that signature again -- previously this
+// function passed args in raw declaration order regardless, silently
+// threading values into the wrong slots whenever a required param
+// followed a defaulted one (a real, reproduced bug: a retention_days
+// value landed in a later vpc_id slot).
 func writeTSCaller(scratch, blueprintDir, blueprintName, stackName, summary string, args []resolvedArg) (string, error) {
 	pkgName, err := packageIdent(blueprintName)
 	if err != nil {
@@ -487,9 +500,20 @@ func writeTSCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 		return "", err
 	}
 
-	argExprs := make([]string, 0, len(args))
-	needsCrossStack := false
+	byName := make(map[string]resolvedArg, len(args))
+	params := make([]Param, 0, len(args))
 	for _, a := range args {
+		byName[a.Param.Name] = a
+		params = append(params, a.Param)
+	}
+	orderedArgs := make([]resolvedArg, 0, len(args))
+	for _, p := range requiredFirstOrder(params) {
+		orderedArgs = append(orderedArgs, byName[p.Name])
+	}
+
+	argExprs := make([]string, 0, len(orderedArgs))
+	needsCrossStack := false
+	for _, a := range orderedArgs {
 		expr, err := argLiteralOrDefault("ts", a)
 		if err != nil {
 			return "", err
@@ -606,6 +630,18 @@ if __name__ == "__main__":
 // ONLY when the call actually overrides it -- omitting an un-overridden
 // one is correct and sufficient here, since Go's own compiled options
 // struct already seeds the Ubxfile's own declared default.
+//
+// UBI-149: args is reordered via requiredFirstOrder (ubxfile.go) BEFORE
+// this loop runs, for the same real reason writeTSCaller needs it --
+// renderGoFunction's own generated signature is every required
+// positional argument FIRST, contiguous, THEN the trailing "opts
+// ...Option" (gogen.go), never interleaved with declaration order.
+// Previously this looped over args in raw Ubxfile declaration order, so
+// a params: default entry declared BETWEEN two required params produced
+// a real Go compile error: a With<Param>(...) call landing positionally
+// where the second required argument belongs, and vice versa -- the
+// exact same root cause as writeTSCaller's own bug, just caught by the
+// Go compiler instead of silently threading the wrong runtime value.
 func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary string, args []resolvedArg) (string, error) {
 	pkgName, err := packageIdent(blueprintName)
 	if err != nil {
@@ -629,8 +665,19 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 		return "", err
 	}
 
-	var callArgs []string
+	byName := make(map[string]resolvedArg, len(args))
+	params := make([]Param, 0, len(args))
 	for _, a := range args {
+		byName[a.Param.Name] = a
+		params = append(params, a.Param)
+	}
+	orderedArgs := make([]resolvedArg, 0, len(args))
+	for _, p := range requiredFirstOrder(params) {
+		orderedArgs = append(orderedArgs, byName[p.Name])
+	}
+
+	var callArgs []string
+	for _, a := range orderedArgs {
 		if a.Param.Required {
 			lit, err := renderArgLiteral("go", a.Param, a.Raw)
 			if err != nil {

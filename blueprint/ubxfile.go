@@ -175,6 +175,56 @@ type Param struct {
 	Default any
 }
 
+// requiredFirstOrder returns params reordered so every required param
+// comes before every defaulted param, each group keeping its own
+// relative declaration order -- the one grouping BOTH TypeScript's and
+// Go's own generated call conventions depend on:
+//   - TypeScript's generated function signature (renderTSFunction,
+//     tsgen.go) is always required-first, defaulted-trailing --
+//     TypeScript itself enforces "a required parameter cannot follow an
+//     optional one," so a purely positional call needs its own
+//     arguments in this exact order too, regardless of Ubxfile
+//     declaration order.
+//   - Go's generated function signature (renderGoFunction, gogen.go) is
+//     required params positional, THEN a trailing "opts ...Option" for
+//     every defaulted one -- so a caller passing a with*() option
+//     BETWEEN two required positional arguments (raw declaration order,
+//     interleaved) produces a real compile error, every required
+//     positional argument has to be grouped contiguously first.
+//
+// UBI-149: shared by renderTSFunction (the TS signature itself),
+// writeTSCaller (invoke.go, the synthesized diagram/md TS caller's own
+// emitted argument list), AND writeGoCaller (invoke.go, the synthesized
+// diagram/md Go caller) -- three previously-independent implementations
+// of "what order do the params go in," two of which (both callers)
+// silently assumed raw declaration order was already safe. A required
+// param declared after a defaulted one broke BOTH: TS threaded the
+// wrong VALUE into the wrong slot at runtime (never caught by Deno's
+// looser typing), Go failed to even compile (a real, stricter, and
+// coincidentally louder failure mode for the identical root cause).
+// Neither ever affected a direct SDK import (the human wrote that call
+// against the real, already-correctly-shaped signature directly), and
+// Python's own native kwargs (writePyCaller) were never order-dependent
+// in the first place. One shared function, used by every path that
+// needs this grouping, per this codebase's own UBI-142 precedent
+// (configFieldLine) for closing exactly this class of two-(or
+// three-)code-paths drift -- not just patching one symptom in
+// isolation.
+func requiredFirstOrder(params []Param) []Param {
+	ordered := make([]Param, 0, len(params))
+	for _, p := range params {
+		if p.Required {
+			ordered = append(ordered, p)
+		}
+	}
+	for _, p := range params {
+		if !p.Required {
+			ordered = append(ordered, p)
+		}
+	}
+	return ordered
+}
+
 // Output is one outputs: entry (UBI-128), in the Ubxfile's own
 // declaration order -- never a map, matching Params' own determinism
 // discipline: a generated function's own return-value ORDER must be

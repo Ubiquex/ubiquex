@@ -591,19 +591,14 @@ func renderTSFunction(funcName, blueprintName string, params []Param, g *tsGener
 	// satisfy that; reordering here guarantees valid syntax regardless
 	// of the Ubxfile's own params: declaration order, matching
 	// GenerateGo's own required-then-defaulted split for consistency.
-	var required, defaulted []Param
-	for _, p := range params {
-		if p.Required {
-			required = append(required, p)
-		} else {
-			defaulted = append(defaulted, p)
-		}
-	}
-
+	// requiredFirstOrder (ubxfile.go) is shared with writeTSCaller
+	// (invoke.go), which must emit its own call arguments in this
+	// EXACT same order (UBI-149) -- never reimplemented independently
+	// here again.
 	var sig strings.Builder
 	sig.WriteString(funcName)
 	sig.WriteString("(")
-	ordered := append(append([]Param{}, required...), defaulted...)
+	ordered := requiredFirstOrder(params)
 	for i, p := range ordered {
 		if i > 0 {
 			sig.WriteString(", ")

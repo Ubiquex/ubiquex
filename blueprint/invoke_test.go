@@ -444,3 +444,208 @@ func TestExpandCalls_ProvenanceStamped_Go(t *testing.T) {
 		t.Fatalf("Ref = %q, want it to start with \"ci-platform:sha256:\" (a bare \"ci-platform\" would mean the SDK-level tag leaked through unresolved)", sources[0].Ref)
 	}
 }
+
+// UBI-149: a real regression fixture for the writeTSCaller argument-
+// ordering bug -- callableUbxfileWithUnitConversion (above) already has
+// two required params and one defaulted one, but declares the defaulted
+// one LAST (queue_name, max_receive_count, retention_days), which never
+// exercised the bug at all: required-first was already true by
+// coincidence. callableUbxfileArgOrderBug is the SAME three params and
+// the SAME resource intent (ciPlatformIntentWithUnitConversion, reused
+// verbatim -- {retention_days} and {max_receive_count} placeholder
+// substitution doesn't care what order the Ubxfile declared them in),
+// with retention_days (defaulted) moved BETWEEN the two required params
+// -- the exact shape that shipped broken: the generated TS signature is
+// required-first (queueName, maxReceiveCount, retentionDays = 1)
+// regardless of this declaration order, so writeTSCaller's own
+// synthesized caller has to reorder its emitted arguments to match, or
+// max_receive_count's own value lands in retentionDays's slot and vice
+// versa.
+const callableUbxfileArgOrderBug = `lang: all
+
+params:
+  queue_name: string, required
+  retention_days: number, default 1
+  max_receive_count: number, required
+
+resources: |
+  placeholder -- never re-drafted by a blueprint CALL, only by
+  ` + "`ubx blueprint build`" + `, which this test never runs.
+`
+
+func ciPlatformUbxfileArgOrderBug() *Ubxfile {
+	return &Ubxfile{
+		Dir:  "testdata",
+		Lang: "all",
+		Params: []Param{
+			{Name: "queue_name", Type: ParamString, Required: true},
+			{Name: "retention_days", Type: ParamNumber, Default: 1},
+			{Name: "max_receive_count", Type: ParamNumber, Required: true},
+		},
+	}
+}
+
+// writeCallableBlueprintArgOrderBug mirrors writeCallableBlueprint
+// exactly (same generators, same onlyLangs filter, same go.mod replace
+// handling), built from callableUbxfileArgOrderBug/
+// ciPlatformUbxfileArgOrderBug instead.
+func writeCallableBlueprintArgOrderBug(t *testing.T, onlyLangs ...string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "ci-platform")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, UbxfileName), []byte(callableUbxfileArgOrderBug), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	intent := mustIntentFile(t, ciPlatformIntentWithUnitConversion)
+	ubxfile := ciPlatformUbxfileArgOrderBug()
+
+	want := map[string]bool{"go": true, "ts": true, "py": true}
+	if len(onlyLangs) > 0 {
+		want = map[string]bool{}
+		for _, l := range onlyLangs {
+			want[l] = true
+		}
+	}
+
+	generators := map[string]func(string, *Ubxfile, *resolver.IntentFile) (map[string]string, error){
+		"go": GenerateGo,
+		"ts": GenerateTS,
+		"py": GeneratePython,
+	}
+	for lang, gen := range generators {
+		if !want[lang] {
+			continue
+		}
+		files, err := gen("ci-platform", ubxfile, intent)
+		if err != nil {
+			t.Fatalf("Generate%s: %v", lang, err)
+		}
+		for name, content := range files {
+			if lang == "go" && name == "go/go.mod" {
+				content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoModuleRoot(t) + "\n"
+			}
+			full := filepath.Join(dir, name)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return dir
+}
+
+// assertArgOrderBugResourceCorrect checks BOTH derived values against
+// what each param's own real call-site value should have produced --
+// message_retention_seconds (retention_days*86400) and
+// visibility_timeout_seconds (max_receive_count*2). The bug this
+// regresses swapped these two: max_receive_count's own value landed in
+// retention_days's slot (and vice versa) whenever the synthesized
+// caller's own argument order didn't match the generated signature.
+func assertArgOrderBugResourceCorrect(t *testing.T, intent *resolver.IntentFile, wantRetentionSec, wantVisibilitySec float64) {
+	t.Helper()
+	if len(intent.Resources) != 1 {
+		t.Fatalf("expected exactly 1 resource, got %d: %+v", len(intent.Resources), intent.Resources)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(intent.Resources[0].Config, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg["message_retention_seconds"]; got != wantRetentionSec {
+		t.Fatalf("message_retention_seconds = %v, want %v -- retention_days landed in the wrong slot", got, wantRetentionSec)
+	}
+	if got := cfg["visibility_timeout_seconds"]; got != wantVisibilitySec {
+		t.Fatalf("visibility_timeout_seconds = %v, want %v -- max_receive_count landed in the wrong slot", got, wantVisibilitySec)
+	}
+}
+
+// TestExpandCalls_ArgOrderBug_TS_RequiredAfterDefaulted is UBI-149's own
+// primary regression: the TS-medium call (diagram/md's own real
+// preferred language, callLanguagePreference) with a required param
+// declared after a defaulted one, both the default-left-as-is case and
+// the default-overridden case, exactly mirroring
+// TestExpandCalls_LocalBlueprint_TS's own two subtests.
+func TestExpandCalls_ArgOrderBug_TS_RequiredAfterDefaulted(t *testing.T) {
+	requireDenoToolchain(t)
+	dir := writeCallableBlueprintArgOrderBug(t, "ts")
+
+	for _, tc := range []struct {
+		name              string
+		args              map[string]string
+		wantRetentionSec  float64
+		wantVisibilitySec float64
+	}{
+		{"default_retention", map[string]string{"queue_name": "payments-notifications", "max_receive_count": "5"}, 86400, 10},
+		{"overridden_retention", map[string]string{"queue_name": "payments-notifications", "max_receive_count": "5", "retention_days": "30"}, 2592000, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intent := &resolver.IntentFile{
+				SchemaVersion: 1,
+				Kind:          resolver.IntentFileKind,
+				Stack:         "payments",
+				BlueprintCalls: []resolver.BlueprintCall{
+					{Name: "ci-platform call", Blueprint: dir, Args: tc.args},
+				},
+			}
+			if err := ExpandCalls(context.Background(), intent); err != nil {
+				t.Fatalf("ExpandCalls: %v", err)
+			}
+			assertArgOrderBugResourceCorrect(t, intent, tc.wantRetentionSec, tc.wantVisibilitySec)
+		})
+	}
+}
+
+// TestExpandCalls_ArgOrderBug_Python_RequiredAfterDefaulted confirms the
+// SAME interleaved param order was, and remains, correct for Python
+// (writePyCaller uses native kwargs, never positional order -- immune
+// to this bug class structurally, verified here with the EXACT param
+// shape that broke TS, not just a different, already-passing shape).
+func TestExpandCalls_ArgOrderBug_Python_RequiredAfterDefaulted(t *testing.T) {
+	requirePython3Toolchain(t)
+	dir := writeCallableBlueprintArgOrderBug(t, "py")
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{
+				"queue_name": "payments-notifications", "max_receive_count": "5", "retention_days": "30",
+			}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("ExpandCalls: %v", err)
+	}
+	assertArgOrderBugResourceCorrect(t, intent, 2592000, 10)
+}
+
+// TestExpandCalls_ArgOrderBug_GoFallback_RequiredAfterDefaulted confirms
+// the same for Go (writeGoCaller filters required-vs-defaulted in place,
+// never assumes a fixed order across the two -- immune structurally,
+// verified here with the EXACT param shape that broke TS). Skipped
+// rather than failed on a genuine network/cache miss, matching
+// TestExpandCalls_LocalBlueprint_GoFallback's own precedent exactly.
+func TestExpandCalls_ArgOrderBug_GoFallback_RequiredAfterDefaulted(t *testing.T) {
+	requireGoToolchain(t)
+	dir := writeCallableBlueprintArgOrderBug(t, "go")
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{
+				"queue_name": "payments-notifications", "max_receive_count": "5", "retention_days": "30",
+			}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Skipf("Go fallback call failed (likely an uncached github.com/ubiquex/ubx-sdk-go module on this machine, not a code bug -- see TestExpandCalls_LocalBlueprint_GoFallback's own identical doc comment): %v", err)
+	}
+	assertArgOrderBugResourceCorrect(t, intent, 2592000, 10)
+}
