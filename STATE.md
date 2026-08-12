@@ -2,6 +2,100 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-58: probe 3 (destroy honesty) confirmed live against real cloud for the first time, UBI-44 reproduced through the real harness itself, 2026-08-12
+
+**The standing tension confirmed, not glossed over, before anything was
+touched.** `docs/conformance-harness.md`'s own "Amendment (session 4,
+closing)" had already weighed this exact question once -- probe 3's own
+live confirmation needs `core/executor.Ship` to reach a real
+`ApplyResourceChange` destroy call against real cloud, exactly what
+CLAUDE.md's ship-verification rule bans ("never... against a real cloud
+provider... always, no exceptions," written after the real UBI-47
+session 4 incident) -- and deliberately chose to stay hermetic-only,
+naming its own real-cloud confirmation as "this arc's one
+deliberately-open item... a future session picking this up should treat
+it as a fresh, standalone decision." This ticket's own "founder
+go-ahead" framing was checked against that real history (found via
+`grep`, not assumed), not taken at face value -- and even with that rich
+precedent found, a direct, explicit, in-conversation confirmation was
+still asked for and received before any real create or destroy was
+attempted, given the severity and the rule's own "no exceptions"
+language.
+
+**Credential scope re-checked, not assumed identical to UBI-56's storage
+access** (a different real permission scope): AWS confirmed
+`AdministratorAccess`; GCP confirmed `roles/owner` on `ubiquex-502722`
+(and the real project id actually used throughout, confirmed as
+`personal-273114`, matching `conformance/gcp_live_test.go`'s own
+pre-existing `gcpProject` constant -- reused, not reinvented).
+
+**Real, permanent, committed test code written** (`conformance/
+destroy_probe_live_test.go`), not a throwaway scratch script -- matching
+this project's own "tests accompany every slice" discipline and making
+this a re-runnable live check for any future session, not a one-off
+manual verification standing alone. Reused every existing live-test
+helper already established (`realAWSProviderPath`/`realGCPProviderPath`/
+`runAWS`/`runAWSOutput`/`runGCloud`/`uniqueName`/`gcpProviderConfig`/
+`RequireLive`), never reinvented.
+
+**Real AWS, the honest case: `aws_sns_topic` + `aws_sqs_queue`** (the
+ticket's own suggested minimal footprint), both created via the real
+`aws` CLI, both destroyed through `ProbeDestroyHonesty`'s own real
+`core/executor.Ship` path -- both resolved genuinely `destroyed`, `nil`
+findings, correctly. Independently re-checked against real, fresh `aws`
+CLI ground truth (not just the probe's own verdict): `aws sns
+get-topic-attributes`/`aws sqs get-queue-attributes` both correctly
+error `NotFound`/`NonExistentQueue` afterward. SQS took ~89 real
+seconds -- real eventual-consistency lag, the same figure UBI-30 already
+found and sized the destroy retry schedule around, not a bug.
+
+**Real GCP, the lying case: UBI-44 reproduced live, through probe 3
+itself, for the first time ever.** Checked whether the original
+`google_pubsub_topic` lookup-completeness gap was still open before
+attempting anything -- confirmed via `grep` across STATE.md/docs/plan.md
+that the gap was explicitly, deliberately left unfixed ("the underlying
+lookup-completeness gap is real, separate, and still open"), never
+patched by any later session. Reproduced the exact historical recipe: a
+real, throwaway pubsub topic, adopted via probe 3's own real scan path
+using the DELIBERATELY incomplete `{"id": "projects/<project>/topics/
+<name>"}` lookup (never `name` -- the same shape an ordinary real `ubx
+ship` destroy of this type has always recorded), shipped through the
+real `core/executor.Ship` path. Result, run twice (once to confirm, once
+more with added logging for a genuinely captured transcript, not a
+reconstructed one) -- **both runs identically produced
+`FindingDestroyLie`/`Confirmed`/`TierLive`**, the first time probe 3
+itself (not a manual CLI reproduction) has ever caught this class of lie
+against real cloud. Two independent, real ground-truth checks, neither
+trusting the probe's own self-reported verdict alone: `gcloud pubsub
+topics describe` confirms the topic genuinely still present; a real
+Cloud Audit Logs query (`gcloud logging read`, the identical filter
+shape the original UBI-44 diagnosis used) confirms zero real
+`DeleteTopic` calls -- the exact "provider claims success but the
+underlying API call never happened" signature, independently
+re-confirmed, not just re-asserted.
+
+**Swept clean, confirmed independently, twice** (once per real run) --
+`aws sns list-topics`/`aws sqs list-queues`/`gcloud pubsub topics list`,
+all filtered for this session's own resource prefix, all empty after
+each run. Distinct from UBI-56's own deliberately-standing GCS/Azure
+infrastructure: every resource this ticket created was single-use and
+is now fully gone, nothing left behind.
+
+**Findings recorded into the real conformance registry and reliability
+report, not left only in this file.** `conformance/registry.go`'s own
+`google_pubsub_topic` entry gained a note recording this live
+re-confirmation, appended to (never replacing) the original UBI-44
+finding it already carried. `docs/reliability-report.md` gained a new
+section (the file's own append-only convention -- nothing existing
+edited) with the real, captured transcript (exact ARNs/URLs/topic name/
+error text from the actual second run, not elided placeholders).
+
+**Full repo `go build ./...`/`go vet ./...`/`gofmt -l .`/`go test
+./...` clean throughout** (one pre-existing, unrelated `gofmt` finding
+in `sdk/codegen/templates/go/go_test.go`, confirmed present even on a
+clean checkout before this session touched anything -- not this
+session's own regression, not fixed, out of scope).
+
 ## UBI-56: gs:// and azblob:// ledger stores, live-verified against real GCS and real Azure Blob Storage, 2026-08-12
 
 **Credential check done first, per the ticket's own explicit stop

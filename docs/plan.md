@@ -2,6 +2,32 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-58: probe 3 (destroy honesty) confirmed live against
+  real cloud for the first time -- `docs/conformance-harness.md`'s own
+  "Amendment (session 4, closing)" had deliberately left this open,
+  naming it "this arc's one deliberately-open item" given the direct
+  tension with CLAUDE.md's ship-verification rule ("always, no
+  exceptions"). That real history was found and read before proceeding,
+  and a direct, explicit, in-conversation confirmation was still
+  obtained before any real create/destroy, given the severity. AWS
+  credential scope re-checked separately from UBI-56's storage access
+  (confirmed AdministratorAccess); real `aws_sns_topic`/`aws_sqs_queue`
+  destroyed honestly through `ProbeDestroyHonesty`'s own real
+  `core/executor.Ship` path, independently re-confirmed gone via fresh
+  `aws` CLI queries. The real target: whether `google_pubsub_topic`'s
+  own UBI-44 lookup-completeness gap (confirmed still open via a real
+  grep of prior sessions' own accounts, never patched) was still
+  reproducible -- it was, live, through probe 3 itself for the first
+  time (previously only a manual CLI reproduction), run twice
+  identically, both independent ground-truth checks (`gcloud describe`,
+  a real Cloud Audit Logs query) confirming the exact historical
+  signature. New, permanent, committed live tests
+  (`conformance/destroy_probe_live_test.go`), not a one-off script.
+  Swept clean and independently reconfirmed after each run -- distinct
+  from UBI-56's own deliberately-standing infrastructure, every resource
+  here was single-use. `conformance/registry.go`'s own `google_pubsub_
+  topic` entry and `docs/reliability-report.md` both updated with the
+  real, captured result. Full account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- UBI-56: gs:// and azblob:// ledger stores implemented
   and live-verified against real GCS and real Azure Blob Storage.
   Credential stop condition checked first per the ticket's own

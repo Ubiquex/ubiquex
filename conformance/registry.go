@@ -619,7 +619,19 @@ var Registry = []TypeSpec{
 			"ledger's own reconciliation record, but the real topic was still live " +
 			"afterward. Not fixed here -- tracked as its own issue since it's a " +
 			"correctness gap in core/executor's own reconcileDestroyLoop trusting the " +
-			"provider's response, not just a conformance-fixture quirk.",
+			"provider's response, not just a conformance-fixture quirk. " +
+			"UBI-58: re-confirmed live through probe 3 itself " +
+			"(conformance.ProbeDestroyHonesty, never a shortcut), the first time " +
+			"the actual harness mechanism -- not just a manual ubx ship " +
+			"reproduction -- was run against real GCP. Same shape exactly: " +
+			"FindingDestroyLie/Confirmed/TierLive, topic confirmed still present " +
+			"via gcloud pubsub topics describe, zero real DeleteTopic calls in " +
+			"Cloud Audit Logs. The underlying lookup-completeness gap is still " +
+			"open as of this confirmation -- see " +
+			"conformance/destroy_probe_live_test.go's own " +
+			"TestLiveProbeDestroyHonesty_GCP_PubSubTopic_UBI44Reproduction, a " +
+			"real, committed, re-runnable live test now, not a one-off manual " +
+			"verification.",
 		Implemented: true,
 	},
 	{Type: "google_pubsub_subscription", Source: "hashicorp/google", Category: "messaging", Safety: FakeOnly,

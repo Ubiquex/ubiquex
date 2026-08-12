@@ -1307,3 +1307,117 @@ enough" read-side gotcha, per `conformance/registry.go`) was named as a
 plausible sibling risk in UBI-44's own filing but not separately
 verified this session — audited by inspection of the identical shape,
 not by a live repro of its own.
+
+## UBI-58: probe 3 itself confirmed live, for the first time, against real cloud
+
+Everything above this section used a manual `ubx ship` CLI reproduction
+against a real provider binary -- real, but never through
+`conformance.ProbeDestroyHonesty` (probe 3) itself. `docs/conformance-
+harness.md`'s own "Amendment (session 4, closing)" deliberately left
+probe 3's own real-cloud confirmation as an open decision, weighing it
+directly against CLAUDE.md's ship-verification rule ("never... against
+a real cloud provider... always, no exceptions") and choosing to stay
+hermetic-only rather than treat a well-reasoned exception as a quiet
+one. This session is that decision, made explicitly: confirmed directly
+with the founder, in-conversation, before any real create or destroy was
+attempted, not inferred from a ticket's own text alone.
+
+**Real AWS, the honest case, first.** Two real, free, sacrificial
+resources -- a real `aws_sns_topic` and a real `aws_sqs_queue`, created
+via the real `aws` CLI, each destroyed through probe 3's own real
+`ProbeDestroyHonesty` path (never a shortcut: the same
+`core.RunScan`/`GenerateProposal`/`Accept`, then a real `Delta.Destroys`
+proposal shipped through `core/executor.Ship`'s own real
+`shipDestroyNode`/`reconcileDestroyLoop`). Both resolved genuinely
+`destroyed` -- `ProbeDestroyHonesty` returned `nil` findings for both,
+correctly. Independently re-checked against real, fresh `aws` CLI
+ground truth, not just probe 3's own self-reported verdict:
+
+```text
+$ aws sns get-topic-attributes --topic-arn arn:aws:sns:us-east-1:839333509514:ubx-conformance-destroy-probe-sns-1786540428630952000
+An error occurred (NotFound) when calling the GetTopicAttributes operation: Topic does not exist
+
+$ aws sqs get-queue-attributes --queue-url https://sqs.us-east-1.amazonaws.com/839333509514/ubx-conformance-destroy-probe-sqs-1786540437443591000
+An error occurred (AWS.SimpleQueueService.NonExistentQueue) when calling the GetQueueAttributes operation: The specified queue does not exist.
+```
+
+The SQS case took ~89 real seconds -- SQS's own real eventual-consistency
+lag (the identical figure UBI-30 already found and sized
+`destroyReconcileBackoffSchedule` around), not a hang or a retry loop
+bug.
+
+**Real GCP, the lying case -- reproduced live, through probe 3 itself,
+for the first time.** A real, throwaway `google_pubsub_topic`, created
+via `gcloud pubsub topics create`, adopted via probe 3's own real scan
+path using the DELIBERATELY incomplete `{"id": "projects/<project>/
+topics/<name>"}` lookup (never `name`) -- the exact lookup shape an
+ordinary real `ubx ship` destroy of this type has always recorded, and
+the exact shape UBI-44's own original live finding used. Shipped through
+the same real `core/executor.Ship` path:
+
+```text
+FindingDestroyLie: {
+  Source: hashicorp/google, Version: 7.40.0, Type: google_pubsub_topic,
+  Verb: destroy, Class: destroy-lie, Tier: live, Confidence: confirmed,
+  Detail: ApplyResourceChange reported a clean destroy success, but a
+  real post-destroy read-back (core/executor's own universal
+  reconcileDestroyLoop) proved the resource was still present after the
+  full retry budget -- the same shape UBI-44 found live against
+  google_pubsub_topic
+}
+```
+
+Two independent, real ground-truth checks, neither trusting probe 3's
+own self-reported verdict alone, both confirming the exact same
+historical UBI-44 signature:
+
+```text
+$ gcloud pubsub topics describe ubx-conformance-destroy-probe-pubsub-1786540526790786000 --project personal-273114
+name: projects/personal-273114/topics/ubx-conformance-destroy-probe-pubsub-1786540526790786000
+```
+
+```text
+$ gcloud logging read 'logName="projects/personal-273114/logs/cloudaudit.googleapis.com%2Factivity" AND protoPayload.methodName="google.pubsub.v1.Publisher.DeleteTopic" AND protoPayload.resourceName="projects/personal-273114/topics/ubx-conformance-destroy-probe-pubsub-1786540526790786000" AND timestamp>="2026-08-12T13:15:31Z"' --project personal-273114
+(zero results -- 30s poll window exhausted, no matching entry ever appeared)
+```
+
+The real topic stayed alive, and the real GCP API never received a real
+`DeleteTopic` call at all -- exactly the same "provider claims success,
+but the underlying call never actually happened" shape the original
+manual diagnosis found. **The underlying `name`-completeness gap is
+still open, confirmed directly, not assumed carried forward from the
+earlier account above.** This closes the loop the whole harness exists
+for: a real provider lie, caught by the real, live probe, not just a
+hermetic fixture proving the mechanism works in principle.
+
+**Swept clean, confirmed independently.** All three resources'
+destroy-probe test cleanup ran (the AWS pair genuinely destroyed by
+probe 3 itself; the GCP topic, which `ubx` cannot destroy via the
+universal lookup, removed by the test's own safety-net `gcloud pubsub
+topics delete`, matching the original diagnosis session's own
+precedent). Re-confirmed via fresh, independent queries after the test
+run, not just trusting the test's own internal assertions or cleanup
+exit codes:
+
+```text
+$ aws sns list-topics --query "Topics[?contains(TopicArn, 'ubx-conformance-destroy-probe')].TopicArn"
+[]
+$ aws sqs list-queues --queue-name-prefix "ubx-conformance-destroy-probe"
+
+$ gcloud pubsub topics list --project personal-273114 --filter="name:ubx-conformance-destroy-probe"
+
+```
+
+**New, permanent, re-runnable live tests** --
+`conformance/destroy_probe_live_test.go`'s
+`TestLiveProbeDestroyHonesty_AWS_SNSTopic`/`_AWS_SQSQueue`/
+`_GCP_PubSubTopic_UBI44Reproduction` -- gated behind
+`UBX_CONFORMANCE_LIVE=1` (all three) and `UBX_TEST_SLOW=1` (the GCP case
+only, matching the hermetic lying-destroy test's own real ~64s retry
+budget), committed to the suite rather than a one-off manual
+verification this account alone would have to stand in for. A future
+provider fix to the underlying lookup-completeness gap will show up as
+this exact test's own `nil`-finding branch, not a silent assumption.
+`conformance/registry.go`'s own `google_pubsub_topic` entry gained a
+note recording this live re-confirmation, alongside the original UBI-44
+finding it already carried.
