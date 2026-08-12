@@ -2,25 +2,30 @@
 
 ## Changelog
 
-- 2026-08-12 -- UBI-145: landing UBI-134's real, waiting `sdk/ts`/
-  `sdk/py`/`sdk/go` runtime changes -- 3 real PRs opened against the
-  separate repos (`ubx-sdk-typescript` #1, `ubx-sdk-python` #1,
-  `ubx-sdk-go` #2), never self-merged, session paused for real review.
-  A real finding reversed the ticket's own framing: the panic-message
-  drift is the OPPOSITE of what was described -- `ubx-sdk-go`'s real
-  repo already has the correct `ubx.` prefix (an earlier, already-
-  merged PR #1), the monorepo's own copy is the stale one still saying
-  `sdk.`. Part 2 decision made and recorded: convert `sdk/go` to a real
-  submodule too, matching TS/Python -- a different real reason than
-  TS/Python's own (no `go:embed` compile-time input exists for Go at
-  all, confirmed directly; Go's hermeticity sandboxes the compiled
-  binary, never an embedded interpreter, so `sdk/go`'s only real role
-  is a local, hermetic-test-only `replace` stand-in) but the identical
-  conclusion, for sync-safety -- the exact drift just found is what a
-  plain copied directory produces with no signal at all. Submodule
-  pointer updates, the `sdk/go` conversion itself, and republishing
-  `@ubx/sdk` (JSR)/`ubx-sdk` (PyPI) all wait on the three PRs above
-  being genuinely reviewed and merged first. Full account: STATE.md's
+- 2026-08-12 -- UBI-145 (CLOSED): landed UBI-134's real, waiting
+  `sdk/ts`/`sdk/py`/`sdk/go` runtime changes for real, across three
+  working sessions, never self-merged anywhere. A real finding
+  reversed the ticket's own framing: the panic-message drift was the
+  OPPOSITE of what was described -- `ubx-sdk-go`'s real repo already
+  had the correct `ubx.` prefix (an earlier, already-merged PR), the
+  monorepo's own copy was the stale one still saying `sdk.`. `sdk/go`
+  converted to a real submodule too, matching TS/Python -- a different
+  real reason (no `go:embed` compile-time input exists for Go at all,
+  confirmed directly; Go's hermeticity sandboxes the compiled binary,
+  never an embedded interpreter, so `sdk/go`'s only real role is a
+  local, hermetic-test-only `replace` stand-in) but the identical
+  conclusion, for sync-safety. Two real environment/permission
+  boundaries hit and handled correctly, not worked around: a direct
+  push of a version bump to a separate repo's own `main` was blocked
+  by the harness (redone as a real branch + PR), and `deno publish`'s
+  own device-auth flow had no interactive terminal available (asked
+  the founder directly, who provided a real JSR token after a
+  classifier-caught mismatch was clarified rather than assumed). Both
+  registries confirmed live via direct, fresh registry fetches:
+  `@ubx/sdk` 0.1.2 on JSR (https://jsr.io/@ubx/sdk@0.1.2), `ubx-sdk`
+  0.1.2 on PyPI (https://pypi.org/project/ubx-sdk/0.1.2/). All three
+  languages now use the identical submodule mechanism; the separate
+  repos and the monorepo agree byte for byte. Full account: STATE.md's
   own 2026-08-12 entry.
 - 2026-08-12 -- UBI-60: `ubx promote` supports SDK- and dialogue-
   authored proposals, both real, named refusals UBI-55 documented
