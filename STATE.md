@@ -2,6 +2,118 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-145: landing UBI-134's runtime changes for real -- 3 real PRs open, blocked on review, not yet mergeable by this session, 2026-08-12
+
+**Real starting state verified first, not assumed** -- `sdk/ts`/`sdk/py`
+confirmed still real git submodules with UBI-134's `CrossStack`/
+`crossStack`/`cross_stack` additions still genuinely uncommitted in
+their own working trees (a real `git diff` in each matched UBI-134's
+own work exactly, nothing drifted). `sdk/go` confirmed NOT a submodule,
+tracked directly, with NO automated sync to `github.com/ubiquex/
+ubx-sdk-go` at all -- `go.mod`/every real import across the whole
+monorepo confirmed to never depend on it directly (only synthesized,
+throwaway `go.mod` files with a local `replace` do, purely for
+hermetic testing).
+
+**A real finding that reversed the ticket's own framing -- verified,
+not trusted.** The ticket said the panic-message drift was "`sdk.XXX`
+in this live repo, `ubx.XXX` in the monorepo's own copy." The REAL,
+current state (`git log`/direct file diff, both checked) is the
+OPPOSITE: `ubx-sdk-go`'s own real repo already has `ubx.XXX` -- fixed
+in a real, ALREADY-MERGED PR (`#1`, "fix/panic-messages-ubx-alias",
+merged 2026-08-10) -- and the monorepo's own `sdk/go/runtime/runtime.go`
+copy is the one still saying `sdk.XXX`, never carried forward. A full
+diff between the two files confirmed this is the ONLY other drift
+besides UBI-134's own `CrossStack` addition -- nothing else has
+diverged. Cross-checked which prefix is actually correct: the
+monorepo's OWN generated code/test fixtures alias the import `sdk`
+(14 real occurrences, `grep`-confirmed), but the REAL, separately
+PUBLISHED `ubx-sdk-aws-go` repo -- the actual real-world consumer,
+confirmed directly -- aliases it `ubx` (1687 real occurrences), matching
+ubiquex-docs' own `tutorial/sdk/first-program.mdx` example exactly.
+`ubx.` is the correct, live, real-world convention; the merged PR #1
+was right, and the monorepo's own copy is what's actually stale.
+
+**Part 1 done: all three languages' real, waiting UBI-134 changes are
+now real, open PRs against their own separate repos, never self-merged:**
+
+- `ubx-sdk-typescript` PR #1: https://github.com/Ubiquex/ubx-sdk-typescript/pull/1
+  (`crossStack`, `deno check` clean)
+- `ubx-sdk-python` PR #1: https://github.com/Ubiquex/ubx-sdk-python/pull/1
+  (`cross_stack`, real smoke-tested)
+- `ubx-sdk-go` PR #2 (repo already had a merged PR #1 for the panic-message
+  fix, confirmed above): https://github.com/Ubiquex/ubx-sdk-go/pull/2
+  (`CrossStack`, based on current `main` so it does NOT reintroduce
+  `sdk.` anywhere -- confirmed via `git diff | grep -c '"sdk\.'` = 0
+  before pushing; `go build`/`go vet`/`go test` all clean)
+
+All three confirmed live via direct, authenticated `gh api .../pulls/N`
+fetches, not just local push exit codes.
+
+**Part 2 decision, made and recorded, not left ambiguous: convert
+`sdk/go` to a real git submodule too, matching TS/Python.** Verified
+the real structural question first, per the ticket's own instruction,
+rather than assuming symmetry: unlike TS (`tseval/assets.go`) and
+Python (`pyeval`'s own embed.go), `sdk/go` has NO `go:embed` anywhere
+-- confirmed directly, `grep` across the whole `sdk/go/` tree found
+none. This is the real, structural reason: Go's own hermeticity model
+sandboxes the compiled BINARY itself (`sandbox-exec`/`bubblewrap`
+around a real `go build` output), never an embedded interpreter, so
+`goeval` never needs the runtime SOURCE baked into the `ubx` binary at
+all -- a Go SDK program pulls `github.com/ubiquex/ubx-sdk-go/runtime`
+in as an ORDINARY, VERSIONED GO MODULE dependency at build time, real
+or `replace`-local. So `sdk/go`'s reason for existing in the monorepo
+at all is structurally different from TS/Python's (a compile-time
+embed input serving two consumers at once) -- it exists purely as a
+LOCAL, HERMETIC-TEST-ONLY STAND-IN for the real published module,
+consumed exclusively via `replace` directives in synthesized `go.mod`
+files, never a real dependency of `ubiquex` itself.
+
+Despite that real difference in WHY each language needs a local copy,
+the submodule mechanism is still the right fix for HOW to keep it in
+sync: the `sdk.`/`ubx.` drift just found is exactly the failure mode a
+plain, manually-copied directory produces (no signal at all when the
+copies diverge), and a submodule's own tracked-commit-pointer would
+have caught it immediately, the same real, concrete benefit that
+motivated TS/Python's own choice, applied here for a different but
+equally real reason. No structural blocker found to converting `sdk/go`
+the identical way (its own `go.mod`/`replace` targets only care about
+the ON-DISK PATH, `sdk/go/`, completely indifferent to whether that
+path is backed by a submodule or plain tracked files).
+
+**Not yet done, blocked on real PR review/merge -- cannot proceed
+further this session:** updating the monorepo's own submodule
+pointers (`sdk/ts`, `sdk/py`), converting `sdk/go` to a real submodule
+pointing at `ubx-sdk-go`'s new merged HEAD, and republishing `@ubx/sdk`
+(JSR) / `ubx-sdk` (PyPI) all require the three PRs above to actually
+be reviewed and merged first -- publishing/pointing at unreviewed code
+would defeat the entire point of "never self-merge, real PR review."
+**Real next steps, once the three PRs are merged (confirm each via
+`gh api .../commits/main` before proceeding, not assumed from the PR
+UI alone):**
+
+1. `git -C sdk/ts pull origin main` / `git -C sdk/py pull origin main`
+   (or a fresh `git submodule update --remote`), then `git add sdk/ts
+   sdk/py` in the monorepo and commit the new pointers directly to
+   `ubiquex` main.
+2. `git rm -r --cached sdk/go` (never `rm -rf` -- the working tree
+   content is about to be replaced by the identical real submodule
+   content anyway) then `git submodule add https://github.com/Ubiquex/
+   ubx-sdk-go.git sdk/go`, confirm `sdk/go/go.mod`'s own module path
+   and every existing hermetic test's own `replace` directive still
+   resolves correctly against the new submodule path, commit directly.
+3. Confirm the real, CURRENT live version of `@ubx/sdk` on JSR and
+   `ubx-sdk` on PyPI (registry API, not assumed), bump, and publish via
+   real, legitimate auth only (`deno publish`'s own device-auth flow
+   for JSR; ask the founder directly for a fresh, scoped PyPI token,
+   never search for or reuse a stored credential) -- confirm both new
+   versions live via a direct registry API fetch afterward.
+4. Full `go build ./...`/`go test ./...` across the reconciled
+   monorepo, confirming `sdk/go/runtime/runtime.go`'s own panic
+   messages now genuinely read `ubx.XXX`, matching `ubx-sdk-go`'s real
+   repo byte for byte (Part 3, resolved as a natural consequence of the
+   submodule conversion, not a separate fix).
+
 ## UBI-60: promotion support for SDK- and dialogue-authored proposals, both real gaps UBI-55 named closed, 2026-08-12
 
 **Real prerequisite verification done first, per the ticket's own
