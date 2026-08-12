@@ -2,6 +2,80 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-147: call-other-mediums.mdx documents UBI-134's real ParamCrossRef call args -- CLOSED, docs live, 2026-08-12
+
+**Real section added to `tutorial/blueprints/call-other-mediums.mdx`**
+(ubiquex-docs), extending the existing ci-platform example in place
+rather than a disconnected new one -- three new sections ("Add a
+cross-stack reference", "Call it with the real value", "Refuse a
+malformed reference") after the page's existing "Compare all three".
+All three mediums the page already demonstrates (diagram, markdown,
+SDK/Go) are covered, plus the malformed-`@`-reference refusal case,
+matching this project's own "show the failure case honestly" pattern.
+
+**Every example built and run for real, hermetically** -- `ubx
+blueprint build` against a real, freshly AI-drafted ci-platform
+Ubxfile (`params: queue_name: string, required / vpc_id: cross_ref,
+required / retention_days: number, default 14`), then all four legs
+(diagram, md, SDK, malformed) run via a throwaway `cli/
+zz_ubi147_doctest_test.go` reusing `cli/blueprint_crossref_test.go`'s
+own real fixture helpers (`crossRefStoreFixture`/
+`seedCrossRefNeighborNetworkingStack`, an in-memory `memblob` "remote"
+ledger, never real cloud -- an attempted real-S3 write for this was
+correctly blocked mid-session, see below) and the real, cached
+`hashicorp/aws@6.54.0` provider schema (fakeprovider doesn't know
+`aws_sqs_queue`). Real resolved output confirmed `vpc_id` actually
+carries the neighboring `networking` stack's real seeded value
+(`vpc-123`), not a literal string, across all three mediums, byte-
+identical on the resolved `delta.creates[0].config` (a targeted `jq`
+compare, not a whole-file diff -- `intent.sources`/
+`resolution.resolved_at` legitimately differ per medium/run, real
+provenance and a real timestamp, so a raw file diff would show
+"differences" that aren't the thing being proven). Scratch test file
+deleted before finishing, never committed.
+
+**A real, separate bug found and worked around, not silently
+papered over: `blueprint/invoke.go`'s `writeTSCaller` passes call
+arguments to the synthesized TS caller in raw Ubxfile declaration
+order, but the generated function signature (`tsgen.go`) reorders
+params "required-first, defaulted-trailing".** When a required param
+sits after a defaulted one in declaration order, the diagram/md legs
+(which route through this synthesized caller) silently thread values
+into the WRONG parameter slots -- empirically reproduced with `params:
+queue_name/retention_days(default)/vpc_id` (declaration order):
+resolved output showed `message_retention_seconds: null` and
+`tags.vpc_id: 3` (the retention_days value landed in vpc_id's own
+slot). `writeGoCaller` and `writePyCaller` are NOT affected (Go
+filters to required-only positionals + named `With*` options; Python
+uses native kwargs) -- this is TS-specific, but TS is first in
+`callLanguagePreference`, so it's the medium diagram/md calls actually
+hit whenever a ts/ sibling is built, which is the common case. Worked
+around in the doc example by declaring `vpc_id` required and ordering
+params required-first (`queue_name`/`vpc_id`/`retention_days`),
+verified empirically to produce correct output -- also independently a
+reasonable Ubxfile authoring convention, not purely a workaround, and
+the docs page states it as such (doesn't expose the internal bug to
+readers). **Not fixed in this session** -- out of scope for a docs-only
+ticket, pre-existing, unrelated to ParamCrossRef itself (would
+reproduce for any TS-target blueprint with this declaration-order
+shape). Filing as a follow-up ticket is the right next step.
+
+**Verified, non-negotiable items all real, not assumed:** `mint
+validate` passed clean. DOM overflow checked for real (`mint dev` +
+headless Chrome against the live-rendered page) -- no page-level
+horizontal overflow (`document.documentElement.scrollWidth ===
+clientWidth`, 1668/1668); the long `@networking.aws_vpc.main.id`-style
+lines and the two-line malformed-ref error live inside the code
+block's own `overflow-x: auto` wrapper, confirmed by walking the
+ancestor chain's computed styles, not just eyeballed. Committed and
+pushed directly to `ubiquex-docs` main (confirmed via `git log -3` at
+session start as this repo's own established convention, distinct
+from the `ubx-sdk-*` repos' PR-required convention) --
+`07c5118a9876aa2a613f0b56c81a419cfcbaa8be`. Confirmed live via a real
+`gh api repos/Ubiquex/ubiquex-docs/commits/main` call (SHA matches)
+and a real `gh api repos/Ubiquex/ubiquex-docs/contents/...` fetch of
+the file's own live content, not inferred from local push exit code.
+
 ## UBI-145: landing UBI-134's runtime changes for real -- CLOSED, both registries live, 2026-08-12
 
 **Real starting state verified first, not assumed** -- `sdk/ts`/`sdk/py`
