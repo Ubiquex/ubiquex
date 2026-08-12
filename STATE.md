@@ -2,6 +2,151 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-134: ParamCrossRef -- blueprint call arguments can now carry a real $ref/$cross reference, 2026-08-12
+
+**The design decision, made explicit before any code.** A new
+`ParamCrossRef` param type (`cross_ref`, `blueprint/ubxfile.go`),
+matching this project's own "explicit typed markers, never silent
+string-sniffing" discipline (CLAUDE.md; the same posture $ref/$cross/
+$secret/$computed already hold at the resolver level) applied one layer
+up, at a blueprint's own declared param surface. A call-site value for
+this param type is always a real `@<stack>.<type>.<name>.<attr-path>`
+reference (`blueprint.parseCrossRefArg`, `invoke.go`) -- reusing
+`diagram/crossref.go`'s own already-established "@" grammar (a reference
+node's label) rather than inventing a second one, extended one segment
+further since a `cross_ref` value is always embedded as one concrete
+attribute's value, never "the whole resource" ($cross has no such
+shape). A malformed value is a real, named parse error, never silently
+accepted as a plain string literal.
+
+**Real gap found and closed in the SDK itself, not assumed away.** The
+blueprint's own `@<stack>...` argument syntax names a neighbor by STACK
+(never a filesystem/URL `ledger_dir` path a blueprint has no way to know
+at build time -- it's built once, called from many stacks/environments).
+`core/resolver/refs.go`'s own `resolveCross` already supports this
+("stack" mode, UBI-32 Arc B's "resolve by NAME against the base") --
+but `sdk.Cross()`/`cross()`/`cross()` (Go/TS/Python) only ever
+constructed the OTHER mode (`ledger_dir`). Added a real sibling
+constructor to all three -- `sdk.CrossStack(stack, to)` (Go,
+`sdk/go/runtime/runtime.go`), `crossStack(stack, address)` (TS,
+`sdk/ts/runtime/src/index.ts`), `cross_stack(stack, to)` (Python,
+`sdk/py/ubx_sdk/__init__.py`) -- each producing the exact
+`{"$cross": {"stack", "to"}}` wire shape `core/resolver/
+crossstack_addressing_test.go`'s own existing tests already prove
+`resolveCross` accepts. `CrossMarker`'s own Go/Python field order was
+kept unchanged (`Stack`/`stack` added as a new trailing field) so the
+existing `Cross()`/`cross()` constructors' own positional construction
+stayed byte-identical, unaffected.
+
+**Publish-status honesty, matching this project's own hard-learned
+rule 8 -- a real discovery mid-session, not assumed away.** Initially
+believed `sdk/ts` and `sdk/py` were plain monorepo directories (both
+embed their own runtime source directly into the `ubx` binary via
+`tseval/assets.go`/Python's own `embed.go`, so evaluation itself never
+needs a live npm/PyPI fetch). Checking `git status` before committing
+found the real shape: **`sdk/ts` and `sdk/py` are real git submodules**
+(`.gitmodules`), each its own separate, real, published-package repo --
+`github.com/Ubiquex/ubx-sdk-typescript` (JSR) and
+`github.com/Ubiquex/ubx-sdk-python` (PyPI, UBI-107) -- with their own
+real git history, currently at `c9da27c`/`d97d339` (both "UBI-139").
+This session's `crossStack`/`cross_stack` edits are real, uncommitted
+changes sitting in those submodules' own working trees, not yet part of
+either separate repo's own history. `sdk/go` is different again: no
+submodule link exists to `github.com/ubiquex/ubx-sdk-go` at all (no
+`.gitmodules` entry, no Makefile sync target) -- it's tracked directly
+inside the monorepo, and the synthesized caller (`writeGoCaller`)
+resolves the real module at call time, with a local `replace` only when
+the BLUEPRINT's own go.mod already carries one (every hermetic test
+fixture does; a real, published blueprint never does).
+
+Given this, and confirmed directly with the founder (in-conversation)
+rather than assumed either way: **monorepo-only for this session.** The
+`ubiquex` commit below carries `sdk/go/runtime/runtime.go` (monorepo
+copy only) plus `blueprint/`/`cli/` -- `sdk/ts`/`sdk/py`'s own real
+uncommitted changes are LEFT AS-IS in their submodule working trees,
+neither committed nor pushed, and the monorepo's own submodule pointers
+are correspondingly NOT bumped (there is no new submodule commit to
+point at yet). **Nothing in this entry claims `crossStack`/
+`cross_stack`/`sdk.CrossStack` is "published" or "live" for any of the
+three separate SDK repos** -- per the rule 8 lesson (UBI-131/UBI-126: a
+monorepo-only change was previously reported "published" when the
+separate repo was never touched). A real, direct Go SDK-import call
+against the monorepo's OWN local-replace path (exactly what every
+hermetic Go test fixture in this codebase already uses) works today,
+unaffected. **Real follow-up debt, named explicitly:** a future session
+needs to (1) commit+push the real `sdk/ts`/`sdk/py` submodule changes to
+their own separate repos, bump the monorepo's own submodule pointers to
+those new commits, and (2) manually sync/publish the identical
+`CrossStack` addition to the separate `github.com/ubiquex/ubx-sdk-go`
+repo (no automated mechanism exists for Go at all, confirmed by
+searching this repo's own Makefile) -- only after which a real
+(no-replace) blueprint call in any of the three languages can actually
+use the new stack-mode constructor.
+
+**Real type decisions, checked against how $cross's own resolved value
+is typed elsewhere, not guessed.** `GoType()` = `sdk.CrossMarker` -- a
+real, already-exported concrete type, matching this file's own existing
+`*sdk.Computed` precedent for another opaque, runtime-only SDK value
+(outputs:, UBI-128) rather than Go's untyped `any` fallback. `TSType()`/
+`PyType()` = `"any"`/`"Any"` -- matching the SAME opaque-runtime-value
+convention this file's own `outputs:` support already established for
+both languages (`{ repoArn: any; ... }` in TS, `-> Any:` in Python);
+TS's own `cross()`/`crossStack()` are themselves generic (`T = unknown`
+default), so a strict param type would force every real call site to
+spell out an explicit instantiation for no real safety gain, since a
+cross-stack reference's own real value is never available at typecheck
+time either way.
+
+**Real coverage across all three calling mediums**
+(`cli/blueprint_crossref_test.go`), each resolving through a real
+`ubx plan` run (the actual `RunE`/resolver/fakeprovider path, in-process
+via `runUbx`, never mocked) against a real stack-mode $cross neighbor --
+git-local can't be used at all for "stack" mode (`crossstack_addressing_
+test.go`'s own `TestResolve_CrossStack_ByStackName_NoBaseIsGitLocal_
+Refused` confirms this directly), so a real shared `memblob` bucket,
+prefixed per stack, backs both the calling stack ("payments", via the
+existing `openRemoteLedgerStore` CLI seam) and the neighbor ("networking",
+seeded via `why_pinchain_test.go`'s own UBI-57 adoption-shaped seed
+helper) -- plus, newly needed here, `core.RegisterRemoteLedgerOpener`
+itself overridden and restored (the neighbor's own lookup inside
+`resolveCross`'s "stack" mode goes through `core.OpenRef` directly,
+never through the CLI-level seam at all). Diagram leg (a real
+`ubx_blueprint` node's own `vpc_id: "@networking.aws_vpc.main.id"`
+attribute, `ubx plan <file>.d2`), md leg (`blueprint_calls` args via a
+real fake `[intent]` adapter, `ubx plan --from-doc`), and a direct Go
+SDK-import leg (a hand-written program importing the built blueprint's
+own package and calling it with a real `sdk.CrossStack(...)` argument,
+`ubx plan --from-code`) all resolve to the identical real neighbor value
+("vpc-123"), not the raw "@..." string. A fourth test proves the
+malformed-reference refusal end to end through the same real `ubx plan`
+path. 12 additional fast, hermetic unit tests
+(`blueprint/crossref_test.go`) cover `parseCrossRefArg`/
+`renderArgLiteral`/`ParamType` in isolation. Full repo `go build ./...`/
+`go vet ./...`/`gofmt -l .`/`go test ./...` clean; `deno check` clean on
+`sdk/ts/runtime/src/index.ts`; the Python SDK's own embedded-runtime
+integration coverage (`go test ./pyeval/...`) clean.
+
+**Docs-debt, named explicitly, not skipped silently.** This is a real,
+user-visible new behavior (a new Ubxfile `params:` type, three new SDK
+functions) -- CLAUDE.md's rule 5 requires a same-session ubiquex-docs
+update. `tutorial/blueprints/call-other-mediums.mdx` is the real,
+existing page this belongs in (the only page documenting blueprint call
+syntax across all three mediums), but a properly verified addition
+(rule 5's own bar: transcripts run against the actual built binary) is
+a genuinely separate, sizable task on its own -- not done this session.
+Recorded here as the explicit exception, not silently skipped; whoever
+picks this up next should add a "calling it with a cross-stack
+reference" section there, verified against a real built `ubx` binary.
+
+**A separate, retroactive finding, not this ticket's own gap:** UBI-57
+(the immediately prior session, same day) shipped a new CLI command
+(`ubx store gc`) and new `ubx why`/`ubx addresses` rendering behavior --
+both real, user-visible changes under rule 5 -- with no ubiquex-docs
+update and no docs-debt entry recorded anywhere in that session's own
+STATE.md entry above. Flagged here since it was noticed while writing
+this entry; not addressed in this session (out of this ticket's own
+scope), a founder call on whether/when to close.
+
 ## UBI-57: two real, independent housekeeping items named in UBI-32, both closed on their own merits, 2026-08-12
 
 **Part 1 -- orphan GC for remote stores.** Verified the real, current

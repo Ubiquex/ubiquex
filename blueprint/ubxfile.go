@@ -45,6 +45,22 @@ const (
 	// (ParamNumber's own "always int, no float" precedent above).
 	ParamListString ParamType = "list(string)"
 	ParamListNumber ParamType = "list(number)"
+
+	// ParamCrossRef (UBI-134) is a param whose call-site value is always
+	// a real "@<stack>.<type>.<name>[.<attr-path>]" cross-stack address
+	// (diagram/crossref.go's own parseCrossRefLabel established this
+	// exact "@" grammar first, for a diagram reference node's label --
+	// reused here verbatim rather than inventing a second one), never a
+	// plain string a caller could accidentally pass instead. This is
+	// this project's own established "explicit typed markers, never
+	// silent string-sniffing" discipline (CLAUDE.md; the same posture
+	// $ref/$cross/$secret/$computed already hold to at the resolver
+	// level, core/resolver/refs.go) applied one layer up, at a
+	// blueprint's own declared param surface -- a param wanting a
+	// cross-stack reference says so explicitly in its own type, rather
+	// than every string-typed param silently being probed for an "@"
+	// prefix.
+	ParamCrossRef ParamType = "cross_ref"
 )
 
 // IsList reports whether t is one of the two list-typed params: types
@@ -73,6 +89,15 @@ func (t ParamType) GoType() string {
 		return "[]string"
 	case ParamListNumber:
 		return "[]int"
+	// sdk.CrossMarker (github.com/ubiquex/ubx-sdk-go/runtime), a real,
+	// already-exported concrete type -- generated Go code already
+	// imports this package unconditionally (invoke.go's writeGoCaller,
+	// gogen.go's own header), matching the SAME "typed *sdk.Computed"
+	// precedent this file's own outputs: support already established
+	// for another opaque, runtime-only SDK value, rather than falling
+	// back to Go's untyped "any" the way an unrecognized type does.
+	case ParamCrossRef:
+		return "sdk.CrossMarker"
 	default:
 		return "any"
 	}
@@ -95,6 +120,16 @@ func (t ParamType) TSType() string {
 		return "string[]"
 	case ParamListNumber:
 		return "number[]"
+	// "any", matching the SAME opaque-runtime-value convention this
+	// file's own outputs: support already uses for every declared
+	// output ("{ repoArn: any; ... }", GenerateTS) -- TS's own cross()
+	// (sdk/ts/runtime/src/index.ts) is itself generic ("T = unknown"),
+	// so typing the param strictly here would force every real call
+	// site to spell out an explicit cross<CrossMarker>(...) instantiation
+	// for no real type-safety gain (a cross-stack reference's own real
+	// value is never available at typecheck time either way).
+	case ParamCrossRef:
+		return "any"
 	default:
 		return "any"
 	}
@@ -119,6 +154,12 @@ func (t ParamType) PyType() string {
 		return "list[str]"
 	case ParamListNumber:
 		return "list[int]"
+	// "Any", mirroring TSType's own reasoning above -- Python's own
+	// cross() (sdk/py/ubx_sdk/__init__.py) is already declared -> Any,
+	// the same established opaque-runtime-value convention this file's
+	// own outputs: support already uses ("-> Any:", GeneratePy).
+	case ParamCrossRef:
+		return "Any"
 	default:
 		return "Any"
 	}
@@ -321,9 +362,9 @@ func parseParamSpec(name, spec string) (Param, error) {
 	}
 	typ := ParamType(strings.TrimSpace(typePart))
 	switch typ {
-	case ParamString, ParamNumber, ParamBool, ParamListString, ParamListNumber:
+	case ParamString, ParamNumber, ParamBool, ParamListString, ParamListNumber, ParamCrossRef:
 	default:
-		return Param{}, fmt.Errorf("unrecognized type %q -- must be \"string\", \"number\", \"bool\", \"list(string)\", or \"list(number)\"", typePart)
+		return Param{}, fmt.Errorf("unrecognized type %q -- must be \"string\", \"number\", \"bool\", \"list(string)\", \"list(number)\", or \"cross_ref\"", typePart)
 	}
 
 	rest = strings.TrimSpace(rest)
@@ -348,6 +389,8 @@ func parseDefaultValue(typ ParamType, text string) (any, error) {
 	switch typ {
 	case ParamListString, ParamListNumber:
 		return nil, fmt.Errorf("list-typed params don't support a default value yet -- declare it \"required\" instead (UBI-129: a list param is always consumed by exactly one for_each resource, which has no notion of an un-given default)")
+	case ParamCrossRef:
+		return nil, fmt.Errorf("cross_ref params don't support a default value -- declare it \"required\" instead (UBI-134: there is no sensible default cross-stack address)")
 	case ParamNumber:
 		n, err := strconv.Atoi(text)
 		if err != nil {

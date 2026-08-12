@@ -142,6 +142,32 @@ func resolveCallArgs(params []Param, given map[string]string) ([]resolvedArg, er
 	return out, nil
 }
 
+// parseCrossRefArg parses a ParamCrossRef call-site argument's own raw
+// value, "@<stack>.<type>.<name>.<attr-path>" -- diagram/crossref.go's
+// own "@" grammar for a reference node's label (parseCrossRefLabel),
+// extended one segment further: an explicit attribute path is always
+// required here, unlike a diagram reference node's own topology-only
+// "@<stack>.<type>.<name>" form (that path never produces a real $cross
+// marker at all -- diagram/parse.go's own "Cross-stack edges" note). A
+// ParamCrossRef value is always embedded directly into a resource's own
+// config as one concrete attribute's value, and core/resolver/refs.go's
+// own splitRefTarget already hard-requires exactly this 4-part shape
+// for $cross's "to" field -- there is no real "the whole resource,
+// no attribute" shape $cross could ever resolve to, so this is a real
+// constraint already enforced downstream, surfaced here as a real,
+// named parse error instead of an opaque resolve-time failure later.
+func parseCrossRefArg(raw string) (stackName, to string, err error) {
+	if !strings.HasPrefix(raw, "@") {
+		return "", "", fmt.Errorf("%q must start with \"@\" -- expected \"@<stack>.<type>.<name>.<attr-path>\"", raw)
+	}
+	addr := strings.TrimPrefix(raw, "@")
+	parts := strings.SplitN(addr, ".", 4)
+	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[2] == "" || parts[3] == "" {
+		return "", "", fmt.Errorf("%q is not a well-formed \"@<stack>.<type>.<name>.<attr-path>\" reference", raw)
+	}
+	return parts[0], addr, nil
+}
+
 // renderArgLiteral renders one resolved arg's own raw string value into
 // lang's own literal syntax for p.Type -- string/number/bool coercion
 // against the target blueprint's own declared param type, deferred
@@ -157,8 +183,30 @@ func resolveCallArgs(params []Param, given map[string]string) ([]resolvedArg, er
 // "eu-central-1a, eu-central-1b, eu-central-1c") -- this is the ONE
 // place that raw text is actually split and rendered as a real
 // language-native list literal, splitListArg below.
+//
+// UBI-134: a ParamCrossRef param's own raw value is, identically, the
+// SAME plain "@<stack>.<type>.<name>.<attr-path>" string every medium's
+// Args capture already carries verbatim -- rendered here as a real
+// sdk.CrossStack(...)/crossStack(...)/sdk.cross_stack(...) construction
+// (matching each language's own real, already-exported $cross
+// constructor -- sdk/go/runtime, sdk/ts/runtime, sdk/py -- never a raw
+// map/dict literal reimplementing the wire shape by hand a fourth time),
+// never treated as an ordinary string literal.
 func renderArgLiteral(lang string, p Param, raw string) (string, error) {
 	switch p.Type {
+	case ParamCrossRef:
+		stackName, to, err := parseCrossRefArg(raw)
+		if err != nil {
+			return "", fmt.Errorf("param %q: %w", p.Name, err)
+		}
+		switch lang {
+		case "go":
+			return fmt.Sprintf("sdk.CrossStack(%s, %s)", strconv.Quote(stackName), strconv.Quote(to)), nil
+		case "py":
+			return fmt.Sprintf("sdk.cross_stack(%s, %s)", jsonStringLiteral(stackName), jsonStringLiteral(to)), nil
+		default: // "ts"
+			return fmt.Sprintf("crossStack(%s, %s)", jsonStringLiteral(stackName), jsonStringLiteral(to)), nil
+		}
 	case ParamString:
 		if lang == "go" {
 			return fmt.Sprintf("%q", raw), nil
@@ -440,22 +488,36 @@ func writeTSCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 	}
 
 	argExprs := make([]string, 0, len(args))
+	needsCrossStack := false
 	for _, a := range args {
 		expr, err := argLiteralOrDefault("ts", a)
 		if err != nil {
 			return "", err
 		}
 		argExprs = append(argExprs, expr)
+		if a.Param.Type == ParamCrossRef {
+			needsCrossStack = true
+		}
 	}
 
-	src := fmt.Sprintf(`import { intent, stack } from "@ubx/sdk";
+	// UBI-134: crossStack imported ONLY when at least one arg actually
+	// needs it -- every existing blueprint call (zero ParamCrossRef
+	// params) keeps generating the byte-identical import line it always
+	// has, no unused-import Deno diagnostic introduced for the common
+	// case.
+	sdkImports := "intent, stack"
+	if needsCrossStack {
+		sdkImports = "crossStack, intent, stack"
+	}
+
+	src := fmt.Sprintf(`import { %s } from "@ubx/sdk";
 import { %s } from %s;
 
 export default stack(%s, () => {
   intent({ summary: %s });
   %s(%s);
 });
-`, funcName, jsonStringLiteral(tsFile), jsonStringLiteral(stackName), jsonStringLiteral(summary), funcName, strings.Join(argExprs, ", "))
+`, sdkImports, funcName, jsonStringLiteral(tsFile), jsonStringLiteral(stackName), jsonStringLiteral(summary), funcName, strings.Join(argExprs, ", "))
 
 	entry := filepath.Join(scratch, "caller.ts")
 	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {

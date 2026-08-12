@@ -75,19 +75,41 @@ func Secret(backend, path string) SecretMarker {
 	return SecretMarker{Backend: backend, Path: path}
 }
 
-// CrossMarker is Cross()'s own return value -- serializes to the exact
-// {"$cross": {"ledger_dir", "to"}} marker docs/schema.md pins. to is a
-// hand-typed address string in v1, the same posture TS's own cross()
-// has (docs/sdk.md's own "Out of scope": a typed cross-stack handle is
+// CrossMarker is Cross()'s/CrossStack()'s own return value -- serializes
+// to the exact {"$cross": {"ledger_dir", "to"}} or {"$cross": {"stack",
+// "to"}} marker docs/schema.md pins (core/resolver/refs.go's own
+// resolveCross accepts exactly one of the two, never both -- Stack and
+// LedgerDir are mutually exclusive here for the identical reason, and
+// exactly one constructor below ever sets either). to is a hand-typed
+// address string in v1, the same posture TS's own cross() has
+// (docs/sdk.md's own "Out of scope": a typed cross-stack handle is
 // real, useful, deferred future work).
 type CrossMarker struct {
 	LedgerDir string
+	Stack     string
 	To        string
 }
 
-// Cross builds a {"$cross": {"ledger_dir", "to"}} marker.
+// Cross builds a {"$cross": {"ledger_dir", "to"}} marker -- an explicit
+// path to the neighbor's own ledger, known and fixed at the call site.
 func Cross(ledgerDir, to string) CrossMarker {
 	return CrossMarker{LedgerDir: ledgerDir, To: to}
+}
+
+// CrossStack builds a {"$cross": {"stack", "to"}} marker (UBI-32 Arc B's
+// own "resolve by NAME against the base," docs/architecture.md --
+// Addressing) -- the neighbor is named by stack, resolved against
+// whichever ledger this program's own intent ultimately runs against
+// (its [ledger.external] entries or base store), never a filesystem/URL
+// path baked into the program itself. This is the form UBI-134's own
+// blueprint cross_ref params need: a blueprint is built once and called
+// from many different stacks/environments, so a call-site "@<stack>.
+// <type>.<name>" reference (matching diagram/crossref.go's own "@"
+// grammar for a reference node's label) can only ever name a neighbor by
+// stack, never by a ledger_dir path the blueprint has no way to know at
+// build time.
+func CrossStack(stack, to string) CrossMarker {
+	return CrossMarker{Stack: stack, To: to}
 }
 
 // ---------------------------------------------------------------------
@@ -442,6 +464,9 @@ func serializeGenericOrMarker(value any, addressForErrors string) (result any, h
 	case SecretMarker:
 		return map[string]any{"$secret": map[string]any{"backend": v.Backend, "path": v.Path}}, true
 	case CrossMarker:
+		if v.Stack != "" {
+			return map[string]any{"$cross": map[string]any{"stack": v.Stack, "to": v.To}}, true
+		}
 		return map[string]any{"$cross": map[string]any{"ledger_dir": v.LedgerDir, "to": v.To}}, true
 	}
 

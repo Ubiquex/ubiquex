@@ -2,6 +2,35 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-134: blueprint call arguments can now carry a real
+  $ref/$cross reference. New `ParamCrossRef` param type (`cross_ref`,
+  `blueprint/ubxfile.go`) -- a call-site value must be a real
+  `@<stack>.<type>.<name>.<attr-path>` reference (reusing `diagram/
+  crossref.go`'s own established "@" grammar), a malformed one is a
+  real, named parse error, never a silent string literal. Extended the
+  Go/TS/Python SDKs with a real `CrossStack`/`crossStack`/`cross_stack`
+  constructor (the "stack"-mode sibling of the existing `Cross`/`cross`,
+  matching `resolveCross`'s own already-supported wire shape) since a
+  blueprint's own `@<stack>...` argument names a neighbor by stack, never
+  a `ledger_dir` path a blueprint has no way to know at build time.
+  `GoType()` = `sdk.CrossMarker`, `TSType()`/`PyType()` = `any`/`Any`,
+  matching this file's own existing `outputs:` opaque-value convention.
+  Real coverage across all three calling mediums (diagram, md, direct Go
+  SDK import), each through a real `ubx plan` run against a real
+  stack-mode $cross neighbor, plus the malformed-reference refusal case.
+  `sdk/ts`/`sdk/py` turned out to be real git submodules of their own
+  separate, published repos (`ubx-sdk-typescript`/`ubx-sdk-python`,
+  discovered mid-session, not assumed) -- their own `crossStack`/
+  `cross_stack` edits are left as real, uncommitted changes in those
+  submodules' own working trees this session, monorepo-only per the
+  founder's own explicit call, not committed/pushed/pointer-bumped.
+  `sdk.CrossStack` (Go) has no submodule link to `github.com/ubiquex/
+  ubx-sdk-go` at all -- monorepo-only the same way. Nothing here is
+  claimed as published/live for any of the three separate SDK repos,
+  per rule 8; real follow-up debt named explicitly in STATE.md. A real
+  ubiquex-docs addition to `tutorial/blueprints/call-other-mediums.mdx`
+  is genuine docs-debt, named explicitly, not done this session. Full
+  account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- UBI-57: two independent housekeeping items from UBI-32,
   closed on their own merits. Part 1 (orphan GC): `ubx store gc` (matches
   the existing `sdk`/`providers` parent-command convention), finds and
