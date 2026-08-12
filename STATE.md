@@ -2,6 +2,93 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-141: ComputedCoercionError fixed for real in tutorial/aws/first-resource.mdx and resource-reference/aws/iam/policy.mdx, 2026-08-12
+
+The ticket's own premise was checked, not trusted: reproduced the exact
+`ComputedCoercionError` (`Computed<T> value for "..." was used as a
+real JS value (accessed Symbol(Symbol.toPrimitive))`) with a real
+`ubx plan --from-code` run against the unmodified tutorial file first.
+The ticket also assumed Go and Python already had working
+`Sprintf`/`fmt`-style helpers for this -- **false**: `ubx.Sprintf`
+(Go) and `ubx.fmt` (Python) are both entirely fictional, non-existent
+functions, confirmed by grepping every exported symbol in the real,
+live `ubx-sdk-go` and `ubx-sdk-python` runtime repos. Both tabs were
+broken the same way as TS, just less obviously (no coercion trap fires
+at the call site -- Go's version wouldn't even compile, Python's would
+raise `AttributeError: module 'ubx_sdk' has no attribute 'fmt'`).
+
+**The real mechanism, found by reading the resolver's own source, not
+guessed**: `addressOf()`/`.Address()`/`.address` alone isn't enough --
+the raw address string embedded directly in a JSON string is inert
+text the resolver never touches. `core/resolver/refs.go`'s
+`scanRefEdges`/`resolveStringValue` JSON-decode every string leaf,
+checking for a real `$ref`/`$cross`/`$secret`/`$computed` marker; only
+a string containing a literal `{"$ref":{"to":"<address>"}}` object gets
+resolved and re-serialized. This is the exact same marker shape the TS
+runtime's own `serializeGenericOrMarker` (`sdk/ts/runtime/src/
+index.ts`) produces automatically for a `Computed<T>` assigned
+directly to a top-level config field -- confirmed by reading that
+function directly, not assumed by analogy. Verified for real: fresh
+`ubx plan --from-code` runs for Go, TypeScript, and Python all produce
+an identical, fully-resolved 4-resource delta.
+
+**A broader sweep (grep across the whole docs site, not just the one
+flagged file) found five more real instances of the same underlying
+bug, not just the one originally reported**: the AWS tutorial's own Go
+and Python tabs (the fictional `Sprintf`/`fmt` calls above); all three
+language tabs of `resource-reference/aws/iam/policy.mdx`, via a
+different but related pattern -- `JSON.stringify`/`json.Marshal`/
+`json.dumps` called on an object tree containing a raw `Computed` value
+as a nested field (not a template literal, but the identical root
+cause: a live `Computed` reaching a serializer that can't handle it).
+The fix there builds the `{"$ref":{"to":"..."}}` marker as a plain
+nested object/map/dict *before* handing it to the language's own
+standard JSON serializer, rather than manually building the JSON
+string by hand -- verified separately, same clean 2-resource delta in
+all three languages. `resource-reference/aws/iam/role.mdx` was checked
+too and confirmed genuinely unaffected (its trust policy is built from
+entirely static literals, no `Computed` value anywhere).
+
+**Two more real, pre-existing, unrelated bugs found and fixed along
+the way, not introduced by this fix**:
+- `RolePolicyAttachmentConfig.policyArn`/`PolicyArn`/`policy_arn` is
+  genuinely required (no `?` in the real generated TS interface) but
+  was missing from all three tutorial language tabs' own
+  `RolePolicyAttachment` config -- added, referencing the `Policy`
+  resource created just above it.
+- The diagram tab's own `message_retention_seconds: "1209600"` (a bare,
+  non-`ubx_required`-wrapped attribute) produced a real, blocking
+  "Questions" warning. Re-tested wrapped in `ubx_required.` too, and it
+  still failed -- `message_retention_seconds` is genuinely optional on
+  `aws_sqs_queue` (confirmed: `ubx_required.message_retention_seconds`
+  fails with `"... is not a required attribute"`), and the diagram
+  medium can only ever set attributes the schema flags required.
+  `aws_sqs_queue` itself has no required top-level attribute at all, so
+  the fix is to drop the attribute from the diagram tab entirely -- a
+  real, honest diagram-medium limitation named on the tab itself,
+  matching the same pattern UBI-140 found for Kubernetes, not a bug to
+  paper over.
+
+**A third, diagram-specific problem surfaced only while testing the
+fix**: the JSON-embedded `{"$ref":{"to":"..."}}` marker, written into a
+`ubx_required.policy` string value, produced a real D2 PARSE error
+(`substitutions must begin on {`), not a ubx resolution error. Root
+cause: D2 reserves an unescaped `$` inside a quoted string for its own
+substitution syntax. Fix: a backslash in front of the marker's own
+`$ref` key (`\$ref`) inside the D2 string literal. Also confirmed
+(same test) that the diagram's own separate `ref:<node>.<path>`
+shorthand only resolves when it's the *entire* value of a
+`ubx_required` field, not something embedded within a larger JSON
+string -- a real, distinct mechanism from the JSON-embedded-refs
+convention, not a variant of it.
+
+All fixes verified with real `ubx plan --from-code`/`--from-diagram`
+runs (not just eyeballed), a real `mint dev` preview (zero page-level
+overflow on every tab of both changed pages, confirmed via
+`document.documentElement.scrollWidth - window.innerWidth`, not the
+code block's own internal scroll which is normal), and a clean
+`mint broken-links`.
+
 ## UBI-140: kubernetes/first-resource.mdx fixed for real, using verified ground truth from the real generated bindings, 2026-08-12
 
 Real, deep re-verification against the actual generated

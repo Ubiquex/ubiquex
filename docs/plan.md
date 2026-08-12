@@ -2,6 +2,31 @@
 
 ## Changelog
 
+- 2026-08-12 -- UBI-141: fixed a real `ComputedCoercionError` bug in
+  `tutorial/aws/first-resource.mdx`'s TS tab (`${queue.arn}` inside a
+  template literal), plus five more real instances of the same
+  underlying bug found by a broader sweep (Go and Python's own
+  fictional `ubx.Sprintf`/`ubx.fmt` helpers in the same tutorial;
+  `JSON.stringify`/`json.Marshal`/`json.dumps` on a raw `Computed` value
+  in all three language tabs of `resource-reference/aws/iam/policy.mdx`;
+  the diagram tab's own non-working `"ref:queue.arn"` embedded in a
+  JSON string). The real, verified mechanism (found by reading
+  `core/resolver/refs.go` directly, not derivable from the runtime API
+  alone): get the `Computed`'s address string (`.Address()` Go,
+  `addressOf()` TS, `.address` Python) and hand-build a literal
+  `{"$ref":{"to":"<address>"}}` marker inside the larger JSON string --
+  the exact marker shape the TS runtime's own config serializer
+  produces automatically for a top-level `Computed<T>` field. Two more
+  real, pre-existing, unrelated bugs found and fixed along the way:
+  `RolePolicyAttachment` was missing its own required `policyArn` field
+  in all three tutorial language tabs; the diagram tab's own
+  `message_retention_seconds` attribute couldn't resolve at all since
+  it's optional and the diagram medium can only ever set attributes the
+  schema flags required (dropped, a real diagram-medium limitation, not
+  a bug). D2 also reserves an unescaped `$` inside a quoted string for
+  its own substitution syntax, discovered via a real parse error;
+  needs a backslash in front of the marker's own `$ref` key. Full
+  account: STATE.md's own 2026-08-12 entry.
 - 2026-08-12 -- UBI-140: `tutorial/kubernetes/first-resource.mdx` fixed
   for real against the actual generated `ubx-sdk-kubernetes` bindings
   (cloned fresh, read directly) -- the fictional `core`/`apps`/
