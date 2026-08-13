@@ -136,7 +136,28 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: %w", e.rt.WireType, err)
 			}
-			files["sdk/go/"+shortName+"/"+service+"/"+e.local+".go"] = content
+			// UBI-151: a real, live-verified Go-toolchain quirk, NOT a
+			// naming collision like the *Config case above -- Go treats
+			// ANY file whose own name ends in "_test.go" as test-only and
+			// permanently excludes it from `go build`/`go doc`/any real
+			// import, regardless of content. A resource whose own local
+			// name happens to end in "_test" (a real, wire-derived name,
+			// e.g. google_network_management_connectivity_test,
+			// azurerm_application_insights_web_test) produced exactly
+			// that filename -- 3 real, confirmed-live instances across
+			// this whole codebase's 4 real provider corpora before this
+			// fix (google, azurerm x2; aws and kubernetes confirmed
+			// clean). Scoped to the FILENAME only, on purpose -- the
+			// exported Go identifier/type name (via ResourceFile's own
+			// e.local above, untouched) is correct today and does not
+			// need to change, only the map key a real consumer's
+			// `go build` never sees. Same trailing-underscore convention
+			// the *Config collision above already uses.
+			fileLocal := e.local
+			if strings.HasSuffix(fileLocal, "_test") {
+				fileLocal += "_"
+			}
+			files["sdk/go/"+shortName+"/"+service+"/"+fileLocal+".go"] = content
 		}
 	}
 	return files, nil

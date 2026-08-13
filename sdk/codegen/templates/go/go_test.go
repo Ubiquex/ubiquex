@@ -403,6 +403,43 @@ func TestGeneratedRepo_ServiceNameIsGoBuildSpecial_Escaped(t *testing.T) {
 	}
 }
 
+// TestGeneratedRepo_LocalNameEndsInTest_FilenameEscaped is UBI-151's own
+// real, live-verified fix. A real, wire-derived local name ending in
+// "_test" (google_network_management_connectivity_test is real and
+// confirmed live, not hypothetical -- azurerm_application_insights_web_test
+// and azurerm_application_insights_standard_web_test are the other 2 real,
+// confirmed instances) produces a Go source filename ending in "_test.go",
+// which Go's own toolchain permanently excludes from `go build`/`go doc`/
+// any real import as test-only, regardless of content -- confirmed live
+// against the real, published repo before this fix (`go list -f
+// '{{.TestGoFiles}}'` names the file; `go doc` finds no such symbol). The
+// exported Go identifier/type name must stay untouched -- only the
+// filename needs the same trailing-underscore escape this file's own
+// *Config collision case already uses, above.
+func TestGeneratedRepo_LocalNameEndsInTest_FilenameEscaped(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("google_network_management_connectivity_test", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("google", "hashicorp/google", "7.42.0", types)
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+	if _, ok := files["sdk/go/google/network/management_connectivity_test_.go"]; !ok {
+		t.Fatalf("GeneratedRepo: expected google/network/management_connectivity_test_.go (escaped _test.go filename), got paths: %v", keys(files))
+	}
+	for path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			t.Fatalf("GeneratedRepo: a real generated file still ends in _test.go, Go's own toolchain will silently exclude it from go build/go doc: %s", path)
+		}
+	}
+	// The exported Go identifier itself is untouched -- only the filename
+	// changed.
+	mustContain(t, files["sdk/go/google/network/management_connectivity_test_.go"], "var ManagementConnectivityTest = ubx.ResourceBinding{")
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
+	}
+}
+
 func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),
