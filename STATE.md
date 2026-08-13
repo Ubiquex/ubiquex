@@ -2,6 +2,82 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-153: monorepo-side fix CLOSED and live; a real, coordinated CI-workflow gap found, NOT yet closed -- 2026-08-14
+
+**Real root cause, confirmed before touching anything**: all four real
+SDK repos (aws, google, azure, kubernetes) checked directly -- every
+one is at `go 1.26.3` today, identically (matches `ubiquex`'s own
+`go.mod` and the real, locally-installed toolchain exactly). Confirms
+the founder's own reasoning: any single hardcoded replacement constant
+would immediately be stale relative to real, live state, recreating
+UBI-151's own bug the next time any one repo legitimately bumps ahead.
+
+**The fix**: `sdk/codegen/templates/go/go.go`'s `GeneratedRepo` no
+longer hardcodes or decides the go.mod `go` directive at all -- takes
+it as a real parameter. `cli/sdk.go`'s new `resolveGoDirective` reads a
+real, already-existing go.mod at the real target path
+(`<out>/<source>/sdk/go/go.mod`) when present, preserving its real
+value verbatim; falls back to `runtime.Version()` (the real toolchain
+that built the running `ubx` binary itself) only for a genuinely new
+repo -- never a second hardcoded constant, which would just move the
+same staleness risk one level up.
+
+**Real regression tests, all passing**: a fixture go.mod pre-set to a
+deliberately fictional, higher-than-anything-real value (1.99.9)
+survives regen unchanged -- unambiguous proof of real preservation, not
+a coincidental match with the fallback (which is also 1.26.3 today, so
+testing only against real repos' own current values would not have
+proven this). Fresh-repo case confirms the real runtime-derived
+fallback. Full repo `go build`/`go vet`/`go test ./...` clean.
+
+**Verified against all four real, live repos**, each one's own real,
+current go.mod seeded at the real target path before regen: all four
+preserve `go 1.26.3` correctly, zero silent downgrades.
+
+**A real, significant finding, not glossed over**: the monorepo-side
+fix alone does NOT intercept the real bug in its actual, live CI-
+triggered occurrence path. Confirmed directly by reading all four real
+`version-watch.yml` workflows: `ubx sdk gen --out` always writes into a
+FRESH, empty scratch directory under `$RUNNER_TEMP` (deliberately, to
+avoid a real, already-documented rsync self-overlap bug -- see that
+workflow's own comment), never the real, already-checked-out repo. A
+real, direct test proved this: regenerating into a genuinely empty,
+unseeded scratch dir (exactly matching real CI behavior today) produces
+`resolveGoDirective`'s own fallback (`runtime.Version()`, currently
+1.26.3) -- which happens to match all four repos' real current value
+right now, masking the gap, but is NOT actually reading their real
+go.mod. If any one repo is ever legitimately bumped ahead of whatever
+Go version built that session's `ubx` binary, the next CI-triggered
+regen would silently downgrade it right back -- the identical UBI-151
+bug, still real and live in its real occurrence path, even after this
+fix.
+
+**Real, closing this needs but has NOT yet had**: a coordinated change
+to all four repos' own `version-watch.yml` (seed the scratch output
+directory's own `sdk/go/go.mod` with the real, already-checked-out
+repo's current go.mod before invoking `ubx sdk gen --lang go`) --
+stopped and reported this finding rather than opening PRs unilaterally
+against all four repos, per this project's own "never self-merge,
+confirm before acting on a separate repo" discipline. Founder's own
+call on how/whether to proceed with the CI-side change.
+
+Committed and pushed (`ubiquex` `ca2ccc4`), confirmed live via
+`gh api`. No downstream repo PR opened or needed to PROVE the monorepo
+fix itself (verified directly against real, seeded go.mod fixtures
+instead) -- the coordinated CI change, if pursued, is real, separate,
+not-yet-started work.
+
+**Also fixed this session, a real gap caught before it could compound**:
+UBI-152's own source-side fix (`provider.Attribute.Description`,
+`sdk/codegen/ir.Field.Description`) was tested and used to power that
+entire prior session's docs work, but was never actually committed to
+this repo -- only the `ubiquex-docs` side had landed. Found while
+starting this session's own `git status` check (an uncommitted diff
+that should not have still been there), committed and pushed separately
+(`ubiquex` `c9db7a5`), correctly attributed to UBI-152, confirmed live.
+
+---
+
 ## UBI-150: CLOSED -- code-block container widened for wide viewports, real, partial fix, honest about its own real limit, 2026-08-14
 
 **Step 1, real, full-corpus measurement (not the single-resource sample
