@@ -2,6 +2,83 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-151: CLOSED -- both real SDK repos fixed/republished/verified live, all 3 blocked docs pages promoted, UBI-144 now genuinely 4197/4197, 2026-08-13
+
+**The one remaining gap across all four UBI-144 providers is closed.**
+Real root cause (Go's toolchain permanently excludes any file ending in
+`_test.go` from `go build`/`go doc`/any real import, regardless of
+content) fixed at the source: `sdk/codegen/templates/go/go.go`
+(`GeneratedRepo`) now escapes the FILENAME only (trailing `_` appended
+when a resource's own wire-derived local name ends in `_test`), leaving
+the exported Go identifier untouched. Real regression test added
+(`sdk/codegen/templates/go/go_test.go`,
+`TestGeneratedRepo_LocalNameEndsInTest_FilenameEscaped`).
+
+- **Both real, separate SDK repos fixed via real PRs, never
+  self-merged**: `ubx-sdk-google` PR #1 (`f75ebc9` -> merge `60acbdd`),
+  `ubx-sdk-azure` PR #1 (`0d482c8` -> merge `c0b41b2`), both 100%-
+  similarity git renames, zero content-byte changes beyond the
+  filename. `go.mod`'s `go 1.26.3` directive (stale-template artifact,
+  UBI-153 filed separately for the template's own root cause) and
+  Azure's `go.mod` module-path (`ubx-sdk-azurerm` -> real `ubx-sdk-
+  azure`, per that repo's own `version-watch.yml` documented
+  correction) both restored, founder-confirmed before merging.
+- **Republished, real, confirmed-live registry versions**:
+  `ubx-sdk-google`/`ubx-sdk-azure` both at **0.2.1** across JSR
+  (`jsr.io/@ubx/sdk-google`, `jsr.io/@ubx/sdk-azure` -- `meta.json`
+  confirms `"latest": "0.2.1"`), PyPI (`pypi.org/project/ubx-sdk-
+  google`, `.../ubx-sdk-azure` -- JSON API confirms `"version":
+  "0.2.1"`), and the Go module proxy at tag `sdk/go/v0.2.1` for both
+  (`@v/list` and `@v/<version>.info` both correctly resolve; `@latest`
+  itself lagged on a stale cached `v0.2.0` at check time for both --
+  a real, harmless proxy-cache quirk, NOT a publish failure, since a
+  real, fresh `go get module@v0.2.1`/`go build`/`go doc` against the
+  live registry, zero local `replace` directives, resolved and built
+  clean with real go.sum hashes recorded for all three real modules).
+  Real CI gap found and fixed along the way: both repos' `publish.yml`
+  runs failed on missing `JSR_TOKEN`/`PYPI_TOKEN` repo secrets (zero
+  secrets present on either repo, confirmed via `gh secret list`);
+  founder provided both real tokens directly in chat, set via safe
+  stdin-piped `gh secret set` (never as a CLI arg, never logged), re-
+  run correctly detected the already-committed `0.2.1` was already
+  ahead of the live `0.2.0` and published as-is with no double-bump.
+- **All 3 previously-broken symbols now real, live, network-resolved**:
+  `ManagementConnectivityTest` (`google/network`), `InsightsWebTest`,
+  `InsightsStandardWebTest` (`azurerm/application`) -- proved via a
+  real, throwaway Go module requiring the exact live `v0.2.1` tag with
+  no local `replace`, `go doc` resolving all three directly against
+  the fetched module cache, `go build ./...` clean.
+- **Docs closure**: local `~/Ubiquex/ubx-sdk-google` and `~/Ubiquex/
+  ubx-sdk-azure` checkouts were found 3 commits behind their real
+  remotes (never pulled after the PR merges) -- caught by the on-disk
+  filename still reading unescaped before a real `git fetch`/`git log
+  origin/main` comparison exposed it; fast-forwarded, re-verified.
+  Along the way, found and fixed a real, previously-latent bug in
+  `gen_complete_pages.py`: the page slug was derived directly from the
+  Go filename, which for these 3 resources now carries the UBI-151
+  escape's trailing `_` -- would have produced a bogus `...-test-`
+  slug matching no real existing page. Fixed by stripping the known
+  escape pattern before slug/intent-text derivation (the exported
+  identifier, and thus every real generated code block, was never
+  affected -- `local`/`slug` are unused parameters inside
+  `build_resource_page_complete` itself). All 3 pages regenerated,
+  full UBI-144 bar: 3/3 real `go build` clean, 3/3 real `ast.parse`
+  clean, 3/3 `deno fmt --check` clean, `mint validate` clean, zero em
+  dashes, zero real page-level overflow across all 12 tab measurements
+  (worst uncontained-looking case 420px, fully contained by its own
+  scroll wrapper), byte-identity spot-checked against 4 unrelated
+  already-approved pages spanning all 4 providers (AWS/GCP/Azure/
+  Kubernetes) -- zero diff, confirming no scope creep.
+
+Committed and pushed (`ubiquex-docs` `132aa0d`), confirmed live via
+`gh api` directly against the real repo.
+
+**Final, closed tally**: AWS 1684/1684, GCP 1329/1329, Azure
+1103/1103, Kubernetes 81/81. **4197/4197 -- zero remaining known gaps
+across all four providers under UBI-144.**
+
+---
+
 ## UBI-144: ALL FOUR PROVIDERS COMPLETE -- 4194/4197 real pages, final tally, 2026-08-13
 
 **Kubernetes, the last of the four providers under this initiative,
