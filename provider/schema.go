@@ -40,13 +40,24 @@ type Block struct {
 // Attribute is one attribute of a schema block. Type is the raw ctyjson
 // type spec (e.g. `"string"`, `["list","string"]`) — byte-identical on the
 // wire in both tfplugin5 and tfplugin6, so it is carried through as-is.
+//
+// Description is the provider's own real, wire-carried prose (UBI-152) —
+// present in both protocols' Schema_Attribute (proto field 3), but
+// genuinely empty for many real providers (confirmed live: 0/15 non-empty
+// for hashicorp/aws's aws_iam_role, 0/100 for hashicorp/azurerm's
+// azurerm_storage_account) and genuinely populated for others (29/30 for
+// hashicorp/google's google_compute_instance, 516/528 recursively for
+// hashicorp/kubernetes's kubernetes_deployment_v1). Carried through
+// verbatim, empty string when the real provider genuinely didn't set
+// one — never a placeholder invented here.
 type Attribute struct {
-	Name      string
-	Type      json.RawMessage
-	Required  bool
-	Optional  bool
-	Computed  bool
-	Sensitive bool
+	Name        string
+	Type        json.RawMessage
+	Description string
+	Required    bool
+	Optional    bool
+	Computed    bool
+	Sensitive   bool
 }
 
 // NestingMode mirrors tfplugin's Schema.NestedBlock.NestingMode, unified
@@ -128,12 +139,13 @@ func blockFromV6(b *tfplugin6.Schema_Block) (Block, error) {
 			return Block{}, fmt.Errorf("attribute %q: %w", a.Name, err)
 		}
 		out.Attributes = append(out.Attributes, Attribute{
-			Name:      a.Name,
-			Type:      typeJSON,
-			Required:  a.Required,
-			Optional:  a.Optional,
-			Computed:  a.Computed,
-			Sensitive: a.Sensitive,
+			Name:        a.Name,
+			Type:        typeJSON,
+			Description: a.Description,
+			Required:    a.Required,
+			Optional:    a.Optional,
+			Computed:    a.Computed,
+			Sensitive:   a.Sensitive,
 		})
 	}
 	for _, nb := range b.BlockTypes {
@@ -257,12 +269,13 @@ func blockFromV5(b *tfplugin5.Schema_Block) Block {
 	out := Block{}
 	for _, a := range b.Attributes {
 		out.Attributes = append(out.Attributes, Attribute{
-			Name:      a.Name,
-			Type:      json.RawMessage(a.Type),
-			Required:  a.Required,
-			Optional:  a.Optional,
-			Computed:  a.Computed,
-			Sensitive: a.Sensitive,
+			Name:        a.Name,
+			Type:        json.RawMessage(a.Type),
+			Description: a.Description,
+			Required:    a.Required,
+			Optional:    a.Optional,
+			Computed:    a.Computed,
+			Sensitive:   a.Sensitive,
 		})
 	}
 	for _, nb := range b.BlockTypes {

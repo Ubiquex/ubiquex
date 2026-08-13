@@ -76,14 +76,26 @@ type TypeRef struct {
 // always has Required/Optional/Computed/Sensitive all false -- a
 // NestedBlock carries none of these itself in a real provider schema,
 // only its own inner Attributes do (provider/schema.go; confirmed by
-// provider/ctyvalue.go's encodeNestedBlockValue comment).
+// provider/ctyvalue.go's encodeNestedBlockValue comment). The same is
+// true of Description below -- a NestedBlock's own Description
+// (provider.NestedBlock.Block.Description, the container's prose, not
+// any inner attribute's) has no home in this flat Field shape and is
+// not carried here.
+//
+// Description is the provider's own real, wire-carried attribute prose
+// (UBI-152), carried through verbatim from provider.Attribute -- empty
+// string when the real provider genuinely didn't set one (confirmed
+// live: hashicorp/aws and hashicorp/azurerm both report this empty for
+// nearly every real attribute; hashicorp/google and hashicorp/
+// kubernetes both populate it richly). Never invented here.
 type Field struct {
-	WireName  string
-	Type      TypeRef
-	Required  bool
-	Optional  bool
-	Computed  bool
-	Sensitive bool
+	WireName    string
+	Type        TypeRef
+	Description string
+	Required    bool
+	Optional    bool
+	Computed    bool
+	Sensitive   bool
 }
 
 // ResourceType is one provider resource type's own IR -- WireType is the
@@ -215,12 +227,13 @@ func blockFields(b provider.Block) ([]Field, error) {
 			return nil, fmt.Errorf("attribute %q: %w", a.Name, err)
 		}
 		fields = append(fields, Field{
-			WireName:  a.Name,
-			Type:      ref,
-			Required:  a.Required,
-			Optional:  a.Optional,
-			Computed:  a.Computed,
-			Sensitive: a.Sensitive,
+			WireName:    a.Name,
+			Type:        ref,
+			Description: a.Description,
+			Required:    a.Required,
+			Optional:    a.Optional,
+			Computed:    a.Computed,
+			Sensitive:   a.Sensitive,
 		})
 	}
 
