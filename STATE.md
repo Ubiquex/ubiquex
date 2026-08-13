@@ -2,6 +2,57 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-152: FULLY CLOSED -- the 7 hand-tuned AWS pages done, real schema text added without touching one existing hand-authored word, 2026-08-13
+
+The bulk pass (2656 pages, prior entry below) deliberately left 7 real,
+hand-authored AWS pages untouched. This session finished them, one at a
+time, per the founder's own explicit instruction: add real schema text
+alongside the existing prose, never replace it.
+
+**Real finding before touching anything**: checked live schema data for
+all 7 first rather than assuming `region` (confirmed near-universal in
+the bulk pass) would apply the same way everywhere. It split three ways:
+- `aws_iam_role`, `aws_iam_policy`, `aws_iam_role_policy_attachment`:
+  genuinely zero real description text for any field -- IAM is a
+  global, non-regional AWS service, has no `region` attribute in its
+  real schema at all. Left byte-identical, confirmed via a direct
+  re-check of the live schema dump, not skipped on assumption.
+- `aws_s3_bucket`: the one page that fit the instruction literally --
+  `region` already exists as a field with its own hand-tuned sentence
+  ("The real AWS region the bucket was created in."). Real schema text
+  appended after it, same sentence, byte-identity confirmed the
+  original survives as an exact prefix.
+- `aws_vpc`, `aws_ecr_repository`, `aws_sqs_queue`: real text exists
+  for `region`, but the field itself was never listed on these pages
+  at all -- written before this attribute existed on the real,
+  current AWS provider schema. Founder's own explicit call (asked
+  directly rather than guessed): add `region` as a new, purely
+  additive `<ResponseField>` entry, matching the page's own existing
+  conventions. Zero existing lines touched on any of the 3.
+
+**Verified individually, one page at a time, same full bar as the bulk
+pass**: 4/4 real `go build` clean, 4/4 `ast.parse` clean, 4/4
+`deno fmt --check` clean, `mint validate` clean after every single
+edit, zero em dashes, zero real overflow. Every diff reviewed before
+moving to the next page -- 3 of the 4 real changes are pure additions
+(zero deletions in the diff), the 4th (`s3_bucket`) is a single-line
+append with the original sentence confirmed byte-identical as a
+prefix.
+
+Committed and pushed (`ubiquex-docs` `65bd978`), confirmed live via
+`gh api`.
+
+**UBI-152 is now completely closed.** Every real, currently-live
+provider description across the full 4197-page corpus that can
+legitimately be surfaced without inventing content or destroying
+existing hand-authored prose has been. Two real, separate bugs found
+along the way (the recursive-rendering explosion on 10 self-
+referential-schema resources; the pre-existing `google_firestore_index`
+build failure) were filed separately as UBI-156/UBI-157 and correctly
+left out of scope here.
+
+---
+
 ## UBI-152: bulk pass CLOSED -- real, schema-sourced field descriptions live across 2656 pages; 7 hand-tuned AWS pages still pending as their own careful pass, 2026-08-13
 
 **Root cause (Step 1, confirmed against real, live provider binaries, not
