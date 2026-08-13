@@ -2,6 +2,74 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: GCP genuinely 1328/1329 -- depth-fill complete, one real SDK bug found and filed (UBI-151), Azure/Kubernetes still stopped per founder direction, 2026-08-13
+
+Per direct founder instruction after AWS depth-fill reached 1684/1684:
+complete GCP to full depth the same way, unconditionally, no other
+provider touched until GCP is done. Same generator, same process, now
+proven stable across two full providers.
+
+- **Scope**: 118 already-proven services from the breadth pass, 1209
+  wire types still on the mechanical tier. Checked proactively this
+  time (learning directly from the AWS `rds`/`db` mistake) for
+  duplicate-title pages before touching anything -- **zero found**,
+  that specific failure mode doesn't recur in the GCP corpus. All
+  1209 schema dumps succeeded against the pinned
+  `hashicorp/google@7.42.0` -- **zero schema-drift gaps this round**
+  (AWS had 5).
+- **A real, structurally new finding -- a live SDK bug, not a docs
+  bug, filed as UBI-151**: `google_network_management_connectivity_test`
+  fails `go build` (`undefined: network.ManagementConnectivityTest`).
+  Root cause confirmed directly: the real, published
+  `ubx-sdk-google-go` repo's own codegen named the resource's source
+  file `management_connectivity_test.go` (from the wire type's own
+  local name ending in `_test`) -- Go's own toolchain treats **any**
+  file ending in `_test.go` as test-only and permanently excludes it
+  from `go build`/`go doc`/any real import, confirmed via `go list
+  -f '{{.TestGoFiles}}'` (shows the file) and `go doc` (finds no such
+  symbol). This is a defect in the shipped, published SDK itself --
+  every real Go consumer of `ubx-sdk-google-go` is affected, not just
+  this docs page. **Stopped and reported before working around it**,
+  per the founder's own "structurally new bug class" instruction --
+  this is categorically different from every prior finding (all of
+  which were docs-tooling-side: template logic, ident inference,
+  provider-version drift). Founder confirmed: file it (UBI-151), skip
+  the one page, continue. Checked scope: isolated to this one wire
+  type within the 1209-resource batch; not checked across the rest of
+  the real GCP/Azure/Kubernetes corpus yet -- flagging as a known risk
+  for future passes, especially any resource whose own wire-derived
+  local name happens to end in `_test` (the `extract_idents.py`
+  comment already named 2 more candidates in Azure's own corpus:
+  `application_insights_web_test`, `insights_standard_web_test`).
+  `resource-reference/gcp/network/management-connectivity-test.mdx`
+  reverted to the original mechanical tier, real fix needs
+  `sdk/codegen/templates/go/go.go` filename disambiguation + a real
+  `ubx-sdk-google-go` regen/republish, out of scope for this session.
+- **Verification, all real, 1208 pages**: 1208/1208 real `go build`
+  clean, 1208/1208 real `ast.parse` clean, `deno fmt` clean inline,
+  `mint validate` clean, zero em dashes. All-4-tab overflow crawl
+  (4832 real measurements): zero real page-level overflow, zero
+  uncontained wide code blocks -- worst cases (up to 911px,
+  `scc/management-organization-security-health-analytics-custom-
+  module`) are the same long-name pattern already tracked as UBI-150,
+  nothing structurally new even at this scale. Byte-identity spot-
+  checked against 6 already-approved pages spanning BOTH providers
+  (3 AWS, 3 GCP) -- zero diff, no cross-provider or cross-batch drift.
+
+Committed and pushed (`ubiquex-docs` `ae2f68b`), confirmed live via
+`gh api` -- including a direct check that the skipped page correctly
+remains on the mechanical tier, not silently shipped broken.
+
+**Final, confirmed state: 1328/1329 real GCP pages on the richer
+template.** The sole gap is the one UBI-151-blocked page, a real,
+filed, out-of-scope SDK defect, not a docs-pass shortfall. **GCP is
+as complete as this pass's real, confirmed scope allows -- the same
+standard AWS was held to.**
+
+Azure/Kubernetes richer-template work remains STOPPED per the
+founder's own direct instruction (never started under this plan) --
+awaiting explicit go-ahead before beginning either.
+
 ## UBI-144: AWS genuinely 1684/1684 -- prior cleanup regression found and fixed, richer-template content fully consistent, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
 
 **Corrects the "1684/1687" figure in the entry directly below** --
