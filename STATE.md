@@ -2,6 +2,73 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-155: CLOSED -- 3 genuinely-missing GCP pages generated; the 2 AWS "gaps" were never real, already correctly resolved by a prior session, 2026-08-14
+
+**Step 1, the real, specific 5 resources, named**: re-ran the exact
+UBI-152 dry-run scan (`gen_field_descriptions.py --dry-run`, isolating
+the "no existing page" cases) -- confirmed exactly `aws_db_instance`,
+`aws_db_subnet_group`, `google_bigquery_analytics_hub_query_template`,
+`google_cloud_support_support_event_subscription`,
+`google_network_connectivity_gateway_advertised_route`.
+
+**Step 2, a real, significant correction mid-investigation**: my own
+first-pass root-cause check (comparing the generator's derived path
+against the real, live `ubx-sdk-aws` repo's own `service_dir`) said
+`db/` was correct and `rds/` (where the 2 AWS pages actually, already
+live) was stale -- I was about to `git mv` them. Before acting, found a
+prior commit (`ubiquex-docs` `c536914`, UBI-144) that already did this
+exact investigation one level deeper: it checked the REAL, UPSTREAM
+`terraform-provider-aws` source directly (`internal/service/rds/
+instance.go`, `subnet_group.go`) and confirmed `rds/` is the true,
+authoritative canonical location -- `db` is merely the wire-type name's
+own prefix, not the provider's real internal service grouping. That
+session already deleted the losing `db/` alias pages and added real,
+already-verified, already-live `docs.json` redirects
+(`db/instance` -> `rds/instance`, `db/subnet-group` -> `rds/subnet-
+group`). My own check (comparing against `ubx-sdk-aws`'s own
+DOWNSTREAM, mechanically-generated repo) was circular -- that repo just
+reproduces the same mechanical rule, not independent verification.
+**Stopped before the `git mv`, corrected the finding, confirmed with the
+founder**: AWS needed zero changes. Moving those files would have
+undone real, already-verified prior work and broken the live redirects.
+
+**GCP (3 resources), the real, confirmed cause**: genuinely never
+generated in any prior GCP phase. A comprehensive search found zero
+matching pages anywhere in the corpus under any name, and zero slug
+collisions against any of GCP's other ~1330 real wire types. Each
+one's real `service_dir` (bigquery, cloud, network) matches the real,
+live, published `ubx-sdk-google` repo exactly -- `resolve_page_path`
+was never wrong; there was simply no page for it to find.
+
+**The fix**: generated via `build_resource_page` directly, not
+`gen_mechanical_pages.py`'s own `generate_mechanical_provider` --
+checked that function's real behavior first and found it unconditionally
+overwrites the WHOLE provider's own top-level `index.mdx` (and expects
+a manual nav-fragment merge), unsafe to run against an already-populated
+provider for an incremental, 3-resource addition. Wrote the 3 mechanical-
+tier pages directly to their real, correct paths, then the standard
+richer-template splice (`gen_complete_pages.py`), the same pipeline as
+the rest of the corpus. All three carry real, schema-sourced field
+descriptions already, via UBI-152's own fix (confirmed live in the
+generated content).
+
+**Verified**: 3/3 real `go build`, `ast.parse`, `deno fmt --check`
+clean, `mint validate` clean, zero em dashes, zero real page-level
+overflow (4 tabs each, all wide blocks correctly contained), byte-
+identity spot-check against 6 unrelated already-approved pages across
+all 4 providers -- zero diff, confirming no scope creep and (critically)
+confirming the AWS pages this session almost moved are still exactly
+as the prior session left them.
+
+Committed and pushed (`ubiquex-docs` `a282e8b`), confirmed live via
+`gh api`.
+
+**Final, real, updated page counts** (direct count, not arithmetic):
+**GCP 1332** (was 1329, +3) / **AWS 1684** (unchanged -- the 2 flagged
+resources were never a real gap).
+
+---
+
 ## UBI-153: fully closed -- CI-side seeding fix opened as real PRs against all four SDK repos, real PR review required, 2026-08-14
 
 Closes the real gap the prior entry (below) found and flagged rather
