@@ -2,6 +2,60 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: Azure breadth pass real and live -- 143/1103, full service-type coverage, corrected generator held from page one, 2026-08-13
+
+Azure's breadth-then-depth pass genuinely began this round (prior
+session's own "beginning Azure now" claim was inaccurate -- caught by
+a direct founder status check that found 0/1103, no processes, no
+scratch files; corrected here with real, verifiable output instead).
+
+- **Real pipeline built from scratch for Azure**: extracted identifiers
+  from the current, canonical combined SDK repo
+  (`ubx-sdk-azure/sdk/{go,python,typescript}` -- confirmed this is the
+  real, live UBI-138 layout; the older per-language `-go` repos are
+  archived/superseded). 1103/1103 wire types have complete go/py/ts
+  bindings, zero gaps.
+- **Proactive checks applied before generating anything** (per the
+  founder's own explicit ask, applying AWS's own caught-late lessons
+  instead of waiting to rediscover them):
+  - Zero duplicate-title pages -- the AWS `rds`/`db` failure mode
+    doesn't recur in Azure's own corpus.
+  - **2 real `_test.go` filename collisions found and confirmed** the
+    same way UBI-151 was (`go list -f '{{.TestGoFiles}}'`, `go doc`):
+    `azurerm_application_insights_web_test` and
+    `azurerm_application_insights_standard_web_test`. Same real
+    SDK-codegen bug class as UBI-151, excluded from this batch, same
+    real fix needed (filename disambiguation + regen/republish) --
+    not a new ticket, an additional confirmed instance of the same one.
+  - All 143 schema dumps succeeded against the pinned
+    `hashicorp/azurerm@5.0.1` -- zero schema-drift gaps.
+  - **The real `azurerm`-internal-path-vs-`azure`-published-package
+    distinction handled correctly from page one**, confirmed directly:
+    every page's Go import is
+    `github.com/ubiquex/ubx-sdk-azure/sdk/go/azurerm/<service>`, every
+    TS import is `jsr:@ubx/sdk-azure/azurerm/<service>/<resource>` --
+    exactly the shape the same-day root-cause fix (two entries below)
+    was built to guarantee, now proven on a provider that actually
+    exercises the divergence, not just on paper.
+- **143 real, distinct Azure `service_dir` groups**, one representative
+  resource each (alphabetically-first wire type per group).
+- **Verification, all real, all 143 pages**: 143/143 real `go build`
+  clean, 143/143 real `ast.parse` clean, `deno fmt` clean inline,
+  `mint validate` clean, zero em dashes, zero real page-level overflow
+  across 143 pages x 4 tabs, zero uncontained wide code blocks -- worst
+  case (674px, `system/center-virtual-machine-manager-availability-set`)
+  is the same long-name pattern already tracked as UBI-150. Byte-identity
+  spot-checked against 2 already-approved pages (1 AWS, 1 GCP) -- zero
+  diff, confirming this fresh Azure run had zero effect on either
+  already-completed provider.
+
+Committed and pushed (`ubiquex-docs` `760a3f0`), confirmed live via
+`gh api`. **143/1103 real Azure pages now on the richer template**
+(breadth complete; depth -- filling in the remaining ~960 resources
+across these same 143 proven services -- not yet started, same
+sequencing AWS/GCP followed). Kubernetes remains untouched, not
+started.
+
 ## UBI-144: real, live Go-import bug found and fixed at the root before Azure started -- exact audit: 1328/1328 GCP pages wrong, 0/1684 AWS pages wrong, both now re-verified clean, 2026-08-13
 
 Found while confirming Azure's own current state (0/1103, no breadth
