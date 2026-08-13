@@ -2,6 +2,47 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: Azure genuinely 1101/1103 -- depth-fill complete, held to the same standard as AWS/GCP, 2026-08-13
+
+Completed Azure's own depth-fill immediately after the breadth pass,
+same session, per direct founder instruction ("continue to Azure's
+depth-fill now, same standard as AWS and GCP").
+
+- **Scope**: 960 pages remained after the 143-page breadth pass. 2 are
+  the known real `_test.go` filename collisions found during breadth
+  (`azurerm_application_insights_web_test`,
+  `azurerm_application_insights_standard_web_test`) -- same bug class
+  as UBI-151, excluded again, not re-litigated. 958 buildable, all 958
+  schema dumps succeeded against the pinned `hashicorp/azurerm@5.0.1`
+  -- zero schema-drift gaps. Zero duplicate-title pages (checked
+  again across the full corpus, not just the breadth sample).
+- **958/958 generated cleanly**, zero skip/error.
+- **Verification, all real, all 958 pages**: 958/958 real `go build`
+  clean -- the real `azurerm`-internal-path-vs-`azure`-published-
+  package distinction held correctly across Azure's FULL depth, not
+  just the 143-page breadth sample. 958/958 real `ast.parse` clean,
+  `mint validate` clean, zero em dashes. All-4-tab overflow crawl
+  (3832 real measurements): zero real page-level overflow, zero
+  uncontained wide code blocks -- worst case (988px,
+  `system/center-virtual-machine-manager-virtual-machine-instance-
+  guest-agent`) is the same long-name pattern already tracked as
+  UBI-150, nothing structurally new even at Azure's own most extreme
+  resource names. Byte-identity spot-checked against 3 already-
+  approved pages spanning all 3 providers (AWS, GCP, Azure's own
+  breadth pass) -- zero diff, no cross-provider or cross-batch drift.
+- No structurally new bug class surfaced -- pushed straight through
+  to completion per the founder's own explicit instruction.
+
+Committed and pushed (`ubiquex-docs` `faf97e4`), confirmed live via
+`gh api`. **Final, confirmed state: 1101/1103 real Azure pages on the
+richer template.** The sole gap is the 2 filed, out-of-scope
+`_test.go`-collision pages (same real SDK-codegen bug class as
+UBI-151), not a docs-pass shortfall. **Azure is now held to the exact
+same completion standard as AWS (1684/1684) and GCP (1328/1329).**
+
+Kubernetes remains entirely untouched -- not started under this plan,
+no breadth pass, no depth-fill, awaiting explicit founder direction.
+
 ## UBI-144: Azure breadth pass real and live -- 143/1103, full service-type coverage, corrected generator held from page one, 2026-08-13
 
 Azure's breadth-then-depth pass genuinely began this round (prior
