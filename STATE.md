@@ -2,6 +2,114 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: AWS genuinely 1684/1684 -- prior cleanup regression found and fixed, richer-template content fully consistent, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
+
+**Corrects the "1684/1687" figure in the entry directly below** --
+that denominator (1687) was itself already stale by the time it was
+written (the canonical-vs-alias cleanup two entries down had already
+removed 3 pages from the real corpus); the real, current total is
+**1684**, and it is now **fully, 100% on the richer template, zero
+gaps** in the addressable AWS corpus.
+
+**A real regression, self-caught during this session's own byte-
+identity spot-checks, not reported by the founder**: the canonical-
+vs-alias cleanup (`c536914`, two entries down) got 1 of its 3 pairs
+wrong. It correctly verified the real upstream provider's own package
+name (`rds` for both `aws_db_instance`/`aws_db_subnet_group`) but
+never checked WHICH of the two candidate pages actually held the
+comprehensive, richer-template content before deleting the other --
+it deleted the comprehensive, fully-verified `db/instance.mdx` and
+`db/subnet-group.mdx`, keeping hand-curated, narrower, never-
+generator-touched stub pages under the "canonical" `rds/` name.
+(`aws_subnet`'s own `vpc/`-vs-`subnet/` pair was re-checked too and
+confirmed correct -- no fix needed there.)
+
+**Restored, per direct founder instruction**: `db/instance.mdx` and
+`db/subnet-group.mdx`'s own content (recovered from commit `67ed9a4`,
+confirmed byte-identical to the pre-deletion state via a real,
+line-for-line Python compare, not eyeballed) now lives at the real
+canonical path (`rds/instance.mdx`, `rds/subnet-group.mdx`). Before
+discarding the hand-curated stubs entirely: checked their own "See
+also" sections against the richer template's (which has none --
+splice-only editing never adds one where none existed) -- both stubs
+had real, non-redundant cross-links, merged onto the restored pages
+(with one stale link path corrected: the old stub's `aws_subnet` link
+pointed at the now-deleted `vpc/subnet`, fixed to the real current
+`subnet/subnet`).
+
+Verification: 2/2 real `go build` clean, `mint validate` clean, `mint
+broken-links` clean (confirms the merged See-also links themselves
+resolve). Committed and pushed (`ubiquex-docs` `28f3237`), confirmed
+live via `gh api`.
+
+**Final, confirmed state: 1684/1684 real AWS pages on the richer
+template.** `aws_mailmanager_rule_set` remains a separate, pre-
+existing, out-of-scope note (missing go/py bindings entirely in the
+published SDK repos -- never counted in the 1684, not a page-count
+gap, an SDK-bindings-side issue unrelated to this docs pass).
+
+GCP/Azure/Kubernetes richer-template work remains STOPPED per the
+founder's own direct instruction -- awaiting explicit go-ahead before
+resuming any of the three.
+
+## UBI-144: AWS genuinely 1684/1687 -- the 5 schema-drift blocks fixed via a scoped provider fetch, no corpus repin needed, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
+
+Per direct founder instruction: investigate the real root cause of the
+5 remaining schema-drift-blocked AWS pages before assuming a fix,
+find the minimal real fix before considering a full corpus repin.
+
+- **Root cause, confirmed individually for each of the 5 against the
+  real `hashicorp/terraform-provider-aws` GitHub source, not
+  assumed**: all 5 wire types genuinely do not exist in the pinned
+  `hashicorp/aws@6.54.0` -- confirmed by direct directory listing at
+  tag `v6.54.0` (`bedrock`'s own service dir has no
+  `evaluation_job.go`; `logs` has no `storage_tier_policy.go`;
+  `mailmanager`'s entire service package 404s -- doesn't exist as a
+  package at all yet; `osis` has no `pipeline_endpoint.go` or
+  `resource_policy.go`, only `pipeline.go`). Cross-checked against the
+  latest release (`v6.59.0`): all 5 exist there. Narrowed further via
+  `CHANGELOG.md`: **all 5 were added in the exact same real release,
+  `v6.57.0`** (its own "New Resource" section lists all 5). Not a
+  fetch bug, not a naming edge case, not a registry hiccup -- a real,
+  confirmed, single-release version gap.
+- **Scoped fix, not a corpus repin**: `dump_schema.go` already takes
+  the provider version as a per-invocation argument -- ran one real,
+  scoped schema dump for just these 5 wire types against `v6.57.0`
+  (a separately-cached provider binary, keyed by version), while the
+  other 1679 already-generated pages' own schemas (sourced from the
+  separately-cached `6.54.0` binary) are completely untouched. No
+  corpus-wide repin, no risk to already-shipped work. Real SDK
+  bindings for all 5 already existed in the published
+  `ubx-sdk-aws-go`/`-py`/`-ts` repos, so no SDK regen was needed
+  either -- purely a docs-generation-side fix.
+- **Verification, all real, all 5 pages**: 5/5 real `go build` clean,
+  5/5 real `ast.parse` clean, `deno fmt` clean inline, `mint validate`
+  clean, zero em dashes, zero real page-level overflow across 5 pages
+  x 4 tabs (all wide blocks contained). Byte-identity spot-checked 8
+  unrelated already-approved pages spanning Phase 1-4, the GCP-fix
+  era, and the AWS depth-fill batch (including `aws_osis_pipeline`, a
+  direct sibling of 2 of the fixed resources, the sharpest test for
+  cross-version contamination) -- zero diff, confirming the scoped
+  `v6.57.0` fetch had zero effect on the pinned-`6.54.0` corpus.
+  `aws_iam_role` also spot-checked and, as expected, differed -- the
+  same pre-existing, already-documented Phase 3
+  `KNOWN_FAMILY_MARKDOWN` mechanical-vs-hand-approved gap, unrelated
+  to this fix, reverted before committing (not shipped).
+
+Committed and pushed (`ubiquex-docs` `a1280d2`), confirmed live via
+`gh api`. **1684/1687 real AWS pages now on the richer template**
+(1679 + these 5). The remaining 3-page gap is
+`aws_mailmanager_rule_set` (missing go/py idents entirely in the
+published bindings repos -- a real, different, SDK-bindings-side gap,
+not a schema/version issue, not addressed this pass) plus the same
+resource counted once more for its own dependent page shape if any
+-- see the depth-fill entry above for exact accounting. **AWS is as
+complete as this pass's real, confirmed scope allows.**
+
+GCP/Azure/Kubernetes richer-template work remains STOPPED per the
+founder's own direct instruction -- awaiting explicit go-ahead before
+resuming any of the three.
+
 ## UBI-144: canonical-vs-alias cleanup resolved -- 1679/1687 real AWS pages stand alone, 5 known schema-drift exceptions remain, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
 
 Resolved the 3 duplicate-page findings the AWS depth-fill pass
