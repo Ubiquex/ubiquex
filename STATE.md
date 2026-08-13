@@ -2,6 +2,65 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: canonical-vs-alias cleanup resolved -- 1679/1687 real AWS pages stand alone, 5 known schema-drift exceptions remain, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
+
+Resolved the 3 duplicate-page findings the AWS depth-fill pass
+surfaced, per direct founder instruction.
+
+- **Verified canonical location against the real, pinned
+  `hashicorp/aws@6.54.0` provider source directly** (not directory
+  naming, per founder's explicit ask): `aws_db_instance` and
+  `aws_db_subnet_group`'s real provider package is `rds`
+  (`internal/service/rds/instance.go`, `subnet_group.go`,
+  `@SDKResource` annotations confirmed against the real GitHub source
+  at the pinned tag) -- no `db` package exists in the real provider
+  source at all. **Confirms the founder's own working assumption:
+  `rds/` canonical.** `aws_subnet`'s real provider package is `ec2`
+  (`internal/service/ec2/vpc_subnet.go`) -- matching NEITHER `vpc/`
+  NOR `subnet/`, the two candidates in this repo. Cross-checked
+  against ubx's own real, live, published `ubx-sdk-aws-go` bindings
+  (the same authoritative source every one of this rollout's 1679
+  pages is already derived from): `aws_subnet`'s own real binding
+  lives at `service_dir: "subnet"` -- ubx's own codegen deliberately
+  splits the real provider's single large `ec2` package into many
+  smaller service_dir groupings for docs navigability (confirmed:
+  `cloud9`, `ec2`, `instance`, `route`, `security`, `vpc` all exist as
+  separate real service_dirs in this corpus already). **Corrects the
+  founder's working assumption: `subnet/` canonical, not `vpc/`.**
+- Deleted the 3 losing alias pages (`db/instance.mdx`,
+  `db/subnet-group.mdx`, `vpc/subnet.mdx`) and their nav entries. The
+  canonical pages (`rds/instance.mdx`, `rds/subnet-group.mdx`,
+  `subnet/subnet.mdx`) were already on the richer template from the
+  depth-fill pass and are untouched by this cleanup (byte-identity
+  confirmed).
+- Added a real, top-level `redirects` field to `docs.json` (a real,
+  validated Mintlify schema field, not previously used anywhere in
+  this repo -- confirmed via `mint validate` before trusting it) from
+  each old alias path to its real canonical page.
+- **Verification**: `mint validate` clean, `mint broken-links` clean,
+  and (going beyond what `broken-links` alone confirms) all 3
+  redirects tested live end-to-end against a real `mint dev` instance
+  -- each resolves `307 -> correct canonical path -> 200`, not just
+  config-valid.
+
+Committed and pushed (`ubiquex-docs` `c536914`), confirmed live via
+`gh api` -- all 3 alias files confirmed gone from the real repo, the
+real `redirects` array confirmed present and correct.
+
+**Net effect: 1679/1687 real AWS pages stand alone on the richer
+template with no duplicate-content ambiguity.** The remaining 8 gap
+is now just the 5 real schema/bindings-drift blocks from the depth-
+fill pass (`aws_bedrock_evaluation_job`,
+`aws_cloudwatch_log_storage_tier_policy`,
+`aws_mailmanager_traffic_policy`, `aws_osis_pipeline_endpoint`,
+`aws_osis_resource_policy`) -- needs a provider repin, not a generator
+or docs-structure fix. **AWS is genuinely complete within the real
+capability of this tooling and the pinned provider version.**
+
+GCP/Azure/Kubernetes richer-template work remains STOPPED per the
+founder's own direct instruction -- awaiting explicit go-ahead before
+resuming any of the three.
+
 ## UBI-144: new SDK Reference template, AWS depth-fill complete -- 1679/1687 real AWS pages on the richer template, 8 known exceptions, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
 
 **AWS is done.** Per direct founder instruction after the GCP breadth
