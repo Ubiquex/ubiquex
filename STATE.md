@@ -2,6 +2,51 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-157: CLOSED -- google_firestore_index's real go build/deno fmt failures were never a code defect, isolated one-off batch omission, 2026-08-14
+
+**Step 1, reproduced first, not assumed**: `main.go:1:1: expected
+'package', found 'import'` -- the page's own Go block was a bare,
+top-level `import (...)`/`cfg := ...`/`ubx.Resource(...)` fragment,
+never wrapped in `package main`/`func main()`. Real cause: this was
+still `build_resource_page`'s own ORIGINAL mechanical-tier shape (a
+bare fragment by design, never meant to `go build` standalone) -- not
+malformed, just never promoted to the richer tier that every other
+real page in the corpus has.
+
+**Step 2, confirmed the earlier, separate UBI-138 fix is still intact**:
+this resource's own real, earlier issue (wire-derived slug "index"
+colliding with the firestore service's own landing-page path) --
+`resource-reference/gcp/firestore/index.mdx` is confirmed to be the
+real resource page, no separate landing page exists for the firestore
+service (6 real pages, no `index.mdx` collision), no regression there.
+
+**Step 3, the real root cause**: ran `gen_complete_pages.py` directly
+against this one resource with ZERO code changes -- succeeded
+immediately. No generator bug exists or ever existed; this resource
+was simply never included in the original GCP depth-fill's own
+richer-template splice batch, almost certainly an overly broad
+exclusion tied to the known "index" slug-collision concern (real,
+separately confirmed above), applied at batch-selection time rather
+than a defect in the splice logic itself. Scanned the full corpus
+(~4770 real pages) for the same "still-mechanical-tier Go block"
+signature -- zero other instances. Isolated, not systemic (also
+matches UBI-152's own bulk-pass finding: this was the ONLY deno fmt
+failure across that entire 2656-page verification too).
+
+**The fix**: ran the standard richer-template splice
+(`gen_complete_pages.py`) against this one resource -- no code
+changes anywhere. Verified: real `go build`, `ast.parse`, `deno fmt
+--check` clean, `mint validate` clean, zero em dashes, zero real
+page-level overflow (4 tabs, all wide blocks contained), byte-identity
+spot-check against 4 unrelated already-approved pages across all 4
+providers -- zero diff.
+
+Committed and pushed (`ubiquex-docs` `4689247`), confirmed live via
+`gh api`. GCP's real page count is unchanged (this resource already
+had a real page counted in the corpus; only its content tier changed).
+
+---
+
 ## UBI-155: CLOSED -- 3 genuinely-missing GCP pages generated; the 2 AWS "gaps" were never real, already correctly resolved by a prior session, 2026-08-14
 
 **Step 1, the real, specific 5 resources, named**: re-ran the exact
