@@ -2,6 +2,92 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-150: CLOSED -- code-block container widened for wide viewports, real, partial fix, honest about its own real limit, 2026-08-14
+
+**Step 1, real, full-corpus measurement (not the single-resource sample
+that originally flagged this)**: `crawl.js` (UBI-148's own original tool
+-- lived only in a prior session's own scratchpad, gone once that
+session ended, recreated here from STATE.md's own detailed account of
+its methodology) crawled all 4772 real `.mdx` pages, 0 errors. **88.4%
+of pages** (4219/4772) carry at least one contained code-block overflow
+instance -- genuinely widespread, not edge cases. Distribution: p50=175px,
+p90=412px, p99=657px, max=1021px. Dominant cause confirmed
+quantitatively, not assumed: r=0.686 correlation between real resource-
+name length and overflow amount, matching UBI-144's own documented
+long-name pattern, now proven at full scale. Azure worst by provider
+(p90=454px) -- its own resource names run longest.
+
+**Step 2**: the ~640-672px width was never a deliberate CSS rule.
+`custom.css` had zero width/layout rules before this session (confirmed
+by reading the whole file). The real width is an emergent result of
+Mintlify's own default `max-w-5xl` (1024px) page container, minus the
+TOC sidebar's own rendered width, minus a flex gap, minus the code
+block's own internal padding -- confirmed via the live DOM ancestor
+chain, not inferred.
+
+**Step 3, the real finding that reshaped the whole ticket**: the Step 1
+crawl measured at 1440px viewport (matching UBI-148's own original
+methodology). Direct measurement across 1280/1366/1440/1536/1920px
+found the `max-w-5xl` cap only actually engages at **>=1536px** -- below
+that, the container is already narrower than any cap due to the page's
+own fluid layout. This means a max-width increase has **zero effect** on
+the exact population the Step 1 distribution measured. Stopped and
+reported this to the founder before picking a number (there is no
+single width that is both real-data-justified AND actually fixes what
+was measured) -- founder's own call: widen anyway for the real,
+confirmed benefit it does provide, be honest about the real limit,
+don't chase the deeper, riskier fix in this ticket.
+
+**Step 4, real safety verification**: 84 checks (12 representative
+pages across every real page type -- resource-reference x4 providers,
+tutorial, concepts, cli-reference, index, install -- x7 viewports
+including mobile/tablet) at the candidate width. Zero new page-level
+overflow, zero broken TOC/sidebar layout. One real page-level overflow
+found (Azure's longest-named resource at 375px mobile) -- confirmed via
+a real A/B test (same page, same viewport, change reverted) as 100%
+pre-existing, unrelated to this fix.
+
+**1280px chosen** (Tailwind's own `max-w-7xl` token, not an arbitrary
+number) -- real, confirmed-live tradeoff: helps wide-viewport readers
+(>=1536px) meaningfully, a real no-op below that. Applied as a narrow,
+compound-selector override (`.mx-auto.max-w-5xl.flex.flex-row-reverse`)
+rather than a blanket `.max-w-5xl` override, to avoid touching any other
+real use of that utility class site-wide.
+
+**Step 5, real re-verification**: full 4772-page re-crawl at 1920px
+(where the change actually applies, extended `crawl.js` to accept an
+explicit viewport arg, default unchanged at 1440px) -- 40 real, clustered
+`ERR_NETWORK_IO_SUSPENDED` failures (a real, single network interruption
+during the ~80-minute run, not a crawler defect), all 40 succeeded clean
+on retry, 0 errors in the final merged 4772/4772 dataset. Confirmed:
+zero real page-level overflow, zero uncontained blocks, post-change.
+Real, exact before/after comparison at 1920px (mathematically derived
+from the unchanged real `scrollWidth` values, not re-measured a third
+time, since the CSS change only affects `clientWidth`): **overflow
+instances 16913 -> 4086 (-76%), pages affected 4307 -> 2001 (-53%)**,
+every percentile improved (p50 256->92, p90 382->262, p99 628->533, max
+1017->761). A full re-crawl at 1440px was deliberately skipped -- already
+proven, not assumed, to be a mathematical no-op at that viewport.
+
+`crawl.js` committed as real, tracked tooling (`ubiquex-docs`), per
+UBI-148's own original recommendation, not left in scratch a second
+time.
+
+Committed and pushed (`ubiquex-docs` `3b62ca7`), confirmed live via
+`gh api`. No PR used -- confirmed direct commit+push is this repo's own
+established convention (every UBI-14x/15x change this session landed
+the same way).
+
+**Real, honest limit, not resolved by this ticket**: the majority
+population (viewports <=1440px, where the Step 1 distribution actually
+lives) sees zero benefit from this change. A real fix there would mean
+shrinking other fixed-width layout elements (TOC sidebar, left-nav
+reservation, or the responsive breakpoints themselves) -- a materially
+larger, riskier site-wide layout change, deliberately not attempted
+here per the founder's own explicit scope call.
+
+---
+
 ## UBI-152: FULLY CLOSED -- the 7 hand-tuned AWS pages done, real schema text added without touching one existing hand-authored word, 2026-08-13
 
 The bulk pass (2656 pages, prior entry below) deliberately left 7 real,
