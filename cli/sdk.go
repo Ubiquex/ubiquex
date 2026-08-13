@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -196,11 +198,18 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		types = append(types, resType)
 	}
 
+	// UBI-138: <out>/<source-sanitized> is the real repo-shaped output
+	// root every language's own GeneratedRepo nests under (sdk/go/,
+	// sdk/typescript/, sdk/python/) -- computed here, before generation,
+	// so the Go path (UBI-153) can check it for a real, already-existing
+	// go.mod before overwriting anything.
+	repoDir := filepath.Join(out, sanitizeSourceForFilename(source))
+
 	var files map[string]string
 	var checkErr error
 	switch lang {
 	case "go":
-		files, err = gotemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		files, err = gotemplate.GeneratedRepo(providerShortName(source), source, version, types, resolveGoDirective(repoDir))
 		if err == nil {
 			checkErr = gotemplate.CheckRepoNoDuplicateDeclarations(files)
 		}
@@ -247,7 +256,6 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	// combined-repo shape directly: <out>/<source-sanitized>/go/,
 	// .../typescript/, .../python/, side by side, ready to become one
 	// real repo's own root.
-	repoDir := filepath.Join(out, sanitizeSourceForFilename(source))
 	for relPath, content := range files {
 		fullPath := filepath.Join(repoDir, filepath.FromSlash(relPath))
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
@@ -258,6 +266,46 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		}
 	}
 	return repoDir, len(types), nil
+}
+
+// goDirectivePattern matches a go.mod "go" directive line -- real go.mod
+// files declare this as a bare top-level line, "go X.Y[.Z]" (the
+// toolchain directive, "toolchain goX.Y.Z", is a real, separate,
+// optional line this pattern deliberately does not match: preserving
+// the wrong line here would be worse than falling back to the real
+// default).
+var goDirectivePattern = regexp.MustCompile(`(?m)^go (\d+\.\d+(?:\.\d+)?)\s*$`)
+
+// resolveGoDirective is UBI-153's own real fix: reads a real,
+// already-existing go.mod at repoDir's own real target path
+// (repoDir/sdk/go/go.mod) if one is there, and returns its own real,
+// current "go" directive value verbatim -- never a hardcoded template
+// constant, which is exactly how UBI-151's own bug happened (a stale
+// "go 1.23" silently downgrading a real repo already bumped to
+// go 1.26.3 on every regen). Read-before-write is self-healing: whatever
+// real value a repo is legitimately bumped to next (a new language
+// feature, a security-driven minimum) survives the next regen
+// automatically, no template edit required, matching the same "shared
+// source of truth, can't drift apart" principle UBI-142/UBI-149's own
+// fixes already established.
+//
+// Falls back to the real go toolchain that built the running ubx binary
+// itself (runtime.Version(), e.g. "go1.26.3" -> "1.26.3") only when
+// genuinely nothing exists to preserve (a brand-new repo, or an
+// existing go.mod this pattern can't parse) -- self-updating by
+// construction, never a second hardcoded constant that could itself go
+// stale the same way the original bug did.
+func resolveGoDirective(repoDir string) string {
+	fallback := strings.TrimPrefix(runtime.Version(), "go")
+	content, err := os.ReadFile(filepath.Join(repoDir, "sdk", "go", "go.mod"))
+	if err != nil {
+		return fallback
+	}
+	m := goDirectivePattern.FindSubmatch(content)
+	if m == nil {
+		return fallback
+	}
+	return string(m[1])
 }
 
 // providerShortName derives a declared provider source's own short name

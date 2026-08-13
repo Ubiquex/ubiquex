@@ -305,6 +305,31 @@ func TestResourceFile_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 	}
 }
 
+// UBI-153: GeneratedRepo must emit exactly the goDirective value it's
+// given, verbatim -- never a hardcoded constant of its own (that's the
+// real bug this fixes: a stale template value silently downgrading a
+// real, already-bumped repo's go.mod on every regen). "1.30.7" is
+// deliberately a real-looking but fictional value, higher than any
+// version that has ever been this package's own hardcoded default, so
+// a pass here can't be coincidental.
+func TestGeneratedRepo_EmitsGivenGoDirective_NeverHardcoded(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_iam_role", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.30.7")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+	goMod, ok := files["sdk/go/go.mod"]
+	if !ok {
+		t.Fatalf("GeneratedRepo: missing sdk/go/go.mod, got paths: %v", keys(files))
+	}
+	mustContain(t, goMod, "go 1.30.7\n")
+	if strings.Contains(goMod, "go 1.23\n") {
+		t.Fatalf("GeneratedRepo: emitted the old hardcoded go 1.23 instead of the given goDirective:\n%s", goMod)
+	}
+}
+
 func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_ecr_repository", scalarField("id", ir.ScalarString, false, false, true, false)),
@@ -314,7 +339,7 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 			scalarField("role", ir.ScalarString, true, false, false, false),
 		),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
@@ -364,7 +389,7 @@ func TestGeneratedRepo_ServiceNameIsGoKeyword_Escaped(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_default_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
@@ -390,7 +415,7 @@ func TestGeneratedRepo_ServiceNameIsGoBuildSpecial_Escaped(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_main_route_table_association", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
@@ -420,7 +445,7 @@ func TestGeneratedRepo_LocalNameEndsInTest_FilenameEscaped(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("google_network_management_connectivity_test", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	files, err := GeneratedRepo("google", "hashicorp/google", "7.42.0", types)
+	files, err := GeneratedRepo("google", "hashicorp/google", "7.42.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
@@ -444,7 +469,7 @@ func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
@@ -460,12 +485,12 @@ func TestGeneratedRepo_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 		rt("aws_db_instance", scalarField("id", ir.ScalarString, false, false, true, false)),
 		rt("aws_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	first, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	first, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		again, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+		again, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 		if err != nil {
 			t.Fatalf("GeneratedRepo (run %d): %v", i, err)
 		}
@@ -499,7 +524,7 @@ func TestGeneratedRepo_SiblingConfigCollision_Escaped(t *testing.T) {
 		rt("aws_svc_instance", scalarField("id", ir.ScalarString, false, false, true, false)),
 		rt("aws_svc_instance_config", scalarField("id", ir.ScalarString, false, false, true, false)),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}

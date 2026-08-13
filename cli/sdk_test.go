@@ -340,6 +340,92 @@ func assertGoRepoCompiles(t *testing.T, repoDir string) {
 	}
 }
 
+// TestSDKGen_ExistingGoModDirective_PreservedNotOverwritten is UBI-153's
+// own real regression test: a real, already-existing go.mod at the real
+// target path, pre-set to a "go" directive HIGHER than the real go
+// toolchain running this test (proves this isn't a coincidental match
+// with the runtime.Version() fallback) -- confirms `ubx sdk gen` reads
+// and preserves it verbatim rather than overwriting it with any
+// hardcoded template value, the exact silent-downgrade UBI-151 found
+// live against ubx-sdk-google's own real go.mod.
+func TestSDKGen_ExistingGoModDirective_PreservedNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+	outDir := filepath.Join(dir, "generated")
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[providers]
+"fake/widget" = "0.1.0"
+`)
+
+	// A real, deliberately fictional, higher-than-anything-real version
+	// -- proves the real value found on disk survives, not a
+	// coincidental match with the real runtime.Version() fallback.
+	const fixtureGoDirective = "1.99.9"
+	repoDir := filepath.Join(outDir, "fake-widget", "sdk", "go")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGoMod := "module github.com/ubiquex/ubx-sdk-widget/sdk/go\n\ngo " + fixtureGoDirective + "\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte(fixtureGoMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runUbx(t, []string{
+		"FAKEPROVIDER_MODE=ok-v6",
+		"UBX_PROVIDER_MIRROR=" + mirrorDir,
+	}, "sdk", "gen", "--out", outDir, "--lang", "go")
+	if err != nil {
+		t.Fatalf("ubx sdk gen --lang go: %v\noutput: %s", err, out)
+	}
+
+	goMod, err := os.ReadFile(filepath.Join(repoDir, "go.mod"))
+	if err != nil {
+		t.Fatalf("reading go.mod: %v", err)
+	}
+	mustContainSDK(t, string(goMod), "go "+fixtureGoDirective+"\n")
+	if strings.Contains(string(goMod), "go 1.23\n") {
+		t.Fatalf("regen silently downgraded the real, existing go.mod directive to the old hardcoded 1.23:\n%s", goMod)
+	}
+}
+
+// TestSDKGen_NoExistingGoMod_FallsBackToRuntimeGoVersion covers the
+// other real half of UBI-153: a genuinely new repo, nothing to
+// preserve. The real, sensible fallback is the real go toolchain that
+// built the running ubx binary itself (runtime.Version()) -- never a
+// second hardcoded constant, which would just recreate the same
+// staleness bug one level up.
+func TestSDKGen_NoExistingGoMod_FallsBackToRuntimeGoVersion(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+	outDir := filepath.Join(dir, "generated")
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[providers]
+"fake/widget" = "0.1.0"
+`)
+
+	out, err := runUbx(t, []string{
+		"FAKEPROVIDER_MODE=ok-v6",
+		"UBX_PROVIDER_MIRROR=" + mirrorDir,
+	}, "sdk", "gen", "--out", outDir, "--lang", "go")
+	if err != nil {
+		t.Fatalf("ubx sdk gen --lang go: %v\noutput: %s", err, out)
+	}
+
+	repoDir := filepath.Join(outDir, "fake-widget", "sdk", "go")
+	goMod, err := os.ReadFile(filepath.Join(repoDir, "go.mod"))
+	if err != nil {
+		t.Fatalf("reading go.mod: %v", err)
+	}
+	wantDirective := strings.TrimPrefix(runtime.Version(), "go")
+	mustContainSDK(t, string(goMod), "go "+wantDirective+"\n")
+}
+
 // TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror covers UBI-98's
 // own repo-shaped --lang py output end to end via the real CLI path --
 // see TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror's own doc

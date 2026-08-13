@@ -112,7 +112,7 @@ func TestFullProvider_Go_CompilesClean(t *testing.T) {
 		types = append(types, resType)
 	}
 
-	files, err := GeneratedRepo("aws", source, version, types)
+	files, err := GeneratedRepo("aws", source, version, types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}

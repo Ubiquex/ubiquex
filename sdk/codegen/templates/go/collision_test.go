@@ -131,7 +131,7 @@ func TestGeneratedRepo_CrossResourceNestedBlockVsSiblingResource_NoCollision(t *
 			scalarField("target", ir.ScalarString, false, true, false, false),
 		),
 	}
-	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types)
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
 	if err != nil {
 		t.Fatalf("GeneratedRepo: %v", err)
 	}

@@ -57,6 +57,19 @@ import (
 // later scope) is untouched by this -- every generated file's own
 // "github.com/ubiquex/ubx-sdk-go/runtime" import stays exactly as it was.
 //
+// goDirective is the real go.mod "go" directive value to emit (e.g.
+// "1.26.3", no "go " prefix) -- UBI-153: this package never hardcodes
+// this value or decides it itself. A hardcoded constant here would just
+// recreate the exact bug UBI-151 found (a stale template value silently
+// downgrading a real repo's own already-bumped go.mod on every regen);
+// the real, current value is the caller's own concern (cli/sdk.go reads
+// a real, already-existing go.mod at the real target path when present,
+// falling back to the real go toolchain that built the running ubx
+// binary -- runtime.Version() -- only when generating a genuinely new
+// repo with nothing to preserve). This package only ever emits whatever
+// real value it's given, the same "never invent, only surface real
+// data" discipline the rest of this codebase already holds to.
+//
 // Returns a map of path, relative to the repo root using "/" always
 // (never the host OS separator -- a logical path, not a filesystem one;
 // the caller decides how to actually write it to disk) -> file content.
@@ -64,7 +77,7 @@ import (
 // return value, then sorted by WireType within each service (defensively,
 // even if the caller already passed a sorted slice -- codegen output must
 // never depend on caller-supplied ordering, determinism is a feature).
-func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) (map[string]string, error) {
+func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, goDirective string) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].WireType < sorted[j].WireType })
@@ -89,7 +102,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	sort.Strings(services)
 
 	files := map[string]string{
-		"sdk/go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/sdk/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName),
+		"sdk/go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/sdk/go\n\ngo %s\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName, goDirective),
 	}
 	// UBI-106: every service package nests under shortName/ (e.g.
 	// aws/iam/, never iam/ directly under sdk/go/) -- a real repo-browsing
