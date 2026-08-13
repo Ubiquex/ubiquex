@@ -2,6 +2,86 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: new SDK Reference template, Phase 4 -- 268 real AWS resource pages live, full remaining service-type coverage in this pass, GCP not yet started, 2026-08-13
+
+**Scale-up batch per founder direction: full service-type coverage of
+the remaining AWS corpus in one pass**, rather than another ~30-40
+page increment, given three straight batches each caught a real,
+distinct bug and the checkpoint process had proven its value.
+
+- **Scope**: 259 total distinct AWS services; 55 already had a page
+  from Phase 1-3. Picked one representative resource per remaining
+  service (alphabetically-first wire type within each), 204
+  candidates. `aws_mailmanager_traffic_policy` dropped -- real schema
+  fetch failure against the pinned `hashicorp/aws@6.54.0` provider
+  (both real mailmanager resources have this drift between published
+  bindings and the pinned provider schema; not fixable in this pass
+  without repinning the provider version). 203 attempted, all 203
+  succeeded. 3 of the 203 picks turned out to already be covered by
+  Phase 3 (`codepipeline/codepipeline`, `elastic/beanstalk-
+  application`, `globalaccelerator/accelerator` -- a gap in my own
+  earlier "touched services" detection, not a real gap in coverage);
+  regenerating them produced byte-identical output, a free extra
+  byte-identity confirmation. Net: 200 genuinely new pages/services.
+  **258/259 real AWS services now have at least one page; the only
+  gap is `mailmanager`, blocked on the real schema-version drift
+  above, not on generator work.**
+- **A fourth real, distinct bug, caught by the real `go build` pass,
+  not gofmt**: `pick_richer_example_fields` double-picked the `name`
+  field whenever it's genuinely plain optional (Optional=True,
+  Required=False, Computed=False) -- it satisfied both the
+  `name_field` filter and the `optional_pure` filter, producing a
+  real Go/TS/Python duplicate-field compile error
+  (`aws_datasync_agent`, `aws_ivschat_logging_configuration`). Fixed
+  by excluding `name` from `optional_pure` (already covered via
+  `name_field`). Confirms the pattern from Phase 3's "diversity keeps
+  catching real bugs" finding, one more data point.
+- **A real, pre-existing bug in the original mechanical tier, worked
+  around not fixed**: `aws_resourceexplorer2_index` and
+  `aws_s3vectors_index`'s own real docs paths
+  (`resourceexplorer2/index.mdx`, `s3vectors/index.mdx`) collide with
+  their service's own CardGroup landing page, so no real per-resource
+  page exists to splice into. Substituted
+  `aws_resourceexplorer2_view`/`aws_s3vectors_vector_bucket` as this
+  pass's representative resource for those two services instead. The
+  underlying "index name collision" bug in the mechanical tier is
+  real, unfixed, out of scope for this pass -- flagging for whoever
+  next touches `gen_mechanical_pages.py`.
+- **Doc-path fix**: a Go service dir colliding with a Go keyword
+  (`default`, `main`) carries a real trailing underscore in its Go
+  import path but the docs directory itself never had that escape
+  (`gen_complete_pages.py` now strips it for the output path only,
+  the real Go import path is untouched).
+- **Verification, all real, all 200 pages**: 200/200 real `go build`
+  clean, 200/200 real `deno fmt` clean (inline at generation), 200/200
+  real `ast.parse` clean, `mint validate` clean, zero em dashes. All-
+  4-tab overflow crawl (800 real measurements): zero real page-level
+  overflow, zero uncontained wide code blocks. Worst offenders (up to
+  793px, `chimesdkmediapipelines`) are the same long-service-name
+  pattern already tracked as UBI-150, nothing structurally new.
+  Byte-identity spot-checked against 6 already-approved Phase 1-3
+  pages (`aws_iam_policy`, `aws_sqs_queue`, `aws_lambda_function`,
+  `aws_s3_bucket`, `aws_cloudwatch_metric_alarm`,
+  `aws_dynamodb_table`) plus the 3 incidental no-op overlaps above --
+  zero diff, no generator drift from either the "name" fix or the
+  doc-path fix.
+
+Committed and pushed (`ubiquex-docs` `b923c45`), confirmed live via
+`gh api` against the real, separate `ubiquex-docs` repo (per rule 5/8
+discipline). **268/1901 real AWS pages done total** (Phase 1: 1,
+Phase 2: 29, Phase 3: 38, Phase 4: 200). This was a breadth pass
+(service-type coverage), not depth -- every touched service still has
+just 1 representative resource, not full per-service coverage.
+GCP/Azure/Kubernetes remain entirely on the original mechanical tier,
+not started. Natural stopping point reached per founder's own framing
+("report back at a real, natural stopping point... if something
+structurally new surfaces requiring another human checkpoint sooner,
+stop and report then instead") -- nothing structurally new surfaced;
+the 4th bug and the 2 workarounds were all the same already-known
+categories (generator bug caught by go build, pre-existing mechanical-
+tier gap, schema/bindings version drift), each handled the same way
+prior batches established.
+
 ## UBI-144: new SDK Reference template, Phase 3 -- 68 real AWS resource pages live, generator now real tracked tooling, GCP not yet started, 2026-08-13
 
 **The generator is real, tracked tooling now, not scratch.** Split the
