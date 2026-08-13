@@ -2,6 +2,88 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: new SDK Reference template, AWS depth-fill complete -- 1679/1687 real AWS pages on the richer template, 8 known exceptions, GCP/Azure/Kubernetes still stopped per founder direction, 2026-08-13
+
+**AWS is done.** Per direct founder instruction after the GCP breadth
+round: complete AWS to full depth unconditionally, no other provider
+touched until AWS reaches completion. This is that pass.
+
+- **A real scope correction, surfaced and flagged before generating
+  anything**: STATE.md's own prior "1901" AWS total (repeated across
+  four earlier entries) turned out to count every `.mdx` file
+  including 214 real per-service `index.mdx` landing pages (CardGroup
+  navigation only, no Input/Output properties, structurally ineligible
+  for this template). **The real, verifiable AWS per-resource corpus
+  is 1687 pages**, confirmed by direct file count and cross-checked
+  against the real 1691-wire-type ident map. Flagged this explicitly
+  rather than silently redefining the founder's own stated target.
+- **To-do list built from real page frontmatter titles** (each page's
+  own `title: "aws_..."` is the ground-truth wire type), not
+  reverse-computed paths -- 1418 pages still on the mechanical tier,
+  1417 distinct wire types after dedup (one wire type,
+  `aws_db_subnet_group`, had listed twice -- see the duplicate-page
+  finding below).
+- **5 real wire types blocked on the same already-diagnosed drift
+  category as `aws_mailmanager_traffic_policy`** (schema fetch fails
+  against the pinned `hashicorp/aws@6.54.0` -- added to a newer
+  provider release than what's pinned): `aws_bedrock_evaluation_job`,
+  `aws_cloudwatch_log_storage_tier_policy`,
+  `aws_mailmanager_traffic_policy`, `aws_osis_pipeline_endpoint`,
+  `aws_osis_resource_policy`. Not a new bug class -- same category,
+  skipped and documented, consistent with precedent. **Real fix**
+  would be repinning the provider version, out of scope for a docs
+  pass.
+- **A real, structurally new finding this scale surfaced (a site-
+  content fact, not a generator bug)**: 3 real wire types have TWO
+  live pages each, at two different service directories, both linked
+  from nav -- `aws_db_instance` (`db/instance.mdx` + `rds/instance.mdx`),
+  `aws_db_subnet_group` (`db/subnet-group.mdx` + `rds/subnet-group.mdx`),
+  `aws_subnet` (`vpc/subnet.mdx` + `subnet/subnet.mdx`). Real diff
+  confirmed these aren't stray copies -- genuinely different content
+  (140-668 diff lines each), both real and navigable. The generator
+  can only target ONE canonical path per wire type (deterministic,
+  from the real Go `service_dir`) -- it updated `db/instance.mdx`,
+  `db/subnet-group.mdx`, `subnet/subnet.mdx`; the other 3 alias pages
+  remain on the old mechanical tier, untouched, now further diverged.
+  **Flagged, not silently resolved** -- needs a founder call on
+  canonical-vs-alias (redirect, merge, or deprecate the older path)
+  before those 3 can be brought current; out of scope for a mechanical
+  generator that operates on one-wire-type-to-one-path.
+- **1412/1412 buildable wire types generated cleanly, zero skip/error.**
+  1410 real files touched (2 outputs collapse into already-counted
+  shared paths from the duplicate-title case above).
+- **Verification, all real, all 1410 pages, at 7x the prior largest
+  batch**: 1410/1410 real `go build` clean -- both generator fixes
+  from the AWS Phase 4 and GCP rounds (excluding `name` from
+  `optional_pure`; reading the real `Config` struct name from source
+  instead of guessing) held with **zero new instances of either bug
+  class** at this scale, real confirmation those fixes generalize.
+  1410/1410 real `ast.parse` clean, `deno fmt` clean inline at
+  generation, `mint validate` clean, zero em dashes. All-4-tab
+  overflow crawl (5640 real measurements): zero real page-level
+  overflow, zero uncontained wide code blocks -- worst cases (up to
+  861px, AWS's own longest real resource names like
+  `managed-notification-additional-channel-association`) are the same
+  long-name pattern already tracked as UBI-150, nothing structurally
+  new even at this scale. Byte-identity spot-checked against 8
+  already-approved pages spanning Phase 1-4 and the GCP-fix era --
+  zero diff, no drift.
+
+Committed and pushed (`ubiquex-docs` `67ed9a4`), confirmed live via
+`gh api` against the real, separate `ubiquex-docs` repo. **1679/1687
+real AWS pages now on the richer template** (269 from Phase 1-4 +
+1410 this pass). The remaining 8 are fully accounted for, not open
+work: 5 schema-drift blocks (needs a provider repin) + 3 alias-
+duplicate pages (needs a founder decision on canonical-vs-alias) --
+neither resolvable by generating more pages. **This is AWS complete
+within the real capability of the current tooling.**
+
+GCP/Azure/Kubernetes richer-template work remains STOPPED per the
+founder's own direct instruction from the prior round -- awaiting
+explicit direction on next steps (resume GCP/Azure/Kubernetes breadth,
+go deeper on AWS's now-269-then-1410-covered services, or something
+else).
+
 ## UBI-144: new SDK Reference template, GCP breadth pass -- 118 real GCP resource pages live, full GCP service-type coverage, STOP on GCP/Azure/Kubernetes per founder direction, 2026-08-13
 
 **Founder-directed strategic pivot after AWS breadth completed**: since
