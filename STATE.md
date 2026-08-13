@@ -2,6 +2,80 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: new SDK Reference template, GCP breadth pass -- 118 real GCP resource pages live, full GCP service-type coverage, STOP on GCP/Azure/Kubernetes per founder direction, 2026-08-13
+
+**Founder-directed strategic pivot after AWS breadth completed**: since
+four straight AWS batches showed bugs correlate with new service/
+resource shapes rather than additional depth within an already-proven
+service, moved to a breadth pass across GCP/Azure/Kubernetes next
+(one representative resource per untouched service each, same
+diversity-first approach), rather than continuing AWS depth-fill
+immediately. **This GCP round is now the LAST provider-breadth work
+done under that plan** -- a direct founder instruction, given after
+this round started, overrides it: once this GCP round is committed
+and reported, STOP on GCP/Azure/Kubernetes entirely. **The next,
+unconditional action is completing AWS to full depth, all remaining
+pages, until AWS reaches 1901/1901 -- no other provider work until
+AWS is fully complete.**
+
+- **Scope**: 118 real, distinct GCP `service_dir` groups (real
+  identifier groupings the SDK codegen itself produces, confirmed to
+  match the existing 118 mechanical-tier directories 1:1). One
+  representative resource per group (alphabetically-first wire type),
+  118/118 succeeded -- every real schema dump against the pinned
+  `hashicorp/google@7.42.0` provider worked, no GCP equivalent of
+  AWS's `mailmanager` schema-drift gap. **118/118 real GCP services
+  now have at least one page.**
+- **A real, structurally NEW bug class, different from all four AWS-
+  phase bugs**: those were all inside `gen_provider_docs.py`'s example-
+  value template logic; this one is in `extract_idents.py`, the
+  separate tool that infers each resource's real `Config` struct/class
+  name. It derived the name as a naive `binding + "Config"` string
+  concat, blind to a real disambiguation rule the actual SDK codegen
+  already applies (documented back in UBI-108/UBI-135): when a
+  resource's naive `<Binding>Config` name collides with a SIBLING
+  resource's own real binding var name in the same package (e.g.
+  `google_workstations_workstation`'s naive `WorkstationConfig`
+  collides with sibling `google_workstations_workstation_config`'s
+  own `var WorkstationConfig = ubx.ResourceBinding{...}`), the real
+  codegen renames the LOSING side's own Config struct with a trailing
+  underscore (`WorkstationConfig_`) -- `extract_idents.py` never knew
+  to check for this, producing a real "is not a type" Go compile
+  error. **Stopped and reported to the founder before working around
+  it silently**, per the founder's own explicit "if something
+  structurally new surfaces... stop and report" instruction. Founder
+  confirmed: fix it as part of this round. Fixed by reading the real
+  declared type straight out of the source file (same discipline the
+  existing `binding` extraction already uses) instead of guessing.
+  Confirmed exactly **3 real instances** of this collision across the
+  whole 1330-resource GCP corpus (`workstations`, `spanner/instance`,
+  `migration_center/report`) -- regenerated all three (the other two
+  weren't otherwise in this batch's 118) to prove the fix generalizes,
+  not just patch the one instance that happened to surface. All 3 now
+  real `go build` clean.
+- **Verification, all real, 120 pages** (118 breadth + 2 extra
+  collision-verification pages): 120/120 real `go build` clean,
+  120/120 real `ast.parse` clean, `deno fmt` clean inline at
+  generation, `mint validate` clean, zero em dashes. All-4-tab
+  overflow crawl (480 real measurements): zero real page-level
+  overflow, zero uncontained wide code blocks -- worst cases (up to
+  539px, `database/migration-service-connection-profile`) are the
+  same long-service-name pattern already tracked as UBI-150, nothing
+  structurally new. Byte-identity spot-checked against 3 already-
+  approved AWS pages (`aws_sqs_queue`, `aws_lambda_function`,
+  `aws_iam_policy`) -- zero diff, confirming the GCP-scoped
+  `extract_idents.py` fix has zero effect on AWS.
+
+Committed and pushed (`ubiquex-docs` `b8bc8f3`), confirmed live via
+`gh api` against the real, separate `ubiquex-docs` repo. **386 real
+richer-template pages done across two providers** (AWS: 268/1901,
+GCP: 118/1329). GCP/Azure/Kubernetes richer-template work STOPS here
+per direct founder instruction -- **do not resume any GCP/Azure/
+Kubernetes work until AWS reaches 1901/1901.** Azure/Kubernetes were
+never started under this plan and remain entirely on the original
+mechanical tier, same as GCP's own remaining 1211 pages
+(1329 mechanical total - 118 now on the richer template).
+
 ## UBI-144: new SDK Reference template, Phase 4 -- 268 real AWS resource pages live, full remaining service-type coverage in this pass, GCP not yet started, 2026-08-13
 
 **Scale-up batch per founder direction: full service-type coverage of
