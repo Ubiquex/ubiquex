@@ -2,6 +2,89 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: ALL FOUR PROVIDERS COMPLETE -- 4194/4197 real pages, final tally, 2026-08-13
+
+**Kubernetes, the last of the four providers under this initiative,
+is done.** Completed in a single pass (81 wire types, small enough to
+skip the breadth-then-depth split AWS/GCP/Azure needed), entirely on
+the corrected generator and verify tool.
+
+- **Real pipeline**: identifiers extracted from the current, canonical
+  combined SDK repo (`ubx-sdk-kubernetes/sdk/{go,python,typescript}`).
+  81/81 wire types have complete bindings, zero gaps.
+- **Proactive checks, none assumed exempt**: zero duplicate-title
+  pages, **zero `_test.go` filename collisions** -- checked directly,
+  not assumed clean just because GCP and Azure both had real
+  instances. All 81 schema dumps succeeded against the pinned
+  `hashicorp/kubernetes@3.2.1` -- zero schema-drift gaps.
+  `schema_name` and `sdk_repo_id` are identical for Kubernetes
+  (`"kubernetes"` both) -- no `azurerm`-style divergence here,
+  confirmed directly.
+- **81/81 generated cleanly**, zero skip/error.
+- **Verification, all real**: 81/81 real `go build` clean, 81/81 real
+  `ast.parse` clean, `mint validate` clean, zero em dashes, zero real
+  overflow across 324 tab measurements, zero uncontained blocks
+  (worst case 412px, notably milder than the other 3 providers,
+  consistent with Kubernetes's own shorter real resource names).
+  Byte-identity spot-checked against 3 already-approved pages from
+  AWS/GCP/Azure -- zero diff. True idempotency confirmed directly for
+  Kubernetes itself (no pre-existing baseline to diff against, since
+  this was its first and only generation pass).
+
+Committed and pushed (`ubiquex-docs` `2d18103`), confirmed live via
+`gh api`.
+
+---
+
+## THE FINAL, COMPLETE TALLY ACROSS ALL FOUR PROVIDERS
+
+| Provider   | Richer template | Real corpus | Gap | Gap cause |
+|------------|-----------------|-------------|-----|-----------|
+| AWS        | 1684            | 1684        | 0   | -- |
+| GCP        | 1328            | 1329        | 1   | UBI-151 (real SDK codegen bug, filed) |
+| Azure      | 1101            | 1103        | 2   | Same UBI-151 bug class, 2 more real instances |
+| Kubernetes | 81              | 81          | 0   | -- |
+| **Total**  | **4194**        | **4197**    | **3** | all 3 are the identical, real, filed, out-of-scope SDK bug |
+
+**Every gap across all four providers traces to exactly one real bug
+class**: a real, published SDK repo's own codegen names a resource's
+source file ending in `_test.go` (from the wire type's own local name
+ending in `_test`), and Go's toolchain permanently excludes any such
+file from `go build`/`go doc`/any real import regardless of content.
+Confirmed 3 real instances total across the whole 4-provider rollout
+(`google_network_management_connectivity_test`,
+`azurerm_application_insights_web_test`,
+`azurerm_application_insights_standard_web_test`) -- filed as UBI-151,
+a real fix in `sdk/codegen/templates/go/go.go` (filename
+disambiguation) plus a regen/republish of the affected SDK repos, out
+of scope for this docs session. Every one of these 3 pages was found,
+confirmed via the same real method (`go list -f '{{.TestGoFiles}}'`,
+`go doc`), and explicitly left on the original mechanical tier rather
+than silently shipped broken.
+
+**One real, live, already-shipped bug was found and fixed at the
+root mid-rollout** (documented in full in the entry below this one):
+`build_resource_page_complete`'s own Go import path hardcoded the SDK
+repo identity to the literal string `"aws"` for every provider,
+affecting 100% of GCP's then-1328 pages. Fixed by parameterizing the
+real repo/package identity as its own value, sourced from an explicit,
+confirmed mapping -- never reconstructed from `schema_name` again.
+Full audit at the time found 0 AWS pages affected (correct only by
+coincidence, confirmed rather than assumed) and confirmed clean going
+forward through GCP's own re-verification, Azure's full breadth-and-
+depth pass, and Kubernetes -- three providers' worth of pages
+generated AFTER the fix, all correct from page one, not retrofitted.
+
+**One real, live process failure was caught and corrected mid-session**:
+an earlier report claimed "beginning Azure now" with no actual action
+taken -- caught by a direct founder status check that found 0/1103,
+no processes running, no scratch files. Corrected by actually starting
+the pipeline and reporting only real, verifiable output from that
+point forward, per the founder's own explicit instruction.
+
+**UBI-144 itself, the "richer template" rollout across the whole
+resource-reference corpus, is now genuinely complete.**
+
 ## UBI-144: Azure genuinely 1101/1103 -- depth-fill complete, held to the same standard as AWS/GCP, 2026-08-13
 
 Completed Azure's own depth-fill immediately after the breadth pass,
