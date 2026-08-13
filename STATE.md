@@ -2,6 +2,109 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-152: bulk pass CLOSED -- real, schema-sourced field descriptions live across 2656 pages; 7 hand-tuned AWS pages still pending as their own careful pass, 2026-08-13
+
+**Root cause (Step 1, confirmed against real, live provider binaries, not
+assumed)**: `provider.Attribute`'s translation from the raw tfplugin5/
+tfplugin6 wire response (`provider/schema.go`) never carried the real,
+wire-present `Description` field through at all -- confirmed present on
+the wire itself (both protocols' `Schema_Attribute.Description`, proto
+field 3), then confirmed genuinely EMPTY for nearly every real attribute
+on `hashicorp/aws`/`hashicorp/azurerm` (0/15, 0/100 on sampled
+resources) but genuinely POPULATED on `hashicorp/google`/`hashicorp/
+kubernetes` (29/30, 516/528 recursively) -- a real, provider-dependent
+split, not a uniform capture gap. AWS/Azure's classic SDKv2-vintage
+resources simply never had this schema-RPC field populated by their own
+maintainers; their real docs live in the Registry's separately-authored
+markdown, not fetchable without breaking `ubx sdk gen`'s own "local,
+pinned, offline-after-generation" guarantee (docs/sdk.md) -- explicitly
+NOT pursued.
+
+**The fix**: `provider.Attribute.Description` added (both `blockFromV5`/
+`blockFromV6`), threaded into `sdk/codegen/ir.Field.Description`. Docs
+side: `gen_provider_docs.py`'s `field_desc` now prepends real schema
+prose when present, keeping the existing flag-derived qualifier
+("Optional.", "Required.", etc.) after it -- real text in, unchanged
+placeholder for every field a provider genuinely left blank. New
+`gen_field_descriptions.py` splices ONLY Input/Output properties
+(mirroring `gen_complete_pages.py`'s own Example-only splice), since
+UBI-144's richer tier never touches that section.
+
+**A real regression caught before shipping**: the first real run
+against `aws_iam_role` silently overwrote genuinely good, existing
+hand-authored prose with the generic placeholder (AWS's schema has no
+real text to substitute). Reverted immediately; added a real safety
+gate (`find_hand_tuned_lines`) that refuses to touch any page whose
+existing description isn't already the known mechanical placeholder
+set. **7 real, hand-authored AWS pages confirmed and left untouched**:
+`aws_vpc`, `aws_ecr_repository`, `aws_iam_role`, `aws_sqs_queue`,
+`aws_s3_bucket`, `aws_iam_policy`, `aws_iam_role_policy_attachment` --
+these are a real, separate, deliberately careful follow-up pass, NOT
+done this session (founder's own explicit instruction: add real schema
+text alongside the existing hand-tuned prose, never replace it, verify
+each merge individually).
+
+**A second real bug found mid-bulk-pass, structurally new, not a
+UBI-152 authoring problem**: `render_response_field`'s recursive
+`Expandable` rendering has no depth/size guard. Ten real resources
+carry genuinely self-referential provider schema types (WAFv2's
+`Statement` containing `AndStatement`/`OrStatement`/`NotStatement`
+each containing another `Statement`; QuickSight's visual/parameter
+trees; LexV2Models' `intent`; AWS Cost Category/Budgets/Anomaly-
+Subscription's own boolean rule trees, same and/or/not pattern) --
+regenerating Input/Output properties for these exploded from single-
+digit real field counts to 4,280-84,577 `<ResponseField>` elements
+(confirmed via a repetition-ratio signal: legitimate complex resources
+land at a total/distinct-field-name ratio of 5-13x, these 10 hit
+30-579x). Excluded from this pass, left on the mechanical tier --
+`sdk/codegen/templates`'s own rendering has a real, separate depth-
+limit gap, out of scope here.
+
+**A third real bug found mid-bulk-pass**: raw provider Description text
+containing literal em dashes (real, e.g. `hashicorp/aws`'s own
+`odb_cloud_vm_cluster` text) and literal `<`/`>`/`{`/`}` characters
+(real, e.g. `google_kms_autokey_config`'s own `<project_id_or_number>`
+placeholder notation) broke MDX parsing outright -- 113 real pages
+failed `mint validate` with real parse errors before this was caught
+and fixed. `normalize_schema_description` now downgrades em dashes to
+this repo's own established `" -- "` convention and HTML-entity-
+escapes MDX's own reserved characters -- typographic/syntax-safety
+normalization only, the real informational content is never altered.
+
+**Final scope**: of 4197 real corpus pages, 2656 had real schema
+description text worth adding (driven overwhelmingly by AWS's own
+near-universal, provider-injected `region` attribute -- confirmed
+real, not padding: 1498 of AWS's 1670 changed pages). ~1518 pages
+genuinely unchanged (no real text for any field, mostly AWS/Azure).
+7 hand-tuned AWS pages deliberately untouched, pending their own pass.
+10 pathological resources excluded, pending a separate rendering fix.
+~17 pre-existing, unrelated gaps surfaced along the way (version drift,
+index/index path collisions, a pre-existing malformed Go block on
+`google_firestore_index`) -- filed separately by the founder as UBI-154/
+UBI-155, out of scope here.
+
+**Verification, all real**: 2656/2656 real `go build` clean (one
+pre-existing, unrelated failure on `google_firestore_index`, confirmed
+identical in the original unmodified file, not caused by this work),
+2656/2656 real `ast.parse` clean, 2655/2656 `deno fmt --check` clean
+(same pre-existing `google_firestore_index` gap), `mint validate`
+clean, zero em dashes repo-wide, zero real page-level overflow across
+all 2656 pages x 4 tabs (worst contained case 911px, the same already-
+accepted long-name pattern from prior UBI-144 checkpoints), byte-
+identity confirmed for every Go/TS/Python code block and every Example
+section across the entire changed set (a real, exhaustive check, not a
+spot sample).
+
+Committed and pushed (`ubiquex-docs` `ba4107a`), confirmed live via
+`gh api`.
+
+**Not done this session, real, explicit remaining work**: the 7
+hand-tuned AWS pages, each needing its own careful, individually-
+verified merge (add real schema text alongside existing prose, never
+replace it) -- founder's own explicit next step, not started yet.
+
+---
+
 ## UBI-151: CLOSED -- both real SDK repos fixed/republished/verified live, all 3 blocked docs pages promoted, UBI-144 now genuinely 4197/4197, 2026-08-13
 
 **The one remaining gap across all four UBI-144 providers is closed.**
