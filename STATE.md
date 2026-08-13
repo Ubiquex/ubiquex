@@ -2,6 +2,59 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-153: fully closed -- CI-side seeding fix opened as real PRs against all four SDK repos, real PR review required, 2026-08-14
+
+Closes the real gap the prior entry (below) found and flagged rather
+than fixing blind: the monorepo's own real-value-preservation fix had
+nothing real to read in its actual live CI path, since `ubx sdk gen
+--out`'s own scratch directory starts genuinely empty every run.
+
+**Read the real rsync self-overlap precedent first**, per the founder's
+own instruction, before changing anything: the documented bug (all four
+`version-watch.yml`'s own header comment) was a scratch dir generated
+INSIDE the repo checkout, which made `rsync --delete`'s own destination
+scan treat its still-being-read source as extraneous content to delete
+mid-transfer. The real, current scratch dir (`$RUNNER_TEMP/ubxgen`) is
+already, and stays, entirely OUTSIDE the checkout -- seeding one file
+into it before generation runs doesn't touch that boundary at all, only
+pre-populates content already-external scratch space starts with.
+
+**The fix**: one new step in each of the four real `version-watch.yml`
+workflows (aws, google, azure, kubernetes), immediately before `ubx sdk
+gen --lang go --out out` runs: `mkdir -p` the real scratch target path
+and `cp` this repo's own real, already-checked-out `sdk/go/go.mod` into
+it. Azure's own version additionally documents the real mechanical
+"hashicorp-azurerm" shortName this path must use (not "azure" -- that
+correction happens in a later, already-existing step in the same job,
+untouched here).
+
+**Real end-to-end simulation, both directions, not just the new one**:
+a scratch checkout of the real generated tree, its own go.mod bumped to
+a deliberately fictional, higher-than-anything-real value (1.99.9) --
+run through the OLD flow (no seeding): silently downgraded to 1.26.3
+(runtime.Version()'s own fallback), reproducing the exact live bug.
+Same fixture through the NEW flow (seeded): survives correctly,
+unchanged. rsync confirmed clean in both runs -- exit 0, full real
+generated tree (1940 real .go files), no "file has vanished"/self-
+overlap symptoms, the real proof the documented precedent wasn't
+reintroduced, not just an assumption from reading the comment.
+
+**Four real PRs opened, one per repo, never self-merged** (confirmed
+live via direct `gh api` query -- state=open, merged=false,
+mergeable_state=clean, changed_files=1 on every one):
+- https://github.com/Ubiquex/ubx-sdk-aws/pull/1
+- https://github.com/Ubiquex/ubx-sdk-google/pull/2
+- https://github.com/Ubiquex/ubx-sdk-azure/pull/2
+- https://github.com/Ubiquex/ubx-sdk-kubernetes/pull/2
+
+No em dashes (real check: zero in every added line, all four repos).
+**Real, remaining next step, not this session's own to take**: the
+founder's own real review and merge of all four PRs -- this session
+never merges its own SDK-repo PRs, per this project's own standing
+discipline.
+
+---
+
 ## UBI-153: monorepo-side fix CLOSED and live; a real, coordinated CI-workflow gap found, NOT yet closed -- 2026-08-14
 
 **Real root cause, confirmed before touching anything**: all four real
