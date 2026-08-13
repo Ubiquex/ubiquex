@@ -2,6 +2,93 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-144: real, live Go-import bug found and fixed at the root before Azure started -- exact audit: 1328/1328 GCP pages wrong, 0/1684 AWS pages wrong, both now re-verified clean, 2026-08-13
+
+Found while confirming Azure's own current state (0/1103, no breadth
+pass yet) and checking the real azurerm-vs-azure naming split ahead of
+starting Azure -- surfaced early, before a single Azure page was
+generated, exactly because that check was done proactively per the
+founder's own explicit request.
+
+- **The bug**: `build_resource_page_complete` (gen_provider_docs.py)
+  hardcoded the Go import's own SDK-repo-name segment to the literal
+  string `"aws"`, for every provider, unconditionally. Confirmed real
+  and live by reading a committed GCP page directly -- every one
+  imported `github.com/ubiquex/ubx-sdk-aws/sdk/go/google/alloydb`
+  instead of the real `.../ubx-sdk-google/sdk/go/google/alloydb`.
+- **Real root cause, confirmed against the real GitHub org, not
+  assumed**: the real, published, combined per-provider SDK repo
+  (UBI-138 -- `ubx-sdk-<X>`, one repo per provider, all 3 languages;
+  confirmed the older per-language `-go`-suffixed repos are archived/
+  superseded) has its own real identity (`aws`, `google`, `azure`,
+  `kubernetes`) independent of BOTH `provider` (docs URL slug -- "gcp"
+  not "google") AND `schema_name` (the repo's own internal path
+  segment -- "azurerm" not "azure" for Azure specifically). All three
+  happened to collide for aws/google/kubernetes -- exactly what let
+  this go unnoticed in GCP, and would have broken immediately and
+  unmistakably the instant Azure's own real azurerm/azure split hit
+  it.
+- **Why `go build` verification never caught it**: `verify_go_blocks.py`'s
+  own `--provider-go-module` flag defaulted to AWS's module path
+  unconditionally, and was never overridden for any GCP verification
+  run this session. The tool's wrong default and the generator's wrong
+  hardcode matched each other exactly, so the local replace directive
+  silently redirected the bogus import to the correct local checkout --
+  masking the bug completely across every GCP `go build` "OK" this
+  session ever reported.
+- **Fixed the real root cause, not the symptom**: added a required
+  `sdk_repo_id` parameter to `build_resource_page_complete`, used for
+  both the Go import's repo segment and the TS/JSR import's package
+  segment (a second, LATENT instance of the identical bug class in the
+  TS formula, never yet triggered since AWS/GCP's own values happened
+  to coincide with `schema_name` too). Sourced from a new, explicit
+  `REAL_SDK_REPO_ID` mapping in `gen_complete_pages.py`
+  (`aws`->`aws`, `google`->`google`, `azurerm`->`azure`,
+  `kubernetes`->`kubernetes`) -- never reconstructed from
+  `schema_name` again, fails loudly if a `schema_name` has no
+  confirmed entry. Fixed `verify_go_blocks.py`'s own
+  `--provider-go-module` the same way -- required, no default.
+- **Full audit, not assumed**: every already-committed AWS (1684) and
+  GCP (1328) richer-template page's own Go AND TypeScript import lines
+  checked directly against the real, correct values. **Exact result:
+  1328/1328 GCP pages had the wrong Go import (100%), 0 wrong TS
+  imports, 0 AWS pages wrong in either** -- AWS was correct only by
+  the same schema_name/repo_id coincidence, now confirmed explicitly
+  rather than assumed, per the founder's own explicit instruction not
+  to assume even a currently-right string is right for the right
+  reason.
+- **Proved the fix, not just trusted it**: verified the OLD, buggy
+  import string against a real, correct provider mapping and confirmed
+  it fails for real -- a genuine `go: ... does not contain package`
+  error from live network module resolution against the real,
+  published, public `ubx-sdk-aws` repo, independent confirmation
+  beyond local replace-directive shimming (an earlier, naive "wrong
+  mapping" test didn't reproduce at all -- Go's own real network
+  resolution silently bypassed a mismatched local replace directive
+  once the generator's OWN output was already correct, a real,
+  worth-remembering limit of this verification technique).
+- **Verification, all real, both providers**: regenerated all 1328 GCP
+  pages -- an exhaustive diff across the entire batch confirms the
+  ONLY line that changed anywhere is the wrong Go import; TS/Python/
+  Markdown/Input/Output properties untouched. Re-verified with the
+  fixed, required-flag tool: 1328/1328 GCP real `go build` clean,
+  1684/1684 AWS real `go build` clean (re-verified, zero regression),
+  1328/1328 real `ast.parse` clean, `mint validate` clean, zero em
+  dashes, zero real page-level overflow across 1328 pages x 4 tabs
+  (worst cases the same known long-name pattern, nothing new), zero
+  uncontained blocks. True idempotency confirmed directly (regenerating
+  an already-fixed page a second time produces byte-identical output).
+
+Committed and pushed (`ubiquex-docs` `052f8bb`), confirmed live via
+`gh api`. **AWS (1684/1684) and GCP (1328/1329, UBI-151 still the sole
+real gap) both now stand on a generator and verify tool that no longer
+has this bug class, latent or live, in either language.**
+
+**Only after all of the above was clean does Azure's own breadth-then-
+depth pass begin**, per the founder's own explicit gate -- starting
+fresh with the corrected generator and verify tool from the first page,
+not retrofitted after the fact.
+
 ## UBI-144: GCP genuinely 1328/1329 -- depth-fill complete, one real SDK bug found and filed (UBI-151), Azure/Kubernetes still stopped per founder direction, 2026-08-13
 
 Per direct founder instruction after AWS depth-fill reached 1684/1684:
