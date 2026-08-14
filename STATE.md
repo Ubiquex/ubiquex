@@ -2,6 +2,128 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-160 Phase 3 (Bamboo/Bitbucket Server): CHECKPOINT, not closed -- real Bitbucket Server merge-acceptance derivation shipped, CircleCI phase not started, 2026-08-14
+
+Per the ticket's own scope split: Bamboo/Bitbucket Server only this
+session (after GitLab in Phase 1, Azure DevOps in Phase 2), checkpoint
+before CircleCI, awaiting confirmation.
+
+**Step 0, done before any implementation, per the kickoff's own
+explicit instruction**: resolved Bamboo's real VCS-pairing question.
+Bamboo has no single native git host the way GitHub/GitLab/Azure
+DevOps each do -- confirmed directly against Atlassian's own current
+docs that a Bamboo plan's linked repository can be Bitbucket Cloud,
+Bitbucket Data Center, or GitHub. A GitHub-paired Bamboo plan is
+already covered by the pre-existing `--github-repo` flag, no new work
+needed there. Bitbucket Server/Data Center is the deepest, most
+natively integrated pairing (bidirectional commit/build/deployment
+linking via Application Links) and matches UBI-31's own earlier
+finding that Bamboo typically pairs with Bitbucket -- the correctly
+scoped new target. Bitbucket Cloud is a real, genuinely different API
+(different base URL/token model), explicitly out of scope as a
+separate future decision, not built out this session.
+
+**Real implementation** (`ubiquex` `f41c89b`): new `bitbucketserver/`
+package (`client.go`, `derive.go`), structurally parallel to
+`github/`/`gitlab/`/`azuredevops/`. New two-flag pair on `ubx accept`:
+`--bitbucket-server-url <url>` + `--bitbucket-server-project
+PROJECTKEY/repository-slug` -- a real, structurally distinct shape
+from the other three platforms' single flags, since Bitbucket Server
+is self-hosted with no fixed default host, unlike GitHub/GitLab/Azure
+DevOps which each have one. `cli/accept.go`'s dispatch validation
+generalized from a three-flag to a four-flag "exactly one of" check.
+
+**A real, considered implementation difference from all three prior
+phases**: no official Atlassian-maintained Go SDK for Bitbucket Server
+exists at all (confirmed via direct research -- only community options
+like `gfleury/go-bitbucket-v1`, `ktrysmt/go-bitbucket`). Chose
+`gfleury/go-bitbucket-v1` (swagger-generated from Atlassian's own real
+API spec) purely for its accurate struct types (`PullRequest`,
+`UserWithMetadata`), confirmed via `go doc` and direct source grep
+that this SDK does not even implement the
+`commits/{commitId}/pull-requests` endpoint DeriveAcceptance needs (it
+only has the reverse `pull-requests/{id}/commits`) -- calling the REST
+API directly with `net/http` while reusing only the SDK's struct types
+was the only option, not a stylistic choice, and mirrors the Azure
+DevOps Phase 2 precedent of bypassing an SDK's own transport layer.
+
+**Real findings, verified against real source/docs rather than
+assumed symmetric with GitHub, GitLab, or Azure DevOps**:
+- Bitbucket Server's approval model is the simplest of the four: a
+  direct `Approved bool` per reviewer (`UserWithMetadata.Approved`),
+  no fold over review events like GitHub, no authoritative
+  approved-by list like GitLab, no vote scale like Azure DevOps.
+- Reviewer approvals are embedded directly on the pull request object
+  the same query already returns -- like Azure DevOps and unlike
+  GitHub/GitLab, only **one** real API call is needed.
+- The real endpoint for finding a PR by commit is `GET
+  /rest/api/1.0/projects/{projectKey}/repos/{repositorySlug}/commits/
+  {commitId}/pull-requests`, a paged `{"values": [...]}` envelope --
+  confirmed directly against Atlassian's own current REST API
+  reference, not guessed from symmetry with any other platform's
+  shape.
+- Bitbucket Server's own real PR notation is "PR #123" (matching
+  GitHub's convention, unlike GitLab's "MR !123" or Azure DevOps' bare
+  "PR 123") -- confirmed, not assumed.
+- Bamboo's real, current, Git-specific predefined variable for the
+  checked-out commit SHA is `${bamboo.planRepository.revision}` --
+  confirmed against Atlassian's own current Bamboo variables
+  reference; `${bamboo.repository.revision.number}` is deprecated/
+  Mercurial-flavored and deliberately not used.
+
+`core.MergeAcceptance`/`core.Acceptance`'s `Platform` field now also
+records `"bitbucket-server"`. `ubx why --verify-acceptance`'s reviewer
+re-check message is honestly platform-aware for all four platforms now.
+`github`'s host-agnostic git-plumbing/regex functions (`CommitExists`,
+`FileAtCommit`, `ParseProposalTrailer`) reused directly a fourth time,
+not duplicated (same UBI-52 naming-quirk reuse as `gitlab`/
+`azuredevops`).
+
+**Test coverage** (`bitbucketserver/derive_test.go`, `cli/
+accept_frommerge_bitbucketserver_test.go`): happy path, empty
+reviewers, the real only-approved-reviewers-count case (mixed
+approved/unapproved reviewers), commit not in history, proposal file
+absent, no PR for commit, no trailer, hash mismatch, missing
+`--bitbucket-server-url`, malformed `--bitbucket-server-project`, the
+new four-way dispatch-validation case (four flags given) -- all
+against a real `net/http` client hitting a real `httptest` server,
+never mocked at the HTTP-transport level.
+
+Full repo `go build`/`go vet`/`go test` clean (`bitbucketserver`
+1.491s, `cli` 45.160s, both `-count=1`, no cache).
+
+**Docs** (`ubiquex-docs` `ced9f8c`): `integrations/bamboo.mdx`'s
+previous "same real gap as GitLab and Azure DevOps" section replaced
+with "Merge-derived acceptance, and a real VCS-pairing question
+resolved first" -- explains the GitHub-paired-Bamboo-already-covered
+finding, the Bitbucket Server scoping decision, and the two-flag
+design; Workflow 3 (ship on merge) rewritten with a real `Accept from
+merge` step using `${bamboo.planRepository.revision}` and
+`BITBUCKET_SERVER_TOKEN`. `cli-reference/accept.mdx` updated with the
+real `--bitbucket-server-url`/`--bitbucket-server-project` usage,
+flags, and example, verified against the real binary's own `--help`
+output and a real derivation run. Full verification bar (zero em
+dashes, mint validate, overflow crawl -- `pageOverflowPx: 0` on both
+pages -- broken-links -- zero new flags beyond the pre-existing ~124
+unrelated GCP false positives -- YAML syntax on all 5 blocks in
+bamboo.mdx, byte-identity spot-check on every other integration/
+cli-reference file) on both files; commit pushed and confirmed live
+via `gh api` (SHA and real content both checked directly, not
+inferred).
+
+**Not done this session, real and explicit**: CircleCI's own `accept
+--from-merge` gap (found during UBI-31, re-confirmed structurally
+identical to GitLab's/Azure DevOps'/Bamboo's former gaps) remains
+unaddressed -- checkpoint per the ticket's own instruction, waiting for
+confirmation before starting CircleCI next. Per the user's own
+instruction, CircleCI "has the same VCS-pairing complication" as
+Bamboo -- its own real VCS-pairing question (likely GitHub-primary,
+given CircleCI's own native GitHub App integration, but not assumed)
+needs independently resolving before any CircleCI-specific package
+implementation begins, mirroring this session's own Step 0.
+
+---
+
 ## UBI-160 Phase 2 (Azure DevOps): CHECKPOINT, not closed -- real Azure DevOps merge-acceptance derivation shipped, Bamboo/CircleCI phases not started, 2026-08-14
 
 Per the ticket's own scope split: Azure DevOps only this session
