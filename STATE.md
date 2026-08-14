@@ -2,6 +2,121 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-160 Phase 2 (Azure DevOps): CHECKPOINT, not closed -- real Azure DevOps merge-acceptance derivation shipped, Bamboo/CircleCI phases not started, 2026-08-14
+
+Per the ticket's own scope split: Azure DevOps only this session
+(after GitLab in Phase 1), checkpoint before Bamboo/CircleCI, awaiting
+confirmation. Same discipline as Phase 1: real GitHub reference
+re-read where needed, Azure DevOps' own approval model confirmed
+independently (genuinely differs from both GitHub's and GitLab's, not
+assumed symmetric with either), real SDK verified via actual
+downloaded module inspection (`go doc`), never memory.
+
+**Real implementation** (`ubiquex` `cd90a65`): new `azuredevops/`
+package (`client.go`, `derive.go`), structurally parallel to
+`github/`/`gitlab/`. New `--azure-devops-project organization/project/
+repository` flag on `ubx accept` -- one more segment than
+`--github-repo`/`--gitlab-project`, since Azure DevOps genuinely needs
+three real identifiers to address a repository, not two. `cli/
+accept.go`'s dispatch validation generalized from a two-flag to a
+three-flag "exactly one of" check.
+
+**A real, considered implementation difference from Phase 1**,
+documented in the package's own doc comment: unlike `github`/`gitlab`,
+`azuredevops` calls the two real, confirmed REST endpoints directly
+with `net/http` (using the official `github.com/microsoft/
+azure-devops-go-api/v7` package's own real struct types for JSON
+shapes) rather than routing through that SDK's own `Client.Send`.
+`Send` resolves every call through a `locationId` -> route-template
+lookup fetched live via an `OPTIONS` request to the API base -- a
+real, additional discovery round trip neither GitHub's nor GitLab's
+own Go clients require, and not needed here either, since both
+endpoints are stable, versioned, directly documented paths (not
+guessed -- confirmed via `go doc` against the actually-downloaded
+v7.1.0 module, and the exact route/locationId traced in its own real
+source). Bypassing it keeps this package testable against a real
+`httptest` server exactly like `github`/`gitlab` (never mocked at the
+HTTP-transport level), without also having to fake Azure DevOps' own
+resource-location protocol just to reach an already-known URL.
+
+**Real findings, verified against real source/docs rather than
+assumed symmetric with GitHub or GitLab**:
+- Azure DevOps reviewer votes are a real five-value scale (`10`
+  approved, `5` approved with suggestions, `0` no vote, `-5` waiting
+  for author, `-10` rejected), not binary approve/reject like either
+  other platform -- confirmed against Microsoft's own current REST API
+  docs. Only vote `10` counts as an approver; `5` is a real, qualified
+  vote, deliberately not rounded up to a full one (unit-tested).
+- Reviewers are embedded directly on the pull request object the same
+  query already returns -- unlike GitHub/GitLab, deriving acceptance
+  needs only **one** real API call here, not two.
+- The real endpoint for finding a PR by merge commit is the Pull
+  Request Query API (`POST .../pullrequestquery`, query type
+  `lastMergeCommit` -- "search for pull requests that created the
+  supplied merge commits," the precise match for a merge commit that
+  already landed, chosen over the broader `commit` query type after
+  reading both real definitions, not guessed).
+- Azure DevOps' own real PR notation is "PR 123" (no `#` or `!`,
+  confirmed against its own default merge-commit message: "Merge PR
+  123: ..."), distinct from GitHub's "PR #123" and GitLab's "MR !123"
+  -- not assumed to share either's convention.
+- A real credential gap for the docs guide, found while writing the
+  ship-on-merge transcript: the plan-on-pull-request workflow's own
+  `System.AccessToken` (Bearer-style OAuth) does **not** work for
+  `ubx accept --from-merge --azure-devops-project`, since `ubx`'s own
+  client authenticates via Basic auth (the standard PAT convention) --
+  a real, separately provisioned Personal Access Token is required in
+  CI, documented plainly in the updated guide.
+
+`core.MergeAcceptance`/`core.Acceptance`'s `Platform` field (added
+Phase 1) now also records `"azure-devops"`. `ubx why
+--verify-acceptance`'s reviewer re-check message is honestly
+platform-aware for all three non-GitHub platforms now, not just
+GitLab (`cli/verify.go`'s `platformDisplayName`).
+`git.go`/`trailer.go`'s host-agnostic git-plumbing/regex functions
+reused directly from package `github` again, not duplicated a third
+time (same UBI-52 naming-quirk reuse as `gitlab`).
+
+**Test coverage** (`azuredevops/derive_test.go`, `cli/
+accept_frommerge_azuredevops_test.go`): happy path, empty reviewers,
+the real vote-5-does-not-count case (Azure DevOps' own genuine edge
+case, no GitHub/GitLab equivalent), commit not in history, proposal
+file absent, no PR for commit, no trailer, hash mismatch, both new
+three-way dispatch-validation cases (three flags given, malformed
+`--azure-devops-project`) -- all against a real `net/http` client
+hitting a real `httptest` server with real, confirmed URL paths
+(traced directly against the SDK's own `client.go` source, including
+the exact `locationId` and route-template shape), never mocked at the
+HTTP-transport level.
+
+Full repo `go build`/`go vet`/`go test` clean. Verified against the
+real, rebuilt `ubx` binary (`make build`, confirmed version output)
+before either docs guide was touched -- a real end-to-end run against
+a real throwaway git repo and a real (non-mocked-in-process) HTTP
+server on a real port, not just the Go test suite.
+
+**Docs** (`ubiquex-docs` `2b76838`): `integrations/azure-devops.mdx`'s
+previous "same real gap as GitLab" section no longer applies to Azure
+DevOps specifically -- replaced with the real, working mechanism,
+including the real `System.AccessToken`-doesn't-work-here finding and
+the `AZURE_DEVOPS_PAT` pipeline-variable requirement.
+`cli-reference/accept.mdx` updated with the real `--azure-devops-project`
+usage, flag, and example, verified against the real binary's own
+`--help` output and a real derivation run. Full verification bar (mint
+validate, broken-links, overflow crawl, YAML syntax, byte-identity
+spot-check, zero em dashes) on both files; both commits pushed and
+confirmed live via `gh api`.
+
+**Not done this session, real and explicit**: Bamboo's and CircleCI's
+own `accept --from-merge` gaps (found during UBI-31, re-confirmed
+structurally identical to GitLab's/Azure DevOps' former gaps) remain
+unaddressed -- checkpoint per the ticket's own instruction, waiting
+for confirmation before starting Bamboo next (its own real VCS-pairing
+question -- Bamboo has no single native git host the way the other
+three each do -- needs resolving independently, not assumed).
+
+---
+
 ## UBI-160 Phase 1 (GitLab): CHECKPOINT, not closed -- real GitLab merge-acceptance derivation shipped, Azure DevOps/Bamboo/CircleCI phases not started, 2026-08-14
 
 Per the ticket's own scope split ("likely 3-4 separate, genuine
