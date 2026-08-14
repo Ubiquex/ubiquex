@@ -15,6 +15,7 @@ import (
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	ghub "github.com/ubiquex/ubiquex/github"
+	glab "github.com/ubiquex/ubiquex/gitlab"
 	"github.com/ubiquex/ubiquex/provider"
 )
 
@@ -32,6 +33,7 @@ func newAcceptCmd() *cobra.Command {
 		repoDir                 string
 		proposalFile            string
 		githubRepo              string
+		gitlabProject           string
 		confirmDestroys         bool
 	)
 
@@ -52,6 +54,7 @@ func newAcceptCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
+			applyGitlabProjectDefault(cmd, &gitlabProject, cfg)
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
@@ -69,7 +72,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, confirmDestroys)
+				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -167,7 +170,8 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromMerge, "from-merge", "", "derive pr_merge acceptance from a merge commit SHA instead of accepting a local file")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --from-merge's commit history against")
 	cmd.Flags().StringVar(&proposalFile, "proposal-file", "", "path, within the repo, to the proposal file the merge commit carries (required with --from-merge)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (required with --from-merge)")
+	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (exactly one of --github-repo/--gitlab-project is required with --from-merge)")
+	cmd.Flags().StringVar(&gitlabProject, "gitlab-project", "", "namespace/project (or numeric project ID) of the GitLab project (exactly one of --github-repo/--gitlab-project is required with --from-merge)")
 	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required to accept any proposal with blast_radius.destroys > 0 -- this project's first hardcoded acceptance-time friction invariant (docs/schema.md)")
 	return cmd
 }
@@ -243,21 +247,33 @@ func readProposalArg(ledgerDir, ref string) (p *core.Proposal, planHash string, 
 	return planP, fullHash, nil
 }
 
-// acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier: derive
-// acceptance from git history + the GitHub API rather than trusting a
-// file or the caller's own say-so (see docs/architecture.md's Decision
-// loop section, and core.AcceptFromMerge's doc comment for what's
-// actually enforced).
-func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo string, confirmDestroys bool) error {
-	if proposalFile == "" || githubRepo == "" {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file and --github-repo")}
-	}
+// mergeDerivation is the common shape both platform-specific derivers
+// (deriveFromGithub, deriveFromGitlab) produce -- UBI-160 Phase 1's
+// dispatch point, since ghub.DerivedAcceptance and glab.DerivedAcceptance
+// necessarily differ in field names (PRNumber vs MRIID) even though
+// core.MergeAcceptance itself has always been platform-agnostic (see
+// core/accept.go). label is the platform-flavored way to print the
+// PR/MR number in the final "accepted ..." line ("PR #%d" for GitHub,
+// "MR !%d" for GitLab -- GitLab's own notation, not an arbitrary choice).
+type mergeDerivation struct {
+	platform            string
+	proposalFileContent []byte
+	claimedHash         string
+	mergeSHA            string
+	number              int64
+	proposalFile        string
+	approvers           []string
+	label               string
+}
+
+// deriveFromGithub wraps ghub.DeriveAcceptance into the common
+// mergeDerivation shape.
+func deriveFromGithub(ctx context.Context, repoDir, githubRepo, mergeSHA, proposalFile string) (*mergeDerivation, error) {
 	owner, repo, ok := strings.Cut(githubRepo, "/")
 	if !ok || owner == "" || repo == "" {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: --github-repo must be \"owner/name\", got %q", githubRepo)}
+		return nil, fmt.Errorf("--github-repo must be \"owner/name\", got %q", githubRepo)
 	}
 
-	ctx := cmd.Context()
 	var apiOpts []ghub.Option
 	if base := os.Getenv("UBX_GITHUB_API_BASE_URL"); base != "" {
 		// Test-only seam (same convention as UBX_PROVIDER_MIRROR): points
@@ -269,16 +285,91 @@ func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoD
 
 	derived, err := ghub.DeriveAcceptance(ctx, api, repoDir, owner, repo, mergeSHA, proposalFile)
 	if err != nil {
+		return nil, err
+	}
+	return &mergeDerivation{
+		platform:            "github",
+		proposalFileContent: derived.ProposalFileContent,
+		claimedHash:         derived.ClaimedHash,
+		mergeSHA:            derived.MergeSHA,
+		number:              derived.PRNumber,
+		proposalFile:        derived.ProposalFile,
+		approvers:           derived.Approvers,
+		label:               fmt.Sprintf("PR #%d", derived.PRNumber),
+	}, nil
+}
+
+// deriveFromGitlab wraps glab.DeriveAcceptance into the common
+// mergeDerivation shape -- the GitLab analog of deriveFromGithub.
+func deriveFromGitlab(ctx context.Context, repoDir, gitlabProject, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+	if gitlabProject == "" {
+		return nil, fmt.Errorf("--gitlab-project must not be empty")
+	}
+
+	var apiOpts []glab.Option
+	if base := os.Getenv("UBX_GITLAB_API_BASE_URL"); base != "" {
+		// Test-only seam, same convention as UBX_GITHUB_API_BASE_URL.
+		apiOpts = append(apiOpts, glab.WithBaseURL(base))
+	}
+	api, err := glab.New(os.Getenv("GITLAB_TOKEN"), apiOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	derived, err := glab.DeriveAcceptance(ctx, api, repoDir, gitlabProject, mergeSHA, proposalFile)
+	if err != nil {
+		return nil, err
+	}
+	return &mergeDerivation{
+		platform:            "gitlab",
+		proposalFileContent: derived.ProposalFileContent,
+		claimedHash:         derived.ClaimedHash,
+		mergeSHA:            derived.MergeSHA,
+		number:              derived.MRIID,
+		proposalFile:        derived.ProposalFile,
+		approvers:           derived.Approvers,
+		label:               fmt.Sprintf("MR !%d", derived.MRIID),
+	}, nil
+}
+
+// acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier (GitLab
+// support added UBI-160 Phase 1): derive acceptance from git history +
+// the platform's own API rather than trusting a file or the caller's own
+// say-so (see docs/architecture.md's Decision loop section, and
+// core.AcceptFromMerge's doc comment for what's actually enforced).
+// Exactly one of githubRepo/gitlabProject is required -- accept --from-
+// merge always derives against one specific platform, never both at once
+// or neither.
+func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject string, confirmDestroys bool) error {
+	if proposalFile == "" {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file")}
+	}
+	if githubRepo != "" && gitlabProject != "" {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge takes exactly one of --github-repo/--gitlab-project, not both")}
+	}
+	if githubRepo == "" && gitlabProject == "" {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires exactly one of --github-repo or --gitlab-project")}
+	}
+
+	ctx := cmd.Context()
+	var derived *mergeDerivation
+	var err error
+	if githubRepo != "" {
+		derived, err = deriveFromGithub(ctx, repoDir, githubRepo, mergeSHA, proposalFile)
+	} else {
+		derived, err = deriveFromGitlab(ctx, repoDir, gitlabProject, mergeSHA, proposalFile)
+	}
+	if err != nil {
 		return &ExitCodeError{Code: deriveAcceptanceErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
 	var p core.Proposal
-	if err := json.Unmarshal(derived.ProposalFileContent, &p); err != nil {
+	if err := json.Unmarshal(derived.proposalFileContent, &p); err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: parse proposal at %s:%s: %w", mergeSHA, proposalFile, err)}
 	}
 
 	// Same friction as the local-file path (see its own comment) -- a
-	// PR-merge-derived acceptance is no less real an acceptance than a
+	// PR/MR-merge-derived acceptance is no less real an acceptance than a
 	// local one, so it needs the same explicit human acknowledgment.
 	if err := checkDestroysConfirmed(&p, confirmDestroys); err != nil {
 		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
@@ -293,36 +384,38 @@ func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoD
 
 	// UBI-32: git stays the signing surface -- everything above this line
 	// (commit history, the trailer hash, reviewer state) is unchanged,
-	// still entirely about git/GitHub, regardless of what store the stack
-	// configures. Only now, once that verification has already succeeded,
-	// does the accepted record get written -- through the stack's own
-	// configured LedgerStore, exactly like the local-accept path a few
-	// lines above in this same file. core.AcceptFromMerge/Ledger.Append
-	// were already store-agnostic (Arc B session 1's own LedgerStore
-	// extraction) -- CAS-guarded WriteProposalIfAbsent+AdvanceHead under
-	// l.store regardless of git or remote -- so no new mirroring mechanism
-	// exists here; opening the right store is the entire change. The
-	// git-committed proposal file itself is never touched or treated as
-	// disposable -- git history stays permanent regardless of where the
-	// authoritative accepted record ends up living.
+	// still entirely about git/the platform's own API, regardless of what
+	// store the stack configures. Only now, once that verification has
+	// already succeeded, does the accepted record get written -- through
+	// the stack's own configured LedgerStore, exactly like the
+	// local-accept path a few lines above in this same file.
+	// core.AcceptFromMerge/Ledger.Append were already store-agnostic (Arc B
+	// session 1's own LedgerStore extraction) -- CAS-guarded
+	// WriteProposalIfAbsent+AdvanceHead under l.store regardless of git or
+	// remote -- so no new mirroring mechanism exists here; opening the
+	// right store is the entire change. The git-committed proposal file
+	// itself is never touched or treated as disposable -- git history
+	// stays permanent regardless of where the authoritative accepted
+	// record ends up living.
 	ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, p.Stack, cfg)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 	}
 	defer closeLedger()
 
-	accepted, err := core.AcceptFromMerge(ledger, &p, derived.ClaimedHash, core.MergeAcceptance{
-		MergeSHA:     derived.MergeSHA,
-		PRNumber:     derived.PRNumber,
-		ProposalFile: derived.ProposalFile,
-		Approvers:    derived.Approvers,
+	accepted, err := core.AcceptFromMerge(ledger, &p, derived.claimedHash, core.MergeAcceptance{
+		Platform:     derived.platform,
+		MergeSHA:     derived.mergeSHA,
+		PRNumber:     derived.number,
+		ProposalFile: derived.proposalFile,
+		Approvers:    derived.approvers,
 	})
 	if err != nil {
 		return &ExitCodeError{Code: acceptErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s) via PR #%d, %d approver(s)\n",
-		accepted.ID, accepted.Stack, accepted.Acceptance.PRNumber, len(accepted.Acceptance.Approvers))
+	fmt.Fprintf(cmd.OutOrStdout(), "accepted %s (stack %s) via %s, %d approver(s)\n",
+		accepted.ID, accepted.Stack, derived.label, len(accepted.Acceptance.Approvers))
 	return nil
 }
 
@@ -347,19 +440,25 @@ func acceptErrorCode(err error) int {
 	return 2
 }
 
-// deriveAcceptanceErrorCode classifies ghub.DeriveAcceptance's failures:
-// every named sentinel it can return means the merge commit's claimed
-// acceptance doesn't check out against git/GitHub history as it stands
-// today (commit gone, file gone at that commit, no PR for it, no
-// ubx-proposal trailer in the PR body) -- an actionable finding (exit 1),
-// the same family as acceptErrorCode's ErrTrailerHashMismatch. A genuine
-// network/API/git-tooling failure is exit 2.
+// deriveAcceptanceErrorCode classifies ghub.DeriveAcceptance/
+// glab.DeriveAcceptance's failures: every named sentinel either can
+// return means the merge commit's claimed acceptance doesn't check out
+// against git/the platform's history as it stands today (commit gone,
+// file gone at that commit, no PR/MR for it, no ubx-proposal trailer in
+// the PR/MR body) -- an actionable finding (exit 1), the same family as
+// acceptErrorCode's ErrTrailerHashMismatch. ghub.ErrCommitNotFound/
+// ErrFileNotFoundAtCommit/ErrNoProposalTrailer cover both platforms
+// (package gitlab reuses those three sentinels directly rather than
+// defining its own -- they're genuinely host-agnostic git-plumbing/
+// regex findings, not GitHub-specific). A genuine network/API/git-tooling
+// failure is exit 2.
 func deriveAcceptanceErrorCode(err error) int {
 	switch {
 	case errors.Is(err, ghub.ErrCommitNotFound),
 		errors.Is(err, ghub.ErrFileNotFoundAtCommit),
 		errors.Is(err, ghub.ErrNoPullRequestForCommit),
-		errors.Is(err, ghub.ErrNoProposalTrailer):
+		errors.Is(err, ghub.ErrNoProposalTrailer),
+		errors.Is(err, glab.ErrNoMergeRequestForCommit):
 		return 1
 	default:
 		return 2

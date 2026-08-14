@@ -451,17 +451,28 @@ type InvariantCheck struct {
 //
 // PRNumber and ProposalFile were added 2026-07-11 (docs/schema.md —
 // "Amendment: pr_merge acceptance fields", UBI-11 stage 1), both for
-// method "pr_merge": PRNumber is the GitHub pull request MergeSHA belongs
-// to; ProposalFile is the repo-relative path the proposal file lived at,
-// at that commit. Both are conveniences in the sense that everything
-// needed to re-derive acceptance is already derivable from MergeSHA alone
-// (the GitHub API resolves a commit to its PR; the PR's own history holds
-// the diff) — but recording them directly means re-verification
-// (`ubx why --verify-acceptance`) is self-contained from the ledger entry
-// alone, never needing the operator to remember or re-supply what path a
-// proposal lived at just to re-check it.
+// method "pr_merge": PRNumber is the GitHub pull request (or, since
+// UBI-160 Phase 1, GitLab merge request) number MergeSHA belongs to;
+// ProposalFile is the repo-relative path the proposal file lived at, at
+// that commit. Both are conveniences in the sense that everything needed
+// to re-derive acceptance is already derivable from MergeSHA alone (the
+// platform's own API resolves a commit to its PR/MR; the PR/MR's own
+// history holds the diff) — but recording them directly means
+// re-verification (`ubx why --verify-acceptance`) is self-contained from
+// the ledger entry alone, never needing the operator to remember or
+// re-supply what path a proposal lived at just to re-check it.
+//
+// Platform was added 2026-08-14 (docs/schema.md — "Amendment: pr_merge
+// acceptance platform field", UBI-160 Phase 1): "github" | "gitlab",
+// which platform's API MergeSHA/PRNumber/Approvers were actually derived
+// against. Without it, a pr_merge acceptance record alone couldn't say
+// which API a later re-derivation should call — GitHub's PR numbers and
+// GitLab's MR IIDs are both plain integers, so PRNumber's value alone
+// can't disambiguate. Additive/optional, same hash-exclusion reasoning as
+// every other Acceptance field.
 type Acceptance struct {
 	Method       string   `json:"method"` // pr_merge | local | crypto
+	Platform     string   `json:"platform,omitempty"` // github | gitlab -- only for method "pr_merge"
 	MergeSHA     string   `json:"merge_sha,omitempty"`
 	PRNumber     int64    `json:"pr_number,omitempty"`
 	ProposalFile string   `json:"proposal_file,omitempty"`

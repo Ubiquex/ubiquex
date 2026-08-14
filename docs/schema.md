@@ -357,6 +357,60 @@ before review). `ubx accept --from-merge` treats a missing trailer, or one
 whose hash doesn't match the proposal file's own recomputed hash, as a
 hard failure — see docs/architecture.md's "hash mismatch" case.
 
+### Amendment: `pr_merge` acceptance platform field (2026-08-14, UBI-160 Phase 1)
+
+`acceptance.platform` is added: `"github"` | `"gitlab"`, only meaningful
+for `method: "pr_merge"` -- which platform's own API `merge_sha`/
+`pr_number`/`approvers` were actually derived against. Additive/optional,
+same hash-exclusion reasoning as every other `acceptance` field (see
+above): `acceptance` is entirely excluded from the content hash, so
+nothing about its shape is load-bearing for the hash chain.
+
+This session extended `ubx accept --from-merge` to derive acceptance
+against GitLab merge requests too (a new `--gitlab-project` flag,
+structurally parallel to `--github-repo`), not just GitHub pull requests.
+Both platforms use plain integers for `pr_number` (a GitHub PR number, or
+a GitLab merge request IID) -- that value alone can't say which API a
+later re-derivation should call, so `platform` records it directly,
+exactly the same "self-contained from the ledger entry alone" reasoning
+`pr_number`/`proposal_file` already used above.
+
+```json
+"acceptance": {
+  "method": "pr_merge",
+  "platform": "gitlab",
+  "merge_sha": "8c1d2e...",
+  "pr_number": 17,
+  "approvers": ["roozbeh"],
+  "accepted_at": "2026-08-14T00:00:00Z"
+}
+```
+
+GitLab's own approval model, confirmed directly against GitLab's current
+API docs rather than assumed symmetric with GitHub's: no
+CHANGES_REQUESTED-supersedes-APPROVED concept exists at all. Instead
+GitLab's merge request approvals endpoint (`GET
+/projects/:id/merge_requests/:iid/approvals`) already returns the
+authoritative, current `approved_by` set directly -- nothing to fold or
+dedupe client-side the way GitHub's raw review-event history needs. By
+default GitLab clears every existing approval outright when a new commit
+lands on the MR's source branch (`reset_approvals_on_push`, true unless a
+project turns it off) -- so `approvers`, read from an already-merged MR,
+reflects exactly who approved the version that was actually merged,
+whether that's because nobody re-approved after a late push or because
+the merge was never reviewed at all; either way it's recorded as it
+happened, never rejected, same "enforcement is the platform's own job"
+principle as GitHub's empty-`approvers` case above.
+
+`ubx why --verify-acceptance`'s reviewer re-check (the API-side half --
+git-history re-verification already covers both platforms, since it's
+platform-agnostic) remains GitHub-only as of this amendment: a
+`platform: "gitlab"` acceptance is reported as git-checked but
+reviewer-re-check-skipped, honestly, not silently treated as
+inconclusive-for-lack-of-a-flag the way a genuinely-GitHub acceptance
+missing `--github-repo` is. Extending the re-check itself to GitLab is
+real, scoped-out follow-up work, not done in this amendment.
+
 ### Amendment: `drift_revert` proposals (2026-07-16, UBI-16)
 
 `kind: "drift_revert"` was already an enumerated value in this document's

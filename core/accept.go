@@ -46,33 +46,40 @@ func Accept(l *Ledger, p *Proposal) (*Proposal, error) {
 }
 
 // MergeAcceptance is AcceptFromMerge's already-verified input — everything
-// the caller (see package github) derived from git history and the GitHub
-// API before calling in. Grouped into one struct because it's inherently
-// one finding, not four independent parameters.
+// the caller (see package github or package gitlab) derived from git
+// history and the platform's own API before calling in. Grouped into one
+// struct because it's inherently one finding, not five independent
+// parameters.
 type MergeAcceptance struct {
+	Platform     string // "github" | "gitlab" (UBI-160 Phase 1) -- which API merge/PRNumber/Approvers were derived against, so a later re-derivation knows which one to call again
 	MergeSHA     string
-	PRNumber     int64
+	PRNumber     int64    // the GitHub pull request number, or the GitLab merge request IID, MergeSHA belongs to
 	ProposalFile string   // repo-relative path the proposal file lived at, at MergeSHA
-	Approvers    []string // every reviewer whose most recent review was APPROVED; may be empty
+	Approvers    []string // every currently-recorded approving reviewer; may be empty
 }
 
 // AcceptFromMerge is the pr_merge acceptance tier (UBI-11 stage 1,
-// docs/architecture.md — Decision loop): p was resolved and its hash fixed
-// *before* review, embedded in a PR body's "ubx-proposal: <hash>" trailer;
-// this derives acceptance from what actually happened, rather than trusting
-// the trailer or the caller's own say-so.
+// docs/architecture.md — Decision loop; GitLab support added UBI-160 Phase
+// 1): p was resolved and its hash fixed *before* review, embedded in a
+// PR/MR body's "ubx-proposal: <hash>" trailer; this derives acceptance
+// from what actually happened, rather than trusting the trailer or the
+// caller's own say-so.
 //
 // claimedHash is the trailer's value; AcceptFromMerge recomputes p's own
 // Hash() and requires it to match exactly — a mismatch means the trailer
 // and the merged proposal file disagree about what was reviewed, which is
 // never accepted regardless of cause (authoring bug or something worse).
 // merge is the caller's already-verified findings (git history contains
-// merge.MergeSHA; merge.Approvers is every reviewer whose most recent
-// review was APPROVED) — AcceptFromMerge itself does not talk to git or
-// GitHub (see package github for that; core stays dependency-free, same
-// inversion as StateReader/EventLookup). merge.Approvers may legitimately
-// be empty: a merge with zero approving reviews is recorded as it
-// happened, never rejected — enforcement is GitHub's job.
+// merge.MergeSHA; merge.Approvers is every currently-recorded approving
+// reviewer, computed the way each platform's own review model actually
+// works — see package github's most-recent-review-wins fold for GitHub,
+// package gitlab's direct approved_by read for GitLab) — AcceptFromMerge
+// itself does not talk to git or any platform API (see package github/
+// package gitlab for that; core stays dependency-free, same inversion as
+// StateReader/EventLookup). merge.Approvers may legitimately be empty: a
+// merge with zero approving reviews is recorded as it happened, never
+// rejected — enforcing "this needed N approvals" is entirely the
+// platform's own job (branch/merge-request protection), never ubx's.
 func AcceptFromMerge(l *Ledger, p *Proposal, claimedHash string, merge MergeAcceptance) (*Proposal, error) {
 	hash, err := validateAndHash(p)
 	if err != nil {
@@ -84,6 +91,7 @@ func AcceptFromMerge(l *Ledger, p *Proposal, claimedHash string, merge MergeAcce
 	}
 	accepted, err := finalizeAndAppend(l, p, hash, &Acceptance{
 		Method:       "pr_merge",
+		Platform:     merge.Platform,
 		MergeSHA:     merge.MergeSHA,
 		PRNumber:     merge.PRNumber,
 		ProposalFile: merge.ProposalFile,

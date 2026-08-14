@@ -44,6 +44,7 @@ type Config struct {
 	ProviderConfigs map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
 	Stack           string                    `toml:"stack" json:"stack"`
 	GithubRepo      string                    `toml:"github_repo" json:"github_repo"`
+	GitlabProject   string                    `toml:"gitlab_project" json:"gitlab_project"`
 	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
 	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 	Ledger          LedgerConfig              `toml:"ledger" json:"ledger"`
@@ -319,6 +320,15 @@ func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
 func applyGithubRepoDefault(cmd *cobra.Command, githubRepo *string, cfg *Config) {
 	if !cmd.Flags().Changed("github-repo") && cfg.GithubRepo != "" {
 		*githubRepo = cfg.GithubRepo
+	}
+}
+
+// applyGitlabProjectDefault fills gitlabProject from cfg if
+// --gitlab-project wasn't explicitly given -- the GitLab analog of
+// applyGithubRepoDefault (UBI-160 Phase 1).
+func applyGitlabProjectDefault(cmd *cobra.Command, gitlabProject *string, cfg *Config) {
+	if !cmd.Flags().Changed("gitlab-project") && cfg.GitlabProject != "" {
+		*gitlabProject = cfg.GitlabProject
 	}
 }
 

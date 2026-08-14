@@ -100,6 +100,18 @@ func runVerifyAcceptance(ctx context.Context, out io.Writer, p *core.Proposal, r
 	}
 	result.GitOK = true
 
+	// UBI-160 Phase 1 added GitLab-derived pr_merge acceptances, but the
+	// reviewer re-check below is still GitHub-only -- a real, named gap,
+	// not silently glossed over: reporting the ordinary "--github-repo"
+	// message for a GitLab-sourced acceptance would be actively
+	// misleading (that flag can never satisfy this check for it).
+	if a.Platform == "gitlab" {
+		if !jsonMode {
+			fmt.Fprintln(out, "gitlab API: skipped -- reviewer re-check against GitLab is not yet supported (only GitHub); git history above already checked")
+		}
+		return result, nil
+	}
+
 	if githubRepo == "" {
 		if !jsonMode {
 			fmt.Fprintln(out, "github API: skipped (no --github-repo given) -- reviewer re-check is inconclusive, not a pass")
