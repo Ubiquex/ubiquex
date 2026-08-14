@@ -2,6 +2,100 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-156: CLOSED -- real recursion guard for genuinely self-referential schema types, all 10 resources regenerated onto the richer tier, 2026-08-14
+
+**Step 1, re-verified all 10 real, current**: reproduced the repetition-
+ratio signal fresh against the real, unmodified `render_response_field`
+-- all 10 real, current, reproducible (WAFv2 `web_acl_rule`/`rule_group`/
+`web_acl`, QuickSight `dashboard`/`analysis`/`template`, LexV2Models
+`intent`, Cost Category, Budgets, Anomaly Subscription).
+
+**Step 2, the real design finding**: walked the actual schema trees
+(`Kind`-aware, not just ratio) rather than trust the ratio number alone.
+Two genuinely different phenomena were hiding under one label: WAFv2 +
+Cost Category/Budgets/Anomaly Subscription have real, literal object-
+type cycles (`statement` genuinely contains `and_statement` genuinely
+containing `statement` again); QuickSight + LexV2Models intent do NOT
+-- their real depth-10-to-14 nesting is genuine, distinct, non-
+recursive structure (QuickSight's ~30 different visual types, LexV2Models'
+~8 real distinct dialog branches each re-expanding the same real message
+vocabulary), structurally the same *kind* of resource as the already-
+shipped `medialive/channel` (legitimately complex, no bug), just bigger.
+A false-positive trap found and avoided along the way: a naive WireName-
+based cycle walk (ignoring `Kind`) flagged ~20 "cycles" in QuickSight that
+turned out to be coincidental field-name reuse across unrelated scalar
+and object types (e.g. a rich `color` object vs. a plain scalar `color`
+string inside `GradientStop`) -- re-verified against the real, `Kind`-
+aware `is_object_ish`/`object_fields_of` and found only 1 genuine cycle
+in QuickSight (`sort_by` -> `column` -> `sort_by`).
+
+Presented the resulting real trade-off to the founder: a depth cap alone
+can't simultaneously protect `medialive/channel`'s real confirmed-
+legitimate depth-8 content AND fully bound QuickSight/LexV2Models into
+the same tight ratio range as the true-cycle cases, since neither is
+actually a cycle. Chosen design: true cycle detection (primary) + a
+depth-8 backstop (secondary), matching `medialive/channel`'s own real,
+directly-measured depth ceiling -- real improvement for QuickSight/
+LexV2Models without ever touching legitimate shallower content.
+
+**Step 3, implemented in `gen_provider_docs.py`'s `render_response_field`**:
+added `depth`/`ancestor_names` params (backward compatible, default
+`depth=0`/`ancestor_names=()`). Two guards, both emitting an honest
+`<Note>` referencing the real field name that recurs (never a fabricated
+type name -- this schema representation has no separate type identity):
+(1) cycle -- a field's own WireName already present among its object-
+typed ancestors; (2) depth backstop at `MAX_RESPONSE_FIELD_DEPTH = 8`.
+Proven zero-risk to already-shipped legitimate content: ran the patched
+function directly against `medialive/channel`, `kinesis/firehose-
+delivery-stream`, `securityhub/insight` -- zero triggered truncations on
+all three (output byte-identical by construction, not just empirically
+similar).
+
+**Step 4, real before/after full-page ratios** (Input+Output properties
+combined, matching what `gen_field_descriptions.py` actually splices onto
+the real page -- the earlier, incomplete single-field-list simulation
+undercounted by ~2x and was caught and corrected before reporting):
+
+| resource | before | after |
+|---|---|---|
+| `aws_wafv2_web_acl_rule` | 579.3x | 15.2x |
+| `aws_wafv2_rule_group` | 288.4x | 12.8x |
+| `aws_wafv2_web_acl` | 230.0x | 13.8x |
+| `aws_quicksight_dashboard` | 58.7x | 15.9x |
+| `aws_quicksight_analysis` | 59.9x | 16.2x |
+| `aws_quicksight_template` | 59.7x | 16.2x |
+| `aws_lexv2models_intent` | 32.7x | 28.8x |
+| `aws_ce_cost_category` | 13.4x | 1.9x |
+| `aws_budgets_budget` | 7.9x | 6.5x |
+| `aws_ce_anomaly_subscription` | 6.0x | 6.0x (unchanged -- real depth 3 never reaches either guard) |
+
+QuickSight/LexV2Models improve substantially but don't reach the same
+tight ~3-6x range as the true-cycle cases -- an accepted, honest trade-
+off (founder confirmed via `AskUserQuestion`), not a gap glossed over.
+
+**Full verification**: real `go build` (10/10), `ast.parse` (10/10),
+`deno fmt --check` (10/10, after fixing an indentation bug in my own
+verification harness, not the pages themselves), `mint validate` clean,
+zero em dashes in the diff, byte-identity spot-check confirming all 10
+`## Example` sections unchanged (only Input/Output properties spliced),
+diff scope confirmed as exactly the 10 target pages + `gen_provider_docs.py`.
+Overflow crawl: WAFv2 pages clean (31-98px, within normal range);
+`quicksight/analysis` could not be crawled even at a 60s navigation
+timeout (genuinely heavy client-side hydration on 10,764 real elements,
+confirmed via `ps` showing the headless-Chromium renderer actively at
+100%+ CPU, not hung) -- reported honestly rather than skipped silently;
+the other 8 completed clean. `anomaly-subscription`'s 200px Go-tab
+overflow confirmed pre-existing (byte-identical Go example block before/
+after this fix, unrelated to the properties-section change).
+
+Committed and pushed (`ubiquex-docs` `3e744f0`), confirmed live via
+`gh api` (both the commit and the actual file content, not just the
+commit SHA). AWS resource-reference page count is unchanged (all 10
+already had real pages; only their content tier moved from mechanical to
+richer).
+
+---
+
 ## UBI-157: CLOSED -- google_firestore_index's real go build/deno fmt failures were never a code defect, isolated one-off batch omission, 2026-08-14
 
 **Step 1, reproduced first, not assumed**: `main.go:1:1: expected
