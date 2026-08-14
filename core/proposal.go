@@ -470,12 +470,28 @@ type InvariantCheck struct {
 // GitLab's MR IIDs are both plain integers, so PRNumber's value alone
 // can't disambiguate. Additive/optional, same hash-exclusion reasoning as
 // every other Acceptance field.
+//
+// Method "pr_review" and ReviewComment were added 2026-08-18 (docs/schema.md
+// — "Amendment: pr_review acceptance method", UBI-28 Phase 1): `ubx
+// server`'s GitHub App triggers acceptance from a native "Approve" review
+// action on a still-open PR, structurally different from "pr_merge" (which
+// derives acceptance from a commit already on the base branch, after the
+// fact) — a pr_review acceptance can be recorded well before the PR ever
+// merges, or independently of whether it merges at all. ReviewComment
+// carries the reviewer's own optional review body verbatim, captured
+// alongside the acceptance rather than folded into Intent.Sources: it's
+// provenance for *how this was signed*, the same category Approvers/
+// AcceptedAt already occupy, not provenance for the proposal's own
+// content the way every existing IntentSource kind is (dialogue, PR,
+// document, attribution match, promotion lineage). Additive/optional,
+// same hash-exclusion reasoning as every other Acceptance field.
 type Acceptance struct {
-	Method       string   `json:"method"` // pr_merge | local | crypto
-	Platform     string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for method "pr_merge"
-	MergeSHA     string   `json:"merge_sha,omitempty"`
-	PRNumber     int64    `json:"pr_number,omitempty"`
-	ProposalFile string   `json:"proposal_file,omitempty"`
-	Approvers    []string `json:"approvers,omitempty"`
-	AcceptedAt   string   `json:"accepted_at,omitempty"`
+	Method        string   `json:"method"`             // pr_merge | pr_review | local | crypto
+	Platform      string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for method "pr_merge"/"pr_review"
+	MergeSHA      string   `json:"merge_sha,omitempty"`
+	PRNumber      int64    `json:"pr_number,omitempty"`
+	ProposalFile  string   `json:"proposal_file,omitempty"`
+	Approvers     []string `json:"approvers,omitempty"`
+	ReviewComment string   `json:"review_comment,omitempty"` // only for method "pr_review" -- the approving reviewer's own optional review body
+	AcceptedAt    string   `json:"accepted_at,omitempty"`
 }

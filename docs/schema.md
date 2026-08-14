@@ -411,6 +411,59 @@ inconclusive-for-lack-of-a-flag the way a genuinely-GitHub acceptance
 missing `--github-repo` is. Extending the re-check itself to GitLab is
 real, scoped-out follow-up work, not done in this amendment.
 
+### Amendment: `pr_review` acceptance method (2026-08-18, UBI-28 Phase 1)
+
+`acceptance.method` gains a third value, `"pr_review"`, alongside
+`"pr_merge"` and `"local"`. `ubx server`'s GitHub App triggers this tier
+from a real, native "Approve" review action on a still-open PR --
+structurally different from `pr_merge`, which derives acceptance from a
+commit already on the base branch, after the fact. A `pr_review`
+acceptance can be recorded well before the PR ever merges, or
+independently of whether it ever merges at all (shipping is a separate,
+later decision -- see "Core flow" in `ubx server`'s own docs).
+
+A new field, `acceptance.review_comment`, carries the reviewer's own
+optional review body verbatim:
+
+```json
+"acceptance": {
+  "method": "pr_review",
+  "platform": "github",
+  "pr_number": 42,
+  "proposal_file": "proposals/db-replica.json",
+  "approvers": ["roozbeh"],
+  "review_comment": "LGTM, matches what we discussed",
+  "accepted_at": "2026-08-18T00:00:00Z"
+}
+```
+
+**Real, open schema question this amendment resolves**: whether the
+reviewer's comment lives on `acceptance` directly, or folds into
+`intent.sources` as a new source kind. Decided in favor of `acceptance`:
+every existing `intent.sources` kind (`dialogue`, `document`,
+`cloudtrail`, `promotion`, etc.) is provenance for the proposal's own
+*content* -- what informed the change being proposed, populated at draft
+or resolve time, before acceptance ever happens. A reviewer's comment is
+not that; it's provenance for *how this was signed*, the exact same
+category `approvers`/`accepted_at` already occupy on `acceptance`.
+Folding it into `sources` would conflate two genuinely different
+provenance chains under one list. `review_comment` is additive/optional,
+same hash-exclusion reasoning as every other `acceptance` field:
+`acceptance` is entirely excluded from the content hash, so nothing
+about its shape is load-bearing.
+
+`merge_sha` is deliberately absent from a `pr_review` acceptance -- there
+is no merge commit yet at review time, and `pr_review` never claims one.
+`AcceptFromReview` (core/accept.go) reads the `ubx-proposal: <hash>`
+trailer and the proposal file's own content at the review's own
+`commit_id` specifically, not the PR's current HEAD, which can have
+moved on with new commits since the review was submitted without
+invalidating it -- GitHub only dismisses stale reviews automatically
+when a repo's branch protection is configured to require it, never by
+default. Reading at the review's own commit closes that real
+TOCTOU-shaped gap the same way `AcceptFromMerge`'s own trailer-hash check
+closes the equivalent one for `pr_merge`.
+
 ### Amendment: `drift_revert` proposals (2026-07-16, UBI-16)
 
 `kind: "drift_revert"` was already an enumerated value in this document's

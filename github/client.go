@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 
 	ghapi "github.com/google/go-github/v78/github"
@@ -51,6 +52,31 @@ func New(token string, opts ...Option) *Client {
 		opt(api)
 	}
 	return &Client{api: api}
+}
+
+// NewWithHTTPClient returns a Client using hc directly as its transport,
+// rather than a static token — package server's own use case (UBI-28):
+// hc wraps a github.com/bradleyfalzon/ghinstallation/v2 Transport, which
+// signs a fresh App JWT and exchanges it for a short-lived installation
+// token automatically, refreshing before each expires, for the life of
+// a long-running daemon process. A bare token (New, above) has no
+// refresh story of its own, which is exactly wrong for that case.
+func NewWithHTTPClient(hc *http.Client, opts ...Option) *Client {
+	api := ghapi.NewClient(hc)
+	for _, opt := range opts {
+		opt(api)
+	}
+	return &Client{api: api}
+}
+
+// API exposes the underlying go-github client directly, for callers that
+// need a real GitHub API surface this package hasn't wrapped yet (package
+// server's own collaborator-permission, team-membership, PR-file, and
+// comment-listing/editing calls, UBI-28) rather than growing this
+// package into a second, parallel go-github wrapper for every endpoint
+// any one caller happens to need once.
+func (c *Client) API() *ghapi.Client {
+	return c.api
 }
 
 // pullRequestForCommit finds the pull request mergeSHA belongs to. GitHub

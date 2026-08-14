@@ -1,0 +1,282 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	ghapi "github.com/google/go-github/v78/github"
+	"github.com/ubiquex/ubiquex/core"
+	ghub "github.com/ubiquex/ubiquex/github"
+)
+
+// ErrAmbiguousProposalFile means a PR's changed files contain zero, or
+// more than one, file matching the real "proposals/*.json" convention
+// every one of ubx's own CI/CD integration guides already documents --
+// discoverProposalFile refuses to guess either way, the same "a wrong
+// match here is a real security defect either direction" principle
+// isAuthorizedToShip's own doc comment states for CODEOWNERS matching.
+var ErrAmbiguousProposalFile = fmt.Errorf("could not identify exactly one proposals/*.json file in this PR's own changed files")
+
+// webhookHandler implements http.Handler for the single real endpoint
+// this server exposes -- GitHub's own webhook delivery target.
+type webhookHandler struct {
+	s *Server
+}
+
+func (h webhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	payload, err := ghapi.ValidatePayload(r, []byte(h.s.cfg.GitHubWebhookSecret))
+	if err != nil {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	event, err := ghapi.ParseWebHook(ghapi.WebHookType(r), payload)
+	if err != nil {
+		http.Error(w, "unrecognized event", http.StatusBadRequest)
+		return
+	}
+
+	// GitHub expects a fast 2xx response; the real work happens after
+	// responding, same "near-stateless, kill and restart, re-derive"
+	// framing as the rest of this package -- a delivery this process
+	// happens to die mid-handling for is simply retried by GitHub's own
+	// real webhook redelivery, not something this handler needs its own
+	// separate durability story for.
+	w.WriteHeader(http.StatusAccepted)
+
+	go h.s.handleEvent(context.Background(), event)
+}
+
+// handleEvent dispatches a single, already-parsed webhook event to the
+// real flow step it corresponds to (UBI-28's own "core flow", steps
+// 1-6). Unrecognized/irrelevant event types and actions are silently
+// ignored -- GitHub delivers many more event types than this server
+// subscribes to caring about the payload of.
+func (s *Server) handleEvent(ctx context.Context, event any) {
+	var err error
+	switch e := event.(type) {
+	case *ghapi.PullRequestEvent:
+		err = s.handlePullRequestEvent(ctx, e)
+	case *ghapi.IssueCommentEvent:
+		err = s.handleIssueCommentEvent(ctx, e)
+	case *ghapi.PullRequestReviewEvent:
+		err = s.handlePullRequestReviewEvent(ctx, e)
+	default:
+		return
+	}
+	if err != nil {
+		slog.Error("ubx server: event handling failed", "error", err)
+	}
+}
+
+// handlePullRequestEvent is core-flow steps 1 and 5 (the automatic
+// half): opened/synchronize runs a plan; closed+merged runs a ship, if
+// ShipOnMerge is on.
+func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullRequestEvent) error {
+	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
+	installationID := e.GetInstallation().GetID()
+
+	switch e.GetAction() {
+	case "opened", "synchronize":
+		return s.runPlanAndComment(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetHead().GetSHA())
+
+	case "closed":
+		if !e.GetPullRequest().GetMerged() {
+			return nil // closed without merging -- nothing to ship
+		}
+		if !s.cfg.ShipOnMerge {
+			return nil
+		}
+		return s.runAutomaticShip(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetBase().GetRef())
+	}
+	return nil
+}
+
+// handleIssueCommentEvent is core-flow steps 3 (re-plan) and 4's manual
+// path (ship via comment) -- both require the real, live authorization
+// checks auth.go implements, never inferred from the app's own
+// installation scope.
+func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueCommentEvent) error {
+	if e.GetAction() != "created" {
+		return nil
+	}
+	if !e.GetIssue().IsPullRequest() {
+		return nil // a plain issue comment, not a PR -- out of scope
+	}
+
+	body := strings.TrimSpace(e.GetComment().GetBody())
+	fields := strings.Fields(body)
+	if len(fields) == 0 || fields[0] != "ubx" || len(fields) < 2 {
+		return nil // not a real ubx command comment at all
+	}
+	verb, flags := fields[1], fields[2:]
+
+	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
+	prNumber := e.GetIssue().GetNumber()
+	commenter := e.GetComment().GetUser().GetLogin()
+	installationID := e.GetInstallation().GetID()
+
+	api, err := s.installations.forInstallation(installationID)
+	if err != nil {
+		return err
+	}
+
+	pr, _, err := api.API().PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		return fmt.Errorf("get PR #%d on %s/%s: %w", prNumber, owner, repo, err)
+	}
+
+	switch verb {
+	case "plan":
+		ok, err := isAuthorizedToReplan(ctx, api, owner, repo, s.botLogin, pr.GetUser().GetLogin(), commenter)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "plan",
+				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a repository collaborator with write access) can.", commenter))
+		}
+		_ = flags // real, forwarded verbatim to the subprocess -- see runPlanAndComment
+		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA())
+
+	case "ship":
+		ok, err := isAuthorizedToShip(ctx, api, owner, repo, prNumber, commenter)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "ship",
+				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter))
+		}
+		confirmDestroys := contains(flags, "--confirm-destroys")
+		return s.runManualShip(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), confirmDestroys)
+	}
+	return nil
+}
+
+// handlePullRequestReviewEvent is core-flow step 4's own trigger: a real
+// native Approve review, never a comment command (preserving the
+// "derived signature, not a comment command" principle stated in this
+// package's own doc comment).
+func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.PullRequestReviewEvent) error {
+	if strings.ToLower(e.GetReview().GetState()) != "approved" {
+		return nil
+	}
+
+	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
+	prNumber := e.GetPullRequest().GetNumber()
+	commitID := e.GetReview().GetCommitID()
+	installationID := e.GetInstallation().GetID()
+
+	api, err := s.installations.forInstallation(installationID)
+	if err != nil {
+		return err
+	}
+
+	files, _, err := api.API().PullRequests.ListFiles(ctx, owner, repo, prNumber, nil)
+	if err != nil {
+		return fmt.Errorf("list changed files for PR #%d: %w", prNumber, err)
+	}
+	proposalFile, err := discoverProposalFile(files)
+	if err != nil {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			fmt.Sprintf("Approval recorded by GitHub, but `ubx` could not derive acceptance from it: %s. Accept this proposal locally with `ubx accept` instead.", err))
+	}
+
+	repoDir, err := s.repoDirFor(ctx, installationID, owner, repo)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, commitID); err != nil {
+		return err
+	}
+
+	body, err := ghub.FileAtCommit(ctx, repoDir, commitID, proposalFile)
+	if err != nil {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			fmt.Sprintf("Approval recorded by GitHub, but `ubx` could not read %s at the reviewed commit: %s", proposalFile, err))
+	}
+
+	pr, _, err := api.API().PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		return fmt.Errorf("get PR #%d on %s/%s: %w", prNumber, owner, repo, err)
+	}
+	claimedHash, ok := ghub.ParseProposalTrailer(pr.GetBody())
+	if !ok {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			"Approval recorded by GitHub, but this PR's own body carries no `ubx-proposal: <hash>` trailer to derive acceptance from.")
+	}
+
+	var p core.Proposal
+	if err := json.Unmarshal(body, &p); err != nil {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			fmt.Sprintf("Approval recorded by GitHub, but %s does not parse as a real proposal file: %s", proposalFile, err))
+	}
+
+	// A destructive proposal is never accepted from a review, full stop --
+	// not gated by Config.AllowDestroy, not satisfiable by any comment
+	// flag the way runManualShip's own ship-time gate is. UBI-28's own
+	// "approval is never sufficient by itself for a destroy" core safety
+	// property applies at the earliest point it can: acceptance itself.
+	// A human accepts a real destroy locally with `ubx accept
+	// --confirm-destroys` (the same real, pre-existing acceptance-time
+	// invariant `cli/accept.go`'s own checkDestroysConfirmed enforces for
+	// the local and pr_merge tiers, docs/schema.md) -- never derived from
+	// a review click here.
+	if p.BlastRadius.Destroys > 0 {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			fmt.Sprintf("Approval recorded by GitHub, but %s has blast_radius.destroys > 0 -- `ubx server` never derives acceptance for a destroy from a review, regardless of configuration. Accept it locally with `ubx accept --confirm-destroys` instead.", proposalFile))
+	}
+
+	ledger := core.Open(repoDir)
+	accepted, err := core.AcceptFromReview(ledger, &p, claimedHash, core.ReviewAcceptance{
+		Platform:     "github",
+		PRNumber:     int64(prNumber),
+		ProposalFile: proposalFile,
+		Approver:     e.GetReview().GetUser().GetLogin(),
+		Comment:      e.GetReview().GetBody(),
+	})
+	if err != nil {
+		return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+			fmt.Sprintf("Approval recorded by GitHub, but `ubx accept` refused it: %s", err))
+	}
+
+	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "accept",
+		fmt.Sprintf("accepted %s (stack %s) via PR #%d, approved by @%s", accepted.ID, accepted.Stack, prNumber, e.GetReview().GetUser().GetLogin()))
+}
+
+// discoverProposalFile finds the one real proposal file among a PR's
+// changed files -- files under a `proposals/` directory with a `.json`
+// extension, the real, existing path convention every one of ubx's own
+// CI/CD integration guides already documents (bamboo.mdx, azure-devops.
+// mdx, circleci.mdx, etc. all use "proposals/db-replica.json"). Zero or
+// more than one match is refused outright, never guessed at either way.
+func discoverProposalFile(files []*ghapi.CommitFile) (string, error) {
+	var match string
+	for _, f := range files {
+		path := f.GetFilename()
+		if strings.HasPrefix(path, "proposals/") && strings.HasSuffix(path, ".json") {
+			if match != "" {
+				return "", ErrAmbiguousProposalFile
+			}
+			match = path
+		}
+	}
+	if match == "" {
+		return "", ErrAmbiguousProposalFile
+	}
+	return match, nil
+}
+
+func contains(fields []string, target string) bool {
+	for _, f := range fields {
+		if f == target {
+			return true
+		}
+	}
+	return false
+}

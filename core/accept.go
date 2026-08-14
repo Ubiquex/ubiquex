@@ -45,6 +45,64 @@ func Accept(l *Ledger, p *Proposal) (*Proposal, error) {
 	return accepted, nil
 }
 
+// ReviewAcceptance is AcceptFromReview's already-verified input —
+// everything package server derived from a real "pull_request_review"
+// webhook event (state == "approved") and the GitHub API before calling
+// in. Grouped into one struct for the same reason MergeAcceptance is.
+type ReviewAcceptance struct {
+	Platform     string // "github" only as of UBI-28 Phase 1
+	PRNumber     int64
+	ProposalFile string
+	Approver     string // the review's own author login
+	Comment      string // the review's own optional body text; may be empty
+}
+
+// AcceptFromReview is the pr_review acceptance tier (UBI-28 Phase 1,
+// docs/schema.md — "Amendment: pr_review acceptance method"): a live
+// counterpart to AcceptFromMerge, triggered by a GitHub PR's native
+// "Approve" review action on a still-open PR rather than derived after
+// the fact from an already-merged commit's history.
+//
+// claimedHash is the "ubx-proposal: <hash>" trailer's value, read from
+// the PR body at review.CommitID specifically — the exact commit the
+// Approve action applied to, never the PR's current HEAD, which can
+// have moved on with new commits since the review was submitted without
+// invalidating it (GitHub only dismisses stale reviews automatically
+// when a repo's branch protection is configured to require it, never by
+// default) — reading at CommitID closes that real TOCTOU-shaped gap.
+// AcceptFromReview recomputes p's own Hash() and requires it to match
+// exactly, same hard-failure-on-mismatch rule AcceptFromMerge enforces,
+// for the identical reason: a mismatch means the trailer and the
+// reviewed proposal file disagree about what was actually approved.
+//
+// AcceptFromReview itself does not talk to GitHub's API — see package
+// server for the webhook handling, the review-vs-CommitID fetch, and the
+// commenter/reviewer authorization checks; core stays dependency-free,
+// same inversion as AcceptFromMerge's own package-github split.
+func AcceptFromReview(l *Ledger, p *Proposal, claimedHash string, review ReviewAcceptance) (*Proposal, error) {
+	hash, err := validateAndHash(p)
+	if err != nil {
+		return nil, fmt.Errorf("accept from review: %w", err)
+	}
+	if hash != claimedHash {
+		return nil, fmt.Errorf("accept from review: %w: trailer claims %s, proposal file hashes to %s",
+			ErrTrailerHashMismatch, claimedHash, hash)
+	}
+	accepted, err := finalizeAndAppend(l, p, hash, &Acceptance{
+		Method:        "pr_review",
+		Platform:      review.Platform,
+		PRNumber:      review.PRNumber,
+		ProposalFile:  review.ProposalFile,
+		Approvers:     []string{review.Approver},
+		ReviewComment: review.Comment,
+		AcceptedAt:    time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accept from review: %w", err)
+	}
+	return accepted, nil
+}
+
 // MergeAcceptance is AcceptFromMerge's already-verified input — everything
 // the caller (see package github, package gitlab, or package
 // azuredevops) derived from git history and the platform's own API
