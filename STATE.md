@@ -2,6 +2,146 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-159: CLOSED -- provider-version-watch.mdx restored, mcp.mdx confirmed already migrated, 2026-08-14
+
+Investigated the 2 real files deleted in `931f12e` (the SDK Reference /
+Tutorial restructure, 2026-08-11) with no obviously-named successor,
+found while researching UBI-31's own Integrations tab placement --
+confirmed for real rather than assumed lost or assumed fine.
+
+**`guides/mcp.mdx`**: has a real, accurate successor already, just
+split across the site's now-established Concepts/CLI-Reference/
+Tutorial structure the same way the other 13 migrated files were --
+`cli-reference/mcp.mdx` (command reference), `concepts/mcp-server.mdx`
+(why read-only), `tutorial/sdk/mcp.mdx` (hands-on walkthrough). All
+three independently confirmed accurate against the real, current
+3-tool (`why`/`status`/`scan`) scope. No restoration needed, no code
+change made.
+
+**`guides/provider-version-watch.mdx`**: genuinely has no successor --
+only the underlying `ubx providers check` command's own CLI reference
+survived (`cli-reference/providers.mdx`), not the actual GitHub
+Actions automation workflow this guide covered. Restored as
+`integrations/provider-version-watch.mdx`, verified line by line
+against real, current source before restoring, not taken at face
+value: the workflow YAML's core mechanism (exit-code branching, the
+`ubx-bot` PR-opening git identity/branch/commit pattern) matches the
+real, live, current `ubx-sdk-*/.github/workflows/version-watch.yml`
+exactly; `ubx plan`'s hand-written-intent-file exclusion from auto-
+detection re-verified directly against `cli/plan.go`'s
+`autodetectMedium` (only ever returns `--from-doc`/`--from-diagram`/
+`--from-code` candidates, confirming the old guide's own live-observed
+claim); the `.ubx/plans/<hash>.json` side effect confirmed against the
+real, current `cli-reference/plan.mdx`. Two real corrections made
+before restoring: the "ubx-sdk-* repos (AWS, Google, Kubernetes, Azure
+x Go/TS/Python)" phrasing corrected to the real, current UBI-138
+structure (4 combined repos, not up to 12 single-language ones), and
+the "broader GitHub Actions guide...not yet published" note updated
+now that `integrations/github-actions.mdx` (UBI-31) is real and live.
+All internal links updated from the old `/cli/*` paths to their real,
+current `/cli-reference/*`/`/concepts/*` locations. One narrow claim
+(the precise `hashicorp/aws` version boundary where
+`aws_cloudwatch_log_storage_tier_policy` was introduced) was not
+re-derived -- the resource type and the cited version number are both
+independently confirmed real, but pinning the exact cutoff would have
+needed a historical provider schema diff disproportionate to the
+guide's real educational point; flagged rather than silently trusted
+or silently dropped.
+
+Restored into the Integrations tab (`docs.json`), alongside the 5
+CI/CD platform guides from UBI-31 -- cross-linked from
+`integrations/github-actions.mdx`'s own See also section.
+
+Full verification: `mint validate`/`mint broken-links` both clean (the
+only flagged items corpus-wide were the same pre-existing, unrelated
+GCP false positives seen throughout tonight's UBI-31 work), zero em
+dashes, real DOM overflow clean, byte-identity spot-check confirming
+all 3 real mcp.mdx successor pages and every other cross-linked page
+untouched. Committed and pushed (`ubiquex-docs` `68e72d5`), confirmed
+live via `gh api` (commit and actual file content).
+
+---
+
+## UBI-31 Phase 1: CLOSED -- Integrations tab + all 5 CI/CD platform guides, real mechanisms verified independently per platform, 2026-08-14
+
+New top-level "Integrations" tab (`docs.json`), positioned after
+Tutorial and before CLI Reference -- narrative/practical content like
+Tutorial, not pure reference like CLI/SDK Reference which cluster at
+the end (no existing placement precedent found; reasoned from the
+site's own established pattern). Five guides, each verified against
+real, current source rather than assumed symmetric with the others:
+
+**A cross-platform finding, confirmed once and re-applied, not
+re-derived per guide**: `ubx accept --from-merge` is GitHub-only --
+confirmed directly against `cli/accept.go`'s `--github-repo`-only flag
+and the `github/` package's GitHub REST API calls (`ListPullRequestsWithCommit`,
+`ListReviews`). No GitLab, Azure DevOps, Bamboo, or CircleCI equivalent
+exists in `ubx` today -- a real gap in `ubx` itself, not a platform
+limitation (each platform's own MR/PR review API is just as real as
+GitHub's). Every non-GitHub guide states this plainly as its own
+opening section: ship-on-merge on that platform ships an
+already-accepted proposal only, preserving the same real safety
+property, just not automated end-to-end yet. Filing a cross-platform
+Linear ticket to extend `--from-merge` support was discussed with the
+founder; the exact title/scope/priority is still pending their
+confirmation before creation, per this project's own rule 6 (verify
+new issue titles against the real board, never invent one unprompted).
+
+**GitHub Actions** (`integrations/github-actions.mdx`): the reference
+implementation every other guide adapted from. Nightly drift watch
+(`ubx status --drift`, the real 0/1/2 exit-code contract) and
+ship-on-merge (`ubx accept --from-merge` deriving acceptance from real
+git history + the GitHub API's PR/review data, then `ubx ship`). Real
+OIDC-to-AWS steps and version pins (`aws-actions/configure-aws-
+credentials`, `actions/checkout`) verified against the GitHub API, not
+memory.
+
+**GitLab CI/CD**: `id_tokens` keyword + a raw `sts assume-role-with-
+web-identity` call (no managed credentials action exists); Pipeline
+Schedules as a separate UI/API object, not inline YAML; native
+notifications route to the pipeline creator/schedule owner.
+
+**Azure DevOps Pipelines**: OIDC-to-AWS is not first-party -- Microsoft
+removed it from the standard service connection wizard; the real path
+runs through the AWS-maintained "AWS Toolkit for Azure DevOps"
+extension's `AWSShellScript@1` task, with a per-organization OIDC
+issuer discovered via a first pipeline run. A real correctness trap
+found and flagged: `schedules:` cron's `always: false` default
+silently skips a run when nothing changed, wrong for drift-watch,
+`always: true` required.
+
+**Bamboo**: no native or AWS-maintained OIDC-to-AWS mechanism exists at
+all -- the only OIDC-capable path is a paid third-party Marketplace app
+that itself leans on group-to-role mapping, not clean per-job
+federation; realistic default is long-lived IAM keys via Shared
+Credentials (Bamboo's own docs concede this is obfuscation, not real
+encryption, without the same paid app). Quartz-style 6-field cron,
+confirmed structurally different from the other three platforms' 5-
+field Unix cron. No dedicated cache feature needed since Bamboo Data
+Center agents are typically long-lived, not ephemeral.
+
+**CircleCI**: closest of the four non-GitHub platforms to GitHub's own
+clean OIDC model -- real, first-party, `$CIRCLE_OIDC_TOKEN` available
+automatically, exchanged via the official `circleci/aws-cli` orb
+(version confirmed against its real GitHub release). Scheduling is
+structurally closer to GitLab's separate-object model; the deprecated
+`workflows.triggers.schedule` YAML mechanism confirmed superseded.
+`pipeline.trigger_source` used correctly to keep drift-watch and
+ship-on-merge from both running on every trigger, since one CircleCI
+trigger fires the whole pipeline, not a single workflow.
+
+Full verification on every guide: `mint validate`/`mint broken-links`
+clean (all flagged items across all 5 checkpoints were the same
+pre-existing, unrelated GCP false positives), zero em dashes, real DOM
+overflow crawl clean on every page, byte-identity spot-check clean at
+every checkpoint. Each guide committed and pushed separately
+(`ubiquex-docs` `5a3bcbe`, `20499e4`, `46fe490`, `3021921`, `b43c76e`),
+each verified live via `gh api` before moving to the next platform, per
+the founder's own explicit "report back at a real checkpoint after each
+platform" instruction.
+
+---
+
 ## UBI-154: CLOSED -- real "index" slug collision fixed for 3 AWS resources, same precedent as google_firestore_index, 2026-08-14
 
 **Step 1, confirmed real pre-fix state, not assumed**: `aws_kendra_index`,
