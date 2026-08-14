@@ -2,6 +2,78 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-160 Phase 4 (CircleCI): CLOSED -- ticket done, all 4 platforms (GitLab, Azure DevOps, Bitbucket Server, CircleCI) verified and shipped, 2026-08-14
+
+**Step 0, done before any implementation, per the kickoff's own explicit
+instruction**: resolved CircleCI's real VCS-pairing question, not
+assumed GitHub-primary despite that being the likely and most common
+answer. Confirmed directly against CircleCI's own current
+documentation: CircleCI Cloud integrates with four real, current VCS
+hosts -- GitHub (GitHub.com, GitHub Enterprise Cloud, GitHub Enterprise
+Server), GitLab (SaaS and self-managed), Bitbucket Cloud, and
+Bitbucket Data Center. (CircleCI Server, the self-hosted product, is
+GitHub-only -- not relevant, since every workflow in the guide targets
+CircleCI Cloud.)
+
+**The real finding this phase produced, genuinely different in shape
+from Phases 1-3**: `ubx accept --from-merge` has no awareness of which
+CI system triggered the job -- confirmed directly against
+`cli/accept.go`'s own dispatch, which only ever consumes a merge SHA,
+a local repo directory, and one of its four platform flags, with zero
+CI-tool-specific logic anywhere. That means three of CircleCI's four
+real pairings -- GitHub, GitLab, Bitbucket Data Center -- were
+**already covered, with zero new Go code this phase**: no new package,
+no new CLI flag, no new tests. This is the same real finding the
+Bamboo guide (Phase 3) reached for its own GitHub-paired case,
+reached independently here via the same Step-0-first discipline, not
+assumed to carry over. Bitbucket Cloud remains a real, genuine gap --
+a different API from Bitbucket Server/Data Center's self-hosted one
+(fixed `api.bitbucket.org` host, OAuth-consumer/App Password auth, no
+on-prem base URL), `ubx` has no client for it -- the same real,
+separate scope decision the Bamboo guide made about Bitbucket Cloud,
+confirmed independently rather than assumed to carry over, not built
+out.
+
+Full repo `go build`/`go vet`/`go test -count=1` clean (confirms no
+regression from the zero-new-code finding, not just an assumption).
+
+**Docs** (`ubiquex-docs` `da27337`): `integrations/circleci.mdx`'s
+previous "same real gap as the other three" section replaced with
+"Merge-derived acceptance, and a real VCS-pairing question already
+resolved" -- explains the four-host finding, the
+three-already-covered result, and the Bitbucket Cloud scope decision.
+Workflow 3 (ship on merge) rewritten with a real `Accept from merge`
+step using `$CIRCLE_SHA1` (confirmed real, current, populated in
+every job regardless of VCS host -- it reflects what `checkout`
+pulled, not a VCS-API call) and `$CIRCLE_PROJECT_USERNAME`/
+`$CIRCLE_PROJECT_REPONAME` (reused from the existing plan-on-PR
+workflow). A real, positive finding worth recording: CircleCI's own
+built-in `checkout` step clones full history by default, unlike
+GitHub Actions' and Azure Pipelines' own shallow-by-default checkout
+actions -- confirmed directly against CircleCI's own docs, so no
+extra depth flag is needed for `ubx accept --from-merge`'s own git-
+history check. `cli-reference/accept.mdx` needed **no changes** this
+phase -- it's already CI-tool-agnostic (documents VCS platforms, not
+CI runners), and the real `--help` output confirms zero new flags.
+Full verification bar (zero em dashes, `mint validate`, overflow crawl
+-- `pageOverflowPx: 0` -- broken-links -- zero new flags beyond the
+pre-existing ~124 unrelated GCP false positives -- YAML/JSON syntax on
+all 6 blocks, byte-identity spot-check on every other integration/
+cli-reference file including `cli-reference/accept.mdx` itself);
+commit pushed and confirmed live via `gh api` (SHA and real content
+both checked directly).
+
+**UBI-160 is now closed.** All four originally-scoped platforms
+(GitLab, Azure DevOps, Bitbucket Server via Bamboo, CircleCI) have
+real, independently-verified `accept --from-merge` support, each
+platform's own approval model confirmed against real source/docs
+rather than assumed symmetric with any other. One real, explicitly
+named follow-up remains outside this ticket's scope: Bitbucket Cloud
+support (raised independently in both the Bamboo and CircleCI
+phases, consistently scoped out both times, not forgotten).
+
+---
+
 ## UBI-160 Phase 3 (Bamboo/Bitbucket Server): CHECKPOINT, not closed -- real Bitbucket Server merge-acceptance derivation shipped, CircleCI phase not started, 2026-08-14
 
 Per the ticket's own scope split: Bamboo/Bitbucket Server only this
