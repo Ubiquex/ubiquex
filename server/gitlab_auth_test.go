@@ -19,8 +19,8 @@ import (
 type fakeGitLabAuthServer struct {
 	project      string
 	mrIID        int64
-	users        map[string]int64 // username -> user ID
-	projectPerm  map[int64]int    // user ID -> real GitLab AccessLevelValue on f.project
+	users        map[string]int64          // username -> user ID
+	projectPerm  map[int64]int             // user ID -> real GitLab AccessLevelValue on f.project
 	groupMembers map[string]map[int64]bool // group path -> set of member user IDs
 	changedFiles []string
 	codeowners   string // empty means no CODEOWNERS file at all

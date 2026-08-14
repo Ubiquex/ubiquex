@@ -9,19 +9,27 @@
 // safety properties (confirm-destroys, freshness re-verification) a
 // second time in this package.
 //
-// GitHub (UBI-28 Phase 1) and GitLab (UBI-28 Phase 2) so far -- Azure
-// DevOps/Bamboo are real, scoped-out follow-up work per UBI-28's own
-// sequencing. The two platforms' own real mechanisms are genuinely
-// different, not symmetric: GitHub is a real installable App with
-// short-lived per-installation tokens (githubapp.go); GitLab has no
-// unified "App" concept at all -- confirmed directly against GitLab's
-// own current docs, not assumed from the earlier design discussion's
-// own summary -- so it authenticates with one real, static Group
-// Access Token instead (gitlab.go), and its own webhook signing
-// mechanism (a real HMAC-SHA256 "signing token", GitLab's own current
-// recommended replacement for its older plain-text secret-token
-// header) is structurally different from GitHub's, not just
-// differently named.
+// GitHub (UBI-28 Phase 1), GitLab (UBI-28 Phase 2), and Azure DevOps
+// (UBI-28 Phase 3) so far -- Bamboo is real, scoped-out follow-up work
+// per UBI-28's own sequencing (UBI-165 tracks the real, separate
+// drift-watch/cli-surface gap found during Phase 2, not blocking any
+// of these three). All three platforms' own real mechanisms are
+// genuinely different, not symmetric: GitHub is a real installable App
+// with short-lived per-installation tokens (githubapp.go); GitLab has
+// no unified "App" concept at all -- confirmed directly against
+// GitLab's own current docs -- so it authenticates with one real,
+// static Group Access Token instead (gitlab.go), with its own real
+// HMAC-SHA256 webhook signing-token mechanism; Azure DevOps has
+// neither an App concept nor any real webhook signature scheme at all
+// -- confirmed directly against Microsoft's own current docs, not
+// assumed symmetric with either -- it authenticates with one real,
+// static Personal Access Token, and its own Service Hooks webhook
+// mechanism carries no cryptographic signature whatsoever, only an
+// optional Basic-Auth header or custom headers on the subscription;
+// this package follows Microsoft's own documented security
+// recommendation (a static, shared-secret custom header, checked on
+// every incoming request) rather than inventing a signing scheme
+// Azure DevOps itself doesn't have.
 package server
 
 import (
@@ -127,6 +135,70 @@ type Config struct {
 	// shares) -- empty means the real gitlab.com.
 	GitLabAPIBaseURL string `yaml:"-"`
 
+	// AzureDevOpsOrganization: yaml `azure_devops_organization`, env
+	// UBX_SERVER_AZURE_DEVOPS_ORGANIZATION, flag
+	// --azure-devops-organization. The real Azure DevOps organization
+	// name (the first path segment of https://dev.azure.com/
+	// {organization}) -- one real PAT authenticates every call this
+	// server makes across every Azure-DevOps-watched repo, the same
+	// "one instance, one credential" simplification GitLab's own
+	// GitLabToken already makes; a server watching repos across more
+	// than one real Azure DevOps organization is out of scope (would
+	// need a second, per-organization client, not built here).
+	AzureDevOpsOrganization string `yaml:"azure_devops_organization"`
+	// AzureDevOpsToken: env UBX_SERVER_AZURE_DEVOPS_TOKEN, flag
+	// --azure-devops-token. Deliberately no YAML key, same secrets
+	// discipline as GitLabToken. A real Personal Access Token, needing
+	// Code (Read & Write) and Graph (Read) scopes -- Code for every
+	// git/policy/comment-thread call this package makes, Graph for the
+	// user/group lookups isAuthorizedToReplanAzureDevOps/
+	// isAuthorizedToShipAzureDevOps need.
+	AzureDevOpsToken string `yaml:"-"`
+	// AzureDevOpsBotDisplayName: yaml `azure_devops_bot_display_name`,
+	// env UBX_SERVER_AZURE_DEVOPS_BOT_DISPLAY_NAME, flag
+	// --azure-devops-bot-display-name. The PAT's own real, current
+	// display name (Azure DevOps has no fixed bot-naming convention at
+	// all, unlike GitHub's "<slug>[bot]" -- a PAT authenticates as
+	// whichever real user or service account created it) -- operator-
+	// set config, read directly off that identity, not derived. Same
+	// real role GitHubBotLogin/GitLabBotUsername play: attributing
+	// drift-watch-opened PRs and finding "this bot's own last comment"
+	// for the edit-in-place mechanism.
+	AzureDevOpsBotDisplayName string `yaml:"azure_devops_bot_display_name"`
+	// AzureDevOpsWebhookSecretHeader: yaml
+	// `azure_devops_webhook_secret_header`, env
+	// UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET_HEADER, flag
+	// --azure-devops-webhook-secret-header. Default
+	// "X-Ubx-Webhook-Secret". Azure DevOps' own Service Hooks have no
+	// real webhook signature scheme at all -- confirmed directly
+	// against Microsoft's own current docs -- only an optional custom-
+	// header mechanism the operator configures on the subscription
+	// itself; Microsoft's own documented security recommendation is a
+	// shared secret in a custom header, checked on every incoming
+	// request, which is what this package implements. The header NAME
+	// is configurable (not a fixed Azure-DevOps-chosen convention the
+	// way GitHub's/GitLab's signature header names are); its value is
+	// AzureDevOpsWebhookSecret below.
+	AzureDevOpsWebhookSecretHeader string `yaml:"azure_devops_webhook_secret_header"`
+	// AzureDevOpsWebhookSecret: env UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET,
+	// flag --azure-devops-webhook-secret. Deliberately no YAML key, same
+	// secrets discipline as every other webhook secret. The real,
+	// static value the operator both sets as the custom header's value
+	// on every Azure DevOps Service Hook subscription AND configures
+	// here -- compared via constant-time equality, never a signature
+	// (there is nothing to verify a signature against; the header
+	// value itself is the whole credential).
+	AzureDevOpsWebhookSecret string `yaml:"-"`
+	// AzureDevOpsAPIBaseURL: env UBX_SERVER_AZURE_DEVOPS_API_BASE_URL,
+	// flag --azure-devops-api-base-url. Deliberately no YAML key,
+	// test-only -- points both the git/policy API base and the Graph
+	// API base at the same httptest.Server; real production traffic
+	// always splits across dev.azure.com and vssps.dev.azure.com, two
+	// genuinely different real hosts (azuredevops.Client's own real
+	// default derivation), which this override deliberately collapses
+	// for hermetic testing only.
+	AzureDevOpsAPIBaseURL string `yaml:"-"`
+
 	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag
 	// --intent-provider-key. Deliberately no YAML key, same
 	// "self-provisioned, masked variable, never literally in the file"
@@ -196,52 +268,70 @@ type Config struct {
 // server watches, plus where within it the ledger root actually lives
 // (mirroring `ubx plan --ledger-dir`'s own default-to-"." shape).
 //
-// Owner/Name (GitHub) and Project (GitLab) are deliberately separate
-// fields, not a single shared "repo path" -- a real, structural
-// difference between the two platforms, not a naming quirk: GitHub's
-// own API always addresses a repository by exactly two segments
-// (owner, name); GitLab's own project path can carry any real number
-// of nested group/subgroup segments ("acme/backend/infra" is a
-// perfectly real GitLab project path, "acme"/"backend" being real,
-// nested groups), so GitLab's own API takes that whole path as one
-// opaque string, never split into two fixed fields.
+// Owner/Name (GitHub), Project (GitLab), and Project+Repository (Azure
+// DevOps) are deliberately separate field groups, not one single
+// shared "repo path" -- a real, structural difference across all
+// three platforms, not a naming quirk: GitHub's own API always
+// addresses a repository by exactly two segments (owner, name);
+// GitLab's own project path can carry any real number of nested
+// group/subgroup segments ("acme/backend/infra" is a perfectly real
+// GitLab project path), so GitLab's own API takes that whole path as
+// one opaque string, never split into two fixed fields; Azure DevOps
+// needs a real, separate project name/ID AND repository name/ID (a
+// real, current organization can host many real repositories per
+// project, and a project name alone never uniquely addresses one) --
+// confirmed directly against Microsoft's own REST API shape (see
+// azuredevops/client.go's own doc comment), not assumed symmetric with
+// either GitHub's two-segment or GitLab's one-opaque-string model.
 type RepoConfig struct {
 	// Platform: yaml `platform`. "github" (default, for backward
-	// compatibility with every Phase-1-era config) or "gitlab".
+	// compatibility with every Phase-1-era config), "gitlab", or
+	// "azuredevops".
 	Platform string `yaml:"platform"`
 
 	// Owner/Name: yaml `owner`/`name` -- GitHub only.
 	Owner string `yaml:"owner"`
 	Name  string `yaml:"name"`
 
-	// Project: yaml `project` -- GitLab only. The full real namespace
-	// path, e.g. "acme/infra" or "acme/backend/infra".
+	// Project: yaml `project` -- GitLab's own full real namespace path
+	// ("acme/infra" or "acme/backend/infra"), OR Azure DevOps' own real
+	// project name/ID (used together with Repository below).
 	Project string `yaml:"project"`
+
+	// Repository: yaml `repository` -- Azure DevOps only. The real
+	// repository name or ID within Project.
+	Repository string `yaml:"repository"`
 
 	LedgerDir string `yaml:"ledger_dir"`
 }
 
 // String renders r's own real repository address for logging --
-// "owner/name" for GitHub, the real project path for GitLab.
+// "owner/name" for GitHub, the real project path for GitLab,
+// "project/repository" for Azure DevOps.
 func (r RepoConfig) String() string {
-	if r.Platform == "gitlab" {
+	switch r.Platform {
+	case "gitlab":
 		return r.Project
+	case "azuredevops":
+		return r.Project + "/" + r.Repository
+	default:
+		return r.Owner + "/" + r.Name
 	}
-	return r.Owner + "/" + r.Name
 }
 
 // defaults returns Config's built-in defaults -- the lowest-precedence
 // layer Load starts from.
 func defaults() Config {
 	return Config{
-		ListenAddr:              ":8080",
-		WorkDir:                 "/var/lib/ubx-server/repos",
-		DriftWatchIntervalRaw:   "24h",
-		SurfaceAs:               "issue",
-		ShipOnMerge:             true,
-		AllowDestroy:            false,
-		GitHubAppPrivateKeyPath: "",
-		GitHubBotLogin:          "ubx[bot]",
+		ListenAddr:                     ":8080",
+		WorkDir:                        "/var/lib/ubx-server/repos",
+		DriftWatchIntervalRaw:          "24h",
+		SurfaceAs:                      "issue",
+		ShipOnMerge:                    true,
+		AllowDestroy:                   false,
+		GitHubAppPrivateKeyPath:        "",
+		GitHubBotLogin:                 "ubx[bot]",
+		AzureDevOpsWebhookSecretHeader: "X-Ubx-Webhook-Secret",
 	}
 }
 
@@ -332,6 +422,24 @@ func applyEnv(cfg *Config) {
 	if v, ok := os.LookupEnv("UBX_SERVER_GITLAB_API_BASE_URL"); ok {
 		cfg.GitLabAPIBaseURL = v
 	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_ORGANIZATION"); ok {
+		cfg.AzureDevOpsOrganization = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_TOKEN"); ok {
+		cfg.AzureDevOpsToken = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_BOT_DISPLAY_NAME"); ok {
+		cfg.AzureDevOpsBotDisplayName = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET_HEADER"); ok {
+		cfg.AzureDevOpsWebhookSecretHeader = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET"); ok {
+		cfg.AzureDevOpsWebhookSecret = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_API_BASE_URL"); ok {
+		cfg.AzureDevOpsAPIBaseURL = v
+	}
 	if v, ok := os.LookupEnv("UBX_SERVER_INTENT_PROVIDER_KEY"); ok {
 		cfg.IntentProviderKey = v
 	}
@@ -401,6 +509,24 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	if flags.Changed("gitlab-api-base-url") {
 		cfg.GitLabAPIBaseURL, _ = flags.GetString("gitlab-api-base-url")
 	}
+	if flags.Changed("azure-devops-organization") {
+		cfg.AzureDevOpsOrganization, _ = flags.GetString("azure-devops-organization")
+	}
+	if flags.Changed("azure-devops-token") {
+		cfg.AzureDevOpsToken, _ = flags.GetString("azure-devops-token")
+	}
+	if flags.Changed("azure-devops-bot-display-name") {
+		cfg.AzureDevOpsBotDisplayName, _ = flags.GetString("azure-devops-bot-display-name")
+	}
+	if flags.Changed("azure-devops-webhook-secret-header") {
+		cfg.AzureDevOpsWebhookSecretHeader, _ = flags.GetString("azure-devops-webhook-secret-header")
+	}
+	if flags.Changed("azure-devops-webhook-secret") {
+		cfg.AzureDevOpsWebhookSecret, _ = flags.GetString("azure-devops-webhook-secret")
+	}
+	if flags.Changed("azure-devops-api-base-url") {
+		cfg.AzureDevOpsAPIBaseURL, _ = flags.GetString("azure-devops-api-base-url")
+	}
 	if flags.Changed("intent-provider-key") {
 		cfg.IntentProviderKey, _ = flags.GetString("intent-provider-key")
 	}
@@ -443,9 +569,15 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 // GitLab project path can carry any number of real nested group/
 // subgroup segments, never assumed to be exactly two like GitHub's own
 // owner/name): "gitlab:namespace/project" or
-// "gitlab:namespace/project:ledger_dir" -- ledger_dir defaults to "."
-// when omitted either way, matching `ubx plan --ledger-dir`'s own
-// default.
+// "gitlab:namespace/project:ledger_dir". Azure DevOps (a real
+// "azuredevops:" prefix, needing two real, separate identifiers --
+// project and repository -- never one opaque path the way GitLab's is,
+// since a real Azure DevOps project name never carries nested
+// segments the way a GitLab namespace can):
+// "azuredevops:project/repository" or
+// "azuredevops:project/repository:ledger_dir" -- ledger_dir defaults
+// to "." when omitted in any of the three forms, matching `ubx plan
+// --ledger-dir`'s own default.
 func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 	repos := make([]RepoConfig, 0, len(raw))
 	for _, r := range raw {
@@ -461,13 +593,26 @@ func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 			continue
 		}
 
+		if rest, ok := cutPrefix(r, "azuredevops:"); ok {
+			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
+			if !hasLedgerDir {
+				ledgerDir = "."
+			}
+			project, repository, ok := cutFirst(projectRepo, '/')
+			if !ok || project == "" || repository == "" {
+				return nil, fmt.Errorf("--repo \"azuredevops:...\" must be \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\", got %q", r)
+			}
+			repos = append(repos, RepoConfig{Platform: "azuredevops", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			continue
+		}
+
 		ownerRepo, ledgerDir, hasLedgerDir := cutLast(r, ':')
 		if !hasLedgerDir {
 			ledgerDir = "."
 		}
 		owner, name, ok := cutFirst(ownerRepo, '/')
 		if !ok || owner == "" || name == "" {
-			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", or \"gitlab:namespace/project:ledger_dir\", got %q", r)
+			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", \"gitlab:namespace/project:ledger_dir\", \"azuredevops:project/repository\", or \"azuredevops:project/repository:ledger_dir\", got %q", r)
 		}
 		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name, LedgerDir: ledgerDir})
 	}

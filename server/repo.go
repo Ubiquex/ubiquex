@@ -45,6 +45,22 @@ func ensureRepoCheckoutGitLab(ctx context.Context, workDir, project, token, apiB
 	return ensureRepoCheckoutFromRemote(ctx, workDir, project, remote)
 }
 
+// ensureRepoCheckoutAzureDevOps is ensureRepoCheckout's Azure DevOps
+// counterpart -- same real "clone if missing, fetch otherwise"
+// mechanism, Azure DevOps' own real git-over-HTTPS PAT convention
+// instead: any real Personal Access Token authenticates as
+// "oauth2:<token>@dev.azure.com/{organization}/{project}/_git/
+// {repository}" (confirmed directly against Microsoft's own current
+// docs). repositoryID (the real GUID this package's own webhook
+// handlers always have on hand, never a possibly-ambiguous name) is
+// used directly in the clone URL -- Azure DevOps' own real repository
+// routing resolves either a name or an ID equally in this same path
+// position, so no separate name lookup is needed just to clone.
+func ensureRepoCheckoutAzureDevOps(ctx context.Context, workDir, organization, project, repositoryID, token string) (string, error) {
+	remote := fmt.Sprintf("https://oauth2:%s@dev.azure.com/%s/%s/_git/%s", token, organization, project, repositoryID)
+	return ensureRepoCheckoutFromRemote(ctx, workDir, filepath.Join("azuredevops", project, repositoryID), remote)
+}
+
 // ensureRepoCheckoutFromRemote is ensureRepoCheckout's and
 // ensureRepoCheckoutGitLab's own shared real mechanism, parameterized on
 // subPath (workDir's own subdirectory a given repo checks out into) and

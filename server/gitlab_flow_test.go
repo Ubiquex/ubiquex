@@ -168,10 +168,10 @@ func TestGitLabReviewAcceptFlow_HappyPath(t *testing.T) {
 	repoDir, sha, trailer := gitlabFlowRepo(t, proposal, "proposals/db-replica.json")
 
 	f := &fakeGitLabServer{
-		project: "acme-infra",
-		mrIID:   7,
-		mr:      &glapi.MergeRequest{BasicMergeRequest: glapi.BasicMergeRequest{IID: 7, SHA: sha, Description: trailer, Author: &glapi.BasicUser{Username: "drift-bot"}}},
-		diffs:   []*glapi.MergeRequestDiff{{NewPath: "proposals/db-replica.json"}},
+		project:  "acme-infra",
+		mrIID:    7,
+		mr:       &glapi.MergeRequest{BasicMergeRequest: glapi.BasicMergeRequest{IID: 7, SHA: sha, Description: trailer, Author: &glapi.BasicUser{Username: "drift-bot"}}},
+		diffs:    []*glapi.MergeRequestDiff{{NewPath: "proposals/db-replica.json"}},
 		approval: &glapi.ProjectApprovals{ResetApprovalsOnPush: true},
 	}
 	s, api := gitlabTestServer(t, f, Config{})

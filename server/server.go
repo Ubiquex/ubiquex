@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	adevops "github.com/ubiquex/ubiquex/azuredevops"
 	glab "github.com/ubiquex/ubiquex/gitlab"
 )
 
@@ -17,18 +18,19 @@ type Server struct {
 	cfg           *Config
 	installations *installationClients
 	botLogin      string
-	gitlab        *glab.Client // nil when Config.GitLabToken is unset -- GitLab support not configured
-	self          string       // this process's own resolved executable path (exec.go)
+	gitlab        *glab.Client    // nil when Config.GitLabToken is unset -- GitLab support not configured
+	azuredevops   *adevops.Client // nil when Config.AzureDevOpsToken is unset -- Azure DevOps support not configured
+	self          string          // this process's own resolved executable path (exec.go)
 }
 
 // New builds a Server from cfg, resolving the GitHub App credentials and
 // this process's own executable path once, up front -- both real,
 // fail-fast checks (a bad private key path or a resolve failure should
 // stop startup, not surface as a mysterious first-webhook error).
-// GitLab's own client is only built when Config.GitLabToken is set --
-// unlike GitHub, GitLab support is genuinely optional per deployment
-// (Phase 1 configs never set it at all), so no GitLab field being unset
-// is itself a real, valid startup state, not an error.
+// GitLab's/Azure DevOps' own clients are only built when their own
+// token config is set -- unlike GitHub, both are genuinely optional per
+// deployment (an operator watching only GitHub repos never sets either),
+// so a nil client is itself a real, valid startup state, not an error.
 func New(cfg *Config) (*Server, error) {
 	installations, err := newInstallationClients(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath, cfg.GitHubAPIBaseURL)
 	if err != nil {
@@ -47,26 +49,33 @@ func New(cfg *Config) (*Server, error) {
 		}
 	}
 
+	var azureDevOpsClient *adevops.Client
+	if cfg.AzureDevOpsToken != "" {
+		azureDevOpsClient = newAzureDevOpsClient(cfg.AzureDevOpsOrganization, cfg.AzureDevOpsToken, cfg.AzureDevOpsAPIBaseURL)
+	}
+
 	return &Server{
 		cfg:           cfg,
 		installations: installations,
 		botLogin:      cfg.GitHubBotLogin,
 		gitlab:        gitlabClient,
+		azuredevops:   azureDevOpsClient,
 		self:          self,
 	}, nil
 }
 
 // Run serves the webhook endpoints and drives the drift-watch loop until
 // ctx is cancelled, then shuts the HTTP server down gracefully.
-// "/webhook/github" and "/webhook/gitlab" are real, separate delivery
-// targets per platform -- Phase 1's original single "/webhook" route is
-// renamed here (never deployed anywhere with real users depending on the
-// old form yet, so this is a safe, proactive rename, not a breaking
-// change to anything real) rather than kept as a third, redundant alias.
+// "/webhook/github", "/webhook/gitlab", and "/webhook/azuredevops" are
+// real, separate delivery targets per platform -- Phase 1's original
+// single "/webhook" route was renamed once already (Phase 2, never
+// deployed anywhere with real users depending on the old form), so this
+// is simply the third real route added to that same real convention.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/github", webhookHandler{s: s})
 	mux.Handle("/webhook/gitlab", gitlabWebhookHandler{s: s})
+	mux.Handle("/webhook/azuredevops", azureDevOpsWebhookHandler{s: s})
 	httpServer := &http.Server{Addr: s.cfg.ListenAddr, Handler: mux}
 
 	errCh := make(chan error, 1)
@@ -353,4 +362,99 @@ func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, proj
 
 	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
 	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "ship", body)
+}
+
+// ledgerDirForAzureDevOps is ledgerDirFor's own Azure DevOps
+// counterpart, matched on both real project and repository identifiers
+// -- a Config.Repos entry's own Repository field can name either a
+// repo's real name or its real ID, matched against both real fields
+// the webhook/API give (repositoryID is always the real GUID; the
+// operator may have configured either).
+func (s *Server) ledgerDirForAzureDevOps(project, repositoryID string) string {
+	for _, r := range s.cfg.Repos {
+		if r.Platform == "azuredevops" && r.Project == project && r.Repository == repositoryID {
+			return r.LedgerDir
+		}
+	}
+	return "."
+}
+
+// repoDirForAzureDevOps is ensureRepoCheckoutAzureDevOps's own
+// Server-level wrapper -- repoDirFor's real Azure DevOps counterpart.
+// Like GitLab's own real, static token, there's no per-installation
+// concept to resolve here either.
+func (s *Server) repoDirForAzureDevOps(ctx context.Context, project, repositoryID string) (string, error) {
+	if s.azuredevops == nil {
+		return "", fmt.Errorf("azure devops support is not configured (missing --azure-devops-token)")
+	}
+	return ensureRepoCheckoutAzureDevOps(ctx, s.cfg.WorkDir, s.cfg.AzureDevOpsOrganization, project, repositoryID, s.cfg.AzureDevOpsToken)
+}
+
+// runPlanAndCommentAzureDevOps is runPlanAndComment's own real Azure
+// DevOps counterpart -- identical core-flow steps 1 and 3, against
+// Azure DevOps' own real comment-thread API instead.
+func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA string) error {
+	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentAzureDevOps(ctx, api, project, repositoryID, prID, s.cfg.AzureDevOpsBotDisplayName, "plan", body)
+}
+
+// runAutomaticShipAzureDevOps is runAutomaticShip's own real Azure
+// DevOps counterpart -- the identical real "never --confirm-destroys
+// on an unattended, merge-triggered path, no exception" safety
+// property.
+func (s *Server) runAutomaticShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, targetRef string) error {
+	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, targetRef); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentAzureDevOps(ctx, api, project, repositoryID, prID, s.cfg.AzureDevOpsBotDisplayName, "ship", body)
+}
+
+// runManualShipAzureDevOps is runManualShip's own real Azure DevOps
+// counterpart -- the identical real two-gate confirm-destroys rule.
+func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA string, confirmDestroys bool) error {
+	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	if confirmDestroys && s.cfg.AllowDestroy {
+		args = append(args, "--confirm-destroys")
+	}
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentAzureDevOps(ctx, api, project, repositoryID, prID, s.cfg.AzureDevOpsBotDisplayName, "ship", body)
 }

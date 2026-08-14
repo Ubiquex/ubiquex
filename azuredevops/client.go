@@ -53,9 +53,10 @@ var ErrNoPullRequestForCommit = errors.New("no pull request found for commit")
 // Client wraps the real Azure DevOps REST API -- the Azure DevOps analog
 // of github.Client / gitlab.Client.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string // https://dev.azure.com/{organization}, or a test server URL
-	authHeader string // "Basic " + base64(":"+PAT), empty for anonymous
+	httpClient   *http.Client
+	baseURL      string // https://dev.azure.com/{organization}, or a test server URL
+	graphBaseURL string // https://vssps.dev.azure.com/{organization} -- Graph's own real, separate host (server_api.go)
+	authHeader   string // "Basic " + base64(":"+PAT), empty for anonymous
 }
 
 // Option configures New.
@@ -63,10 +64,24 @@ type Option func(*Client)
 
 // WithBaseURL points the client at a different API base -- tests use
 // this to talk to an httptest.Server instead of the real dev.azure.com,
-// the same convention as github.WithBaseURL / gitlab.WithBaseURL.
+// the same convention as github.WithBaseURL / gitlab.WithBaseURL. Does
+// NOT affect graphBaseURL; pass WithGraphBaseURL too if a test also
+// exercises Graph calls.
 func WithBaseURL(rawURL string) Option {
 	return func(c *Client) {
 		c.baseURL = strings.TrimRight(rawURL, "/")
+	}
+}
+
+// WithGraphBaseURL points Graph calls (server_api.go's own
+// QuerySubjectDescriptor/CheckMembership) at a different base -- real
+// production traffic always splits across dev.azure.com and
+// vssps.dev.azure.com, two genuinely different real hosts, but tests
+// can point both at the same httptest server via WithBaseURL +
+// WithGraphBaseURL together.
+func WithGraphBaseURL(rawURL string) Option {
+	return func(c *Client) {
+		c.graphBaseURL = strings.TrimRight(rawURL, "/")
 	}
 }
 
@@ -79,8 +94,9 @@ func WithBaseURL(rawURL string) Option {
 // https://dev.azure.com/{organization}).
 func New(organization, token string, opts ...Option) *Client {
 	c := &Client{
-		httpClient: http.DefaultClient,
-		baseURL:    "https://dev.azure.com/" + organization,
+		httpClient:   http.DefaultClient,
+		baseURL:      "https://dev.azure.com/" + organization,
+		graphBaseURL: "https://vssps.dev.azure.com/" + organization,
 	}
 	if token != "" {
 		c.authHeader = "Basic " + basicAuth("", token)

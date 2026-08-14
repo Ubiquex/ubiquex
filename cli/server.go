@@ -15,20 +15,22 @@ func newServerCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab)",
+		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps)",
 		Long: `ubx server turns the same real plan/accept/ship/status --drift flow into a continuously-running
 daemon, reacting to webhook events instead of a human or a CI job invoking each command by hand.
 
-Real, current scope (UBI-28): GitHub (a real, installable GitHub App) and GitLab (a real Group Access
-Token plus a separately-configured webhook signing token) -- webhooks land on "/webhook/github" and
-"/webhook/gitlab" respectively. Azure DevOps/Bamboo are real, planned follow-up phases, not yet built.
+Real, current scope (UBI-28): GitHub (a real, installable GitHub App), GitLab (a real Group Access
+Token plus a separately-configured webhook signing token), and Azure DevOps (a real Personal Access
+Token plus a real, static shared-secret Service Hooks header -- Azure DevOps has no cryptographic
+webhook signature scheme at all) -- webhooks land on "/webhook/github", "/webhook/gitlab", and
+"/webhook/azuredevops" respectively. Bamboo is a real, planned follow-up phase, not yet built.
 
 The real flow: a PR/MR opening runs "ubx plan" automatically, posted as a single PR/MR comment; its own
 creator can comment "ubx plan" again to re-run it, edited in place; a native Approve action -- GitHub's
-own review, GitLab's own approval -- never a comment, derives acceptance; a merge ships automatically
-(policy-gated) or a CODEOWNERS-authorized "ubx ship" comment ships manually; destroy is disabled by
-default and, once enabled, still needs a separate, explicit --confirm-destroys in the comment itself,
-every time.
+own review, GitLab's own approval, Azure DevOps' own vote -- never a comment, derives acceptance; a
+merge ships automatically (policy-gated) or a CODEOWNERS-authorized "ubx ship" comment ships manually;
+destroy is disabled by default and, once enabled, still needs a separate, explicit --confirm-destroys
+in the comment itself, every time.
 
 Same binary as ubx itself, not a second codebase -- every actual plan/accept/ship/scan operation shells
 back out to this exact executable, reusing its real safety properties (confirm-destroys enforcement,
@@ -71,6 +73,12 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().String("gitlab-bot-username", "", "the Group Access Token's own bot user username, as GitLab assigned it at token-creation time")
 	cmd.Flags().String("gitlab-webhook-secret", "", "the webhook signing token (\"whsec_...\") configured on the GitLab webhook (required for GitLab support; also settable via UBX_SERVER_GITLAB_WEBHOOK_SECRET, never the YAML file)")
 	cmd.Flags().String("gitlab-api-base-url", "", "override the GitLab API base URL (a self-managed GitLab instance, or test-only; default the real gitlab.com)")
+	cmd.Flags().String("azure-devops-organization", "", "the real Azure DevOps organization name (the first path segment of https://dev.azure.com/{organization})")
+	cmd.Flags().String("azure-devops-token", "", "the Azure DevOps Personal Access Token to authenticate as (required for Azure DevOps support; also settable via UBX_SERVER_AZURE_DEVOPS_TOKEN, never the YAML file)")
+	cmd.Flags().String("azure-devops-bot-display-name", "", "the Personal Access Token's own real, current display name (Azure DevOps has no fixed bot-naming convention)")
+	cmd.Flags().String("azure-devops-webhook-secret-header", "", "the custom HTTP header name every Azure DevOps Service Hook subscription carries the shared secret in (default \"X-Ubx-Webhook-Secret\" -- Azure DevOps has no webhook signature scheme at all, only Microsoft's own documented shared-secret-header recommendation)")
+	cmd.Flags().String("azure-devops-webhook-secret", "", "the shared secret value configured in that same header on every Azure DevOps Service Hook subscription (required for Azure DevOps support; also settable via UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET, never the YAML file)")
+	cmd.Flags().String("azure-devops-api-base-url", "", "override both the git/policy and Graph Azure DevOps API bases (test-only; real production traffic always splits across dev.azure.com and vssps.dev.azure.com)")
 	cmd.Flags().String("intent-provider-key", "", "the [intent] provider's own API key, forwarded to \"ubx plan\" as UBX_INTENT_PROVIDER_KEY for markdown-authored (--from-doc) proposals (also settable via UBX_SERVER_INTENT_PROVIDER_KEY, never the YAML file; unset means markdown-authored proposals aren't supported)")
 	cmd.Flags().String("provider-source", "", "provider source for plan/ship/status --drift, e.g. hashicorp/aws")
 	cmd.Flags().String("provider-version", "", "provider version to acquire")
@@ -79,7 +87,7 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().Bool("allow-destroy", false, "allow a manual \"ubx ship --confirm-destroys\" comment to actually pass --confirm-destroys through (default false -- destroy is disabled by default)")
 	cmd.Flags().String("surface-as", "", "how drift-watch surfaces real drift: \"issue\" or \"pr\" (default \"issue\")")
 	cmd.Flags().String("drift-watch-interval", "", "how often to run the drift-watch loop, a Go duration (default \"24h\")")
-	cmd.Flags().StringArray("repo", nil, "a watched repo: \"owner/name\" or \"owner/name:ledger_dir\" for GitHub, \"gitlab:namespace/project\" or \"gitlab:namespace/project:ledger_dir\" for GitLab (repeatable; the YAML file's own repos: list is the alternative for more than a few)")
+	cmd.Flags().StringArray("repo", nil, "a watched repo: \"owner/name\" or \"owner/name:ledger_dir\" for GitHub, \"gitlab:namespace/project\" or \"gitlab:namespace/project:ledger_dir\" for GitLab, \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\" for Azure DevOps (repeatable; the YAML file's own repos: list is the alternative for more than a few)")
 
 	return cmd
 }

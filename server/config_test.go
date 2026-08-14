@@ -21,6 +21,12 @@ func newTestFlags() *pflag.FlagSet {
 	fs.String("gitlab-bot-username", "", "")
 	fs.String("gitlab-webhook-secret", "", "")
 	fs.String("gitlab-api-base-url", "", "")
+	fs.String("azure-devops-organization", "", "")
+	fs.String("azure-devops-token", "", "")
+	fs.String("azure-devops-bot-display-name", "", "")
+	fs.String("azure-devops-webhook-secret-header", "", "")
+	fs.String("azure-devops-webhook-secret", "", "")
+	fs.String("azure-devops-api-base-url", "", "")
 	fs.String("provider-source", "", "")
 	fs.String("provider-version", "", "")
 	fs.String("provider-config", "", "")
@@ -196,6 +202,27 @@ func TestLoad_RepoFlagGitLabShorthand(t *testing.T) {
 	}
 	if cfg.Repos[1] != (RepoConfig{Platform: "gitlab", Project: "acme/backend/infra", LedgerDir: "stacks/payments"}) {
 		t.Errorf("Repos[1] = %+v, want the real, nested subgroup project path parsed as one whole string", cfg.Repos[1])
+	}
+}
+
+func TestLoad_RepoFlagAzureDevOpsShorthand(t *testing.T) {
+	flags := newTestFlags()
+	if err := flags.Parse([]string{"--repo", "azuredevops:acme-infra/infra", "--repo", "azuredevops:acme-infra/payments-infra:stacks/payments"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load("", flags)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
+	}
+	if cfg.Repos[0] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "infra", LedgerDir: "."}) {
+		t.Errorf("Repos[0] = %+v, want azuredevops:acme-infra/infra with default ledger_dir \".\"", cfg.Repos[0])
+	}
+	if cfg.Repos[1] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "payments-infra", LedgerDir: "stacks/payments"}) {
+		t.Errorf("Repos[1] = %+v, want project and repository parsed as two real, separate identifiers", cfg.Repos[1])
 	}
 }
 
