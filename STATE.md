@@ -2,6 +2,109 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-160 Phase 1 (GitLab): CHECKPOINT, not closed -- real GitLab merge-acceptance derivation shipped, Azure DevOps/Bamboo/CircleCI phases not started, 2026-08-14
+
+Per the ticket's own scope split ("likely 3-4 separate, genuine
+sub-efforts, not one shared abstraction"): GitLab only this session,
+checkpoint before Azure DevOps/Bamboo/CircleCI, awaiting confirmation.
+
+**Real implementation** (`ubiquex` `8c6e2aa`): `ubx accept --from-merge`
+now derives acceptance from a real, merged GitLab merge request, not
+just a GitHub pull request. New `gitlab/` package
+(`gitlab.com/gitlab-org/api/client-go/v2`, the real, current, official
+GitLab Go SDK -- confirmed via `go doc` against the actually-downloaded
+module, not guessed from search summaries), structurally parallel to
+`github/`. New `--gitlab-project` flag on `ubx accept`, following
+`--github-repo`'s own convention exactly, plus a matching `.ubx/config`
+cascade default (`gitlab_project`).
+
+`core.MergeAcceptance`/`core.Acceptance` needed no structural change --
+already platform-agnostic from UBI-11 stage 1 -- except a new
+`Platform` field (`"github"` | `"gitlab"`, docs/schema.md amendment)
+recording which API a `pr_merge` acceptance was actually derived
+against, since GitHub PR numbers and GitLab MR IIDs are both plain
+integers and can't otherwise disambiguate a later re-derivation. `ubx
+why --verify-acceptance`'s reviewer re-check is still GitHub-only --
+honestly reported as skipped for a `platform: "gitlab"` acceptance now,
+not misleadingly suggesting `--github-repo` the way it would have
+before this session's fix.
+
+**Real findings, verified against real source/docs rather than assumed
+symmetric with GitHub**:
+- GitLab's own approval model has no CHANGES_REQUESTED-supersedes-
+  APPROVED concept at all -- its approvals endpoint (`GET
+  /projects/:id/merge_requests/:iid/approvals`, confirmed available on
+  every GitLab tier including Free) already returns the current
+  `approved_by` set directly, no most-recent-review-wins fold needed
+  client-side the way GitHub's raw review-event history needs --
+  genuinely simpler to derive, not just differently named.
+- GitLab clears every approval by default when a new commit lands on
+  an MR (`reset_approvals_on_push`) -- the real "force-pushed branch"
+  edge case the ticket named explicitly; covered by the same
+  empty-approvers-is-fine path as an unreviewed GitHub merge, both
+  unit-tested.
+- A real, load-bearing credential gap found and documented, not
+  discovered too late to matter: GitLab's own auto-injected
+  `CI_JOB_TOKEN` can resolve a commit to its MR but is **not**
+  authorized for the approvals endpoint at all (confirmed against
+  GitLab's own current `CI_JOB_TOKEN` docs) -- a real, separately
+  provisioned Project Access Token is required in CI, unlike GitHub
+  Actions' own `GITHUB_TOKEN`, which already has read access to PR
+  reviews out of the box. This shapes the updated `gitlab-ci.mdx`
+  guide's own ship-on-merge credentials section directly.
+
+**A real, minor package-naming quirk found and flagged, not silently
+fixed**: `github/git.go`'s `CommitExists`/`FileAtCommit` and
+`github/trailer.go`'s `ParseProposalTrailer` are genuinely
+host-agnostic (pure local-git-plumbing and regex parsing on a PR/MR
+body string) -- not actually GitHub-specific despite living in that
+package, the same class of naming mismatch UBI-52 already named and
+fixed once before (`tfstate/` -> `stateimport/`). `gitlab/derive.go`
+reuses them directly from package `github` rather than duplicating
+~80 lines, with a comment noting the quirk. Extracting them into a
+correctly-named shared package is real, worthwhile follow-up, not done
+this session to keep blast radius to what this phase asked for.
+
+**Test coverage** (`gitlab/derive_test.go`, `cli/
+accept_frommerge_gitlab_test.go`): happy path, empty/reset approvers,
+approved_by taken as-is (no fold needed), commit not in history,
+proposal file absent from merge, no MR for commit, no trailer, hash
+mismatch, both new CLI dispatch-validation cases (both repo flags
+given, neither given) -- all against a real go-gitlab client hitting a
+real `httptest` server with real, confirmed URL paths (verified
+directly against the downloaded module's own source, including the
+exact `api/v4/` prefix and `ProjectID` path-escaping behavior), never
+mocked at the HTTP-transport level. One real bug self-caught before
+being shown to anyone: an initial CLI dispatch draft would have logged
+`--gitlab-project` derivation under the wrong label; caught by the
+test asserting the exact `"via MR !%d"` output string.
+
+Full repo `go build`/`go vet`/`go test` clean. Verified against the
+real, rebuilt `ubx` binary (`make build`, confirmed version output)
+before the docs guide was touched -- a real end-to-end run against a
+real throwaway git repo and a real (non-mocked-in-process) HTTP server
+on a real port, not just the Go test suite.
+
+**Docs** (`ubiquex-docs` `194085a`): `integrations/gitlab-ci.mdx`'s
+previous "real gap, stated plainly" section (ship-on-merge shipping an
+already-accepted proposal only) no longer applies to GitLab
+specifically -- replaced with the real, working mechanism, including
+the `GITLAB_API_TOKEN` CI/CD variable requirement found above.
+`cli-reference/accept.mdx` updated with the real `--gitlab-project`
+usage, flag, and example, verified against the real binary's own
+`--help` output and a real derivation run, not just prose edited by
+hand. Full verification bar (mint validate, broken-links, overflow
+crawl, YAML syntax, byte-identity spot-check, zero em dashes) on both
+files; both commits pushed and confirmed live via `gh api`.
+
+**Not done this session, real and explicit**: Azure DevOps, Bamboo,
+and CircleCI's own `accept --from-merge` gaps (found during UBI-31,
+re-confirmed structurally identical to GitLab's former gap) remain
+unaddressed -- checkpoint per the ticket's own instruction, waiting for
+confirmation before starting Azure DevOps next.
+
+---
+
 ## UBI-161: CLOSED -- all 5 platforms now have a plan-on-push/plan-on-merge-request/plan-on-pull-request guide, 2026-08-14
 
 Group 2 (Bamboo, CircleCI) closes out the ticket's own scope split,
