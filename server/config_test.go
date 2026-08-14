@@ -17,6 +17,10 @@ func newTestFlags() *pflag.FlagSet {
 	fs.String("github-bot-login", "", "")
 	fs.String("github-webhook-secret", "", "")
 	fs.String("github-api-base-url", "", "")
+	fs.String("gitlab-token", "", "")
+	fs.String("gitlab-bot-username", "", "")
+	fs.String("gitlab-webhook-secret", "", "")
+	fs.String("gitlab-api-base-url", "", "")
 	fs.String("provider-source", "", "")
 	fs.String("provider-version", "", "")
 	fs.String("provider-config", "", "")
@@ -162,11 +166,36 @@ func TestLoad_RepoFlagShorthand(t *testing.T) {
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
 	}
-	if cfg.Repos[0] != (RepoConfig{Owner: "acme", Name: "infra", LedgerDir: "."}) {
+	if cfg.Repos[0] != (RepoConfig{Platform: "github", Owner: "acme", Name: "infra", LedgerDir: "."}) {
 		t.Errorf("Repos[0] = %+v, want acme/infra with default ledger_dir \".\"", cfg.Repos[0])
 	}
-	if cfg.Repos[1] != (RepoConfig{Owner: "acme", Name: "payments", LedgerDir: "stacks/payments"}) {
+	if cfg.Repos[1] != (RepoConfig{Platform: "github", Owner: "acme", Name: "payments", LedgerDir: "stacks/payments"}) {
 		t.Errorf("Repos[1] = %+v, want acme/payments:stacks/payments parsed correctly", cfg.Repos[1])
+	}
+}
+
+// TestLoad_RepoFlagGitLabShorthand covers the real "gitlab:" prefix,
+// including a real, nested GitLab project path (a real subgroup) --
+// never assumed to split into exactly two segments the way GitHub's
+// own owner/name always does.
+func TestLoad_RepoFlagGitLabShorthand(t *testing.T) {
+	flags := newTestFlags()
+	if err := flags.Parse([]string{"--repo", "gitlab:acme/infra", "--repo", "gitlab:acme/backend/infra:stacks/payments"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load("", flags)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
+	}
+	if cfg.Repos[0] != (RepoConfig{Platform: "gitlab", Project: "acme/infra", LedgerDir: "."}) {
+		t.Errorf("Repos[0] = %+v, want gitlab:acme/infra with default ledger_dir \".\"", cfg.Repos[0])
+	}
+	if cfg.Repos[1] != (RepoConfig{Platform: "gitlab", Project: "acme/backend/infra", LedgerDir: "stacks/payments"}) {
+		t.Errorf("Repos[1] = %+v, want the real, nested subgroup project path parsed as one whole string", cfg.Repos[1])
 	}
 }
 

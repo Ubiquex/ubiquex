@@ -63,6 +63,17 @@ func New(token string, opts ...Option) (*Client, error) {
 	return &Client{api: api}, nil
 }
 
+// API exposes the underlying go-gitlab client directly, for callers
+// that need a real GitLab API surface this package hasn't wrapped yet
+// (package server's own Notes/MergeRequests/project-approval-settings/
+// project-and-group-membership calls, UBI-28 Phase 2) rather than
+// growing this package into a second, parallel go-gitlab wrapper for
+// every endpoint any one caller happens to need once -- the same real
+// reasoning package github's own API() accessor gives.
+func (c *Client) API() *glapi.Client {
+	return c.api
+}
+
 // mergeRequestForCommit finds the merge request mergeSHA belongs to.
 // GitLab, like GitHub, can associate more than one MR with a commit in an
 // unusual history; the first (most API-relevant) result is used -- the

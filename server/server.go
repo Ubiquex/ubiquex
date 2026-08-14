@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	glab "github.com/ubiquex/ubiquex/gitlab"
 )
 
 // Server is ubx server's own real, running instance -- everything
@@ -15,13 +17,18 @@ type Server struct {
 	cfg           *Config
 	installations *installationClients
 	botLogin      string
-	self          string // this process's own resolved executable path (exec.go)
+	gitlab        *glab.Client // nil when Config.GitLabToken is unset -- GitLab support not configured
+	self          string       // this process's own resolved executable path (exec.go)
 }
 
 // New builds a Server from cfg, resolving the GitHub App credentials and
 // this process's own executable path once, up front -- both real,
 // fail-fast checks (a bad private key path or a resolve failure should
 // stop startup, not surface as a mysterious first-webhook error).
+// GitLab's own client is only built when Config.GitLabToken is set --
+// unlike GitHub, GitLab support is genuinely optional per deployment
+// (Phase 1 configs never set it at all), so no GitLab field being unset
+// is itself a real, valid startup state, not an error.
 func New(cfg *Config) (*Server, error) {
 	installations, err := newInstallationClients(cfg.GitHubAppID, cfg.GitHubAppPrivateKeyPath, cfg.GitHubAPIBaseURL)
 	if err != nil {
@@ -31,21 +38,35 @@ func New(cfg *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	var gitlabClient *glab.Client
+	if cfg.GitLabToken != "" {
+		gitlabClient, err = newGitLabClient(cfg.GitLabToken, cfg.GitLabAPIBaseURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Server{
 		cfg:           cfg,
 		installations: installations,
 		botLogin:      cfg.GitHubBotLogin,
+		gitlab:        gitlabClient,
 		self:          self,
 	}, nil
 }
 
-// Run serves the webhook endpoint and drives the drift-watch loop until
-// ctx is cancelled, then shuts the HTTP server down gracefully. The one
-// real route is "/webhook" -- GitHub's own real, single delivery target
-// for every event type this server subscribes to.
+// Run serves the webhook endpoints and drives the drift-watch loop until
+// ctx is cancelled, then shuts the HTTP server down gracefully.
+// "/webhook/github" and "/webhook/gitlab" are real, separate delivery
+// targets per platform -- Phase 1's original single "/webhook" route is
+// renamed here (never deployed anywhere with real users depending on the
+// old form yet, so this is a safe, proactive rename, not a breaking
+// change to anything real) rather than kept as a third, redundant alias.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
-	mux.Handle("/webhook", webhookHandler{s: s})
+	mux.Handle("/webhook/github", webhookHandler{s: s})
+	mux.Handle("/webhook/gitlab", gitlabWebhookHandler{s: s})
 	httpServer := &http.Server{Addr: s.cfg.ListenAddr, Handler: mux}
 
 	errCh := make(chan error, 1)
@@ -110,6 +131,26 @@ func (s *Server) providerArgs() []string {
 	return args
 }
 
+// intentProviderEnv returns the extra env vars a `ubx plan` subprocess
+// needs to transcribe a markdown-authored proposal via the configured
+// [intent] provider (docs/intent-provider.md) -- UBX_INTENT_PROVIDER_KEY
+// carries the real secret value (never logged, never written to disk),
+// under the one fixed name Config.IntentProviderKey's own doc comment
+// documents every watched repo's own .ubx/config [intent].key_ref.env
+// is expected to reference, so package server never needs to parse that
+// repo-owned TOML cascade itself to learn a repo-chosen name. Empty
+// when Config.IntentProviderKey is unset -- a real, legitimate
+// deployment for an operator who never accepts markdown-authored
+// proposals at all; `ubx plan`'s own existing resolveKeyRef error
+// surfaces as a real, posted PR/MR comment in that case, not a silent
+// failure.
+func (s *Server) intentProviderEnv() []string {
+	if s.cfg.IntentProviderKey == "" {
+		return nil
+	}
+	return []string{"UBX_INTENT_PROVIDER_KEY=" + s.cfg.IntentProviderKey}
+}
+
 // runPlanAndComment is core-flow steps 1 and 3: run `ubx plan` against
 // prNumber's own real head commit, and post/edit the result as a single
 // PR comment (comment.go's own edit-last mechanism) -- one real,
@@ -133,7 +174,7 @@ func (s *Server) runPlanAndComment(ctx context.Context, installationID int64, ow
 	}
 
 	args := append([]string{"plan", "--ledger-dir", s.ledgerDirFor(owner, repo)}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
 	if err != nil {
 		return err
 	}
@@ -216,4 +257,100 @@ func (s *Server) runManualShip(ctx context.Context, installationID int64, owner,
 
 	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
 	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "ship", body)
+}
+
+// ledgerDirForGitLab is ledgerDirFor's own GitLab counterpart, matched
+// on project's real, full namespace path rather than a separate
+// owner/name pair.
+func (s *Server) ledgerDirForGitLab(project string) string {
+	for _, r := range s.cfg.Repos {
+		if r.Platform == "gitlab" && r.Project == project {
+			return r.LedgerDir
+		}
+	}
+	return "."
+}
+
+// repoDirForGitLab is ensureRepoCheckoutGitLab's own Server-level
+// wrapper -- repoDirFor's real GitLab counterpart. Unlike GitHub's
+// per-installation token (resolved fresh per call from a short-lived
+// JWT-derived cache), GitLab's own token is the one, real, static
+// Config.GitLabToken -- there is no per-installation concept to
+// resolve at all.
+func (s *Server) repoDirForGitLab(ctx context.Context, project string) (string, error) {
+	if s.gitlab == nil {
+		return "", fmt.Errorf("gitlab support is not configured (missing --gitlab-token)")
+	}
+	return ensureRepoCheckoutGitLab(ctx, s.cfg.WorkDir, project, s.cfg.GitLabToken, s.cfg.GitLabAPIBaseURL)
+}
+
+// runPlanAndCommentGitLab is runPlanAndComment's own real GitLab
+// counterpart -- identical core-flow steps 1 and 3, against GitLab's
+// own real Notes API instead.
+func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA string) error {
+	repoDir, err := s.repoDirForGitLab(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "plan", body)
+}
+
+// runAutomaticShipGitLab is runAutomaticShip's own real GitLab
+// counterpart -- the identical real "never --confirm-destroys on an
+// unattended, merge-triggered path, no exception" safety property.
+func (s *Server) runAutomaticShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, baseRef string) error {
+	repoDir, err := s.repoDirForGitLab(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, baseRef); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "ship", body)
+}
+
+// runManualShipGitLab is runManualShip's own real GitLab counterpart --
+// the identical real two-gate confirm-destroys rule (Config.AllowDestroy
+// as the outer, operator-set gate; the human's own explicit
+// `--confirm-destroys` note flag as the inner, per-instance one; both
+// required, neither alone sufficient).
+func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA string, confirmDestroys bool) error {
+	repoDir, err := s.repoDirForGitLab(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	if confirmDestroys && s.cfg.AllowDestroy {
+		args = append(args, "--confirm-destroys")
+	}
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "ship", body)
 }
