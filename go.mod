@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.35.2
 	github.com/google/go-github/v78 v78.0.0
 	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/spf13/cobra v1.10.2

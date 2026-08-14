@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	adevops "github.com/ubiquex/ubiquex/azuredevops"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	ghub "github.com/ubiquex/ubiquex/github"
@@ -34,6 +35,7 @@ func newAcceptCmd() *cobra.Command {
 		proposalFile            string
 		githubRepo              string
 		gitlabProject           string
+		azureDevOpsProject      string
 		confirmDestroys         bool
 	)
 
@@ -55,6 +57,7 @@ func newAcceptCmd() *cobra.Command {
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 			applyGitlabProjectDefault(cmd, &gitlabProject, cfg)
+			applyAzureDevOpsProjectDefault(cmd, &azureDevOpsProject, cfg)
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
@@ -72,7 +75,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, confirmDestroys)
+				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -170,8 +173,9 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromMerge, "from-merge", "", "derive pr_merge acceptance from a merge commit SHA instead of accepting a local file")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --from-merge's commit history against")
 	cmd.Flags().StringVar(&proposalFile, "proposal-file", "", "path, within the repo, to the proposal file the merge commit carries (required with --from-merge)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (exactly one of --github-repo/--gitlab-project is required with --from-merge)")
-	cmd.Flags().StringVar(&gitlabProject, "gitlab-project", "", "namespace/project (or numeric project ID) of the GitLab project (exactly one of --github-repo/--gitlab-project is required with --from-merge)")
+	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
+	cmd.Flags().StringVar(&gitlabProject, "gitlab-project", "", "namespace/project (or numeric project ID) of the GitLab project (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
+	cmd.Flags().StringVar(&azureDevOpsProject, "azure-devops-project", "", "organization/project/repository of the Azure DevOps repo (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
 	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required to accept any proposal with blast_radius.destroys > 0 -- this project's first hardcoded acceptance-time friction invariant (docs/schema.md)")
 	return cmd
 }
@@ -332,32 +336,85 @@ func deriveFromGitlab(ctx context.Context, repoDir, gitlabProject, mergeSHA, pro
 	}, nil
 }
 
+// deriveFromAzureDevOps wraps adevops.DeriveAcceptance into the common
+// mergeDerivation shape -- the Azure DevOps analog of deriveFromGithub/
+// deriveFromGitlab. azureDevOpsProject is "organization/project/
+// repository" -- unlike GitHub's owner/repo or GitLab's namespace/
+// project, Azure DevOps genuinely needs three real identifiers to
+// address a repository, not two, so the flag's own shape has one more
+// slash-separated segment than the other two platforms', not an
+// arbitrary choice.
+func deriveFromAzureDevOps(ctx context.Context, repoDir, azureDevOpsProject, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+	parts := strings.SplitN(azureDevOpsProject, "/", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return nil, fmt.Errorf("--azure-devops-project must be \"organization/project/repository\", got %q", azureDevOpsProject)
+	}
+	organization, project, repository := parts[0], parts[1], parts[2]
+
+	var apiOpts []adevops.Option
+	if base := os.Getenv("UBX_AZURE_DEVOPS_API_BASE_URL"); base != "" {
+		// Test-only seam, same convention as UBX_GITHUB_API_BASE_URL /
+		// UBX_GITLAB_API_BASE_URL.
+		apiOpts = append(apiOpts, adevops.WithBaseURL(base))
+	}
+	api := adevops.New(organization, os.Getenv("AZURE_DEVOPS_TOKEN"), apiOpts...)
+
+	derived, err := adevops.DeriveAcceptance(ctx, api, repoDir, project, repository, mergeSHA, proposalFile)
+	if err != nil {
+		return nil, err
+	}
+	return &mergeDerivation{
+		platform:            "azure-devops",
+		proposalFileContent: derived.ProposalFileContent,
+		claimedHash:         derived.ClaimedHash,
+		mergeSHA:            derived.MergeSHA,
+		number:              derived.PullRequestID,
+		proposalFile:        derived.ProposalFile,
+		approvers:           derived.Approvers,
+		// "PR 123", no # or ! -- Azure DevOps' own real notation
+		// (confirmed against its own default merge-commit message,
+		// "Merge PR 123: ..."), distinct from GitHub's "PR #123" and
+		// GitLab's "MR !123", not assumed to share either's convention.
+		label: fmt.Sprintf("PR %d", derived.PullRequestID),
+	}, nil
+}
+
 // acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier (GitLab
-// support added UBI-160 Phase 1): derive acceptance from git history +
-// the platform's own API rather than trusting a file or the caller's own
-// say-so (see docs/architecture.md's Decision loop section, and
+// support added UBI-160 Phase 1, Azure DevOps support added UBI-160
+// Phase 2): derive acceptance from git history + the platform's own API
+// rather than trusting a file or the caller's own say-so (see
+// docs/architecture.md's Decision loop section, and
 // core.AcceptFromMerge's doc comment for what's actually enforced).
-// Exactly one of githubRepo/gitlabProject is required -- accept --from-
-// merge always derives against one specific platform, never both at once
-// or neither.
-func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject string, confirmDestroys bool) error {
+// Exactly one of githubRepo/gitlabProject/azureDevOpsProject is required
+// -- accept --from-merge always derives against one specific platform,
+// never more than one at once or none.
+func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject string, confirmDestroys bool) error {
 	if proposalFile == "" {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file")}
 	}
-	if githubRepo != "" && gitlabProject != "" {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge takes exactly one of --github-repo/--gitlab-project, not both")}
+	given := 0
+	for _, v := range []string{githubRepo, gitlabProject, azureDevOpsProject} {
+		if v != "" {
+			given++
+		}
 	}
-	if githubRepo == "" && gitlabProject == "" {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires exactly one of --github-repo or --gitlab-project")}
+	if given > 1 {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge takes exactly one of --github-repo/--gitlab-project/--azure-devops-project, not more than one")}
+	}
+	if given == 0 {
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires exactly one of --github-repo, --gitlab-project, or --azure-devops-project")}
 	}
 
 	ctx := cmd.Context()
 	var derived *mergeDerivation
 	var err error
-	if githubRepo != "" {
+	switch {
+	case githubRepo != "":
 		derived, err = deriveFromGithub(ctx, repoDir, githubRepo, mergeSHA, proposalFile)
-	} else {
+	case gitlabProject != "":
 		derived, err = deriveFromGitlab(ctx, repoDir, gitlabProject, mergeSHA, proposalFile)
+	default:
+		derived, err = deriveFromAzureDevOps(ctx, repoDir, azureDevOpsProject, mergeSHA, proposalFile)
 	}
 	if err != nil {
 		return &ExitCodeError{Code: deriveAcceptanceErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
@@ -441,24 +498,25 @@ func acceptErrorCode(err error) int {
 }
 
 // deriveAcceptanceErrorCode classifies ghub.DeriveAcceptance/
-// glab.DeriveAcceptance's failures: every named sentinel either can
-// return means the merge commit's claimed acceptance doesn't check out
-// against git/the platform's history as it stands today (commit gone,
-// file gone at that commit, no PR/MR for it, no ubx-proposal trailer in
-// the PR/MR body) -- an actionable finding (exit 1), the same family as
-// acceptErrorCode's ErrTrailerHashMismatch. ghub.ErrCommitNotFound/
-// ErrFileNotFoundAtCommit/ErrNoProposalTrailer cover both platforms
-// (package gitlab reuses those three sentinels directly rather than
-// defining its own -- they're genuinely host-agnostic git-plumbing/
-// regex findings, not GitHub-specific). A genuine network/API/git-tooling
-// failure is exit 2.
+// glab.DeriveAcceptance/adevops.DeriveAcceptance's failures: every named
+// sentinel any of them can return means the merge commit's claimed
+// acceptance doesn't check out against git/the platform's history as it
+// stands today (commit gone, file gone at that commit, no PR/MR for it,
+// no ubx-proposal trailer in the PR/MR body) -- an actionable finding
+// (exit 1), the same family as acceptErrorCode's ErrTrailerHashMismatch.
+// ghub.ErrCommitNotFound/ErrFileNotFoundAtCommit/ErrNoProposalTrailer
+// cover all three platforms (packages gitlab and azuredevops both reuse
+// those three sentinels directly rather than defining their own --
+// they're genuinely host-agnostic git-plumbing/regex findings, not
+// GitHub-specific). A genuine network/API/git-tooling failure is exit 2.
 func deriveAcceptanceErrorCode(err error) int {
 	switch {
 	case errors.Is(err, ghub.ErrCommitNotFound),
 		errors.Is(err, ghub.ErrFileNotFoundAtCommit),
 		errors.Is(err, ghub.ErrNoPullRequestForCommit),
 		errors.Is(err, ghub.ErrNoProposalTrailer),
-		errors.Is(err, glab.ErrNoMergeRequestForCommit):
+		errors.Is(err, glab.ErrNoMergeRequestForCommit),
+		errors.Is(err, adevops.ErrNoPullRequestForCommit):
 		return 1
 	default:
 		return 2

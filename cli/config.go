@@ -39,17 +39,18 @@ type Config struct {
 		Source  string `toml:"source" json:"source"`
 		Version string `toml:"version" json:"version"`
 	} `toml:"provider" json:"provider"`
-	ProviderConfig  map[string]any            `toml:"provider_config" json:"provider_config"`
-	Providers       map[string]string         `toml:"providers" json:"providers"`
-	ProviderConfigs map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
-	Stack           string                    `toml:"stack" json:"stack"`
-	GithubRepo      string                    `toml:"github_repo" json:"github_repo"`
-	GitlabProject   string                    `toml:"gitlab_project" json:"gitlab_project"`
-	TFDir           string                    `toml:"tf_dir" json:"tf_dir"`
-	K8sAudit        K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
-	Ledger          LedgerConfig              `toml:"ledger" json:"ledger"`
-	Intent          IntentConfig              `toml:"intent" json:"intent"`
-	Root            bool                      `toml:"root" json:"root"`
+	ProviderConfig     map[string]any            `toml:"provider_config" json:"provider_config"`
+	Providers          map[string]string         `toml:"providers" json:"providers"`
+	ProviderConfigs    map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
+	Stack              string                    `toml:"stack" json:"stack"`
+	GithubRepo         string                    `toml:"github_repo" json:"github_repo"`
+	GitlabProject      string                    `toml:"gitlab_project" json:"gitlab_project"`
+	AzureDevOpsProject string                    `toml:"azure_devops_project" json:"azure_devops_project"`
+	TFDir              string                    `toml:"tf_dir" json:"tf_dir"`
+	K8sAudit           K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
+	Ledger             LedgerConfig              `toml:"ledger" json:"ledger"`
+	Intent             IntentConfig              `toml:"intent" json:"intent"`
+	Root               bool                      `toml:"root" json:"root"`
 }
 
 // IntentConfig is .ubx/config's [intent] table (UBI-41,
@@ -329,6 +330,16 @@ func applyGithubRepoDefault(cmd *cobra.Command, githubRepo *string, cfg *Config)
 func applyGitlabProjectDefault(cmd *cobra.Command, gitlabProject *string, cfg *Config) {
 	if !cmd.Flags().Changed("gitlab-project") && cfg.GitlabProject != "" {
 		*gitlabProject = cfg.GitlabProject
+	}
+}
+
+// applyAzureDevOpsProjectDefault fills azureDevOpsProject from cfg if
+// --azure-devops-project wasn't explicitly given -- the Azure DevOps
+// analog of applyGithubRepoDefault/applyGitlabProjectDefault (UBI-160
+// Phase 2).
+func applyAzureDevOpsProjectDefault(cmd *cobra.Command, azureDevOpsProject *string, cfg *Config) {
+	if !cmd.Flags().Changed("azure-devops-project") && cfg.AzureDevOpsProject != "" {
+		*azureDevOpsProject = cfg.AzureDevOpsProject
 	}
 }
 

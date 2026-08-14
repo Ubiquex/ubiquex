@@ -182,6 +182,7 @@ github.com/google/pprof v0.0.0-20240927180334-d43a67379298 h1:dMHbguTqGtorivvHTa
 github.com/google/pprof v0.0.0-20240927180334-d43a67379298/go.mod h1:vavhavw2zAxS5dIdcRluK6cSGGPlZynqzFM8NdvU144=
 github.com/google/s2a-go v0.1.9 h1:LGD7gtMgezd8a/Xak7mEWL0PjoTQFvpRudN895yqKW0=
 github.com/google/s2a-go v0.1.9/go.mod h1:YA0Ei2ZQL3acow2O62kdp9UlnvMmU7kA6Eutn0dXayM=
+github.com/google/uuid v1.1.1/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/google/wire v0.7.0 h1:JxUKI6+CVBgCO2WToKy/nQk0sS+amI9z9EjVmdaocj4=
@@ -218,6 +219,8 @@ github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWE
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mazznoer/csscolorparser v0.1.5 h1:Wr4uNIE+pHWN3TqZn2SGpA2nLRG064gB7WdSfSS5cz4=
 github.com/mazznoer/csscolorparser v0.1.5/go.mod h1:OQRVvgCyHDCAquR1YWfSwwaDcM0LhnSffGnlbOew/3I=
+github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0 h1:mmJCWLe63QvybxhW1iBmQWEaCKdc4SKgALfTNZ+OphU=
+github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0/go.mod h1:mDunUZ1IUJdJIRHvFb+LPBUtxe3AYB5MI6BMXNg8194=
 github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQflz0v0=
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
 github.com/modelcontextprotocol/go-sdk v1.6.1 h1:0zOSupjKUxPKSocPT1Wtago+mUHU2/uZ4xSOY0FGReU=

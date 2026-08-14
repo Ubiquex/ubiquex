@@ -46,12 +46,12 @@ func Accept(l *Ledger, p *Proposal) (*Proposal, error) {
 }
 
 // MergeAcceptance is AcceptFromMerge's already-verified input — everything
-// the caller (see package github or package gitlab) derived from git
-// history and the platform's own API before calling in. Grouped into one
-// struct because it's inherently one finding, not five independent
-// parameters.
+// the caller (see package github, package gitlab, or package
+// azuredevops) derived from git history and the platform's own API
+// before calling in. Grouped into one struct because it's inherently one
+// finding, not five independent parameters.
 type MergeAcceptance struct {
-	Platform     string // "github" | "gitlab" (UBI-160 Phase 1) -- which API merge/PRNumber/Approvers were derived against, so a later re-derivation knows which one to call again
+	Platform     string // "github" | "gitlab" | "azure-devops" (UBI-160) -- which API merge/PRNumber/Approvers were derived against, so a later re-derivation knows which one to call again
 	MergeSHA     string
 	PRNumber     int64    // the GitHub pull request number, or the GitLab merge request IID, MergeSHA belongs to
 	ProposalFile string   // repo-relative path the proposal file lived at, at MergeSHA

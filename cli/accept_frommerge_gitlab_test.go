@@ -180,7 +180,11 @@ func TestAcceptFromMerge_Gitlab_NoMergeRequestForCommit(t *testing.T) {
 // TestAcceptFromMerge_BothRepoFlagsRejected and
 // TestAcceptFromMerge_NeitherRepoFlagRejected are UBI-160 Phase 1's own
 // new dispatch-validation cases: --from-merge always derives against
-// exactly one specific platform.
+// exactly one specific platform. NeitherRepoFlagRejected's own message
+// assertion was updated in Phase 2 (see
+// cli/accept_frommerge_azuredevops_test.go's own
+// TestAcceptFromMerge_ThreeRepoFlagsRejected for the three-flag case)
+// when the real error text grew a third platform.
 func TestAcceptFromMerge_BothRepoFlagsRejected(t *testing.T) {
 	repoDir, sha := gitRepoWithProposal(t, "proposal.json", draftProposalJSON)
 	ledgerDir := t.TempDir()
@@ -210,7 +214,7 @@ func TestAcceptFromMerge_NeitherRepoFlagRejected(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 	)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "exactly one of --github-repo or --gitlab-project") {
+	if !strings.Contains(err.Error(), "exactly one of --github-repo, --gitlab-project, or --azure-devops-project") {
 		t.Fatalf("expected an exactly-one-of error, got: %v", err)
 	}
 }

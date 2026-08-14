@@ -463,7 +463,7 @@ type InvariantCheck struct {
 // re-supply what path a proposal lived at just to re-check it.
 //
 // Platform was added 2026-08-14 (docs/schema.md — "Amendment: pr_merge
-// acceptance platform field", UBI-160 Phase 1): "github" | "gitlab",
+// acceptance platform field", UBI-160): "github" | "gitlab" | "azure-devops",
 // which platform's API MergeSHA/PRNumber/Approvers were actually derived
 // against. Without it, a pr_merge acceptance record alone couldn't say
 // which API a later re-derivation should call — GitHub's PR numbers and
@@ -472,7 +472,7 @@ type InvariantCheck struct {
 // every other Acceptance field.
 type Acceptance struct {
 	Method       string   `json:"method"` // pr_merge | local | crypto
-	Platform     string   `json:"platform,omitempty"` // github | gitlab -- only for method "pr_merge"
+	Platform     string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for method "pr_merge"
 	MergeSHA     string   `json:"merge_sha,omitempty"`
 	PRNumber     int64    `json:"pr_number,omitempty"`
 	ProposalFile string   `json:"proposal_file,omitempty"`
