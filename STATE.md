@@ -2,6 +2,163 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-28 Phase 2 (ubx server, GitLab): CHECKPOINT, not closed -- webhook/auth/config/core-layer destroy enforcement built, adversarial tests, Docker, and docs shipped, Azure DevOps/Bamboo phases not started, 2026-08-14
+
+Real, current scope per the founder's own explicit Phase 2 kickoff:
+GitLab support for `ubx server`, mirroring Phase 1's own GitHub core
+flow, but built against GitLab's own real, current API/docs (verified
+directly, not built from the earlier design-discussion summary alone).
+
+**Real implementation** (`ubiquex` `a6c6824`): `server/gitlab.go`
+(client construction, real `Webhook-Id`/`Webhook-Timestamp`/
+`Webhook-Signature` HMAC-SHA256 signing-token verification --
+confirmed against GitLab's own current docs, NOT the older, GitLab-
+labeled "not recommended" plain-text `X-Gitlab-Token` header, which
+this server doesn't support at all), `server/gitlab_auth.go` (mirrors
+`auth.go`'s two-tier re-plan rule and CODEOWNERS-based ship
+authorization against GitLab's real project-membership/group-
+membership/repository-files APIs), `server/gitlab_comment.go` (mirrors
+`comment.go`'s edit-in-place mechanism against GitLab's real Notes
+API), `server/gitlab_webhook.go` (event dispatch: `merge_request`
+open/update/approval/merge, `merge_request` comment-based plan/ship).
+`server/server.go` gained a `gitlab *gitlab.Client` field and GitLab-
+specific `runPlanAndCommentGitLab`/`runAutomaticShipGitLab`/
+`runManualShipGitLab`; `Run()` now mounts two real routes,
+`/webhook/github` and `/webhook/gitlab` (a deliberate, proactive rename
+of Phase 1's own single `/webhook` -- never deployed anywhere with real
+users depending on the old form). `server/repo.go`'s `ensureRepoCheckout`
+refactored into a shared `ensureRepoCheckoutFromRemote` helper, with a
+new `ensureRepoCheckoutGitLab` using GitLab's own real
+`oauth2:<token>@` git-over-HTTPS convention. `server/config.go` gained
+`GitLabToken`/`GitLabBotUsername`/`GitLabWebhookSecret`/
+`GitLabAPIBaseURL`, a redesigned `RepoConfig` (`Platform` field,
+`Project` as one opaque, possibly-nested string for GitLab rather than
+GitHub's fixed `Owner`/`Name` pair), and a `gitlab:namespace/project`
+`--repo` shorthand -- fully backward compatible (an empty `Platform`
+after YAML unmarshal defaults to `"github"`).
+
+**Real, confirmed structural differences from GitHub, not assumed
+symmetric**: GitLab has no unified "App" concept -- one real, static
+Group Access Token authenticates every call, and its own bot user is
+auto-created by GitLab at token-creation time with a GitLab-chosen
+username (not a fixed `<slug>[bot]` convention), so
+`GitLabBotUsername` is operator-set config, not derived. GitLab's own
+real webhook signing-token mechanism (three headers, an HMAC-SHA256
+digest over `"{id}.{timestamp}.{body}"`, keyed on a `whsec_`-prefixed,
+base64-decoded token) is structurally different from GitHub's
+`X-Hub-Signature-256`, not just differently named. GitLab project paths
+can be nested to any depth (`acme/backend/infra`), so `RepoConfig`
+keeps the whole path as one opaque string and `ownsAsGitLab`'s own
+CODEOWNERS group-owner resolution never splits it at the first slash
+the way GitHub's org+team-slug pair is (a design correction made
+mid-session: an early draft nearly reused GitHub's own `teamSlug()`
+splitting helper, which would have silently truncated a nested group
+path).
+
+**The real, GitLab-specific TOCTOU safety mechanism for step 3's
+Approve-derived acceptance** (task #322): GitLab's approvals API
+carries no per-approval commit SHA at all, unlike GitHub's
+`review.commit_id`. `handleGitLabApproval` (gitlab_webhook.go) instead
+checks the project's own real `reset_approvals_on_push` setting (via
+`ProjectsService.GetApprovalConfiguration`) before trusting any
+approval -- that setting being on (GitLab's own default) already
+guarantees a currently-recorded approval corresponds to the MR's
+current head commit, since GitLab clears every approval outright on a
+new commit. If it's off, acceptance is refused outright with a real
+note explaining why, never silently trusting a possibly-stale approval.
+The identical Phase 1 destroy-refusal fix (a destructive proposal is
+refused before ever reaching `core.AcceptFromReview`, regardless of
+configuration) is applied here too, proven by
+`TestGitLabReviewAcceptFlow_DestroyIsRefused`.
+
+**Test coverage** (24 new tests in `server/`, all real): `gitlab_flow_test.go`
+(a real local-git-repo end-to-end review-accept flow mirroring
+Phase 1's own `review_accept_flow_test.go` -- happy path, destroy
+refusal, and the GitLab-specific `reset_approvals_on_push`-false
+refusal), `gitlab_auth_test.go` (httptest-backed GitLab API doubles for
+the two-tier re-plan rule and CODEOWNERS direct-user/group-owner/
+no-file cases, including the deliberate nested-group-path test proving
+the divergence from GitHub's team-slug splitting), `gitlab_signature_test.go`
+(the real HMAC signature verification: accepted, wrong-secret-rejected,
+tampered-body-rejected, missing-header-rejected, malformed-signing-
+token-rejected, and real key-rotation support -- more than one
+space-separated signature, either one accepted). Full repo `go build`/
+`go vet`/`go test` clean.
+
+**Real Docker verification**: rebuilt the existing `Dockerfile` (no
+changes needed -- same binary, same runtime deps), ran a real container
+with both GitHub and GitLab env vars set, and exercised all four real
+cases against the live process: GitLab bad signature -> 401, GitLab
+valid signature -> 202, GitHub bad signature -> 401 (still works), old
+single `/webhook` route -> 404 (confirms the proactive rename took
+effect).
+
+**Docs** (`ubiquex-docs` `85b36d6`, verified live via `gh api`): new
+`server/gitlab-setup.mdx` (Group Access Token creation, webhook signing
+token, `reset_approvals_on_push`, `--repo gitlab:` shorthand, CODEOWNERS
+group-ownership divergence), `server/configuration.mdx` (GitLab key
+rows, GitLab YAML example, `--repo gitlab:` shorthand),
+`server/overview.mdx`/`workflow.mdx`/`github-setup.mdx`/`docker.mdx`
+updated for the two-platform scope and the `/webhook/github` route
+rename (a stale `/webhook` reference in `github-setup.mdx` and
+`workflow.mdx`'s own verified transcript would otherwise have gone
+undetected -- caught only by grepping every existing GitHub-only page
+for the old route string). `workflow.mdx`'s webhook-endpoint transcript
+re-captured for real against a live container, both routes. Zero
+em-dashes, `mint validate` clean, `mint broken-links` clean (no new
+breaks introduced), overflow crawl clean on all 6 touched pages (a few
+wide code blocks flagged `overflowPx > 0` but `contained: true` --
+safely horizontally-scrollable within their own code-block container,
+not a real page-level bug), `docs.json` nav updated.
+
+**Addendum, found and fixed this session, NOT part of the original
+Phase 2 ask**: the founder asked mid-session whether `ubx server` has
+any mechanism for the LLM/intent-provider credential `ubx plan
+--from-doc` needs for markdown-authored proposals -- it did not, at
+all, in Phase 1 or anywhere in this codebase. Confirmed by direct
+inspection (zero references to "intent"/"llm"/"anthropic"/"openai" in
+`server/`) and by tracing `runUbx`'s own env-inheritance: a markdown-
+authored PR's automatic plan step would fail with `ubx plan`'s own real
+`resolveKeyRef` error, silently, unless an operator happened to
+independently export the exact right env var name into the server
+process's own shell before starting it -- no explicit config field, no
+validation, no documentation, not part of the Dockerfile. Fixed: new
+`Config.IntentProviderKey` (env `UBX_SERVER_INTENT_PROVIDER_KEY`, flag
+`--intent-provider-key`, no YAML key, same secrets discipline as
+`GitHubWebhookSecret`), forwarded into every `ubx plan` subprocess (both
+GitHub and GitLab paths) as a fixed `UBX_INTENT_PROVIDER_KEY` env var --
+package `server` never parses a watched repo's own `.ubx/config`
+`[intent]` table to learn a repo-chosen `key_ref.env` name; the fixed
+name is the one real contract point, documented in
+`server/configuration.mdx` as what a repo's own `.ubx/config` should
+reference. Proven end-to-end by
+`TestGitLabPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey`
+(both the failure-when-unset and success-when-set cases, against a real
+local git repo and a fake `ubx` subprocess script mimicking
+`resolveKeyRef`'s own real error).
+
+**A real, deliberately-flagged scope gap, not silently worked
+around**: GitLab drift-watch (core-flow step 6) could NOT be extended
+this session. `server/drift.go`'s `driftWatchOnce` shells out to `ubx
+status --drift --surface-as <issue|pr>`, but `cli/surface.go` (the
+underlying drift-surfacing mechanism) is entirely GitHub-only today --
+`--github-repo`, `GITHUB_TOKEN`, `ghub.New`, no GitLab equivalent
+(`--gitlab-project`, GitLab issue/MR creation) exists anywhere in the
+CLI. This is a real, structural blocker at the `cli/` layer, not a
+`server/`-package implementation gap -- building it would mean adding a
+new CLI feature well beyond Phase 2's own "wire the existing core flow
+onto GitLab's real webhook/auth model" framing. `driftWatchOnce`
+remains GitHub-only; GitLab-watched repos in `Config.Repos` are
+silently skipped by the drift-watch loop specifically (steps 1-5 all
+work for GitLab). Flagged here rather than either silently building a
+new CLI surface unasked or silently shipping a half-covered drift-watch
+without saying so.
+
+**Next**: Azure DevOps (Phase 3, per the founder's own "report back at
+the next checkpoint before Azure DevOps"), plus a decision on the
+drift-watch/`cli/surface.go` GitLab gap above (fold into a Phase, or a
+separate follow-up ticket).
+
 ## UBI-28 Phase 1 (ubx server, GitHub-only): CHECKPOINT, not closed -- full core mechanics, config system, Dockerfile, and docs shipped, GitLab/Azure DevOps/Bamboo phases not started, 2026-08-18
 
 Real, finalized design per UBI-28's own current description (read fresh
