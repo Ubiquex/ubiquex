@@ -2,6 +2,142 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-28 Phase 3 (ubx server, Azure DevOps): CHECKPOINT, not closed -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 3-platform Docker, and docs shipped, Bamboo phase not started, 2026-08-15
+
+Real, current scope per the founder's own explicit Phase 3 kickoff:
+Azure DevOps support for `ubx server`, steps 1-5 of the core flow
+(drift-watch's own CLI-level gap, already known from Phase 2's GitLab
+work, is filed separately as UBI-165, not blocking this phase), built
+against Azure DevOps' own real, current API/docs (verified
+independently -- explicitly not assumed symmetric with either GitHub
+or GitLab, both of which had already turned out to differ from each
+other in real, structural ways).
+
+**Real implementation** (`ubiquex` `d47c5f6`): `azuredevops/server_api.go`
+(new client methods: `GetPullRequest`, `ListPullRequestThreads`,
+`CreatePullRequestThread`, `UpdateThreadComment`, `GetRawFile`,
+`ListPullRequestChangedFiles`, `ResetOnSourcePush`,
+`QuerySubjectDescriptor`, `CheckMembership`), `azuredevops/client.go`
+gained a second `graphBaseURL` field + `WithGraphBaseURL` option (Azure
+DevOps splits git/policy calls onto `dev.azure.com` and Graph calls
+onto `vssps.dev.azure.com` -- a real, structural quirk neither GitHub
+nor GitLab's single-host clients have). `server/azuredevops.go` (client
+construction + shared-secret-header signature check),
+`server/azuredevops_auth.go` (two-tier re-plan rule via Contributors-
+group membership, CODEOWNERS-based ship authorization),
+`server/azuredevops_comment.go` (edit-in-place via the first comment of
+a `GitPullRequestCommentThread` -- Azure DevOps has no flat "create a
+comment" concept at all), `server/azuredevops_webhook.go` (event
+dispatch keyed on a `?notification=` query-parameter convention, see
+below). `server/server.go` gained an `azuredevops *adevops.Client`
+field and Azure-DevOps-specific `runPlanAndCommentAzureDevOps`/
+`runAutomaticShipAzureDevOps`/`runManualShipAzureDevOps`; `Run()` now
+mounts a third real route, `/webhook/azuredevops`. `server/repo.go`
+gained `ensureRepoCheckoutAzureDevOps` using Azure DevOps' own real
+`oauth2:<token>@dev.azure.com/{org}/{project}/_git/{repo}` convention.
+`server/config.go` gained `AzureDevOpsOrganization`/`AzureDevOpsToken`/
+`AzureDevOpsBotDisplayName`/`AzureDevOpsWebhookSecretHeader`/
+`AzureDevOpsWebhookSecret`/`AzureDevOpsAPIBaseURL`, `RepoConfig`
+extended with a `Repository` field (Azure DevOps addresses a repo via
+two real, separate identifiers, Project + Repository, never one opaque
+path like GitLab or a fixed pair like GitHub), and an `azuredevops:`
+`--repo` shorthand.
+
+**Real, confirmed structural differences from both GitHub and GitLab,
+not assumed symmetric**: Azure DevOps has no unified "App" concept and
+no cryptographic webhook signature scheme at all -- confirmed against
+Microsoft's own current Service Hooks docs. `ubx server` implements
+Microsoft's own documented recommendation instead: a real, static,
+operator-configured shared-secret custom HTTP header (name configurable
+via `--azure-devops-webhook-secret-header`, default
+`X-Ubx-Webhook-Secret`), compared via `subtle.ConstantTimeCompare` --
+never an HMAC. `git.pullrequest.updated` folds push/vote/status/
+reviewer-list changes into ONE real event type, distinguishable only by
+which of several separately-configured Service Hook subscriptions
+delivers a given payload (a subscription-time `notificationType` filter
+never inspectable in the delivered payload itself) -- resolved via a
+deliberate, documented design choice requiring the operator to point
+multiple Service Hook subscriptions at the same route with a
+distinguishing `?notification=push`/`?notification=vote` query
+parameter. Real vote scale confirmed via the SDK's own
+`IdentityRefWithVote.Vote` doc comment (10=approved,
+5=approved-with-suggestions, 0=no-vote, -5=waiting-for-author,
+-10=rejected) -- only `10` counts as an approval-deriving vote, 5 is
+never rounded up.
+
+**The real, Azure-DevOps-specific TOCTOU safety mechanism for step 3's
+Approve-derived acceptance** (task #332): Azure DevOps' vote objects
+carry NO per-vote commit/iteration reference at all (confirmed directly
+against the real SDK's `IdentityRefWithVote` struct -- no such field
+exists), structurally different from both GitHub's `review.commit_id`
+and GitLab's project-wide `reset_approvals_on_push` setting.
+`ResetOnSourcePush` (azuredevops/server_api.go) instead queries the
+target branch's own real "Minimum number of reviewers" branch policy
+(policy type GUID `fa4e907d-c16b-4a4c-9dfa-4906e5d171dd`, confirmed
+against Microsoft's own official REST API reference example response --
+an earlier, ambiguous web search had also surfaced a different,
+similar-looking GUID, never used) for its own real `resetOnSourcePush`
+setting, scoped via real `scope[]` entries (`policyScopeMatches`
+handles repositoryId null-or-match, refName Exact-or-Prefix). Refuses
+outright, with a distinct posted explanation, if no such enabled policy
+exists at all. The identical Phase 1/2 destroy-refusal fix (a
+destructive proposal is refused before ever reaching
+`core.AcceptFromReview`) is applied here too.
+
+**No native CODEOWNERS support in Azure DevOps at all** -- confirmed
+via Microsoft's own docs; `ubx server` overlays its own consistent,
+cross-platform CODEOWNERS-file convention anyway (same file, same three
+checked locations as GitHub/GitLab), fetched via the real Items API.
+Since Azure DevOps has no fixed "username" concept, CODEOWNERS
+"username" entries match against the commenter's own current
+DisplayName (plain text, whitespace-delimited per real CODEOWNERS
+syntax -- deliberately requires space-free identifiers, a bug caught
+and fixed in the test fixture itself: an original `@Roozbeh Shafiee`
+entry would have silently mis-parsed as two tokens). "team" entries
+resolve as one whole real group DisplayName via the Graph API, never
+split at a delimiter (group DisplayNames carry a real `\` separator,
+e.g. `[Project]\Group Name` -- different from GitHub/GitLab's own `/`).
+`Descriptor` (confirmed via the SDK's own doc comment) is the one real,
+stable identity key used for "same person" comparisons -- DisplayName
+is explicitly documented non-unique and never used for that specific
+comparison. Real "write access" fallback for the two-tier re-plan
+authorization: Azure DevOps' real ACL/security-namespace permission
+model has no single-call "does user X have write access" endpoint, so
+`hasContributorAccessAzureDevOps` checks real, current membership in
+the project's well-known default "Contributors" group via the Graph
+API -- the same practical-threshold reasoning GitLab's own
+Developer-or-above check already used.
+
+**Test coverage** (new `server/azuredevops_signature_test.go` [5
+tests], `server/azuredevops_auth_test.go` [9 tests, httptest-backed
+fixture], `server/azuredevops_flow_test.go` [5 tests, real local-git
+end-to-end review-accept flow mirroring the GitHub/GitLab precedents --
+happy path, destroy refusal, no-reset-policy refusal], all real, all
+passing). Full repo `go build`/`go vet`/`go test` clean.
+
+**Real Docker verification**: rebuilt the existing `Dockerfile` (no
+changes needed), ran a real container with GitHub, GitLab, AND Azure
+DevOps env vars all set simultaneously, confirmed the log line showing
+a real successful listen and exercised all three platforms' webhook
+routes against the one live process.
+
+**Docs** (`ubiquex-docs` `0e73166`, verified live via `gh api`): new
+`server/azure-devops-setup.mdx` (PAT creation, Service Hooks shared-
+secret header setup, `resetOnSourcePush` branch-policy requirement,
+`--repo azuredevops:` shorthand, CODEOWNERS DisplayName/group-path
+divergence), `server/configuration.mdx`/`overview.mdx`/`workflow.mdx`/
+`docker.mdx`/`github-setup.mdx`/`gitlab-setup.mdx` updated for
+three-platform scope. Zero em-dashes, `mint validate` clean, `mint
+broken-links` clean, overflow crawl clean on all 7 touched pages,
+`docs.json` nav updated.
+
+**Next**: Bamboo (Phase 4, per the founder's own "report back at the
+next checkpoint before Bamboo"), plus the still-open GitLab drift-watch
+CLI gap (UBI-165, filed, not blocking) and its Azure DevOps equivalent
+(not yet separately filed -- `cli/surface.go` remains GitHub-only, so
+Azure-DevOps-watched repos are also silently skipped by the drift-watch
+loop, steps 1-5 all work).
+
 ## UBI-28 Phase 2 (ubx server, GitLab): CHECKPOINT, not closed -- webhook/auth/config/core-layer destroy enforcement built, adversarial tests, Docker, and docs shipped, Azure DevOps/Bamboo phases not started, 2026-08-14
 
 Real, current scope per the founder's own explicit Phase 2 kickoff:
