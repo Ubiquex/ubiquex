@@ -27,6 +27,10 @@ func newTestFlags() *pflag.FlagSet {
 	fs.String("azure-devops-webhook-secret-header", "", "")
 	fs.String("azure-devops-webhook-secret", "", "")
 	fs.String("azure-devops-api-base-url", "", "")
+	fs.String("bitbucket-server-url", "", "")
+	fs.String("bitbucket-server-token", "", "")
+	fs.String("bitbucket-server-bot-name", "", "")
+	fs.String("bitbucket-server-webhook-secret", "", "")
 	fs.String("provider-source", "", "")
 	fs.String("provider-version", "", "")
 	fs.String("provider-config", "", "")
@@ -223,6 +227,27 @@ func TestLoad_RepoFlagAzureDevOpsShorthand(t *testing.T) {
 	}
 	if cfg.Repos[1] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "payments-infra", LedgerDir: "stacks/payments"}) {
 		t.Errorf("Repos[1] = %+v, want project and repository parsed as two real, separate identifiers", cfg.Repos[1])
+	}
+}
+
+func TestLoad_RepoFlagBitbucketServerShorthand(t *testing.T) {
+	flags := newTestFlags()
+	if err := flags.Parse([]string{"--repo", "bitbucketserver:INFRA/infra", "--repo", "bitbucketserver:INFRA/payments-infra:stacks/payments"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load("", flags)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
+	}
+	if cfg.Repos[0] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "infra", LedgerDir: "."}) {
+		t.Errorf("Repos[0] = %+v, want bitbucketserver:INFRA/infra with default ledger_dir \".\"", cfg.Repos[0])
+	}
+	if cfg.Repos[1] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "payments-infra", LedgerDir: "stacks/payments"}) {
+		t.Errorf("Repos[1] = %+v, want project key and repository slug parsed as two real, separate identifiers", cfg.Repos[1])
 	}
 }
 

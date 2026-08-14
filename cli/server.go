@@ -15,15 +15,18 @@ func newServerCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps)",
+		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps, Bamboo/Bitbucket Server)",
 		Long: `ubx server turns the same real plan/accept/ship/status --drift flow into a continuously-running
 daemon, reacting to webhook events instead of a human or a CI job invoking each command by hand.
 
-Real, current scope (UBI-28): GitHub (a real, installable GitHub App), GitLab (a real Group Access
-Token plus a separately-configured webhook signing token), and Azure DevOps (a real Personal Access
-Token plus a real, static shared-secret Service Hooks header -- Azure DevOps has no cryptographic
-webhook signature scheme at all) -- webhooks land on "/webhook/github", "/webhook/gitlab", and
-"/webhook/azuredevops" respectively. Bamboo is a real, planned follow-up phase, not yet built.
+Real, current scope (UBI-28, final): GitHub (a real, installable GitHub App), GitLab (a real Group
+Access Token plus a separately-configured webhook signing token), Azure DevOps (a real Personal
+Access Token plus a real, static shared-secret Service Hooks header -- Azure DevOps has no
+cryptographic webhook signature scheme at all), and Bamboo/Bitbucket Server (a real HTTP access
+token plus Bitbucket Server's own real, bundled HMAC-SHA256 webhook signature -- Bamboo itself has
+no single native git host; Bitbucket Server/Data Center is the real, deliberately scoped
+integration surface, see the Bamboo setup guide) -- webhooks land on "/webhook/github",
+"/webhook/gitlab", "/webhook/azuredevops", and "/webhook/bitbucketserver" respectively.
 
 The real flow: a PR/MR opening runs "ubx plan" automatically, posted as a single PR/MR comment; its own
 creator can comment "ubx plan" again to re-run it, edited in place; a native Approve action -- GitHub's
@@ -79,6 +82,10 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().String("azure-devops-webhook-secret-header", "", "the custom HTTP header name every Azure DevOps Service Hook subscription carries the shared secret in (default \"X-Ubx-Webhook-Secret\" -- Azure DevOps has no webhook signature scheme at all, only Microsoft's own documented shared-secret-header recommendation)")
 	cmd.Flags().String("azure-devops-webhook-secret", "", "the shared secret value configured in that same header on every Azure DevOps Service Hook subscription (required for Azure DevOps support; also settable via UBX_SERVER_AZURE_DEVOPS_WEBHOOK_SECRET, never the YAML file)")
 	cmd.Flags().String("azure-devops-api-base-url", "", "override both the git/policy and Graph Azure DevOps API bases (test-only; real production traffic always splits across dev.azure.com and vssps.dev.azure.com)")
+	cmd.Flags().String("bitbucket-server-url", "", "the real, self-hosted Bitbucket Server/Data Center base URL, e.g. https://bitbucket.example.com (required for Bitbucket Server support -- no default host exists)")
+	cmd.Flags().String("bitbucket-server-token", "", "the Bitbucket Server HTTP access token to authenticate as (required for Bitbucket Server support; also settable via UBX_SERVER_BITBUCKET_SERVER_TOKEN, never the YAML file)")
+	cmd.Flags().String("bitbucket-server-bot-name", "", "the token's own real, current username (Bitbucket Server has no fixed bot-naming convention; also used as the git-over-HTTPS clone username, a real Bitbucket Server requirement)")
+	cmd.Flags().String("bitbucket-server-webhook-secret", "", "the real, static secret configured on every Bitbucket Server webhook, verified via its own bundled HMAC-SHA256 X-Hub-Signature header (required for Bitbucket Server support; also settable via UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET, never the YAML file)")
 	cmd.Flags().String("intent-provider-key", "", "the [intent] provider's own API key, forwarded to \"ubx plan\" as UBX_INTENT_PROVIDER_KEY for markdown-authored (--from-doc) proposals (also settable via UBX_SERVER_INTENT_PROVIDER_KEY, never the YAML file; unset means markdown-authored proposals aren't supported)")
 	cmd.Flags().String("provider-source", "", "provider source for plan/ship/status --drift, e.g. hashicorp/aws")
 	cmd.Flags().String("provider-version", "", "provider version to acquire")
@@ -87,7 +94,7 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().Bool("allow-destroy", false, "allow a manual \"ubx ship --confirm-destroys\" comment to actually pass --confirm-destroys through (default false -- destroy is disabled by default)")
 	cmd.Flags().String("surface-as", "", "how drift-watch surfaces real drift: \"issue\" or \"pr\" (default \"issue\")")
 	cmd.Flags().String("drift-watch-interval", "", "how often to run the drift-watch loop, a Go duration (default \"24h\")")
-	cmd.Flags().StringArray("repo", nil, "a watched repo: \"owner/name\" or \"owner/name:ledger_dir\" for GitHub, \"gitlab:namespace/project\" or \"gitlab:namespace/project:ledger_dir\" for GitLab, \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\" for Azure DevOps (repeatable; the YAML file's own repos: list is the alternative for more than a few)")
+	cmd.Flags().StringArray("repo", nil, "a watched repo: \"owner/name\" or \"owner/name:ledger_dir\" for GitHub, \"gitlab:namespace/project\" or \"gitlab:namespace/project:ledger_dir\" for GitLab, \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\" for Azure DevOps, \"bitbucketserver:PROJECTKEY/repository-slug\" or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\" for Bitbucket Server (repeatable; the YAML file's own repos: list is the alternative for more than a few)")
 
 	return cmd
 }

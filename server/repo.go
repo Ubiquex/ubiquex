@@ -61,6 +61,30 @@ func ensureRepoCheckoutAzureDevOps(ctx context.Context, workDir, organization, p
 	return ensureRepoCheckoutFromRemote(ctx, workDir, filepath.Join("azuredevops", project, repositoryID), remote)
 }
 
+// ensureRepoCheckoutBitbucketServer is ensureRepoCheckout's Bitbucket
+// Server counterpart -- same real "clone if missing, fetch otherwise"
+// mechanism, Bitbucket Server's own real git-over-HTTPS HTTP-access-
+// token convention instead: "https://<username>:<token>@<host>/scm/
+// {projectKey}/{repositorySlug}.git" (confirmed directly against
+// Atlassian's own current HTTP access tokens docs). Unlike GitHub's
+// placeholder "x-access-token" or GitLab's/Azure DevOps' placeholder
+// "oauth2" convention, Bitbucket Server's own real HTTP access tokens
+// require the REAL username the token belongs to in that position --
+// there is no platform-fixed placeholder string here, so username is
+// the token's own real, operator-configured owner (Config.
+// BitbucketServerBotName, the same identity used for edit-in-place/
+// two-tier-authorization elsewhere in this package). baseURL's own
+// host is used directly -- Bitbucket Server has no separate API-vs-git
+// host split the way Azure DevOps does.
+func ensureRepoCheckoutBitbucketServer(ctx context.Context, workDir, baseURL, projectKey, repositorySlug, username, token string) (string, error) {
+	host := ""
+	if u, err := url.Parse(baseURL); err == nil {
+		host = u.Host
+	}
+	remote := fmt.Sprintf("https://%s:%s@%s/scm/%s/%s.git", username, token, host, projectKey, repositorySlug)
+	return ensureRepoCheckoutFromRemote(ctx, workDir, filepath.Join("bitbucketserver", projectKey, repositorySlug), remote)
+}
+
 // ensureRepoCheckoutFromRemote is ensureRepoCheckout's and
 // ensureRepoCheckoutGitLab's own shared real mechanism, parameterized on
 // subPath (workDir's own subdirectory a given repo checks out into) and

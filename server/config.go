@@ -9,27 +9,35 @@
 // safety properties (confirm-destroys, freshness re-verification) a
 // second time in this package.
 //
-// GitHub (UBI-28 Phase 1), GitLab (UBI-28 Phase 2), and Azure DevOps
-// (UBI-28 Phase 3) so far -- Bamboo is real, scoped-out follow-up work
-// per UBI-28's own sequencing (UBI-165 tracks the real, separate
-// drift-watch/cli-surface gap found during Phase 2, not blocking any
-// of these three). All three platforms' own real mechanisms are
-// genuinely different, not symmetric: GitHub is a real installable App
-// with short-lived per-installation tokens (githubapp.go); GitLab has
-// no unified "App" concept at all -- confirmed directly against
-// GitLab's own current docs -- so it authenticates with one real,
-// static Group Access Token instead (gitlab.go), with its own real
-// HMAC-SHA256 webhook signing-token mechanism; Azure DevOps has
-// neither an App concept nor any real webhook signature scheme at all
-// -- confirmed directly against Microsoft's own current docs, not
-// assumed symmetric with either -- it authenticates with one real,
-// static Personal Access Token, and its own Service Hooks webhook
-// mechanism carries no cryptographic signature whatsoever, only an
-// optional Basic-Auth header or custom headers on the subscription;
-// this package follows Microsoft's own documented security
-// recommendation (a static, shared-secret custom header, checked on
-// every incoming request) rather than inventing a signing scheme
-// Azure DevOps itself doesn't have.
+// GitHub (UBI-28 Phase 1), GitLab (UBI-28 Phase 2), Azure DevOps (UBI-28
+// Phase 3), and Bamboo/Bitbucket Server (UBI-28 Phase 4, final) -- see
+// bitbucketserver/client.go's own doc comment for why Bitbucket Server,
+// not Bamboo itself, is the real integration surface (UBI-165 tracks
+// the real, separate drift-watch/cli-surface gap found during Phase 2,
+// confirmed to apply identically here, not blocking any phase). All
+// four platforms' own real mechanisms are genuinely different, not
+// symmetric: GitHub is a real installable App with short-lived
+// per-installation tokens (githubapp.go); GitLab has no unified "App"
+// concept at all -- confirmed directly against GitLab's own current
+// docs -- so it authenticates with one real, static Group Access Token
+// instead (gitlab.go), with its own real HMAC-SHA256 webhook
+// signing-token mechanism; Azure DevOps has neither an App concept nor
+// any real webhook signature scheme at all -- confirmed directly
+// against Microsoft's own current docs, not assumed symmetric with
+// either -- it authenticates with one real, static Personal Access
+// Token, and its own Service Hooks webhook mechanism carries no
+// cryptographic signature whatsoever, only an optional Basic-Auth
+// header or custom headers on the subscription; this package follows
+// Microsoft's own documented security recommendation (a static,
+// shared-secret custom header, checked on every incoming request)
+// rather than inventing a signing scheme Azure DevOps itself doesn't
+// have. Bitbucket Server has real, bundled (no plugin required, since
+// version 5.4) native webhooks with a real HMAC-SHA256 signature --
+// confirmed directly against Atlassian's own current docs, contradicting
+// this ticket's own initial "likely a plugin" suspicion, not assumed
+// either way -- authenticating with one real, static HTTP access
+// token, the same "one instance, one credential" shape GitLab's/Azure
+// DevOps' own single client already have.
 package server
 
 import (
@@ -199,6 +207,56 @@ type Config struct {
 	// for hermetic testing only.
 	AzureDevOpsAPIBaseURL string `yaml:"-"`
 
+	// BitbucketServerURL: yaml `bitbucket_server_url`, env
+	// UBX_SERVER_BITBUCKET_SERVER_URL, flag --bitbucket-server-url. The
+	// real, self-hosted Bitbucket Server/Data Center base URL (e.g.
+	// "https://bitbucket.example.com") -- confirmed directly against
+	// bitbucketserver.Client's own doc comment (UBI-160 Phase 3):
+	// unlike GitHub/GitLab/Azure DevOps, Bitbucket Server has no single
+	// fixed default host at all, so this is always required, real
+	// production config, never a test-only override the way
+	// AzureDevOpsAPIBaseURL is -- tests point this same field at an
+	// httptest.Server instead. Matches the existing `ubx accept
+	// --bitbucket-server-url` flag's own real name for the identical
+	// concept, deliberate consistency across the whole CLI.
+	BitbucketServerURL string `yaml:"bitbucket_server_url"`
+	// BitbucketServerToken: env UBX_SERVER_BITBUCKET_SERVER_TOKEN, flag
+	// --bitbucket-server-token. Deliberately no YAML key, same secrets
+	// discipline as every other platform token. A real HTTP access
+	// token (bitbucketserver.Client's own doc comment: personal,
+	// project, or repository-scoped), needing real REPO_READ (git
+	// clone/fetch, CODEOWNERS/raw-file reads) and REPO_WRITE (posting/
+	// editing comments) on every Bitbucket-Server-watched repo.
+	BitbucketServerToken string `yaml:"-"`
+	// BitbucketServerBotName: yaml `bitbucket_server_bot_name`, env
+	// UBX_SERVER_BITBUCKET_SERVER_BOT_NAME, flag
+	// --bitbucket-server-bot-name. The token's own real, current
+	// username (Bitbucket Server has no fixed bot-naming convention any
+	// more than GitLab/Azure DevOps do) -- operator-set config, read
+	// directly off that identity, not derived. Same real role
+	// GitHubBotLogin/GitLabBotUsername/AzureDevOpsBotDisplayName play:
+	// attributing drift-watch-opened PRs, finding "this bot's own last
+	// comment" for the edit-in-place mechanism, and (real, Bitbucket-
+	// Server-specific) authenticating the git-over-HTTPS clone/fetch
+	// URL, since Bitbucket Server's own real HTTP access tokens clone
+	// as "https://<username>:<token>@..." -- a real username is
+	// required in that position, unlike GitHub's placeholder
+	// "x-access-token" or GitLab's/Azure DevOps' placeholder "oauth2"
+	// convention (confirmed directly against Atlassian's own current
+	// HTTP access tokens docs).
+	BitbucketServerBotName string `yaml:"bitbucket_server_bot_name"`
+	// BitbucketServerWebhookSecret: env
+	// UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET, flag
+	// --bitbucket-server-webhook-secret. Deliberately no YAML key, same
+	// secrets discipline as every other webhook secret. Bitbucket
+	// Server's own real, bundled webhook feature signs every delivery
+	// with this real, static secret via HMAC-SHA256 over the raw body,
+	// carried in a real "X-Hub-Signature" header as "sha256=<hex>" --
+	// confirmed directly against Atlassian's own current docs (see
+	// validBitbucketServerSignature's own doc comment for the real
+	// header-name-collision-with-GitHub's-older-header nuance).
+	BitbucketServerWebhookSecret string `yaml:"-"`
+
 	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag
 	// --intent-provider-key. Deliberately no YAML key, same
 	// "self-provisioned, masked variable, never literally in the file"
@@ -285,8 +343,8 @@ type Config struct {
 // either GitHub's two-segment or GitLab's one-opaque-string model.
 type RepoConfig struct {
 	// Platform: yaml `platform`. "github" (default, for backward
-	// compatibility with every Phase-1-era config), "gitlab", or
-	// "azuredevops".
+	// compatibility with every Phase-1-era config), "gitlab",
+	// "azuredevops", or "bitbucketserver".
 	Platform string `yaml:"platform"`
 
 	// Owner/Name: yaml `owner`/`name` -- GitHub only.
@@ -294,12 +352,15 @@ type RepoConfig struct {
 	Name  string `yaml:"name"`
 
 	// Project: yaml `project` -- GitLab's own full real namespace path
-	// ("acme/infra" or "acme/backend/infra"), OR Azure DevOps' own real
-	// project name/ID (used together with Repository below).
+	// ("acme/infra" or "acme/backend/infra"), Azure DevOps' own real
+	// project name/ID, or Bitbucket Server's own real project key
+	// (used together with Repository below in both of the latter two
+	// cases).
 	Project string `yaml:"project"`
 
-	// Repository: yaml `repository` -- Azure DevOps only. The real
-	// repository name or ID within Project.
+	// Repository: yaml `repository` -- Azure DevOps' own real
+	// repository name or ID, or Bitbucket Server's own real repository
+	// slug, within Project.
 	Repository string `yaml:"repository"`
 
 	LedgerDir string `yaml:"ledger_dir"`
@@ -307,12 +368,13 @@ type RepoConfig struct {
 
 // String renders r's own real repository address for logging --
 // "owner/name" for GitHub, the real project path for GitLab,
-// "project/repository" for Azure DevOps.
+// "project/repository" for Azure DevOps and Bitbucket Server (Project
+// is a project key, Repository a repository slug, for the latter).
 func (r RepoConfig) String() string {
 	switch r.Platform {
 	case "gitlab":
 		return r.Project
-	case "azuredevops":
+	case "azuredevops", "bitbucketserver":
 		return r.Project + "/" + r.Repository
 	default:
 		return r.Owner + "/" + r.Name
@@ -440,6 +502,18 @@ func applyEnv(cfg *Config) {
 	if v, ok := os.LookupEnv("UBX_SERVER_AZURE_DEVOPS_API_BASE_URL"); ok {
 		cfg.AzureDevOpsAPIBaseURL = v
 	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_URL"); ok {
+		cfg.BitbucketServerURL = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_TOKEN"); ok {
+		cfg.BitbucketServerToken = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_BOT_NAME"); ok {
+		cfg.BitbucketServerBotName = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET"); ok {
+		cfg.BitbucketServerWebhookSecret = v
+	}
 	if v, ok := os.LookupEnv("UBX_SERVER_INTENT_PROVIDER_KEY"); ok {
 		cfg.IntentProviderKey = v
 	}
@@ -527,6 +601,18 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	if flags.Changed("azure-devops-api-base-url") {
 		cfg.AzureDevOpsAPIBaseURL, _ = flags.GetString("azure-devops-api-base-url")
 	}
+	if flags.Changed("bitbucket-server-url") {
+		cfg.BitbucketServerURL, _ = flags.GetString("bitbucket-server-url")
+	}
+	if flags.Changed("bitbucket-server-token") {
+		cfg.BitbucketServerToken, _ = flags.GetString("bitbucket-server-token")
+	}
+	if flags.Changed("bitbucket-server-bot-name") {
+		cfg.BitbucketServerBotName, _ = flags.GetString("bitbucket-server-bot-name")
+	}
+	if flags.Changed("bitbucket-server-webhook-secret") {
+		cfg.BitbucketServerWebhookSecret, _ = flags.GetString("bitbucket-server-webhook-secret")
+	}
 	if flags.Changed("intent-provider-key") {
 		cfg.IntentProviderKey, _ = flags.GetString("intent-provider-key")
 	}
@@ -575,9 +661,15 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 // since a real Azure DevOps project name never carries nested
 // segments the way a GitLab namespace can):
 // "azuredevops:project/repository" or
-// "azuredevops:project/repository:ledger_dir" -- ledger_dir defaults
-// to "." when omitted in any of the three forms, matching `ubx plan
-// --ledger-dir`'s own default.
+// "azuredevops:project/repository:ledger_dir". Bitbucket Server (a real
+// "bitbucketserver:" prefix, the identical two-real-identifier shape
+// as Azure DevOps' own -- a real project key and repository slug,
+// matching the existing `ubx accept --bitbucket-server-project
+// PROJECTKEY/repository-slug` flag's own real format):
+// "bitbucketserver:PROJECTKEY/repository-slug" or
+// "bitbucketserver:PROJECTKEY/repository-slug:ledger_dir" -- ledger_dir
+// defaults to "." when omitted in any of the four forms, matching `ubx
+// plan --ledger-dir`'s own default.
 func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 	repos := make([]RepoConfig, 0, len(raw))
 	for _, r := range raw {
@@ -606,13 +698,26 @@ func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 			continue
 		}
 
+		if rest, ok := cutPrefix(r, "bitbucketserver:"); ok {
+			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
+			if !hasLedgerDir {
+				ledgerDir = "."
+			}
+			project, repository, ok := cutFirst(projectRepo, '/')
+			if !ok || project == "" || repository == "" {
+				return nil, fmt.Errorf("--repo \"bitbucketserver:...\" must be \"bitbucketserver:PROJECTKEY/repository-slug\" or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
+			}
+			repos = append(repos, RepoConfig{Platform: "bitbucketserver", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			continue
+		}
+
 		ownerRepo, ledgerDir, hasLedgerDir := cutLast(r, ':')
 		if !hasLedgerDir {
 			ledgerDir = "."
 		}
 		owner, name, ok := cutFirst(ownerRepo, '/')
 		if !ok || owner == "" || name == "" {
-			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", \"gitlab:namespace/project:ledger_dir\", \"azuredevops:project/repository\", or \"azuredevops:project/repository:ledger_dir\", got %q", r)
+			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", \"gitlab:namespace/project:ledger_dir\", \"azuredevops:project/repository\", \"azuredevops:project/repository:ledger_dir\", \"bitbucketserver:PROJECTKEY/repository-slug\", or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
 		}
 		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name, LedgerDir: ledgerDir})
 	}

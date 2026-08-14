@@ -9,18 +9,20 @@ import (
 	"time"
 
 	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
 	glab "github.com/ubiquex/ubiquex/gitlab"
 )
 
 // Server is ubx server's own real, running instance -- everything
 // New wires together, and Run drives until ctx is cancelled.
 type Server struct {
-	cfg           *Config
-	installations *installationClients
-	botLogin      string
-	gitlab        *glab.Client    // nil when Config.GitLabToken is unset -- GitLab support not configured
-	azuredevops   *adevops.Client // nil when Config.AzureDevOpsToken is unset -- Azure DevOps support not configured
-	self          string          // this process's own resolved executable path (exec.go)
+	cfg             *Config
+	installations   *installationClients
+	botLogin        string
+	gitlab          *glab.Client     // nil when Config.GitLabToken is unset -- GitLab support not configured
+	azuredevops     *adevops.Client  // nil when Config.AzureDevOpsToken is unset -- Azure DevOps support not configured
+	bitbucketserver *bbserver.Client // nil when Config.BitbucketServerToken is unset -- Bitbucket Server support not configured
+	self            string           // this process's own resolved executable path (exec.go)
 }
 
 // New builds a Server from cfg, resolving the GitHub App credentials and
@@ -54,28 +56,36 @@ func New(cfg *Config) (*Server, error) {
 		azureDevOpsClient = newAzureDevOpsClient(cfg.AzureDevOpsOrganization, cfg.AzureDevOpsToken, cfg.AzureDevOpsAPIBaseURL)
 	}
 
+	var bitbucketServerClient *bbserver.Client
+	if cfg.BitbucketServerToken != "" {
+		bitbucketServerClient = newBitbucketServerClient(cfg.BitbucketServerURL, cfg.BitbucketServerToken)
+	}
+
 	return &Server{
-		cfg:           cfg,
-		installations: installations,
-		botLogin:      cfg.GitHubBotLogin,
-		gitlab:        gitlabClient,
-		azuredevops:   azureDevOpsClient,
-		self:          self,
+		cfg:             cfg,
+		installations:   installations,
+		botLogin:        cfg.GitHubBotLogin,
+		gitlab:          gitlabClient,
+		azuredevops:     azureDevOpsClient,
+		bitbucketserver: bitbucketServerClient,
+		self:            self,
 	}, nil
 }
 
 // Run serves the webhook endpoints and drives the drift-watch loop until
 // ctx is cancelled, then shuts the HTTP server down gracefully.
-// "/webhook/github", "/webhook/gitlab", and "/webhook/azuredevops" are
-// real, separate delivery targets per platform -- Phase 1's original
-// single "/webhook" route was renamed once already (Phase 2, never
-// deployed anywhere with real users depending on the old form), so this
-// is simply the third real route added to that same real convention.
+// "/webhook/github", "/webhook/gitlab", "/webhook/azuredevops", and
+// "/webhook/bitbucketserver" are real, separate delivery targets per
+// platform -- Phase 1's original single "/webhook" route was renamed
+// once already (Phase 2, never deployed anywhere with real users
+// depending on the old form), so this is simply the fourth real route
+// added to that same real convention.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/github", webhookHandler{s: s})
 	mux.Handle("/webhook/gitlab", gitlabWebhookHandler{s: s})
 	mux.Handle("/webhook/azuredevops", azureDevOpsWebhookHandler{s: s})
+	mux.Handle("/webhook/bitbucketserver", bitbucketServerWebhookHandler{s: s})
 	httpServer := &http.Server{Addr: s.cfg.ListenAddr, Handler: mux}
 
 	errCh := make(chan error, 1)
@@ -457,4 +467,96 @@ func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Clie
 
 	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
 	return postOrEditCommentAzureDevOps(ctx, api, project, repositoryID, prID, s.cfg.AzureDevOpsBotDisplayName, "ship", body)
+}
+
+// ledgerDirForBitbucketServer is ledgerDirFor's own Bitbucket Server
+// counterpart, matched on both real project key and repository slug.
+func (s *Server) ledgerDirForBitbucketServer(projectKey, repositorySlug string) string {
+	for _, r := range s.cfg.Repos {
+		if r.Platform == "bitbucketserver" && r.Project == projectKey && r.Repository == repositorySlug {
+			return r.LedgerDir
+		}
+	}
+	return "."
+}
+
+// repoDirForBitbucketServer is ensureRepoCheckoutBitbucketServer's own
+// Server-level wrapper -- repoDirFor's real Bitbucket Server
+// counterpart. Like GitLab's/Azure DevOps' own real, static token,
+// there's no per-installation concept to resolve here either.
+func (s *Server) repoDirForBitbucketServer(ctx context.Context, projectKey, repositorySlug string) (string, error) {
+	if s.bitbucketserver == nil {
+		return "", fmt.Errorf("bitbucket server support is not configured (missing --bitbucket-server-token)")
+	}
+	return ensureRepoCheckoutBitbucketServer(ctx, s.cfg.WorkDir, s.cfg.BitbucketServerURL, projectKey, repositorySlug, s.cfg.BitbucketServerBotName, s.cfg.BitbucketServerToken)
+}
+
+// runPlanAndCommentBitbucketServer is runPlanAndComment's own real
+// Bitbucket Server counterpart -- identical core-flow steps 1 and 3,
+// against Bitbucket Server's own real flat-comment API instead.
+func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA string) error {
+	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketServer(ctx, api, projectKey, repositorySlug, prID, s.cfg.BitbucketServerBotName, "plan", body)
+}
+
+// runAutomaticShipBitbucketServer is runAutomaticShip's own real
+// Bitbucket Server counterpart -- the identical real "never
+// --confirm-destroys on an unattended, merge-triggered path, no
+// exception" safety property.
+func (s *Server) runAutomaticShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, toRef string) error {
+	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, toRef); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketServer(ctx, api, projectKey, repositorySlug, prID, s.cfg.BitbucketServerBotName, "ship", body)
+}
+
+// runManualShipBitbucketServer is runManualShip's own real Bitbucket
+// Server counterpart -- the identical real two-gate confirm-destroys
+// rule.
+func (s *Server) runManualShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA string, confirmDestroys bool) error {
+	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
+	if err != nil {
+		return err
+	}
+	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
+		return err
+	}
+
+	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	if confirmDestroys && s.cfg.AllowDestroy {
+		args = append(args, "--confirm-destroys")
+	}
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketServer(ctx, api, projectKey, repositorySlug, prID, s.cfg.BitbucketServerBotName, "ship", body)
 }
