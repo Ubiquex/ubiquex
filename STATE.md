@@ -2,6 +2,66 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-161: CLOSED -- all 5 platforms now have a plan-on-push/plan-on-merge-request/plan-on-pull-request guide, 2026-08-14
+
+Group 2 (Bamboo, CircleCI) closes out the ticket's own scope split,
+following Group 1 (GitHub/GitLab/Azure DevOps, below). Same
+cross-platform finding re-applied, not re-derived: `ubx plan`'s
+resolve step never makes a live provider call (`core/resolver/
+resolver.go`), so plan-on-PR needs no AWS credentials on any of the
+5 platforms, unlike drift-watch and ship-on-merge.
+
+**Bamboo** (`integrations/bamboo.mdx`, `ubiquex-docs` `def1b97`):
+Workflow 2, plan on pull request. Bamboo's own real mechanism is
+**plan branches** (`branches: create: for-pull-request` in Specs
+YAML -- the direct counterpart of the confirmed Java Specs API's own
+`createForPullRequest()` method), auto-created when the plan's linked
+repository is Bitbucket Server/Data Center/Cloud. Same-repo PR build
+status auto-posts to Bitbucket once linked, but not for forked-repo
+PRs (confirmed against Atlassian's own docs) -- either way, posting
+the actual `ubx plan` receipt as text still needs a script, since
+Bamboo has no `bitbucket` CLI at all: a direct call to Bitbucket
+Server's own pull request comments REST API, using the real, confirmed
+`${bamboo.repository.pr.key}` predefined variable and a Bitbucket
+personal access token stored as a Bamboo shared credential.
+
+**CircleCI** (`integrations/circleci.mdx`, `ubiquex-docs` `27d1ab2`):
+Workflow 2, plan on pull request. CircleCI has no dedicated
+pull-request trigger event at all -- the real, current control is the
+project-wide **"Only build pull requests"** Advanced setting (off by
+default), paired with a `branches: ignore: main` filter on the plan
+job itself since the setting can't be scoped to one workflow alone.
+A real, worth-knowing gap confirmed against CircleCI's own support
+docs: `$CIRCLE_PULL_REQUEST`, CircleCI's own predefined PR variable,
+is never populated under GitHub Apps integration (only the older
+OAuth integration) -- used CircleCI's own officially documented
+branch-lookup workaround against GitHub's API instead
+(`pulls?head=...&state=open`), which works under either integration
+type. One real bug caught and fixed before committing: an initial
+draft re-enabled `set -e` between capturing `ubx plan`'s exit code and
+the comment-posting `curl` call -- a failed/empty PR lookup would have
+aborted the script before `exit $plan_exit` ever ran, masking a real
+resolve failure behind an unrelated curl error. Fixed by never
+re-enabling `-e`, matching Bamboo's own single-script exit-code
+pattern.
+
+Full verification bar on both new files: `mint validate` clean, `mint
+broken-links` clean (124 flagged both times, same pre-existing,
+unrelated GCP false positives seen throughout this arc, none touching
+either changed file), zero em dashes, all embedded YAML blocks parsed
+clean via Deno's `jsr:@std/yaml`, all embedded bash blocks passed
+`bash -n`, real DOM overflow crawl clean (`pageOverflowPx: 0` on both
+pages), byte-identity spot-check confirming every cross-linked file
+untouched. Both commits pushed and confirmed live via `gh api`.
+
+`ubx accept --from-merge`'s GitHub-only gap (found during UBI-31,
+re-confirmed for GitLab/Azure DevOps/Bamboo/CircleCI) remains a real,
+open item -- the cross-platform Linear ticket discussed for extending
+it was never filed, still pending explicit user go-ahead on title/
+scope/priority.
+
+---
+
 ## UBI-161 Group 1 (GitHub/GitLab/Azure DevOps): CLOSED -- plan-on-push/plan-on-merge-request/plan-on-pull-request, real per-platform mechanisms verified independently, 2026-08-14
 
 Ticket's own scope split: Group 1 (GitHub Actions, GitLab CI, Azure
