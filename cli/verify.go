@@ -105,7 +105,7 @@ func runVerifyAcceptance(ctx context.Context, out io.Writer, p *core.Proposal, r
 	// not silently glossed over: reporting the ordinary "--github-repo"
 	// message for a GitLab-sourced acceptance would be actively
 	// misleading (that flag can never satisfy this check for it).
-	if a.Platform == "gitlab" || a.Platform == "azure-devops" {
+	if a.Platform == "gitlab" || a.Platform == "azure-devops" || a.Platform == "bitbucket-server" {
 		if !jsonMode {
 			fmt.Fprintf(out, "%s API: skipped -- reviewer re-check against %s is not yet supported (only GitHub); git history above already checked\n",
 				a.Platform, platformDisplayName(a.Platform))
@@ -177,14 +177,16 @@ func acceptanceMethod(p *core.Proposal) string {
 }
 
 // platformDisplayName renders acceptance.platform's own stored value
-// ("gitlab", "azure-devops") as the human-facing platform name used in
-// runVerifyAcceptance's skip message.
+// ("gitlab", "azure-devops", "bitbucket-server") as the human-facing
+// platform name used in runVerifyAcceptance's skip message.
 func platformDisplayName(platform string) string {
 	switch platform {
 	case "gitlab":
 		return "GitLab"
 	case "azure-devops":
 		return "Azure DevOps"
+	case "bitbucket-server":
+		return "Bitbucket Server"
 	default:
 		return platform
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	ghub "github.com/ubiquex/ubiquex/github"
@@ -36,6 +37,8 @@ func newAcceptCmd() *cobra.Command {
 		githubRepo              string
 		gitlabProject           string
 		azureDevOpsProject      string
+		bitbucketServerURL      string
+		bitbucketServerProject  string
 		confirmDestroys         bool
 	)
 
@@ -58,6 +61,7 @@ func newAcceptCmd() *cobra.Command {
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 			applyGitlabProjectDefault(cmd, &gitlabProject, cfg)
 			applyAzureDevOpsProjectDefault(cmd, &azureDevOpsProject, cfg)
+			applyBitbucketServerDefaults(cmd, &bitbucketServerURL, &bitbucketServerProject, cfg)
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept: %w", err)}
 			}
@@ -75,7 +79,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, confirmDestroys)
+				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -173,9 +177,11 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromMerge, "from-merge", "", "derive pr_merge acceptance from a merge commit SHA instead of accepting a local file")
 	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --from-merge's commit history against")
 	cmd.Flags().StringVar(&proposalFile, "proposal-file", "", "path, within the repo, to the proposal file the merge commit carries (required with --from-merge)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
-	cmd.Flags().StringVar(&gitlabProject, "gitlab-project", "", "namespace/project (or numeric project ID) of the GitLab project (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
-	cmd.Flags().StringVar(&azureDevOpsProject, "azure-devops-project", "", "organization/project/repository of the Azure DevOps repo (exactly one of --github-repo/--gitlab-project/--azure-devops-project is required with --from-merge)")
+	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project is required with --from-merge)")
+	cmd.Flags().StringVar(&gitlabProject, "gitlab-project", "", "namespace/project (or numeric project ID) of the GitLab project (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project is required with --from-merge)")
+	cmd.Flags().StringVar(&azureDevOpsProject, "azure-devops-project", "", "organization/project/repository of the Azure DevOps repo (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project is required with --from-merge)")
+	cmd.Flags().StringVar(&bitbucketServerURL, "bitbucket-server-url", "", "base URL of the self-hosted Bitbucket Server/Data Center instance, e.g. https://bitbucket.example.com (required with --bitbucket-server-project; no default exists, unlike the other platforms' own fixed hosts)")
+	cmd.Flags().StringVar(&bitbucketServerProject, "bitbucket-server-project", "", "PROJECTKEY/repository-slug of the Bitbucket Server repo (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project is required with --from-merge; requires --bitbucket-server-url)")
 	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required to accept any proposal with blast_radius.destroys > 0 -- this project's first hardcoded acceptance-time friction invariant (docs/schema.md)")
 	return cmd
 }
@@ -379,30 +385,75 @@ func deriveFromAzureDevOps(ctx context.Context, repoDir, azureDevOpsProject, mer
 	}, nil
 }
 
+// deriveFromBitbucketServer wraps bbserver.DeriveAcceptance into the
+// common mergeDerivation shape -- the Bitbucket Server analog of
+// deriveFromGithub/deriveFromGitlab/deriveFromAzureDevOps.
+// bitbucketServerProject is "PROJECTKEY/repository-slug"; unlike the
+// other three platforms, Bitbucket Server has no single fixed host of
+// its own, so bitbucketServerURL is a real, separately required piece
+// of identity, not an optional test-only override.
+func deriveFromBitbucketServer(ctx context.Context, repoDir, bitbucketServerURL, bitbucketServerProject, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+	if bitbucketServerURL == "" {
+		return nil, fmt.Errorf("--bitbucket-server-project requires --bitbucket-server-url")
+	}
+	parts := strings.SplitN(bitbucketServerProject, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, fmt.Errorf("--bitbucket-server-project must be \"PROJECTKEY/repository-slug\", got %q", bitbucketServerProject)
+	}
+	projectKey, repositorySlug := parts[0], parts[1]
+
+	baseURL := bitbucketServerURL
+	if base := os.Getenv("UBX_BITBUCKET_SERVER_API_BASE_URL"); base != "" {
+		// Test-only seam, same convention as UBX_GITHUB_API_BASE_URL /
+		// UBX_GITLAB_API_BASE_URL / UBX_AZURE_DEVOPS_API_BASE_URL --
+		// here it overrides the always-required --bitbucket-server-url
+		// rather than a fixed default, since this platform has none.
+		baseURL = base
+	}
+	api := bbserver.New(baseURL, os.Getenv("BITBUCKET_SERVER_TOKEN"))
+
+	derived, err := bbserver.DeriveAcceptance(ctx, api, repoDir, projectKey, repositorySlug, mergeSHA, proposalFile)
+	if err != nil {
+		return nil, err
+	}
+	return &mergeDerivation{
+		platform:            "bitbucket-server",
+		proposalFileContent: derived.ProposalFileContent,
+		claimedHash:         derived.ClaimedHash,
+		mergeSHA:            derived.MergeSHA,
+		number:              derived.PullRequestID,
+		proposalFile:        derived.ProposalFile,
+		approvers:           derived.Approvers,
+		label:               fmt.Sprintf("PR #%d", derived.PullRequestID),
+	}, nil
+}
+
 // acceptFromMerge is UBI-11 stage 1's PR-merge acceptance tier (GitLab
 // support added UBI-160 Phase 1, Azure DevOps support added UBI-160
-// Phase 2): derive acceptance from git history + the platform's own API
-// rather than trusting a file or the caller's own say-so (see
+// Phase 2, Bitbucket Server support added UBI-160 Phase 3): derive
+// acceptance from git history + the platform's own API rather than
+// trusting a file or the caller's own say-so (see
 // docs/architecture.md's Decision loop section, and
 // core.AcceptFromMerge's doc comment for what's actually enforced).
-// Exactly one of githubRepo/gitlabProject/azureDevOpsProject is required
-// -- accept --from-merge always derives against one specific platform,
-// never more than one at once or none.
-func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject string, confirmDestroys bool) error {
+// Exactly one of githubRepo/gitlabProject/azureDevOpsProject/
+// bitbucketServerProject is required -- accept --from-merge always
+// derives against one specific platform, never more than one at once or
+// none.
+func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject string, confirmDestroys bool) error {
 	if proposalFile == "" {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file")}
 	}
 	given := 0
-	for _, v := range []string{githubRepo, gitlabProject, azureDevOpsProject} {
+	for _, v := range []string{githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerProject} {
 		if v != "" {
 			given++
 		}
 	}
 	if given > 1 {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge takes exactly one of --github-repo/--gitlab-project/--azure-devops-project, not more than one")}
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge takes exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project, not more than one")}
 	}
 	if given == 0 {
-		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires exactly one of --github-repo, --gitlab-project, or --azure-devops-project")}
+		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires exactly one of --github-repo, --gitlab-project, --azure-devops-project, or --bitbucket-server-project")}
 	}
 
 	ctx := cmd.Context()
@@ -413,8 +464,10 @@ func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoD
 		derived, err = deriveFromGithub(ctx, repoDir, githubRepo, mergeSHA, proposalFile)
 	case gitlabProject != "":
 		derived, err = deriveFromGitlab(ctx, repoDir, gitlabProject, mergeSHA, proposalFile)
-	default:
+	case azureDevOpsProject != "":
 		derived, err = deriveFromAzureDevOps(ctx, repoDir, azureDevOpsProject, mergeSHA, proposalFile)
+	default:
+		derived, err = deriveFromBitbucketServer(ctx, repoDir, bitbucketServerURL, bitbucketServerProject, mergeSHA, proposalFile)
 	}
 	if err != nil {
 		return &ExitCodeError{Code: deriveAcceptanceErrorCode(err), Err: fmt.Errorf("accept: %w", err)}
@@ -498,16 +551,17 @@ func acceptErrorCode(err error) int {
 }
 
 // deriveAcceptanceErrorCode classifies ghub.DeriveAcceptance/
-// glab.DeriveAcceptance/adevops.DeriveAcceptance's failures: every named
-// sentinel any of them can return means the merge commit's claimed
-// acceptance doesn't check out against git/the platform's history as it
-// stands today (commit gone, file gone at that commit, no PR/MR for it,
-// no ubx-proposal trailer in the PR/MR body) -- an actionable finding
-// (exit 1), the same family as acceptErrorCode's ErrTrailerHashMismatch.
-// ghub.ErrCommitNotFound/ErrFileNotFoundAtCommit/ErrNoProposalTrailer
-// cover all three platforms (packages gitlab and azuredevops both reuse
-// those three sentinels directly rather than defining their own --
-// they're genuinely host-agnostic git-plumbing/regex findings, not
+// glab.DeriveAcceptance/adevops.DeriveAcceptance/bbserver.
+// DeriveAcceptance's failures: every named sentinel any of them can
+// return means the merge commit's claimed acceptance doesn't check out
+// against git/the platform's history as it stands today (commit gone,
+// file gone at that commit, no PR/MR for it, no ubx-proposal trailer in
+// the PR/MR body) -- an actionable finding (exit 1), the same family as
+// acceptErrorCode's ErrTrailerHashMismatch. ghub.ErrCommitNotFound/
+// ErrFileNotFoundAtCommit/ErrNoProposalTrailer cover all four platforms
+// (packages gitlab, azuredevops, and bitbucketserver all reuse those
+// three sentinels directly rather than defining their own -- they're
+// genuinely host-agnostic git-plumbing/regex findings, not
 // GitHub-specific). A genuine network/API/git-tooling failure is exit 2.
 func deriveAcceptanceErrorCode(err error) int {
 	switch {
@@ -516,7 +570,8 @@ func deriveAcceptanceErrorCode(err error) int {
 		errors.Is(err, ghub.ErrNoPullRequestForCommit),
 		errors.Is(err, ghub.ErrNoProposalTrailer),
 		errors.Is(err, glab.ErrNoMergeRequestForCommit),
-		errors.Is(err, adevops.ErrNoPullRequestForCommit):
+		errors.Is(err, adevops.ErrNoPullRequestForCommit),
+		errors.Is(err, bbserver.ErrNoPullRequestForCommit):
 		return 1
 	default:
 		return 2
