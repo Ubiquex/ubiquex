@@ -2,6 +2,86 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-161 Group 1 (GitHub/GitLab/Azure DevOps): CLOSED -- plan-on-push/plan-on-merge-request/plan-on-pull-request, real per-platform mechanisms verified independently, 2026-08-14
+
+Ticket's own scope split: Group 1 (GitHub Actions, GitLab CI, Azure
+DevOps) done this session; Bamboo and CircleCI (Group 2) not started,
+checkpoint pending before that group per the established UBI-31
+per-platform pattern.
+
+**A cross-platform, session-changing finding, confirmed once and
+re-applied per guide rather than re-derived**: `ubx plan`'s resolve
+step never makes a live provider call -- traced directly through
+`core/resolver/resolver.go`, confirmed it only ever touches
+`SchemaInspector` methods (`Schema.HasType`, `Schema.UnknownConfigKeys`,
+`Schema.MissingRequiredKeys`, `Schema.IsComputed`), never `Configure`
+or a live read. Matches an existing code comment in `cli/plan.go`
+("schema-only, no cloud calls either time"). Means plan-on-push/
+plan-on-merge-request/plan-on-pull-request need **no AWS credentials
+at all**, unlike drift-watch (reads live state) and ship-on-merge
+(applies real changes) -- this reshaped the credentials section of
+every guide below.
+
+**GitHub Actions** (`integrations/github-actions.mdx`, `ubiquex-docs`
+`3abaa43`): Workflow 2, plan on push. Real mechanism confirmed before
+writing: `gh pr comment --body-file --edit-last --create-if-none`
+(verified via `gh pr comment --help`), triggered on `pull_request:
+[opened, synchronize]`. `if: always()` on the comment step (without
+`continue-on-error` on the render step) so a genuine `ubx plan`
+failure still fails the job while the output still posts either way.
+
+**GitLab CI** (`integrations/gitlab-ci.mdx`, `ubiquex-docs` `440c252`):
+Workflow 2, plan on merge request. Single
+`$CI_PIPELINE_SOURCE == "merge_request_event"` rule covers both the
+MR's initial pipeline and every subsequent push -- structurally
+simpler than GitHub's separate `opened`/`synchronize` pair. Real,
+material gap documented plainly rather than worked around: `glab mr
+note create` (confirmed via the real `glab` CLI reference) has no
+`--edit-last` equivalent at all -- `--unique` only skips a
+byte-identical repeat, which a changed plan output never is, so every
+push posts a new note. `GLAB_ENABLE_CI_AUTOLOGIN=true` required
+explicitly (unlike `gh`, `glab` doesn't auto-detect `CI_JOB_TOKEN` on
+its own). `glab` tarball extraction verified against its real,
+current contents (`tar tzf` on the actual downloaded `v1.113.0`
+tarball) before writing the guide -- caught and fixed a wrong
+`--strip-components=2` guess (real value: `1`) before it was ever
+shown to the user.
+
+**Azure DevOps Pipelines** (`integrations/azure-devops.mdx`,
+`ubiquex-docs` `34ab48a`): Workflow 2, plan on pull request. A real,
+structural fork confirmed against Microsoft's own current triggers
+documentation: the YAML `pr:` keyword only works for GitHub/Bitbucket
+Cloud-hosted repos -- for Azure Repos Git (this guide's own assumed
+case) it does nothing at all, PR-triggered runs require a **branch
+policy** (Build validation) configured outside the pipeline YAML,
+documented both via the UI path and `az repos policy build create`.
+No `az repos pr comment` command exists (confirmed against the real
+`az repos pr` reference) -- real mechanism is a direct call to the
+Pull Request Threads - Create REST API, authenticated with the job's
+own `System.AccessToken` (which, per Microsoft's own docs, must be
+mapped through an explicit `env:` block, not macro-substituted
+directly). Same real gap as GitLab's `glab mr note create`: no
+comment-update mechanism, every triggering event posts a new thread.
+
+Full verification bar on both new files: `mint validate` clean, `mint
+broken-links` clean (only the same pre-existing, unrelated GCP false
+positives seen throughout the UBI-31/UBI-159 work), zero em dashes,
+all embedded YAML blocks parsed clean via Deno's `jsr:@std/yaml`, all
+embedded bash blocks passed `bash -n`, real DOM overflow crawl clean
+(`pageOverflowPx: 0` on both pages), byte-identity spot-check
+confirming every cross-linked file untouched. Both commits pushed and
+confirmed live via `gh api` (commit SHA and actual file content, not
+inferred from the local push alone).
+
+**Not done this session**: STATE.md itself had never been updated for
+any part of UBI-161 before this entry -- same category of gap caught
+and fixed retroactively for UBI-31 earlier. The cross-platform Linear
+ticket for extending `ubx accept --from-merge` (GitLab/Azure DevOps/
+Bamboo/CircleCI), discussed during UBI-31, remains unfiled -- still a
+real, open item.
+
+---
+
 ## UBI-159: CLOSED -- provider-version-watch.mdx restored, mcp.mdx confirmed already migrated, 2026-08-14
 
 Investigated the 2 real files deleted in `931f12e` (the SDK Reference /
