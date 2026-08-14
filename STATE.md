@@ -2,6 +2,171 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-28 Phase 1 (ubx server, GitHub-only): CHECKPOINT, not closed -- full core mechanics, config system, Dockerfile, and docs shipped, GitLab/Azure DevOps/Bamboo phases not started, 2026-08-18
+
+Real, finalized design per UBI-28's own current description (read fresh
+from Linear, not built against any earlier "ubx-agent" framing) --
+GitHub only this phase, as a real, installable GitHub App turning
+plan/accept/ship/status --drift into a continuously-running daemon.
+
+**Real implementation** (`ubiquex` `d9b671e`): new `server/` package
+(config.go, githubapp.go, webhook.go, auth.go, comment.go, exec.go,
+repo.go, drift.go, server.go), new `cli/server.go` wiring `ubx server`
+as a cobra subcommand. Same binary as `ubx` itself -- every actual
+plan/accept/ship/scan operation shells back out to this exact
+executable (exec.go) against a real git working tree (repo.go), reusing
+its existing safety properties exactly rather than reimplementing them.
+
+**Core flow, all six steps built**: PR opened/synchronize runs `ubx
+plan`, posted as a single edit-in-place PR comment (comment.go reuses
+UBI-161's own real `--edit-last` mechanism, keyed on a hidden
+`<!-- ubx:<kind> -->` marker so plan/ship comments never collide);
+re-plan via a `ubx plan` comment; GitHub's own native Approve review
+(never a comment) derives acceptance; ship automatically on merge or
+manually via a CODEOWNERS-authorized `ubx ship` comment; destroy
+disabled by default; drift-watch on a real, configured interval reusing
+`--surface-as` unchanged.
+
+**The two flagged open decisions, both resolved and documented**:
+
+1. **Acceptance-comment schema placement**: a new `Acceptance.Method`
+   value, `"pr_review"`, plus a new `Acceptance.ReviewComment` field
+   (docs/schema.md -- "Amendment: pr_review acceptance method"). Decided
+   for `acceptance` directly, not `intent.sources`: every existing
+   `intent.sources` kind is provenance for the proposal's own *content*;
+   a reviewer's comment is provenance for *how it was signed*, the same
+   category `approvers`/`accepted_at` already occupy. New
+   `core.AcceptFromReview` (core/accept.go) mirrors `AcceptFromMerge`'s
+   own trailer-hash-check discipline, reading the proposal file at the
+   review's own `commit_id` specifically, never the PR's current head.
+2. **Drift-PR re-plan authorization**: `isAuthorizedToReplan` (auth.go)
+   is a real, two-tier rule -- the commenter must be the PR's own real
+   creator (the normal case), or, when the PR was opened by the
+   server's own bot (`Config.GitHubBotLogin`, a drift-watch PR), the
+   rule falls back to real, live collaborator write-access on the repo,
+   checked fresh via GitHub's own permissions API, never cached, never
+   loosened for a human-opened PR.
+
+**A real, adversarially-found bug fixed during this session**:
+`core.AcceptFromReview`, called directly from `webhook.go` (not through
+the CLI), had no confirm-destroys enforcement of its own --
+`checkDestroysConfirmed`/`ErrDestroysNotConfirmed` have only ever lived
+in `cli/accept.go`, invisible to a caller inside `core` directly. Fixed
+by refusing a destructive proposal outright in
+`handlePullRequestReviewEvent` before it ever reaches
+`AcceptFromReview`, regardless of any configuration -- a human accepts
+a real destroy locally with `ubx accept --confirm-destroys` instead.
+Proven by `server/review_accept_flow_test.go`'s own
+`TestReviewAcceptFlow_DestroyIsRefused`.
+
+**GitHub App auth**: real short-lived installation tokens via
+`github.com/bradleyfalzon/ghinstallation/v2` (auto-refreshed, cached
+per installation ID -- every webhook payload already carries its own
+installation ID, no separate listing call needed on that path; the
+drift-watch loop, which has none, resolves one via the real
+App-level `FindRepositoryInstallation` call instead). `github/client.go`
+gained `NewWithHTTPClient`/`API()` so package `server` can reuse
+package `github`'s existing git-plumbing helpers
+(`FileAtCommit`/`ParseProposalTrailer`/`CommitExists`) and its own
+issue/PR helpers, rather than duplicating a second GitHub API wrapper.
+
+**CODEOWNERS matching**: `github.com/hmarr/codeowners` (real gitignore-
+style glob matching, not hand-rolled), team ownership resolved via a
+real, live `GetTeamMembershipBySlug` call, never cached (a wrong match
+here is a real security defect either direction).
+
+**Config system**: real four-layer cascade (flags > env `UBX_SERVER_*`
+> YAML > built-in defaults), every scalar field documented with its
+real YAML key/env var/flag together (server/config.go's own doc
+comments). `repos` is YAML-only (a real list of structured objects);
+`github_webhook_secret` has no YAML key at all, deliberately (env/flag
+only -- a secret shouldn't sit in a file that might get committed).
+
+**Destroy safety, two independent, real gates**: an automatic
+merge-triggered ship never passes `--confirm-destroys`, no exception,
+regardless of `Config.AllowDestroy` -- there's no human present in an
+unattended path to give the required, separate confirmation. A manual
+ship comment needs BOTH `Config.AllowDestroy` (the operator's own
+server-wide policy switch) AND the human's own explicit
+`--confirm-destroys` in the comment text itself, every time -- neither
+alone is sufficient.
+
+**Test coverage** (29 new tests in `server/`, all real): httptest-backed
+GitHub API doubles for every auth/comment-editing case (`auth_test.go`
+-- human-creator match/mismatch, bot-PR write-access fallback
+authorized/rejected, CODEOWNERS direct-user/team/email-owner/unowned-
+file/no-file-at-all, all in both directions; `comment_test.go` --
+create-when-none-exists, edit-in-place, kind-isolation, human-comment
+isolation), real subprocess execution (`exec_test.go` -- exit code/
+stdout/stderr/env/cwd, using a real shell script standing in for the
+real `ubx` binary), real config precedence (`config_test.go`, extending
+the same discipline UBI-160's own platform config cascades used), and a
+real local-git-repo end-to-end test chaining every real function
+`handlePullRequestReviewEvent` itself calls, in the same real order
+(`review_accept_flow_test.go` -- proving both the happy path and the
+destroy-refusal fix for real, not just by code inspection). Full repo
+`go build`/`go vet`/`go test` clean.
+
+**Real end-to-end verification, stated plainly per the ticket's own
+ask**: no real GitHub App installation was used (infeasible in this
+environment -- no real org, no real webhook delivery target). The most
+realistic mock available was used instead: httptest-backed GitHub API
+doubles for every GitHub-API-touching piece, a real local git repo and
+real subprocess execution for the plan/ship/accept mechanics, and a
+real, running Docker container for the webhook HTTP layer itself (see
+below) -- not simulated, an actual signed/unsigned webhook round trip
+against a live process.
+
+**Dockerfile**: real multi-stage build (`golang:1.26-bookworm` ->
+`debian:bookworm-slim`, real `git` + CA certs at runtime, non-root
+user). Actually built and run this session, not just written:
+`docker build` succeeded end to end; the running container's own logs
+showed a real successful listen; `docker exec` confirmed `git
+version 2.39.5` and the non-root `ubx` user; a real curl round trip
+against the live container confirmed the webhook signature check in
+both directions --
+
+```
+no-signature: 401
+bad-signature: 401
+valid-signature: 202
+```
+
+**Documentation** (`ubiquex-docs` `823b140`): new top-level "ubx server"
+tab -- overview, GitHub App setup (real, current form fields and
+permission scopes confirmed against GitHub's own current docs, not
+memory), configuration reference (the complete real flag/env/YAML
+mapping table), the real workflow (grounded in the same real, tested
+behavior above, including the real webhook transcript reproduced
+verbatim), Docker deployment (the real Dockerfile plus the real
+build/run/verify transcript above). `cli-reference/server.mdx` added to
+the existing CLI Reference tab, verified against the real, current
+`./ubx server --help` output. Full verification bar (zero em dashes,
+`mint validate`, overflow crawl -- `pageOverflowPx: 0` on all 6 pages --
+`mint broken-links` -- zero new flags beyond the pre-existing ~124
+unrelated GCP false positives -- byte-identity spot-check via `git
+status` showing only the intended files touched); commit pushed and
+confirmed live via `gh api`.
+
+**A real, load-bearing operational finding surfaced in the docs, not
+silently left implicit**: `ubx` itself never runs `git commit`/`git
+push` -- a repo `ubx server` watches needs a real [remote ledger
+store](https://ubx.mintlify.app/tutorial/remote-stores) (S3/GCS/Azure
+Blob) configured in its own `.ubx/config`, the same real requirement
+the existing CI/CD ship-on-merge guides already carry but never state
+explicitly. Documented plainly in `server/workflow.mdx`'s own
+Prerequisites section this session, not fixed in the CI/CD guides
+themselves (out of this ticket's own scope).
+
+**Not done this session, real and explicit**: GitLab's, Azure DevOps',
+and Bamboo's own real server mechanisms (per UBI-28's own sequencing --
+"Build GitHub first... Checkpoint, then extend to GitLab, then verify
+and build Azure DevOps and Bamboo's own real mechanisms independently")
+remain unaddressed -- checkpoint per the ticket's own instruction,
+waiting for confirmation before starting GitLab next.
+
+---
+
 ## UBI-160 Phase 4 (CircleCI): CLOSED -- ticket done, all 4 platforms (GitLab, Azure DevOps, Bitbucket Server, CircleCI) verified and shipped, 2026-08-14
 
 **Step 0, done before any implementation, per the kickoff's own explicit
