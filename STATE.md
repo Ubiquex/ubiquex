@@ -2,6 +2,69 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-154: CLOSED -- real "index" slug collision fixed for 3 AWS resources, same precedent as google_firestore_index, 2026-08-14
+
+**Step 1, confirmed real pre-fix state, not assumed**: `aws_kendra_index`,
+`aws_resourceexplorer2_index`, `aws_s3vectors_index` each resolve (via
+`resolve_page_path`) to their own service directory's `index.mdx` --
+the exact same path `generate_mechanical_provider` writes the service's
+CardGroup landing page to. Direct inspection confirmed the landing page
+had won for all 3: the real resource content was absent from disk
+entirely, and each landing page's own "Index" card linked back to
+itself (`href="/resource-reference/aws/<service>/index"`, i.e. the
+landing page). For `resourceexplorer2` and `s3vectors`, "index" also
+happens to sort alphabetically first among that service's own resources,
+so `docs.json`'s nav group "root" pointer ALSO targeted this same
+colliding path (kendra's root already pointed at `data-source`,
+unaffected). This matches `google_firestore_index`'s own pre-fix
+symptom in kind (a real filename collision with the service landing
+page) but differs in which side won: firestore's own resource page had
+already displaced its landing page (that fix's real precedent, found
+directly in `gen_provider_docs.py`'s own `index_collision` skip-landing-
+page logic, already correctly names all 4 of these resources in its own
+code comment); AWS's 3 had never been regenerated since that logic
+landed, so their landing pages were still the ones written last.
+
+**Step 2, applied the same real precedent**: generated real mechanical-
+tier pages (`build_resource_page`, real schema dump + idents already on
+hand) directly to each colliding path, overwriting the landing page
+content -- the resource page wins, matching firestore exactly. Then
+spliced the richer-tier Example section (`gen_complete_pages.py`) since
+every sibling resource in all 3 services is already on that tier. No
+`docs.json` edits and no redirects: no path was renamed, only the
+content already at the existing `index.mdx` path changed, so nothing
+external could have been referencing a since-moved path.
+
+**A real, deliberate side effect, not glossed over**: for `resourceexplorer2`
+and `s3vectors`, clicking the group header in the sidebar (and the
+"Resourceexplorer2"/"S3Vectors" cards on the top-level `resource-
+reference/aws/index.mdx`) now shows the real resource page instead of
+a card grid -- a genuine improvement (real content over a generic grid),
+not a break, but a real, visible change in what a user sees at that
+click.
+
+**Verification**: real `go build` (3/3), `ast.parse` (3/3), `deno fmt
+--check` (3/3), `mint validate` clean, `mint broken-links` clean for all
+3 (the only flagged items corpuswide were pre-existing, unrelated GCP
+pages -- regex-pattern text in field descriptions being misread as link
+syntax, confirmed none of the 3 target pages appear in that output),
+zero em dashes, byte-identity spot-check confirming `google_firestore_index`
+and other unrelated pages untouched, diff scope confirmed as exactly the
+3 target files. Repetition ratio (UBI-156 diligence, re-checked out of
+caution): 1.2-1.8x, well within the legitimate range, no depth-guard
+concerns. Overflow crawl clean (0 page-level overflow on all 3; the one
+elevated `pre`-block number, 217px on `resourceexplorer2`'s Go tab, is
+contained/expected horizontal code-block scroll, same pattern as other
+already-shipped pages this session).
+
+Committed and pushed (`ubiquex-docs` `503a1d4`), confirmed live via
+`gh api` (commit and actual file content, not just the SHA). AWS
+resource-reference page count is unchanged (all 3 already had a real
+page counted in the corpus; only their content -- and, for 2 of them,
+what the nav root points to -- changed).
+
+---
+
 ## UBI-156: CLOSED -- real recursion guard for genuinely self-referential schema types, all 10 resources regenerated onto the richer tier, 2026-08-14
 
 **Step 1, re-verified all 10 real, current**: reproduced the repetition-
