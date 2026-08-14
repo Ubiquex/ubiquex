@@ -2,6 +2,124 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-28 Phase 4, FINAL (ubx server, Bamboo/Bitbucket Server): CLOSED -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 4-platform Docker, and docs shipped, all four phases complete, 2026-08-15
+
+Real, current scope per the founder's own explicit Phase 4 kickoff (the final phase of UBI-28):
+Bamboo/Bitbucket Server support for `ubx server`, steps 1-5 of the core flow, built against
+Bitbucket Server's own real, current API/docs (verified independently -- explicitly not assumed
+symmetric with GitHub, GitLab, or Azure DevOps, all three of which had already turned out to
+differ from each other in real, structural ways).
+
+**Step 0, resolved before any implementation, per the kickoff's own explicit instruction**:
+Bamboo's own real setup mechanism. Bamboo has no single native git host -- confirmed directly
+against Atlassian's own current docs -- a Bamboo plan's linked repository can be Bitbucket
+Server/Data Center, Bitbucket Cloud, or GitHub. A GitHub-paired Bamboo plan is already fully
+covered by the existing GitHub App integration. Bitbucket Server/Data Center is the real,
+deliberately scoped target -- the identical scoping decision UBI-160 Phase 3's own `ubx accept
+--from-merge` work already made. The founder's own kickoff flagged this as "likely an installable
+plugin, but not confirmed" -- confirmed, independently, to be **wrong**: Bitbucket Server/Data
+Center has shipped native, bundled webhooks since version 5.4 (2017), no plugin required at all
+(confirmed via Atlassian's own current docs and via the Atlassian Marketplace's own "Web Post
+Hooks for Bitbucket" plugin listing, which states it was made obsolete by this exact bundled
+feature) -- a real, deliberately-reported correction to the ticket's own initial assumption, not
+silently absorbed.
+
+**Real implementation** (`ubiquex` `7657bfd`): `bitbucketserver/server_api.go` (new client methods
+on the existing UBI-160 Phase 3 `Client`: `GetPullRequest`, `ListPullRequestChangedFiles`,
+`ListPullRequestComments`, `CreatePullRequestComment`, `UpdateComment`, `GetRawFile`,
+`HasWriteAccess`), continuing that package's own established real net/http-direct style (reusing
+only `go-bitbucket-v1`'s struct types) rather than introducing a second HTTP-calling convention
+within one package, even though the real SDK's own generated transport does implement every one of
+these endpoints. `server/bitbucketserver.go` (client construction + real HMAC-SHA256 signature
+check), `server/bitbucketserver_auth.go` (two-tier re-plan rule via a genuine, single-call
+REPO_WRITE-or-above permission check, CODEOWNERS-based ship authorization),
+`server/bitbucketserver_comment.go` (edit-in-place via Bitbucket Server's own real, flat top-level
+comment model -- simpler than Azure DevOps' thread-only model), `server/bitbucketserver_webhook.go`
+(event dispatch: five real, separate event keys, no folded-event disambiguation needed). `server/
+server.go` gained a `bitbucketserver *bbserver.Client` field and Bitbucket-Server-specific
+`runPlanAndCommentBitbucketServer`/`runAutomaticShipBitbucketServer`/
+`runManualShipBitbucketServer`; `Run()` now mounts a fourth real route,
+`/webhook/bitbucketserver`. `server/repo.go` gained `ensureRepoCheckoutBitbucketServer` using
+Bitbucket Server's own real `https://<username>:<token>@<host>/scm/{project}/{repo}.git`
+convention (a real username is required in that position, unlike GitHub's placeholder
+`x-access-token` or GitLab's/Azure DevOps' placeholder `oauth2`, confirmed against Atlassian's own
+HTTP access tokens docs). `server/config.go` gained `BitbucketServerURL`/`BitbucketServerToken`/
+`BitbucketServerBotName`/`BitbucketServerWebhookSecret` and a `bitbucketserver:` `--repo` shorthand
+(reusing the existing `Project`/`Repository` fields Azure DevOps' own phase already added, no new
+RepoConfig fields needed).
+
+**Real, confirmed structural differences from all three prior platforms, not assumed symmetric**:
+a real, bundled HMAC-SHA256 signature carried in a header literally named `X-Hub-Signature` -- a
+real naming collision with GitHub's own older, deprecated SHA-1-only header, but the *value*
+format (`sha256=<hex>`) matches GitHub's newer scheme instead, confirmed directly, never assumed
+from the header name alone (`validBitbucketServerSignature`'s own doc comment states this
+explicitly). Every semantic PR change gets its own separate, real event key (`pr:opened`,
+`pr:from_ref_updated`, `pr:reviewer:approved`, `pr:merged`, `pr:comment:added`, plus others not
+used here) -- no folded event needing Azure DevOps' own query-parameter disambiguation trick.
+Bitbucket Server does have a real, stable username (`Name`, confirmed against both the real
+webhook payload's own author/actor shape and the SDK's own `UserWithLinks` struct) -- unlike Azure
+DevOps' DisplayName-only fallback, CODEOWNERS "username" entries match directly; a CODEOWNERS
+"team" entry is a real, deliberate, documented non-match here (no group-membership-by-name lookup
+exists for this package's own scope, proven by `TestIsAuthorizedToShipBitbucketServer_
+GroupOwnerNeverMatches`). A genuine, single-call "does this user have write access" check exists
+(`HasWriteAccess`, `GET .../permissions/users?filter=<username>`) -- unlike Azure DevOps' own ACL/
+security-namespace model, which had no such endpoint and needed a Contributors-group-membership
+approximation instead.
+
+**The real, Bitbucket-Server-specific TOCTOU safety mechanism for step 3's Approve-derived
+acceptance** (task #343): confirmed, independently, via two separate real sources -- the real,
+locally-downloaded `go-bitbucket-v1` SDK's own `UserWithMetadata.LastReviewedCommit` struct field,
+and Atlassian's own current, real `pr:reviewer:approved` webhook payload example -- that Bitbucket
+Server's own real `participant` object carries the exact commit SHA the approving reviewer
+actually reviewed, delivered directly on the same webhook payload as the PR's own current
+`fromRef.latestCommit`. `handlePullRequestApprovedBitbucketServer` compares the two directly, no
+separate live query needed at all -- structurally different from GitLab's project-wide setting and
+Azure DevOps' branch-policy fallback (no per-vote commit reference exists there at all), closer in
+spirit to GitHub's own `review.commit_id`, achieved through a genuinely different, real mechanism.
+A mismatch (a push landed after the approval) refuses outright with a real, explanatory posted
+comment. The identical Phase 1/2/3 destroy-refusal fix (a destructive proposal is refused before
+ever reaching `core.AcceptFromReview`) is applied here too.
+
+**Test coverage** (new `server/bitbucketserver_signature_test.go` [7 tests, including a real
+missing-"sha256="-prefix case and a malformed-hex case neither prior platform's own signature test
+needed], `server/bitbucketserver_auth_test.go` [8 tests, httptest-backed fixture, including the
+real CODEOWNERS-team-never-matches case documenting Bitbucket Server's own real scope gap],
+`server/bitbucketserver_flow_test.go` [5 tests, real local-git end-to-end review-accept flow
+mirroring the three prior platforms' own precedents -- happy path, destroy refusal, and a real
+stale-approval-refused case unique to this platform's own TOCTOU mechanism], all real, all
+passing). Full repo `go build`/`go vet`/`go test` clean.
+
+**Real Docker verification**: rebuilt the existing `Dockerfile` (no changes needed), ran a real
+container with GitHub, GitLab, Azure DevOps, AND Bitbucket Server env vars all set simultaneously,
+confirmed the log line showing a real successful listen and exercised all four platforms' webhook
+routes (signature accept/reject, old single `/webhook` route still 404) against the one live
+process -- the identical real verification bar every phase before this one used, this time
+covering all four platforms in one container at once.
+
+**Docs** (`ubiquex-docs` `e55247e`, verified live via `gh api`): new `server/bamboo-setup.mdx`
+(HTTP access token creation, the real bundled-not-plugin webhook correction stated plainly, the
+five real event keys, the real per-reviewer-commit TOCTOU mechanism, `--repo bitbucketserver:`
+shorthand, CODEOWNERS username/no-team-match divergence), `server/configuration.mdx`/
+`overview.mdx`/`workflow.mdx`/`docker.mdx`/`github-setup.mdx`/`gitlab-setup.mdx` updated for
+four-platform, final scope. Zero em-dashes, `mint validate` clean, `mint broken-links` clean (zero
+new breaks beyond the pre-existing, unrelated GCP false positives), overflow crawl clean on all 8
+touched pages (`pageOverflowPx: 0` on every page; a few wide code blocks flagged `overflowPx > 0`
+but `contained: true` -- safely horizontally-scrollable within their own container, not a real
+bug), `docs.json` nav updated, real captured transcripts (webhook signature accept/reject codes,
+container listen log, `git --version`/`whoami`) all freshly re-verified against a live container
+rather than reused from a prior phase's own run.
+
+**UBI-165 (GitLab/Azure DevOps drift-watch CLI gap) confirmed to apply identically to Bitbucket
+Server too, per the founder's own explicit instruction** -- no new ticket filed, folded into
+UBI-165's own existing multi-platform scope. `cli/surface.go` remains GitHub-only; a
+Bitbucket-Server-watched repo in `Config.Repos` is silently skipped by the drift-watch loop
+specifically (steps 1-4 all work identically across all four platforms).
+
+**UBI-28 is now closed, all four phases complete**: GitHub (Phase 1), GitLab (Phase 2), Azure
+DevOps (Phase 3), Bamboo/Bitbucket Server (Phase 4, this entry). See the consolidated final report
+delivered to the founder in this same session for the full cross-platform comparison table and
+closure summary, matching the shape UBI-160's own final close used.
+
 ## UBI-28 Phase 3 (ubx server, Azure DevOps): CHECKPOINT, not closed -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 3-platform Docker, and docs shipped, Bamboo phase not started, 2026-08-15
 
 Real, current scope per the founder's own explicit Phase 3 kickoff:
