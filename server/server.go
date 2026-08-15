@@ -162,7 +162,7 @@ func (s *Server) repoDirFor(ctx context.Context, installationID int64, owner, re
 	if err != nil {
 		return "", err
 	}
-	return ensureRepoCheckout(ctx, s.cfg.WorkDir, owner, repo, token)
+	return ensureRepoCheckout(ctx, s.cfg.WorkDir, s.cfg.GitHubAPIBaseURL, owner, repo, token)
 }
 
 // checkoutForGitHub is repoDirFor plus a real checkout at ref -- the
@@ -435,7 +435,7 @@ func (s *Server) repoDirForAzureDevOps(ctx context.Context, project, repositoryI
 	if s.azuredevops == nil {
 		return "", fmt.Errorf("azure devops support is not configured (missing --azure-devops-token)")
 	}
-	return ensureRepoCheckoutAzureDevOps(ctx, s.cfg.WorkDir, s.cfg.AzureDevOpsOrganization, project, repositoryID, s.cfg.AzureDevOpsToken)
+	return ensureRepoCheckoutAzureDevOps(ctx, s.cfg.WorkDir, s.cfg.AzureDevOpsAPIBaseURL, s.cfg.AzureDevOpsOrganization, project, repositoryID, s.cfg.AzureDevOpsToken)
 }
 
 // runPlanAndCommentAzureDevOps is runPlanAndComment's own real Azure

@@ -51,7 +51,7 @@ func TestDeriveAcceptance_HappyPath(t *testing.T) {
 		},
 	}
 	srv := api.server(t)
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 
 	derived, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "proposals/pending.json")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestDeriveAcceptance_LatestReviewWinsOverEarlierApproval(t *testing.T) {
 		},
 	}
 	srv := api.server(t)
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 
 	derived, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "proposal.json")
 	if err != nil {
@@ -111,7 +111,7 @@ func TestDeriveAcceptance_EmptyApproversIsFine(t *testing.T) {
 		reviews: []map[string]any{}, // merged with zero reviews at all
 	}
 	srv := api.server(t)
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 
 	derived, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "proposal.json")
 	if err != nil {
@@ -124,7 +124,7 @@ func TestDeriveAcceptance_EmptyApproversIsFine(t *testing.T) {
 
 func TestDeriveAcceptance_CommitNotInHistory(t *testing.T) {
 	repoDir, _ := testRepo(t, "proposal.json", `{"schema_version":1}`)
-	client := New("") // never reached -- git check fails first
+	client := newTestClient(t, "") // never reached -- git check fails first
 
 	_, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "proposal.json")
@@ -135,7 +135,7 @@ func TestDeriveAcceptance_CommitNotInHistory(t *testing.T) {
 
 func TestDeriveAcceptance_ProposalFileAbsentFromMerge(t *testing.T) {
 	repoDir, sha := testRepo(t, "proposal.json", `{"schema_version":1}`)
-	client := New("") // never reached -- git check fails first
+	client := newTestClient(t, "") // never reached -- git check fails first
 
 	_, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "wrong/path.json")
 	if !errors.Is(err, ErrFileNotFoundAtCommit) {
@@ -147,7 +147,7 @@ func TestDeriveAcceptance_NoPullRequestForCommit(t *testing.T) {
 	repoDir, sha := testRepo(t, "proposal.json", `{"schema_version":1}`)
 	api := &fakeGitHubAPI{pulls: []map[string]any{}}
 	srv := api.server(t)
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 
 	_, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "proposal.json")
 	if !errors.Is(err, ErrNoPullRequestForCommit) {
@@ -161,7 +161,7 @@ func TestDeriveAcceptance_NoTrailerInPRBody(t *testing.T) {
 		pulls: []map[string]any{{"number": 9, "body": "just a normal PR, nothing special"}},
 	}
 	srv := api.server(t)
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 
 	_, err := DeriveAcceptance(context.Background(), client, repoDir, "acme", "infra", sha, "proposal.json")
 	if !errors.Is(err, ErrNoProposalTrailer) {

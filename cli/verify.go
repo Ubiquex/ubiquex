@@ -128,7 +128,10 @@ func runVerifyAcceptance(ctx context.Context, out io.Writer, p *core.Proposal, r
 	if base := os.Getenv("UBX_GITHUB_API_BASE_URL"); base != "" {
 		apiOpts = append(apiOpts, ghub.WithBaseURL(base))
 	}
-	api := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	api, err := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	if err != nil {
+		return result, err
+	}
 
 	current, err := api.ApprovingReviewers(ctx, owner, repo, a.PRNumber)
 	if err != nil {

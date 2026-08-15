@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	ghapi "github.com/google/go-github/v78/github"
-	ghub "github.com/ubiquex/ubiquex/github"
 )
 
 // fakeCommentServer serves exactly the two real endpoints
@@ -70,7 +69,7 @@ func idStrOf(id int64) string {
 
 func TestPostOrEditComment_CreatesWhenNoneExists(t *testing.T) {
 	f := &fakeCommentServer{}
-	api := ghub.New("test-token", ghub.WithBaseURL(f.server(t).URL+"/"))
+	api := newTestClient(t, f.server(t))
 
 	if err := postOrEditComment(context.Background(), api, "acme", "infra", 42, "ubx[bot]", "plan", "delta: 1 creates"); err != nil {
 		t.Fatalf("postOrEditComment: %v", err)
@@ -91,7 +90,7 @@ func TestPostOrEditComment_CreatesWhenNoneExists(t *testing.T) {
 // one -- UBI-161's own --edit-last mechanism, reused here.
 func TestPostOrEditComment_EditsExistingInPlace(t *testing.T) {
 	f := &fakeCommentServer{}
-	api := ghub.New("test-token", ghub.WithBaseURL(f.server(t).URL+"/"))
+	api := newTestClient(t, f.server(t))
 	ctx := context.Background()
 
 	if err := postOrEditComment(ctx, api, "acme", "infra", 42, "ubx[bot]", "plan", "delta: 1 creates"); err != nil {
@@ -114,7 +113,7 @@ func TestPostOrEditComment_EditsExistingInPlace(t *testing.T) {
 // overwritten by a "plan" post.
 func TestPostOrEditComment_IgnoresOtherKinds(t *testing.T) {
 	f := &fakeCommentServer{}
-	api := ghub.New("test-token", ghub.WithBaseURL(f.server(t).URL+"/"))
+	api := newTestClient(t, f.server(t))
 	ctx := context.Background()
 
 	if err := postOrEditComment(ctx, api, "acme", "infra", 42, "ubx[bot]", "ship", "shipped abc123"); err != nil {
@@ -139,7 +138,7 @@ func TestPostOrEditComment_IgnoresNonBotComments(t *testing.T) {
 		},
 	}
 	f.nextID = 1
-	api := ghub.New("test-token", ghub.WithBaseURL(f.server(t).URL+"/"))
+	api := newTestClient(t, f.server(t))
 
 	if err := postOrEditComment(context.Background(), api, "acme", "infra", 42, "ubx[bot]", "plan", "delta: 1 creates"); err != nil {
 		t.Fatalf("postOrEditComment: %v", err)
