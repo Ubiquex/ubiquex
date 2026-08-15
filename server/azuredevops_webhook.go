@@ -90,8 +90,8 @@ func (s *Server) handleAzureDevOpsEvent(ctx context.Context, eventType string, r
 // DevOps PR-event handler needs, extracted once from a decoded
 // git.GitPullRequest -- project/repositoryID/prID address the real
 // API calls (three real identifiers, never two, see server/config.go's
-// own RepoConfig doc comment); ledgerDir comes from matching them
-// against Config.Repos.
+// own RepoConfig doc comment); matching them against Config.Repos is
+// what decides whether this event is allowed to be acted on at all.
 type prIdentityAzureDevOps struct {
 	project      string
 	repositoryID string
