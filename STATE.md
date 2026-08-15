@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-171 (ubx server + accept): GitHub Enterprise Server and on-prem Azure DevOps Server, PRs OPEN not yet merged, 2026-08-15
+## UBI-171 (ubx server + accept): GitHub Enterprise Server and on-prem Azure DevOps Server, code PR #9 and docs PR #4 OPEN not yet merged (never self-merged), 2026-08-15
 
 Real scope: two self-hosted products that could not work at all, however correctly they were
 configured. Found by the verification-only base-URL question asked earlier in the same session, and
