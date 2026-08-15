@@ -2,6 +2,96 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-170 (Bitbucket Cloud): accept --from-merge + full ubx server integration, PRs OPEN not yet merged, 2026-08-15
+
+Real scope: Bitbucket Cloud, the fifth platform, named across the whole `ubx server`/`accept
+--from-merge` arc but never built. Confirmed as its own distinct effort, not a variant of Bitbucket
+Server.
+
+**Step 1 (verify first) hit a real environment wall and then routed around it honestly.** Every
+Atlassian DOCUMENTATION host is hard-blocked by this session's egress policy
+(`developer.atlassian.com`, `support.atlassian.com`, `confluence.atlassian.com` all fail CONNECT).
+But `api.bitbucket.org` is reachable, and it serves Bitbucket Cloud's own official OpenAPI
+definition at `https://api.bitbucket.org/swagger.json` (943 KB), which carries BOTH the API schema
+AND Atlassian's own narrative documentation inline under `x-atlassian-narrative`. That plus live
+API calls against a real public repo (`bitbucketpipelines/official-pipes`) settled everything
+except one detail. **Worth remembering: when Atlassian docs are blocked, the swagger endpoint is a
+first-class authoritative substitute, not a fallback.**
+
+**Confirmed differences from Bitbucket Server, none assumed:**
+- Auth: app passwords are DEPRECATED per Atlassian's own narrative. Access tokens (repository/
+  project/workspace scoped, bound to a resource not a person) sent as `Authorization: Bearer`.
+- Clone credential: `https://x-token-auth:{token}@bitbucket.org/...`. A THIRD distinct literal,
+  matching neither GitHub's `x-access-token` nor Bitbucket Server's real-username form. Atlassian's
+  own docs call the GitHub difference out explicitly.
+- Event keys share nothing: `pullrequest:created`/`push`/`approved`/`fulfilled` (its own word for
+  merged)/`comment_created`. Confirmed live from `/2.0/hook_events/repository` (24 events).
+- Approvals carry NO commit reference. A participant is exactly `{user, role, approved, state,
+  participated_on}`. Bitbucket Server's `lastReviewedCommit` does not exist.
+- No username on an account at all: `account_id`/`uuid` (stable), `nickname`/`display_name`
+  (user-changeable).
+- `commit/{sha}/pullrequests` returns a MINIMAL pull request (id/title/links only), so derivation
+  needs two calls. Also carries a `repo_indexed` flag: an unindexed repo returns empty, which means
+  "unknown", not "no PR".
+- Webhook signing exists: write-only `secret` on the subscription, HMAC hex digest in
+  `X-Hub-Signature`, generated ONLY when a secret is set.
+
+**The one thing the spec does not state is the HMAC algorithm** (every `SHA1` hit in the spec is
+about git commit SHAs). The founder confirmed it against support.atlassian.com: sha256, `sha256=`
+prefix, and Atlassian's own "might change in the future" note. So the implementation **parses the
+algorithm name out of the header** and looks it up in a table rather than hardcoding it. An
+unimplemented algorithm is refused explicitly, which is real downgrade protection: a real,
+correctly-computed SHA-1 signature is refused, verified end to end.
+
+**Implementation**: new `bitbucketcloud/` package (client.go, derive.go, server_api.go);
+`--bitbucket-cloud-repo` on `ubx accept --from-merge`; `server/bitbucketcloud{,_auth,_comment,
+_webhook}.go`; a fifth route `/webhook/bitbucketcloud`; `bitbucketcloud:workspace/repo-slug` on
+`--repo`. UBI-166's allowlist and UBI-167's auto-discovery are reused unchanged, not rebuilt.
+
+**Three founder-confirmed design decisions, all implemented as decided:**
+1. CODEOWNERS entries resolve to real `account_id`s at check time against live workspace
+   membership, refusing on both failed and ambiguous resolution, and reporting the refusal on the
+   pull request rather than swallowing it as a plain not-authorized.
+2. TOCTOU follows the GitLab/Azure DevOps branch-restriction pattern
+   (`reset_pullrequest_approvals_on_change` / `smart_reset_pullrequest_approvals`), never Bitbucket
+   Server's per-approval commit reference.
+3. Access tokens, not personal API tokens, throughout setup docs.
+
+**UBI-168 applied from the start, not inherited**: the authorization check runs BEFORE any clone or
+fetch in the comment-triggered handlers. The four older platforms still resolve the stack (and
+therefore clone) first; that remains UBI-168's own open work. Two tests assert the work directory
+stays completely empty after an unauthorized `ubx plan`/`ubx ship` comment.
+
+**Verification**: full repo `go build`/`go vet`/`go test -count=1` clean, gofmt clean
+(`blueprint/`'s 4 wasmtime/bwrap environment failures confirmed identical on unmodified `main`, as
+every ticket tonight). New tests: `bitbucketcloud/{client,server_api,derive}_test.go` and
+`server/bitbucketcloud_{signature,allowlist,auth,flow}_test.go` plus
+`cli/accept_frommerge_bitbucketcloud_test.go`, all against real httptest servers and real git
+repositories, never mocked at the transport level.
+
+**Docker verification: still blocked, same as UBI-167.** `production.cloudfront.docker.com` returns
+403 for every base image; re-confirmed this session by pulling `debian:bookworm-slim` directly. Ran
+the same host-process substitute instead: a real `ubx server` process, real HMAC-SHA256-signed
+deliveries, a stand-in Bitbucket Cloud API, and a real local git remote via `url.<path>.insteadOf`
+rewriting the real `x-token-auth@bitbucket.org` clone URL. All 7 cases passed: real clone plus
+auto-discovered stack on `pullrequest:created`; TOCTOU refusal with no reset restriction; gate
+passes with either reset kind; unauthorized ship refused with an EMPTY work dir (UBI-168);
+authorized ship proceeds after resolving `@owner` to a real account_id; unlisted repo refused and
+logged with nothing cloned (UBI-166); and signature enforcement returning 202 for a valid sha256
+and 401 for a real sha1, an unknown algorithm, a bare digest, a wrong secret, and a missing header.
+
+**One detail deliberately handled as fail-closed**: the `X-Event-Key` header name is the only thing
+in this integration that comes from Atlassian's webhook docs rather than the machine-readable
+definition, so an absent or unrecognized event key does nothing at all. A test asserts silence for
+five such keys. The payload is otherwise trusted only for repository identity, pull request id,
+actor, and comment text; every other fact is re-fetched from the API.
+
+**Docs** (`ubiquex-docs` PR, `cd252cc`): new `server/bitbucket-cloud-setup.mdx` and
+`integrations/bitbucket-cloud.mdx`, plus nav and cross-links. `mint validate` clean;
+`mint broken-links` 124 findings on the branch and 124 on unmodified main, zero on any touched page.
+
+**Not yet done, per the ticket's own "Never self-merge"**: both PRs are open and awaiting review.
+
 ## UBI-169 (ubx server docs + CLI help): Bamboo -> Bitbucket Server naming correction, PRs OPEN not yet merged, 2026-08-15
 
 Real scope, read directly from the ticket: `ubx server` is a webhook listener talking to a VCS

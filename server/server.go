@@ -9,6 +9,7 @@ import (
 	"time"
 
 	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
 	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
 	ghub "github.com/ubiquex/ubiquex/github"
 	glab "github.com/ubiquex/ubiquex/gitlab"
@@ -24,6 +25,7 @@ type Server struct {
 	gitlab          *glab.Client     // nil when Config.GitLabToken is unset -- GitLab support not configured
 	azuredevops     *adevops.Client  // nil when Config.AzureDevOpsToken is unset -- Azure DevOps support not configured
 	bitbucketserver *bbserver.Client // nil when Config.BitbucketServerToken is unset -- Bitbucket Server support not configured
+	bitbucketcloud  *bbcloud.Client  // nil when Config.BitbucketCloudToken is unset -- Bitbucket Cloud support not configured
 	self            string           // this process's own resolved executable path (exec.go)
 }
 
@@ -63,6 +65,11 @@ func New(cfg *Config) (*Server, error) {
 		bitbucketServerClient = newBitbucketServerClient(cfg.BitbucketServerURL, cfg.BitbucketServerToken)
 	}
 
+	var bitbucketCloudClient *bbcloud.Client
+	if cfg.BitbucketCloudToken != "" {
+		bitbucketCloudClient = newBitbucketCloudClient(cfg.BitbucketCloudToken, cfg.BitbucketCloudAPIBaseURL)
+	}
+
 	return &Server{
 		cfg:             cfg,
 		installations:   installations,
@@ -70,6 +77,7 @@ func New(cfg *Config) (*Server, error) {
 		gitlab:          gitlabClient,
 		azuredevops:     azureDevOpsClient,
 		bitbucketserver: bitbucketServerClient,
+		bitbucketcloud:  bitbucketCloudClient,
 		self:            self,
 	}, nil
 }
@@ -88,6 +96,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/webhook/gitlab", gitlabWebhookHandler{s: s})
 	mux.Handle("/webhook/azuredevops", azureDevOpsWebhookHandler{s: s})
 	mux.Handle("/webhook/bitbucketserver", bitbucketServerWebhookHandler{s: s})
+	mux.Handle("/webhook/bitbucketcloud", bitbucketCloudWebhookHandler{s: s})
 	httpServer := &http.Server{Addr: s.cfg.ListenAddr, Handler: mux}
 
 	errCh := make(chan error, 1)
@@ -542,4 +551,91 @@ func (s *Server) runManualShipBitbucketServer(ctx context.Context, api *bbserver
 
 	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
 	return postOrEditCommentBitbucketServer(ctx, api, projectKey, repositorySlug, prID, s.cfg.BitbucketServerBotName, "ship", body)
+}
+
+// matchingRepoConfigsBitbucketCloud is matchingRepoConfigsGitHub's own
+// Bitbucket Cloud counterpart, matched on both real workspace and
+// repository slug. Project carries the workspace and Repository the
+// repo slug, the same two-real-identifier shape Azure DevOps' and
+// Bitbucket Server's own entries already use.
+func (s *Server) matchingRepoConfigsBitbucketCloud(workspace, repoSlug string) []RepoConfig {
+	var out []RepoConfig
+	for _, r := range s.cfg.Repos {
+		if r.Platform == "bitbucketcloud" && r.Project == workspace && r.Repository == repoSlug {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// repoDirForBitbucketCloud is ensureRepoCheckoutBitbucketCloud's own
+// Server-level wrapper -- repoDirFor's real Bitbucket Cloud
+// counterpart. Like GitLab's/Azure DevOps'/Bitbucket Server's own real,
+// static token, there's no per-installation concept to resolve here.
+func (s *Server) repoDirForBitbucketCloud(ctx context.Context, workspace, repoSlug string) (string, error) {
+	if s.bitbucketcloud == nil {
+		return "", fmt.Errorf("bitbucket cloud support is not configured (missing --bitbucket-cloud-token)")
+	}
+	return ensureRepoCheckoutBitbucketCloud(ctx, s.cfg.WorkDir, workspace, repoSlug, s.cfg.BitbucketCloudToken)
+}
+
+// checkoutForBitbucketCloud is checkoutForGitHub's own Bitbucket Cloud
+// counterpart.
+func (s *Server) checkoutForBitbucketCloud(ctx context.Context, workspace, repoSlug, ref string) (string, error) {
+	repoDir, err := s.repoDirForBitbucketCloud(ctx, workspace, repoSlug)
+	if err != nil {
+		return "", err
+	}
+	if err := checkoutRef(ctx, repoDir, ref); err != nil {
+		return "", err
+	}
+	return repoDir, nil
+}
+
+// runPlanAndCommentBitbucketCloud is runPlanAndComment's own real
+// Bitbucket Cloud counterpart -- identical core-flow steps 1 and 2,
+// against Bitbucket Cloud's own real comment API instead.
+func (s *Server) runPlanAndCommentBitbucketCloud(ctx context.Context, api *bbcloud.Client, workspace, repoSlug string, prID int64, repoDir, ledgerDir string) error {
+	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketCloud(ctx, api, workspace, repoSlug, prID, s.cfg.BitbucketCloudBotAccountID, "plan", body)
+}
+
+// runAutomaticShipBitbucketCloud is runAutomaticShip's own real
+// Bitbucket Cloud counterpart -- the identical real "never
+// --confirm-destroys on an unattended, merge-triggered path, no
+// exception" safety property.
+func (s *Server) runAutomaticShipBitbucketCloud(ctx context.Context, api *bbcloud.Client, workspace, repoSlug string, prID int64, repoDir, ledgerDir string) error {
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketCloud(ctx, api, workspace, repoSlug, prID, s.cfg.BitbucketCloudBotAccountID, "ship", body)
+}
+
+// runManualShipBitbucketCloud is runManualShip's own real Bitbucket
+// Cloud counterpart -- the identical real two-gate confirm-destroys
+// rule (Config.AllowDestroy as the outer, operator-set gate; the
+// human's own explicit --confirm-destroys comment flag as the inner,
+// per-instance one; both required, neither alone sufficient).
+func (s *Server) runManualShipBitbucketCloud(ctx context.Context, api *bbcloud.Client, workspace, repoSlug string, prID int64, repoDir, ledgerDir string, confirmDestroys bool) error {
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
+	if confirmDestroys && s.cfg.AllowDestroy {
+		args = append(args, "--confirm-destroys")
+	}
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
+	if err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
+	return postOrEditCommentBitbucketCloud(ctx, api, workspace, repoSlug, prID, s.cfg.BitbucketCloudBotAccountID, "ship", body)
 }
