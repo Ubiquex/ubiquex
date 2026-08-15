@@ -90,8 +90,8 @@ func (s *Server) handleAzureDevOpsEvent(ctx context.Context, eventType string, r
 // DevOps PR-event handler needs, extracted once from a decoded
 // git.GitPullRequest -- project/repositoryID/prID address the real
 // API calls (three real identifiers, never two, see server/config.go's
-// own RepoConfig doc comment); ledgerDir comes from matching them
-// against Config.Repos.
+// own RepoConfig doc comment); matching them against Config.Repos is
+// what decides whether this event is allowed to be acted on at all.
 type prIdentityAzureDevOps struct {
 	project      string
 	repositoryID string
@@ -143,13 +143,17 @@ func (s *Server) handlePullRequestCreatedAzureDevOps(ctx context.Context, resour
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.headSHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
 	})
 	if err != nil {
 		return s.refuseAmbiguousStackAzureDevOps(ctx, api, id, "git.pullrequest.created", err)
 	}
-	return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, id.headSHA, ledgerDir)
+	return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir)
 }
 
 // handlePullRequestUpdatedAzureDevOps is core-flow steps 3 (re-plan on
@@ -184,13 +188,17 @@ func (s *Server) handlePullRequestUpdatedAzureDevOps(ctx context.Context, resour
 
 	switch notification {
 	case "push":
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.headSHA)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackAzureDevOps(ctx, api, id, "git.pullrequest.updated:push", err)
 		}
-		return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, id.headSHA, ledgerDir)
+		return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir)
 	case "vote":
 		var approver *git.IdentityRefWithVote
 		if pr.Reviewers != nil {
@@ -237,22 +245,26 @@ func (s *Server) handlePullRequestMergedAzureDevOps(ctx context.Context, resourc
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.targetRef)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
 	})
 	if err != nil {
 		return s.refuseAmbiguousStackAzureDevOps(ctx, api, id, "git.pullrequest.merged", err)
 	}
-	return s.runAutomaticShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, id.targetRef, ledgerDir)
+	return s.runAutomaticShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir)
 }
 
 // refuseAmbiguousStackAzureDevOps is refuseAmbiguousStackGitHub's own
 // Azure DevOps counterpart.
 func (s *Server) refuseAmbiguousStackAzureDevOps(ctx context.Context, api *adevops.Client, id prIdentityAzureDevOps, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
 		"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "event", event, "error", err)
 	return postOrEditCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, s.cfg.AzureDevOpsBotDisplayName, "plan",
-		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // handlePullRequestCommentAzureDevOps is core-flow steps 3 (manual
@@ -315,7 +327,11 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "verb", verb)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.headSHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
 	})
 	if err != nil {
@@ -339,7 +355,7 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a project member with real, current Contributors-group access) can.", commenterDisplayName))
 		}
 		_ = flags
-		return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, id.headSHA, ledgerDir)
+		return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, commenterDisplayName, commenterDescriptor)
@@ -351,7 +367,7 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenterDisplayName))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, id.headSHA, ledgerDir, confirmDestroys)
+		return s.runManualShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
 }
@@ -410,11 +426,8 @@ func (s *Server) handleAzureDevOpsApproval(ctx context.Context, api *adevops.Cli
 			fmt.Sprintf("Approval recorded by Azure DevOps, but `ubx` could not derive acceptance from it: %s. Accept this proposal locally with `ubx accept` instead.", err))
 	}
 
-	repoDir, err := s.repoDirForAzureDevOps(ctx, id.project, id.repositoryID)
+	repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, headSHA)
 	if err != nil {
-		return err
-	}
-	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
 		return err
 	}
 

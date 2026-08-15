@@ -84,12 +84,13 @@ func TestHandlePullRequestReviewEvent_UnlistedRepoRefusedAndLogged(t *testing.T)
 }
 
 // TestChangedFilePathsGitHub_ResolvesTwoRealStacksIndependently proves
-// UBI-166's own real GitHub wiring for a genuinely multi-stack
-// repository: changedFilePathsGitHub's own real fetch (a real HTTP
-// round trip against a fixture server, the same "changes" endpoint
-// GitHub's own List Files API exposes) feeds resolveLedgerDir the
-// real, current changed-file paths, and each stack resolves
-// independently of Config.Repos listing order.
+// the real GitHub wiring for a genuinely multi-stack repository:
+// changedFilePathsGitHub's own real fetch (a real HTTP round trip
+// against a fixture server, the same "changes" endpoint GitHub's own
+// List Files API exposes) feeds the resolver the real, current
+// changed-file paths, and the PR resolves against the stacks actually
+// discovered in the repository's own checkout (UBI-167) rather than
+// any declared path.
 func TestChangedFilePathsGitHub_ResolvesTwoRealStacksIndependently(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/acme/infra/pulls/42/files", func(w http.ResponseWriter, r *http.Request) {
@@ -105,13 +106,13 @@ func TestChangedFilePathsGitHub_ResolvesTwoRealStacksIndependently(t *testing.T)
 		t.Fatalf("changedFilePathsGitHub: %v", err)
 	}
 
-	candidates := []RepoConfig{
-		{Platform: "github", Owner: "acme", Name: "infra", LedgerDir: "stacks/payments"},
-		{Platform: "github", Owner: "acme", Name: "infra", LedgerDir: "stacks/networking"},
-	}
-	dir, err := resolveLedgerDir(candidates, paths)
+	repoDir := t.TempDir()
+	writeStack(t, repoDir, "stacks/payments", "config")
+	writeStack(t, repoDir, "stacks/networking", "config")
+
+	dir, err := resolveStackIn(repoDir, func() ([]string, error) { return paths, nil })
 	if err != nil {
-		t.Fatalf("resolveLedgerDir: %v", err)
+		t.Fatalf("resolveStackIn: %v", err)
 	}
 	if dir != "stacks/payments" {
 		t.Errorf("dir = %q, want %q -- a payments-only PR must resolve to the payments stack via the real fetched changed files", dir, "stacks/payments")

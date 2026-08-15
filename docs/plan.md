@@ -2,6 +2,28 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-167: `ubx server`'s own `Config.Repos` entries carry
+  repository identity ONLY. The `ledger_dir` field is gone; once a repo
+  clears UBI-166's allowlist (unchanged, untouched -- unlisted repos are
+  still refused outright and loudly logged), the stacks come from the
+  repository's own checkout: every directory containing a real
+  `.ubx/config` (any of cli/configcascade.go's own four real file names)
+  is discovered by walking the checkout at the event's own commit, in
+  new `server/stackdiscovery.go`. UBI-166's deepest-matching-stack-wins
+  resolution is reused unchanged, just fed auto-discovered candidates
+  instead of manually-declared ones -- so the multi-stack case still
+  matches against the event's own real changed files and still refuses
+  outright on genuine ambiguity, never guessing. Zero discovered stacks
+  is a real, separate refusal (`ErrNoStackDiscovered`) from "not on the
+  allowlist", which never reached this resolver in the first place. Real
+  structural consequence: each platform's own handler now does the
+  checkout before resolving (discovery reads what the commit actually
+  contains), so the twelve `run*` helpers take a prepared `repoDir`
+  instead of checking out themselves. Drift-watch, which has no event
+  and therefore no changed files to disambiguate with, runs one real
+  `ubx status --drift` pass per discovered stack rather than picking
+  one. A pre-UBI-167 `ledger_dir` (YAML key or `--repo` suffix) is
+  refused BY NAME at startup, never silently ignored.
 - 2026-08-12 -- UBI-145 (CLOSED): landed UBI-134's real, waiting
   `sdk/ts`/`sdk/py`/`sdk/go` runtime changes for real, across three
   working sessions, never self-merged anywhere. A real finding

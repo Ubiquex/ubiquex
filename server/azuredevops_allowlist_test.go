@@ -96,19 +96,21 @@ func TestHandlePullRequestMergedAzureDevOps_UnlistedRepoRefusedAndLogged(t *test
 	}
 }
 
-// TestResolveLedgerDir_AzureDevOpsTwoRealStacksIndependently proves the
+// TestResolveStackIn_AzureDevOpsTwoRealStacksIndependently proves the
 // shared resolution core, applied against Azure DevOps' own real
 // changed-file path shape (ListPullRequestChangedFiles's own real
-// return type, already flat repo-relative paths), resolves two
-// independently configured stacks correctly.
-func TestResolveLedgerDir_AzureDevOpsTwoRealStacksIndependently(t *testing.T) {
-	candidates := []RepoConfig{
-		{Platform: "azuredevops", Project: "acme-infra", Repository: "11111111-1111-1111-1111-111111111111", LedgerDir: "stacks/payments"},
-		{Platform: "azuredevops", Project: "acme-infra", Repository: "11111111-1111-1111-1111-111111111111", LedgerDir: "stacks/networking"},
-	}
-	dir, err := resolveLedgerDir(candidates, []string{"/stacks/payments/proposals/db-replica.json"})
+// return type, already flat repo-relative paths), resolves two real,
+// auto-discovered stacks correctly.
+func TestResolveStackIn_AzureDevOpsTwoRealStacksIndependently(t *testing.T) {
+	repoDir := t.TempDir()
+	writeStack(t, repoDir, "stacks/payments", "config")
+	writeStack(t, repoDir, "stacks/networking", "config")
+
+	dir, err := resolveStackIn(repoDir, func() ([]string, error) {
+		return []string{"/stacks/payments/proposals/db-replica.json"}, nil
+	})
 	if err != nil {
-		t.Fatalf("resolveLedgerDir: %v", err)
+		t.Fatalf("resolveStackIn: %v", err)
 	}
 	if dir != "stacks/payments" {
 		t.Errorf("dir = %q, want %q -- Azure DevOps' own real changed-file paths carry a leading slash, which must not break resolution", dir, "stacks/payments")

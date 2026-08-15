@@ -102,13 +102,17 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 
 	switch action {
 	case "open":
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForGitLab(ctx, project, e.ObjectAttributes.LastCommit.ID)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return changedFilePathsGitLab(ctx, api, project, mrIID)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackGitLab(ctx, api, project, mrIID, "merge_request:"+action, err)
 		}
-		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, e.ObjectAttributes.LastCommit.ID, ledgerDir)
+		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, repoDir, ledgerDir)
 
 	case "update":
 		// GitLab folds "new commit pushed" and every other real MR
@@ -121,13 +125,17 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 		if e.ObjectAttributes.OldRev == "" {
 			return nil
 		}
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForGitLab(ctx, project, e.ObjectAttributes.LastCommit.ID)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return changedFilePathsGitLab(ctx, api, project, mrIID)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackGitLab(ctx, api, project, mrIID, "merge_request:"+action, err)
 		}
-		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, e.ObjectAttributes.LastCommit.ID, ledgerDir)
+		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, repoDir, ledgerDir)
 
 	case "approval":
 		// Real, deliberate choice: "approval" (an individual user's own
@@ -151,13 +159,17 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 		if !s.cfg.ShipOnMerge {
 			return nil
 		}
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForGitLab(ctx, project, e.ObjectAttributes.TargetBranch)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return changedFilePathsGitLab(ctx, api, project, mrIID)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackGitLab(ctx, api, project, mrIID, "merge_request:merge", err)
 		}
-		return s.runAutomaticShipGitLab(ctx, api, project, mrIID, e.ObjectAttributes.TargetBranch, ledgerDir)
+		return s.runAutomaticShipGitLab(ctx, api, project, mrIID, repoDir, ledgerDir)
 	}
 	return nil
 }
@@ -165,10 +177,10 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 // refuseAmbiguousStackGitLab is refuseAmbiguousStackGitHub's own
 // GitLab counterpart.
 func (s *Server) refuseAmbiguousStackGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
 		"platform", "gitlab", "repo", project, "mr", mrIID, "event", event, "error", err)
 	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "plan",
-		fmt.Sprintf("`ubx server` could not resolve this MR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
+		fmt.Sprintf("`ubx server` could not resolve this MR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // handleMergeCommentEvent is core-flow steps 3 (re-plan) and 4's manual
@@ -206,7 +218,11 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 		return fmt.Errorf("get MR !%d on %s: %w", mrIID, project, err)
 	}
 
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForGitLab(ctx, project, mr.SHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return changedFilePathsGitLab(ctx, api, project, mrIID)
 	})
 	if err != nil {
@@ -224,7 +240,7 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this MR -- only its own creator (or, for a drift-watch-opened MR, a project member with real, current Developer access or higher) can.", commenter))
 		}
 		_ = flags
-		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, mr.SHA, ledgerDir)
+		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, repoDir, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShipGitLab(ctx, api, project, mrIID, commenter)
@@ -236,7 +252,7 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this MR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShipGitLab(ctx, api, project, mrIID, mr.SHA, ledgerDir, confirmDestroys)
+		return s.runManualShipGitLab(ctx, api, project, mrIID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
 }
@@ -283,11 +299,8 @@ func (s *Server) handleGitLabApproval(ctx context.Context, api *glab.Client, pro
 			fmt.Sprintf("Approval recorded by GitLab, but `ubx` could not derive acceptance from it: %s. Accept this proposal locally with `ubx accept` instead.", err))
 	}
 
-	repoDir, err := s.repoDirForGitLab(ctx, project)
+	repoDir, err := s.checkoutForGitLab(ctx, project, headSHA)
 	if err != nil {
-		return err
-	}
-	if err := checkoutRef(ctx, repoDir, headSHA); err != nil {
 		return err
 	}
 
