@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 OPEN not yet merged, 2026-08-15
+## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 and state PR #12 OPEN not yet merged (never self-merged), 2026-08-15
 
 Docs-only. All five CI/CD guides run `ubx accept --from-merge` and `ubx ship --yes` in their
 ship-on-merge workflow and none mentioned needing a real remote ledger store.
