@@ -2,6 +2,91 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-172: mint dev "Client not built" -- root cause found, NOT fixable in this sandbox, state PR #15 OPEN not yet merged (never self-merged), 2026-08-15
+
+**Do not re-investigate this from scratch.** The root cause is confirmed and the remedy is outside
+this container. A one-line re-check is at the end.
+
+### Root cause, verified end to end
+
+`mint dev` does not build anything. It needs a **prebuilt Next.js standalone bundle** that the CLI
+**downloads** from `https://releases.mintlify.com`. That host is **denied by the organization's
+network egress policy**, so the bundle is never fetched and the renderer never exists.
+
+The full chain, each step confirmed by running it:
+
+1. `releases.mintlify.com` is blocked **both ways**. Through the agent proxy: `403` on
+   `CONNECT releases.mintlify.com:443`, recorded in the proxy's own `recentRelayFailures` as
+   `connect_rejected`, "gateway answered 403 (policy denial)". Bypassing the proxy: TLS completes
+   against a transparent interceptor that returns **HTTP 403** with the body
+   `Host not in allowlist: releases.mintlify.com. Add this host to your network egress settings to
+   allow access.` Same policy, two expressions of it.
+2. `getLatestClientVersion()` wraps that fetch in a `catch` that returns `undefined`. Verified by
+   calling it directly: `getLatestClientVersion() => undefined`, `getClientVersion() => "none"`.
+3. `mint update`'s client block is `if (latestClientVersion) { ... }`. With `undefined` it is
+   skipped **silently** and the CLI prints **`success already up to date`** while no client is
+   installed at all. That false success is why this never looked like a network problem.
+4. `mint dev` never bootstraps the client anyway: `start.js` -> `dev()` -> `run.js` -> `setupNext()`
+   with no download step in that path.
+5. `setupNext()` hits ENOENT on
+   `~/.mintlify/mint/apps/client/.next/required-server-files.json` and throws
+   **"Client not built. Run: cd <path>/apps/client && STANDALONE_BUILD=true NEXT_PUBLIC_ENV=cli
+   yarn build"**. That message is aimed at Mintlify's own monorepo developers, not at CLI users.
+   **It is what misled four sessions into hunting for a missing local build step that does not
+   exist for CLI installs.**
+
+On disk: `~/.mintlify/mint/apps/client/` has `public/` and `src/` but **no** `.next/`, no
+`mint-version.txt`, no `node_modules/next`.
+
+### Not fixable here, and why
+
+The allowlist is enforced upstream. The proxy reports `selective: false`, `toolScoped: false`, has
+no writable allowlist endpoint (`POST /__agentproxy/allow` -> 405), and no egress config exists in
+the repo or session settings. `/root/.ccr/README.md` is explicit for this failure class: a 403 is an
+organization egress policy denial, and the instruction is to **report the blocked host, not retry or
+route around it**. No fix was attempted or faked.
+
+There is also no legitimate alternate source: the client bundle is **not** published on npm
+(`@mintlify/client`, `mint-client`, `@mintlify/mint` are all unpublished; only the CLI tooling is),
+and the CLI hardcodes `releases.mintlify.com` in `constants.js` with no mirror or local-bundle
+override.
+
+### What this is NOT
+
+**Not a bug in the ubiquex-docs site.** `mint validate` and `mint broken-links` both pass here, on
+every session, because neither needs the client bundle. The failure is entirely in fetching
+Mintlify's prebuilt renderer.
+
+**Not something a normal machine hits.** Any environment whose egress permits
+`releases.mintlify.com` (an ordinary local dev machine, or this container with the host
+allowlisted) runs `mint dev` fine. This is environment-specific, full stop.
+
+### What future sessions should do
+
+Expect the same limitation **unless the host gets allowlisted**. Keep using the measured
+source-level substitute for DOM overflow checks and structural verification for redirects, and keep
+saying plainly that the rendered check was not performed.
+
+Cheap re-check, seconds, before assuming it is still blocked:
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' https://releases.mintlify.com/mint-version.txt
+```
+
+`403` means still blocked. `200` means the allowlist changed: run `npx mint@latest update`, confirm
+`~/.mintlify/mint/apps/client/.next/` now exists, and the real `mint dev` DOM and live-redirect
+checks become available for the first time.
+
+**The one action that would fix it** is adding `releases.mintlify.com` to this environment's network
+egress allowlist, which is a Claude Code environment setting, not a repository change.
+
+### Two real Mintlify CLI bugs found along the way
+
+Neither is ours to fix, both worth knowing: `mint update` reports success when it silently skipped
+the download, and `mint dev` reports a monorepo build instruction to CLI users whose actual problem
+is a failed download. Either one alone would have made this a five-minute diagnosis instead of four
+sessions of guessing.
+
 ## Bitbucket setup pages combined (no ticket, founder request): docs PR #9 and state PR #14 OPEN not yet merged (never self-merged), 2026-08-15
 
 `server/bitbucket-server-setup.mdx` + `server/bitbucket-cloud-setup.mdx` -> one
