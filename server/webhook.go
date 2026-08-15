@@ -167,6 +167,15 @@ func (s *Server) refuseAmbiguousStackGitHub(ctx context.Context, api *ghub.Clien
 // path (ship via comment) -- both require the real, live authorization
 // checks auth.go implements, never inferred from the app's own
 // installation scope.
+//
+// UBI-168: the authorization check runs BEFORE any clone or fetch. It
+// used to run after, which meant an unauthorized commenter on an
+// allowlisted repository could still make this server do the real work
+// of cloning or fetching that repository, on every comment, before
+// being told no. Nothing else about the flow changed: the same checks
+// run against the same inputs and produce the same refusal comments,
+// only the checkout now happens on the authorized path instead of
+// ahead of the decision.
 func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueCommentEvent) error {
 	if e.GetAction() != "created" {
 		return nil
@@ -204,17 +213,6 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 		return fmt.Errorf("get PR #%d on %s/%s: %w", prNumber, owner, repo, err)
 	}
 
-	repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, pr.GetHead().GetSHA())
-	if err != nil {
-		return err
-	}
-	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
-		return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
-	})
-	if err != nil {
-		return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "issue_comment:"+verb, err)
-	}
-
 	switch verb {
 	case "plan":
 		ok, err := isAuthorizedToReplan(ctx, api, owner, repo, s.botLogin, pr.GetUser().GetLogin(), commenter)
@@ -226,6 +224,10 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a repository collaborator with write access) can.", commenter))
 		}
 		_ = flags // real, forwarded verbatim to the subprocess -- see runPlanAndComment
+		repoDir, ledgerDir, err := s.prepareStackGitHub(ctx, api, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), "issue_comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runPlanAndComment(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 
 	case "ship":
@@ -238,9 +240,34 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
+		repoDir, ledgerDir, err := s.prepareStackGitHub(ctx, api, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), "issue_comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runManualShip(ctx, api, owner, repo, prNumber, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
+}
+
+// prepareStackGitHub checks the repository out at headSHA and resolves
+// the one real stack the event acts on -- handleIssueCommentEvent's own
+// post-authorization step (UBI-168), structurally identical to
+// prepareStackBitbucketCloud, which was built this way from the start.
+//
+// Returns an empty repoDir with a nil error when the refusal has already
+// been posted as a PR comment, so a caller can simply stop.
+func (s *Server) prepareStackGitHub(ctx context.Context, api *ghub.Client, installationID int64, owner, repo string, prNumber int, headSHA, event string) (repoDir, ledgerDir string, err error) {
+	repoDir, err = s.checkoutForGitHub(ctx, installationID, owner, repo, headSHA)
+	if err != nil {
+		return "", "", err
+	}
+	ledgerDir, err = resolveStackIn(repoDir, func() ([]string, error) {
+		return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+	})
+	if err != nil {
+		return "", "", s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, event, err)
+	}
+	return repoDir, ledgerDir, nil
 }
 
 // handlePullRequestReviewEvent is core-flow step 4's own trigger: a real

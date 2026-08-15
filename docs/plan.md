@@ -2,6 +2,22 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-168: in every comment-triggered handler, the real,
+  live authorization check now runs before any clone or fetch. A pure
+  ordering fix, pre-existing from UBI-166 and filed separately during
+  UBI-167 rather than folded into it; UBI-167 raised its cost, since an
+  unauthorized commenter on an allowlisted repository went from
+  triggering a changed-files API call to triggering a real clone. The
+  four older platforms were brought to Bitbucket Cloud's own shape (a
+  `prepareStack<Platform>` helper called inside each authorized branch),
+  which UBI-170 built correctly from the start, rather than to a new
+  design. Nothing else changed: same checks, same inputs, same refusal
+  comments, whole pre-existing suite untouched. Two verification lessons
+  worth keeping: a "did not happen" assertion needs a paired "does
+  happen" control or it proves nothing, and the first harness had two
+  weaknesses (an undecodable CODEOWNERS encoding, and a single-stack
+  fixture that made one signal vacuously true) that made a passing run
+  mean less than it appeared to.
 - 2026-08-15 -- UBI-171: GitHub Enterprise Server and on-prem Azure
   DevOps Server, which could not work at all before this regardless of
   configuration. Two real defects, both found by the verification-only

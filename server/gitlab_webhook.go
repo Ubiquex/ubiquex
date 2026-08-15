@@ -185,6 +185,11 @@ func (s *Server) refuseAmbiguousStackGitLab(ctx context.Context, api *glab.Clien
 
 // handleMergeCommentEvent is core-flow steps 3 (re-plan) and 4's manual
 // path (ship via note) for GitLab.
+//
+// UBI-168: the authorization check runs BEFORE any clone or fetch, the
+// same reordering handleIssueCommentEvent's own doc comment describes.
+// Only the ordering changed; every check, input, and refusal note is
+// unchanged.
 func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeCommentEvent) error {
 	if e.ObjectAttributes.System {
 		return nil // a real, GitLab-generated system note (e.g. "changed the description"), never a real command
@@ -218,17 +223,6 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 		return fmt.Errorf("get MR !%d on %s: %w", mrIID, project, err)
 	}
 
-	repoDir, err := s.checkoutForGitLab(ctx, project, mr.SHA)
-	if err != nil {
-		return err
-	}
-	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
-		return changedFilePathsGitLab(ctx, api, project, mrIID)
-	})
-	if err != nil {
-		return s.refuseAmbiguousStackGitLab(ctx, api, project, mrIID, "note:"+verb, err)
-	}
-
 	switch verb {
 	case "plan":
 		ok, err := isAuthorizedToReplanGitLab(ctx, api, project, s.cfg.GitLabBotUsername, mr.Author.Username, commenter)
@@ -240,6 +234,10 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this MR -- only its own creator (or, for a drift-watch-opened MR, a project member with real, current Developer access or higher) can.", commenter))
 		}
 		_ = flags
+		repoDir, ledgerDir, err := s.prepareStackGitLab(ctx, api, project, mrIID, mr.SHA, "note:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runPlanAndCommentGitLab(ctx, api, project, mrIID, repoDir, ledgerDir)
 
 	case "ship":
@@ -252,9 +250,31 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this MR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
+		repoDir, ledgerDir, err := s.prepareStackGitLab(ctx, api, project, mrIID, mr.SHA, "note:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runManualShipGitLab(ctx, api, project, mrIID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
+}
+
+// prepareStackGitLab is handleMergeCommentEvent's own post-authorization
+// checkout and stack resolution (UBI-168), the GitLab counterpart of
+// prepareStackGitHub/prepareStackBitbucketCloud. An empty repoDir with a
+// nil error means the refusal note has already been posted.
+func (s *Server) prepareStackGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, sha, event string) (repoDir, ledgerDir string, err error) {
+	repoDir, err = s.checkoutForGitLab(ctx, project, sha)
+	if err != nil {
+		return "", "", err
+	}
+	ledgerDir, err = resolveStackIn(repoDir, func() ([]string, error) {
+		return changedFilePathsGitLab(ctx, api, project, mrIID)
+	})
+	if err != nil {
+		return "", "", s.refuseAmbiguousStackGitLab(ctx, api, project, mrIID, event, err)
+	}
+	return repoDir, ledgerDir, nil
 }
 
 // handleGitLabApproval is core-flow step 4's own trigger for GitLab:
