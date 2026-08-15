@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## Bitbucket setup pages combined (no ticket, founder request): docs PR #9 OPEN not yet merged, 2026-08-15
+## Bitbucket setup pages combined (no ticket, founder request): docs PR #9 and state PR #14 OPEN not yet merged (never self-merged), 2026-08-15
 
 `server/bitbucket-server-setup.mdx` + `server/bitbucket-cloud-setup.mdx` -> one
 `server/bitbucket-setup.mdx`, two self-contained `##` sections, no blended prose (UBI-170
