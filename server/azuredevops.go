@@ -16,9 +16,12 @@ import (
 func newAzureDevOpsClient(organization, token, baseURL string) *adevops.Client {
 	var opts []adevops.Option
 	if baseURL != "" {
-		// Test-only: collapse both of Azure DevOps' own real, separate
-		// hosts (dev.azure.com, vssps.dev.azure.com) onto the same
-		// httptest.Server -- see server_api.go's own doc comment.
+		// Both bases get the same value, which is the real, correct
+		// production shape for an on-prem Azure DevOps Server (UBI-171):
+		// the separate vssps.dev.azure.com Graph host exists only in the
+		// SaaS, and on-prem serves Graph from the same collection base
+		// as the git and policy APIs. A test pointing both at one
+		// httptest.Server is the same wiring for a different reason.
 		opts = append(opts, adevops.WithBaseURL(baseURL), adevops.WithGraphBaseURL(baseURL))
 	}
 	return adevops.New(organization, token, opts...)

@@ -59,7 +59,7 @@ func (s *Server) driftWatchOnce(ctx context.Context) {
 			slog.Error("ubx server: drift watch: get installation token", "repo", r.Owner+"/"+r.Name, "error", err)
 			continue
 		}
-		repoDir, err := ensureRepoCheckout(ctx, s.cfg.WorkDir, r.Owner, r.Name, token)
+		repoDir, err := ensureRepoCheckout(ctx, s.cfg.WorkDir, s.cfg.GitHubAPIBaseURL, r.Owner, r.Name, token)
 		if err != nil {
 			slog.Error("ubx server: drift watch: checkout", "repo", r.Owner+"/"+r.Name, "error", err)
 			continue

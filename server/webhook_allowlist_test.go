@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	ghapi "github.com/google/go-github/v78/github"
-	ghub "github.com/ubiquex/ubiquex/github"
 )
 
 // TestHandlePullRequestEvent_UnlistedRepoRefusedAndLogged proves
@@ -100,7 +99,7 @@ func TestChangedFilePathsGitHub_ResolvesTwoRealStacksIndependently(t *testing.T)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	api := ghub.New("test-token", ghub.WithBaseURL(srv.URL+"/"))
+	api := newTestClient(t, srv)
 	paths, err := changedFilePathsGitHub(context.Background(), api, "acme", "infra", 42)
 	if err != nil {
 		t.Fatalf("changedFilePathsGitHub: %v", err)

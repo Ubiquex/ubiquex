@@ -2,6 +2,26 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-171: GitHub Enterprise Server and on-prem Azure
+  DevOps Server, which could not work at all before this regardless of
+  configuration. Two real defects, both found by the verification-only
+  base-URL question asked earlier in the same session. First, the
+  configured API base URL was applied raw, so GHES' own `/api/v3` path
+  convention was never applied and every call landed at the instance
+  root; `github.WithEnterpriseBaseURL` now delegates to go-github's own
+  `WithEnterpriseURLs`. Second, the git clone host was the literal string
+  `github.com` (and `dev.azure.com`), so a correctly-configured instance
+  would authenticate against itself and then clone from the SaaS; the
+  host is now derived from the same configured base URL, matching what
+  GitLab and Bitbucket Server already did in the same file. Both settings
+  moved from test-only to real production config with a YAML key, and
+  `ubx accept --from-merge` gained three real documented base URL flags,
+  closing the same gap in the CLI. One design point worth keeping: where
+  ghinstallation forced this codebase to reimplement a convention it does
+  not own, the test asserts agreement with go-github's real
+  implementation case by case rather than against a hand-written
+  expectation -- which is exactly what caught the `api.github.com` case
+  go-github deliberately exempts.
 - 2026-08-15 -- UBI-170: Bitbucket Cloud, the fifth platform, for both
   `ubx accept --from-merge` and `ubx server`. A genuinely separate
   platform from Bitbucket Server, not a variant: verified first against

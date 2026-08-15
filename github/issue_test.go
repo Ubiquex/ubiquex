@@ -32,7 +32,7 @@ func TestCreateIssue(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 	issue, err := CreateIssue(context.Background(), client, "acme", "infra", "drift detected", "receipt body")
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)

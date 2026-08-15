@@ -2,7 +2,87 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-170 (Bitbucket Cloud): accept --from-merge + full ubx server integration, PRs OPEN not yet merged, 2026-08-15
+## UBI-171 (ubx server + accept): GitHub Enterprise Server and on-prem Azure DevOps Server, PRs OPEN not yet merged, 2026-08-15
+
+Real scope: two self-hosted products that could not work at all, however correctly they were
+configured. Found by the verification-only base-URL question asked earlier in the same session, and
+deliberately not fixed then.
+
+### The two real defects
+
+1. **The configured API base URL was used raw.** GitHub Enterprise Server serves its REST API under
+   `/api/v3/` and its uploads under `/api/uploads/`. `github.WithBaseURL` set `Client.BaseURL`
+   directly, so every call landed at the instance root and 404'd. Fixed by adding
+   `github.WithEnterpriseBaseURL`, which delegates to go-github's own `WithEnterpriseURLs`.
+2. **The git clone host was a hardcoded literal.** `server/repo.go` built
+   `https://x-access-token:%s@github.com/...` and `https://oauth2:%s@dev.azure.com/...`
+   unconditionally. A correctly-configured GHES or on-prem Azure DevOps Server deployment would
+   authenticate against its own instance and then try to clone from the SaaS. GitLab's and Bitbucket
+   Server's siblings in the same file already derived their host from real config; this brought the
+   other two in line via `gitHostForGitHub` and `azureDevOpsCloneURL`.
+
+Both settings were also relabeled from "test-only" to real production config, gaining a YAML key
+(`github_api_base_url`, `azure_devops_api_base_url`, and `gitlab_api_base_url` for consistency)
+alongside their existing flag and env var.
+
+`ubx accept --from-merge` gained three real, documented flags -- `--gitlab-api-base-url` (the one
+explicitly asked for; it previously read an undocumented, test-only env var with no flag) plus
+`--github-api-base-url` and `--azure-devops-api-base-url`. **The latter two are a deliberate
+completion slightly beyond the stated scope**, flagged as such in the session report: leaving them
+out would have meant GHES and on-prem Azure DevOps Server worked in `ubx server` but not in the CLI,
+which is exactly the kind of half-fix the ticket was filed against. Each falls back to its
+long-standing `UBX_*_API_BASE_URL` env var, so the hermetic test seam is unchanged.
+
+### A real surprise, caught by the verification harness, not by the tests
+
+`enterpriseAPIRoot` (the shim that hands ghinstallation an API root, since ghinstallation
+string-joins rather than following go-github's convention) originally appended `/api/v3`
+unconditionally. The host-process harness' own SaaS-default case surfaced the consequence
+immediately: an operator setting `github_api_base_url: https://api.github.com` explicitly would get
+a token exchange at `https://api.github.com/api/v3/app/installations/...`, which the real SaaS does
+not serve.
+
+go-github's own `WithEnterpriseURLs` deliberately skips any host starting `api.` or containing
+`.api.` for exactly this reason. `enterpriseAPIRoot` now mirrors that rule, and
+`TestEnterpriseAPIRoot_AgreesWithGoGitHub` asserts the two agree case by case rather than trusting
+that they do. **Worth generalizing: whenever this codebase reimplements a convention it does not
+own, the test should compare against the real implementation, not against a hand-written
+expectation.**
+
+### Verification
+
+- `go build ./...`, `go vet ./...`, `gofmt` all clean. `go test ./... -count=1` clean apart from the
+  4 known pre-existing `blueprint/` failures (wasmtime/bwrap absent from this container).
+- New adversarial tests, none mocked at the transport level: `github/client_test.go` (GHES path
+  handling against a stand-in that 404s anything outside `/api/v3/`), and
+  `server/enterprisehost_test.go`, which runs the **real `git` binary** against real local
+  repositories reached through a real `url.<base>.insteadOf` rewrite registered for the enterprise
+  host only. **Mutation-checked**: reverting `gitHostForGitHub`/`azureDevOpsCloneURL` to their
+  hardcoded hosts makes exactly those two tests fail, so they genuinely catch the defect.
+- **Docker registry egress is still blocked** (403 from `production.cloudfront.docker.com`), so the
+  same rigorous host-process substitute UBI-167 and UBI-170 used was rebuilt for this ticket:
+  `scratchpad/verify171.sh`, 14/14 cases passing, driving a real `ubx server` process with real
+  HMAC-signed webhook deliveries against a stand-in GHES that refuses anything outside `/api/v3/`,
+  with `github.example.test` resolved via `/etc/hosts` so the enterprise hostname is genuinely in
+  the URL the code built.
+
+### Not done, deliberately
+
+- Bitbucket Cloud's base URL stays test-only with no YAML key. It is SaaS-only; Bitbucket's
+  self-hosted product is Bitbucket Server, a separate platform with its own separate required
+  `bitbucket_server_url`.
+- UBI-168 (authorization must run before clone/fetch on the four older platforms) is still open and
+  untouched here.
+
+### Docs
+
+`server/configuration.mdx` gained a "Self-hosted instances (UBI-171)" section and three corrected
+key-mapping rows; `cli-reference/server.mdx` and `cli-reference/accept.mdx` gained real
+`ResponseField` entries with the "test-only" language removed. `mint validate` clean, zero em
+dashes in any added line. Also corrected a stale "all four platforms" to "all five" in
+`configuration.mdx`, left behind by UBI-170.
+
+## UBI-170 (Bitbucket Cloud): CLOSED -- accept --from-merge + full ubx server integration, code PR #8 merged as `ac2a14b`, docs PR #3 merged as `cd252cc`, both verified against real, current main 2026-08-15
 
 Real scope: Bitbucket Cloud, the fifth platform, named across the whole `ubx server`/`accept
 --from-merge` arc but never built. Confirmed as its own distinct effort, not a variant of Bitbucket

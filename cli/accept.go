@@ -42,6 +42,7 @@ func newAcceptCmd() *cobra.Command {
 		bitbucketServerProject  string
 		bitbucketCloudRepo      string
 		confirmDestroys         bool
+		bases                   apiBaseURLs
 	)
 
 	cmd := &cobra.Command{
@@ -81,7 +82,7 @@ func newAcceptCmd() *cobra.Command {
 				if len(args) != 0 {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge does not take a proposal.json argument (use --proposal-file for its path within the repo)")}
 				}
-				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject, bitbucketCloudRepo, confirmDestroys)
+				return acceptFromMerge(cmd, cfg, ledgerDir, fromMerge, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject, bitbucketCloudRepo, bases, confirmDestroys)
 			}
 			if len(args) != 1 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept requires a proposal.json argument, or --from-merge for PR-merge derivation")}
@@ -185,8 +186,41 @@ func newAcceptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&bitbucketServerURL, "bitbucket-server-url", "", "base URL of the self-hosted Bitbucket Server/Data Center instance, e.g. https://bitbucket.example.com (required with --bitbucket-server-project; no default exists, unlike the other platforms' own fixed hosts)")
 	cmd.Flags().StringVar(&bitbucketServerProject, "bitbucket-server-project", "", "PROJECTKEY/repository-slug of the Bitbucket Server repo (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project/--bitbucket-cloud-repo is required with --from-merge; requires --bitbucket-server-url)")
 	cmd.Flags().StringVar(&bitbucketCloudRepo, "bitbucket-cloud-repo", "", "workspace/repo-slug of the Bitbucket Cloud repository (exactly one of --github-repo/--gitlab-project/--azure-devops-project/--bitbucket-server-project/--bitbucket-cloud-repo is required with --from-merge). Bitbucket Cloud is a genuinely different platform from Bitbucket Server, not a hosted variant of it")
+	cmd.Flags().StringVar(&bases.github, "github-api-base-url", "", "a GitHub Enterprise Server instance URL, e.g. https://github.example.com (GHES' own /api/v3 path is applied for you; default the real api.github.com)")
+	cmd.Flags().StringVar(&bases.gitlab, "gitlab-api-base-url", "", "a self-managed GitLab instance URL, e.g. https://gitlab.example.com (default the real gitlab.com)")
+	cmd.Flags().StringVar(&bases.azureDevOps, "azure-devops-api-base-url", "", "an on-prem Azure DevOps Server collection URL, e.g. https://tfs.example.com/tfs/DefaultCollection (default the real Azure DevOps Services)")
 	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required to accept any proposal with blast_radius.destroys > 0 -- this project's first hardcoded acceptance-time friction invariant (docs/schema.md)")
 	return cmd
+}
+
+// apiBaseURLs carries `ubx accept --from-merge`'s own per-platform API
+// base URLs (UBI-171). Grouped rather than threaded as three more
+// positional parameters through an already-long acceptFromMerge
+// signature.
+//
+// Only the three platforms with a real self-hosted product whose host
+// differs from the SaaS default appear here. Bitbucket Server's own base
+// URL is always required and already has its own --bitbucket-server-url
+// flag; Bitbucket Cloud is SaaS-only, with one fixed host and nothing
+// per-deployment to declare.
+//
+// Each field falls back to its long-standing UBX_*_API_BASE_URL
+// environment variable when the flag is unset, so the hermetic test seam
+// those variables have always provided keeps working unchanged.
+type apiBaseURLs struct {
+	github      string
+	gitlab      string
+	azureDevOps string
+}
+
+// orEnv returns flagValue when set, otherwise the environment variable
+// envName -- the flag is the real, documented production surface, the
+// env var the pre-existing seam.
+func orEnv(flagValue, envName string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv(envName)
 }
 
 // ErrDestroysNotConfirmed means a proposal with blast_radius.destroys > 0
@@ -281,20 +315,29 @@ type mergeDerivation struct {
 
 // deriveFromGithub wraps ghub.DeriveAcceptance into the common
 // mergeDerivation shape.
-func deriveFromGithub(ctx context.Context, repoDir, githubRepo, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+func deriveFromGithub(ctx context.Context, repoDir, githubRepo, mergeSHA, proposalFile, apiBaseURL string) (*mergeDerivation, error) {
 	owner, repo, ok := strings.Cut(githubRepo, "/")
 	if !ok || owner == "" || repo == "" {
 		return nil, fmt.Errorf("--github-repo must be \"owner/name\", got %q", githubRepo)
 	}
 
 	var apiOpts []ghub.Option
-	if base := os.Getenv("UBX_GITHUB_API_BASE_URL"); base != "" {
-		// Test-only seam (same convention as UBX_PROVIDER_MIRROR): points
-		// the client at something other than the real api.github.com, so
-		// tests never make a real network call.
-		apiOpts = append(apiOpts, ghub.WithBaseURL(base))
+	switch {
+	case apiBaseURL != "":
+		// Real production config (UBI-171): --github-api-base-url names a
+		// GitHub Enterprise Server instance, so GHES' own /api/v3 path
+		// convention has to be applied rather than the URL used raw.
+		apiOpts = append(apiOpts, ghub.WithEnterpriseBaseURL(apiBaseURL))
+	case os.Getenv("UBX_GITHUB_API_BASE_URL") != "":
+		// The pre-existing hermetic test seam (same convention as
+		// UBX_PROVIDER_MIRROR): an exact API root, used verbatim, so a
+		// test can point at an httptest.Server whose paths it controls.
+		apiOpts = append(apiOpts, ghub.WithBaseURL(os.Getenv("UBX_GITHUB_API_BASE_URL")))
 	}
-	api := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	api, err := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	if err != nil {
+		return nil, err
+	}
 
 	derived, err := ghub.DeriveAcceptance(ctx, api, repoDir, owner, repo, mergeSHA, proposalFile)
 	if err != nil {
@@ -314,14 +357,18 @@ func deriveFromGithub(ctx context.Context, repoDir, githubRepo, mergeSHA, propos
 
 // deriveFromGitlab wraps glab.DeriveAcceptance into the common
 // mergeDerivation shape -- the GitLab analog of deriveFromGithub.
-func deriveFromGitlab(ctx context.Context, repoDir, gitlabProject, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+func deriveFromGitlab(ctx context.Context, repoDir, gitlabProject, mergeSHA, proposalFile, apiBaseURL string) (*mergeDerivation, error) {
 	if gitlabProject == "" {
 		return nil, fmt.Errorf("--gitlab-project must not be empty")
 	}
 
 	var apiOpts []glab.Option
-	if base := os.Getenv("UBX_GITLAB_API_BASE_URL"); base != "" {
-		// Test-only seam, same convention as UBX_GITHUB_API_BASE_URL.
+	// --gitlab-api-base-url is the real, documented production surface
+	// for a self-managed GitLab instance (UBI-171, closing the gap
+	// `ubx server` did not have); UBX_GITLAB_API_BASE_URL remains the
+	// pre-existing hermetic test seam. One form, one option: go-gitlab
+	// appends its own api/v4/ path either way.
+	if base := orEnv(apiBaseURL, "UBX_GITLAB_API_BASE_URL"); base != "" {
 		apiOpts = append(apiOpts, glab.WithBaseURL(base))
 	}
 	api, err := glab.New(os.Getenv("GITLAB_TOKEN"), apiOpts...)
@@ -353,7 +400,7 @@ func deriveFromGitlab(ctx context.Context, repoDir, gitlabProject, mergeSHA, pro
 // address a repository, not two, so the flag's own shape has one more
 // slash-separated segment than the other two platforms', not an
 // arbitrary choice.
-func deriveFromAzureDevOps(ctx context.Context, repoDir, azureDevOpsProject, mergeSHA, proposalFile string) (*mergeDerivation, error) {
+func deriveFromAzureDevOps(ctx context.Context, repoDir, azureDevOpsProject, mergeSHA, proposalFile, apiBaseURL string) (*mergeDerivation, error) {
 	parts := strings.SplitN(azureDevOpsProject, "/", 3)
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return nil, fmt.Errorf("--azure-devops-project must be \"organization/project/repository\", got %q", azureDevOpsProject)
@@ -361,9 +408,13 @@ func deriveFromAzureDevOps(ctx context.Context, repoDir, azureDevOpsProject, mer
 	organization, project, repository := parts[0], parts[1], parts[2]
 
 	var apiOpts []adevops.Option
-	if base := os.Getenv("UBX_AZURE_DEVOPS_API_BASE_URL"); base != "" {
-		// Test-only seam, same convention as UBX_GITHUB_API_BASE_URL /
-		// UBX_GITLAB_API_BASE_URL.
+	// --azure-devops-api-base-url is the real, documented production
+	// surface for an on-prem Azure DevOps Server collection (UBI-171);
+	// UBX_AZURE_DEVOPS_API_BASE_URL remains the hermetic test seam.
+	// Only the git/policy base is set: acceptance derivation reads a
+	// pull request and its reviewer votes, never Graph, so there is no
+	// second base to point anywhere here.
+	if base := orEnv(apiBaseURL, "UBX_AZURE_DEVOPS_API_BASE_URL"); base != "" {
 		apiOpts = append(apiOpts, adevops.WithBaseURL(base))
 	}
 	api := adevops.New(organization, os.Getenv("AZURE_DEVOPS_TOKEN"), apiOpts...)
@@ -489,7 +540,7 @@ func deriveFromBitbucketCloud(ctx context.Context, repoDir, bitbucketCloudRepo, 
 	}, nil
 }
 
-func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject, bitbucketCloudRepo string, confirmDestroys bool) error {
+func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoDir, proposalFile, githubRepo, gitlabProject, azureDevOpsProject, bitbucketServerURL, bitbucketServerProject, bitbucketCloudRepo string, bases apiBaseURLs, confirmDestroys bool) error {
 	if proposalFile == "" {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("accept --from-merge requires --proposal-file")}
 	}
@@ -511,11 +562,11 @@ func acceptFromMerge(cmd *cobra.Command, cfg *Config, ledgerDir, mergeSHA, repoD
 	var err error
 	switch {
 	case githubRepo != "":
-		derived, err = deriveFromGithub(ctx, repoDir, githubRepo, mergeSHA, proposalFile)
+		derived, err = deriveFromGithub(ctx, repoDir, githubRepo, mergeSHA, proposalFile, bases.github)
 	case gitlabProject != "":
-		derived, err = deriveFromGitlab(ctx, repoDir, gitlabProject, mergeSHA, proposalFile)
+		derived, err = deriveFromGitlab(ctx, repoDir, gitlabProject, mergeSHA, proposalFile, bases.gitlab)
 	case azureDevOpsProject != "":
-		derived, err = deriveFromAzureDevOps(ctx, repoDir, azureDevOpsProject, mergeSHA, proposalFile)
+		derived, err = deriveFromAzureDevOps(ctx, repoDir, azureDevOpsProject, mergeSHA, proposalFile, bases.azureDevOps)
 	case bitbucketServerProject != "":
 		derived, err = deriveFromBitbucketServer(ctx, repoDir, bitbucketServerURL, bitbucketServerProject, mergeSHA, proposalFile)
 	default:

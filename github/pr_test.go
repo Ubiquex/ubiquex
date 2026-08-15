@@ -74,7 +74,7 @@ func TestOpenDraftPR(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client := New("", WithBaseURL(srv.URL+"/"))
+	client := newTestClient(t, "", WithBaseURL(srv.URL+"/"))
 	pr, err := OpenDraftPR(context.Background(), client, "acme", "infra",
 		"ubx-drift/prod-aws_instance-web", "ubx-drift/proposal.json",
 		[]byte(`{"schema_version":1}`), "record drift", "drift: aws_instance.web", "ubx-proposal: abc\n\nreceipt")

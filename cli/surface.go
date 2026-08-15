@@ -40,7 +40,10 @@ func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr cor
 	if base := os.Getenv("UBX_GITHUB_API_BASE_URL"); base != "" {
 		apiOpts = append(apiOpts, ghub.WithBaseURL(base))
 	}
-	api := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	api, err := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
+	if err != nil {
+		return err
+	}
 
 	switch surfaceAs {
 	case "issue":

@@ -101,12 +101,28 @@ type Config struct {
 	// --github-webhook-secret. Deliberately no YAML key -- see the type
 	// doc comment above.
 	GitHubWebhookSecret string `yaml:"-"`
-	// GitHubAPIBaseURL: env UBX_SERVER_GITHUB_API_BASE_URL, flag
-	// --github-api-base-url. Deliberately no YAML key, test-only --
-	// points the installation client at an httptest.Server instead of
-	// the real api.github.com, same real-transport-fake-fixture pattern
-	// UBX_GITHUB_API_BASE_URL already uses elsewhere in this codebase.
-	GitHubAPIBaseURL string `yaml:"-"`
+	// GitHubAPIBaseURL: yaml `github_api_base_url`, env
+	// UBX_SERVER_GITHUB_API_BASE_URL, flag --github-api-base-url. Real,
+	// production config for a GitHub Enterprise Server deployment
+	// (UBI-171) -- empty means the real api.github.com, and a value like
+	// "https://github.example.com" means that instance.
+	//
+	// Not a raw URL substitution: GHES serves its REST API under
+	// /api/v3/ and its uploads under /api/uploads/, so this is applied
+	// through go-github's own WithEnterpriseURLs (github.Client's
+	// WithEnterpriseBaseURL), which appends both when they are missing
+	// and leaves them alone when the operator spelled them out. Either
+	// form therefore works: the instance root, or the /api/v3 root.
+	//
+	// Because ghinstallation (the App-token exchange this server runs
+	// on) builds its own token URL by string concatenation rather than
+	// through go-github, githubapp.go normalizes the same value with
+	// enterpriseAPIRoot before handing it over -- see the comment there.
+	//
+	// The same value also decides the git clone host (repo.go's own
+	// gitHostForGitHub): a GHES deployment clones from its own instance,
+	// never from github.com.
+	GitHubAPIBaseURL string `yaml:"github_api_base_url"`
 
 	// GitLabToken: env UBX_SERVER_GITLAB_TOKEN, flag --gitlab-token.
 	// Deliberately no YAML key -- a real Group Access Token, the same
@@ -135,13 +151,17 @@ type Config struct {
 	// plain-text secret-token header, which this package doesn't
 	// support at all.
 	GitLabWebhookSecret string `yaml:"-"`
-	// GitLabAPIBaseURL: env UBX_SERVER_GITLAB_API_BASE_URL, flag
-	// --gitlab-api-base-url. Deliberately no YAML key. Real, dual
-	// purpose: a self-managed GitLab instance's own real API base (not
-	// just test-only the way GitHubAPIBaseURL is, since GitLab, unlike
-	// a GitHub App, has no single fixed host every real deployment
-	// shares) -- empty means the real gitlab.com.
-	GitLabAPIBaseURL string `yaml:"-"`
+	// GitLabAPIBaseURL: yaml `gitlab_api_base_url`, env
+	// UBX_SERVER_GITLAB_API_BASE_URL, flag --gitlab-api-base-url. A
+	// self-managed GitLab instance's own real API base -- empty means
+	// the real gitlab.com. go-gitlab appends its own api/v4/ path, so
+	// the instance root is the right value here.
+	//
+	// This is the pattern UBI-171 brought GitHub and Azure DevOps up to:
+	// real production config, a YAML key alongside the flag and env var,
+	// and the same value driving the git clone host (repo.go's own
+	// ensureRepoCheckoutGitLab, correct here since before UBI-171).
+	GitLabAPIBaseURL string `yaml:"gitlab_api_base_url"`
 
 	// AzureDevOpsOrganization: yaml `azure_devops_organization`, env
 	// UBX_SERVER_AZURE_DEVOPS_ORGANIZATION, flag
@@ -197,15 +217,25 @@ type Config struct {
 	// (there is nothing to verify a signature against; the header
 	// value itself is the whole credential).
 	AzureDevOpsWebhookSecret string `yaml:"-"`
-	// AzureDevOpsAPIBaseURL: env UBX_SERVER_AZURE_DEVOPS_API_BASE_URL,
-	// flag --azure-devops-api-base-url. Deliberately no YAML key,
-	// test-only -- points both the git/policy API base and the Graph
-	// API base at the same httptest.Server; real production traffic
-	// always splits across dev.azure.com and vssps.dev.azure.com, two
-	// genuinely different real hosts (azuredevops.Client's own real
-	// default derivation), which this override deliberately collapses
-	// for hermetic testing only.
-	AzureDevOpsAPIBaseURL string `yaml:"-"`
+	// AzureDevOpsAPIBaseURL: yaml `azure_devops_api_base_url`, env
+	// UBX_SERVER_AZURE_DEVOPS_API_BASE_URL, flag
+	// --azure-devops-api-base-url. Real, production config for an
+	// on-prem Azure DevOps Server (UBI-171): the full collection base,
+	// for example "https://tfs.example.com/tfs/DefaultCollection".
+	// Empty means the real Azure DevOps Services SaaS, whose bases are
+	// derived from AzureDevOpsOrganization.
+	//
+	// One value covers both of the client's own bases because on-prem
+	// has only one host: the separate vssps.dev.azure.com Graph host
+	// exists in the SaaS only, and an on-prem deployment serves Graph
+	// from the same collection base (azuredevops.WithGraphBaseURL's own
+	// doc comment). Tests point both at one httptest.Server through the
+	// same field, which is the same wiring for a different reason.
+	//
+	// The same value also decides the git clone host (repo.go's own
+	// azureDevOpsCloneURL), since an on-prem deployment clones from its
+	// own collection, never from dev.azure.com.
+	AzureDevOpsAPIBaseURL string `yaml:"azure_devops_api_base_url"`
 
 	// BitbucketServerURL: yaml `bitbucket_server_url`, env
 	// UBX_SERVER_BITBUCKET_SERVER_URL, flag --bitbucket-server-url. The
@@ -213,9 +243,10 @@ type Config struct {
 	// "https://bitbucket.example.com") -- confirmed directly against
 	// bitbucketserver.Client's own doc comment (UBI-160 Phase 3):
 	// unlike GitHub/GitLab/Azure DevOps, Bitbucket Server has no single
-	// fixed default host at all, so this is always required, real
-	// production config, never a test-only override the way
-	// AzureDevOpsAPIBaseURL is -- tests point this same field at an
+	// fixed default host at all, so this is always required rather than
+	// optional, unlike GitHubAPIBaseURL/GitLabAPIBaseURL/
+	// AzureDevOpsAPIBaseURL, whose own empty values each mean a real,
+	// well-known SaaS default. Tests point this same field at an
 	// httptest.Server instead. Matches the existing `ubx accept
 	// --bitbucket-server-url` flag's own real name for the identical
 	// concept, deliberate consistency across the whole CLI.
@@ -301,6 +332,14 @@ type Config struct {
 	// test-only -- Bitbucket Cloud is SaaS with one real, fixed host
 	// (api.bitbucket.org), so unlike Bitbucket Server's own always-
 	// required base URL this is a genuine override of a real default.
+	//
+	// The only base URL here still test-only after UBI-171, and
+	// deliberately so: GitHub and Azure DevOps each have a real
+	// self-hosted product (GitHub Enterprise Server, Azure DevOps
+	// Server) whose operators genuinely need to point this server at
+	// their own instance. Bitbucket's self-hosted product is Bitbucket
+	// Server, a separate platform with its own separate config above,
+	// not a different host for this one.
 	BitbucketCloudAPIBaseURL string `yaml:"-"`
 
 	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag

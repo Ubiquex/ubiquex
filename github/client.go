@@ -22,19 +22,52 @@ type Client struct {
 	api *ghapi.Client
 }
 
-// Option configures New.
-type Option func(*ghapi.Client)
+// Option configures New/NewWithHTTPClient.
+//
+// Applied to a small options struct rather than straight to the
+// go-github client, because the real GitHub Enterprise Server form
+// (WithEnterpriseBaseURL) both rewrites the client and can fail on a
+// malformed URL -- go-github's own WithEnterpriseURLs returns a new
+// client and an error, which a mutate-in-place option type cannot
+// express.
+type Option func(*clientOptions)
 
-// WithBaseURL points the client at a different API base — tests use this
-// to talk to an httptest.Server instead of the real api.github.com.
+type clientOptions struct {
+	baseURL           string
+	enterpriseBaseURL string
+}
+
+// WithBaseURL points the client at an exact API endpoint, used
+// verbatim.
+//
+// This is the "I already know the full API root" form: tests use it to
+// talk to an httptest.Server, and so does the UBX_GITHUB_API_BASE_URL
+// seam. For a real GitHub Enterprise Server deployment use
+// WithEnterpriseBaseURL instead, which applies GHES' own real
+// /api/v3/ path convention rather than requiring the operator to know
+// and type it.
 func WithBaseURL(rawURL string) Option {
-	return func(c *ghapi.Client) {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return
-		}
-		c.BaseURL = u
-	}
+	return func(o *clientOptions) { o.baseURL = rawURL }
+}
+
+// WithEnterpriseBaseURL points the client at a real GitHub Enterprise
+// Server instance, given that instance's own URL (for example
+// "https://github.example.com").
+//
+// Delegates to go-github's own WithEnterpriseURLs rather than setting
+// the URL raw, which is the whole point (UBI-171): GHES serves its REST
+// API under /api/v3/ and its uploads under /api/uploads/, neither of
+// which api.github.com uses. WithEnterpriseURLs appends both when they
+// are missing and leaves them alone when the operator already spelled
+// them out, so both forms work. Setting the URL raw, as this package
+// did before, produced a client that requested /repos/... at the
+// instance root and 404'd on every real call.
+//
+// The same value is passed for the upload URL, which is correct for
+// GHES: both live on the instance's own host, unlike github.com where
+// uploads live on a separate uploads.github.com.
+func WithEnterpriseBaseURL(rawURL string) Option {
+	return func(o *clientOptions) { o.enterpriseBaseURL = rawURL }
 }
 
 // New returns a Client authenticated with token (a GitHub personal access
@@ -43,15 +76,17 @@ func WithBaseURL(rawURL string) Option {
 // discovery here any more than cloudtrail.New does for AWS). An empty
 // token is valid — unauthenticated requests work against public repos, at
 // a much lower rate limit.
-func New(token string, opts ...Option) *Client {
+//
+// Returns an error only when a configured enterprise base URL cannot be
+// applied, the same "validates its configuration at construction time"
+// shape gitlab.New already has, so a malformed GHES URL fails at
+// startup rather than as a mysterious first-request error.
+func New(token string, opts ...Option) (*Client, error) {
 	api := ghapi.NewClient(nil)
 	if token != "" {
 		api = api.WithAuthToken(token)
 	}
-	for _, opt := range opts {
-		opt(api)
-	}
-	return &Client{api: api}
+	return applyOptions(api, opts)
 }
 
 // NewWithHTTPClient returns a Client using hc directly as its transport,
@@ -61,12 +96,31 @@ func New(token string, opts ...Option) *Client {
 // token automatically, refreshing before each expires, for the life of
 // a long-running daemon process. A bare token (New, above) has no
 // refresh story of its own, which is exactly wrong for that case.
-func NewWithHTTPClient(hc *http.Client, opts ...Option) *Client {
-	api := ghapi.NewClient(hc)
+func NewWithHTTPClient(hc *http.Client, opts ...Option) (*Client, error) {
+	return applyOptions(ghapi.NewClient(hc), opts)
+}
+
+func applyOptions(api *ghapi.Client, opts []Option) (*Client, error) {
+	var o clientOptions
 	for _, opt := range opts {
-		opt(api)
+		opt(&o)
 	}
-	return &Client{api: api}
+
+	if o.enterpriseBaseURL != "" {
+		enterprise, err := api.WithEnterpriseURLs(o.enterpriseBaseURL, o.enterpriseBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("github: enterprise base URL %q: %w", o.enterpriseBaseURL, err)
+		}
+		api = enterprise
+	}
+	if o.baseURL != "" {
+		u, err := url.Parse(o.baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("github: base URL %q: %w", o.baseURL, err)
+		}
+		api.BaseURL = u
+	}
+	return &Client{api: api}, nil
 }
 
 // API exposes the underlying go-github client directly, for callers that
