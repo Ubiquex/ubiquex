@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 OPEN not yet merged, 2026-08-15
+## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 and state PR #13 OPEN not yet merged (never self-merged), 2026-08-15
 
 UBI-171's self-hosted content on `server/configuration.mdx` was accurate but unreachable. Confirmed
 before touching anything: `github-setup.mdx` and `azure-devops-setup.mdx` each had **zero** matches
