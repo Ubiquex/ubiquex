@@ -61,19 +61,22 @@ func TestHandleMergeCommentEvent_UnlistedProjectRefusedAndLogged(t *testing.T) {
 	}
 }
 
-// TestResolveLedgerDir_GitLabTwoRealStacksIndependently proves the
+// TestResolveStackIn_GitLabTwoRealStacksIndependently proves the
 // shared resolution core (already exhaustively tested in
 // allowlist_test.go) applied against GitLab's own real
 // changedFilePathsGitLab-shaped inputs (NewPath/OldPath-derived paths)
-// resolves two independently configured stacks correctly.
-func TestResolveLedgerDir_GitLabTwoRealStacksIndependently(t *testing.T) {
-	candidates := []RepoConfig{
-		{Platform: "gitlab", Project: "acme/infra", LedgerDir: "stacks/payments"},
-		{Platform: "gitlab", Project: "acme/infra", LedgerDir: "stacks/networking"},
-	}
-	dir, err := resolveLedgerDir(candidates, []string{"stacks/networking/proposals/vpc.json"})
+// resolves two real, auto-discovered stacks correctly -- unchanged
+// deepest-match behavior on UBI-167's auto-discovered candidates.
+func TestResolveStackIn_GitLabTwoRealStacksIndependently(t *testing.T) {
+	repoDir := t.TempDir()
+	writeStack(t, repoDir, "stacks/payments", "config")
+	writeStack(t, repoDir, "stacks/networking", "config")
+
+	dir, err := resolveStackIn(repoDir, func() ([]string, error) {
+		return []string{"stacks/networking/proposals/vpc.json"}, nil
+	})
 	if err != nil {
-		t.Fatalf("resolveLedgerDir: %v", err)
+		t.Fatalf("resolveStackIn: %v", err)
 	}
 	if dir != "stacks/networking" {
 		t.Errorf("dir = %q, want %q", dir, "stacks/networking")

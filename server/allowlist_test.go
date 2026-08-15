@@ -21,18 +21,22 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// TestResolveLedgerDir_ZeroCandidatesRefused covers UBI-167's own real
+// meaning for the zero case: an allowlisted repository whose checkout
+// declares no stack at all. "Not on the allowlist" never reaches this
+// resolver -- that refusal fires earlier, in each platform's own
+// handler, and is covered by the per-platform tests.
 func TestResolveLedgerDir_ZeroCandidatesRefused(t *testing.T) {
 	_, err := resolveLedgerDir(nil, nil)
-	if !errors.Is(err, ErrRepoNotAllowed) {
-		t.Fatalf("err = %v, want ErrRepoNotAllowed", err)
+	if !errors.Is(err, ErrNoStackDiscovered) {
+		t.Fatalf("err = %v, want ErrNoStackDiscovered", err)
 	}
 }
 
 func TestResolveLedgerDir_OneCandidateUsedDirectly(t *testing.T) {
-	candidates := []RepoConfig{{LedgerDir: "stacks/payments"}}
 	// changedFiles is deliberately nil -- a single candidate must never
 	// need to inspect it at all.
-	dir, err := resolveLedgerDir(candidates, nil)
+	dir, err := resolveLedgerDir([]string{"stacks/payments"}, nil)
 	if err != nil {
 		t.Fatalf("resolveLedgerDir: %v", err)
 	}
@@ -42,23 +46,20 @@ func TestResolveLedgerDir_OneCandidateUsedDirectly(t *testing.T) {
 }
 
 // TestResolveLedgerDir_TwoSiblingStacksResolvedIndependently proves
-// UBI-166's own real fix for the former "first Config.Repos entry
-// silently wins" bug: two real, independently configured stacks in the
-// same repository (neither a prefix of the other) each resolve
+// UBI-166's own real fix for the former "first entry silently wins"
+// bug, unchanged by UBI-167: two real, independently declared stacks in
+// the same repository (neither a prefix of the other) each resolve
 // correctly based on which stack's own files a given PR actually
 // touches.
 func TestResolveLedgerDir_TwoSiblingStacksResolvedIndependently(t *testing.T) {
-	candidates := []RepoConfig{
-		{LedgerDir: "stacks/payments"},
-		{LedgerDir: "stacks/networking"},
-	}
+	candidates := []string{"stacks/payments", "stacks/networking"}
 
 	dir, err := resolveLedgerDir(candidates, []string{"stacks/payments/proposals/db-replica.json"})
 	if err != nil {
 		t.Fatalf("resolveLedgerDir (payments PR): %v", err)
 	}
 	if dir != "stacks/payments" {
-		t.Errorf("dir = %q, want %q -- a payments-only PR must resolve to the payments stack, never the first-listed entry", dir, "stacks/payments")
+		t.Errorf("dir = %q, want %q -- a payments-only PR must resolve to the payments stack, never the first-listed one", dir, "stacks/payments")
 	}
 
 	dir, err = resolveLedgerDir(candidates, []string{"stacks/networking/proposals/vpc.json"})
@@ -71,15 +72,11 @@ func TestResolveLedgerDir_TwoSiblingStacksResolvedIndependently(t *testing.T) {
 }
 
 // TestResolveLedgerDir_RootAndNestedStack_MostSpecificWins proves a
-// real, legitimate repo-root stack ("." ledger_dir) coexisting with a
-// real, nested subdirectory stack is not treated as a misconfiguration
-// -- the more specific, nested stack wins for a changed file under its
-// own subtree.
+// real, legitimate repo-root stack coexisting with a real, nested
+// subdirectory stack is not treated as a misconfiguration -- the more
+// specific, nested stack wins for a changed file under its own subtree.
 func TestResolveLedgerDir_RootAndNestedStack_MostSpecificWins(t *testing.T) {
-	candidates := []RepoConfig{
-		{LedgerDir: "."},
-		{LedgerDir: "stacks/payments"},
-	}
+	candidates := []string{".", "stacks/payments"}
 
 	dir, err := resolveLedgerDir(candidates, []string{"stacks/payments/proposals/db-replica.json"})
 	if err != nil {
@@ -99,23 +96,17 @@ func TestResolveLedgerDir_RootAndNestedStack_MostSpecificWins(t *testing.T) {
 }
 
 func TestResolveLedgerDir_NoMatchingFiles_Refused(t *testing.T) {
-	candidates := []RepoConfig{
-		{LedgerDir: "stacks/payments"},
-		{LedgerDir: "stacks/networking"},
-	}
+	candidates := []string{"stacks/payments", "stacks/networking"}
 	_, err := resolveLedgerDir(candidates, []string{"docs/README.md"})
 	if !errors.Is(err, ErrAmbiguousStack) {
-		t.Fatalf("err = %v, want ErrAmbiguousStack -- a change touching neither configured stack must never guess one", err)
+		t.Fatalf("err = %v, want ErrAmbiguousStack -- a change touching neither stack must never guess one", err)
 	}
 }
 
 func TestResolveLedgerDir_EquallySpecificTie_Refused(t *testing.T) {
-	candidates := []RepoConfig{
-		{LedgerDir: "stacks/payments"},
-		{LedgerDir: "stacks/networking"},
-	}
-	// A real PR touching both configured stacks at once -- genuinely
-	// ambiguous, never guessed either direction.
+	candidates := []string{"stacks/payments", "stacks/networking"}
+	// A real PR touching both stacks at once -- genuinely ambiguous,
+	// never guessed either direction.
 	_, err := resolveLedgerDir(candidates, []string{
 		"stacks/payments/proposals/db-replica.json",
 		"stacks/networking/proposals/vpc.json",
@@ -132,14 +123,14 @@ func TestResolveLedgerDirLazy_SkipsFetchWhenUnambiguous(t *testing.T) {
 		return nil, nil
 	}
 
-	if _, err := resolveLedgerDirLazy(nil, fetch); !errors.Is(err, ErrRepoNotAllowed) {
-		t.Fatalf("err = %v, want ErrRepoNotAllowed", err)
+	if _, err := resolveLedgerDirLazy(nil, fetch); !errors.Is(err, ErrNoStackDiscovered) {
+		t.Fatalf("err = %v, want ErrNoStackDiscovered", err)
 	}
 	if fetchCalled {
 		t.Error("expected fetchChangedFiles to never be called for zero candidates")
 	}
 
-	dir, err := resolveLedgerDirLazy([]RepoConfig{{LedgerDir: "."}}, fetch)
+	dir, err := resolveLedgerDirLazy([]string{"."}, fetch)
 	if err != nil {
 		t.Fatalf("resolveLedgerDirLazy: %v", err)
 	}
@@ -153,7 +144,7 @@ func TestResolveLedgerDirLazy_SkipsFetchWhenUnambiguous(t *testing.T) {
 
 func TestResolveLedgerDirLazy_FetchesOnlyWhenAmbiguous(t *testing.T) {
 	fetchCalled := false
-	candidates := []RepoConfig{{LedgerDir: "stacks/payments"}, {LedgerDir: "stacks/networking"}}
+	candidates := []string{"stacks/payments", "stacks/networking"}
 	fetch := func() ([]string, error) {
 		fetchCalled = true
 		return []string{"stacks/payments/proposals/db-replica.json"}, nil

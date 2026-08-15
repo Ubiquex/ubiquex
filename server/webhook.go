@@ -81,6 +81,12 @@ func (s *Server) handleEvent(ctx context.Context, event any) {
 // Config.Repos entry at all -- see allowlist.go's own doc comment for
 // the real security gap this closes (before this fix, an unlisted
 // repo silently defaulted to ledger_dir "." instead of being refused).
+//
+// UBI-167: once membership IS confirmed, the stack this event acts on
+// comes from the repository's own checkout (resolveStackIn), never
+// from a path declared in ubx server's own config, so the checkout
+// happens here, before resolution, rather than inside each run*
+// helper.
 func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullRequestEvent) error {
 	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
 	installationID := e.GetInstallation().GetID()
@@ -100,13 +106,17 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 		if err != nil {
 			return err
 		}
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, e.GetPullRequest().GetHead().GetSHA())
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:"+action, err)
 		}
-		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, e.GetPullRequest().GetHead().GetSHA(), ledgerDir)
+		return s.runPlanAndComment(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 
 	case "closed":
 		if !e.GetPullRequest().GetMerged() {
@@ -119,31 +129,38 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 		if err != nil {
 			return err
 		}
-		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, e.GetPullRequest().GetBase().GetRef())
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
 		})
 		if err != nil {
 			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:closed(merged)", err)
 		}
-		return s.runAutomaticShip(ctx, installationID, owner, repo, prNumber, e.GetPullRequest().GetBase().GetRef(), ledgerDir)
+		return s.runAutomaticShip(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 	}
 	return nil
 }
 
 // refuseAmbiguousStackGitHub is handlePullRequestEvent's/
 // handleIssueCommentEvent's own shared real refusal path for
-// ErrAmbiguousStack (UBI-166): a loud, structured server-side log (the
-// same discipline the plain unlisted-repo refusal above already has)
-// AND a real, posted PR comment -- unlike an unlisted repo (never
-// acted on, never commented on, since it was never opted into ubx
-// server automation at all), this repo IS explicitly configured; a
-// human watching it deserves the same real, actionable feedback
-// discoverProposalFile's own ambiguous-match refusal already gives.
+// ErrAmbiguousStack/ErrNoStackDiscovered (UBI-166, UBI-167): a loud,
+// structured server-side log (the same discipline the plain
+// unlisted-repo refusal above already has) AND a real, posted PR
+// comment -- unlike an unlisted repo (never acted on, never commented
+// on, since it was never opted into ubx server automation at all),
+// this repo IS explicitly allowlisted; a human watching it deserves
+// the same real, actionable feedback discoverProposalFile's own
+// ambiguous-match refusal already gives. The fix now lives in the
+// repository itself (add or disambiguate its own .ubx/config), not in
+// ubx server's config, so the comment says that.
 func (s *Server) refuseAmbiguousStackGitHub(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
 		"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "event", event, "error", err)
 	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "plan",
-		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // handleIssueCommentEvent is core-flow steps 3 (re-plan) and 4's manual
@@ -187,7 +204,11 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 		return fmt.Errorf("get PR #%d on %s/%s: %w", prNumber, owner, repo, err)
 	}
 
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, pr.GetHead().GetSHA())
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
 	})
 	if err != nil {
@@ -205,7 +226,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a repository collaborator with write access) can.", commenter))
 		}
 		_ = flags // real, forwarded verbatim to the subprocess -- see runPlanAndComment
-		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), ledgerDir)
+		return s.runPlanAndComment(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShip(ctx, api, owner, repo, prNumber, commenter)
@@ -217,7 +238,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShip(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), ledgerDir, confirmDestroys)
+		return s.runManualShip(ctx, api, owner, repo, prNumber, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
 }
@@ -242,7 +263,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 	// core.AcceptFromReview directly against repoDir (never against a
 	// resolved --ledger-dir the way the plan/ship subprocess paths
 	// do), so only the allowlist membership check applies here, not
-	// the full multi-stack ledger_dir resolution.
+	// the multi-stack resolution over auto-discovered stacks.
 	if len(s.matchingRepoConfigsGitHub(owner, repo)) == 0 {
 		slog.Error("ubx server: refusing pull_request_review event -- repository not in Config.Repos allowlist (UBI-166)",
 			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber)
@@ -264,11 +285,8 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 			fmt.Sprintf("Approval recorded by GitHub, but `ubx` could not derive acceptance from it: %s. Accept this proposal locally with `ubx accept` instead.", err))
 	}
 
-	repoDir, err := s.repoDirFor(ctx, installationID, owner, repo)
+	repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, commitID)
 	if err != nil {
-		return err
-	}
-	if err := checkoutRef(ctx, repoDir, commitID); err != nil {
 		return err
 	}
 

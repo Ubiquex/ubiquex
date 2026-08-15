@@ -2,7 +2,110 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-166, URGENT (ubx server, all four platforms): real security fix, PR OPEN not yet merged, awaiting founder review, 2026-08-15
+## UBI-167 (ubx server): ledger_dir removed from Config.Repos, stacks auto-discovered from each repo's own .ubx/config, PR OPEN not yet merged, awaiting founder review, 2026-08-15
+
+**First: UBI-166 is confirmed genuinely merged.** Verified two independent ways, not from a stale
+PR view: a fresh `git fetch origin main` (`git rev-parse origin/main` =
+`2914e0e51e07292b533818cda997233524c98f87`, the real merge commit of PR #5, second parent
+`9bff8f3e4227d215cb284a95baa3ec85eb29150a`) and the GitHub API resolving `refs/heads/main` to the
+same SHA with `server/allowlist.go` present at blob `c85047f7...`, byte-identical to the local
+blob. Worth knowing for the next session: the local `main` branch ref in a fresh clone can be
+stale (it was, at `f4dbfe3`) -- `origin/main` after a real fetch is the authority, `git log main`
+without a pull is exactly the stale view this check existed to rule out.
+
+Real, current scope (the ticket was CORRECTED once before this session started, and the corrected
+version is what was built -- read directly from Linear, not from memory): `Config.Repos` stays
+exactly as UBI-166 built it, the real, enforced allowlist. Unlisted repos are still refused
+outright, loudly logged, on every platform, untouched. What changed is only the `ledger_dir` field
+*within* each entry: a stack's real location inside a repo is a property of the repo (its own
+`.ubx/config`), not something ubx server's central config should have to declare and keep in sync
+by hand.
+
+**Real implementation**: new `server/stackdiscovery.go` -- `discoverStacks(repoDir)` walks the
+already-checked-out repository and returns every directory containing a real `.ubx/config` (all
+four of cli/configcascade.go's own real names: `config.hcl`, `config.toml`, `config`,
+`config.yaml`), repo-relative and sorted for determinism, skipping `.git` and never descending
+into `.ubx` itself. The name list is deliberately duplicated rather than imported: package cli
+imports package server (cli/server.go wires up `ubx server`), so the reverse would be a real
+import cycle -- noted here because it IS a real drift risk if cli's own list ever changes.
+Deliberate: a `.ubx/` directory with no config file is NOT a stack (ubx writes `.ubx/plans/` and
+`.ubx/ledger.lock` there too; a leftover lock file must never read as "a stack lives here").
+
+**UBI-166's resolution core is reused unchanged**, just fed auto-discovered candidates instead of
+manually-declared ones: same deepest-matching-stack-wins against the event's own real changed
+files, same lazy fetch (single-stack repos still pay nothing), same refuse-outright-never-guess on
+a tie or a no-match. Only the candidate type changed (`[]RepoConfig` -> `[]string`) and the zero
+case's meaning: it used to mean "unlisted repo" (`ErrRepoNotAllowed`, which in practice never
+fired, since every handler already gated on `len(candidates) == 0` first) and now means
+"allowlisted repo that declares no stack at all" (`ErrNoStackDiscovered`) -- a genuinely different
+condition, so it says so rather than reusing the old sentinel.
+
+**Real structural consequence, worth knowing**: discovery has to read what the event's own commit
+actually contains, so the checkout now happens in each platform's own handler, BEFORE resolution,
+rather than inside each `run*` helper afterwards. The twelve `run*` helpers
+(plan/automatic-ship/manual-ship x four platforms) therefore take a prepared `repoDir` and no
+longer check out themselves; four new `checkoutFor*` helpers own that. Drift-watch has no
+triggering event and therefore no changed files to disambiguate with, and doesn't need any: drift
+applies to every stack a repo declares, so it now runs one real `ubx status --drift` pass per
+discovered stack instead of one against a declared path.
+
+**Refused by name, never silently absorbed**: a pre-UBI-167 `ledger_dir` YAML key fails startup
+with a real, named error (yaml.v3 ignores unknown keys by default, so without an explicit probe an
+upgrading operator would have had their declared path quietly dropped); so does a `--repo
+owner/name:ledger_dir` suffix, which would otherwise have parsed as a repository literally named
+`infra:stacks/payments` and then simply never matched a real event -- a silent, allowlist-shaped
+failure of exactly the kind UBI-166 exists to prevent.
+
+**Real, adversarial test coverage**: `server/stackdiscovery_test.go` (new) -- one real
+`.ubx/config` discovered and resolved with no fetch; two real stacks resolved by deepest match in
+both directions; root+nested discovered together; ambiguity refused; no-config-anywhere refused;
+a `.ubx/` with only a lock file proven NOT to be a stack; `.git` skipped and walk order proven
+deterministic across repeated runs; every one of the four real config file names counted.
+`server/allowlist_test.go` and the four per-platform tests updated to the auto-discovered shape
+(each per-platform "two real stacks" test now builds a real checkout on disk rather than a
+declared list). `server/config_test.go` gained both real refusal tests. Full repo `go build`/`go
+vet`/`go test -count=1` clean.
+
+**Real end-to-end verification, and an honest bound on it**: `docker build` is NOT possible in
+this session's environment -- the egress policy returns a hard 403 for
+`production.cloudfront.docker.com`, so no base image (`golang:1.26-bookworm`,
+`debian:bookworm-slim`, or the `docker/dockerfile:1` frontend) can be pulled at all. The Docker
+daemon itself starts fine; this is an image-registry egress denial, confirmed by pulling each base
+image directly, not a Dockerfile problem. So the equivalent verification was run against the real
+`ubx server` binary as a real host process instead, driven by real HMAC-SHA256-signed webhook
+deliveries, a stand-in GitHub API, and real local git remotes (`url.<path>.insteadOf` rewriting
+the real clone URL). **Every scenario used the IDENTICAL server config; only the cloned
+repository's own contents differed**, which is exactly the property UBI-167 introduces. All eight
+passed: one real `.ubx/config` discovered and planned (no refusal); two stacks with a PR touching
+one (no refusal); two stacks with a PR touching both (refused, real posted comment naming "2
+equally-specific discovered stacks"); three stacks with a PR touching none (refused, naming "3
+stacks discovered in this repository" -- a direct readout of discovery over the real clone); an
+allowlisted repo with no `.ubx/config` anywhere (refused, "no .ubx/config found anywhere");
+an unlisted repo (refused with UBI-166's own unchanged log line, and nothing ever cloned, work dir
+empty); the two legacy-`ledger_dir` startup refusals. **A real `docker build` + container run is
+still owed and should be done in an environment whose egress policy allows Docker Hub.**
+
+**Docs** (`ubiquex-docs`): `server/configuration.mdx` gained a new "Stack locations are
+auto-discovered, never declared here (UBI-167)" section with a `<Warning>` carrying the real
+startup-refusal text, rewrote "Two real stacks in one repository" for auto-discovery, and removed
+`ledger_dir` from the key description, the YAML example, and the `--repo` shorthand. The `repos:`
+examples and `--repo` shorthand in `server/gitlab-setup.mdx`, `server/azure-devops-setup.mdx`,
+`server/bamboo-setup.mdx`, and `cli-reference/server.mdx` were fixed too -- not scope creep: those
+examples would otherwise have been actively broken config that now fails startup by design. Zero
+em-dashes, `mint validate` clean.
+
+**Observation for the founder, deliberately NOT acted on**: in the comment-triggered handlers
+(`ubx plan` / `ubx ship` via comment, all four platforms), stack resolution runs before the
+authorization check, so an unauthorized commenter on an allowlisted repo now triggers a real
+clone/fetch where before they triggered only a changed-files API call. That ordering is
+pre-existing (UBI-166 already fetched changed files before auth); moving it after the auth check
+is a real, separate improvement worth a ticket, not something to change silently inside this one.
+
+**Not yet done, explicit, per the ticket's own "Never self-merge" constraint**: everything above is
+committed on branch `claude/verify-pr-5-merge-ov475n` and pushed -- **not merged**. The founder's
+own review and merge decision is the next step.
+
+## UBI-166, URGENT (ubx server, all four platforms): CLOSED -- merged as PR #5, `2914e0e`, verified against real, current main 2026-08-15
 
 Real, current scope: `Config.Repos`/`ledger_dir` was never actually enforced as an allowlist for
 any webhook-triggered action (plan, re-plan, approval-derived acceptance, ship) on any of the four
@@ -62,14 +165,14 @@ the repo root instead of refusing them), documents the loud-refusal log line's o
 explains the two-real-stacks resolution behavior. Zero em-dashes, `mint validate` clean, `mint
 broken-links` clean, overflow crawl clean (`pageOverflowPx: 0`) on the one touched page.
 
-**Not yet done, explicit, per the founder's own "Never self-merge" instruction for this specific
-fix**: the Go implementation (`server/allowlist.go` + the four webhook-handler files + five new
-test files) is committed on a real, separate branch (`ubi-166-repo-allowlist`), pushed, and a real
-PR opened against `main` -- **not merged**. The founder's own review and merge decision is the
-next, explicit step; this is a real, deliberate deviation from every prior UBI-28 phase's own
-direct-commit-to-main pattern, specifically because this change is security-relevant and the
-founder asked for it explicitly this time. STATE.md itself is committed on that same branch (this
-entry), not `main`, until the PR merges.
+**Merged, confirmed 2026-08-15**: PR #5 (`ubi-166-repo-allowlist` -> `main`) was reviewed and
+merged by the founder, never self-merged. Real merge commit `2914e0e51e07292b533818cda997233524c98f87`,
+carrying `9bff8f3e4227d215cb284a95baa3ec85eb29150a` as its second parent. Confirmed against real,
+current `main` two independent ways (a fresh `git fetch origin main`, and the GitHub API resolving
+`refs/heads/main`), both agreeing on the SHA and on `server/allowlist.go`'s own blob -- see
+UBI-167's own entry above for the full check, including the stale-local-`main`-ref trap it ruled
+out. UBI-167 then removed only the `ledger_dir` field from `Config.Repos`; the allowlist
+enforcement described in this entry is unchanged and still live.
 
 ## UBI-28 Phase 4, FINAL (ubx server, Bamboo/Bitbucket Server): CLOSED -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 4-platform Docker, and docs shipped, all four phases complete, 2026-08-15
 

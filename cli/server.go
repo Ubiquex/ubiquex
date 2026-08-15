@@ -94,7 +94,7 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().Bool("allow-destroy", false, "allow a manual \"ubx ship --confirm-destroys\" comment to actually pass --confirm-destroys through (default false -- destroy is disabled by default)")
 	cmd.Flags().String("surface-as", "", "how drift-watch surfaces real drift: \"issue\" or \"pr\" (default \"issue\")")
 	cmd.Flags().String("drift-watch-interval", "", "how often to run the drift-watch loop, a Go duration (default \"24h\")")
-	cmd.Flags().StringArray("repo", nil, "a watched repo: \"owner/name\" or \"owner/name:ledger_dir\" for GitHub, \"gitlab:namespace/project\" or \"gitlab:namespace/project:ledger_dir\" for GitLab, \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\" for Azure DevOps, \"bitbucketserver:PROJECTKEY/repository-slug\" or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\" for Bitbucket Server (repeatable; the YAML file's own repos: list is the alternative for more than a few)")
+	cmd.Flags().StringArray("repo", nil, "a repo ubx server is allowed to act on: \"owner/name\" for GitHub, \"gitlab:namespace/project\" for GitLab, \"azuredevops:project/repository\" for Azure DevOps, \"bitbucketserver:PROJECTKEY/repository-slug\" for Bitbucket Server (repeatable; the YAML file's own repos: list is the alternative for more than a few). Repository identity only -- each stack's own location is discovered from that repository's real .ubx/config, never declared here")
 
 	return cmd
 }

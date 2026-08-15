@@ -323,8 +323,12 @@ type Config struct {
 }
 
 // RepoConfig is one entry of Config.Repos: a single repository ubx
-// server watches, plus where within it the ledger root actually lives
-// (mirroring `ubx plan --ledger-dir`'s own default-to-"." shape).
+// server is allowed to act on. Identity only, by design (UBI-167) --
+// there is deliberately no ledger_dir field here. Where a stack
+// actually lives inside a repository is a property of that repository
+// (its own `.ubx/config`), auto-discovered from the real checkout by
+// stackdiscovery.go once membership is confirmed, never declared
+// centrally here and kept in sync by hand.
 //
 // Owner/Name (GitHub), Project (GitLab), and Project+Repository (Azure
 // DevOps) are deliberately separate field groups, not one single
@@ -362,8 +366,6 @@ type RepoConfig struct {
 	// repository name or ID, or Bitbucket Server's own real repository
 	// slug, within Project.
 	Repository string `yaml:"repository"`
-
-	LedgerDir string `yaml:"ledger_dir"`
 }
 
 // String renders r's own real repository address for logging --
@@ -415,6 +417,9 @@ func Load(yamlPath string, flags *pflag.FlagSet) (*Config, error) {
 			if err := yaml.Unmarshal(data, &cfg); err != nil {
 				return nil, fmt.Errorf("parse config file %s: %w", yamlPath, err)
 			}
+			if err := rejectLedgerDirKeys(data, yamlPath); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -443,6 +448,35 @@ func Load(yamlPath string, flags *pflag.FlagSet) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// rejectLedgerDirKeys fails startup, loudly and by name, on a
+// pre-UBI-167 config file that still declares `ledger_dir` under a
+// `repos:` entry. yaml.v3 ignores unknown keys by default, so without
+// this an operator upgrading an existing deployment would get their
+// carefully declared path silently dropped and every event resolved
+// against auto-discovery instead -- exactly the kind of quiet behavior
+// change a config file should never absorb without saying so. A
+// separate targeted probe rather than a blanket KnownFields(true),
+// which would also start rejecting every unrelated key this struct
+// doesn't model.
+func rejectLedgerDirKeys(data []byte, yamlPath string) error {
+	var probe struct {
+		Repos []struct {
+			LedgerDir *string `yaml:"ledger_dir"`
+		} `yaml:"repos"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		// Already parsed cleanly into Config above -- a shape this
+		// narrower probe can't read is not a real config error.
+		return nil
+	}
+	for i, r := range probe.Repos {
+		if r.LedgerDir != nil {
+			return fmt.Errorf("config file %s: repos[%d] declares ledger_dir %q, which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so remove the key; repos entries carry repository identity only", yamlPath, i, *r.LedgerDir)
+		}
+	}
+	return nil
 }
 
 // applyEnv is the cascade's env-var layer -- UBX_SERVER_<KEY>, only
@@ -648,80 +682,90 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	return nil
 }
 
-// parseRepoFlags parses --repo's own real shorthand. GitHub (the
-// default when no platform prefix is given, for backward compatibility
-// with every Phase-1-era --repo value): "owner/name" or
-// "owner/name:ledger_dir". GitLab (a real "gitlab:" prefix, since a
+// parseRepoFlags parses --repo's own real shorthand: repository
+// identity only, never a path (UBI-167 -- a stack's own location is
+// auto-discovered from the repository's real .ubx/config, so there is
+// nothing left for this flag to declare beyond which repository is
+// allowed at all). GitHub (the default when no platform prefix is
+// given, for backward compatibility with every Phase-1-era --repo
+// value): "owner/name". GitLab (a real "gitlab:" prefix, since a
 // GitLab project path can carry any number of real nested group/
 // subgroup segments, never assumed to be exactly two like GitHub's own
-// owner/name): "gitlab:namespace/project" or
-// "gitlab:namespace/project:ledger_dir". Azure DevOps (a real
+// owner/name): "gitlab:namespace/project". Azure DevOps (a real
 // "azuredevops:" prefix, needing two real, separate identifiers --
 // project and repository -- never one opaque path the way GitLab's is,
-// since a real Azure DevOps project name never carries nested
-// segments the way a GitLab namespace can):
-// "azuredevops:project/repository" or
-// "azuredevops:project/repository:ledger_dir". Bitbucket Server (a real
-// "bitbucketserver:" prefix, the identical two-real-identifier shape
-// as Azure DevOps' own -- a real project key and repository slug,
-// matching the existing `ubx accept --bitbucket-server-project
-// PROJECTKEY/repository-slug` flag's own real format):
-// "bitbucketserver:PROJECTKEY/repository-slug" or
-// "bitbucketserver:PROJECTKEY/repository-slug:ledger_dir" -- ledger_dir
-// defaults to "." when omitted in any of the four forms, matching `ubx
-// plan --ledger-dir`'s own default.
+// since a real Azure DevOps project name never carries nested segments
+// the way a GitLab namespace can): "azuredevops:project/repository".
+// Bitbucket Server (a real "bitbucketserver:" prefix, the identical
+// two-real-identifier shape as Azure DevOps' own -- a real project key
+// and repository slug, matching the existing `ubx accept
+// --bitbucket-server-project PROJECTKEY/repository-slug` flag's own
+// real format): "bitbucketserver:PROJECTKEY/repository-slug".
+//
+// A leftover pre-UBI-167 ":ledger_dir" suffix is refused by name
+// rather than silently absorbed into a repository identifier -- the
+// same reasoning rejectLedgerDirKeys applies to the YAML form.
 func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 	repos := make([]RepoConfig, 0, len(raw))
 	for _, r := range raw {
 		if rest, ok := cutPrefix(r, "gitlab:"); ok {
-			project, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			if project == "" {
+			if rest == "" {
 				return nil, fmt.Errorf("--repo \"gitlab:...\" must name a real project path, got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "gitlab", Project: project, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "gitlab", Project: rest})
 			continue
 		}
 
 		if rest, ok := cutPrefix(r, "azuredevops:"); ok {
-			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			project, repository, ok := cutFirst(projectRepo, '/')
+			project, repository, ok := cutFirst(rest, '/')
 			if !ok || project == "" || repository == "" {
-				return nil, fmt.Errorf("--repo \"azuredevops:...\" must be \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\", got %q", r)
+				return nil, fmt.Errorf("--repo \"azuredevops:...\" must be \"azuredevops:project/repository\", got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "azuredevops", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "azuredevops", Project: project, Repository: repository})
 			continue
 		}
 
 		if rest, ok := cutPrefix(r, "bitbucketserver:"); ok {
-			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			project, repository, ok := cutFirst(projectRepo, '/')
+			project, repository, ok := cutFirst(rest, '/')
 			if !ok || project == "" || repository == "" {
-				return nil, fmt.Errorf("--repo \"bitbucketserver:...\" must be \"bitbucketserver:PROJECTKEY/repository-slug\" or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
+				return nil, fmt.Errorf("--repo \"bitbucketserver:...\" must be \"bitbucketserver:PROJECTKEY/repository-slug\", got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "bitbucketserver", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "bitbucketserver", Project: project, Repository: repository})
 			continue
 		}
 
-		ownerRepo, ledgerDir, hasLedgerDir := cutLast(r, ':')
-		if !hasLedgerDir {
-			ledgerDir = "."
+		if err := rejectLedgerDirSuffix(r, r); err != nil {
+			return nil, err
 		}
-		owner, name, ok := cutFirst(ownerRepo, '/')
+		owner, name, ok := cutFirst(r, '/')
 		if !ok || owner == "" || name == "" {
-			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", \"gitlab:namespace/project:ledger_dir\", \"azuredevops:project/repository\", \"azuredevops:project/repository:ledger_dir\", \"bitbucketserver:PROJECTKEY/repository-slug\", or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
+			return nil, fmt.Errorf("--repo must be \"owner/name\", \"gitlab:namespace/project\", \"azuredevops:project/repository\", or \"bitbucketserver:PROJECTKEY/repository-slug\", got %q", r)
 		}
-		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name, LedgerDir: ledgerDir})
+		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name})
 	}
 	return repos, nil
+}
+
+// rejectLedgerDirSuffix refuses a --repo value whose own
+// platform-specific remainder still carries a ":ledger_dir" suffix.
+// Without it, "acme/infra:stacks/payments" would parse as a repository
+// literally named "infra:stacks/payments" and then simply never match
+// any real incoming event -- a silent, allowlist-shaped failure, which
+// is precisely the outcome UBI-166 exists to prevent.
+func rejectLedgerDirSuffix(full, rest string) error {
+	if _, ledgerDir, found := cutFirst(rest, ':'); found {
+		return fmt.Errorf("--repo %q carries a ledger_dir suffix (%q), which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so pass repository identity alone", full, ledgerDir)
+	}
+	return nil
 }
 
 func cutPrefix(s, prefix string) (rest string, found bool) {
@@ -740,11 +784,3 @@ func cutFirst(s string, sep byte) (before, after string, found bool) {
 	return s, "", false
 }
 
-func cutLast(s string, sep byte) (before, after string, found bool) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == sep {
-			return s[:i], s[i+1:], true
-		}
-	}
-	return s, "", false
-}

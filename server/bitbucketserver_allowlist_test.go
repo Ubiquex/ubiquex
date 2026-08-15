@@ -109,19 +109,21 @@ func TestHandlePullRequestApprovedBitbucketServer_UnlistedRepoRefusedAndLogged(t
 	}
 }
 
-// TestResolveLedgerDir_BitbucketServerTwoRealStacksIndependently proves
+// TestResolveStackIn_BitbucketServerTwoRealStacksIndependently proves
 // the shared resolution core, applied against Bitbucket Server's own
 // real changed-file path shape (ListPullRequestChangedFiles's own
-// real return type, path.toString-derived), resolves two independently
-// configured stacks correctly.
-func TestResolveLedgerDir_BitbucketServerTwoRealStacksIndependently(t *testing.T) {
-	candidates := []RepoConfig{
-		{Platform: "bitbucketserver", Project: "INFRA", Repository: "infra", LedgerDir: "stacks/payments"},
-		{Platform: "bitbucketserver", Project: "INFRA", Repository: "infra", LedgerDir: "stacks/networking"},
-	}
-	dir, err := resolveLedgerDir(candidates, []string{"stacks/networking/proposals/vpc.json"})
+// real return type, path.toString-derived), resolves two real,
+// auto-discovered stacks correctly.
+func TestResolveStackIn_BitbucketServerTwoRealStacksIndependently(t *testing.T) {
+	repoDir := t.TempDir()
+	writeStack(t, repoDir, "stacks/payments", "config")
+	writeStack(t, repoDir, "stacks/networking", "config")
+
+	dir, err := resolveStackIn(repoDir, func() ([]string, error) {
+		return []string{"stacks/networking/proposals/vpc.json"}, nil
+	})
 	if err != nil {
-		t.Fatalf("resolveLedgerDir: %v", err)
+		t.Fatalf("resolveStackIn: %v", err)
 	}
 	if dir != "stacks/networking" {
 		t.Errorf("dir = %q, want %q", dir, "stacks/networking")

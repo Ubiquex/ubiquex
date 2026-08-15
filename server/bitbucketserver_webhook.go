@@ -138,13 +138,17 @@ func (s *Server) handlePullRequestOpenedBitbucketServer(ctx context.Context, bod
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.headSHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
 	})
 	if err != nil {
 		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:opened", err)
 	}
-	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
+	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir)
 }
 
 // handlePullRequestSourceUpdatedBitbucketServer is core-flow step 3's
@@ -169,13 +173,17 @@ func (s *Server) handlePullRequestSourceUpdatedBitbucketServer(ctx context.Conte
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.headSHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
 	})
 	if err != nil {
 		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:from_ref_updated", err)
 	}
-	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
+	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir)
 }
 
 // handlePullRequestMergedBitbucketServer is core-flow step 5's
@@ -207,22 +215,26 @@ func (s *Server) handlePullRequestMergedBitbucketServer(ctx context.Context, bod
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.toRef)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
 	})
 	if err != nil {
 		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:merged", err)
 	}
-	return s.runAutomaticShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.toRef, ledgerDir)
+	return s.runAutomaticShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir)
 }
 
 // refuseAmbiguousStackBitbucketServer is refuseAmbiguousStackGitHub's
 // own Bitbucket Server counterpart.
 func (s *Server) refuseAmbiguousStackBitbucketServer(ctx context.Context, api *bbserver.Client, id prIdentityBitbucketServer, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
 		"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "event", event, "error", err)
 	return postOrEditCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, s.cfg.BitbucketServerBotName, "plan",
-		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // bitbucketServerWebhookComment is the real, minimal shape of the
@@ -283,7 +295,11 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "verb", verb)
 		return nil
 	}
-	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+	repoDir, err := s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.headSHA)
+	if err != nil {
+		return err
+	}
+	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
 		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
 	})
 	if err != nil {
@@ -307,7 +323,7 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a user with real, current REPO_WRITE-or-above access) can.", commenter.Name))
 		}
 		_ = flags
-		return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
+		return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, commenter)
@@ -319,7 +335,7 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter.Name))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir, confirmDestroys)
+		return s.runManualShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
 }

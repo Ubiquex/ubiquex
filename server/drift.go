@@ -69,25 +69,47 @@ func (s *Server) driftWatchOnce(ctx context.Context) {
 			continue
 		}
 
-		args := []string{"status", "--drift", "--surface-as", s.cfg.SurfaceAs,
-			"--ledger-dir", r.LedgerDir, "--github-repo", r.Owner + "/" + r.Name}
-		if s.cfg.ProviderSource != "" {
-			args = append(args, "--source", s.cfg.ProviderSource, "--provider-version", s.cfg.ProviderVersion)
-		}
-		if s.cfg.ProviderConfig != "" {
-			args = append(args, "--provider-config", s.cfg.ProviderConfig)
-		}
-
-		result, err := runUbx(ctx, self, repoDir, []string{"GITHUB_TOKEN=" + token}, args...)
+		// UBI-167: the stacks come from the repo's own checkout now,
+		// not from a ledger_dir this entry used to declare. Unlike
+		// every webhook-triggered path, drift-watch has no event and
+		// therefore no changed files to disambiguate a multi-stack
+		// repository with -- and it doesn't need any: drift genuinely
+		// applies to every stack the repo declares, so each discovered
+		// stack gets its own real `ubx status --drift` pass rather
+		// than one of them being picked.
+		stacks, err := discoverStacks(repoDir)
 		if err != nil {
-			slog.Error("ubx server: drift watch: run ubx status --drift", "repo", r.Owner+"/"+r.Name, "error", err)
+			slog.Error("ubx server: drift watch: discover stacks", "repo", r.Owner+"/"+r.Name, "error", err)
 			continue
 		}
-		if result.ExitCode != 0 && result.ExitCode != 1 {
-			// 0 clean, 1 drift found (and surfaced) -- both real,
-			// successful outcomes; anything else is a genuine failure.
-			slog.Error("ubx server: drift watch: ubx status --drift failed",
-				"repo", r.Owner+"/"+r.Name, "exit_code", result.ExitCode, "stderr", result.Stderr)
+		if len(stacks) == 0 {
+			slog.Warn("ubx server: drift watch: skipping repository -- no .ubx/config found anywhere in its own checkout, so it declares no stack to check (UBI-167)",
+				"repo", r.Owner+"/"+r.Name)
+			continue
+		}
+
+		for _, ledgerDir := range stacks {
+			args := []string{"status", "--drift", "--surface-as", s.cfg.SurfaceAs,
+				"--ledger-dir", ledgerDir, "--github-repo", r.Owner + "/" + r.Name}
+			if s.cfg.ProviderSource != "" {
+				args = append(args, "--source", s.cfg.ProviderSource, "--provider-version", s.cfg.ProviderVersion)
+			}
+			if s.cfg.ProviderConfig != "" {
+				args = append(args, "--provider-config", s.cfg.ProviderConfig)
+			}
+
+			result, err := runUbx(ctx, self, repoDir, []string{"GITHUB_TOKEN=" + token}, args...)
+			if err != nil {
+				slog.Error("ubx server: drift watch: run ubx status --drift",
+					"repo", r.Owner+"/"+r.Name, "ledger_dir", ledgerDir, "error", err)
+				continue
+			}
+			if result.ExitCode != 0 && result.ExitCode != 1 {
+				// 0 clean, 1 drift found (and surfaced) -- both real,
+				// successful outcomes; anything else is a genuine failure.
+				slog.Error("ubx server: drift watch: ubx status --drift failed",
+					"repo", r.Owner+"/"+r.Name, "ledger_dir", ledgerDir, "exit_code", result.ExitCode, "stderr", result.Stderr)
+			}
 		}
 	}
 }
