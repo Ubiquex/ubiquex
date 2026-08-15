@@ -2,7 +2,54 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 and state PR #12 OPEN not yet merged (never self-merged), 2026-08-15
+## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 and state PR #13 OPEN not yet merged (never self-merged), 2026-08-15
+
+UBI-171's self-hosted content on `server/configuration.mdx` was accurate but unreachable. Confirmed
+before touching anything: `github-setup.mdx` and `azure-devops-setup.mdx` each had **zero** matches
+for enterprise/self-hosted/on-prem/base-URL, and the sidebar has one flat page per platform.
+
+### The open question, answered on evidence rather than assumption
+
+Asked whether this warranted separate "GitHub Enterprise Server setup" / "Azure DevOps Server
+setup" pages. **No, in-page callouts**, and the two platforms reach that answer differently:
+
+- **GitHub.** Diffed GitHub's own published REST descriptions (`github/rest-api-description`,
+  cloned for this): of github.com's 24 GitHub App endpoints, **0 are missing from GHES 3.22**,
+  which exposes 8 enterprise-scoped endpoints of its own. Every endpoint `ubx server` calls is on
+  both. App creation is the same form on a different host, so a separate page would be a
+  near-verbatim duplicate that drifts.
+- **Azure DevOps.** There is no app registration to differ at all: auth is a PAT, and Azure DevOps
+  Server creates PATs the same way. Microsoft's own on-prem specs cover `git` (66 paths, identical
+  to hosted), `wit` (`workitems/${type}`) and `policy` (`configurations`).
+
+### The finding worth keeping
+
+Microsoft publishes on-prem API specifications for **33 areas and none for Graph**, while
+publishing them for every other area `ubx server` uses. `ubx server` uses Graph in exactly two
+paths, both verified in source: `hasContributorAccessAzureDevOps` (the re-plan fallback for a
+drift-watch-opened PR, where the bot is the creator and group membership is the ONLY rule that
+applies) and `CODEOWNERS` group entries in `isAuthorizedToShipAzureDevOps`. Everything else runs
+from the PAT alone.
+
+So an on-prem Azure DevOps Server deployment is very likely fine except that a drift-watch-opened
+pull request cannot be re-planned by comment and group `CODEOWNERS` entries never authorize a
+ship. **Documented at exactly the confidence available**: drawn from what Microsoft publishes, not
+from a live instance, and the page says so. Worth confirming against a real deployment if one ever
+becomes available; if Graph does turn out to be unavailable, `azuredevops/server_api.go`'s two
+Graph callers are the code that needs an on-prem fallback.
+
+### Verification
+
+- `mint validate` clean; `broken-links` 124 findings identical to the UBI-164 baseline, none on the
+  changed pages; zero em dashes.
+- Byte-identity: all 6 other `server/*.mdx` pages and `docs.json` byte-identical, every changed
+  file `+N -0`.
+- **`mint dev` failed with `Error: Client not built` for the THIRD time** (UBI-169, UBI-164, here).
+  Treat it as a standing environment limitation, not a transient one: a real rendered-DOM overflow
+  check is simply not available in this container, and claiming one would be false. The measured
+  substitute compares added content against each page's own published maxima.
+
+## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 merged as `a5170cd`, state PR #12 OPEN not yet merged, 2026-08-15
 
 Docs-only. All five CI/CD guides run `ubx accept --from-merge` and `ubx ship --yes` in their
 ship-on-merge workflow and none mentioned needing a real remote ledger store.
