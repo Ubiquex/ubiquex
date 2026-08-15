@@ -268,7 +268,14 @@ func (s *Server) refuseAmbiguousStackAzureDevOps(ctx context.Context, api *adevo
 }
 
 // handlePullRequestCommentAzureDevOps is core-flow steps 3 (manual
-// re-plan) and 4's manual path (ship via comment). Always re-fetches
+// re-plan) and 4's manual path (ship via comment).
+//
+// UBI-168: the authorization check runs BEFORE any clone or fetch, the
+// same reordering handleIssueCommentEvent's own doc comment describes.
+// Only the ordering changed; every check, input, and refusal comment is
+// unchanged.
+//
+// Always re-fetches
 // the PR fresh via GetPullRequest -- the comment event's own
 // "pullRequest" resource field is confirmed real but not necessarily
 // current by the time this handler actually runs, the identical real
@@ -327,17 +334,6 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "verb", verb)
 		return nil
 	}
-	repoDir, err := s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.headSHA)
-	if err != nil {
-		return err
-	}
-	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
-		return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
-	})
-	if err != nil {
-		return s.refuseAmbiguousStackAzureDevOps(ctx, api, id, "comment:"+verb, err)
-	}
-
 	var creator *git.IdentityRefWithVote
 	if pr.CreatedBy != nil {
 		creator = &git.IdentityRefWithVote{DisplayName: pr.CreatedBy.DisplayName, Descriptor: pr.CreatedBy.Descriptor}
@@ -355,6 +351,10 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a project member with real, current Contributors-group access) can.", commenterDisplayName))
 		}
 		_ = flags
+		repoDir, ledgerDir, err := s.prepareStackAzureDevOps(ctx, api, id, "comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runPlanAndCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir)
 
 	case "ship":
@@ -367,9 +367,32 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenterDisplayName))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
+		repoDir, ledgerDir, err := s.prepareStackAzureDevOps(ctx, api, id, "comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runManualShipAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
+}
+
+// prepareStackAzureDevOps is handlePullRequestCommentAzureDevOps' own
+// post-authorization checkout and stack resolution (UBI-168), the Azure
+// DevOps counterpart of prepareStackGitHub/prepareStackBitbucketCloud.
+// An empty repoDir with a nil error means the refusal comment has
+// already been posted.
+func (s *Server) prepareStackAzureDevOps(ctx context.Context, api *adevops.Client, id prIdentityAzureDevOps, event string) (repoDir, ledgerDir string, err error) {
+	repoDir, err = s.checkoutForAzureDevOps(ctx, id.project, id.repositoryID, id.headSHA)
+	if err != nil {
+		return "", "", err
+	}
+	ledgerDir, err = resolveStackIn(repoDir, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.project, id.repositoryID, id.prID)
+	})
+	if err != nil {
+		return "", "", s.refuseAmbiguousStackAzureDevOps(ctx, api, id, event, err)
+	}
+	return repoDir, ledgerDir, nil
 }
 
 // handleAzureDevOpsApproval is core-flow step 4's own trigger: a real

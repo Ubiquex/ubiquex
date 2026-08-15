@@ -2,7 +2,66 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-171 (ubx server + accept): GitHub Enterprise Server and on-prem Azure DevOps Server, code PR #9 and docs PR #4 OPEN not yet merged (never self-merged), 2026-08-15
+## UBI-168 (ubx server, all five platforms): authorization now runs before any clone or fetch, PRs OPEN not yet merged, 2026-08-15
+
+Real scope: a pure ordering fix in the comment-triggered handlers. Pre-existing from UBI-166, found
+during UBI-167's implementation and correctly filed separately rather than folded in. UBI-167
+changed its real cost: an unauthorized commenter on an allowlisted repository went from triggering a
+changed-files API call to triggering a real clone or fetch, on every comment, before being told no.
+
+Fixed on GitHub, GitLab, Azure DevOps and Bitbucket Server by extracting a `prepareStack<Platform>`
+helper and calling it inside each verb's own authorized branch. Bitbucket Cloud (UBI-170) was built
+this way from the start and is the pattern the other four were brought to, not a new design.
+
+**Nothing else changed.** Every check runs against the same inputs and produces the same refusal
+comments; the whole pre-existing server test suite passes untouched. The one thing worth noting is
+that `ubx ship` legitimately fetches changed files DURING authorization (CODEOWNERS matching needs
+them), which is not the same as stack resolution and still happens before any checkout.
+
+### Verification, and two places the first attempt was weaker than it looked
+
+Ten Go tests, two per platform, each asserting both that the real refusal comment was posted and
+that the work directory is still empty. The work-directory assertion is the discriminating one:
+`ensureRepoCheckoutFromRemote` calls `os.MkdirAll` on the checkout's parent BEFORE running git
+clone, so any handler that reaches the checkout leaves a directory behind even when the clone itself
+cannot succeed.
+
+Each platform also has an `..._AuthorizedReplanDoesReachCheckout` control. Without it, the
+unauthorized tests would pass just as happily against a handler that never checks out at all, which
+would prove nothing about ordering. **This is the general lesson: a "did not happen" assertion is
+worth little without a paired "does happen" control.**
+
+**Mutation-checked, all five platforms.** Hoisting `prepareStack*` back above the switch makes all
+ten unauthorized tests fail and passes again when restored, so they genuinely catch the defect
+rather than passing on a lenient fixture. Bitbucket Cloud was mutated too, so the proof covers the
+platform that was already correct, not just the four that were changed.
+
+**Docker registry egress is still blocked** (403 from `production.cloudfront.docker.com`,
+re-confirmed this session), so the established host-process substitute was rebuilt:
+`scratchpad/verify168.sh`, 6/6 passing, driving a real `ubx server` with a real HMAC-signed comment
+webhook against a real local git remote. Two harness weaknesses were found and fixed rather than
+reported as passes:
+
+- The stand-in served CODEOWNERS with `"encoding":"utf-8"`, which go-github refuses to decode, so
+  the ship authorization aborted early and the run only LOOKED like it proved the ordering.
+- The fixture repository had one stack, which made the "changed files were never fetched" signal
+  vacuously true: `resolveStackIn` only fetches changed files for a genuinely multi-stack
+  repository. Seeded two stacks, after which that signal fails under the reverted ordering as it
+  should.
+
+Running the corrected harness against a deliberately reverted build fails both unauthorized cases
+on both signals, while the authorized control performs a real, successful clone with the real stack
+discovered. Same config, same repository, same real clone: it happens when authorized and never
+starts when not.
+
+### Docs
+
+`server/workflow.mdx` gains a note stating the ordering guarantee and what it used to be;
+`server/overview.mdx`'s core-flow step 2 now says the check runs before any clone or fetch. `mint
+validate` clean, `broken-links` 124 findings identical to the UBI-171 baseline with none on the
+changed pages, zero em dashes in any added line.
+
+## UBI-171 (ubx server + accept): CLOSED -- GitHub Enterprise Server and on-prem Azure DevOps Server, code PR #9 merged as `22fbeb7`/`0d8137d`, docs PR #4 merged as `fd598e2`, both verified against real, current main 2026-08-15
 
 Real scope: two self-hosted products that could not work at all, however correctly they were
 configured. Found by the verification-only base-URL question asked earlier in the same session, and

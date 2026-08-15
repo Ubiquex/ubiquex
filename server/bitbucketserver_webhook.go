@@ -253,7 +253,14 @@ type bitbucketServerWebhookComment struct {
 }
 
 // handlePullRequestCommentBitbucketServer is core-flow steps 3 (manual
-// re-plan) and 4's manual path (ship via comment). Always re-fetches
+// re-plan) and 4's manual path (ship via comment).
+//
+// UBI-168: the authorization check runs BEFORE any clone or fetch, the
+// same reordering handleIssueCommentEvent's own doc comment describes.
+// Only the ordering changed; every check, input, and refusal comment is
+// unchanged.
+//
+// Always re-fetches
 // the PR fresh via GetPullRequest -- the comment event's own
 // "pullRequest" resource field is confirmed real but not necessarily
 // current by the time this handler actually runs, the identical real
@@ -295,17 +302,6 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "verb", verb)
 		return nil
 	}
-	repoDir, err := s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.headSHA)
-	if err != nil {
-		return err
-	}
-	ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
-		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
-	})
-	if err != nil {
-		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "comment:"+verb, err)
-	}
-
 	var creator bitbucketv1.UserWithLinks
 	if pr.Author != nil {
 		creator = pr.Author.User
@@ -323,6 +319,10 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a user with real, current REPO_WRITE-or-above access) can.", commenter.Name))
 		}
 		_ = flags
+		repoDir, ledgerDir, err := s.prepareStackBitbucketServer(ctx, api, id, "comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir)
 
 	case "ship":
@@ -335,9 +335,33 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter.Name))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
+		repoDir, ledgerDir, err := s.prepareStackBitbucketServer(ctx, api, id, "comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
 		return s.runManualShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
+}
+
+// prepareStackBitbucketServer is
+// handlePullRequestCommentBitbucketServer's own post-authorization
+// checkout and stack resolution (UBI-168), the Bitbucket Server
+// counterpart of prepareStackGitHub/prepareStackBitbucketCloud. An empty
+// repoDir with a nil error means the refusal comment has already been
+// posted.
+func (s *Server) prepareStackBitbucketServer(ctx context.Context, api *bbserver.Client, id prIdentityBitbucketServer, event string) (repoDir, ledgerDir string, err error) {
+	repoDir, err = s.checkoutForBitbucketServer(ctx, id.projectKey, id.repositorySlug, id.headSHA)
+	if err != nil {
+		return "", "", err
+	}
+	ledgerDir, err = resolveStackIn(repoDir, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
+	})
+	if err != nil {
+		return "", "", s.refuseAmbiguousStackBitbucketServer(ctx, api, id, event, err)
+	}
+	return repoDir, ledgerDir, nil
 }
 
 // handlePullRequestApprovedBitbucketServer is core-flow step 4's own
