@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-165 (cli/surface.go + ubx server drift-watch): drift-watch works on all five platforms, PRs OPEN not yet merged, 2026-08-15
+## UBI-165 (cli/surface.go + ubx server drift-watch): drift-watch works on all five platforms, code PR #11 and docs PR #6 OPEN not yet merged (never self-merged), 2026-08-15
 
 Stated scope was "extend cli/surface.go beyond GitHub". Delivered, plus **two adjacent defects found
 during implementation that had to be fixed for the stated goal to be true at all.**
