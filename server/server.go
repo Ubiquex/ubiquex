@@ -10,7 +10,9 @@ import (
 
 	adevops "github.com/ubiquex/ubiquex/azuredevops"
 	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	ghub "github.com/ubiquex/ubiquex/github"
 	glab "github.com/ubiquex/ubiquex/gitlab"
+	glapi "gitlab.com/gitlab-org/api/client-go/v2"
 )
 
 // Server is ubx server's own real, running instance -- everything
@@ -108,18 +110,36 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// ledgerDirFor looks up owner/repo's own configured LedgerDir --
-// Config.Repos' own real per-repo setting -- falling back to "." (`ubx
-// plan`'s own default) for a repo a webhook fired for but that isn't
-// explicitly listed in Config.Repos, the same forgiving default the CLI
-// itself already applies when --ledger-dir is omitted.
-func (s *Server) ledgerDirFor(owner, repo string) string {
+// matchingRepoConfigsGitHub returns every real Config.Repos entry for
+// owner/repo -- UBI-166's own real allowlist query, replacing the
+// former ledgerDirFor's own silent "." fallback for an unlisted repo.
+// Zero, one, or more than one entries are all real, valid outcomes;
+// resolveLedgerDir (allowlist.go) is what actually decides what each
+// one means, never this function.
+func (s *Server) matchingRepoConfigsGitHub(owner, repo string) []RepoConfig {
+	var out []RepoConfig
 	for _, r := range s.cfg.Repos {
-		if r.Owner == owner && r.Name == repo {
-			return r.LedgerDir
+		if r.Platform == "github" && r.Owner == owner && r.Name == repo {
+			out = append(out, r)
 		}
 	}
-	return "."
+	return out
+}
+
+// changedFilePathsGitHub returns prNumber's own real, current changed-
+// file paths -- resolveLedgerDirLazy's own fetch closure for the
+// GitHub path, only ever called when matchingRepoConfigsGitHub found
+// more than one candidate (a genuinely multi-stack repository).
+func changedFilePathsGitHub(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int) ([]string, error) {
+	files, _, err := api.API().PullRequests.ListFiles(ctx, owner, repo, prNumber, nil)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.GetFilename())
+	}
+	return paths, nil
 }
 
 // repoDirFor is ensureRepoCheckout's own Server-level wrapper: resolve a
@@ -175,7 +195,7 @@ func (s *Server) intentProviderEnv() []string {
 // PR comment (comment.go's own edit-last mechanism) -- one real,
 // current plan visible per PR, exactly UBI-161's own already-established
 // behavior, reused here rather than reimplemented.
-func (s *Server) runPlanAndComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
+func (s *Server) runPlanAndComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA, ledgerDir string) error {
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
 		return err
@@ -192,7 +212,7 @@ func (s *Server) runPlanAndComment(ctx context.Context, installationID int64, ow
 		return err
 	}
 
-	args := append([]string{"plan", "--ledger-dir", s.ledgerDirFor(owner, repo)}, s.providerArgs()...)
+	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
 	if err != nil {
 		return err
@@ -211,7 +231,7 @@ func (s *Server) runPlanAndComment(ctx context.Context, installationID int64, ow
 // merge-triggered path; a destructive proposal therefore always fails
 // `ubx ship`'s own confirm-destroys enforcement here, by design, forcing
 // a human to the manual comment path below instead, which can supply it.
-func (s *Server) runAutomaticShip(ctx context.Context, installationID int64, owner, repo string, prNumber int, baseRef string) error {
+func (s *Server) runAutomaticShip(ctx context.Context, installationID int64, owner, repo string, prNumber int, baseRef, ledgerDir string) error {
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
 		return err
@@ -228,7 +248,7 @@ func (s *Server) runAutomaticShip(ctx context.Context, installationID int64, own
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirFor(owner, repo)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
@@ -248,7 +268,7 @@ func (s *Server) runAutomaticShip(ctx context.Context, installationID int64, own
 // server was deliberately turned on for it), the human's own explicit
 // flag is the inner one (this specific ship, this specific time) -- both
 // real, both required, neither alone sufficient.
-func (s *Server) runManualShip(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string, confirmDestroys bool) error {
+func (s *Server) runManualShip(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA, ledgerDir string, confirmDestroys bool) error {
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
 		return err
@@ -265,7 +285,7 @@ func (s *Server) runManualShip(ctx context.Context, installationID int64, owner,
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirFor(owner, repo)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	if confirmDestroys && s.cfg.AllowDestroy {
 		args = append(args, "--confirm-destroys")
 	}
@@ -278,16 +298,38 @@ func (s *Server) runManualShip(ctx context.Context, installationID int64, owner,
 	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "ship", body)
 }
 
-// ledgerDirForGitLab is ledgerDirFor's own GitLab counterpart, matched
-// on project's real, full namespace path rather than a separate
-// owner/name pair.
-func (s *Server) ledgerDirForGitLab(project string) string {
+// matchingRepoConfigsGitLab is matchingRepoConfigsGitHub's own GitLab
+// counterpart, matched on project's real, full namespace path rather
+// than a separate owner/name pair.
+func (s *Server) matchingRepoConfigsGitLab(project string) []RepoConfig {
+	var out []RepoConfig
 	for _, r := range s.cfg.Repos {
 		if r.Platform == "gitlab" && r.Project == project {
-			return r.LedgerDir
+			out = append(out, r)
 		}
 	}
-	return "."
+	return out
+}
+
+// changedFilePathsGitLab is changedFilePathsGitHub's own GitLab
+// counterpart, against GitLab's own real MergeRequestDiff shape (same
+// NewPath/OldPath fallback discoverProposalFileGitLab already uses).
+func changedFilePathsGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64) ([]string, error) {
+	diffs, _, err := api.API().MergeRequests.ListMergeRequestDiffs(project, mrIID, nil, glapi.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(diffs))
+	for _, d := range diffs {
+		path := d.NewPath
+		if path == "" {
+			path = d.OldPath
+		}
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
 
 // repoDirForGitLab is ensureRepoCheckoutGitLab's own Server-level
@@ -306,7 +348,7 @@ func (s *Server) repoDirForGitLab(ctx context.Context, project string) (string, 
 // runPlanAndCommentGitLab is runPlanAndComment's own real GitLab
 // counterpart -- identical core-flow steps 1 and 3, against GitLab's
 // own real Notes API instead.
-func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA string) error {
+func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA, ledgerDir string) error {
 	repoDir, err := s.repoDirForGitLab(ctx, project)
 	if err != nil {
 		return err
@@ -315,7 +357,7 @@ func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, 
 		return err
 	}
 
-	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
 	if err != nil {
 		return err
@@ -328,7 +370,7 @@ func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, 
 // runAutomaticShipGitLab is runAutomaticShip's own real GitLab
 // counterpart -- the identical real "never --confirm-destroys on an
 // unattended, merge-triggered path, no exception" safety property.
-func (s *Server) runAutomaticShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, baseRef string) error {
+func (s *Server) runAutomaticShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, baseRef, ledgerDir string) error {
 	repoDir, err := s.repoDirForGitLab(ctx, project)
 	if err != nil {
 		return err
@@ -337,7 +379,7 @@ func (s *Server) runAutomaticShipGitLab(ctx context.Context, api *glab.Client, p
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
@@ -352,7 +394,7 @@ func (s *Server) runAutomaticShipGitLab(ctx context.Context, api *glab.Client, p
 // as the outer, operator-set gate; the human's own explicit
 // `--confirm-destroys` note flag as the inner, per-instance one; both
 // required, neither alone sufficient).
-func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA string, confirmDestroys bool) error {
+func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, headSHA, ledgerDir string, confirmDestroys bool) error {
 	repoDir, err := s.repoDirForGitLab(ctx, project)
 	if err != nil {
 		return err
@@ -361,7 +403,7 @@ func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, proj
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForGitLab(project)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	if confirmDestroys && s.cfg.AllowDestroy {
 		args = append(args, "--confirm-destroys")
 	}
@@ -374,19 +416,20 @@ func (s *Server) runManualShipGitLab(ctx context.Context, api *glab.Client, proj
 	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "ship", body)
 }
 
-// ledgerDirForAzureDevOps is ledgerDirFor's own Azure DevOps
-// counterpart, matched on both real project and repository identifiers
-// -- a Config.Repos entry's own Repository field can name either a
-// repo's real name or its real ID, matched against both real fields
-// the webhook/API give (repositoryID is always the real GUID; the
-// operator may have configured either).
-func (s *Server) ledgerDirForAzureDevOps(project, repositoryID string) string {
+// matchingRepoConfigsAzureDevOps is matchingRepoConfigsGitHub's own
+// Azure DevOps counterpart, matched on both real project and
+// repository identifiers -- a Config.Repos entry's own Repository
+// field can name either a repo's real name or its real ID, matched
+// against both real fields the webhook/API give (repositoryID is
+// always the real GUID; the operator may have configured either).
+func (s *Server) matchingRepoConfigsAzureDevOps(project, repositoryID string) []RepoConfig {
+	var out []RepoConfig
 	for _, r := range s.cfg.Repos {
 		if r.Platform == "azuredevops" && r.Project == project && r.Repository == repositoryID {
-			return r.LedgerDir
+			out = append(out, r)
 		}
 	}
-	return "."
+	return out
 }
 
 // repoDirForAzureDevOps is ensureRepoCheckoutAzureDevOps's own
@@ -403,7 +446,7 @@ func (s *Server) repoDirForAzureDevOps(ctx context.Context, project, repositoryI
 // runPlanAndCommentAzureDevOps is runPlanAndComment's own real Azure
 // DevOps counterpart -- identical core-flow steps 1 and 3, against
 // Azure DevOps' own real comment-thread API instead.
-func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA string) error {
+func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA, ledgerDir string) error {
 	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
 	if err != nil {
 		return err
@@ -412,7 +455,7 @@ func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.
 		return err
 	}
 
-	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
 	if err != nil {
 		return err
@@ -426,7 +469,7 @@ func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.
 // DevOps counterpart -- the identical real "never --confirm-destroys
 // on an unattended, merge-triggered path, no exception" safety
 // property.
-func (s *Server) runAutomaticShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, targetRef string) error {
+func (s *Server) runAutomaticShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, targetRef, ledgerDir string) error {
 	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
 	if err != nil {
 		return err
@@ -435,7 +478,7 @@ func (s *Server) runAutomaticShipAzureDevOps(ctx context.Context, api *adevops.C
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
@@ -447,7 +490,7 @@ func (s *Server) runAutomaticShipAzureDevOps(ctx context.Context, api *adevops.C
 
 // runManualShipAzureDevOps is runManualShip's own real Azure DevOps
 // counterpart -- the identical real two-gate confirm-destroys rule.
-func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA string, confirmDestroys bool) error {
+func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, headSHA, ledgerDir string, confirmDestroys bool) error {
 	repoDir, err := s.repoDirForAzureDevOps(ctx, project, repositoryID)
 	if err != nil {
 		return err
@@ -456,7 +499,7 @@ func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Clie
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForAzureDevOps(project, repositoryID)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	if confirmDestroys && s.cfg.AllowDestroy {
 		args = append(args, "--confirm-destroys")
 	}
@@ -469,15 +512,17 @@ func (s *Server) runManualShipAzureDevOps(ctx context.Context, api *adevops.Clie
 	return postOrEditCommentAzureDevOps(ctx, api, project, repositoryID, prID, s.cfg.AzureDevOpsBotDisplayName, "ship", body)
 }
 
-// ledgerDirForBitbucketServer is ledgerDirFor's own Bitbucket Server
-// counterpart, matched on both real project key and repository slug.
-func (s *Server) ledgerDirForBitbucketServer(projectKey, repositorySlug string) string {
+// matchingRepoConfigsBitbucketServer is matchingRepoConfigsGitHub's
+// own Bitbucket Server counterpart, matched on both real project key
+// and repository slug.
+func (s *Server) matchingRepoConfigsBitbucketServer(projectKey, repositorySlug string) []RepoConfig {
+	var out []RepoConfig
 	for _, r := range s.cfg.Repos {
 		if r.Platform == "bitbucketserver" && r.Project == projectKey && r.Repository == repositorySlug {
-			return r.LedgerDir
+			out = append(out, r)
 		}
 	}
-	return "."
+	return out
 }
 
 // repoDirForBitbucketServer is ensureRepoCheckoutBitbucketServer's own
@@ -494,7 +539,7 @@ func (s *Server) repoDirForBitbucketServer(ctx context.Context, projectKey, repo
 // runPlanAndCommentBitbucketServer is runPlanAndComment's own real
 // Bitbucket Server counterpart -- identical core-flow steps 1 and 3,
 // against Bitbucket Server's own real flat-comment API instead.
-func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA string) error {
+func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA, ledgerDir string) error {
 	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
 	if err != nil {
 		return err
@@ -503,7 +548,7 @@ func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbse
 		return err
 	}
 
-	args := append([]string{"plan", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
 	if err != nil {
 		return err
@@ -517,7 +562,7 @@ func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbse
 // Bitbucket Server counterpart -- the identical real "never
 // --confirm-destroys on an unattended, merge-triggered path, no
 // exception" safety property.
-func (s *Server) runAutomaticShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, toRef string) error {
+func (s *Server) runAutomaticShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, toRef, ledgerDir string) error {
 	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
 	if err != nil {
 		return err
@@ -526,7 +571,7 @@ func (s *Server) runAutomaticShipBitbucketServer(ctx context.Context, api *bbser
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
@@ -539,7 +584,7 @@ func (s *Server) runAutomaticShipBitbucketServer(ctx context.Context, api *bbser
 // runManualShipBitbucketServer is runManualShip's own real Bitbucket
 // Server counterpart -- the identical real two-gate confirm-destroys
 // rule.
-func (s *Server) runManualShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA string, confirmDestroys bool) error {
+func (s *Server) runManualShipBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, headSHA, ledgerDir string, confirmDestroys bool) error {
 	repoDir, err := s.repoDirForBitbucketServer(ctx, projectKey, repositorySlug)
 	if err != nil {
 		return err
@@ -548,7 +593,7 @@ func (s *Server) runManualShipBitbucketServer(ctx context.Context, api *bbserver
 		return err
 	}
 
-	args := append([]string{"ship", "--yes", "--ledger-dir", s.ledgerDirForBitbucketServer(projectKey, repositorySlug)}, s.providerArgs()...)
+	args := append([]string{"ship", "--yes", "--ledger-dir", ledgerDir}, s.providerArgs()...)
 	if confirmDestroys && s.cfg.AllowDestroy {
 		args = append(args, "--confirm-destroys")
 	}

@@ -2,6 +2,75 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-166, URGENT (ubx server, all four platforms): real security fix, PR OPEN not yet merged, awaiting founder review, 2026-08-15
+
+Real, current scope: `Config.Repos`/`ledger_dir` was never actually enforced as an allowlist for
+any webhook-triggered action (plan, re-plan, approval-derived acceptance, ship) on any of the four
+platforms `ubx server` supports -- an unlisted repository silently defaulted to `ledger_dir "."`
+and ran anyway, found and reported during a real investigation this same session ran (the founder's
+own explicit question: "why does `ledger_dir` require explicit declaration"). GitHub's own
+installation scope is a real, coarser gate, but `Config.Repos` was never checked independently on
+top of it; GitLab/Azure DevOps/Bitbucket Server -- each authenticating with one real, static
+credential with no narrower per-repo concept at all -- had **no real scope boundary whatsoever**
+beyond webhook-signature validity. Confirmed real, live, filed as UBI-166 (Urgent) by the founder.
+
+**Real fix** (branch `ubi-166-repo-allowlist`, PR not yet opened/merged as of this entry -- see
+"Not yet done" below): new `server/allowlist.go` -- `resolveLedgerDir`/`resolveLedgerDirLazy`, the
+real, shared core every platform's own webhook handler now calls. Zero matching `Config.Repos`
+entries for an incoming event's own repository identity refuses outright
+(`ErrRepoNotAllowed`) -- loudly logged via a real, structured `slog.Error` line naming the
+platform/repo/event, never a silent no-op, the founder's own explicit requirement. All four
+platforms' own webhook handlers (`server/webhook.go`, `server/gitlab_webhook.go`,
+`server/azuredevops_webhook.go`, `server/bitbucketserver_webhook.go`) gained this real gate,
+checked before any client resolution or API call is even attempted (a real ordering bug this
+session's own adversarial test caught and fixed along the way: GitLab's `handleMergeEvent`
+originally resolved its own API client before the allowlist check, which would have surfaced a
+confusing "gitlab support is not configured" error instead of the real allowlist refusal on a
+deployment that never enabled GitLab support at all).
+
+**The independent "first Config.Repos entry silently wins" bug, fixed in the same change**: a
+repository with two real, independently configured stacks (two `Config.Repos` entries, same
+owner/repo, different `ledger_dir`) could never be routed correctly before this -- only the
+first-listed entry was ever consulted, for every event, regardless of which stack a given PR's own
+changes actually touched. `resolveLedgerDir` now fetches the event's own real changed files (only
+when more than one candidate exists -- the common, single-stack-per-repository case pays zero
+extra API cost) and picks the most specific (deepest) configured `ledger_dir` whose own subtree
+contains at least one changed file -- a real, deliberate "most specific route wins" convention
+(a coexisting repo-root stack and nested subdirectory stack is a legitimate configuration, not a
+misconfiguration), refusing outright (`ErrAmbiguousStack`) if changed files touch zero or more
+than one equally-specific configured stack at once, never guessing either direction.
+
+**Real, adversarial test coverage, all four platforms** (`server/allowlist_test.go` -- exhaustive
+pure-function coverage of the shared core; `server/webhook_allowlist_test.go`,
+`server/gitlab_allowlist_test.go`, `server/azuredevops_allowlist_test.go`,
+`server/bitbucketserver_allowlist_test.go` -- one real, unlisted-repo-refused-and-logged test per
+platform per real event type, using `captureSlog` to assert the real, structured log line fires,
+plus one real, two-stacks-resolved-independently test per platform proving the platform's own
+changed-files fetch wiring feeds the shared resolver correctly). Full repo `go build`/`go vet`/
+`go test` clean, `-count=1`.
+
+**Real Docker verification**: rebuilt the image, ran one container with all four platforms
+configured but a genuinely empty `Config.Repos` (no `--config` YAML at all), fired one real,
+validly-signed webhook event per platform for an unlisted repo, confirmed all four returned `202`
+at the transport layer (signature valid) but were refused internally, with the real, structured
+UBI-166 log line appearing in the container's own logs for every one of them.
+
+**Docs** (`ubiquex-docs` `61b5157`, verified live via `gh api`): `server/configuration.mdx` gained
+a new "`repos` is a real, enforced allowlist (UBI-166)" section -- correcting the record plainly
+(a `<Warning>` block states directly that a pre-UBI-166 deployment silently ran unlisted repos at
+the repo root instead of refusing them), documents the loud-refusal log line's own real shape, and
+explains the two-real-stacks resolution behavior. Zero em-dashes, `mint validate` clean, `mint
+broken-links` clean, overflow crawl clean (`pageOverflowPx: 0`) on the one touched page.
+
+**Not yet done, explicit, per the founder's own "Never self-merge" instruction for this specific
+fix**: the Go implementation (`server/allowlist.go` + the four webhook-handler files + five new
+test files) is committed on a real, separate branch (`ubi-166-repo-allowlist`), pushed, and a real
+PR opened against `main` -- **not merged**. The founder's own review and merge decision is the
+next, explicit step; this is a real, deliberate deviation from every prior UBI-28 phase's own
+direct-commit-to-main pattern, specifically because this change is security-relevant and the
+founder asked for it explicitly this time. STATE.md itself is committed on that same branch (this
+entry), not `main`, until the PR merges.
+
 ## UBI-28 Phase 4, FINAL (ubx server, Bamboo/Bitbucket Server): CLOSED -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 4-platform Docker, and docs shipped, all four phases complete, 2026-08-15
 
 Real, current scope per the founder's own explicit Phase 4 kickoff (the final phase of UBI-28):

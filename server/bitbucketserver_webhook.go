@@ -115,6 +115,10 @@ func prIdentityFromBitbucketServer(pr *bitbucketv1.PullRequest) (prIdentityBitbu
 
 // handlePullRequestOpenedBitbucketServer is core-flow step 1: a real
 // "pr:opened" event runs `ubx plan` automatically.
+//
+// UBI-166: refuses outright, loudly logged, if projectKey/
+// repositorySlug has no real Config.Repos entry at all -- see
+// allowlist.go's own doc comment.
 func (s *Server) handlePullRequestOpenedBitbucketServer(ctx context.Context, body []byte) error {
 	var payload struct {
 		PullRequest bitbucketv1.PullRequest `json:"pullRequest"`
@@ -127,7 +131,20 @@ func (s *Server) handlePullRequestOpenedBitbucketServer(ctx context.Context, bod
 		return err
 	}
 	api := s.bitbucketServerClient()
-	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA)
+
+	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pr:opened event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
+		return nil
+	}
+	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
+	})
+	if err != nil {
+		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:opened", err)
+	}
+	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
 }
 
 // handlePullRequestSourceUpdatedBitbucketServer is core-flow step 3's
@@ -145,7 +162,20 @@ func (s *Server) handlePullRequestSourceUpdatedBitbucketServer(ctx context.Conte
 		return err
 	}
 	api := s.bitbucketServerClient()
-	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA)
+
+	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pr:from_ref_updated event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
+		return nil
+	}
+	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
+	})
+	if err != nil {
+		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:from_ref_updated", err)
+	}
+	return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
 }
 
 // handlePullRequestMergedBitbucketServer is core-flow step 5's
@@ -170,7 +200,29 @@ func (s *Server) handlePullRequestMergedBitbucketServer(ctx context.Context, bod
 		return err
 	}
 	api := s.bitbucketServerClient()
-	return s.runAutomaticShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.toRef)
+
+	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pr:merged event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
+		return nil
+	}
+	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
+	})
+	if err != nil {
+		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "pr:merged", err)
+	}
+	return s.runAutomaticShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.toRef, ledgerDir)
+}
+
+// refuseAmbiguousStackBitbucketServer is refuseAmbiguousStackGitHub's
+// own Bitbucket Server counterpart.
+func (s *Server) refuseAmbiguousStackBitbucketServer(ctx context.Context, api *bbserver.Client, id prIdentityBitbucketServer, event string, err error) error {
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+		"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "event", event, "error", err)
+	return postOrEditCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, s.cfg.BitbucketServerBotName, "plan",
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // bitbucketServerWebhookComment is the real, minimal shape of the
@@ -225,6 +277,19 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 		return err
 	}
 
+	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pr:comment:added event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "verb", verb)
+		return nil
+	}
+	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		return api.ListPullRequestChangedFiles(ctx, id.projectKey, id.repositorySlug, id.prID)
+	})
+	if err != nil {
+		return s.refuseAmbiguousStackBitbucketServer(ctx, api, id, "comment:"+verb, err)
+	}
+
 	var creator bitbucketv1.UserWithLinks
 	if pr.Author != nil {
 		creator = pr.Author.User
@@ -242,7 +307,7 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a user with real, current REPO_WRITE-or-above access) can.", commenter.Name))
 		}
 		_ = flags
-		return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA)
+		return s.runPlanAndCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, commenter)
@@ -254,7 +319,7 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter.Name))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, confirmDestroys)
+		return s.runManualShipBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, id.headSHA, ledgerDir, confirmDestroys)
 	}
 	return nil
 }
@@ -293,6 +358,19 @@ func (s *Server) handlePullRequestApprovedBitbucketServer(ctx context.Context, b
 	}
 	api := s.bitbucketServerClient()
 	approverName := payload.Participant.User.Name
+
+	// UBI-166: same real allowlist gate as every other event handler
+	// -- an approval on an unlisted repo must never derive acceptance
+	// either. This flow calls core.AcceptFromReview directly against
+	// repoDir (never against a resolved --ledger-dir), so only the
+	// allowlist membership check applies here, the same real scoping
+	// refuseAmbiguousStackGitHub's own doc comment explains for
+	// GitHub's own approval flow.
+	if len(s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)) == 0 {
+		slog.Error("ubx server: refusing pr:reviewer:approved event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
+		return nil
+	}
 
 	if payload.Participant.LastReviewedCommit == "" || id.headSHA == "" || payload.Participant.LastReviewedCommit != id.headSHA {
 		return postOrEditCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, s.cfg.BitbucketServerBotName, "accept",

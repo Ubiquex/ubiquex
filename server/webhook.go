@@ -76,13 +76,37 @@ func (s *Server) handleEvent(ctx context.Context, event any) {
 // handlePullRequestEvent is core-flow steps 1 and 5 (the automatic
 // half): opened/synchronize runs a plan; closed+merged runs a ship, if
 // ShipOnMerge is on.
+//
+// UBI-166: refuses outright, loudly logged, if owner/repo has no real
+// Config.Repos entry at all -- see allowlist.go's own doc comment for
+// the real security gap this closes (before this fix, an unlisted
+// repo silently defaulted to ledger_dir "." instead of being refused).
 func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullRequestEvent) error {
 	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
 	installationID := e.GetInstallation().GetID()
+	prNumber := e.GetNumber()
+	action := e.GetAction()
 
-	switch e.GetAction() {
+	candidates := s.matchingRepoConfigsGitHub(owner, repo)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pull_request event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "action", action, "pr", prNumber)
+		return nil
+	}
+
+	switch action {
 	case "opened", "synchronize":
-		return s.runPlanAndComment(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetHead().GetSHA())
+		api, err := s.installations.forInstallation(installationID)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+		})
+		if err != nil {
+			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:"+action, err)
+		}
+		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, e.GetPullRequest().GetHead().GetSHA(), ledgerDir)
 
 	case "closed":
 		if !e.GetPullRequest().GetMerged() {
@@ -91,9 +115,35 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 		if !s.cfg.ShipOnMerge {
 			return nil
 		}
-		return s.runAutomaticShip(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetBase().GetRef())
+		api, err := s.installations.forInstallation(installationID)
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+		})
+		if err != nil {
+			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:closed(merged)", err)
+		}
+		return s.runAutomaticShip(ctx, installationID, owner, repo, prNumber, e.GetPullRequest().GetBase().GetRef(), ledgerDir)
 	}
 	return nil
+}
+
+// refuseAmbiguousStackGitHub is handlePullRequestEvent's/
+// handleIssueCommentEvent's own shared real refusal path for
+// ErrAmbiguousStack (UBI-166): a loud, structured server-side log (the
+// same discipline the plain unlisted-repo refusal above already has)
+// AND a real, posted PR comment -- unlike an unlisted repo (never
+// acted on, never commented on, since it was never opted into ubx
+// server automation at all), this repo IS explicitly configured; a
+// human watching it deserves the same real, actionable feedback
+// discoverProposalFile's own ambiguous-match refusal already gives.
+func (s *Server) refuseAmbiguousStackGitHub(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int, event string, err error) error {
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one configured stack (UBI-166)",
+		"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "event", event, "error", err)
+	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "plan",
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one configured stack: %s. Fix `Config.Repos`, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // handleIssueCommentEvent is core-flow steps 3 (re-plan) and 4's manual
@@ -120,6 +170,13 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 	commenter := e.GetComment().GetUser().GetLogin()
 	installationID := e.GetInstallation().GetID()
 
+	candidates := s.matchingRepoConfigsGitHub(owner, repo)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing issue_comment event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "verb", verb)
+		return nil
+	}
+
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
 		return err
@@ -128,6 +185,13 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 	pr, _, err := api.API().PullRequests.Get(ctx, owner, repo, prNumber)
 	if err != nil {
 		return fmt.Errorf("get PR #%d on %s/%s: %w", prNumber, owner, repo, err)
+	}
+
+	ledgerDir, err := resolveLedgerDirLazy(candidates, func() ([]string, error) {
+		return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+	})
+	if err != nil {
+		return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "issue_comment:"+verb, err)
 	}
 
 	switch verb {
@@ -141,7 +205,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a repository collaborator with write access) can.", commenter))
 		}
 		_ = flags // real, forwarded verbatim to the subprocess -- see runPlanAndComment
-		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA())
+		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShip(ctx, api, owner, repo, prNumber, commenter)
@@ -153,7 +217,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShip(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), confirmDestroys)
+		return s.runManualShip(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), ledgerDir, confirmDestroys)
 	}
 	return nil
 }
@@ -171,6 +235,19 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 	prNumber := e.GetPullRequest().GetNumber()
 	commitID := e.GetReview().GetCommitID()
 	installationID := e.GetInstallation().GetID()
+
+	// UBI-166: same real allowlist gate as handlePullRequestEvent/
+	// handleIssueCommentEvent -- an Approve review on an unlisted repo
+	// must never derive acceptance either. This particular flow calls
+	// core.AcceptFromReview directly against repoDir (never against a
+	// resolved --ledger-dir the way the plan/ship subprocess paths
+	// do), so only the allowlist membership check applies here, not
+	// the full multi-stack ledger_dir resolution.
+	if len(s.matchingRepoConfigsGitHub(owner, repo)) == 0 {
+		slog.Error("ubx server: refusing pull_request_review event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber)
+		return nil
+	}
 
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
