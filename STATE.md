@@ -2,7 +2,85 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-167 (ubx server): ledger_dir removed from Config.Repos, stacks auto-discovered from each repo's own .ubx/config, PR OPEN not yet merged, awaiting founder review, 2026-08-15
+## UBI-169 (ubx server docs + CLI help): Bamboo -> Bitbucket Server naming correction, PRs OPEN not yet merged, 2026-08-15
+
+Real scope, read directly from the ticket: `ubx server` is a webhook listener talking to a VCS
+host's own API (PRs, webhooks, approvals) and has no relationship to Bamboo, a CI tool. Bitbucket
+Server was always the real integration target. The label most likely crept over from the CI-focused
+UBI-31/UBI-160 work, where Bamboo genuinely IS the subject.
+
+**Scope item 1, verified rather than assumed, as the ticket explicitly required**: the Go code was
+already correct everywhere it matters. Config fields (`BitbucketServerURL`/`Token`/`BotName`/
+`WebhookSecret`), YAML keys (`bitbucket_server_url`, `bitbucket_server_bot_name`), env vars
+(`UBX_SERVER_BITBUCKET_SERVER_*`), flags (`--bitbucket-server-*`), the `--repo bitbucketserver:`
+prefix, the route `/webhook/bitbucketserver`, and the package name `bitbucketserver` all check out
+against the real built binary's own `--help`. No functional change was needed, exactly as the
+ticket predicted. One user-visible string did need it: `ubx server`'s own help said
+"Bamboo/Bitbucket Server" and pointed at "the Bamboo setup guide", the page being renamed.
+
+**Docs** (`ubiquex-docs` PR #2, branch `claude/ubi-169-bitbucket-server-naming`, `4f39486`):
+`server/bamboo-setup.mdx` -> `server/bitbucket-server-setup.mdx`, matching the `<platform>-setup`
+convention its three siblings already use, with a short in-page note explaining the rename so a
+bookmark holder isn't left guessing. Content re-verified against real source rather than relabeled:
+the event list became a table of the five keys `handleBitbucketServerEvent` actually dispatches on
+(plus the fact that any other key is ignored); the core-flow mapping was corrected (the old page
+mapped `pr:from_ref_updated` to "step 2's re-plan", but step 2 is specifically the
+comment-triggered re-plan with its own auth check); the signature section now states the real
+fail-closed behavior from `validBitbucketServerSignature`; the bot-name note now explains it is
+also the git-over-HTTPS clone username, so a wrong value breaks cloning and not just attribution;
+the approval section gained the destroys refusal; CODEOWNERS gained the three real file locations
+and the nobody-not-everybody default; and a new note records that a PR is identified by its
+**target** repository (`toRef`), which is what actually matters for allowlisting a cross-repository
+PR. Cross-links updated in `docs.json`, `overview`, `workflow`, `docker`, `github-setup`,
+`gitlab-setup`, `configuration`. `integrations/bamboo.mdx` deliberately untouched and still linked:
+Bamboo is legitimately the subject there.
+
+**Code** (`ubiquex` PR #7, same branch name, `acf2c40`): `cli/server.go` help strings only. Also
+fixed a real omission found while verifying: Bitbucket Server's own approval was missing from the
+Long text's list of native Approve actions that derive acceptance, despite
+`handlePullRequestApprovedBitbucketServer` existing since UBI-28 Phase 4.
+
+**Two adjacent errors found while verifying, both fixed**: `server/workflow.mdx` linked to a
+`#bamboo-bitbucket-server` anchor that the renamed heading would have left dangling; and
+`cli-reference/server.mdx` still claimed "GitHub only... GitLab, Azure DevOps, and Bamboo are real,
+planned follow-up phases, not yet built", which has been false since UBI-28 Phase 4 closed.
+
+**A real near-miss worth recording as a pattern, not a one-off.** The UBI-169 code branch was cut
+from `origin/main` while the local ref was still stale at `2914e0e`, before UBI-167 merged. UBI-167
+had also edited `cli/server.go` (the `--repo` flag help). Merging UBI-169 from that base would have
+silently REVERTED UBI-167's `--repo` text. Caught by explicitly checking `git merge-base
+--is-ancestor origin/main HEAD` after a fresh fetch, then rebasing; the post-rebase diff is the
+naming change alone and UBI-167's text is intact. This is the same stale-local-ref trap the UBI-166
+merge verification hit earlier tonight, in a second, more dangerous form: there it produced a
+misleading read, here it would have produced a silent regression. **Always fetch and confirm
+ancestry before branching, and re-confirm before opening the PR.** The docs branch happened to be
+cut after the docs merge and was fine, but that was luck, not process.
+
+**Verification**: full repo `go build`/`go vet`/`go test -count=1` clean (`blueprint/`'s 4
+wasmtime/bwrap environment failures confirmed identical on unmodified `main`). Real `ubx server
+--help` and `ubx --help` output read from the rebuilt binary, not from the source string, and line
+wrapping reflowed so the rendered help has no ragged/orphan lines. `mint validate` clean.
+`mint broken-links`: 124 findings on the branch, 124 on unmodified `main`, zero on any touched
+page (the residue is pre-existing, all generated `resource-reference/gcp/*` regex fragments and
+provider doc paths). Zero em dashes. Byte-identity spot-check: `git diff --name-only origin/main`
+lists exactly the 10 intended docs files and nothing else.
+
+**Owed, not done, explicitly**: the real rendered DOM overflow check. `mint dev` cannot start in
+this environment at all (`Error: Client not built` -- the local preview needs a prebuilt Next.js
+client bundle it can't produce here). Rather than claim a check that wasn't run, a source-level
+width proxy was done instead, and the one new element carrying real overflow risk was tightened:
+the event table's widest cell went from 101 chars to 40, and the page's longest code line (89) and
+longest token (80) both sit at or below `azure-devops-setup.mdx`'s already-shipped 91 and 72. The
+rendered check should be run against the PR's own Mintlify deployment preview.
+
+**Also owed from UBI-167, still**: a real `docker build` + container run. Docker Hub image blobs
+are hard-403'd by this environment's egress policy (`production.cloudfront.docker.com`), confirmed
+by pulling each base image directly.
+
+**Not yet done, per the ticket's own "Never self-merge" constraint**: both PRs are open, pushed,
+and awaiting the founder's own review and merge decision.
+
+## UBI-167 (ubx server): CLOSED -- ledger_dir removed from Config.Repos, stacks auto-discovered from each repo's own .ubx/config, merged 2026-08-15
 
 **First: UBI-166 is confirmed genuinely merged.** Verified two independent ways, not from a stale
 PR view: a fresh `git fetch origin main` (`git rev-parse origin/main` =
@@ -101,9 +179,12 @@ clone/fetch where before they triggered only a changed-files API call. That orde
 pre-existing (UBI-166 already fetched changed files before auth); moving it after the auth check
 is a real, separate improvement worth a ticket, not something to change silently inside this one.
 
-**Not yet done, explicit, per the ticket's own "Never self-merge" constraint**: everything above is
-committed on branch `claude/verify-pr-5-merge-ov475n` and pushed -- **not merged**. The founder's
-own review and merge decision is the next step.
+**Merged, confirmed 2026-08-15**: reviewed and merged by the founder, never self-merged. Code:
+`Ubiquex/ubiquex` PR #6 (`claude/verify-pr-5-merge-ov475n` -> `main`), merge commit `df18f04`,
+head `6b2724f`. Docs: `Ubiquex/ubiquex-docs` PR #1, merge commit `0c73b94`, head `9f3e8ea`. The
+docs PR was deliberately opened against a branch rather than pushed straight to docs `main`,
+because it documents behavior ("ledger_dir is gone, the server refuses to start") that would have
+been actively wrong on the live site until the code PR landed.
 
 ## UBI-166, URGENT (ubx server, all four platforms): CLOSED -- merged as PR #5, `2914e0e`, verified against real, current main 2026-08-15
 
