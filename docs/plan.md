@@ -2,6 +2,27 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-165: `ubx scan --surface-as` covers all five
+  platforms, and `ubx server`'s drift-watch loop actually runs. The
+  ticket scoped this as "extend cli/surface.go beyond GitHub"; two
+  adjacent defects had to be fixed for that to mean anything. The loop
+  shelled out to `ubx status --drift --surface-as`, and `ubx status` has
+  no such flag, so every drift sweep ever run died on `unknown flag`
+  before reaching any API -- drift-watch worked on no platform, not on
+  GitHub-only as assumed. And `ubx scan` refused `--surface-as` for a
+  fleet-scoped walk, which is exactly drift-watch's own shape. The five
+  platforms turned out genuinely asymmetric, each verified against a
+  real current source rather than assumed: Bitbucket Server has no issue
+  tracker at all (224 SDK methods, zero issue endpoints; Atlassian's
+  model is Jira) so issue mode is refused rather than downgraded; Azure
+  DevOps has work items in a separate service, with a literal `$` in the
+  route, a JSON Patch content type, and a type that comes from the
+  project's process template; Bitbucket Cloud's tracker is opt-in per
+  repository and its `/src` endpoint creates branch and commit in one
+  call; GitLab has no draft flag at all. One harness lesson: a stand-in
+  multiplexing several platforms needs routing as precise as the code
+  under test, or it reports false failures -- `/repos/` and
+  `/pullrequests` are each shared by two platforms here.
 - 2026-08-15 -- UBI-168: in every comment-triggered handler, the real,
   live authorization check now runs before any clone or fetch. A pure
   ordering fix, pre-existing from UBI-166 and filed separately during

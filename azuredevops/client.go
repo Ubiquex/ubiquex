@@ -201,11 +201,21 @@ func ApprovingReviewers(pr *git.GitPullRequest) []string {
 }
 
 func (c *Client) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	return c.doWithContentType(ctx, method, url, body, "application/json")
+}
+
+// doWithContentType is do's real, parameterized form. Azure DevOps'
+// own work item API is the one endpoint this package calls that does
+// NOT accept application/json: it requires
+// application/json-patch+json, confirmed against Microsoft's own
+// published REST spec (surface.go). Everything else keeps the plain
+// JSON content type via do above.
+func (c *Client) doWithContentType(ctx context.Context, method, url string, body []byte, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if c.authHeader != "" {
 		req.Header.Set("Authorization", c.authHeader)
 	}
