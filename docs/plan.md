@@ -2,6 +2,27 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-169: the `ubx server` Atlassian integration is named
+  Bitbucket Server everywhere a user can see it. `ubx server` talks
+  directly to a VCS host's own API and has no relationship to Bamboo, a
+  CI tool; the label crept over from the CI-focused UBI-31/UBI-160 work,
+  where Bamboo genuinely is the subject. Verified rather than assumed
+  first, as the ticket required: the Go code was already correct
+  everywhere it matters (config fields, YAML keys, env vars, flags, the
+  `--repo bitbucketserver:` prefix, the `/webhook/bitbucketserver` route,
+  the package name), checked against the real built binary's own
+  `--help`, so no functional change was needed. `ubx server`'s own help
+  text was the one user-visible exception. Docs: `server/bamboo-setup.mdx`
+  renamed to `server/bitbucket-server-setup.mdx` and its content
+  re-verified against real source rather than relabeled in place (real
+  dispatched event keys, corrected core-flow mapping, real fail-closed
+  signature behavior, the bot name's double duty as clone username, the
+  approval-time destroys refusal, the three real CODEOWNERS locations,
+  and target-vs-source repository identity for cross-repository PRs).
+  `integrations/bamboo.mdx` deliberately untouched. Two adjacent errors
+  found while verifying and fixed: a dangling `#bamboo-bitbucket-server`
+  anchor, and a `cli-reference/server.mdx` scope claim ("GitHub only...
+  the other three not yet built") that had been false since UBI-28 Phase 4.
 - 2026-08-15 -- UBI-167: `ubx server`'s own `Config.Repos` entries carry
   repository identity ONLY. The `ledger_dir` field is gone; once a repo
   clears UBI-166's allowlist (unchanged, untouched -- unlisted repos are

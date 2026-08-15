@@ -15,25 +15,25 @@ func newServerCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps, Bamboo/Bitbucket Server)",
+		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps, Bitbucket Server)",
 		Long: `ubx server turns the same real plan/accept/ship/status --drift flow into a continuously-running
 daemon, reacting to webhook events instead of a human or a CI job invoking each command by hand.
 
 Real, current scope (UBI-28, final): GitHub (a real, installable GitHub App), GitLab (a real Group
 Access Token plus a separately-configured webhook signing token), Azure DevOps (a real Personal
 Access Token plus a real, static shared-secret Service Hooks header -- Azure DevOps has no
-cryptographic webhook signature scheme at all), and Bamboo/Bitbucket Server (a real HTTP access
-token plus Bitbucket Server's own real, bundled HMAC-SHA256 webhook signature -- Bamboo itself has
-no single native git host; Bitbucket Server/Data Center is the real, deliberately scoped
-integration surface, see the Bamboo setup guide) -- webhooks land on "/webhook/github",
-"/webhook/gitlab", "/webhook/azuredevops", and "/webhook/bitbucketserver" respectively.
+cryptographic webhook signature scheme at all), and Bitbucket Server/Data Center (a real HTTP
+access token plus Bitbucket Server's own real, bundled HMAC-SHA256 webhook signature, native since
+version 5.4 with no plugin required -- see the Bitbucket Server setup guide) -- webhooks land on
+"/webhook/github", "/webhook/gitlab", "/webhook/azuredevops", and "/webhook/bitbucketserver"
+respectively.
 
 The real flow: a PR/MR opening runs "ubx plan" automatically, posted as a single PR/MR comment; its own
 creator can comment "ubx plan" again to re-run it, edited in place; a native Approve action -- GitHub's
-own review, GitLab's own approval, Azure DevOps' own vote -- never a comment, derives acceptance; a
-merge ships automatically (policy-gated) or a CODEOWNERS-authorized "ubx ship" comment ships manually;
-destroy is disabled by default and, once enabled, still needs a separate, explicit --confirm-destroys
-in the comment itself, every time.
+own review, GitLab's own approval, Azure DevOps' own vote, Bitbucket Server's own approval -- never a
+comment, derives acceptance; a merge ships automatically (policy-gated) or a CODEOWNERS-authorized
+"ubx ship" comment ships manually; destroy is disabled by default and, once enabled, still needs a
+separate, explicit --confirm-destroys in the comment itself, every time.
 
 Same binary as ubx itself, not a second codebase -- every actual plan/accept/ship/scan operation shells
 back out to this exact executable, reusing its real safety properties (confirm-destroys enforcement,
