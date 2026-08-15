@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-168 (ubx server, all five platforms): authorization now runs before any clone or fetch, PRs OPEN not yet merged, 2026-08-15
+## UBI-168 (ubx server, all five platforms): authorization now runs before any clone or fetch, code PR #10 and docs PR #5 OPEN not yet merged (never self-merged), 2026-08-15
 
 Real scope: a pure ordering fix in the comment-triggered handlers. Pre-existing from UBI-166, found
 during UBI-167's implementation and correctly filed separately rather than folded in. UBI-167
