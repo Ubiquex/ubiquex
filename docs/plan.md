@@ -2,6 +2,20 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-164: the remote-ledger-store requirement is
+  documented in every CI/CD integration guide. All of them run
+  `ubx accept --from-merge` and `ubx ship --yes`, and none said those
+  need a real remote store. The real problem was sharper than the
+  ticket's framing: each guide OPENS by telling the reader to bring "a
+  git-local ledger already committed", which is exactly the setup that
+  loses every accepted proposal, so the note qualifies that paragraph
+  rather than sitting in the credentials section. Matched to
+  server/github-setup.mdx's own canonical wording, adapting only the
+  part that genuinely differs (the ephemeral runner/agent/job workspace
+  rather than ubx server's long-lived clone). One claim beyond the
+  canonical note was verified in source first: only core/accept.go
+  appends to the ledger and ship persists apply records to the same
+  store, so drift-watch and plan-on-push really are unaffected.
 - 2026-08-15 -- UBI-165: `ubx scan --surface-as` covers all five
   platforms, and `ubx server`'s drift-watch loop actually runs. The
   ticket scoped this as "extend cli/surface.go beyond GitHub"; two
