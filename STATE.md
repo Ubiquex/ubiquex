@@ -2,7 +2,78 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-168 (ubx server, all five platforms): authorization now runs before any clone or fetch, code PR #10 and docs PR #5 OPEN not yet merged (never self-merged), 2026-08-15
+## UBI-165 (cli/surface.go + ubx server drift-watch): drift-watch works on all five platforms, PRs OPEN not yet merged, 2026-08-15
+
+Stated scope was "extend cli/surface.go beyond GitHub". Delivered, plus **two adjacent defects found
+during implementation that had to be fixed for the stated goal to be true at all.**
+
+### The finding that changes the story
+
+`server/drift.go` shelled out to `ubx status --drift --surface-as ... --github-repo ...`.
+**`ubx status` has no `--surface-as` flag and never had one** -- the flag lives on `ubx scan`. Every
+drift sweep this server ever ran died on `unknown flag` before reaching any API. So drift-watch was
+not "working on GitHub, missing elsewhere" as the ticket assumed: it worked on **nothing**, and the
+GitHub-only surfacing code was never actually reachable from the server at all.
+
+Second defect: even pointed at the right command, `ubx scan` refused `--surface-as` for a
+fleet-scoped walk, which is exactly the shape drift-watch needs. Both fixed, and both are reported
+as beyond the ticket's stated scope rather than folded in silently.
+
+### The real per-platform findings, verified independently
+
+Every claim below was confirmed against a real, current source, never assumed symmetric. Atlassian
+and Microsoft doc hosts are egress-blocked here, so: Bitbucket Cloud against its own live OpenAPI
+definition at api.bitbucket.org, Azure DevOps against **Microsoft's own published REST spec** (the
+public MicrosoftDocs/vsts-rest-api-specs repo, cloned for this), GitLab and Bitbucket Server
+against the real, locally-downloaded SDKs.
+
+- **GitLab** is closest to GitHub: a real issue tracker on every project. Calls the body
+  `description`, not `body`. No draft flag on a merge request at all, so draft is the `Draft:` title
+  convention.
+- **Azure DevOps** has no issue tracker. It has **work items**, in Azure Boards, a separate service
+  a project can disable. Route is `POST {project}/_apis/wit/workitems/${type}` with a **literal `$`**
+  and `application/json-patch+json`, not `application/json`. The type comes from the project's own
+  process template: `Issue` in Agile/Basic, `Product Backlog Item` in Scrum, `Requirement` in CMMI,
+  so it is configurable and unguessable. Has a real `isDraft` flag.
+- **Bitbucket Server has NO issue tracker at all.** Decisive evidence: its REST SDK exposes 224 API
+  methods, **zero** touching any issue resource, while `CreatePullRequest`/`CreateBranch`/
+  `GetDefaultBranch` are all present. Atlassian's model is Jira. `--surface-as issue` is refused
+  with `ErrNoIssueTracker` rather than silently downgraded to a pull request, which would hand an
+  operator something materially more privileged than they asked for.
+- **Bitbucket Cloud** has an issue tracker but it is **opt-in per repository**. Body is nested
+  `content.raw`, not a flat string. Its `POST /src` creates branch and commit in ONE call and
+  defaults a pull request's destination to `mainbranch`, so this platform needs **two** calls where
+  Azure DevOps needs five. The form FIELD NAME is the file's repository path, with a load-bearing
+  leading slash to disambiguate from metadata fields.
+
+### Verification
+
+- Build, vet, gofmt clean; `go test ./... -count=1` clean apart from the 4 known pre-existing
+  `blueprint/` failures.
+- Real httptest-backed tests per platform, never mocked at the transport level, each pinning that
+  platform's own real contract (the JSON Patch document and literal `$` route for Azure DevOps, the
+  multipart write and single-call branch creation for Bitbucket Server, the form-field-as-path
+  encoding and exactly-two-calls property for Bitbucket Cloud, `description` vs `body` for GitLab).
+  Plus a five-way dispatch test in `cli/`, which is where a switch this wide actually goes wrong.
+- **Docker registry egress still blocked** (403, re-confirmed), so the established host-process
+  substitute: `scratchpad/verify165.sh`, **13/13**, driving the real `ubx` binary against a real
+  ledger with real fakeprovider-produced drift, one stand-in per platform. It also proves the OLD
+  drift-watch command line really was invalid (`unknown flag`) and the new one really surfaces.
+
+**A harness lesson worth keeping:** the first run reported 3 false failures because the stand-in
+routed on loose substrings. `/repos/` appears in Bitbucket Server paths too, and `/pullrequests` is
+both Azure DevOps' and Bitbucket Cloud's. Fixed by routing on each platform's own distinctive API
+root. A harness that multiplexes several platforms needs its routing to be as precise as the code
+under test.
+
+### Docs
+
+`server/workflow.mdx` gains a per-platform table and states plainly that this step worked on no
+platform before; `server/overview.mdx`'s GitHub-only note is replaced; `cli-reference/scan.mdx`
+documents all seven new flags. `mint validate` clean, `broken-links` 124 findings identical to the
+UBI-168 baseline with none on the changed pages, zero em dashes in any added line.
+
+## UBI-168 (ubx server, all five platforms): CLOSED -- authorization runs before any clone or fetch, code PR #10 merged as `f204003`/`55e38fd`, docs PR #5 merged, both verified against real, current main 2026-08-15
 
 Real scope: a pure ordering fix in the comment-triggered handlers. Pre-existing from UBI-166, found
 during UBI-167's implementation and correctly filed separately rather than folded in. UBI-167
