@@ -2,7 +2,53 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-165 (cli/surface.go + ubx server drift-watch): drift-watch works on all five platforms, code PR #11 and docs PR #6 OPEN not yet merged (never self-merged), 2026-08-15
+## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 OPEN not yet merged, 2026-08-15
+
+Docs-only. All five CI/CD guides run `ubx accept --from-merge` and `ubx ship --yes` in their
+ship-on-merge workflow and none mentioned needing a real remote ledger store.
+
+**Worse than the omission the ticket describes.** Every one of the five OPENS its Prerequisites by
+telling the reader to bring "a git-local ledger already committed" -- precisely the setup that
+silently loses every accepted proposal. So the note is placed immediately after that paragraph,
+qualifying it, rather than tucked into the credentials section as the ticket suggested. The
+placement is the fix; putting it elsewhere would have left the misleading sentence standing alone.
+
+The canonical explanation is `server/github-setup.mdx`'s own `<Note>` (UBI-28 Phase 1). Matched on
+facts and tone, adapting only what genuinely differs: what disappears is the runner/agent/job
+workspace, not `ubx server`'s long-lived working clone. Each guide gets its own platform's word.
+
+### One claim the canonical note does not make, verified in real source before writing it
+
+"Drift-watch and plan-on-X are unaffected, since neither appends to the ledger." Checked rather
+than assumed: only `core/accept.go`'s three `finalizeAndAppend` paths call `Ledger.Append`; `ship`
+persists apply records to the same store via `SaveApplyProgress`/`SealApply`; `cli/status.go`,
+`cli/scanfleet.go` and `cli/plan.go` never append, and `plan` writes to the plan store via
+`writePlanFile`. Worth stating so readers do not over-apply the requirement to workflows that do
+not need it.
+
+### Two deliberate deviations, flagged not silent
+
+- **`<Warning>`, not the canonical `<Note>`.** The five guides used `<Note>` only. This one
+  contradicts the paragraph directly above it and describes silent data loss, which is what
+  `<Warning>` already marks elsewhere in this docs set.
+- **`integrations/bitbucket-cloud.mdx` included, beyond the stated five.** Identical gap (runs
+  `accept --from-merge` in Pipelines, zero remote-store mentions). Absent from the ticket only
+  because UBI-170 added it after the ticket was filed.
+
+### Verification
+
+- **Byte-identity spot-check, the strongest check here:** every file `+N -0`, exactly one hunk, and
+  programmatically removing the added block reproduces the pre-edit file **byte for byte** on all
+  six. Nothing but the intended addition landed.
+- `mint validate` clean; `broken-links` 124 findings identical to the UBI-165 baseline, none on the
+  changed pages; zero em dashes in any added line.
+- **DOM overflow check NOT performed, and not claimed.** `mint dev` still fails with
+  `Error: Client not built`, the same failure UBI-169 hit; this is now a repeat blocker worth
+  treating as known. Substitute with a real baseline: no code blocks and no tables added (the two
+  things that actually overflow), prose wrapped at 72 (100 for Bitbucket Cloud), longest
+  unbreakable token added 41 chars against already-published maxima of 88-165 on the same pages.
+
+## UBI-165 (cli/surface.go + ubx server drift-watch): CLOSED -- drift-watch works on all five platforms, code PR #11 merged as `4d0d9bd`/`c39eb28`, docs PR #6 merged as `78300c7`, both verified against real, current main 2026-08-15
 
 Stated scope was "extend cli/surface.go beyond GitHub". Delivered, plus **two adjacent defects found
 during implementation that had to be fixed for the stated goal to be true at all.**
