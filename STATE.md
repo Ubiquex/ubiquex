@@ -2,7 +2,49 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 and state PR #13 OPEN not yet merged (never self-merged), 2026-08-15
+## Bitbucket setup pages combined (no ticket, founder request): docs PR #9 OPEN not yet merged, 2026-08-15
+
+`server/bitbucket-server-setup.mdx` + `server/bitbucket-cloud-setup.mdx` -> one
+`server/bitbucket-setup.mdx`, two self-contained `##` sections, no blended prose (UBI-170
+established these are genuinely different platforms).
+
+**Path correction worth recording.** The request said `integrations/bitbucket-setup.mdx`. Wrong
+twice: these are "ubx server" tab pages whose convention is `server/<platform>-setup.mdx`, and
+`integrations/` already holds `integrations/bitbucket-cloud.mdx`, a different page about `accept
+--from-merge` in Bitbucket Pipelines. Confirmed before choosing, landed on `server/`.
+
+**Method that made this safe:** the merge was scripted from the two source files rather than
+retyped, then verified line by line -- every non-heading prose line from both pages is provably
+present in the result. Worth reusing for any future page merge; retyping 448 lines by hand would
+have been an unverifiable transcription risk.
+
+Both pages had an identical `## Configure the webhook`, which would have become a duplicate anchor
+on the merged page, so all headings are demoted to `###` and platform-qualified.
+
+**A real staleness the merge exposed:** the Bitbucket Server half claimed `ubx server` exposes
+*four* webhook routes and omitted `/webhook/bitbucketcloud`, wrong since UBI-170 and directly
+contradicting the Cloud half on the same page once combined. Corrected. General lesson: combining
+two pages surfaces contradictions that sat invisible while they were apart.
+
+Nav: two sidebar entries -> one, in the first's position. Both old paths redirect to the new page
+using the shape the 4 existing redirects already use. All 23 internal cross-links point at the
+relevant section anchor, so each keeps its original intent.
+
+### Verification
+
+- `mint validate` clean; `broken-links` 124 identical to baseline with zero bitbucket findings, so
+  every rewritten link including the deep shorthand anchor resolves.
+- Byte-identity: **4,788** unrelated `.mdx` files identical; `docs.json` diff exactly `+9 -2`; the
+  7 cross-link files each `+N -N` with zero lines differing beyond the link swap.
+- **`mint dev` failed with `Error: Client not built` for the FOURTH time** (UBI-169, UBI-164,
+  PR #8, here). Two consequences: the DOM overflow check remains the measured substitute, and the
+  redirects are verified **structurally only**, never as a live 301. If a real preview ever becomes
+  available, probing `/server/bitbucket-server-setup` and `/server/bitbucket-cloud-setup` is the
+  one check this change could not complete.
+- The new intro table was the one real overflow risk, so it was tightened to a widest cell of 35,
+  under the 38 already published in tables on these very pages.
+
+## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 merged as `bac840b`, state PR #13 OPEN not yet merged, 2026-08-15
 
 UBI-171's self-hosted content on `server/configuration.mdx` was accurate but unreachable. Confirmed
 before touching anything: `github-setup.mdx` and `azure-devops-setup.mdx` each had **zero** matches
