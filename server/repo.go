@@ -85,6 +85,25 @@ func ensureRepoCheckoutBitbucketServer(ctx context.Context, workDir, baseURL, pr
 	return ensureRepoCheckoutFromRemote(ctx, workDir, filepath.Join("bitbucketserver", projectKey, repositorySlug), remote)
 }
 
+// ensureRepoCheckoutBitbucketCloud is ensureRepoCheckout's Bitbucket
+// Cloud counterpart -- same real "clone if missing, fetch otherwise"
+// mechanism, Bitbucket Cloud's own real git-over-HTTPS access-token
+// convention instead: "https://x-token-auth:{token}@bitbucket.org/
+// {workspace}/{repo_slug}.git".
+//
+// The literal string "x-token-auth" in the username position is
+// required, and is a real, third distinct convention -- confirmed
+// directly against Atlassian's own current documentation, which calls
+// it out explicitly as differing from GitHub's (where the token itself
+// goes in the username field). It matches neither GitHub's
+// "x-access-token" placeholder nor Bitbucket Server's requirement for
+// the token owner's own real username. Unlike Bitbucket Server, the
+// host is fixed: Bitbucket Cloud is SaaS.
+func ensureRepoCheckoutBitbucketCloud(ctx context.Context, workDir, workspace, repoSlug, token string) (string, error) {
+	remote := fmt.Sprintf("https://x-token-auth:%s@bitbucket.org/%s/%s.git", token, workspace, repoSlug)
+	return ensureRepoCheckoutFromRemote(ctx, workDir, filepath.Join("bitbucketcloud", workspace, repoSlug), remote)
+}
+
 // ensureRepoCheckoutFromRemote is ensureRepoCheckout's and
 // ensureRepoCheckoutGitLab's own shared real mechanism, parameterized on
 // subPath (workDir's own subdirectory a given repo checks out into) and

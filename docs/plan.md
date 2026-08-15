@@ -2,6 +2,29 @@
 
 ## Changelog
 
+- 2026-08-15 -- UBI-170: Bitbucket Cloud, the fifth platform, for both
+  `ubx accept --from-merge` and `ubx server`. A genuinely separate
+  platform from Bitbucket Server, not a variant: verified first against
+  Bitbucket Cloud's own official OpenAPI definition (served live at
+  api.bitbucket.org/swagger.json, carrying Atlassian's own narrative
+  docs inline) plus live API calls, because every Atlassian
+  documentation host is egress-blocked in this environment. Confirmed
+  differences: access tokens with app passwords deprecated, an
+  `x-token-auth` clone literal matching neither GitHub's nor Bitbucket
+  Server's, entirely different event keys (`pullrequest:fulfilled` is
+  its own word for merged), a two-call commit-to-pull-request
+  derivation with its own `repo_indexed` condition, approvals carrying
+  no commit reference at all, and no username on an account. Three
+  consequences shaped the design: identity is an `account_id`
+  throughout; CODEOWNERS entries resolve to real account_ids at check
+  time and refuse on failed or ambiguous resolution; and the TOCTOU
+  gate follows GitLab's/Azure DevOps' branch-restriction pattern rather
+  than Bitbucket Server's per-approval commit reference. The webhook
+  signature parses its algorithm out of the header rather than
+  hardcoding sha256, so an unimplemented algorithm is refused instead of
+  silently downgraded. UBI-166's allowlist and UBI-167's auto-discovery
+  are reused unchanged; UBI-168's authorization-before-clone ordering is
+  applied here from the start rather than inherited as a defect.
 - 2026-08-15 -- UBI-169: the `ubx server` Atlassian integration is named
   Bitbucket Server everywhere a user can see it. `ubx server` talks
   directly to a VCS host's own API and has no relationship to Bamboo, a

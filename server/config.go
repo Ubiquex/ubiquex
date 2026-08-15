@@ -257,6 +257,52 @@ type Config struct {
 	// header-name-collision-with-GitHub's-older-header nuance).
 	BitbucketServerWebhookSecret string `yaml:"-"`
 
+	// BitbucketCloudToken: env UBX_SERVER_BITBUCKET_CLOUD_TOKEN, flag
+	// --bitbucket-cloud-token. Deliberately no YAML key, same secrets
+	// discipline as every other platform token. A real Bitbucket Cloud
+	// ACCESS token (repository, project, or workspace scoped), not a
+	// personal API token: an access token is bound to a resource rather
+	// than to a person, which is the right shape for an unattended
+	// daemon, and Atlassian's own current documentation states plainly
+	// that app passwords are deprecated. Sent as "Authorization:
+	// Bearer" and used as the git-over-HTTPS clone credential, where
+	// Bitbucket Cloud requires the literal username "x-token-auth"
+	// (confirmed against Atlassian's own current docs; note this is a
+	// third distinct convention, matching neither GitHub's
+	// "x-access-token" nor Bitbucket Server's real-username form).
+	BitbucketCloudToken string `yaml:"-"`
+	// BitbucketCloudBotAccountID: yaml `bitbucket_cloud_bot_account_id`,
+	// env UBX_SERVER_BITBUCKET_CLOUD_BOT_ACCOUNT_ID, flag
+	// --bitbucket-cloud-bot-account-id. The access token's own real,
+	// current account_id.
+	//
+	// An account_id rather than a name, unavoidably and unlike every
+	// other platform here: Bitbucket Cloud accounts carry NO username
+	// at all, and both nickname and display_name are user-changeable
+	// (UBI-170). This identity is used to attribute drift-watch-opened
+	// pull requests, to find this bot's own last comment for the
+	// edit-in-place mechanism, and as the drift-watch-creator signal in
+	// the two-tier re-plan rule, so a mutable label would silently
+	// break all three the moment somebody renamed the token.
+	BitbucketCloudBotAccountID string `yaml:"bitbucket_cloud_bot_account_id"`
+	// BitbucketCloudWebhookSecret: env
+	// UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET, flag
+	// --bitbucket-cloud-webhook-secret. Deliberately no YAML key, same
+	// secrets discipline as every other webhook secret. Bitbucket Cloud
+	// signs every delivery with this secret as an HMAC hex digest in a
+	// real "X-Hub-Signature" header, but ONLY when a secret is actually
+	// configured on the webhook; an unset secret means no header is
+	// sent at all and every delivery is refused (see
+	// validBitbucketCloudSignature).
+	BitbucketCloudWebhookSecret string `yaml:"-"`
+	// BitbucketCloudAPIBaseURL: env
+	// UBX_SERVER_BITBUCKET_CLOUD_API_BASE_URL, flag
+	// --bitbucket-cloud-api-base-url. Deliberately no YAML key,
+	// test-only -- Bitbucket Cloud is SaaS with one real, fixed host
+	// (api.bitbucket.org), so unlike Bitbucket Server's own always-
+	// required base URL this is a genuine override of a real default.
+	BitbucketCloudAPIBaseURL string `yaml:"-"`
+
 	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag
 	// --intent-provider-key. Deliberately no YAML key, same
 	// "self-provisioned, masked variable, never literally in the file"
@@ -548,6 +594,18 @@ func applyEnv(cfg *Config) {
 	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET"); ok {
 		cfg.BitbucketServerWebhookSecret = v
 	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_TOKEN"); ok {
+		cfg.BitbucketCloudToken = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_BOT_ACCOUNT_ID"); ok {
+		cfg.BitbucketCloudBotAccountID = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET"); ok {
+		cfg.BitbucketCloudWebhookSecret = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_API_BASE_URL"); ok {
+		cfg.BitbucketCloudAPIBaseURL = v
+	}
 	if v, ok := os.LookupEnv("UBX_SERVER_INTENT_PROVIDER_KEY"); ok {
 		cfg.IntentProviderKey = v
 	}
@@ -647,6 +705,18 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	if flags.Changed("bitbucket-server-webhook-secret") {
 		cfg.BitbucketServerWebhookSecret, _ = flags.GetString("bitbucket-server-webhook-secret")
 	}
+	if flags.Changed("bitbucket-cloud-token") {
+		cfg.BitbucketCloudToken, _ = flags.GetString("bitbucket-cloud-token")
+	}
+	if flags.Changed("bitbucket-cloud-bot-account-id") {
+		cfg.BitbucketCloudBotAccountID, _ = flags.GetString("bitbucket-cloud-bot-account-id")
+	}
+	if flags.Changed("bitbucket-cloud-webhook-secret") {
+		cfg.BitbucketCloudWebhookSecret, _ = flags.GetString("bitbucket-cloud-webhook-secret")
+	}
+	if flags.Changed("bitbucket-cloud-api-base-url") {
+		cfg.BitbucketCloudAPIBaseURL, _ = flags.GetString("bitbucket-cloud-api-base-url")
+	}
 	if flags.Changed("intent-provider-key") {
 		cfg.IntentProviderKey, _ = flags.GetString("intent-provider-key")
 	}
@@ -743,12 +813,24 @@ func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 			continue
 		}
 
+		if rest, ok := cutPrefix(r, "bitbucketcloud:"); ok {
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
+			}
+			workspace, repository, ok := cutFirst(rest, '/')
+			if !ok || workspace == "" || repository == "" {
+				return nil, fmt.Errorf("--repo \"bitbucketcloud:...\" must be \"bitbucketcloud:workspace/repo-slug\", got %q", r)
+			}
+			repos = append(repos, RepoConfig{Platform: "bitbucketcloud", Project: workspace, Repository: repository})
+			continue
+		}
+
 		if err := rejectLedgerDirSuffix(r, r); err != nil {
 			return nil, err
 		}
 		owner, name, ok := cutFirst(r, '/')
 		if !ok || owner == "" || name == "" {
-			return nil, fmt.Errorf("--repo must be \"owner/name\", \"gitlab:namespace/project\", \"azuredevops:project/repository\", or \"bitbucketserver:PROJECTKEY/repository-slug\", got %q", r)
+			return nil, fmt.Errorf("--repo must be \"owner/name\", \"gitlab:namespace/project\", \"azuredevops:project/repository\", \"bitbucketserver:PROJECTKEY/repository-slug\", or \"bitbucketcloud:workspace/repo-slug\", got %q", r)
 		}
 		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name})
 	}
@@ -783,4 +865,3 @@ func cutFirst(s string, sep byte) (before, after string, found bool) {
 	}
 	return s, "", false
 }
-

@@ -15,7 +15,7 @@ func newServerCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28: GitHub, GitLab, Azure DevOps, Bitbucket Server)",
+		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28/UBI-170: GitHub, GitLab, Azure DevOps, Bitbucket Server, Bitbucket Cloud)",
 		Long: `ubx server turns the same real plan/accept/ship/status --drift flow into a continuously-running
 daemon, reacting to webhook events instead of a human or a CI job invoking each command by hand.
 
@@ -24,14 +24,16 @@ Access Token plus a separately-configured webhook signing token), Azure DevOps (
 Access Token plus a real, static shared-secret Service Hooks header -- Azure DevOps has no
 cryptographic webhook signature scheme at all), and Bitbucket Server/Data Center (a real HTTP
 access token plus Bitbucket Server's own real, bundled HMAC-SHA256 webhook signature, native since
-version 5.4 with no plugin required -- see the Bitbucket Server setup guide) -- webhooks land on
-"/webhook/github", "/webhook/gitlab", "/webhook/azuredevops", and "/webhook/bitbucketserver"
-respectively.
+version 5.4 with no plugin required -- see the Bitbucket Server setup guide), and Bitbucket Cloud
+(a real access token plus its own HMAC X-Hub-Signature webhook signature -- a genuinely different
+platform from Bitbucket Server, not a hosted variant of it: different auth model, different event
+keys, no username on an account at all) -- webhooks land on "/webhook/github", "/webhook/gitlab",
+"/webhook/azuredevops", "/webhook/bitbucketserver", and "/webhook/bitbucketcloud" respectively.
 
 The real flow: a PR/MR opening runs "ubx plan" automatically, posted as a single PR/MR comment; its own
 creator can comment "ubx plan" again to re-run it, edited in place; a native Approve action -- GitHub's
-own review, GitLab's own approval, Azure DevOps' own vote, Bitbucket Server's own approval -- never a
-comment, derives acceptance; a merge ships automatically (policy-gated) or a CODEOWNERS-authorized
+own review, GitLab's own approval, Azure DevOps' own vote, Bitbucket Server's or Bitbucket Cloud's
+own approval -- never a comment, derives acceptance; a merge ships automatically (policy-gated) or a CODEOWNERS-authorized
 "ubx ship" comment ships manually; destroy is disabled by default and, once enabled, still needs a
 separate, explicit --confirm-destroys in the comment itself, every time.
 
@@ -86,6 +88,10 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().String("bitbucket-server-token", "", "the Bitbucket Server HTTP access token to authenticate as (required for Bitbucket Server support; also settable via UBX_SERVER_BITBUCKET_SERVER_TOKEN, never the YAML file)")
 	cmd.Flags().String("bitbucket-server-bot-name", "", "the token's own real, current username (Bitbucket Server has no fixed bot-naming convention; also used as the git-over-HTTPS clone username, a real Bitbucket Server requirement)")
 	cmd.Flags().String("bitbucket-server-webhook-secret", "", "the real, static secret configured on every Bitbucket Server webhook, verified via its own bundled HMAC-SHA256 X-Hub-Signature header (required for Bitbucket Server support; also settable via UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET, never the YAML file)")
+	cmd.Flags().String("bitbucket-cloud-token", "", "the Bitbucket Cloud access token to authenticate as, repository/project/workspace scoped (required for Bitbucket Cloud support; app passwords are deprecated by Atlassian, use an access token; also settable via UBX_SERVER_BITBUCKET_CLOUD_TOKEN, never the YAML file)")
+	cmd.Flags().String("bitbucket-cloud-bot-account-id", "", "the access token's own real, current account_id (Bitbucket Cloud accounts carry no username at all, and nickname/display_name are both user-changeable, so identity here is an account_id)")
+	cmd.Flags().String("bitbucket-cloud-webhook-secret", "", "the real, static secret configured on every Bitbucket Cloud webhook, verified via its own HMAC X-Hub-Signature header (required for Bitbucket Cloud support; also settable via UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET, never the YAML file)")
+	cmd.Flags().String("bitbucket-cloud-api-base-url", "", "override the Bitbucket Cloud API base URL (test-only; the real default is https://api.bitbucket.org/2.0)")
 	cmd.Flags().String("intent-provider-key", "", "the [intent] provider's own API key, forwarded to \"ubx plan\" as UBX_INTENT_PROVIDER_KEY for markdown-authored (--from-doc) proposals (also settable via UBX_SERVER_INTENT_PROVIDER_KEY, never the YAML file; unset means markdown-authored proposals aren't supported)")
 	cmd.Flags().String("provider-source", "", "provider source for plan/ship/status --drift, e.g. hashicorp/aws")
 	cmd.Flags().String("provider-version", "", "provider version to acquire")
@@ -94,7 +100,7 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().Bool("allow-destroy", false, "allow a manual \"ubx ship --confirm-destroys\" comment to actually pass --confirm-destroys through (default false -- destroy is disabled by default)")
 	cmd.Flags().String("surface-as", "", "how drift-watch surfaces real drift: \"issue\" or \"pr\" (default \"issue\")")
 	cmd.Flags().String("drift-watch-interval", "", "how often to run the drift-watch loop, a Go duration (default \"24h\")")
-	cmd.Flags().StringArray("repo", nil, "a repo ubx server is allowed to act on: \"owner/name\" for GitHub, \"gitlab:namespace/project\" for GitLab, \"azuredevops:project/repository\" for Azure DevOps, \"bitbucketserver:PROJECTKEY/repository-slug\" for Bitbucket Server (repeatable; the YAML file's own repos: list is the alternative for more than a few). Repository identity only -- each stack's own location is discovered from that repository's real .ubx/config, never declared here")
+	cmd.Flags().StringArray("repo", nil, "a repo ubx server is allowed to act on: \"owner/name\" for GitHub, \"gitlab:namespace/project\" for GitLab, \"azuredevops:project/repository\" for Azure DevOps, \"bitbucketserver:PROJECTKEY/repository-slug\" for Bitbucket Server, \"bitbucketcloud:workspace/repo-slug\" for Bitbucket Cloud (repeatable; the YAML file's own repos: list is the alternative for more than a few). Repository identity only -- each stack's own location is discovered from that repository's real .ubx/config, never declared here")
 
 	return cmd
 }
