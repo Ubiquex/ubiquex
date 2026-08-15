@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-172: mint dev "Client not built" -- root cause found, NOT fixable in this sandbox, 2026-08-15
+## UBI-172: mint dev "Client not built" -- root cause found, NOT fixable in this sandbox, state PR #15 OPEN not yet merged (never self-merged), 2026-08-15
 
 **Do not re-investigate this from scratch.** The root cause is confirmed and the remedy is outside
 this container. A one-line re-check is at the end.
