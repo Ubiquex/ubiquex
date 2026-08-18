@@ -2,6 +2,109 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-158 Phase 4 Checkpoint 2 (Dynamic Provider AWS via Smithy: wire protocols + SigV4): CHECKPOINT, not closed -- real per-protocol wire execution, real SigV4 signing, real tfplugin serving, PR opened not merged, 2026-08-19
+
+**Fetched fresh from real, current `main` before starting, confirmed not assumed**: `gh api .../pulls/2`
+confirmed Checkpoint 1's PR merged, local `ubx-provider-dynamic` fast-forwarded from `364f38f` to the
+real remote HEAD (`661a84e`), confirmed via `git rev-parse HEAD` matching the real remote ref.
+
+**Real protocol distribution across all 430 real AWS Smithy service models -- direct file sampling, not
+GitHub code search**: GitHub's own code-search API was tried first and found unreliable for this
+(`restXml: 0`, `ec2Query: 0` -- known-wrong results, since Checkpoint 1's own research had already
+directly confirmed S3 uses restXml and EC2 uses ec2Query; diagnosed as GitHub code search excluding
+large files, S3's model is ~3MB, EC2's is ~6.6MB, from its index). Replaced with a real, direct
+range-fetch-then-grep sweep of all 430 real service model files (full file list obtained via one real
+GitHub Git Trees API call, `recursive=1`, rather than 430 separate directory-listing calls). Real,
+confirmed result: `restJson1` 256 (59.5%), `awsJson1_1` 102 (23.7%), `awsJson1_0` 50 (11.6%), `awsQuery`
+15 (3.5%), `restXml` 4 (0.9%, but includes S3), `ec2Query` **1** (0.2%, EC2 only -- confirmed genuinely
+exclusive, not a sampling gap). One real service (`partnercentral-revenue-measurement`) declares no
+`aws.protocols#*` trait at all on its own service shape -- a real data-quality gap, not a scan bug
+(confirmed by direct inspection). `cloudwatch` declares two protocols (`awsJson1_0` +
+`awsQueryCompatible`) -- Checkpoint 1's own existing `resolveProtocol` first-match preference order
+already handles this correctly, unchanged.
+
+**Real, load-bearing finding that reshaped the whole wire-execution design**: the JSON body/response a
+real AWS request/response uses is always keyed by the Smithy shape's own real member name (`QueueUrl`),
+never the schema's translated snake_case attribute name (`queue_url`). `internal/smithy/wireexec`
+re-derives this mapping at request/response time directly from the model via the same
+`uschema.ToSnakeCase` the translator itself used to build the schema -- one real source of truth,
+consulted twice, rather than threading a parallel name map through `BuiltResource`.
+
+**Real, deliberate deviation from an implicit assumption in the original ticket, confirmed not
+guessed**: AWS's own published Smithy models carry **no field at all** for `awsJson1_0`/`awsJson1_1`'s
+own real `X-Amz-Target` header prefix. Confirmed by diffing real `aws-cli --debug` request traces
+against the real, same-session-fetched model files for three structurally different services: SQS's
+real prefix is `AmazonSQS` (an `"Amazon"+sdkId` shape), DynamoDB's is `DynamoDB_20120810` (service name
++ real API version, a genuinely DIFFERENT shape), and grepping both real model files directly for either
+string confirms neither appears anywhere in the model at all. A blanket `"Amazon"+sdkId` heuristic would
+have silently misfired against DynamoDB-shaped services with AWS's own real `UnknownOperationException`.
+`target_prefix` is therefore required, explicit `.ubx/config` for any Smithy-sourced provider whose
+protocol resolves to `awsJson1_0`/`awsJson1_1` (`config.Provider.TargetPrefix`), never guessed.
+
+**Real wire protocol implementation** (`internal/smithy/wireexec`): all six real protocols dispatched on
+the model's own declared trait -- `restJson1`/`restXml` share one real REST-binding codec (`httpLabel`
+path substitution, including Smithy's own real "greedy label" `{Key+}` syntax confirmed live against
+S3's `GetObject`; `httpQuery`; `httpHeader`), `awsJson1_0`/`awsJson1_1` share one real JSON-RPC codec
+(flat body, `X-Amz-Target` header), `awsQuery`/`ec2Query` share one real form-encoded codec
+(`Action`/`Version` + flattened members, real `<OperationName>Result` XML-response unwrapping, confirmed
+live against a real SNS `ListTopics` response shape via `aws-cli --debug`). `restexec.Client` gained
+`DoWithCodec` (`internal/restexec/codec.go`, purely additive -- `Do`/`doOnce` untouched, zero risk to
+Phase 1-3's own tested REST-JSON path) so every real protocol reuses the identical real retry/backoff/
+auth logic rather than reimplementing it four times. Real, documented, flagged gap (not silently
+worked around): `restXml` REQUEST bodies (schema-guided XML encoding) are not yet implemented -- rare (4
+real services) and not needed by any of this checkpoint's own real verification targets; a restXml
+operation with body members refuses loudly rather than silently dropping fields.
+
+**Real SigV4 signing** (`internal/auth/sigv4.go`, replacing Phase 2's stub): `aws-sdk-go-v2/aws/signer/v4`,
+all three real credential sources (`env`/`profile`/`instance_role`) via `aws-sdk-go-v2/config`'s own
+real, standard credential chain, wrapped in `aws.CredentialsCache` for real automatic refresh. **Real,
+confirmed finding: the `Authenticator` interface (`Apply(req *http.Request) error`) needed NO change at
+all** -- `req.GetBody`, already populated for every real `*bytes.Reader`-backed request this repo
+builds, is exactly what a real signer needs to hash the body then restore it, exactly as Phase 2's own
+research predicted and this session's own `TestGetBodyIsPopulatedForBytesReaderBody` already proved.
+
+**Real, live AWS verification, three levels, all genuinely conclusive** (account `839333509514`, user
+`roozbeh`, read-only, nothing created): (1) `internal/auth/sigv4_live_test.go` -- a raw, hand-built SQS
+`ListQueues` request signed by `sigV4Auth.Apply` alone, real HTTP `200`. (2) `internal/smithy/wireexec/live_test.go`
+-- the same real `ListQueues`, this time through `wireexec.Client.Do`'s own real JSON-RPC codec end to
+end, real HTTP `200`. (3) The real, compiled `ubx-provider-dynamic` binary, launched exactly as `ubx`
+core would via the real `provider.Launch` (a throwaway `cmd/smithylivetest` tool in this monorepo,
+deleted before committing, same `cmd/awsnames`-precedent discipline), against a real `.ubx/config`
+(`schema_source = "smithy"`, real SQS model URL, `target_prefix = "AmazonSQS"`, `aws_sigv4` auth) --
+real `GetProviderSchema` (confirmed `aws_sqs_queue` present), real `ConfigureProvider`, real
+`ReadResource` against a well-formed but non-existent queue URL, returning AWS's own real, structured
+`QueueDoesNotExist` fault (HTTP 400) -- proves the full pipeline (SigV4 signing, JSON-RPC framing,
+response decoding, Diagnostic surfacing) reaches AWS correctly end to end without creating anything, a
+wrong signature or malformed request would have failed differently and just as loudly.
+
+**A real, structural schema gap Checkpoint 1 did not surface, found only once this checkpoint's own live
+testing actually tried to READ a resource**: `build.go`'s original schema merge (create-request-input +
+read-response-output only) left SQS's own `queue_url` out of the schema entirely -- `CreateQueueRequest`
+(create input) and `GetQueueAttributesResult` (read output) neither one carries it; it exists only on
+`CreateQueueResult` (create OUTPUT, never previously translated) yet `GetQueueAttributes`' own real INPUT
+REQUIRES it. Confirmed live via `TestServer_RealSQSReadResource` initially failing with an empty request
+body. Fixed by (1) translating and merging create's own output too, and (2) a new
+`ensureIdentifyingAttrsPresent` (Smithy's own real equivalent of `dynserver/build.go`'s
+`ensurePathParamsPresent`) synthesizing a plain attribute for any real REQUIRED read-input member still
+missing after that merge -- an honest fallback, not a universal guarantee for every real AWS service's
+own shape.
+
+**New `internal/smithy/server`**: a real, separate (not a generalization of `dynserver.Server`)
+`tfprotov6.ProviderServer` for Smithy-sourced resources, real Create/Read/Update/Delete/Import/Plan
+wired through `wireexec.Client.Do`, reusing `wire.go`'s tftypes<->JSON conversion and
+`restexec.IsNotFound`/`IsTerminal` unchanged. **Real, deliberate scope narrowing, flagged not hidden**:
+Phase 3's own async-operation polling and field-level drift/normalize policy are not yet wired for
+Smithy resources -- not this checkpoint's own explicit scope, and no real verification target needed
+either (SQS's own real operations are synchronous). `main.go` now actually serves a Smithy-sourced
+provider in place of Checkpoint 1's own explicit refusal.
+
+**Verification discipline**: `go build`/`go vet`/`go test ./...` clean (hermetic), plus
+`UBX_LIVE_VALIDATION=1 go test ./...` clean (every real-service test in the repo, GitHub/Datadog/AWS
+alike). Branch `ubi-158-phase-4-cp2-wire-sigv4`, PR `github.com/Ubiquex/ubx-provider-dynamic/pull/3`,
+confirmed live via `gh api .../pulls/3` (`state: open`, `mergeable_state: clean`) -- not merged, per
+this repo's own PR-only discipline. This closes Phase 4; Phase 5 (conformance gate) has not been
+requested and has not been started.
+
 ## UBI-158 Phase 4 Checkpoint 1 (Dynamic Provider AWS via Smithy: schema + naming): CHECKPOINT, not closed -- real Smithy schema source, resource mapping, and naming-parity layer, proven against five real AWS models, PR opened not merged, 2026-08-19
 
 **Own-call checkpoint split, per this session's own explicit invitation ("your call once you see the real
