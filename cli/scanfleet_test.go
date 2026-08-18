@@ -100,14 +100,47 @@ func TestScanFleet_Out_Rejected(t *testing.T) {
 	}
 }
 
-func TestScanFleet_SurfaceAs_Rejected(t *testing.T) {
-	_, err := runUbx(t, nil, "scan", "--stack", "payments", "--surface-as", "issue", "--github-repo", "acme/infra", "--ledger-dir", t.TempDir())
-	if err == nil {
-		t.Fatal("expected --surface-as to be rejected for a fleet-scoped scan")
-	}
-	if !strings.Contains(err.Error(), "--surface-as is only supported for a single-resource scan") {
-		t.Fatalf("expected a teaching error naming the single-resource requirement, got: %v", err)
-	}
+// TestScanFleet_SurfaceAs_NeedsExactlyOnePlatform replaces an earlier
+// test that asserted --surface-as was refused outright for a
+// fleet-scoped scan. UBI-165 removes that restriction deliberately: a
+// fleet-wide walk that surfaces each drift is precisely what `ubx
+// server`'s own drift-watch loop needs, and refusing it left that loop
+// with no working command to call at all.
+//
+// What IS still refused is an ambiguous target, and that is what this
+// now covers.
+func TestScanFleet_SurfaceAs_NeedsExactlyOnePlatform(t *testing.T) {
+	t.Run("no platform flag at all", func(t *testing.T) {
+		_, err := runUbx(t, nil, "scan", "--stack", "payments", "--surface-as", "issue", "--ledger-dir", t.TempDir())
+		if err == nil {
+			t.Fatal("expected --surface-as with no platform flag to be rejected")
+		}
+		if !strings.Contains(err.Error(), "exactly one of --github-repo") {
+			t.Fatalf("expected a teaching error listing every platform flag, got: %v", err)
+		}
+	})
+
+	t.Run("two platform flags", func(t *testing.T) {
+		_, err := runUbx(t, nil, "scan", "--stack", "payments", "--surface-as", "issue",
+			"--github-repo", "acme/infra", "--gitlab-project", "acme/infra", "--ledger-dir", t.TempDir())
+		if err == nil {
+			t.Fatal("expected two platform flags to be rejected")
+		}
+		if !strings.Contains(err.Error(), "exactly one platform") {
+			t.Fatalf("expected a teaching error naming the one-platform rule, got: %v", err)
+		}
+	})
+
+	t.Run("revert still refused, receipt needs a drift_adopt", func(t *testing.T) {
+		_, err := runUbx(t, nil, "scan", "--stack", "payments", "--surface-as", "issue",
+			"--propose", "revert", "--github-repo", "acme/infra", "--ledger-dir", t.TempDir())
+		if err == nil {
+			t.Fatal("expected --surface-as with --propose revert to be rejected")
+		}
+		if !strings.Contains(err.Error(), "requires --propose adopt") {
+			t.Fatalf("expected the existing propose-revert refusal, got: %v", err)
+		}
+	})
 }
 
 // TestScanFleet_ShipShortHash_EndToEnd proves the fleet walk's own saved

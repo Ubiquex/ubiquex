@@ -78,7 +78,11 @@ func (f *fakeGitHubAuthServer) server(t *testing.T) *httptest.Server {
 
 func newTestClient(t *testing.T, srv *httptest.Server) *ghub.Client {
 	t.Helper()
-	return ghub.New("test-token", ghub.WithBaseURL(srv.URL+"/"))
+	api, err := ghub.New("test-token", ghub.WithBaseURL(srv.URL+"/"))
+	if err != nil {
+		t.Fatalf("ghub.New: %v", err)
+	}
+	return api
 }
 
 func TestIsAuthorizedToReplan_HumanCreatorMatch(t *testing.T) {

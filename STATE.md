@@ -408,6 +408,779 @@ share every param.
 `ubx-provider-dynamic` now or later; Phase 2 (auth implementations, real `[dynamic_providers.<name>.auth]`
 types) is the natural next slice per the original 5-phase structure.
 
+## UBI-172: mint dev "Client not built" -- root cause found, NOT fixable in this sandbox, state PR #15 OPEN not yet merged (never self-merged), 2026-08-15
+
+**Do not re-investigate this from scratch.** The root cause is confirmed and the remedy is outside
+this container. A one-line re-check is at the end.
+
+### Root cause, verified end to end
+
+`mint dev` does not build anything. It needs a **prebuilt Next.js standalone bundle** that the CLI
+**downloads** from `https://releases.mintlify.com`. That host is **denied by the organization's
+network egress policy**, so the bundle is never fetched and the renderer never exists.
+
+The full chain, each step confirmed by running it:
+
+1. `releases.mintlify.com` is blocked **both ways**. Through the agent proxy: `403` on
+   `CONNECT releases.mintlify.com:443`, recorded in the proxy's own `recentRelayFailures` as
+   `connect_rejected`, "gateway answered 403 (policy denial)". Bypassing the proxy: TLS completes
+   against a transparent interceptor that returns **HTTP 403** with the body
+   `Host not in allowlist: releases.mintlify.com. Add this host to your network egress settings to
+   allow access.` Same policy, two expressions of it.
+2. `getLatestClientVersion()` wraps that fetch in a `catch` that returns `undefined`. Verified by
+   calling it directly: `getLatestClientVersion() => undefined`, `getClientVersion() => "none"`.
+3. `mint update`'s client block is `if (latestClientVersion) { ... }`. With `undefined` it is
+   skipped **silently** and the CLI prints **`success already up to date`** while no client is
+   installed at all. That false success is why this never looked like a network problem.
+4. `mint dev` never bootstraps the client anyway: `start.js` -> `dev()` -> `run.js` -> `setupNext()`
+   with no download step in that path.
+5. `setupNext()` hits ENOENT on
+   `~/.mintlify/mint/apps/client/.next/required-server-files.json` and throws
+   **"Client not built. Run: cd <path>/apps/client && STANDALONE_BUILD=true NEXT_PUBLIC_ENV=cli
+   yarn build"**. That message is aimed at Mintlify's own monorepo developers, not at CLI users.
+   **It is what misled four sessions into hunting for a missing local build step that does not
+   exist for CLI installs.**
+
+On disk: `~/.mintlify/mint/apps/client/` has `public/` and `src/` but **no** `.next/`, no
+`mint-version.txt`, no `node_modules/next`.
+
+### Not fixable here, and why
+
+The allowlist is enforced upstream. The proxy reports `selective: false`, `toolScoped: false`, has
+no writable allowlist endpoint (`POST /__agentproxy/allow` -> 405), and no egress config exists in
+the repo or session settings. `/root/.ccr/README.md` is explicit for this failure class: a 403 is an
+organization egress policy denial, and the instruction is to **report the blocked host, not retry or
+route around it**. No fix was attempted or faked.
+
+There is also no legitimate alternate source: the client bundle is **not** published on npm
+(`@mintlify/client`, `mint-client`, `@mintlify/mint` are all unpublished; only the CLI tooling is),
+and the CLI hardcodes `releases.mintlify.com` in `constants.js` with no mirror or local-bundle
+override.
+
+### What this is NOT
+
+**Not a bug in the ubiquex-docs site.** `mint validate` and `mint broken-links` both pass here, on
+every session, because neither needs the client bundle. The failure is entirely in fetching
+Mintlify's prebuilt renderer.
+
+**Not something a normal machine hits.** Any environment whose egress permits
+`releases.mintlify.com` (an ordinary local dev machine, or this container with the host
+allowlisted) runs `mint dev` fine. This is environment-specific, full stop.
+
+### What future sessions should do
+
+Expect the same limitation **unless the host gets allowlisted**. Keep using the measured
+source-level substitute for DOM overflow checks and structural verification for redirects, and keep
+saying plainly that the rendered check was not performed.
+
+Cheap re-check, seconds, before assuming it is still blocked:
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' https://releases.mintlify.com/mint-version.txt
+```
+
+`403` means still blocked. `200` means the allowlist changed: run `npx mint@latest update`, confirm
+`~/.mintlify/mint/apps/client/.next/` now exists, and the real `mint dev` DOM and live-redirect
+checks become available for the first time.
+
+**The one action that would fix it** is adding `releases.mintlify.com` to this environment's network
+egress allowlist, which is a Claude Code environment setting, not a repository change.
+
+### Two real Mintlify CLI bugs found along the way
+
+Neither is ours to fix, both worth knowing: `mint update` reports success when it silently skipped
+the download, and `mint dev` reports a monorepo build instruction to CLI users whose actual problem
+is a failed download. Either one alone would have made this a five-minute diagnosis instead of four
+sessions of guessing.
+
+## Bitbucket setup pages combined (no ticket, founder request): docs PR #9 and state PR #14 OPEN not yet merged (never self-merged), 2026-08-15
+
+`server/bitbucket-server-setup.mdx` + `server/bitbucket-cloud-setup.mdx` -> one
+`server/bitbucket-setup.mdx`, two self-contained `##` sections, no blended prose (UBI-170
+established these are genuinely different platforms).
+
+**Path correction worth recording.** The request said `integrations/bitbucket-setup.mdx`. Wrong
+twice: these are "ubx server" tab pages whose convention is `server/<platform>-setup.mdx`, and
+`integrations/` already holds `integrations/bitbucket-cloud.mdx`, a different page about `accept
+--from-merge` in Bitbucket Pipelines. Confirmed before choosing, landed on `server/`.
+
+**Method that made this safe:** the merge was scripted from the two source files rather than
+retyped, then verified line by line -- every non-heading prose line from both pages is provably
+present in the result. Worth reusing for any future page merge; retyping 448 lines by hand would
+have been an unverifiable transcription risk.
+
+Both pages had an identical `## Configure the webhook`, which would have become a duplicate anchor
+on the merged page, so all headings are demoted to `###` and platform-qualified.
+
+**A real staleness the merge exposed:** the Bitbucket Server half claimed `ubx server` exposes
+*four* webhook routes and omitted `/webhook/bitbucketcloud`, wrong since UBI-170 and directly
+contradicting the Cloud half on the same page once combined. Corrected. General lesson: combining
+two pages surfaces contradictions that sat invisible while they were apart.
+
+Nav: two sidebar entries -> one, in the first's position. Both old paths redirect to the new page
+using the shape the 4 existing redirects already use. All 23 internal cross-links point at the
+relevant section anchor, so each keeps its original intent.
+
+### Verification
+
+- `mint validate` clean; `broken-links` 124 identical to baseline with zero bitbucket findings, so
+  every rewritten link including the deep shorthand anchor resolves.
+- Byte-identity: **4,788** unrelated `.mdx` files identical; `docs.json` diff exactly `+9 -2`; the
+  7 cross-link files each `+N -N` with zero lines differing beyond the link swap.
+- **`mint dev` failed with `Error: Client not built` for the FOURTH time** (UBI-169, UBI-164,
+  PR #8, here). Two consequences: the DOM overflow check remains the measured substitute, and the
+  redirects are verified **structurally only**, never as a live 301. If a real preview ever becomes
+  available, probing `/server/bitbucket-server-setup` and `/server/bitbucket-cloud-setup` is the
+  one check this change could not complete.
+- The new intro table was the one real overflow risk, so it was tightened to a widest cell of 35,
+  under the 38 already published in tables on these very pages.
+
+## Docs discoverability, self-hosted setup (no ticket, founder screenshot review): docs PR #8 merged as `bac840b`, state PR #13 OPEN not yet merged, 2026-08-15
+
+UBI-171's self-hosted content on `server/configuration.mdx` was accurate but unreachable. Confirmed
+before touching anything: `github-setup.mdx` and `azure-devops-setup.mdx` each had **zero** matches
+for enterprise/self-hosted/on-prem/base-URL, and the sidebar has one flat page per platform.
+
+### The open question, answered on evidence rather than assumption
+
+Asked whether this warranted separate "GitHub Enterprise Server setup" / "Azure DevOps Server
+setup" pages. **No, in-page callouts**, and the two platforms reach that answer differently:
+
+- **GitHub.** Diffed GitHub's own published REST descriptions (`github/rest-api-description`,
+  cloned for this): of github.com's 24 GitHub App endpoints, **0 are missing from GHES 3.22**,
+  which exposes 8 enterprise-scoped endpoints of its own. Every endpoint `ubx server` calls is on
+  both. App creation is the same form on a different host, so a separate page would be a
+  near-verbatim duplicate that drifts.
+- **Azure DevOps.** There is no app registration to differ at all: auth is a PAT, and Azure DevOps
+  Server creates PATs the same way. Microsoft's own on-prem specs cover `git` (66 paths, identical
+  to hosted), `wit` (`workitems/${type}`) and `policy` (`configurations`).
+
+### The finding worth keeping
+
+Microsoft publishes on-prem API specifications for **33 areas and none for Graph**, while
+publishing them for every other area `ubx server` uses. `ubx server` uses Graph in exactly two
+paths, both verified in source: `hasContributorAccessAzureDevOps` (the re-plan fallback for a
+drift-watch-opened PR, where the bot is the creator and group membership is the ONLY rule that
+applies) and `CODEOWNERS` group entries in `isAuthorizedToShipAzureDevOps`. Everything else runs
+from the PAT alone.
+
+So an on-prem Azure DevOps Server deployment is very likely fine except that a drift-watch-opened
+pull request cannot be re-planned by comment and group `CODEOWNERS` entries never authorize a
+ship. **Documented at exactly the confidence available**: drawn from what Microsoft publishes, not
+from a live instance, and the page says so. Worth confirming against a real deployment if one ever
+becomes available; if Graph does turn out to be unavailable, `azuredevops/server_api.go`'s two
+Graph callers are the code that needs an on-prem fallback.
+
+### Verification
+
+- `mint validate` clean; `broken-links` 124 findings identical to the UBI-164 baseline, none on the
+  changed pages; zero em dashes.
+- Byte-identity: all 6 other `server/*.mdx` pages and `docs.json` byte-identical, every changed
+  file `+N -0`.
+- **`mint dev` failed with `Error: Client not built` for the THIRD time** (UBI-169, UBI-164, here).
+  Treat it as a standing environment limitation, not a transient one: a real rendered-DOM overflow
+  check is simply not available in this container, and claiming one would be false. The measured
+  substitute compares added content against each page's own published maxima.
+
+## UBI-164 (docs, CI/CD Integrations): remote-ledger-store requirement documented, docs PR #7 merged as `a5170cd`, state PR #12 OPEN not yet merged, 2026-08-15
+
+Docs-only. All five CI/CD guides run `ubx accept --from-merge` and `ubx ship --yes` in their
+ship-on-merge workflow and none mentioned needing a real remote ledger store.
+
+**Worse than the omission the ticket describes.** Every one of the five OPENS its Prerequisites by
+telling the reader to bring "a git-local ledger already committed" -- precisely the setup that
+silently loses every accepted proposal. So the note is placed immediately after that paragraph,
+qualifying it, rather than tucked into the credentials section as the ticket suggested. The
+placement is the fix; putting it elsewhere would have left the misleading sentence standing alone.
+
+The canonical explanation is `server/github-setup.mdx`'s own `<Note>` (UBI-28 Phase 1). Matched on
+facts and tone, adapting only what genuinely differs: what disappears is the runner/agent/job
+workspace, not `ubx server`'s long-lived working clone. Each guide gets its own platform's word.
+
+### One claim the canonical note does not make, verified in real source before writing it
+
+"Drift-watch and plan-on-X are unaffected, since neither appends to the ledger." Checked rather
+than assumed: only `core/accept.go`'s three `finalizeAndAppend` paths call `Ledger.Append`; `ship`
+persists apply records to the same store via `SaveApplyProgress`/`SealApply`; `cli/status.go`,
+`cli/scanfleet.go` and `cli/plan.go` never append, and `plan` writes to the plan store via
+`writePlanFile`. Worth stating so readers do not over-apply the requirement to workflows that do
+not need it.
+
+### Two deliberate deviations, flagged not silent
+
+- **`<Warning>`, not the canonical `<Note>`.** The five guides used `<Note>` only. This one
+  contradicts the paragraph directly above it and describes silent data loss, which is what
+  `<Warning>` already marks elsewhere in this docs set.
+- **`integrations/bitbucket-cloud.mdx` included, beyond the stated five.** Identical gap (runs
+  `accept --from-merge` in Pipelines, zero remote-store mentions). Absent from the ticket only
+  because UBI-170 added it after the ticket was filed.
+
+### Verification
+
+- **Byte-identity spot-check, the strongest check here:** every file `+N -0`, exactly one hunk, and
+  programmatically removing the added block reproduces the pre-edit file **byte for byte** on all
+  six. Nothing but the intended addition landed.
+- `mint validate` clean; `broken-links` 124 findings identical to the UBI-165 baseline, none on the
+  changed pages; zero em dashes in any added line.
+- **DOM overflow check NOT performed, and not claimed.** `mint dev` still fails with
+  `Error: Client not built`, the same failure UBI-169 hit; this is now a repeat blocker worth
+  treating as known. Substitute with a real baseline: no code blocks and no tables added (the two
+  things that actually overflow), prose wrapped at 72 (100 for Bitbucket Cloud), longest
+  unbreakable token added 41 chars against already-published maxima of 88-165 on the same pages.
+
+## UBI-165 (cli/surface.go + ubx server drift-watch): CLOSED -- drift-watch works on all five platforms, code PR #11 merged as `4d0d9bd`/`c39eb28`, docs PR #6 merged as `78300c7`, both verified against real, current main 2026-08-15
+
+Stated scope was "extend cli/surface.go beyond GitHub". Delivered, plus **two adjacent defects found
+during implementation that had to be fixed for the stated goal to be true at all.**
+
+### The finding that changes the story
+
+`server/drift.go` shelled out to `ubx status --drift --surface-as ... --github-repo ...`.
+**`ubx status` has no `--surface-as` flag and never had one** -- the flag lives on `ubx scan`. Every
+drift sweep this server ever ran died on `unknown flag` before reaching any API. So drift-watch was
+not "working on GitHub, missing elsewhere" as the ticket assumed: it worked on **nothing**, and the
+GitHub-only surfacing code was never actually reachable from the server at all.
+
+Second defect: even pointed at the right command, `ubx scan` refused `--surface-as` for a
+fleet-scoped walk, which is exactly the shape drift-watch needs. Both fixed, and both are reported
+as beyond the ticket's stated scope rather than folded in silently.
+
+### The real per-platform findings, verified independently
+
+Every claim below was confirmed against a real, current source, never assumed symmetric. Atlassian
+and Microsoft doc hosts are egress-blocked here, so: Bitbucket Cloud against its own live OpenAPI
+definition at api.bitbucket.org, Azure DevOps against **Microsoft's own published REST spec** (the
+public MicrosoftDocs/vsts-rest-api-specs repo, cloned for this), GitLab and Bitbucket Server
+against the real, locally-downloaded SDKs.
+
+- **GitLab** is closest to GitHub: a real issue tracker on every project. Calls the body
+  `description`, not `body`. No draft flag on a merge request at all, so draft is the `Draft:` title
+  convention.
+- **Azure DevOps** has no issue tracker. It has **work items**, in Azure Boards, a separate service
+  a project can disable. Route is `POST {project}/_apis/wit/workitems/${type}` with a **literal `$`**
+  and `application/json-patch+json`, not `application/json`. The type comes from the project's own
+  process template: `Issue` in Agile/Basic, `Product Backlog Item` in Scrum, `Requirement` in CMMI,
+  so it is configurable and unguessable. Has a real `isDraft` flag.
+- **Bitbucket Server has NO issue tracker at all.** Decisive evidence: its REST SDK exposes 224 API
+  methods, **zero** touching any issue resource, while `CreatePullRequest`/`CreateBranch`/
+  `GetDefaultBranch` are all present. Atlassian's model is Jira. `--surface-as issue` is refused
+  with `ErrNoIssueTracker` rather than silently downgraded to a pull request, which would hand an
+  operator something materially more privileged than they asked for.
+- **Bitbucket Cloud** has an issue tracker but it is **opt-in per repository**. Body is nested
+  `content.raw`, not a flat string. Its `POST /src` creates branch and commit in ONE call and
+  defaults a pull request's destination to `mainbranch`, so this platform needs **two** calls where
+  Azure DevOps needs five. The form FIELD NAME is the file's repository path, with a load-bearing
+  leading slash to disambiguate from metadata fields.
+
+### Verification
+
+- Build, vet, gofmt clean; `go test ./... -count=1` clean apart from the 4 known pre-existing
+  `blueprint/` failures.
+- Real httptest-backed tests per platform, never mocked at the transport level, each pinning that
+  platform's own real contract (the JSON Patch document and literal `$` route for Azure DevOps, the
+  multipart write and single-call branch creation for Bitbucket Server, the form-field-as-path
+  encoding and exactly-two-calls property for Bitbucket Cloud, `description` vs `body` for GitLab).
+  Plus a five-way dispatch test in `cli/`, which is where a switch this wide actually goes wrong.
+- **Docker registry egress still blocked** (403, re-confirmed), so the established host-process
+  substitute: `scratchpad/verify165.sh`, **13/13**, driving the real `ubx` binary against a real
+  ledger with real fakeprovider-produced drift, one stand-in per platform. It also proves the OLD
+  drift-watch command line really was invalid (`unknown flag`) and the new one really surfaces.
+
+**A harness lesson worth keeping:** the first run reported 3 false failures because the stand-in
+routed on loose substrings. `/repos/` appears in Bitbucket Server paths too, and `/pullrequests` is
+both Azure DevOps' and Bitbucket Cloud's. Fixed by routing on each platform's own distinctive API
+root. A harness that multiplexes several platforms needs its routing to be as precise as the code
+under test.
+
+### Docs
+
+`server/workflow.mdx` gains a per-platform table and states plainly that this step worked on no
+platform before; `server/overview.mdx`'s GitHub-only note is replaced; `cli-reference/scan.mdx`
+documents all seven new flags. `mint validate` clean, `broken-links` 124 findings identical to the
+UBI-168 baseline with none on the changed pages, zero em dashes in any added line.
+
+## UBI-168 (ubx server, all five platforms): CLOSED -- authorization runs before any clone or fetch, code PR #10 merged as `f204003`/`55e38fd`, docs PR #5 merged, both verified against real, current main 2026-08-15
+
+Real scope: a pure ordering fix in the comment-triggered handlers. Pre-existing from UBI-166, found
+during UBI-167's implementation and correctly filed separately rather than folded in. UBI-167
+changed its real cost: an unauthorized commenter on an allowlisted repository went from triggering a
+changed-files API call to triggering a real clone or fetch, on every comment, before being told no.
+
+Fixed on GitHub, GitLab, Azure DevOps and Bitbucket Server by extracting a `prepareStack<Platform>`
+helper and calling it inside each verb's own authorized branch. Bitbucket Cloud (UBI-170) was built
+this way from the start and is the pattern the other four were brought to, not a new design.
+
+**Nothing else changed.** Every check runs against the same inputs and produces the same refusal
+comments; the whole pre-existing server test suite passes untouched. The one thing worth noting is
+that `ubx ship` legitimately fetches changed files DURING authorization (CODEOWNERS matching needs
+them), which is not the same as stack resolution and still happens before any checkout.
+
+### Verification, and two places the first attempt was weaker than it looked
+
+Ten Go tests, two per platform, each asserting both that the real refusal comment was posted and
+that the work directory is still empty. The work-directory assertion is the discriminating one:
+`ensureRepoCheckoutFromRemote` calls `os.MkdirAll` on the checkout's parent BEFORE running git
+clone, so any handler that reaches the checkout leaves a directory behind even when the clone itself
+cannot succeed.
+
+Each platform also has an `..._AuthorizedReplanDoesReachCheckout` control. Without it, the
+unauthorized tests would pass just as happily against a handler that never checks out at all, which
+would prove nothing about ordering. **This is the general lesson: a "did not happen" assertion is
+worth little without a paired "does happen" control.**
+
+**Mutation-checked, all five platforms.** Hoisting `prepareStack*` back above the switch makes all
+ten unauthorized tests fail and passes again when restored, so they genuinely catch the defect
+rather than passing on a lenient fixture. Bitbucket Cloud was mutated too, so the proof covers the
+platform that was already correct, not just the four that were changed.
+
+**Docker registry egress is still blocked** (403 from `production.cloudfront.docker.com`,
+re-confirmed this session), so the established host-process substitute was rebuilt:
+`scratchpad/verify168.sh`, 6/6 passing, driving a real `ubx server` with a real HMAC-signed comment
+webhook against a real local git remote. Two harness weaknesses were found and fixed rather than
+reported as passes:
+
+- The stand-in served CODEOWNERS with `"encoding":"utf-8"`, which go-github refuses to decode, so
+  the ship authorization aborted early and the run only LOOKED like it proved the ordering.
+- The fixture repository had one stack, which made the "changed files were never fetched" signal
+  vacuously true: `resolveStackIn` only fetches changed files for a genuinely multi-stack
+  repository. Seeded two stacks, after which that signal fails under the reverted ordering as it
+  should.
+
+Running the corrected harness against a deliberately reverted build fails both unauthorized cases
+on both signals, while the authorized control performs a real, successful clone with the real stack
+discovered. Same config, same repository, same real clone: it happens when authorized and never
+starts when not.
+
+### Docs
+
+`server/workflow.mdx` gains a note stating the ordering guarantee and what it used to be;
+`server/overview.mdx`'s core-flow step 2 now says the check runs before any clone or fetch. `mint
+validate` clean, `broken-links` 124 findings identical to the UBI-171 baseline with none on the
+changed pages, zero em dashes in any added line.
+
+## UBI-171 (ubx server + accept): CLOSED -- GitHub Enterprise Server and on-prem Azure DevOps Server, code PR #9 merged as `22fbeb7`/`0d8137d`, docs PR #4 merged as `fd598e2`, both verified against real, current main 2026-08-15
+
+Real scope: two self-hosted products that could not work at all, however correctly they were
+configured. Found by the verification-only base-URL question asked earlier in the same session, and
+deliberately not fixed then.
+
+### The two real defects
+
+1. **The configured API base URL was used raw.** GitHub Enterprise Server serves its REST API under
+   `/api/v3/` and its uploads under `/api/uploads/`. `github.WithBaseURL` set `Client.BaseURL`
+   directly, so every call landed at the instance root and 404'd. Fixed by adding
+   `github.WithEnterpriseBaseURL`, which delegates to go-github's own `WithEnterpriseURLs`.
+2. **The git clone host was a hardcoded literal.** `server/repo.go` built
+   `https://x-access-token:%s@github.com/...` and `https://oauth2:%s@dev.azure.com/...`
+   unconditionally. A correctly-configured GHES or on-prem Azure DevOps Server deployment would
+   authenticate against its own instance and then try to clone from the SaaS. GitLab's and Bitbucket
+   Server's siblings in the same file already derived their host from real config; this brought the
+   other two in line via `gitHostForGitHub` and `azureDevOpsCloneURL`.
+
+Both settings were also relabeled from "test-only" to real production config, gaining a YAML key
+(`github_api_base_url`, `azure_devops_api_base_url`, and `gitlab_api_base_url` for consistency)
+alongside their existing flag and env var.
+
+`ubx accept --from-merge` gained three real, documented flags -- `--gitlab-api-base-url` (the one
+explicitly asked for; it previously read an undocumented, test-only env var with no flag) plus
+`--github-api-base-url` and `--azure-devops-api-base-url`. **The latter two are a deliberate
+completion slightly beyond the stated scope**, flagged as such in the session report: leaving them
+out would have meant GHES and on-prem Azure DevOps Server worked in `ubx server` but not in the CLI,
+which is exactly the kind of half-fix the ticket was filed against. Each falls back to its
+long-standing `UBX_*_API_BASE_URL` env var, so the hermetic test seam is unchanged.
+
+### A real surprise, caught by the verification harness, not by the tests
+
+`enterpriseAPIRoot` (the shim that hands ghinstallation an API root, since ghinstallation
+string-joins rather than following go-github's convention) originally appended `/api/v3`
+unconditionally. The host-process harness' own SaaS-default case surfaced the consequence
+immediately: an operator setting `github_api_base_url: https://api.github.com` explicitly would get
+a token exchange at `https://api.github.com/api/v3/app/installations/...`, which the real SaaS does
+not serve.
+
+go-github's own `WithEnterpriseURLs` deliberately skips any host starting `api.` or containing
+`.api.` for exactly this reason. `enterpriseAPIRoot` now mirrors that rule, and
+`TestEnterpriseAPIRoot_AgreesWithGoGitHub` asserts the two agree case by case rather than trusting
+that they do. **Worth generalizing: whenever this codebase reimplements a convention it does not
+own, the test should compare against the real implementation, not against a hand-written
+expectation.**
+
+### Verification
+
+- `go build ./...`, `go vet ./...`, `gofmt` all clean. `go test ./... -count=1` clean apart from the
+  4 known pre-existing `blueprint/` failures (wasmtime/bwrap absent from this container).
+- New adversarial tests, none mocked at the transport level: `github/client_test.go` (GHES path
+  handling against a stand-in that 404s anything outside `/api/v3/`), and
+  `server/enterprisehost_test.go`, which runs the **real `git` binary** against real local
+  repositories reached through a real `url.<base>.insteadOf` rewrite registered for the enterprise
+  host only. **Mutation-checked**: reverting `gitHostForGitHub`/`azureDevOpsCloneURL` to their
+  hardcoded hosts makes exactly those two tests fail, so they genuinely catch the defect.
+- **Docker registry egress is still blocked** (403 from `production.cloudfront.docker.com`), so the
+  same rigorous host-process substitute UBI-167 and UBI-170 used was rebuilt for this ticket:
+  `scratchpad/verify171.sh`, 14/14 cases passing, driving a real `ubx server` process with real
+  HMAC-signed webhook deliveries against a stand-in GHES that refuses anything outside `/api/v3/`,
+  with `github.example.test` resolved via `/etc/hosts` so the enterprise hostname is genuinely in
+  the URL the code built.
+
+### Not done, deliberately
+
+- Bitbucket Cloud's base URL stays test-only with no YAML key. It is SaaS-only; Bitbucket's
+  self-hosted product is Bitbucket Server, a separate platform with its own separate required
+  `bitbucket_server_url`.
+- UBI-168 (authorization must run before clone/fetch on the four older platforms) is still open and
+  untouched here.
+
+### Docs
+
+`server/configuration.mdx` gained a "Self-hosted instances (UBI-171)" section and three corrected
+key-mapping rows; `cli-reference/server.mdx` and `cli-reference/accept.mdx` gained real
+`ResponseField` entries with the "test-only" language removed. `mint validate` clean, zero em
+dashes in any added line. Also corrected a stale "all four platforms" to "all five" in
+`configuration.mdx`, left behind by UBI-170.
+
+## UBI-170 (Bitbucket Cloud): CLOSED -- accept --from-merge + full ubx server integration, code PR #8 merged as `ac2a14b`, docs PR #3 merged as `cd252cc`, both verified against real, current main 2026-08-15
+
+Real scope: Bitbucket Cloud, the fifth platform, named across the whole `ubx server`/`accept
+--from-merge` arc but never built. Confirmed as its own distinct effort, not a variant of Bitbucket
+Server.
+
+**Step 1 (verify first) hit a real environment wall and then routed around it honestly.** Every
+Atlassian DOCUMENTATION host is hard-blocked by this session's egress policy
+(`developer.atlassian.com`, `support.atlassian.com`, `confluence.atlassian.com` all fail CONNECT).
+But `api.bitbucket.org` is reachable, and it serves Bitbucket Cloud's own official OpenAPI
+definition at `https://api.bitbucket.org/swagger.json` (943 KB), which carries BOTH the API schema
+AND Atlassian's own narrative documentation inline under `x-atlassian-narrative`. That plus live
+API calls against a real public repo (`bitbucketpipelines/official-pipes`) settled everything
+except one detail. **Worth remembering: when Atlassian docs are blocked, the swagger endpoint is a
+first-class authoritative substitute, not a fallback.**
+
+**Confirmed differences from Bitbucket Server, none assumed:**
+- Auth: app passwords are DEPRECATED per Atlassian's own narrative. Access tokens (repository/
+  project/workspace scoped, bound to a resource not a person) sent as `Authorization: Bearer`.
+- Clone credential: `https://x-token-auth:{token}@bitbucket.org/...`. A THIRD distinct literal,
+  matching neither GitHub's `x-access-token` nor Bitbucket Server's real-username form. Atlassian's
+  own docs call the GitHub difference out explicitly.
+- Event keys share nothing: `pullrequest:created`/`push`/`approved`/`fulfilled` (its own word for
+  merged)/`comment_created`. Confirmed live from `/2.0/hook_events/repository` (24 events).
+- Approvals carry NO commit reference. A participant is exactly `{user, role, approved, state,
+  participated_on}`. Bitbucket Server's `lastReviewedCommit` does not exist.
+- No username on an account at all: `account_id`/`uuid` (stable), `nickname`/`display_name`
+  (user-changeable).
+- `commit/{sha}/pullrequests` returns a MINIMAL pull request (id/title/links only), so derivation
+  needs two calls. Also carries a `repo_indexed` flag: an unindexed repo returns empty, which means
+  "unknown", not "no PR".
+- Webhook signing exists: write-only `secret` on the subscription, HMAC hex digest in
+  `X-Hub-Signature`, generated ONLY when a secret is set.
+
+**The one thing the spec does not state is the HMAC algorithm** (every `SHA1` hit in the spec is
+about git commit SHAs). The founder confirmed it against support.atlassian.com: sha256, `sha256=`
+prefix, and Atlassian's own "might change in the future" note. So the implementation **parses the
+algorithm name out of the header** and looks it up in a table rather than hardcoding it. An
+unimplemented algorithm is refused explicitly, which is real downgrade protection: a real,
+correctly-computed SHA-1 signature is refused, verified end to end.
+
+**Implementation**: new `bitbucketcloud/` package (client.go, derive.go, server_api.go);
+`--bitbucket-cloud-repo` on `ubx accept --from-merge`; `server/bitbucketcloud{,_auth,_comment,
+_webhook}.go`; a fifth route `/webhook/bitbucketcloud`; `bitbucketcloud:workspace/repo-slug` on
+`--repo`. UBI-166's allowlist and UBI-167's auto-discovery are reused unchanged, not rebuilt.
+
+**Three founder-confirmed design decisions, all implemented as decided:**
+1. CODEOWNERS entries resolve to real `account_id`s at check time against live workspace
+   membership, refusing on both failed and ambiguous resolution, and reporting the refusal on the
+   pull request rather than swallowing it as a plain not-authorized.
+2. TOCTOU follows the GitLab/Azure DevOps branch-restriction pattern
+   (`reset_pullrequest_approvals_on_change` / `smart_reset_pullrequest_approvals`), never Bitbucket
+   Server's per-approval commit reference.
+3. Access tokens, not personal API tokens, throughout setup docs.
+
+**UBI-168 applied from the start, not inherited**: the authorization check runs BEFORE any clone or
+fetch in the comment-triggered handlers. The four older platforms still resolve the stack (and
+therefore clone) first; that remains UBI-168's own open work. Two tests assert the work directory
+stays completely empty after an unauthorized `ubx plan`/`ubx ship` comment.
+
+**Verification**: full repo `go build`/`go vet`/`go test -count=1` clean, gofmt clean
+(`blueprint/`'s 4 wasmtime/bwrap environment failures confirmed identical on unmodified `main`, as
+every ticket tonight). New tests: `bitbucketcloud/{client,server_api,derive}_test.go` and
+`server/bitbucketcloud_{signature,allowlist,auth,flow}_test.go` plus
+`cli/accept_frommerge_bitbucketcloud_test.go`, all against real httptest servers and real git
+repositories, never mocked at the transport level.
+
+**Docker verification: still blocked, same as UBI-167.** `production.cloudfront.docker.com` returns
+403 for every base image; re-confirmed this session by pulling `debian:bookworm-slim` directly. Ran
+the same host-process substitute instead: a real `ubx server` process, real HMAC-SHA256-signed
+deliveries, a stand-in Bitbucket Cloud API, and a real local git remote via `url.<path>.insteadOf`
+rewriting the real `x-token-auth@bitbucket.org` clone URL. All 7 cases passed: real clone plus
+auto-discovered stack on `pullrequest:created`; TOCTOU refusal with no reset restriction; gate
+passes with either reset kind; unauthorized ship refused with an EMPTY work dir (UBI-168);
+authorized ship proceeds after resolving `@owner` to a real account_id; unlisted repo refused and
+logged with nothing cloned (UBI-166); and signature enforcement returning 202 for a valid sha256
+and 401 for a real sha1, an unknown algorithm, a bare digest, a wrong secret, and a missing header.
+
+**One detail deliberately handled as fail-closed**: the `X-Event-Key` header name is the only thing
+in this integration that comes from Atlassian's webhook docs rather than the machine-readable
+definition, so an absent or unrecognized event key does nothing at all. A test asserts silence for
+five such keys. The payload is otherwise trusted only for repository identity, pull request id,
+actor, and comment text; every other fact is re-fetched from the API.
+
+**Docs** (`ubiquex-docs` PR, `cd252cc`): new `server/bitbucket-cloud-setup.mdx` and
+`integrations/bitbucket-cloud.mdx`, plus nav and cross-links. `mint validate` clean;
+`mint broken-links` 124 findings on the branch and 124 on unmodified main, zero on any touched page.
+
+**Not yet done, per the ticket's own "Never self-merge"**: both PRs are open and awaiting review.
+
+## UBI-169 (ubx server docs + CLI help): Bamboo -> Bitbucket Server naming correction, PRs OPEN not yet merged, 2026-08-15
+
+Real scope, read directly from the ticket: `ubx server` is a webhook listener talking to a VCS
+host's own API (PRs, webhooks, approvals) and has no relationship to Bamboo, a CI tool. Bitbucket
+Server was always the real integration target. The label most likely crept over from the CI-focused
+UBI-31/UBI-160 work, where Bamboo genuinely IS the subject.
+
+**Scope item 1, verified rather than assumed, as the ticket explicitly required**: the Go code was
+already correct everywhere it matters. Config fields (`BitbucketServerURL`/`Token`/`BotName`/
+`WebhookSecret`), YAML keys (`bitbucket_server_url`, `bitbucket_server_bot_name`), env vars
+(`UBX_SERVER_BITBUCKET_SERVER_*`), flags (`--bitbucket-server-*`), the `--repo bitbucketserver:`
+prefix, the route `/webhook/bitbucketserver`, and the package name `bitbucketserver` all check out
+against the real built binary's own `--help`. No functional change was needed, exactly as the
+ticket predicted. One user-visible string did need it: `ubx server`'s own help said
+"Bamboo/Bitbucket Server" and pointed at "the Bamboo setup guide", the page being renamed.
+
+**Docs** (`ubiquex-docs` PR #2, branch `claude/ubi-169-bitbucket-server-naming`, `4f39486`):
+`server/bamboo-setup.mdx` -> `server/bitbucket-server-setup.mdx`, matching the `<platform>-setup`
+convention its three siblings already use, with a short in-page note explaining the rename so a
+bookmark holder isn't left guessing. Content re-verified against real source rather than relabeled:
+the event list became a table of the five keys `handleBitbucketServerEvent` actually dispatches on
+(plus the fact that any other key is ignored); the core-flow mapping was corrected (the old page
+mapped `pr:from_ref_updated` to "step 2's re-plan", but step 2 is specifically the
+comment-triggered re-plan with its own auth check); the signature section now states the real
+fail-closed behavior from `validBitbucketServerSignature`; the bot-name note now explains it is
+also the git-over-HTTPS clone username, so a wrong value breaks cloning and not just attribution;
+the approval section gained the destroys refusal; CODEOWNERS gained the three real file locations
+and the nobody-not-everybody default; and a new note records that a PR is identified by its
+**target** repository (`toRef`), which is what actually matters for allowlisting a cross-repository
+PR. Cross-links updated in `docs.json`, `overview`, `workflow`, `docker`, `github-setup`,
+`gitlab-setup`, `configuration`. `integrations/bamboo.mdx` deliberately untouched and still linked:
+Bamboo is legitimately the subject there.
+
+**Code** (`ubiquex` PR #7, same branch name, `acf2c40`): `cli/server.go` help strings only. Also
+fixed a real omission found while verifying: Bitbucket Server's own approval was missing from the
+Long text's list of native Approve actions that derive acceptance, despite
+`handlePullRequestApprovedBitbucketServer` existing since UBI-28 Phase 4.
+
+**Two adjacent errors found while verifying, both fixed**: `server/workflow.mdx` linked to a
+`#bamboo-bitbucket-server` anchor that the renamed heading would have left dangling; and
+`cli-reference/server.mdx` still claimed "GitHub only... GitLab, Azure DevOps, and Bamboo are real,
+planned follow-up phases, not yet built", which has been false since UBI-28 Phase 4 closed.
+
+**A real near-miss worth recording as a pattern, not a one-off.** The UBI-169 code branch was cut
+from `origin/main` while the local ref was still stale at `2914e0e`, before UBI-167 merged. UBI-167
+had also edited `cli/server.go` (the `--repo` flag help). Merging UBI-169 from that base would have
+silently REVERTED UBI-167's `--repo` text. Caught by explicitly checking `git merge-base
+--is-ancestor origin/main HEAD` after a fresh fetch, then rebasing; the post-rebase diff is the
+naming change alone and UBI-167's text is intact. This is the same stale-local-ref trap the UBI-166
+merge verification hit earlier tonight, in a second, more dangerous form: there it produced a
+misleading read, here it would have produced a silent regression. **Always fetch and confirm
+ancestry before branching, and re-confirm before opening the PR.** The docs branch happened to be
+cut after the docs merge and was fine, but that was luck, not process.
+
+**Verification**: full repo `go build`/`go vet`/`go test -count=1` clean (`blueprint/`'s 4
+wasmtime/bwrap environment failures confirmed identical on unmodified `main`). Real `ubx server
+--help` and `ubx --help` output read from the rebuilt binary, not from the source string, and line
+wrapping reflowed so the rendered help has no ragged/orphan lines. `mint validate` clean.
+`mint broken-links`: 124 findings on the branch, 124 on unmodified `main`, zero on any touched
+page (the residue is pre-existing, all generated `resource-reference/gcp/*` regex fragments and
+provider doc paths). Zero em dashes. Byte-identity spot-check: `git diff --name-only origin/main`
+lists exactly the 10 intended docs files and nothing else.
+
+**Owed, not done, explicitly**: the real rendered DOM overflow check. `mint dev` cannot start in
+this environment at all (`Error: Client not built` -- the local preview needs a prebuilt Next.js
+client bundle it can't produce here). Rather than claim a check that wasn't run, a source-level
+width proxy was done instead, and the one new element carrying real overflow risk was tightened:
+the event table's widest cell went from 101 chars to 40, and the page's longest code line (89) and
+longest token (80) both sit at or below `azure-devops-setup.mdx`'s already-shipped 91 and 72. The
+rendered check should be run against the PR's own Mintlify deployment preview.
+
+**Also owed from UBI-167, still**: a real `docker build` + container run. Docker Hub image blobs
+are hard-403'd by this environment's egress policy (`production.cloudfront.docker.com`), confirmed
+by pulling each base image directly.
+
+**Not yet done, per the ticket's own "Never self-merge" constraint**: both PRs are open, pushed,
+and awaiting the founder's own review and merge decision.
+
+## UBI-167 (ubx server): CLOSED -- ledger_dir removed from Config.Repos, stacks auto-discovered from each repo's own .ubx/config, merged 2026-08-15
+
+**First: UBI-166 is confirmed genuinely merged.** Verified two independent ways, not from a stale
+PR view: a fresh `git fetch origin main` (`git rev-parse origin/main` =
+`2914e0e51e07292b533818cda997233524c98f87`, the real merge commit of PR #5, second parent
+`9bff8f3e4227d215cb284a95baa3ec85eb29150a`) and the GitHub API resolving `refs/heads/main` to the
+same SHA with `server/allowlist.go` present at blob `c85047f7...`, byte-identical to the local
+blob. Worth knowing for the next session: the local `main` branch ref in a fresh clone can be
+stale (it was, at `f4dbfe3`) -- `origin/main` after a real fetch is the authority, `git log main`
+without a pull is exactly the stale view this check existed to rule out.
+
+Real, current scope (the ticket was CORRECTED once before this session started, and the corrected
+version is what was built -- read directly from Linear, not from memory): `Config.Repos` stays
+exactly as UBI-166 built it, the real, enforced allowlist. Unlisted repos are still refused
+outright, loudly logged, on every platform, untouched. What changed is only the `ledger_dir` field
+*within* each entry: a stack's real location inside a repo is a property of the repo (its own
+`.ubx/config`), not something ubx server's central config should have to declare and keep in sync
+by hand.
+
+**Real implementation**: new `server/stackdiscovery.go` -- `discoverStacks(repoDir)` walks the
+already-checked-out repository and returns every directory containing a real `.ubx/config` (all
+four of cli/configcascade.go's own real names: `config.hcl`, `config.toml`, `config`,
+`config.yaml`), repo-relative and sorted for determinism, skipping `.git` and never descending
+into `.ubx` itself. The name list is deliberately duplicated rather than imported: package cli
+imports package server (cli/server.go wires up `ubx server`), so the reverse would be a real
+import cycle -- noted here because it IS a real drift risk if cli's own list ever changes.
+Deliberate: a `.ubx/` directory with no config file is NOT a stack (ubx writes `.ubx/plans/` and
+`.ubx/ledger.lock` there too; a leftover lock file must never read as "a stack lives here").
+
+**UBI-166's resolution core is reused unchanged**, just fed auto-discovered candidates instead of
+manually-declared ones: same deepest-matching-stack-wins against the event's own real changed
+files, same lazy fetch (single-stack repos still pay nothing), same refuse-outright-never-guess on
+a tie or a no-match. Only the candidate type changed (`[]RepoConfig` -> `[]string`) and the zero
+case's meaning: it used to mean "unlisted repo" (`ErrRepoNotAllowed`, which in practice never
+fired, since every handler already gated on `len(candidates) == 0` first) and now means
+"allowlisted repo that declares no stack at all" (`ErrNoStackDiscovered`) -- a genuinely different
+condition, so it says so rather than reusing the old sentinel.
+
+**Real structural consequence, worth knowing**: discovery has to read what the event's own commit
+actually contains, so the checkout now happens in each platform's own handler, BEFORE resolution,
+rather than inside each `run*` helper afterwards. The twelve `run*` helpers
+(plan/automatic-ship/manual-ship x four platforms) therefore take a prepared `repoDir` and no
+longer check out themselves; four new `checkoutFor*` helpers own that. Drift-watch has no
+triggering event and therefore no changed files to disambiguate with, and doesn't need any: drift
+applies to every stack a repo declares, so it now runs one real `ubx status --drift` pass per
+discovered stack instead of one against a declared path.
+
+**Refused by name, never silently absorbed**: a pre-UBI-167 `ledger_dir` YAML key fails startup
+with a real, named error (yaml.v3 ignores unknown keys by default, so without an explicit probe an
+upgrading operator would have had their declared path quietly dropped); so does a `--repo
+owner/name:ledger_dir` suffix, which would otherwise have parsed as a repository literally named
+`infra:stacks/payments` and then simply never matched a real event -- a silent, allowlist-shaped
+failure of exactly the kind UBI-166 exists to prevent.
+
+**Real, adversarial test coverage**: `server/stackdiscovery_test.go` (new) -- one real
+`.ubx/config` discovered and resolved with no fetch; two real stacks resolved by deepest match in
+both directions; root+nested discovered together; ambiguity refused; no-config-anywhere refused;
+a `.ubx/` with only a lock file proven NOT to be a stack; `.git` skipped and walk order proven
+deterministic across repeated runs; every one of the four real config file names counted.
+`server/allowlist_test.go` and the four per-platform tests updated to the auto-discovered shape
+(each per-platform "two real stacks" test now builds a real checkout on disk rather than a
+declared list). `server/config_test.go` gained both real refusal tests. Full repo `go build`/`go
+vet`/`go test -count=1` clean.
+
+**Real end-to-end verification, and an honest bound on it**: `docker build` is NOT possible in
+this session's environment -- the egress policy returns a hard 403 for
+`production.cloudfront.docker.com`, so no base image (`golang:1.26-bookworm`,
+`debian:bookworm-slim`, or the `docker/dockerfile:1` frontend) can be pulled at all. The Docker
+daemon itself starts fine; this is an image-registry egress denial, confirmed by pulling each base
+image directly, not a Dockerfile problem. So the equivalent verification was run against the real
+`ubx server` binary as a real host process instead, driven by real HMAC-SHA256-signed webhook
+deliveries, a stand-in GitHub API, and real local git remotes (`url.<path>.insteadOf` rewriting
+the real clone URL). **Every scenario used the IDENTICAL server config; only the cloned
+repository's own contents differed**, which is exactly the property UBI-167 introduces. All eight
+passed: one real `.ubx/config` discovered and planned (no refusal); two stacks with a PR touching
+one (no refusal); two stacks with a PR touching both (refused, real posted comment naming "2
+equally-specific discovered stacks"); three stacks with a PR touching none (refused, naming "3
+stacks discovered in this repository" -- a direct readout of discovery over the real clone); an
+allowlisted repo with no `.ubx/config` anywhere (refused, "no .ubx/config found anywhere");
+an unlisted repo (refused with UBI-166's own unchanged log line, and nothing ever cloned, work dir
+empty); the two legacy-`ledger_dir` startup refusals. **A real `docker build` + container run is
+still owed and should be done in an environment whose egress policy allows Docker Hub.**
+
+**Docs** (`ubiquex-docs`): `server/configuration.mdx` gained a new "Stack locations are
+auto-discovered, never declared here (UBI-167)" section with a `<Warning>` carrying the real
+startup-refusal text, rewrote "Two real stacks in one repository" for auto-discovery, and removed
+`ledger_dir` from the key description, the YAML example, and the `--repo` shorthand. The `repos:`
+examples and `--repo` shorthand in `server/gitlab-setup.mdx`, `server/azure-devops-setup.mdx`,
+`server/bamboo-setup.mdx`, and `cli-reference/server.mdx` were fixed too -- not scope creep: those
+examples would otherwise have been actively broken config that now fails startup by design. Zero
+em-dashes, `mint validate` clean.
+
+**Observation for the founder, deliberately NOT acted on**: in the comment-triggered handlers
+(`ubx plan` / `ubx ship` via comment, all four platforms), stack resolution runs before the
+authorization check, so an unauthorized commenter on an allowlisted repo now triggers a real
+clone/fetch where before they triggered only a changed-files API call. That ordering is
+pre-existing (UBI-166 already fetched changed files before auth); moving it after the auth check
+is a real, separate improvement worth a ticket, not something to change silently inside this one.
+
+**Merged, confirmed 2026-08-15**: reviewed and merged by the founder, never self-merged. Code:
+`Ubiquex/ubiquex` PR #6 (`claude/verify-pr-5-merge-ov475n` -> `main`), merge commit `df18f04`,
+head `6b2724f`. Docs: `Ubiquex/ubiquex-docs` PR #1, merge commit `0c73b94`, head `9f3e8ea`. The
+docs PR was deliberately opened against a branch rather than pushed straight to docs `main`,
+because it documents behavior ("ledger_dir is gone, the server refuses to start") that would have
+been actively wrong on the live site until the code PR landed.
+
+## UBI-166, URGENT (ubx server, all four platforms): CLOSED -- merged as PR #5, `2914e0e`, verified against real, current main 2026-08-15
+
+Real, current scope: `Config.Repos`/`ledger_dir` was never actually enforced as an allowlist for
+any webhook-triggered action (plan, re-plan, approval-derived acceptance, ship) on any of the four
+platforms `ubx server` supports -- an unlisted repository silently defaulted to `ledger_dir "."`
+and ran anyway, found and reported during a real investigation this same session ran (the founder's
+own explicit question: "why does `ledger_dir` require explicit declaration"). GitHub's own
+installation scope is a real, coarser gate, but `Config.Repos` was never checked independently on
+top of it; GitLab/Azure DevOps/Bitbucket Server -- each authenticating with one real, static
+credential with no narrower per-repo concept at all -- had **no real scope boundary whatsoever**
+beyond webhook-signature validity. Confirmed real, live, filed as UBI-166 (Urgent) by the founder.
+
+**Real fix** (branch `ubi-166-repo-allowlist`, PR not yet opened/merged as of this entry -- see
+"Not yet done" below): new `server/allowlist.go` -- `resolveLedgerDir`/`resolveLedgerDirLazy`, the
+real, shared core every platform's own webhook handler now calls. Zero matching `Config.Repos`
+entries for an incoming event's own repository identity refuses outright
+(`ErrRepoNotAllowed`) -- loudly logged via a real, structured `slog.Error` line naming the
+platform/repo/event, never a silent no-op, the founder's own explicit requirement. All four
+platforms' own webhook handlers (`server/webhook.go`, `server/gitlab_webhook.go`,
+`server/azuredevops_webhook.go`, `server/bitbucketserver_webhook.go`) gained this real gate,
+checked before any client resolution or API call is even attempted (a real ordering bug this
+session's own adversarial test caught and fixed along the way: GitLab's `handleMergeEvent`
+originally resolved its own API client before the allowlist check, which would have surfaced a
+confusing "gitlab support is not configured" error instead of the real allowlist refusal on a
+deployment that never enabled GitLab support at all).
+
+**The independent "first Config.Repos entry silently wins" bug, fixed in the same change**: a
+repository with two real, independently configured stacks (two `Config.Repos` entries, same
+owner/repo, different `ledger_dir`) could never be routed correctly before this -- only the
+first-listed entry was ever consulted, for every event, regardless of which stack a given PR's own
+changes actually touched. `resolveLedgerDir` now fetches the event's own real changed files (only
+when more than one candidate exists -- the common, single-stack-per-repository case pays zero
+extra API cost) and picks the most specific (deepest) configured `ledger_dir` whose own subtree
+contains at least one changed file -- a real, deliberate "most specific route wins" convention
+(a coexisting repo-root stack and nested subdirectory stack is a legitimate configuration, not a
+misconfiguration), refusing outright (`ErrAmbiguousStack`) if changed files touch zero or more
+than one equally-specific configured stack at once, never guessing either direction.
+
+**Real, adversarial test coverage, all four platforms** (`server/allowlist_test.go` -- exhaustive
+pure-function coverage of the shared core; `server/webhook_allowlist_test.go`,
+`server/gitlab_allowlist_test.go`, `server/azuredevops_allowlist_test.go`,
+`server/bitbucketserver_allowlist_test.go` -- one real, unlisted-repo-refused-and-logged test per
+platform per real event type, using `captureSlog` to assert the real, structured log line fires,
+plus one real, two-stacks-resolved-independently test per platform proving the platform's own
+changed-files fetch wiring feeds the shared resolver correctly). Full repo `go build`/`go vet`/
+`go test` clean, `-count=1`.
+
+**Real Docker verification**: rebuilt the image, ran one container with all four platforms
+configured but a genuinely empty `Config.Repos` (no `--config` YAML at all), fired one real,
+validly-signed webhook event per platform for an unlisted repo, confirmed all four returned `202`
+at the transport layer (signature valid) but were refused internally, with the real, structured
+UBI-166 log line appearing in the container's own logs for every one of them.
+
+**Docs** (`ubiquex-docs` `61b5157`, verified live via `gh api`): `server/configuration.mdx` gained
+a new "`repos` is a real, enforced allowlist (UBI-166)" section -- correcting the record plainly
+(a `<Warning>` block states directly that a pre-UBI-166 deployment silently ran unlisted repos at
+the repo root instead of refusing them), documents the loud-refusal log line's own real shape, and
+explains the two-real-stacks resolution behavior. Zero em-dashes, `mint validate` clean, `mint
+broken-links` clean, overflow crawl clean (`pageOverflowPx: 0`) on the one touched page.
+
+**Merged, confirmed 2026-08-15**: PR #5 (`ubi-166-repo-allowlist` -> `main`) was reviewed and
+merged by the founder, never self-merged. Real merge commit `2914e0e51e07292b533818cda997233524c98f87`,
+carrying `9bff8f3e4227d215cb284a95baa3ec85eb29150a` as its second parent. Confirmed against real,
+current `main` two independent ways (a fresh `git fetch origin main`, and the GitHub API resolving
+`refs/heads/main`), both agreeing on the SHA and on `server/allowlist.go`'s own blob -- see
+UBI-167's own entry above for the full check, including the stale-local-`main`-ref trap it ruled
+out. UBI-167 then removed only the `ledger_dir` field from `Config.Repos`; the allowlist
+enforcement described in this entry is unchanged and still live.
+
 ## UBI-28 Phase 4, FINAL (ubx server, Bamboo/Bitbucket Server): CLOSED -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 4-platform Docker, and docs shipped, all four phases complete, 2026-08-15
 
 Real, current scope per the founder's own explicit Phase 4 kickoff (the final phase of UBI-28):

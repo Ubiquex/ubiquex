@@ -76,13 +76,47 @@ func (s *Server) handleEvent(ctx context.Context, event any) {
 // handlePullRequestEvent is core-flow steps 1 and 5 (the automatic
 // half): opened/synchronize runs a plan; closed+merged runs a ship, if
 // ShipOnMerge is on.
+//
+// UBI-166: refuses outright, loudly logged, if owner/repo has no real
+// Config.Repos entry at all -- see allowlist.go's own doc comment for
+// the real security gap this closes (before this fix, an unlisted
+// repo silently defaulted to ledger_dir "." instead of being refused).
+//
+// UBI-167: once membership IS confirmed, the stack this event acts on
+// comes from the repository's own checkout (resolveStackIn), never
+// from a path declared in ubx server's own config, so the checkout
+// happens here, before resolution, rather than inside each run*
+// helper.
 func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullRequestEvent) error {
 	owner, repo := e.GetRepo().GetOwner().GetLogin(), e.GetRepo().GetName()
 	installationID := e.GetInstallation().GetID()
+	prNumber := e.GetNumber()
+	action := e.GetAction()
 
-	switch e.GetAction() {
+	candidates := s.matchingRepoConfigsGitHub(owner, repo)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing pull_request event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "action", action, "pr", prNumber)
+		return nil
+	}
+
+	switch action {
 	case "opened", "synchronize":
-		return s.runPlanAndComment(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetHead().GetSHA())
+		api, err := s.installations.forInstallation(installationID)
+		if err != nil {
+			return err
+		}
+		repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, e.GetPullRequest().GetHead().GetSHA())
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
+			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+		})
+		if err != nil {
+			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:"+action, err)
+		}
+		return s.runPlanAndComment(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 
 	case "closed":
 		if !e.GetPullRequest().GetMerged() {
@@ -91,15 +125,57 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 		if !s.cfg.ShipOnMerge {
 			return nil
 		}
-		return s.runAutomaticShip(ctx, installationID, owner, repo, e.GetNumber(), e.GetPullRequest().GetBase().GetRef())
+		api, err := s.installations.forInstallation(installationID)
+		if err != nil {
+			return err
+		}
+		repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, e.GetPullRequest().GetBase().GetRef())
+		if err != nil {
+			return err
+		}
+		ledgerDir, err := resolveStackIn(repoDir, func() ([]string, error) {
+			return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+		})
+		if err != nil {
+			return s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, "pull_request:closed(merged)", err)
+		}
+		return s.runAutomaticShip(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 	}
 	return nil
+}
+
+// refuseAmbiguousStackGitHub is handlePullRequestEvent's/
+// handleIssueCommentEvent's own shared real refusal path for
+// ErrAmbiguousStack/ErrNoStackDiscovered (UBI-166, UBI-167): a loud,
+// structured server-side log (the same discipline the plain
+// unlisted-repo refusal above already has) AND a real, posted PR
+// comment -- unlike an unlisted repo (never acted on, never commented
+// on, since it was never opted into ubx server automation at all),
+// this repo IS explicitly allowlisted; a human watching it deserves
+// the same real, actionable feedback discoverProposalFile's own
+// ambiguous-match refusal already gives. The fix now lives in the
+// repository itself (add or disambiguate its own .ubx/config), not in
+// ubx server's config, so the comment says that.
+func (s *Server) refuseAmbiguousStackGitHub(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int, event string, err error) error {
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+		"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "event", event, "error", err)
+	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "plan",
+		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
 }
 
 // handleIssueCommentEvent is core-flow steps 3 (re-plan) and 4's manual
 // path (ship via comment) -- both require the real, live authorization
 // checks auth.go implements, never inferred from the app's own
 // installation scope.
+//
+// UBI-168: the authorization check runs BEFORE any clone or fetch. It
+// used to run after, which meant an unauthorized commenter on an
+// allowlisted repository could still make this server do the real work
+// of cloning or fetching that repository, on every comment, before
+// being told no. Nothing else about the flow changed: the same checks
+// run against the same inputs and produce the same refusal comments,
+// only the checkout now happens on the authorized path instead of
+// ahead of the decision.
 func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueCommentEvent) error {
 	if e.GetAction() != "created" {
 		return nil
@@ -119,6 +195,13 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 	prNumber := e.GetIssue().GetNumber()
 	commenter := e.GetComment().GetUser().GetLogin()
 	installationID := e.GetInstallation().GetID()
+
+	candidates := s.matchingRepoConfigsGitHub(owner, repo)
+	if len(candidates) == 0 {
+		slog.Error("ubx server: refusing issue_comment event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "verb", verb)
+		return nil
+	}
 
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
@@ -141,7 +224,11 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't authorized to re-run `ubx plan` on this PR -- only its own creator (or, for a drift-watch-opened PR, a repository collaborator with write access) can.", commenter))
 		}
 		_ = flags // real, forwarded verbatim to the subprocess -- see runPlanAndComment
-		return s.runPlanAndComment(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA())
+		repoDir, ledgerDir, err := s.prepareStackGitHub(ctx, api, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), "issue_comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
+		return s.runPlanAndComment(ctx, api, owner, repo, prNumber, repoDir, ledgerDir)
 
 	case "ship":
 		ok, err := isAuthorizedToShip(ctx, api, owner, repo, prNumber, commenter)
@@ -153,9 +240,34 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 				fmt.Sprintf("@%s isn't a CODEOWNERS-listed owner of any file this PR changes -- not authorized to `ubx ship` it.", commenter))
 		}
 		confirmDestroys := contains(flags, "--confirm-destroys")
-		return s.runManualShip(ctx, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), confirmDestroys)
+		repoDir, ledgerDir, err := s.prepareStackGitHub(ctx, api, installationID, owner, repo, prNumber, pr.GetHead().GetSHA(), "issue_comment:"+verb)
+		if err != nil || repoDir == "" {
+			return err
+		}
+		return s.runManualShip(ctx, api, owner, repo, prNumber, repoDir, ledgerDir, confirmDestroys)
 	}
 	return nil
+}
+
+// prepareStackGitHub checks the repository out at headSHA and resolves
+// the one real stack the event acts on -- handleIssueCommentEvent's own
+// post-authorization step (UBI-168), structurally identical to
+// prepareStackBitbucketCloud, which was built this way from the start.
+//
+// Returns an empty repoDir with a nil error when the refusal has already
+// been posted as a PR comment, so a caller can simply stop.
+func (s *Server) prepareStackGitHub(ctx context.Context, api *ghub.Client, installationID int64, owner, repo string, prNumber int, headSHA, event string) (repoDir, ledgerDir string, err error) {
+	repoDir, err = s.checkoutForGitHub(ctx, installationID, owner, repo, headSHA)
+	if err != nil {
+		return "", "", err
+	}
+	ledgerDir, err = resolveStackIn(repoDir, func() ([]string, error) {
+		return changedFilePathsGitHub(ctx, api, owner, repo, prNumber)
+	})
+	if err != nil {
+		return "", "", s.refuseAmbiguousStackGitHub(ctx, api, owner, repo, prNumber, event, err)
+	}
+	return repoDir, ledgerDir, nil
 }
 
 // handlePullRequestReviewEvent is core-flow step 4's own trigger: a real
@@ -172,6 +284,19 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 	commitID := e.GetReview().GetCommitID()
 	installationID := e.GetInstallation().GetID()
 
+	// UBI-166: same real allowlist gate as handlePullRequestEvent/
+	// handleIssueCommentEvent -- an Approve review on an unlisted repo
+	// must never derive acceptance either. This particular flow calls
+	// core.AcceptFromReview directly against repoDir (never against a
+	// resolved --ledger-dir the way the plan/ship subprocess paths
+	// do), so only the allowlist membership check applies here, not
+	// the multi-stack resolution over auto-discovered stacks.
+	if len(s.matchingRepoConfigsGitHub(owner, repo)) == 0 {
+		slog.Error("ubx server: refusing pull_request_review event -- repository not in Config.Repos allowlist (UBI-166)",
+			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber)
+		return nil
+	}
+
 	api, err := s.installations.forInstallation(installationID)
 	if err != nil {
 		return err
@@ -187,11 +312,8 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 			fmt.Sprintf("Approval recorded by GitHub, but `ubx` could not derive acceptance from it: %s. Accept this proposal locally with `ubx accept` instead.", err))
 	}
 
-	repoDir, err := s.repoDirFor(ctx, installationID, owner, repo)
+	repoDir, err := s.checkoutForGitHub(ctx, installationID, owner, repo, commitID)
 	if err != nil {
-		return err
-	}
-	if err := checkoutRef(ctx, repoDir, commitID); err != nil {
 		return err
 	}
 

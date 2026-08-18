@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -74,7 +75,6 @@ allow_destroy: true
 repos:
   - owner: acme
     name: infra
-    ledger_dir: "."
 `
 	if err := os.WriteFile(path, []byte(yamlContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestLoad_UnsetFlagsDoNotBlankLowerLayers(t *testing.T) {
 
 func TestLoad_RepoFlagShorthand(t *testing.T) {
 	flags := newTestFlags()
-	if err := flags.Parse([]string{"--repo", "acme/infra", "--repo", "acme/payments:stacks/payments"}); err != nil {
+	if err := flags.Parse([]string{"--repo", "acme/infra", "--repo", "acme/payments"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,11 +176,11 @@ func TestLoad_RepoFlagShorthand(t *testing.T) {
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
 	}
-	if cfg.Repos[0] != (RepoConfig{Platform: "github", Owner: "acme", Name: "infra", LedgerDir: "."}) {
-		t.Errorf("Repos[0] = %+v, want acme/infra with default ledger_dir \".\"", cfg.Repos[0])
+	if cfg.Repos[0] != (RepoConfig{Platform: "github", Owner: "acme", Name: "infra"}) {
+		t.Errorf("Repos[0] = %+v, want acme/infra", cfg.Repos[0])
 	}
-	if cfg.Repos[1] != (RepoConfig{Platform: "github", Owner: "acme", Name: "payments", LedgerDir: "stacks/payments"}) {
-		t.Errorf("Repos[1] = %+v, want acme/payments:stacks/payments parsed correctly", cfg.Repos[1])
+	if cfg.Repos[1] != (RepoConfig{Platform: "github", Owner: "acme", Name: "payments"}) {
+		t.Errorf("Repos[1] = %+v, want acme/payments", cfg.Repos[1])
 	}
 }
 
@@ -190,7 +190,7 @@ func TestLoad_RepoFlagShorthand(t *testing.T) {
 // own owner/name always does.
 func TestLoad_RepoFlagGitLabShorthand(t *testing.T) {
 	flags := newTestFlags()
-	if err := flags.Parse([]string{"--repo", "gitlab:acme/infra", "--repo", "gitlab:acme/backend/infra:stacks/payments"}); err != nil {
+	if err := flags.Parse([]string{"--repo", "gitlab:acme/infra", "--repo", "gitlab:acme/backend/infra"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,17 +201,17 @@ func TestLoad_RepoFlagGitLabShorthand(t *testing.T) {
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
 	}
-	if cfg.Repos[0] != (RepoConfig{Platform: "gitlab", Project: "acme/infra", LedgerDir: "."}) {
-		t.Errorf("Repos[0] = %+v, want gitlab:acme/infra with default ledger_dir \".\"", cfg.Repos[0])
+	if cfg.Repos[0] != (RepoConfig{Platform: "gitlab", Project: "acme/infra"}) {
+		t.Errorf("Repos[0] = %+v, want gitlab:acme/infra", cfg.Repos[0])
 	}
-	if cfg.Repos[1] != (RepoConfig{Platform: "gitlab", Project: "acme/backend/infra", LedgerDir: "stacks/payments"}) {
+	if cfg.Repos[1] != (RepoConfig{Platform: "gitlab", Project: "acme/backend/infra"}) {
 		t.Errorf("Repos[1] = %+v, want the real, nested subgroup project path parsed as one whole string", cfg.Repos[1])
 	}
 }
 
 func TestLoad_RepoFlagAzureDevOpsShorthand(t *testing.T) {
 	flags := newTestFlags()
-	if err := flags.Parse([]string{"--repo", "azuredevops:acme-infra/infra", "--repo", "azuredevops:acme-infra/payments-infra:stacks/payments"}); err != nil {
+	if err := flags.Parse([]string{"--repo", "azuredevops:acme-infra/infra", "--repo", "azuredevops:acme-infra/payments-infra"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,17 +222,17 @@ func TestLoad_RepoFlagAzureDevOpsShorthand(t *testing.T) {
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
 	}
-	if cfg.Repos[0] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "infra", LedgerDir: "."}) {
-		t.Errorf("Repos[0] = %+v, want azuredevops:acme-infra/infra with default ledger_dir \".\"", cfg.Repos[0])
+	if cfg.Repos[0] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "infra"}) {
+		t.Errorf("Repos[0] = %+v, want azuredevops:acme-infra/infra", cfg.Repos[0])
 	}
-	if cfg.Repos[1] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "payments-infra", LedgerDir: "stacks/payments"}) {
+	if cfg.Repos[1] != (RepoConfig{Platform: "azuredevops", Project: "acme-infra", Repository: "payments-infra"}) {
 		t.Errorf("Repos[1] = %+v, want project and repository parsed as two real, separate identifiers", cfg.Repos[1])
 	}
 }
 
 func TestLoad_RepoFlagBitbucketServerShorthand(t *testing.T) {
 	flags := newTestFlags()
-	if err := flags.Parse([]string{"--repo", "bitbucketserver:INFRA/infra", "--repo", "bitbucketserver:INFRA/payments-infra:stacks/payments"}); err != nil {
+	if err := flags.Parse([]string{"--repo", "bitbucketserver:INFRA/infra", "--repo", "bitbucketserver:INFRA/payments-infra"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,10 +243,10 @@ func TestLoad_RepoFlagBitbucketServerShorthand(t *testing.T) {
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos = %+v, want 2 entries", cfg.Repos)
 	}
-	if cfg.Repos[0] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "infra", LedgerDir: "."}) {
-		t.Errorf("Repos[0] = %+v, want bitbucketserver:INFRA/infra with default ledger_dir \".\"", cfg.Repos[0])
+	if cfg.Repos[0] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "infra"}) {
+		t.Errorf("Repos[0] = %+v, want bitbucketserver:INFRA/infra", cfg.Repos[0])
 	}
-	if cfg.Repos[1] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "payments-infra", LedgerDir: "stacks/payments"}) {
+	if cfg.Repos[1] != (RepoConfig{Platform: "bitbucketserver", Project: "INFRA", Repository: "payments-infra"}) {
 		t.Errorf("Repos[1] = %+v, want project key and repository slug parsed as two real, separate identifiers", cfg.Repos[1])
 	}
 }
@@ -285,5 +285,61 @@ func TestLoad_MalformedYAMLIsAnError(t *testing.T) {
 
 	if _, err := Load(path, nil); err == nil {
 		t.Fatal("expected an error for malformed YAML, got nil")
+	}
+}
+
+// TestLoad_YAMLLedgerDirRejected proves a pre-UBI-167 config file is
+// refused by name rather than having its carefully declared path
+// silently dropped -- yaml.v3 ignores unknown keys by default, so
+// without the explicit probe an operator upgrading an existing
+// deployment would get a quiet behavior change instead of an error.
+func TestLoad_YAMLLedgerDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ubx-server.yaml")
+	yamlContent := `
+repos:
+  - owner: acme
+    name: infra
+  - owner: acme
+    name: payments
+    ledger_dir: "stacks/payments"
+`
+	if err := os.WriteFile(path, []byte(yamlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path, nil)
+	if err == nil {
+		t.Fatal("Load should reject a repos entry still declaring ledger_dir (UBI-167)")
+	}
+	if !strings.Contains(err.Error(), "ledger_dir") || !strings.Contains(err.Error(), "UBI-167") {
+		t.Errorf("err = %v, want a real, named refusal mentioning ledger_dir and UBI-167", err)
+	}
+}
+
+// TestLoad_RepoFlagLedgerDirSuffixRejected is the --repo counterpart:
+// "acme/infra:stacks/payments" must never parse as a repository
+// literally named "infra:stacks/payments", which would then simply
+// never match a real incoming event -- a silent, allowlist-shaped
+// failure of exactly the kind UBI-166 exists to prevent.
+func TestLoad_RepoFlagLedgerDirSuffixRejected(t *testing.T) {
+	for _, raw := range []string{
+		"acme/infra:stacks/payments",
+		"gitlab:acme/infra:stacks/payments",
+		"azuredevops:acme-infra/infra:stacks/payments",
+		"bitbucketserver:INFRA/infra:stacks/payments",
+	} {
+		flags := newTestFlags()
+		if err := flags.Parse([]string{"--repo", raw}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load("", flags)
+		if err == nil {
+			t.Errorf("--repo %q should be rejected (UBI-167), got no error", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "UBI-167") {
+			t.Errorf("--repo %q: err = %v, want a real, named UBI-167 refusal", raw, err)
+		}
 	}
 }

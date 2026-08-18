@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
@@ -37,7 +39,7 @@ type installationEntry struct {
 type installationClients struct {
 	appID      int64
 	privateKey []byte
-	baseURL    string // test-only; empty means the real api.github.com
+	baseURL    string // a GitHub Enterprise Server instance URL; empty means the real api.github.com
 
 	// appClient is authenticated with the App-level JWT (ghinstallation.
 	// AppsTransport), never an installation token -- the only real,
@@ -62,17 +64,56 @@ func newInstallationClients(appID int64, privateKeyPath, baseURL string) (*insta
 	}
 	var appOpts []ghub.Option
 	if baseURL != "" {
-		atr.BaseURL = baseURL
-		appOpts = append(appOpts, ghub.WithBaseURL(baseURL))
+		// The same configured instance URL, in the two shapes its two
+		// consumers need. go-github applies GitHub Enterprise Server's
+		// own /api/v3 convention itself, given the instance URL;
+		// ghinstallation has no such convention and string-joins onto
+		// whatever BaseURL it is handed, so it gets the API root
+		// spelled out. enterpriseAPIRoot mirrors go-github's own rule
+		// exactly so the two never disagree.
+		atr.BaseURL = enterpriseAPIRoot(baseURL)
+		appOpts = append(appOpts, ghub.WithEnterpriseBaseURL(baseURL))
+	}
+
+	appClient, err := ghub.NewWithHTTPClient(&http.Client{Transport: atr}, appOpts...)
+	if err != nil {
+		return nil, err
 	}
 
 	return &installationClients{
 		appID:      appID,
 		privateKey: key,
 		baseURL:    baseURL,
-		appClient:  ghub.NewWithHTTPClient(&http.Client{Transport: atr}, appOpts...),
+		appClient:  appClient,
 		entries:    make(map[int64]installationEntry),
 	}, nil
+}
+
+// enterpriseAPIRoot returns the REST API root ghinstallation should
+// exchange App JWTs at, for whatever instance URL is configured.
+//
+// go-github is handed the instance URL and applies the /api/v3
+// convention itself; ghinstallation has no such convention and simply
+// joins paths onto whatever it is given, so it needs the root spelled
+// out. The two must agree, or the App JWT and the API calls made with
+// the resulting token would go to different places.
+//
+// So this deliberately mirrors go-github's own real rule
+// (WithEnterpriseURLs) rather than appending unconditionally: an
+// operator who already spelled out /api/v3 gets it back unchanged, and
+// a host that is itself an API host (api.github.com, or any "api."
+// subdomain) never gets the path added, because GitHub's own SaaS API
+// does not serve one.
+func enterpriseAPIRoot(instanceURL string) string {
+	trimmed := strings.TrimRight(instanceURL, "/")
+	if strings.HasSuffix(trimmed, "/api/v3") {
+		return trimmed
+	}
+	if u, err := url.Parse(trimmed); err == nil &&
+		(strings.HasPrefix(u.Host, "api.") || strings.Contains(u.Host, ".api.")) {
+		return trimmed
+	}
+	return trimmed + "/api/v3"
 }
 
 // forInstallation returns the (cached, or newly built) client for
@@ -101,16 +142,18 @@ func (ic *installationClients) entryFor(installationID int64) (installationEntry
 	if err != nil {
 		return installationEntry{}, fmt.Errorf("github app installation transport (installation %d): %w", installationID, err)
 	}
-	if ic.baseURL != "" {
-		itr.BaseURL = ic.baseURL
-	}
-
 	var opts []ghub.Option
 	if ic.baseURL != "" {
-		opts = append(opts, ghub.WithBaseURL(ic.baseURL))
+		itr.BaseURL = enterpriseAPIRoot(ic.baseURL)
+		opts = append(opts, ghub.WithEnterpriseBaseURL(ic.baseURL))
+	}
+
+	client, err := ghub.NewWithHTTPClient(&http.Client{Transport: itr}, opts...)
+	if err != nil {
+		return installationEntry{}, err
 	}
 	e := installationEntry{
-		client:    ghub.NewWithHTTPClient(&http.Client{Transport: itr}, opts...),
+		client:    client,
 		transport: itr,
 	}
 	ic.entries[installationID] = e

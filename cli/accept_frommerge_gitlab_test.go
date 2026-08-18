@@ -214,7 +214,7 @@ func TestAcceptFromMerge_NeitherRepoFlagRejected(t *testing.T) {
 		"--ledger-dir", ledgerDir,
 	)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "exactly one of --github-repo, --gitlab-project, --azure-devops-project, or --bitbucket-server-project") {
+	if !strings.Contains(err.Error(), "exactly one of --github-repo, --gitlab-project, --azure-devops-project, --bitbucket-server-project, or --bitbucket-cloud-repo") {
 		t.Fatalf("expected an exactly-one-of error, got: %v", err)
 	}
 }

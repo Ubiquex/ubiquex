@@ -62,11 +62,13 @@ type Client struct {
 // Option configures New.
 type Option func(*Client)
 
-// WithBaseURL points the client at a different API base -- tests use
-// this to talk to an httptest.Server instead of the real dev.azure.com,
-// the same convention as github.WithBaseURL / gitlab.WithBaseURL. Does
-// NOT affect graphBaseURL; pass WithGraphBaseURL too if a test also
-// exercises Graph calls.
+// WithBaseURL points the client at a different API base -- an on-prem
+// Azure DevOps Server collection (for example
+// "https://tfs.example.com/tfs/DefaultCollection"), or an
+// httptest.Server, the same convention as github.WithBaseURL /
+// gitlab.WithBaseURL. Does NOT affect graphBaseURL; pass
+// WithGraphBaseURL too, which both an on-prem deployment and a test
+// need for different reasons (UBI-171 -- see WithGraphBaseURL).
 func WithBaseURL(rawURL string) Option {
 	return func(c *Client) {
 		c.baseURL = strings.TrimRight(rawURL, "/")
@@ -74,11 +76,16 @@ func WithBaseURL(rawURL string) Option {
 }
 
 // WithGraphBaseURL points Graph calls (server_api.go's own
-// QuerySubjectDescriptor/CheckMembership) at a different base -- real
-// production traffic always splits across dev.azure.com and
-// vssps.dev.azure.com, two genuinely different real hosts, but tests
-// can point both at the same httptest server via WithBaseURL +
-// WithGraphBaseURL together.
+// QuerySubjectDescriptor/CheckMembership) at a different base.
+//
+// Against the real Azure DevOps Services (the SaaS), Graph genuinely
+// lives on its own separate host, vssps.dev.azure.com, which is why
+// this is a second option rather than a derivation from WithBaseURL.
+// An on-prem Azure DevOps Server has no vssps host at all: Graph is
+// served from the same collection base as everything else, so an
+// on-prem deployment passes the SAME value to both options. That is
+// real production configuration, not a test shortcut (UBI-171); a test
+// pointing both at one httptest.Server happens to look identical.
 func WithGraphBaseURL(rawURL string) Option {
 	return func(c *Client) {
 		c.graphBaseURL = strings.TrimRight(rawURL, "/")
@@ -194,11 +201,21 @@ func ApprovingReviewers(pr *git.GitPullRequest) []string {
 }
 
 func (c *Client) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	return c.doWithContentType(ctx, method, url, body, "application/json")
+}
+
+// doWithContentType is do's real, parameterized form. Azure DevOps'
+// own work item API is the one endpoint this package calls that does
+// NOT accept application/json: it requires
+// application/json-patch+json, confirmed against Microsoft's own
+// published REST spec (surface.go). Everything else keeps the plain
+// JSON content type via do above.
+func (c *Client) doWithContentType(ctx context.Context, method, url string, body []byte, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if c.authHeader != "" {
 		req.Header.Set("Authorization", c.authHeader)
 	}

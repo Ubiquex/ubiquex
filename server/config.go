@@ -101,12 +101,28 @@ type Config struct {
 	// --github-webhook-secret. Deliberately no YAML key -- see the type
 	// doc comment above.
 	GitHubWebhookSecret string `yaml:"-"`
-	// GitHubAPIBaseURL: env UBX_SERVER_GITHUB_API_BASE_URL, flag
-	// --github-api-base-url. Deliberately no YAML key, test-only --
-	// points the installation client at an httptest.Server instead of
-	// the real api.github.com, same real-transport-fake-fixture pattern
-	// UBX_GITHUB_API_BASE_URL already uses elsewhere in this codebase.
-	GitHubAPIBaseURL string `yaml:"-"`
+	// GitHubAPIBaseURL: yaml `github_api_base_url`, env
+	// UBX_SERVER_GITHUB_API_BASE_URL, flag --github-api-base-url. Real,
+	// production config for a GitHub Enterprise Server deployment
+	// (UBI-171) -- empty means the real api.github.com, and a value like
+	// "https://github.example.com" means that instance.
+	//
+	// Not a raw URL substitution: GHES serves its REST API under
+	// /api/v3/ and its uploads under /api/uploads/, so this is applied
+	// through go-github's own WithEnterpriseURLs (github.Client's
+	// WithEnterpriseBaseURL), which appends both when they are missing
+	// and leaves them alone when the operator spelled them out. Either
+	// form therefore works: the instance root, or the /api/v3 root.
+	//
+	// Because ghinstallation (the App-token exchange this server runs
+	// on) builds its own token URL by string concatenation rather than
+	// through go-github, githubapp.go normalizes the same value with
+	// enterpriseAPIRoot before handing it over -- see the comment there.
+	//
+	// The same value also decides the git clone host (repo.go's own
+	// gitHostForGitHub): a GHES deployment clones from its own instance,
+	// never from github.com.
+	GitHubAPIBaseURL string `yaml:"github_api_base_url"`
 
 	// GitLabToken: env UBX_SERVER_GITLAB_TOKEN, flag --gitlab-token.
 	// Deliberately no YAML key -- a real Group Access Token, the same
@@ -135,13 +151,17 @@ type Config struct {
 	// plain-text secret-token header, which this package doesn't
 	// support at all.
 	GitLabWebhookSecret string `yaml:"-"`
-	// GitLabAPIBaseURL: env UBX_SERVER_GITLAB_API_BASE_URL, flag
-	// --gitlab-api-base-url. Deliberately no YAML key. Real, dual
-	// purpose: a self-managed GitLab instance's own real API base (not
-	// just test-only the way GitHubAPIBaseURL is, since GitLab, unlike
-	// a GitHub App, has no single fixed host every real deployment
-	// shares) -- empty means the real gitlab.com.
-	GitLabAPIBaseURL string `yaml:"-"`
+	// GitLabAPIBaseURL: yaml `gitlab_api_base_url`, env
+	// UBX_SERVER_GITLAB_API_BASE_URL, flag --gitlab-api-base-url. A
+	// self-managed GitLab instance's own real API base -- empty means
+	// the real gitlab.com. go-gitlab appends its own api/v4/ path, so
+	// the instance root is the right value here.
+	//
+	// This is the pattern UBI-171 brought GitHub and Azure DevOps up to:
+	// real production config, a YAML key alongside the flag and env var,
+	// and the same value driving the git clone host (repo.go's own
+	// ensureRepoCheckoutGitLab, correct here since before UBI-171).
+	GitLabAPIBaseURL string `yaml:"gitlab_api_base_url"`
 
 	// AzureDevOpsOrganization: yaml `azure_devops_organization`, env
 	// UBX_SERVER_AZURE_DEVOPS_ORGANIZATION, flag
@@ -197,15 +217,25 @@ type Config struct {
 	// (there is nothing to verify a signature against; the header
 	// value itself is the whole credential).
 	AzureDevOpsWebhookSecret string `yaml:"-"`
-	// AzureDevOpsAPIBaseURL: env UBX_SERVER_AZURE_DEVOPS_API_BASE_URL,
-	// flag --azure-devops-api-base-url. Deliberately no YAML key,
-	// test-only -- points both the git/policy API base and the Graph
-	// API base at the same httptest.Server; real production traffic
-	// always splits across dev.azure.com and vssps.dev.azure.com, two
-	// genuinely different real hosts (azuredevops.Client's own real
-	// default derivation), which this override deliberately collapses
-	// for hermetic testing only.
-	AzureDevOpsAPIBaseURL string `yaml:"-"`
+	// AzureDevOpsAPIBaseURL: yaml `azure_devops_api_base_url`, env
+	// UBX_SERVER_AZURE_DEVOPS_API_BASE_URL, flag
+	// --azure-devops-api-base-url. Real, production config for an
+	// on-prem Azure DevOps Server (UBI-171): the full collection base,
+	// for example "https://tfs.example.com/tfs/DefaultCollection".
+	// Empty means the real Azure DevOps Services SaaS, whose bases are
+	// derived from AzureDevOpsOrganization.
+	//
+	// One value covers both of the client's own bases because on-prem
+	// has only one host: the separate vssps.dev.azure.com Graph host
+	// exists in the SaaS only, and an on-prem deployment serves Graph
+	// from the same collection base (azuredevops.WithGraphBaseURL's own
+	// doc comment). Tests point both at one httptest.Server through the
+	// same field, which is the same wiring for a different reason.
+	//
+	// The same value also decides the git clone host (repo.go's own
+	// azureDevOpsCloneURL), since an on-prem deployment clones from its
+	// own collection, never from dev.azure.com.
+	AzureDevOpsAPIBaseURL string `yaml:"azure_devops_api_base_url"`
 
 	// BitbucketServerURL: yaml `bitbucket_server_url`, env
 	// UBX_SERVER_BITBUCKET_SERVER_URL, flag --bitbucket-server-url. The
@@ -213,9 +243,10 @@ type Config struct {
 	// "https://bitbucket.example.com") -- confirmed directly against
 	// bitbucketserver.Client's own doc comment (UBI-160 Phase 3):
 	// unlike GitHub/GitLab/Azure DevOps, Bitbucket Server has no single
-	// fixed default host at all, so this is always required, real
-	// production config, never a test-only override the way
-	// AzureDevOpsAPIBaseURL is -- tests point this same field at an
+	// fixed default host at all, so this is always required rather than
+	// optional, unlike GitHubAPIBaseURL/GitLabAPIBaseURL/
+	// AzureDevOpsAPIBaseURL, whose own empty values each mean a real,
+	// well-known SaaS default. Tests point this same field at an
 	// httptest.Server instead. Matches the existing `ubx accept
 	// --bitbucket-server-url` flag's own real name for the identical
 	// concept, deliberate consistency across the whole CLI.
@@ -256,6 +287,60 @@ type Config struct {
 	// validBitbucketServerSignature's own doc comment for the real
 	// header-name-collision-with-GitHub's-older-header nuance).
 	BitbucketServerWebhookSecret string `yaml:"-"`
+
+	// BitbucketCloudToken: env UBX_SERVER_BITBUCKET_CLOUD_TOKEN, flag
+	// --bitbucket-cloud-token. Deliberately no YAML key, same secrets
+	// discipline as every other platform token. A real Bitbucket Cloud
+	// ACCESS token (repository, project, or workspace scoped), not a
+	// personal API token: an access token is bound to a resource rather
+	// than to a person, which is the right shape for an unattended
+	// daemon, and Atlassian's own current documentation states plainly
+	// that app passwords are deprecated. Sent as "Authorization:
+	// Bearer" and used as the git-over-HTTPS clone credential, where
+	// Bitbucket Cloud requires the literal username "x-token-auth"
+	// (confirmed against Atlassian's own current docs; note this is a
+	// third distinct convention, matching neither GitHub's
+	// "x-access-token" nor Bitbucket Server's real-username form).
+	BitbucketCloudToken string `yaml:"-"`
+	// BitbucketCloudBotAccountID: yaml `bitbucket_cloud_bot_account_id`,
+	// env UBX_SERVER_BITBUCKET_CLOUD_BOT_ACCOUNT_ID, flag
+	// --bitbucket-cloud-bot-account-id. The access token's own real,
+	// current account_id.
+	//
+	// An account_id rather than a name, unavoidably and unlike every
+	// other platform here: Bitbucket Cloud accounts carry NO username
+	// at all, and both nickname and display_name are user-changeable
+	// (UBI-170). This identity is used to attribute drift-watch-opened
+	// pull requests, to find this bot's own last comment for the
+	// edit-in-place mechanism, and as the drift-watch-creator signal in
+	// the two-tier re-plan rule, so a mutable label would silently
+	// break all three the moment somebody renamed the token.
+	BitbucketCloudBotAccountID string `yaml:"bitbucket_cloud_bot_account_id"`
+	// BitbucketCloudWebhookSecret: env
+	// UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET, flag
+	// --bitbucket-cloud-webhook-secret. Deliberately no YAML key, same
+	// secrets discipline as every other webhook secret. Bitbucket Cloud
+	// signs every delivery with this secret as an HMAC hex digest in a
+	// real "X-Hub-Signature" header, but ONLY when a secret is actually
+	// configured on the webhook; an unset secret means no header is
+	// sent at all and every delivery is refused (see
+	// validBitbucketCloudSignature).
+	BitbucketCloudWebhookSecret string `yaml:"-"`
+	// BitbucketCloudAPIBaseURL: env
+	// UBX_SERVER_BITBUCKET_CLOUD_API_BASE_URL, flag
+	// --bitbucket-cloud-api-base-url. Deliberately no YAML key,
+	// test-only -- Bitbucket Cloud is SaaS with one real, fixed host
+	// (api.bitbucket.org), so unlike Bitbucket Server's own always-
+	// required base URL this is a genuine override of a real default.
+	//
+	// The only base URL here still test-only after UBI-171, and
+	// deliberately so: GitHub and Azure DevOps each have a real
+	// self-hosted product (GitHub Enterprise Server, Azure DevOps
+	// Server) whose operators genuinely need to point this server at
+	// their own instance. Bitbucket's self-hosted product is Bitbucket
+	// Server, a separate platform with its own separate config above,
+	// not a different host for this one.
+	BitbucketCloudAPIBaseURL string `yaml:"-"`
 
 	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag
 	// --intent-provider-key. Deliberately no YAML key, same
@@ -323,8 +408,12 @@ type Config struct {
 }
 
 // RepoConfig is one entry of Config.Repos: a single repository ubx
-// server watches, plus where within it the ledger root actually lives
-// (mirroring `ubx plan --ledger-dir`'s own default-to-"." shape).
+// server is allowed to act on. Identity only, by design (UBI-167) --
+// there is deliberately no ledger_dir field here. Where a stack
+// actually lives inside a repository is a property of that repository
+// (its own `.ubx/config`), auto-discovered from the real checkout by
+// stackdiscovery.go once membership is confirmed, never declared
+// centrally here and kept in sync by hand.
 //
 // Owner/Name (GitHub), Project (GitLab), and Project+Repository (Azure
 // DevOps) are deliberately separate field groups, not one single
@@ -362,8 +451,6 @@ type RepoConfig struct {
 	// repository name or ID, or Bitbucket Server's own real repository
 	// slug, within Project.
 	Repository string `yaml:"repository"`
-
-	LedgerDir string `yaml:"ledger_dir"`
 }
 
 // String renders r's own real repository address for logging --
@@ -415,6 +502,9 @@ func Load(yamlPath string, flags *pflag.FlagSet) (*Config, error) {
 			if err := yaml.Unmarshal(data, &cfg); err != nil {
 				return nil, fmt.Errorf("parse config file %s: %w", yamlPath, err)
 			}
+			if err := rejectLedgerDirKeys(data, yamlPath); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -443,6 +533,35 @@ func Load(yamlPath string, flags *pflag.FlagSet) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// rejectLedgerDirKeys fails startup, loudly and by name, on a
+// pre-UBI-167 config file that still declares `ledger_dir` under a
+// `repos:` entry. yaml.v3 ignores unknown keys by default, so without
+// this an operator upgrading an existing deployment would get their
+// carefully declared path silently dropped and every event resolved
+// against auto-discovery instead -- exactly the kind of quiet behavior
+// change a config file should never absorb without saying so. A
+// separate targeted probe rather than a blanket KnownFields(true),
+// which would also start rejecting every unrelated key this struct
+// doesn't model.
+func rejectLedgerDirKeys(data []byte, yamlPath string) error {
+	var probe struct {
+		Repos []struct {
+			LedgerDir *string `yaml:"ledger_dir"`
+		} `yaml:"repos"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		// Already parsed cleanly into Config above -- a shape this
+		// narrower probe can't read is not a real config error.
+		return nil
+	}
+	for i, r := range probe.Repos {
+		if r.LedgerDir != nil {
+			return fmt.Errorf("config file %s: repos[%d] declares ledger_dir %q, which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so remove the key; repos entries carry repository identity only", yamlPath, i, *r.LedgerDir)
+		}
+	}
+	return nil
 }
 
 // applyEnv is the cascade's env-var layer -- UBX_SERVER_<KEY>, only
@@ -513,6 +632,18 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_SERVER_WEBHOOK_SECRET"); ok {
 		cfg.BitbucketServerWebhookSecret = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_TOKEN"); ok {
+		cfg.BitbucketCloudToken = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_BOT_ACCOUNT_ID"); ok {
+		cfg.BitbucketCloudBotAccountID = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET"); ok {
+		cfg.BitbucketCloudWebhookSecret = v
+	}
+	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_API_BASE_URL"); ok {
+		cfg.BitbucketCloudAPIBaseURL = v
 	}
 	if v, ok := os.LookupEnv("UBX_SERVER_INTENT_PROVIDER_KEY"); ok {
 		cfg.IntentProviderKey = v
@@ -613,6 +744,18 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	if flags.Changed("bitbucket-server-webhook-secret") {
 		cfg.BitbucketServerWebhookSecret, _ = flags.GetString("bitbucket-server-webhook-secret")
 	}
+	if flags.Changed("bitbucket-cloud-token") {
+		cfg.BitbucketCloudToken, _ = flags.GetString("bitbucket-cloud-token")
+	}
+	if flags.Changed("bitbucket-cloud-bot-account-id") {
+		cfg.BitbucketCloudBotAccountID, _ = flags.GetString("bitbucket-cloud-bot-account-id")
+	}
+	if flags.Changed("bitbucket-cloud-webhook-secret") {
+		cfg.BitbucketCloudWebhookSecret, _ = flags.GetString("bitbucket-cloud-webhook-secret")
+	}
+	if flags.Changed("bitbucket-cloud-api-base-url") {
+		cfg.BitbucketCloudAPIBaseURL, _ = flags.GetString("bitbucket-cloud-api-base-url")
+	}
 	if flags.Changed("intent-provider-key") {
 		cfg.IntentProviderKey, _ = flags.GetString("intent-provider-key")
 	}
@@ -648,80 +791,102 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	return nil
 }
 
-// parseRepoFlags parses --repo's own real shorthand. GitHub (the
-// default when no platform prefix is given, for backward compatibility
-// with every Phase-1-era --repo value): "owner/name" or
-// "owner/name:ledger_dir". GitLab (a real "gitlab:" prefix, since a
+// parseRepoFlags parses --repo's own real shorthand: repository
+// identity only, never a path (UBI-167 -- a stack's own location is
+// auto-discovered from the repository's real .ubx/config, so there is
+// nothing left for this flag to declare beyond which repository is
+// allowed at all). GitHub (the default when no platform prefix is
+// given, for backward compatibility with every Phase-1-era --repo
+// value): "owner/name". GitLab (a real "gitlab:" prefix, since a
 // GitLab project path can carry any number of real nested group/
 // subgroup segments, never assumed to be exactly two like GitHub's own
-// owner/name): "gitlab:namespace/project" or
-// "gitlab:namespace/project:ledger_dir". Azure DevOps (a real
+// owner/name): "gitlab:namespace/project". Azure DevOps (a real
 // "azuredevops:" prefix, needing two real, separate identifiers --
 // project and repository -- never one opaque path the way GitLab's is,
-// since a real Azure DevOps project name never carries nested
-// segments the way a GitLab namespace can):
-// "azuredevops:project/repository" or
-// "azuredevops:project/repository:ledger_dir". Bitbucket Server (a real
-// "bitbucketserver:" prefix, the identical two-real-identifier shape
-// as Azure DevOps' own -- a real project key and repository slug,
-// matching the existing `ubx accept --bitbucket-server-project
-// PROJECTKEY/repository-slug` flag's own real format):
-// "bitbucketserver:PROJECTKEY/repository-slug" or
-// "bitbucketserver:PROJECTKEY/repository-slug:ledger_dir" -- ledger_dir
-// defaults to "." when omitted in any of the four forms, matching `ubx
-// plan --ledger-dir`'s own default.
+// since a real Azure DevOps project name never carries nested segments
+// the way a GitLab namespace can): "azuredevops:project/repository".
+// Bitbucket Server (a real "bitbucketserver:" prefix, the identical
+// two-real-identifier shape as Azure DevOps' own -- a real project key
+// and repository slug, matching the existing `ubx accept
+// --bitbucket-server-project PROJECTKEY/repository-slug` flag's own
+// real format): "bitbucketserver:PROJECTKEY/repository-slug".
+//
+// A leftover pre-UBI-167 ":ledger_dir" suffix is refused by name
+// rather than silently absorbed into a repository identifier -- the
+// same reasoning rejectLedgerDirKeys applies to the YAML form.
 func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 	repos := make([]RepoConfig, 0, len(raw))
 	for _, r := range raw {
 		if rest, ok := cutPrefix(r, "gitlab:"); ok {
-			project, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			if project == "" {
+			if rest == "" {
 				return nil, fmt.Errorf("--repo \"gitlab:...\" must name a real project path, got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "gitlab", Project: project, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "gitlab", Project: rest})
 			continue
 		}
 
 		if rest, ok := cutPrefix(r, "azuredevops:"); ok {
-			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			project, repository, ok := cutFirst(projectRepo, '/')
+			project, repository, ok := cutFirst(rest, '/')
 			if !ok || project == "" || repository == "" {
-				return nil, fmt.Errorf("--repo \"azuredevops:...\" must be \"azuredevops:project/repository\" or \"azuredevops:project/repository:ledger_dir\", got %q", r)
+				return nil, fmt.Errorf("--repo \"azuredevops:...\" must be \"azuredevops:project/repository\", got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "azuredevops", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "azuredevops", Project: project, Repository: repository})
 			continue
 		}
 
 		if rest, ok := cutPrefix(r, "bitbucketserver:"); ok {
-			projectRepo, ledgerDir, hasLedgerDir := cutLast(rest, ':')
-			if !hasLedgerDir {
-				ledgerDir = "."
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
 			}
-			project, repository, ok := cutFirst(projectRepo, '/')
+			project, repository, ok := cutFirst(rest, '/')
 			if !ok || project == "" || repository == "" {
-				return nil, fmt.Errorf("--repo \"bitbucketserver:...\" must be \"bitbucketserver:PROJECTKEY/repository-slug\" or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
+				return nil, fmt.Errorf("--repo \"bitbucketserver:...\" must be \"bitbucketserver:PROJECTKEY/repository-slug\", got %q", r)
 			}
-			repos = append(repos, RepoConfig{Platform: "bitbucketserver", Project: project, Repository: repository, LedgerDir: ledgerDir})
+			repos = append(repos, RepoConfig{Platform: "bitbucketserver", Project: project, Repository: repository})
 			continue
 		}
 
-		ownerRepo, ledgerDir, hasLedgerDir := cutLast(r, ':')
-		if !hasLedgerDir {
-			ledgerDir = "."
+		if rest, ok := cutPrefix(r, "bitbucketcloud:"); ok {
+			if err := rejectLedgerDirSuffix(r, rest); err != nil {
+				return nil, err
+			}
+			workspace, repository, ok := cutFirst(rest, '/')
+			if !ok || workspace == "" || repository == "" {
+				return nil, fmt.Errorf("--repo \"bitbucketcloud:...\" must be \"bitbucketcloud:workspace/repo-slug\", got %q", r)
+			}
+			repos = append(repos, RepoConfig{Platform: "bitbucketcloud", Project: workspace, Repository: repository})
+			continue
 		}
-		owner, name, ok := cutFirst(ownerRepo, '/')
+
+		if err := rejectLedgerDirSuffix(r, r); err != nil {
+			return nil, err
+		}
+		owner, name, ok := cutFirst(r, '/')
 		if !ok || owner == "" || name == "" {
-			return nil, fmt.Errorf("--repo must be \"owner/name\", \"owner/name:ledger_dir\", \"gitlab:namespace/project\", \"gitlab:namespace/project:ledger_dir\", \"azuredevops:project/repository\", \"azuredevops:project/repository:ledger_dir\", \"bitbucketserver:PROJECTKEY/repository-slug\", or \"bitbucketserver:PROJECTKEY/repository-slug:ledger_dir\", got %q", r)
+			return nil, fmt.Errorf("--repo must be \"owner/name\", \"gitlab:namespace/project\", \"azuredevops:project/repository\", \"bitbucketserver:PROJECTKEY/repository-slug\", or \"bitbucketcloud:workspace/repo-slug\", got %q", r)
 		}
-		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name, LedgerDir: ledgerDir})
+		repos = append(repos, RepoConfig{Platform: "github", Owner: owner, Name: name})
 	}
 	return repos, nil
+}
+
+// rejectLedgerDirSuffix refuses a --repo value whose own
+// platform-specific remainder still carries a ":ledger_dir" suffix.
+// Without it, "acme/infra:stacks/payments" would parse as a repository
+// literally named "infra:stacks/payments" and then simply never match
+// any real incoming event -- a silent, allowlist-shaped failure, which
+// is precisely the outcome UBI-166 exists to prevent.
+func rejectLedgerDirSuffix(full, rest string) error {
+	if _, ledgerDir, found := cutFirst(rest, ':'); found {
+		return fmt.Errorf("--repo %q carries a ledger_dir suffix (%q), which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so pass repository identity alone", full, ledgerDir)
+	}
+	return nil
 }
 
 func cutPrefix(s, prefix string) (rest string, found bool) {
@@ -733,15 +898,6 @@ func cutPrefix(s, prefix string) (rest string, found bool) {
 
 func cutFirst(s string, sep byte) (before, after string, found bool) {
 	for i := 0; i < len(s); i++ {
-		if s[i] == sep {
-			return s[:i], s[i+1:], true
-		}
-	}
-	return s, "", false
-}
-
-func cutLast(s string, sep byte) (before, after string, found bool) {
-	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == sep {
 			return s[:i], s[i+1:], true
 		}
