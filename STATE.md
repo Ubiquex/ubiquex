@@ -2,6 +2,412 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-158 Phase 4 Checkpoint 1 (Dynamic Provider AWS via Smithy: schema + naming): CHECKPOINT, not closed -- real Smithy schema source, resource mapping, and naming-parity layer, proven against five real AWS models, PR opened not merged, 2026-08-19
+
+**Own-call checkpoint split, per this session's own explicit invitation ("your call once you see the real
+scope")**: Phase 4's own four pieces (Smithy schema source, SigV4 auth, wire protocols, naming
+compatibility) split into two checkpoints -- **Checkpoint 1 (this entry)**: Smithy schema source +
+resource mapping + naming parity, provable via discovery alone. **Checkpoint 2 (next)**: real
+per-protocol wire execution (restJson1/restXml/awsJson1_x/awsQuery/ec2Query) + real SigV4 signing,
+which genuinely need each other (SigV4 needs at least one real wire executor to sign real requests
+against). Branch `ubi-158-phase-4-cp1-smithy-naming`, PR
+`github.com/Ubiquex/ubx-provider-dynamic/pull/2`, confirmed live via `gh api .../pulls/2` (`state:
+open`, `mergeable_state: clean`, 24 files changed) -- not merged, per this repo's own PR-only
+discipline (Phase 3 onward).
+
+**Fetched fresh from real, current `main` before starting, confirmed not assumed**: `git fetch` +
+`git pull` showed Phase 3's own PR (`#1`) already merged by the founder (`gh api .../pulls/1`:
+`merged: true`) -- local `main` fast-forwarded to the real remote HEAD (`364f38f`) before any Phase 4
+work began, matching this session's own explicit instruction.
+
+**Real, current Smithy source, confirmed directly, not assumed**: `github.com/aws/api-models-aws`
+("API Models for all public AWS Services," real, public, AWS-owned), one JSON file per service at
+`models/<service>/service/<api-version>/<service>-<api-version>.json`. Real, confirmed format: Smithy
+2.0 JSON AST -- a flat `shapeId -> shape` map, no `$ref` resolution needed at all (unlike OpenAPI),
+confirmed against five real, structurally different services read directly this session (SQS, S3,
+DynamoDB, EC2, Lambda, plus SNS added later for a clean fifth parity example after Lambda's own real
+data turned out incomplete -- see below).
+
+**Real, load-bearing reuse, not a parallel translator, per this session's own explicit instruction**:
+`ubx-provider-dynamic`'s own `internal/smithy` package converts Smithy shapes into the *identical*
+`openapi3.Schema` tree Phase 1's `schema.Translator` already consumes, completely unchanged --
+confirmed by literally calling `Translator.BuildTopLevel` on the adapter's own output in a real test
+and getting correctly-translated tfplugin attributes back. Two real reuse wins, not merely claimed:
+Smithy's own tagged-union (`union`) shape maps directly onto OpenAPI's `oneOf`, activating Phase 1's
+existing lossy-collapse-to-union-of-properties path with zero new logic; a self-referential Smithy
+shape (real, confirmed to exist in real AWS models -- recursive filter/expression trees) is caught by
+Phase 1's existing cycle guard for free, because the adapter memoizes each shape's own conversion by
+shapeId (the SAME `*openapi3.Schema` pointer on every reference), and that guard was already built
+pointer-identity-generic, not OpenAPI-specific. `internal/schema`'s own `tfName` was exported as
+`ToSnakeCase` for this reuse (both OpenAPI property names and Smithy operation nouns converge on the
+identical ubx snake_case convention).
+
+**Real format difference reconciled once, not left for the translator to know**: Smithy puts
+`smithy.api#required` as a trait on each MEMBER, not a parent-level `required: [...]` list the way
+OpenAPI/JSON-Schema does -- the adapter collects it into the parent's own `Required` list during
+conversion, so by the time a Smithy-sourced schema reaches `schema.Translator` it looks exactly like
+an OpenAPI one, no second convention needed downstream. Smithy's own `input`/`output` operation split
+maps even more directly onto Phase 1's create-request/read-response merge pattern than OpenAPI's own
+per-status-code responses did.
+
+**Resource mapping is a genuinely new heuristic, not reused from Phase 1's OpenAPI resourcemap**: real,
+confirmed finding -- none of the five real AWS Smithy models read this session declare Smithy `resource`
+shapes in practice, despite the Smithy spec itself defining a real `resource` shape kind with CRUD
+bindings. What every real service DOES use is a verb+noun operation-naming convention
+(`CreateQueue`/`GetQueueAttributes`/`SetQueueAttributes`/`DeleteQueue`) -- `internal/smithy/resourcemap.go`
+groups on that instead, with two real, documented heuristic refinements found live, not designed in
+advance: (1) AWS's own real `Get<Noun>Attributes`/`Set<Noun>Attributes` convention (the read/update
+operation is very often NOT bare `Get<Noun>`) needed a real preference-ordered match (exact ->
+`Attributes`-suffixed -> shortest-prefix -> alphabetical, deterministic); (2) EC2's own real
+`RunInstances` (not `CreateInstance`) needed `Run` added to the real create-verb vocabulary (a genuine,
+cross-service AWS "launch" convention, not an EC2-only special case) plus a singular-preferred-over-
+plural noun resolution, since the batch-shaped verb leaves a plural remainder ("Instances") but
+HashiCorp's own real resource name is always singular (`aws_instance`).
+
+**Naming compatibility layer -- the real, highest-risk piece, proven against real ground truth, not
+assumed**: dumped `hashicorp/aws`'s own real, live, complete resource type name list (**1682 real
+names**) via ubx's own real `provider.Acquire`/`provider.Launch` machinery against a real, running
+`hashicorp/aws` 6.54.0 binary's own `GetProviderSchema` call -- the identical "schema-fetch, safe, no
+credentials" mechanism this repo's own `docs/executor.md`/STATE.md history already established
+(`cmd/schemadump` precedent), via a throwaway tool in `cmd/awsnames`, deleted before committing, same
+discipline as that precedent. Embedded a snapshot of this real list directly into `ubx-provider-dynamic`
+(`internal/smithy/data/`, `go:embed`) so naming resolution works with no network access.
+
+**Real, aggregate parity result across five real services (107 resources discovered)**: 39 exact
+formula matches (`aws_<endpointPrefix>_<noun>` -- SQS/S3/DynamoDB/SNS's own primary resources all
+matched this way: `aws_sqs_queue`, `aws_s3_bucket`, `aws_dynamodb_table`, `aws_sns_topic`), 26
+bare-fallback matches (`aws_<noun>`, no service infix -- confirmed live: `aws_instance`, `aws_vpc`,
+`aws_subnet`, `aws_security_group` all drop EC2's own `ec2_` prefix entirely), **42 genuinely
+unresolved** -- overwhelmingly EC2, and NOT a heuristic bug: HashiCorp's own real naming here tracks
+AWS's own human, conceptual service boundaries (EC2 core compute, EBS storage, VPC networking) rather
+than the literal Smithy/API service boundary -- confirmed live that `aws_ebs_volume`/`aws_ebs_snapshot`
+use a real, DIFFERENT prefix (`ebs`, not `ec2`) for operations living in the exact same Smithy model,
+while dozens of other real EC2-API resources (`aws_ec2_transit_gateway`, `aws_ec2_fleet`, ...) DO carry
+the expected `ec2_` prefix. No algorithm operating on the Smithy model alone can derive this distinction,
+since the model itself never encodes it -- a real, permanent limitation, honestly reported via
+`StrategyUnresolved` rather than guessed at or silently forced to match.
+
+**A real, separate data-quality finding, not a bug in this package**: AWS's own published Smithy model
+for Lambda (`models/lambda/service/2015-03-31/lambda-2015-03-31.json`, confirmed there is only one file
+at this path) binds only **13 of 85** real operation shapes to its own service shape
+(`com.amazonaws.lambda#AWSGirApiService`) -- `CreateFunction`/`GetFunction` both exist as real, fully-
+defined shapes in the file but are simply never referenced by the service's own `operations` list, the
+one real, correct way Smithy defines a service's actual API surface. `Discover` therefore correctly,
+honestly reports zero resources for this specific real data source rather than guessing by scanning
+orphaned shapes (a real risk: pulling in operations that were deliberately, or accidentally, left
+unbound). SNS substituted as Checkpoint 1's fifth real parity example instead, confirmed complete (42
+bound operations, real `CreateTopic`/`GetTopicAttributes`/`SetTopicAttributes`/`DeleteTopic`).
+
+**Real, deliberate deviation from UBI-158's own original three-tier schema_source design (openapi/
+inline/aws_ccapi), flagged rather than silently folded in**: this session's own Phase 4 prompt named
+"Smithy" as AWS's real schema source, not "aws_ccapi" (the original ticket's own CloudFormation Cloud
+Control API registry tier) -- these are two real, genuinely different AWS schema sources (Smithy models
+AWS generates its own SDKs from vs. the separate CloudFormation resource-provider schema registry), so
+`SchemaSourceSmithy` is a real, new fourth `schema_source` value; `SchemaSourceAWSCCAPI` is left exactly
+as it was, a real, distinct, still-unimplemented tier of its own.
+
+**Honest about what Checkpoint 1 does NOT do**: `cmd/ubx-provider-dynamic/main.go` runs the full real
+Smithy discovery/translation/naming pipeline when `schema_source = "smithy"` (confirmed live against the
+real SQS model via the actual compiled binary -- discovered `aws_sqs_queue`, naming strategy
+"prefixed") and reports it to stderr, then **explicitly refuses to serve** -- real per-protocol wire
+execution against AWS doesn't exist yet (Checkpoint 2's own scope), and this repo's own standing
+discipline is never to silently serve a provider that can discover resources but cannot actually
+apply/read any of them.
+
+**Full repo `go build`/`go vet`/`go test ./...` clean** (18 new real tests in `internal/smithy`, all
+against real, fetched AWS Smithy models and a real hashicorp/aws name dump -- zero synthetic fixtures
+for the core claims; a handful of small synthetic fixtures remain for pure edge-case unit tests --
+malformed service shapes, self-referential-shape termination -- clearly distinguished from the real
+ones in the test names). No em dashes. Never self-merged.
+
+**Explicitly not done this checkpoint**: real per-protocol wire execution, real SigV4 signing, the
+conformance gate.
+
+## UBI-158 Phase 3 (Dynamic Provider execution semantics): CHECKPOINT, not closed -- retry/backoff, per-operation timeouts, async polling, field-level drift, PR opened (not merged) as of this session's own explicit PR-workflow switch, 2026-08-18
+
+**Real workflow switch, per this session's own explicit instruction**: from this phase onward,
+`ubx-provider-dynamic` no longer takes direct pushes to `main` -- this session branched
+(`ubi-158-phase-3-execution-semantics`), committed (`dd6d8ea`), pushed, and opened a real PR
+(`github.com/Ubiquex/ubx-provider-dynamic/pull/1`, confirmed live via `gh api
+repos/Ubiquex/ubx-provider-dynamic/pulls/1` -- `state: open`, `mergeable_state: clean`, 20 files
+changed -- not just the `gh pr create` exit status). **Never self-merged, per this project's own
+standing constraint** -- the PR is left open for review.
+
+**Real, load-bearing correctness fix, found by reading ubx core's own source rather than assumed**:
+this session's own explicit instruction was to "plug into ubx's own existing reconcile-by-query
+executor behavior... rather than designing a parallel mechanism" -- reading `docs/executor.md` and
+`core/executor/ship.go` (this repo) directly surfaced that every Phase 1/2 call site in
+`ubx-provider-dynamic` was wrapping every REST failure -- including merely transient ones (a 503, a
+dropped connection) -- as a terminal tfplugin `Diagnostic`, unconditionally. Confirmed against the
+real classification boundary `cli/stateadapter.go`/`provider/provider.go` (this repo) implement: a
+`Diagnostic`-bearing response (`err == nil` from the RPC call itself) becomes a
+`*provider.DiagnosticError`, permanently terminal within one `ubx ship` invocation; a raw, propagated
+RPC-level error (`err != nil` from the call itself) is treated as retryable/ambiguous, driving
+`unknown_post_timeout` and reconcile-by-query. Fixed in `ubx-provider-dynamic`: `restexec.IsTerminal`
+classifies a real, structured 4xx rejection (400/401/403/404/405/406/409/410/411/412/413/414/415/422/
+451) as terminal; 408/429/5xx (already targeted by `restexec`'s own internal retry loop) and every
+network-level/decode failure default to ambiguous -- the identical "fail open toward uncertain"
+asymmetry this repo's own `docs/executor.md` UBI-44 finding already established for a real "lying
+destroy." `dynserver`'s own `classifyRESTError` is the one real seam every CRUD RPC method now routes
+through, returning `(nil, err)` (a plain Go error) for the ambiguous case rather than ever wrapping it
+in a Diagnostic.
+
+**A real, deliberate non-reimplementation, confirmed rather than assumed**: `ubx-provider-dynamic`
+does NOT reimplement `reconcileLoop`/`reconcileDestroyLoop`/`eventualConsistencyBackoffSchedule` --
+those are core-side mechanisms operating on tfplugin-level primitives (`ReadResource`/`Diagnostic`)
+the provider sits on the other side of. A clean destroy response from `ubx-provider-dynamic` already
+transparently triggers core's own universal post-destroy read-back (UBI-44) with zero extra code on
+the provider's own side -- confirmed by re-reading `shipDestroyNode`'s own real logic (this repo)
+rather than assumed. What Phase 3 mirrors instead is the same DISCIPLINE, one layer down, in REST
+terms: a real backoff schedule for the provider's own upstream HTTP calls (driven by real
+`Retry-After`/rate-limit signals, not ubx core's own AWS-tuned schedule), a real per-operation timeout
+(confirmed core sets none of its own -- `cli/ship.go`'s `--timeout` is one shared budget for an entire
+`ubx ship` run, not per-RPC), and mapping every outcome onto exactly the two signals core actually
+understands (Diagnostic vs. plain error) -- never a third, ubx-core-shaped concept.
+
+**Real transport-level retry/backoff** (`internal/restexec`, new `retry.go`/`classify.go`): `Retry-After`
+(RFC 9110 §10.2.3, both delay-seconds and HTTP-date forms) and a configurable rate-limit-reset header
+(`X-RateLimit-Reset`, confirmed live against a real `api.github.com` response this session, present on
+every GitHub response but confirmed ABSENT on Datadog's own real `/api/v1/validate` 403 -- real APIs
+genuinely differ, hence a config field, not a hardcoded header name) both win outright over the
+exponential-with-jitter fallback, deliberately NOT clamped to `MaxBackoff` (a real server-told wait is
+never a "guess" `MaxBackoff` should bound) -- a real bug caught and fixed by the test itself
+(`TestDo_RespectsRealRetryAfterHeader` first failed against the original, wrongly-clamping
+implementation). A second real, non-obvious finding recorded in the same test file: a
+unix-timestamp-second-granularity reset header ("N seconds from now") truncates sub-second precision,
+so a naive "assert ~N seconds elapsed" test is genuinely flaky, not a production bug -- fixed by
+asserting a lower bound against a 2-second target instead.
+
+**Per-operation timeouts** (`internal/dynserver/policy.go`, `server.go`'s own
+`withOperationTimeout`): `[dynamic_providers.<name>.timeouts]`, one real budget per CRUD operation
+kind, wrapped around each individual `restexec.Client.Do` call -- independent of and additional to
+ubx core's own ambient `--ship` deadline, exactly the granularity this session's own research
+confirmed core structurally cannot supply on its own.
+
+**Generic async/long-running-operation polling** (`internal/dynserver/async.go`), deliberately not
+AWS-shaped per this session's own explicit instruction: `[dynamic_providers.<name>.resources.<type>.async]`
+names where to find a newly-started operation's own id (a real response header, e.g. `Location`, or a
+body dot-path -- a header wins when both are configured, a stronger signal than a guessed body path),
+where to poll it, which dot-path carries status, and which real status values are terminal
+success/failure. On success, performs one more real read against the resource's own canonical URL for
+final attributes (a job-status response is rarely the full resource representation) -- reusing
+`readFromAPI`, not a second read mechanism. Outcomes map onto the identical two signals: a configured
+failure status becomes a Diagnostic (real, certain); a poll-timeout with no terminal status becomes a
+plain, propagated error (ambiguous, lets core's own reconcile-by-query take over on the next
+`ReadResource`). Verified end to end against a real local HTTP server modeling a genuine 202+job-id/
+poll/final-read flow (`TestApplyResourceChange_Create_AsyncPollsUntilSuccessThenReads` and two sibling
+tests for the failure-status and poll-timeout paths) -- caught and fixed one real test-data bug along
+the way (the async operation id's own field name collided with the resource schema's own "id"
+attribute, a string-vs-integer type mismatch, not a production bug).
+
+**Field-level drift rules** (`internal/dynserver/policy.go`): `ignore` reuses the exact same
+carry-forward mechanism Phase 1's own path-param handling already established (`carryForwardFields`,
+renamed from `allPathParams`) -- an ignored field's fresh API value is simply never written into
+state, the identical mechanism, a second real reason to use it. `normalize` (a real, small, fixed
+registry -- `lowercase`/`uppercase`/`trim`, never an arbitrary expression language) is applied
+unconditionally to every fresh API response before it's ever recorded, so every recorded value is
+already canonical from the moment it's first written -- no separate "normalize before comparing" step
+needed anywhere else.
+
+**Live re-verification, not just hermetic tests**: GitHub's and Datadog's real specs still discover
+the identical 61/25 resource sets after this refactor (byte-identical resource-type lists and Note
+counts to Phase 1/2's own runs). GitHub's real rate-limit headers (`X-RateLimit-Limit/Remaining/
+Reset/Used/Resource`) parse correctly against a real live response. OAuth2 client-credentials flow
+re-verified against a real, local RFC 6749-compliant token endpoint (still no genuine third-party
+no-registration test server available, same real constraint Phase 2 already recorded).
+
+**Full repo `go build`/`go vet`/`go test ./...` clean** (45 real tests, live ones gated behind
+`UBX_LIVE_VALIDATION=1`). No em dashes.
+
+**Explicitly not done this phase**: SigV4 signing itself (Phase 4, per UBI-158's own original
+5-phase structure), Smithy, the conformance gate.
+
+## UBI-158 Phase 2 (Dynamic Provider auth framework): CHECKPOINT, not closed -- pluggable auth registry, api_key_header + oauth2_client_credentials real, aws_sigv4 config-shaped stub, real remote created and verified live, 2026-08-18
+
+**Remote created and verified live this session, not just pushed**: `~/Ubiquex/ubx-provider-dynamic`
+now has a real GitHub remote, `github.com/Ubiquex/ubx-provider-dynamic` (private, matching `ubx`/
+`ubiquex`/`docs`' own visibility convention -- `ubx-sdk-*` repos are public because they're published
+packages, this isn't one yet). Both Phase 1 (`1840ec3`) and Phase 2 (`9662aac`) commits pushed to
+`main`; both confirmed live via a real `gh api repos/Ubiquex/ubx-provider-dynamic/git/refs/heads/main`
+call matching local `HEAD` exactly, not inferred from push exit status (this repo's own CLAUDE.md
+rule 8 discipline, applied even though this is a brand-new repo rather than one of the pre-existing
+shared-runtime repos that rule names explicitly).
+
+**Real design: pluggable by construction, confirmed not a fixed enum**: `internal/auth`'s own
+registry (`Register`/`Build`) is the same self-registering-driver shape `database/sql` and `image`
+use in Go's own standard library -- each real type calls `Register` from its own file's `init()`;
+adding a new type never touches a switch statement anywhere else. Verified this holds by construction
+(three real types registered this way with zero shared switch/dispatch code between them), not just
+asserted.
+
+**Real implementations, both verified against their real, live target APIs**:
+`api_key_header` (one or more real header/env pairs -- one real mechanism covers both GitHub's single
+`Authorization: Bearer` header and Datadog's real, documented two-header `DD-API-KEY`/
+`DD-APPLICATION-KEY` scheme, no service-specific code needed for either) verified live authenticated
+against `https://api.github.com/user` using a real token (`gh auth token`'s own real output) --
+confirmed real, successful login as `RoozbehShafiee`. No real Datadog account credentials were
+available in this environment; verified instead against Datadog's own real, live
+`/api/v1/validate` endpoint with a deliberately invalid key, confirming a real, structured
+`{"errors":["Forbidden"]}` 403 (proving the two-header wire format is genuinely received and
+processed as documented, not proving authentication) -- this real limitation is stated plainly in
+the test itself, not silently passed over.
+`oauth2_client_credentials` (RFC 6749 §4.4, built on the real, official
+`golang.org/x/oauth2/clientcredentials` -- already a transitive dependency of `terraform-plugin-go`'s
+own `tf6server`, confirmed via `go get` reporting an upgrade rather than a new module) verified
+against a real, local, RFC-compliant token endpoint (real HTTP, real Basic-auth/form-encoded
+credential detection, real JSON token response, real token caching across two calls) -- no genuinely
+third-party, no-registration-required client-credentials test server exists to point this at instead,
+unlike GitHub/Datadog's own real, live, directly-reachable APIs.
+
+**`aws_sigv4`, Phase 4's own real type, config-shaped now, not implemented**: `region`/`service`/
+`credential_source` params validate today; `Apply` itself refuses with a clear, real error rather
+than silently sending an unsigned request. Real, confirmed finding (not assumed): the existing
+`restexec.Authenticator` interface (`Apply(req *http.Request) error`) already carries everything a
+real SigV4 signer needs -- no interface change required for Phase 4. Verified two ways: (1) directly
+against go1.26's real `net/http/request.go` source that `*bytes.Reader` request bodies (restexec's
+own real shape) get `req.GetBody` auto-populated, letting a signer hash the body then restore it, and
+(2) a real, passing test (`TestGetBodyIsPopulatedForBytesReaderBody`) proving that exact claim against
+real `net/http`, not citing docs alone.
+
+**Real, secrets-never-literal discipline extended from ubx core's own existing `IntentConfig.KeyRef`
+precedent**: every real auth type's own config accepts only an environment variable *name*
+(`value_env`, `client_secret_env`, ...), never a credential value itself -- enforced at Build time
+(a missing `value_env`/`client_secret_env` field is a real validation error, not silently accepted).
+
+**Full pipeline integration proven, not just the auth package in isolation**: a real end-to-end test
+(`TestServer_AuthenticatedReadResource_RealAuthFlow`) drives a full `ReadResource` RPC through a real
+`restexec.Client` built with a real `auth.Build`-constructed `Authenticator`, against a real
+`net/http/httptest` server that genuinely rejects unauthenticated requests -- plus its own mirror
+proving an unauthenticated client gets a real, honest rejection Diagnostic, not a silent pass-through.
+
+**A real mistake caught by actually running the parse, not by re-reading struct tags**: this
+session's own first draft of the README's auth config example used
+`[[dynamic_providers.<name>.auth.headers]]`, omitting the `params` table segment
+`config.Auth.Params`'s own `toml:"params"` struct tag requires. Caught by actually running the real
+parse end to end (a throwaway `cmd/tomlcheck` program, deleted before committing, same discipline as
+UBI-9's own `cmd/schemadump`), not by inspection -- fixed in the README and locked in as a permanent
+regression test (`internal/config/auth_integration_test.go`).
+
+**Full repo `go build`/`go vet`/`go test ./...` clean** (32 real tests, live ones gated behind
+`UBX_LIVE_VALIDATION=1` + real credentials/env, hermetic by default). No em dashes. Never self-merged
+(direct push to `main` on a repo with no other collaborators/branch protection yet, matching Phase 1's
+own precedent -- worth revisiting once this repo has real reviewers).
+
+**Explicitly not done this phase**: SigV4 signing itself (Phase 4), async/retry execution semantics,
+drift rules, Smithy, the conformance gate.
+
+## UBI-158 Phase 1 (Dynamic Provider generic engine): CHECKPOINT, not closed -- tfplugin v6 server, OpenAPI->tfplugin schema translation, resource mapping, config layer built and validated live against GitHub's and Datadog's real specs, in a NEW separate repo, 2026-08-18
+
+**New repo, not this monorepo, per this session's own explicit instruction**: `~/Ubiquex/ubx-provider-dynamic`
+(local only -- no remote created or pushed to this session; git-initialized, one commit, `1840ec3`).
+Binary/config decisions this session's own prompt already settled (post-dating UBI-158's own Linear
+description, which is a pure design-exploration doc from 2026-08-13 and was read but not treated as
+authoritative where it conflicts): binary name `ubx-provider-dynamic` (not `ubx-provider-universal`),
+config inline in `.ubx/config` (not a separate Providerfile), 5-phase structure. No other real
+contradiction found in the Linear ticket worth a separate flag beyond the one below.
+
+**Real, deliberate deviation from this session's own prompt, flagged rather than silently
+reconciled**: the prompt's own text says to read a `[providers.<name>]` block from `.ubx/config`.
+Confirmed directly against `cli/config.go` (this repo): `.ubx/config` already has a real,
+incompatible `[providers]` table (UBI-43, `map[string]string`, source -> pinned version) plus a
+parallel `[provider_configs]` table whose per-source blob is delivered to a launched provider via
+the standard `ConfigureProvider` RPC, never read from disk by the provider itself. Neither can
+supply what Phase 1 actually needs: `GetProviderSchema` is called before `ConfigureProvider` ever
+runs (confirmed: `provider/provider.go`'s `v6Provider.Schema` takes zero arguments), so a Dynamic-
+Provider-backed resource's schema -- which depends on which real OpenAPI spec this instance
+represents -- must already be known at process startup, not delivered after Configure. Resolved by
+having the binary read its own, separate, non-colliding table directly off disk at startup instead:
+`[dynamic_providers.<name>]` (`schema_source`, `schema_url`, `base_url`, plus a stubbed `[auth]`
+sub-table per Phase 1's own explicit non-scope). Full reasoning recorded in
+`ubx-provider-dynamic/internal/config/config.go`'s own doc comment.
+
+**Protocol version, confirmed against real ubx source, not assumed**: `provider/handshake.go` shows
+ubx's own client advertises both v5 and v6 (`supportedAppProtocolVersions = []int{5, 6}`) and picks
+whichever a launched binary negotiates -- v6 is the modern protocol, real HashiCorp binaries built on
+`terraform-plugin-framework` (not legacy SDKv2) already speak it, and this session's prompt directed
+building against v6, so `ubx-provider-dynamic` speaks v6 only (no legacy-v5 fallback needed for a
+brand-new binary). Implemented via `terraform-plugin-go`'s own real, official `tfprotov6`/`tf6server`
+package (v0.31.0, the identical module `provider/tfplugin6/tfplugin6.pb.go`'s own header cites as its
+source) rather than hand-rolling the gRPC handshake/serve loop -- confirmed its magic cookie
+key/value (`TF_PLUGIN_MAGIC_COOKIE` / `d602bf8f...`) match `provider/handshake.go`'s own real
+constants exactly, so a `ubx-provider-dynamic` process is a genuine drop-in for `provider.Launch`,
+zero special-casing.
+
+**Layer 2 (schema translation) -- the real, load-bearing findings, the ticket's own "most important"
+ask**: uses protocol v6's real nested-ATTRIBUTES feature (`SchemaAttribute.NestedType`/`SchemaObject`,
+not the legacy block-nesting mechanism) -- the correct, exact fit for OpenAPI's own
+properties-of-an-object shape. `oneOf`/`anyOf` is the single genuinely lossy case, three real,
+distinct outcomes depending on the branches' own shapes (all documented via `Note`s attached to the
+exact field path, never silently flattened): all-same-primitive branches collapse to that primitive
+(not lossy in any way that matters -- only per-branch format/enum metadata is lost); all-object
+branches collapse to the UNION of every branch's own properties, all Optional (real, documented loss:
+mutual exclusivity and each branch's own required fields aren't enforced); structurally incompatible
+mixed branches (primitive+object+array together) become `tftypes.DynamicPseudoType`, a real, native
+protocol feature -- not a workaround -- for "the shape isn't known until a value actually arrives."
+`allOf` is NOT lossy (real property union, JSON Schema's own composition semantics, not a compromise).
+Optionality is derived per-schema from OpenAPI's real, distinct signals (`required` list, `readOnly`,
+`writeOnly` -- the last maps onto protocol v6's own real, native `WriteOnly` flag, a clean, exact fit,
+no loss at all); the Optional+Computed ("provider may default this") combination a real resource needs
+is a separate, resource-level merge (`schema.MergeResourceAttributes`) combining a create-request
+schema's own translation with a read-response schema's own translation by field name, since a single
+schema alone has no basis to know that combination on its own.
+
+**A real, serious bug found and fixed during live validation, not by inspection**: the translator had
+no cycle detection. Live validation against Datadog's own real, published spec (not GitHub's) hung
+with unbounded recursion -- confirmed directly (not assumed) via a stuck test process showing 6GB+ RSS
+and climbing, diagnosed by `kill -QUIT` for a goroutine dump after ruling out network blocking (idle
+CPU, no open sockets) as the cause. Root cause: a genuinely self-referential OpertAPI schema (Datadog's
+own logs-pipeline `processors` field nests processors within processors; likely also present in
+`widgets`/dashboard content). Fixed with a real cycle guard (`Translator.active`, a stack of
+`*openapi3.Schema` pointers currently being expanded -- kin-openapi memoizes every `$ref` resolution to
+one stable pointer per component, making pointer identity a reliable, cheap test) plus a depth cap as
+defense-in-depth; a detected cycle degrades that one field to `DynamicPseudoType` with a `Note`, same
+honest-degradation discipline as the `oneOf`/`anyOf` cases. A dedicated test
+(`TestBuildAttribute_SelfReferentialSchema_DoesNotHang`, goroutine + 5s timeout, not just "runs fast in
+practice") reproduces this exact shape so it can't regress silently.
+
+**Layer 3 (resource mapping) -- real finding, not assumed**: real REST APIs are not path-symmetric.
+Confirmed directly against GitHub's own spec: a repository is READ at `/repos/{owner}/{repo}` but
+CREATED at `/orgs/{org}/repos` or `/user/repos` -- `/repos` alone doesn't exist as a collection path at
+all. The reliable, real, cross-API pairing key `resourcemap.Discover` uses instead is response-schema
+identity (matching the read and create operations' own `$ref` component name), not path structure --
+path structure is only trusted for the narrower, reliably-real question "does this exact item path also
+have a PATCH/PUT/DELETE." A second real finding from live validation: two distinct GitHub item paths
+can legitimately share one response schema on purpose (`/gists/{gist_id}` and
+`/gists/{gist_id}/{sha}`, both `gist-simple`) -- resolved as a deterministic skip-with-Note (shorter/
+more-canonical path wins the name) rather than a hard error, so one such collision doesn't block every
+other resource in the same document.
+
+**Live validation, real proof, both real specs currently fetched from their real, official sources**:
+GitHub (`github/rest-api-description`, `api.github.com.json`, ~12.9MB) -> **61 real resources
+discovered** (`github_full_repository`, `github_issue`, `github_gist_simple`, `github_commit`, ...),
+219 Notes. Datadog (`DataDog/datadog-api-client-go`'s own generator schema, v1 OpenAPI, ~1.6MB) -> **25
+real resources discovered** (`datadog_dashboard`, `datadog_monitor`, `datadog_logs_pipeline`, ...), 471
+Notes -- including `datadog_dashboard`'s own `widgets[].definition` field, a real `oneOf` of 41
+structurally distinct branches, correctly and honestly typed as fully dynamic. Both runs gated behind
+`UBX_LIVE_VALIDATION=1` (hermetic by default, matching this repo's own "`go test ./...` stays
+hermetic" discipline). A separate, real end-to-end test (`TestServer_FullCRUDLifecycle`) drives a full
+create/read/update/destroy cycle through the real `tfprotov6.ProviderServer` interface (real
+`DynamicValue`/msgpack encoding, no transport mocking) against a real `net/http/httptest` server --
+this is what caught a second real bug (a create-only path attribute like GitHub's own "org" was
+silently nulled on every subsequent Read; fixed by widening `ReadResource`'s own carry-forward set to
+include create-path params, not just read-path ones) before it could reach the live-spec validation at
+all.
+
+**Full repo `go build`/`go vet`/`go test ./...` clean.** Never self-merged (nothing to merge -- no
+remote exists yet for this new repo). No em dashes.
+
+**Explicitly not done this phase, per its own scope**: auth implementations (config layer stubs the
+interface only), async/retry execution semantics, drift rules, Smithy, the conformance gate. A real,
+known gap surfaced but not solved: `ImportResourceState` can't recover a create-only path attribute
+(no prior state to carry it from, and the read response never mentions it either) -- documented in
+`Server.ImportResourceState`'s own comment, affects only resources whose Create and Read paths don't
+share every param.
+
+**Next steps for the founder's own checkpoint review**: whether to create a real GitHub remote for
+`ubx-provider-dynamic` now or later; Phase 2 (auth implementations, real `[dynamic_providers.<name>.auth]`
+types) is the natural next slice per the original 5-phase structure.
+
 ## UBI-28 Phase 4, FINAL (ubx server, Bamboo/Bitbucket Server): CLOSED -- webhook/auth/config/core-layer destroy enforcement + TOCTOU-safe acceptance built, adversarial tests, 4-platform Docker, and docs shipped, all four phases complete, 2026-08-15
 
 Real, current scope per the founder's own explicit Phase 4 kickoff (the final phase of UBI-28):
