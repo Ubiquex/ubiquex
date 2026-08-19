@@ -2904,6 +2904,66 @@ see docs/executor.md's own session-6 addendum for the full finding and
 two further, real, GCP-specific gaps found along the way (filed as
 UBI-44 for the more serious one, a destroy that silently doesn't destroy).
 
+**Amendment (2026-08-20, no Linear ticket ID given this session): `[providers]`
+splits into two namespaces.** The `[providers]` table described above
+(source → pinned version, real Terraform-registry providers only) is
+renamed `[thirdparty_providers]`, its own real shape kept verbatim —
+`[providers]` itself is now a real, different, additive meaning: ubx's
+own, dynamic-provider-backed sources, declared per-name exactly like
+`sdk/providers/.ubx/config`'s own `[dynamic_providers.<name>]` table
+already does for SDK codegen (`schema_source`/`schema_url`/`base_url`/
+`auth`/...), reusing that identical shape rather than inventing a second
+one for the same real `ubx-provider-dynamic` binary:
+
+```toml
+[providers.aws]
+schema_source = "cloudformation"
+schema_url    = "https://schema.cloudformation.us-east-1.amazonaws.com/CloudformationSchema.zip"
+base_url      = "https://cloudcontrolapi.us-east-1.amazonaws.com"
+
+[thirdparty_providers]
+"hashicorp/aws" = "6.60.0"
+```
+
+The naming states the real decision plainly: `[providers]` means ubx's
+own; `[thirdparty_providers]` means everyone else's. Precedence, when
+the same real key is declared in both — `providerShortName`'s existing
+last-`/`-segment derivation makes `"hashicorp/aws"` and `aws` the same
+real key for this comparison — `[providers]` always wins
+(`resolveProviderPrecedence`, `cli/providerpool.go`). `providerPool.Get`
+routes a `[providers]`-declared key through a real `ubx-provider-dynamic`
+launch (`newDynamicProviderLaunchFunc`) instead of `provider.Acquire` —
+the first time a dynamic-provider-backed source becomes usable for real
+infra through `ubx resolve`/`ubx ship`, not just `ubx sdk gen`'s
+schema-only dump. `sdk/providers/.ubx/config`'s own `[dynamic_providers]`
+table name is unchanged; it stays internal to codegen.
+
+Real, honest, not-yet-done scope boundary: `core/resolver`'s own
+provider-inference logic does not yet automatically prefer a
+`[providers]`-declared source when inferring an unrecorded resource's
+provider from its type alone — the routing mechanism above is real and
+tested (`cli/providerpool_test.go`), but today it only fires for a call
+that already knows to pass the dynamic key as `source`. Extending
+`resolver.InferProvider` itself to consider `[providers]` is real,
+separate, future work, not silently assumed done here.
+
+Companion real work, a separate repo (`ubx-provider-dynamic`, branch
+`onboarding-pipeline-kubernetes-checkpoint`, PR #5, still open/draft):
+`schema_source = "cloudformation"`, AWS's real, published CloudFormation
+resource-provider schema registry, executed via a new, purpose-built
+Cloud Control API client (`internal/cloudformation/ccapi`) rather than
+the generic REST/Smithy execution paths this binary already had —
+CCAPI's own real async model (a `RequestToken`, polled via a separate
+`GetResourceRequestStatus` operation) does not fit `internal/dynserver`'s
+existing REST-path-shaped `AsyncConfig`, confirmed directly (that
+package's own doc comment had already named this exact gap before this
+session). Verified hermetically end to end (create + destroy against a
+local fake CCAPI server, no real AWS credentials or resources touched,
+per this project's own standing rule against a live apply) — real
+resource/field counts from a real, live registry fetch: 1,705 real
+`AWS::` types, 1,700 successfully translated, 15,678 real top-level
+fields.
+
 ## Intent provider + md medium (built, UBI-41 — docs/intent-provider.md; closed)
 
 Phase 3's opener: the first session where an LLM enters the product.

@@ -416,7 +416,7 @@ occurrences), not assumed from the warning alone.
 ## Component 2 — the `[intent]` config table
 
 Rides the identical config-cascade machinery every other table already
-uses (`[provider]`, `[providers]`, `[ledger]`) — cascade content, per-key,
+uses (`[provider]`, `[thirdparty_providers]`, `[ledger]`) — cascade content, per-key,
 nearest-directory-wins, provenance-tracked by `ubx config`, no new loader.
 Fixed, known shape (like `[provider]`/`[ledger]`, not freeform like
 `[provider_configs]`) since these are ubx-defined knobs, not

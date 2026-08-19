@@ -2,6 +2,49 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session) real, breaking
+  restructure of `.ubx/config`'s provider-declaration surface into two
+  namespaces: `[providers]` now means ubx's own, dynamic-provider-backed
+  sources (the same real `map[string]map[string]any`
+  schema_source/schema_url/base_url/auth/... shape `sdk/providers/
+  .ubx/config`'s own `[dynamic_providers.<name>]` table already used for
+  SDK codegen, reused here rather than a second shape for the same real
+  binary); the prior `[providers]` (a flat `"hashicorp/aws" = "6.60.0"`
+  map, real Terraform-registry sources) is renamed `[thirdparty_providers]`,
+  its own real shape kept verbatim, never reshaped. Precedence: the same
+  real key declared in both resolves to the dynamic entry
+  (`resolveProviderPrecedence`, `cli/providerpool.go`, keyed by
+  `providerShortName`'s existing last-`/`-segment derivation for a
+  thirdparty source). `providerPool.Get` now routes a `[providers]`-
+  declared key through a real `ubx-provider-dynamic` launch
+  (`newDynamicProviderLaunchFunc`) instead of `provider.Acquire` --
+  making a dynamic-provider-backed source usable for real infra via
+  `ubx resolve`/`ubx ship` for the first time (previously schema-dump-
+  only via `ubx sdk gen`, `Config.DynamicProviders`' own doc comment's
+  prior, now-superseded scope note). `sdk/providers/.ubx/config`'s own
+  `[dynamic_providers]` table name is unchanged -- internal to codegen,
+  deliberately left alone. Companion, real addition in the separate
+  `ubx-provider-dynamic` repo (branch `onboarding-pipeline-kubernetes-
+  checkpoint`, PR #5, still open/draft): a new `schema_source =
+  "cloudformation"` tier (renamed from the long-unimplemented `aws_ccapi`
+  placeholder, which conflated schema source with execution mechanism),
+  fetching and translating AWS's real, published CloudFormation resource-
+  provider schema registry (1,705 real `AWS::` types live-fetched, 1,700
+  built, 15,678 real top-level fields), executed via a new, purpose-built
+  Cloud Control API client (`internal/cloudformation/ccapi`) -- real
+  async via `GetResourceRequestStatus` polling, confirmed NOT to fit
+  `dynserver`'s own REST-path-shaped `AsyncConfig` (that package's own
+  doc comment had already named this exact gap). Real, hermetic (no real
+  AWS credentials/resources touched, per the standing CLAUDE.md rule
+  against a live apply, confirmed with the founder this session) end-to-
+  end create+destroy proof against a local fake CCAPI server, plus real
+  config-precedence tests with both namespaces declaring `aws`, all
+  passing. Not yet done, named not hidden: `core/resolver`'s own
+  provider-inference logic does not yet automatically prefer a
+  `[providers]`-declared source when inferring an unrecorded resource's
+  provider -- the routing mechanism is real and tested, but a stack has
+  to already know to record source="aws" for it to take effect; deeper
+  resolver-level integration is real, separate, future work.
 - 2026-08-15 -- UBI-164: the remote-ledger-store requirement is
   documented in every CI/CD integration guide. All of them run
   `ubx accept --from-merge` and `ubx ship --yes`, and none said those

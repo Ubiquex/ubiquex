@@ -549,7 +549,7 @@ Three real decisions made this session, none contradicting prior design:
   type, or the `$cross` limitation itself), so it needs the same
   human-review checkpoint the md medium's own ambiguity does before
   anything reaches a ledger.
-- **No legacy single-provider fallback.** Requires a real `[providers]`
+- **No legacy single-provider fallback.** Requires a real `[thirdparty_providers]`
   table, matching `ubx sdk gen`'s own precedent (`cli/sdk.go`) — both are
   post-UBI-43 features with no pre-multi-provider shape to fall back to.
 - **A standalone `loadDiagramProviders` helper, not a `cli/resolve.go`
@@ -579,7 +579,7 @@ type-inference questions render to the terminal identically to how
 rendering code.
 
 Five hermetic CLI tests (`cli/propose_from_diagram_test.go`): missing
-`[providers]` table rejected naming it; missing `--stack` rejected;
+`[thirdparty_providers]` table rejected naming it; missing `--stack` rejected;
 three-way mutual exclusivity (`proposal.json` arg, `--from-doc`,
 `--from-diagram`) enforced; a real end-to-end run via the
 `UBX_PROVIDER_MIRROR` seam (matching `cli/sdk_test.go`'s own mechanism)

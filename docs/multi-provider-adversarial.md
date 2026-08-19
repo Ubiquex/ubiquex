@@ -71,7 +71,7 @@ for one Fleet entry but fails for another mid-walk, ...) is a future
 session's own work, not yet built out row-by-row here; and
 `.ubx/config`'s own two version-pinning failure modes beyond a plain
 version mismatch (UBI-43 session 4, live-verified for the plain case —
-see docs/executor.md's own session-4 addendum) — a `[providers]` entry
+see docs/executor.md's own session-4 addendum) — a `[thirdparty_providers]` entry
 whose pinned version doesn't exist in the acquire cache/registry at all,
 and two stacks sharing a ledger directory with genuinely conflicting
 `[provider_configs]` for the same source (a config-layering question, not

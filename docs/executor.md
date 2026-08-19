@@ -1468,6 +1468,21 @@ own staged plan) is built: `warnIfLegacyProviderFlagsGiven`
 ignored, whenever a stack with a real `[providers]` table also receives
 them.
 
+**Amendment (2026-08-20)**: `cli/providerpool.go`'s own `providerPool`
+now also carries `dynamic`/`dynamicLaunch` alongside the `versions`/
+`launch` this section describes — a real, additive routing branch for a
+key declared under the new `[providers]` namespace (ubx's own, dynamic-
+provider-backed sources; the table this section calls `[providers]`
+above is `[thirdparty_providers]` now). `Get` checks the dynamic map
+first; a match launches a real `ubx-provider-dynamic` subprocess
+(`newDynamicProviderLaunchFunc`, `cli/dynamicprovider.go`) instead of
+`provider.Acquire`, wrapped into the identical real `executor.Applier`
+shape via `newApplier` either way — every caller of `ApplierPool.Get`
+(resolve/ship/drift/scan/status/scanfleet/scanall) is unaffected by
+which branch actually ran. Full design and real precedence rule:
+docs/architecture.md's own "Amendment (2026-08-20): `[providers]` splits
+into two namespaces."
+
 **Live-verified against the real built binary, not just hermetic**: a
 real `ubx resolve` → `ubx accept` → `ubx ship` chain against two
 genuinely separate provider subprocesses (`UBX_PROVIDER_MIRROR`, no

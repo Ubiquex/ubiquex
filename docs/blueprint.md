@@ -291,7 +291,7 @@ literal code path, for one load-bearing reason:
 sdk gen`'s own per-type renderer) needs a real `*ir.ResourceType`, which
 needs a real provider binary launched and its schema fetched — real
 credentials/binary-acquisition machinery a bare blueprint directory (no
-`[providers]` table, often no `.ubx/config` at all) has no reason to
+`[thirdparty_providers]` table, often no `.ubx/config` at all) has no reason to
 carry. Every `Config` struct field `sdk/go/runtime` actually reads is
 typed `any` regardless of the real schema's own type (confirmed by
 reading `ResourceFile`'s own output before relying on this) — the ONLY

@@ -892,6 +892,17 @@ warns to stderr, naming exactly which flags were ignored, whenever a
 stack with a real `[providers]` table also receives them — config always
 wins, the flags are never silently overridden nor honored instead.
 
+**Amendment (2026-08-20)**: the `[providers]` table this section
+describes is now `[thirdparty_providers]` (`cfg.ThirdpartyProviders`);
+`[providers]` itself is a real, different, new meaning (ubx's own,
+dynamic-provider-backed sources). See docs/architecture.md's own
+"Amendment (2026-08-20): `[providers]` splits into two namespaces" for
+the full design and real precedence rule — not restated here, since
+`resolve.go`'s own eager-launch behavior described above is otherwise
+unchanged (it still only ever eagerly launches thirdparty sources;
+`core/resolver`'s own inference does not yet consider `[providers]`,
+named as real, separate, not-yet-done work there).
+
 **Live-verified, not just hermetic**: a real multi-provider `ubx resolve`
 → `ubx accept` → `ubx ship` chain against two genuinely separate
 provider subprocesses (via `UBX_PROVIDER_MIRROR`, no network), each
