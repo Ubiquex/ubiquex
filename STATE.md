@@ -2,6 +2,32 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## AWS coverage-without-HashiCorp: CHECKPOINT 16 -- fixed the requested upstream recall bug, re-ran the full verification, real numbers moved, still investigation only, 2026-08-20
+
+**Continuation, same no-ticket-ID arc.** Founder's own explicit follow-up on checkpoint 15's honestly-flagged residual limitation: fix the plural-folding recall bug in Step 1's noun-grouping (`CreateBackup`/`DescribeBackups` failing to group, `fsx` service yielding zero inferred resources despite a real Backup API), then re-run the full 1,682-resource verification and report the same three buckets. Explicitly no advance estimate given.
+
+**The requested fix**: `aws_infer_resources.py`'s noun-grouping now folds each literal noun to a real, symmetric singular/plural key (the same trailing-`s` fold already used for attribute-name matching) before grouping create/read/update/delete/list operations, instead of grouping on exact string equality. Canonical display noun is taken from the real create-op's own spelling when one exists (AWS's own convention: a single-resource create uses the singular noun). Confirmed live: `fsx` went from 0 inferred resources to 8, including the real `Backup` (paired from `CreateBackup` + `DescribeBackups`, previously two separate, individually-incomplete groups). Total real inferred resources across all 430 services: 1,847 -> 2,211.
+
+**Two further real bugs found and fixed while re-verifying (not part of the requested fix, surfaced by spot-checking the rerun's own results, reported transparently rather than folded in silently)**:
+1. **Real false positive**: raw attribute-overlap alone matched `aws_security_group` to `smithy:ec2:NetworkAcl` on `egress`/`ownerid`/`vpcid` -- confirmed live these are real, near-universal EC2-family API-envelope/cross-resource fields (`ownerid` on 40% of all 89 real ec2 resources, `dryrun` on 99%), not resource-specific signal, invisible to the existing GLOBAL (all-1,682-resources) generic-attribute exclusion because they're common only within the ec2 family, not the whole corpus. Fixed with a second, service-local generic-attribute exclusion (per real Smithy service dir / per real CFN namespace, data-derived, minimum group size 5, threshold tuned to 30% after a first pass at 20% created a NEW real false negative -- see below).
+2. **Real false positive**: `aws_instance`'s top-ranked candidate became `smithy:ec2:LaunchTemplate` (28 raw shared attributes) instead of the real, correct `AWS::EC2::Instance` (27) -- confirmed live: LaunchTemplate's own real recursive schema wraps a near-complete instance launch spec (179 real attributes vs Instance's 90), so a bigger, coincidentally-overlapping candidate pool out-ranked the correct, tighter one on raw count alone. Fixed by ranking on Jaccard similarity (shared / union size) instead of raw shared count, which penalizes bloated candidate pools; tie-safety broadened from exact-count equality to a relative Jaccard window (0.85x the top score), since a REAL near-tie (Instance 0.241 vs LaunchTemplate 0.253, an 11-point absolute shared-count gap the old exact-tie check would have missed) is just as real a source of ambiguity as an exact one.
+
+**Real self-correction during the same pass**: the first service-local generic threshold (20%) fixed the ec2 case but immediately created a NEW, confirmed real false negative -- `aws_workspacesweb_network_settings_association` lost its one real, correct match (`AWS::WorkSpacesWeb::NetworkSettings`, via `network_settings_arn`) because that field sits at exactly 20% within WorkSpacesWeb's own 10-resource CFN family, where it's genuinely meaningful (sibling "association" resources legitimately cross-reference each other's real ARNs) rather than boilerplate. Raised to 30%, confirmed live: still excludes ec2's real boilerplate (`dryrun` 99%, `ownerid` 40%) while no longer excluding WorkSpacesWeb's real identity field.
+
+**Real, definitive, per-resource result after all of the above -- 1,682 of 1,682 individually reclassified, no percentage reported**:
+
+| Bucket | Checkpoint 15 | Checkpoint 16 (this run) |
+|---|---:|---:|
+| COVERED | 1,052 | 922 |
+| NOT COVERED | 1 | 5 |
+| UNRESOLVED | 629 | 755 |
+
+**The numbers moved in a direction opposite the requested fix's own effect in isolation** -- the noun-grouping fix alone (checked in isolation, before the two follow-on fixes) raised COVERED to 1,078 and held NOT-COVERED at 1, exactly as expected from closing a real recall gap. The two follow-on false-positive fixes (service-local generic exclusion, Jaccard bloat-correction) then net-reduced COVERED to 922 by correctly reclassifying real false positives -- confirmed matches that were never actually verified correctly -- as honest UNRESOLVED or NOT-COVERED instead. Both effects are real; the founder's own instruction ("do not estimate the improvement in advance") is satisfied by reporting both, not just the first.
+
+**Honest, still-open finding, not fixed here**: `aws_instance` -- one of the founder's own original named examples -- is now itself UNRESOLVED (a genuine near-tie between `AWS::EC2::Instance` and `AWS::EC2::LaunchTemplate`, whose real schemas deeply overlap since a launch template literally stores instance launch parameters). This is not a tooling defect; it is pure attribute-name-overlap verification hitting a genuine semantic limit that only real API-operation semantics (not attribute names) could resolve, which is out of the founder's stated no-string-similarity, no-broader-semantic-reasoning bounds for this analysis.
+
+**No config, pipeline, or generation changes made.** Full per-resource lists live in the session's own scratchpad, ephemeral, not committed, same handling as every prior investigation-only checkpoint.
+
 ## AWS coverage-without-HashiCorp: CHECKPOINT 15 -- definitive, per-resource verified answer (not a percentage), investigation only, no code/config changes, 2026-08-19
 
 **Continuation, same no-ticket-ID arc.** Founder's own explicit rejection of the prior checkpoint's squashed-key-normalized "57.9%" coverage figure as insufficiently rigorous: no percentages, no estimates, no name-similarity-only verdicts. Required real, per-resource verification against hashicorp/aws's own real 1,682 resource types (freshly live-fetched, `hashicorp/aws@6.54.0`, schema-fetch only, no Configure/Apply), and an explicit, complete not-covered list, plus a third unresolved list with real per-item reasons for anything not definitively classifiable.
