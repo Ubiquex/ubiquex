@@ -84,6 +84,8 @@ func newSDKGenCmd() *cobra.Command {
 		dynamicProviderBin string
 		describeEnabled    bool
 		describeModel      string
+		descriptionsDir    string
+		gapsDir            string
 	)
 
 	cmd := &cobra.Command{
@@ -126,14 +128,22 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 			}
 
-			// checkpoint 5's own real wiring: --describe is opt-in (nil
-			// Generator otherwise, writeGeneratedSDK's own real "skip
-			// enrichment entirely" signal) since a real Claude call per
-			// undescribed field is slow and billed -- a plain `ubx sdk gen`
-			// must never pay that cost silently. describe.New itself never
-			// touches the network (see its own doc comment); a bad/missing
-			// credential only ever surfaces once the first real field
-			// enrichment actually runs.
+			// checkpoint 6's own real, cost-driven redesign (STATE.md):
+			// --describe (a real, live, billed Claude API call per
+			// undescribed field) stays opt-in, nil Generator otherwise --
+			// a plain `ubx sdk gen` must never pay that cost silently.
+			// describe.New itself never touches the network (see its own
+			// doc comment); a bad/missing credential only ever surfaces
+			// once the first real field enrichment actually runs.
+			//
+			// The REAL default enrichment path is now --descriptions-dir
+			// (on by default, sdk/providers/descriptions -- a real,
+			// checked-in, human/Claude-Code-authored data file this
+			// command reads at zero cost; a provider with no such file yet
+			// just sees every field stay genuinely undescribed, the
+			// honest status quo). Coverage is now always collected and
+			// reported, not just when --describe is passed, since reading
+			// a checked-in file is effectively free.
 			var describeGen *describe.Generator
 			if describeEnabled {
 				describeGen = describe.New(describe.Config{Model: describeModel})
@@ -144,15 +154,13 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			for _, source := range sortedProviderSources(cfg.Providers) {
 				version := cfg.Providers[source]
 
-				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen)
+				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for %s@%s -> %s\n", count, source, version, path)
-				if describeEnabled {
-					perProviderCoverage[source] = coverage
-					coverageOrder = append(coverageOrder, source)
-				}
+				perProviderCoverage[source] = coverage
+				coverageOrder = append(coverageOrder, source)
 			}
 
 			// Real, deliberate posture difference from the [providers] loop
@@ -178,22 +186,18 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			for _, name := range sortedDynamicProviderNames(cfg.DynamicProviders) {
 				params := cfg.DynamicProviders[name]
 
-				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, describeGen)
+				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir)
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "sdk gen: dynamic provider %q: %v\n", name, err)
 					dynamicFailures = append(dynamicFailures, name)
 					continue
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for dynamic provider %q -> %s\n", count, name, path)
-				if describeEnabled {
-					perProviderCoverage[name] = coverage
-					coverageOrder = append(coverageOrder, name)
-				}
+				perProviderCoverage[name] = coverage
+				coverageOrder = append(coverageOrder, name)
 			}
 
-			if describeEnabled {
-				fmt.Fprint(cmd.OutOrStdout(), formatCoverageReport(perProviderCoverage, coverageOrder))
-			}
+			fmt.Fprint(cmd.OutOrStdout(), formatCoverageReport(perProviderCoverage, coverageOrder))
 
 			if len(dynamicFailures) > 0 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %d of %d dynamic provider(s) failed: %s", len(dynamicFailures), len(cfg.DynamicProviders), strings.Join(dynamicFailures, ", "))}
@@ -207,8 +211,10 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 	cmd.Flags().StringVar(&dynamicProviderBin, "dynamic-provider-bin", "", `path to an already-built ubx-provider-dynamic binary, for [dynamic_providers.<name>] entries -- if unset, built on demand from a local checkout (UBX_PROVIDER_DYNAMIC_REPO, default "../ubx-provider-dynamic")`)
-	cmd.Flags().BoolVar(&describeEnabled, "describe", false, `fill every real field a source model left undescribed via a real Claude API call (sdk/codegen/describe), labeled "AI-inferred" in generated doc comments -- opt-in: slow, billed, needs a resolvable Anthropic credential (ANTHROPIC_API_KEY or an ` + "`ant auth login`" + ` profile)`)
+	cmd.Flags().BoolVar(&describeEnabled, "describe", false, `ALSO fill any field still undescribed after --descriptions-dir via a real, live Claude API call (sdk/codegen/describe) -- opt-in: slow, billed, needs a resolvable Anthropic credential (ANTHROPIC_API_KEY or an `+"`ant auth login`"+` profile). The interim, cost-free default is --descriptions-dir; see that flag's own doc.`)
 	cmd.Flags().StringVar(&describeModel, "describe-model", "", `model for --describe (default: `+describe.DefaultModel+`)`)
+	cmd.Flags().StringVar(&descriptionsDir, "descriptions-dir", defaultDescriptionsDir, `directory of real, checked-in <provider>.json description files (resource -> dotted field path -> description text) this command reads at zero cost and applies to any field a source model left undescribed, labeled "AI-inferred" in generated doc comments -- the real default enrichment path; pass "" to disable entirely`)
+	cmd.Flags().StringVar(&gapsDir, "list-undescribed", "", `directory to write one real <provider>.json gap file per declared source, listing every field STILL undescribed after --descriptions-dir/--describe (type, required/optional/computed, parent context, and any real enum/constraint signal found) -- the structured "what's missing" list a description-authoring pass (this session or a future one) reads; unset (default) writes nothing`)
 
 	return cmd
 }
@@ -226,7 +232,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 // provider gets its own fresh timeout budget, never one shared budget
 // that a slow first provider could eat into a fast second one's own
 // allowance.
-func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -249,7 +255,12 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		return "", 0, descriptionCoverage{}, fmt.Errorf("fetch schema for %s@%s: %w", source, version, err)
 	}
 
-	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen)
+	// nil signalsByType: a real registry-acquired provider has no
+	// OpenAPI/Smithy document at all for this codebase to have extracted
+	// enum/constraint signal from in the first place -- a real, separate,
+	// unaddressed limitation of THIS source, not something writeGeneratedSDK
+	// can make up for.
+	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, nil)
 }
 
 // generateOneDynamicProvider is generateOneProvider's own real sibling for
@@ -261,7 +272,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 // provider.Schemas into generated files. version is the real, honest
 // placeholder "dynamic" -- see resolveDynamicProviderBinary's own doc
 // comment for why no real per-target version pin exists yet.
-func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -279,8 +290,20 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 		return "", 0, descriptionCoverage{}, err
 	}
 
+	// Real enum/constraint signal (ubx-provider-dynamic's own
+	// internal/schema.CollectSignals, dumped via --dump-signals) is
+	// genuinely supplementary context, not required for a correct
+	// generation -- a failure here degrades gracefully (a warning, an
+	// empty signal set) rather than failing the whole provider, matching
+	// this codebase's own "skip, don't fail" discipline.
+	signalsByType, sigErr := dynamicProviderSignals(ctx, binPath, name, params)
+	if sigErr != nil {
+		fmt.Fprintf(os.Stderr, "sdk gen: dynamic provider %q: signal collection failed, continuing without enum/constraint context: %v\n", name, sigErr)
+		signalsByType = nil
+	}
+
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen)
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, signalsByType)
 }
 
 // writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's
@@ -294,7 +317,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // declared [dynamic_providers.<name>] name, which needs no sanitizing
 // itself but shares the identical real code path rather than a parallel
 // one).
-func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, signalsByType map[string]map[string]*fieldSignal) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -325,17 +348,33 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		types = append(types, resType)
 	}
 
-	// checkpoint 5's own real wiring: fill every real field FromSchema
-	// left with DescriptionSourceNone via a real Claude call, labeled
-	// AIInferred so the generated code's own doc comments (below) can
-	// render the founder's own required visible label -- opt-in only
-	// (describeGen is nil unless --describe was passed), since this is a
-	// real, slow, billed step a plain `ubx sdk gen` run should never pay
-	// for silently.
-	if describeGen != nil {
-		coverage, err = enrichDescriptions(ctx, describeGen, source, types)
-		if err != nil {
-			return "", 0, coverage, fmt.Errorf("%s@%s: describe: %w", source, version, err)
+	// checkpoint 6's own real, cost-driven redesign: fill every real
+	// field FromSchema left with DescriptionSourceNone from the real,
+	// checked-in descriptions file first (free, on by default), then
+	// (only if --describe was passed) a real, live Claude call for
+	// whatever's still left -- either way labeled AIInferred so the
+	// generated code's own doc comments (below) can render the
+	// founder's own required visible label. Always runs (checkedIn/gen/
+	// gapsOut may all be nil/empty for a provider with no artifact and
+	// no --describe/--list-undescribed yet) so coverage is always real
+	// and always reportable, not just when --describe is passed.
+	checkedIn, err := loadCheckedInDescriptions(descriptionsDir, shortName)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, fmt.Errorf("%s@%s: %w", source, version, err)
+	}
+	var gaps map[string]map[string]gapFieldInfo
+	enrichOpts := enrichOptions{checkedIn: checkedIn, gen: describeGen}
+	if gapsDir != "" {
+		gaps = map[string]map[string]gapFieldInfo{}
+		enrichOpts.gapsOut = &gaps
+	}
+	coverage, err = enrichDescriptions(ctx, source, types, signalsByType, enrichOpts)
+	if err != nil {
+		return "", 0, coverage, fmt.Errorf("%s@%s: describe: %w", source, version, err)
+	}
+	if gapsDir != "" {
+		if err := writeGapFile(gapsDir, shortName, gaps); err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: write gap file: %w", source, version, err)
 		}
 	}
 

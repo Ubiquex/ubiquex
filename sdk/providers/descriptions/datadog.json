@@ -1,0 +1,18 @@
+{
+  "datadog_application_key_response": {
+    "application_key.hash": "The application key's hashed value.",
+    "application_key.name": "The name of the application key.",
+    "application_key.owner": "The Datadog username or team that owns this application key."
+  },
+  "datadog_dashboard_list": {
+    "author.email": "The email address of the dashboard list's author.",
+    "author.handle": "The Datadog handle of the dashboard list's author.",
+    "author.name": "The display name of the dashboard list's author."
+  },
+  "datadog_api_key_response": {
+    "api_key.created": "Timestamp the API key was created.",
+    "api_key.created_by": "The Datadog user who created the API key.",
+    "api_key.key": "The API key's value.",
+    "api_key.name": "The name of the API key."
+  }
+}

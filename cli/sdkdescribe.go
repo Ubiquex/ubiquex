@@ -1,15 +1,29 @@
 // Real wiring for the provider-onboarding pipeline's own second half:
-// sdk/codegen/describe (checkpoint 4, standalone, real, live-verified)
-// filling in every real field a source model left undescribed --
-// checkpoint 5's own real job, per the founder's own explicit priority
-// ordering ("this unblocks the real per-provider coverage split, which
-// is a number worth having before committing to a full regeneration
-// run").
+// filling in every real field a source model left undescribed.
+//
+// Cost-driven redesign, explicitly interim (founder's own words: "the
+// right long-term design once budget exists; this is a deliberate
+// interim substitution"): the real, live Claude API path
+// (sdk/codegen/describe, checkpoint 4) stays in the code, but is no
+// longer how a real coverage run gets its descriptions by default --
+// per-field API billing across four-plus providers, at real volume
+// (hundreds to thousands of fields), has no budget today. The default
+// path is now a real, checked-in, provider-authored data file
+// (loadCheckedInDescriptions) this pipeline reads at codegen time,
+// costing nothing to consume. Authoring it is a real, separate,
+// human-in-the-loop (or Claude-Code-in-session, no API key) step: this
+// file's own emitDescribeGaps produces the real, structured "what's
+// still missing" list that step needs, batched across sessions given
+// the real volume -- see cli/sdk.go's own --list-undescribed flag.
 package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -21,9 +35,9 @@ import (
 // exactly the three real DescriptionSource states, counted, never
 // estimated or extrapolated from a sample.
 type descriptionCoverage struct {
-	Sourced   int // DescriptionSourceModel -- the real provider's own prose
-	AIInferred int // DescriptionSourceAIInferred -- generated, labeled visibly
-	None      int // DescriptionSourceNone -- abstained, or genuinely nothing to say
+	Sourced    int // DescriptionSourceModel -- the real provider's own prose
+	AIInferred int // DescriptionSourceAIInferred -- checked-in or live-generated, labeled visibly
+	None       int // DescriptionSourceNone -- genuinely undescribed: abstained, or not yet authored
 }
 
 func (c descriptionCoverage) total() int { return c.Sourced + c.AIInferred + c.None }
@@ -44,72 +58,191 @@ func (c descriptionCoverage) String() string {
 }
 
 // enrichDescriptionsConcurrency bounds how many real, concurrent Claude
-// API calls a single `ubx sdk gen --describe` run makes -- a real
-// provider's own full schema can carry hundreds to thousands of
-// undescribed fields (confirmed live this checkpoint against Kubernetes'
-// own real 71 resource types); a real, bounded worker pool keeps this
-// tractable without either serializing every call (impractically slow)
-// or firing an unbounded number of simultaneous real requests (a real
-// risk of tripping the Anthropic API's own real rate limits).
+// API calls a single `ubx sdk gen --describe` run makes -- opt-in, not
+// the default path (see this file's own top doc comment), but still a
+// real, deliberate rate-limit-safety bound whenever it IS used.
 const enrichDescriptionsConcurrency = 8
 
+// defaultDescriptionsDir is where the onboarding pipeline's own
+// checked-in description artifacts live -- a real, deliberate sibling of
+// wherever THIS invocation's own .ubx/config resolved from (relative to
+// the process's own CWD, exactly like .ubx/config itself), never a
+// repo-root-relative path: `ubx sdk gen` against the central provider
+// config is run FROM sdk/providers/ (where sdk/providers/.ubx/config
+// itself lives, confirmed live this checkpoint -- a repo-root-relative
+// default silently resolved to a nonexistent, doubled
+// sdk/providers/sdk/providers/descriptions and produced zero AI-inferred
+// fields despite a real, committed descriptions file existing, caught
+// only by re-running and comparing the coverage report against what a
+// real checked-in file should have changed). "descriptions", a plain
+// sibling of .ubx/, is correct for both this pipeline's own real
+// sdk/providers/ CWD and a generic per-project [providers]-only user
+// running from their own repo root.
+const defaultDescriptionsDir = "descriptions"
+
+// describeJob is one real field FromSchema (and any prior enrichment
+// step) left with DescriptionSourceNone -- resource/relPath together
+// are the real, stable key both the checked-in descriptions file and
+// the gap-list output use; ParentContext/Enum/Constraints in context
+// are the real signal a description author (live API or a real,
+// in-session Claude Code authoring pass) gets to work from.
+type describeJob struct {
+	field    *ir.Field
+	resource string // rt.WireType
+	relPath  string // dotted path relative to the resource root, e.g. "spec.replicas"
+	context  describe.FieldContext
+}
+
+// gapFieldInfo is one real field's own recorded context in a gap-list
+// output file -- exactly the real signal a description author (this
+// session, or a future one) has to work with: name/type/required-optional-
+// computed/parent-context always, enum/constraints when
+// ubx-provider-dynamic's own --dump-signals mode found real data for
+// this field (empty for a [providers] real-registry source, which has
+// no OpenAPI/Smithy document to extract enum/constraints from at all --
+// a real, separate, still-unaddressed limitation of THAT source, not
+// this mechanism).
+type gapFieldInfo struct {
+	Type          string   `json:"type"`
+	Required      bool     `json:"required,omitempty"`
+	Optional      bool     `json:"optional,omitempty"`
+	Computed      bool     `json:"computed,omitempty"`
+	ParentContext string   `json:"parent_context"`
+	Enum          []string `json:"enum,omitempty"`
+	Constraints   []string `json:"constraints,omitempty"`
+}
+
+// checkedInDescriptions is one provider's own real, checked-in
+// description artifact, loaded from sdk/providers/descriptions/<name>.json --
+// resource WireType -> relPath -> the real description text an
+// authoring pass (live API or a Claude Code session) wrote. A field
+// simply ABSENT from this map is the real, first-class abstention
+// outcome the founder's own instruction requires -- never a sentinel
+// value, never a placeholder string.
+type checkedInDescriptions map[string]map[string]string
+
+// loadCheckedInDescriptions reads dir/<providerFileName>.json. Returns
+// nil, nil (not an error) when no such file exists yet for this
+// provider -- the real, honest, common state for any provider before
+// its own first authoring pass; dir == "" also returns nil, nil
+// (explicitly disabled, see --descriptions-dir's own flag doc).
+func loadCheckedInDescriptions(dir, providerFileName string) (checkedInDescriptions, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	path := filepath.Join(dir, providerFileName+".json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read checked-in descriptions %q: %w", path, err)
+	}
+	var out checkedInDescriptions
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("parse checked-in descriptions %q: %w", path, err)
+	}
+	return out, nil
+}
+
+func (c checkedInDescriptions) lookup(resource, relPath string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	byField, ok := c[resource]
+	if !ok {
+		return "", false
+	}
+	desc, ok := byField[relPath]
+	return desc, ok
+}
+
+// enrichOptions controls which real enrichment mechanisms enrichDescriptions
+// applies, in order: checkedIn first (free, the real default path), then
+// gen (opt-in, real live API calls, --describe) for whatever's still
+// left. gapsOut, when non-nil, receives every field STILL
+// DescriptionSourceNone after both -- the real, structured "what's
+// missing" list --list-undescribed writes out.
+type enrichOptions struct {
+	checkedIn checkedInDescriptions
+	gen       *describe.Generator
+	gapsOut   *map[string]map[string]gapFieldInfo
+}
+
 // enrichDescriptions walks every real field of every resource type in
-// types (recursively, through List/Set/Map/Object nesting), calling gen
-// for every field FromSchema left with DescriptionSourceNone, and
-// returns the real, honest, counted coverage split. A field already
-// carrying DescriptionSourceModel (the real provider's own prose) is
-// never touched -- this step only ever fills a genuine gap, never
+// types (recursively, through List/Set/Map/Object nesting), applying
+// opts' own real mechanisms in order, and returns the real, honest,
+// counted coverage split. A field already carrying
+// DescriptionSourceModel (the real provider's own prose) is never
+// touched -- every mechanism here only ever fills a genuine gap, never
 // overwrites or second-guesses a real, existing description.
-func enrichDescriptions(ctx context.Context, gen *describe.Generator, providerName string, types []*ir.ResourceType) (descriptionCoverage, error) {
-	// Collect every real field needing enrichment first (a flat job
-	// list), rather than recursing with a live worker pool interleaved --
-	// keeps the concurrency/error-handling logic in one place, separate
-	// from the real tree-walk itself.
-	type job struct {
-		field   *ir.Field
-		context describe.FieldContext
-	}
-	var jobs []job
-	var collect func(fields []ir.Field, parentContext string)
-	collect = func(fields []ir.Field, parentContext string) {
-		for i := range fields {
-			f := &fields[i]
-			if f.DescriptionSource == ir.DescriptionSourceNone {
-				jobs = append(jobs, job{field: f, context: describe.FieldContext{
-					Name:          f.WireName,
-					Type:          typeRefString(f.Type),
-					Required:      f.Required,
-					Optional:      f.Optional,
-					Computed:      f.Computed,
-					ParentContext: parentContext,
-				}})
-			}
-			walkNested(f.Type, func(nested []ir.Field) {
-				collect(nested, parentContext+"."+f.WireName)
-			})
-		}
-	}
-	for _, rt := range types {
-		collect(rt.Fields, providerName+"."+rt.WireType)
-	}
+// signalsByType carries ubx-provider-dynamic's own real, per-resource
+// enum/constraint signal (nil for a [providers] real-registry source,
+// which has no such data at all -- see gapFieldInfo's own doc comment).
+func enrichDescriptions(ctx context.Context, providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal, opts enrichOptions) (descriptionCoverage, error) {
+	jobs := collectJobs(providerName, types, signalsByType)
 
 	var coverage descriptionCoverage
 	for _, rt := range types {
 		countExisting(rt.Fields, &coverage)
 	}
 
-	if len(jobs) == 0 {
-		return coverage, nil
+	var remaining []describeJob
+	for _, j := range jobs {
+		if desc, ok := opts.checkedIn.lookup(j.resource, j.relPath); ok {
+			j.field.Description = desc
+			j.field.DescriptionSource = ir.DescriptionSourceAIInferred
+			coverage.AIInferred++
+			continue
+		}
+		remaining = append(remaining, j)
+	}
+	jobs = remaining
+
+	if opts.gen != nil && len(jobs) > 0 {
+		var err error
+		jobs, err = runLiveDescribe(ctx, opts.gen, jobs, &coverage)
+		if err != nil {
+			return coverage, err
+		}
 	}
 
+	if opts.gapsOut != nil {
+		for _, j := range jobs {
+			if (*opts.gapsOut)[j.resource] == nil {
+				(*opts.gapsOut)[j.resource] = map[string]gapFieldInfo{}
+			}
+			(*opts.gapsOut)[j.resource][j.relPath] = gapFieldInfo{
+				Type:          j.context.Type,
+				Required:      j.context.Required,
+				Optional:      j.context.Optional,
+				Computed:      j.context.Computed,
+				ParentContext: j.context.ParentContext,
+				Enum:          j.context.Enum,
+				Constraints:   j.context.Constraints,
+			}
+		}
+	}
+	coverage.None += len(jobs)
+
+	return coverage, nil
+}
+
+// runLiveDescribe calls gen.Describe for every real job, bounded to
+// enrichDescriptionsConcurrency concurrent real API calls, returning
+// whatever jobs the generator itself abstained on (still genuinely
+// undescribed -- eligible for gapsOut, same as a field this whole
+// mechanism never had a checked-in entry OR a live call for at all).
+func runLiveDescribe(ctx context.Context, gen *describe.Generator, jobs []describeJob, coverage *descriptionCoverage) ([]describeJob, error) {
 	sem := make(chan struct{}, enrichDescriptionsConcurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
+	var stillNone []describeJob
 
 	for _, j := range jobs {
 		wg.Add(1)
-		go func(j job) {
+		go func(j describeJob) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -124,7 +257,7 @@ func enrichDescriptions(ctx context.Context, gen *describe.Generator, providerNa
 				return
 			}
 			if result.Abstained {
-				coverage.None++
+				stillNone = append(stillNone, j)
 				return
 			}
 			j.field.Description = result.Description
@@ -134,16 +267,73 @@ func enrichDescriptions(ctx context.Context, gen *describe.Generator, providerNa
 	}
 	wg.Wait()
 	if firstErr != nil {
-		return coverage, firstErr
+		return nil, firstErr
 	}
-	return coverage, nil
+	return stillNone, nil
+}
+
+// collectJobs walks every field of every resource type in types,
+// recursively through List/Set/Map/Object nesting (walkNested), pairing
+// each DescriptionSourceNone field with its own real signal (looked up
+// in signalsByType in exact lockstep with the field-tree walk) and its
+// own dotted relPath, relative to the resource root -- the real, stable
+// key both the checked-in descriptions file and the gap-list output
+// share.
+func collectJobs(providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal) []describeJob {
+	var jobs []describeJob
+	var walk func(fields []ir.Field, resource, parentContext, relPath string, sigMap map[string]*fieldSignal)
+	walk = func(fields []ir.Field, resource, parentContext, relPath string, sigMap map[string]*fieldSignal) {
+		for i := range fields {
+			f := &fields[i]
+			fieldRelPath := joinFieldPath(relPath, f.WireName)
+			var sig *fieldSignal
+			if sigMap != nil {
+				sig = sigMap[f.WireName]
+			}
+			if f.DescriptionSource == ir.DescriptionSourceNone {
+				jobs = append(jobs, describeJob{
+					field:    f,
+					resource: resource,
+					relPath:  fieldRelPath,
+					context: describe.FieldContext{
+						Name:          f.WireName,
+						Type:          typeRefString(f.Type),
+						Required:      f.Required,
+						Optional:      f.Optional,
+						Computed:      f.Computed,
+						ParentContext: parentContext,
+						Enum:          sig.enumStrings(),
+						Constraints:   sig.constraintStrings(),
+					},
+				})
+			}
+			var childSigs map[string]*fieldSignal
+			if sig != nil {
+				childSigs = sig.Nested
+			}
+			walkNested(f.Type, func(nested []ir.Field) {
+				walk(nested, resource, parentContext+"."+f.WireName, fieldRelPath, childSigs)
+			})
+		}
+	}
+	for _, rt := range types {
+		walk(rt.Fields, rt.WireType, providerName+"."+rt.WireType, "", signalsByType[rt.WireType])
+	}
+	return jobs
+}
+
+func joinFieldPath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
 }
 
 // countExisting tallies every field NOT needing enrichment (already
-// DescriptionSourceModel) into coverage -- the enrichment loop above
-// only ever increments AIInferred/None for the fields it actually
-// touches, so the real "sourced" count is collected separately, once,
-// up front.
+// DescriptionSourceModel) into coverage -- collectJobs/enrichDescriptions
+// only ever increment AIInferred/None for the fields they actually
+// touch, so the real "sourced" count is collected separately, once, up
+// front.
 func countExisting(fields []ir.Field, coverage *descriptionCoverage) {
 	for i := range fields {
 		f := &fields[i]
@@ -213,8 +403,7 @@ func derefOrInvalid(ref *ir.TypeRef) ir.TypeRef {
 
 // formatCoverageReport renders the real, per-provider coverage lines the
 // founder asked to see -- called once, after every declared source
-// (both [providers] and [dynamic_providers.<name>]) with --describe has
-// been enriched.
+// (both [providers] and [dynamic_providers.<name>]) has been enriched.
 func formatCoverageReport(perProvider map[string]descriptionCoverage, order []string) string {
 	var b strings.Builder
 	b.WriteString("real description coverage:\n")
@@ -226,4 +415,25 @@ func formatCoverageReport(perProvider map[string]descriptionCoverage, order []st
 		fmt.Fprintf(&b, "  %s: %s\n", name, c)
 	}
 	return b.String()
+}
+
+// writeGapFile writes gaps (resource -> relPath -> gapFieldInfo) to
+// dir/<providerFileName>.json, deterministically (Go's own
+// encoding/json already sorts map keys on Marshal, so this needs no
+// separate sort step of its own) -- the real, structured "fields lacking
+// a source description" list the founder's own interim workflow calls
+// for, sharing the identical (resource, relPath) key shape
+// loadCheckedInDescriptions reads, so authoring a real description for
+// a gap is a same-shaped-key insertion into the checked-in file, not a
+// format translation.
+func writeGapFile(dir, providerFileName string, gaps map[string]map[string]gapFieldInfo) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(gaps, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, providerFileName+".json")
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }

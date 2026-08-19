@@ -1,0 +1,33 @@
+{
+  "github_label": {
+    "node_id": "The label's GraphQL node ID."
+  },
+  "github_autolink": {
+    "id": "The autolink reference's numeric ID.",
+    "updated_at": "Timestamp of the autolink reference's last update."
+  },
+  "github_deployment_protection_rule": {
+    "app.id": "The numeric ID of the GitHub App providing this deployment protection rule.",
+    "app.integration_url": "The URL of the GitHub App's integration page.",
+    "app.node_id": "The GraphQL node ID of the GitHub App.",
+    "app.slug": "The GitHub App's URL-friendly slug."
+  },
+  "github_organization_actions_variable": {
+    "selected_repositories_url": "API URL listing the repositories this organization-level Actions variable is selectively exposed to."
+  },
+  "github_org_private_registry_configuration": {
+    "created_at": "Timestamp the private registry configuration was created.",
+    "updated_at": "Timestamp the private registry configuration was last updated."
+  },
+  "github_ssh_signing_key": {
+    "created_at": "Timestamp the SSH signing key was added to the account.",
+    "id": "The SSH signing key's numeric ID."
+  },
+  "github_blob": {
+    "highlighted_content": "The blob's content rendered with syntax highlighting, when requested.",
+    "node_id": "The blob's GraphQL node ID.",
+    "sha": "The SHA-1 hash identifying this blob's content.",
+    "size": "The size of the blob's content, in bytes.",
+    "url": "The API URL for retrieving this blob."
+  }
+}

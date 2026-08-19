@@ -1,0 +1,8 @@
+{
+  "aws_sqs_queue": {
+    "attributes": "The queue's read-only attributes as returned by the SQS API (for example ApproximateNumberOfMessages, QueueArn), keyed by attribute name.",
+    "queue_name": "The name of the SQS queue.",
+    "queue_url": "The URL identifying the created SQS queue.",
+    "tags": "Key-value tags attached to the queue."
+  }
+}

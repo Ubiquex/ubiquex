@@ -17,6 +17,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -144,6 +145,44 @@ func dynamicProviderSchema(ctx context.Context, binPath, name string, params map
 		return nil, fmt.Errorf("fetch schema for dynamic provider %q: %w", name, err)
 	}
 	return schemas, nil
+}
+
+// dynamicProviderSignals runs the SAME ubx-provider-dynamic binary a
+// second time, as a real, plain subprocess -- --dump-signals (see that
+// flag's own doc comment in ubx-provider-dynamic's cmd/ubx-provider-dynamic/main.go
+// for why this can't ride the same provider.Launch/go-plugin connection
+// dynamicProviderSchema above uses: go-plugin's own real handshake
+// protocol already owns that process's stdout). Reuses the identical
+// real, temporary .ubx/config dynamicProviderSchema writes. Returns a
+// real, honestly EMPTY (not nil, not an error) result for a
+// schema_source this binary doesn't yet extract signals for (Smithy --
+// AWS, today), matching that binary's own "skip, don't fail" answer.
+func dynamicProviderSignals(ctx context.Context, binPath, name string, params map[string]any) (map[string]map[string]*fieldSignal, error) {
+	workDir, err := os.MkdirTemp("", "ubx-sdk-gen-signals-"+name)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(workDir)
+
+	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, binPath, "--dump-signals")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "UBX_DYNAMIC_PROVIDER_NAME="+name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("dump signals for dynamic provider %q: %w\n%s", name, err, stderr.String())
+	}
+
+	var out map[string]map[string]*fieldSignal
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		return nil, fmt.Errorf("parse signal output for dynamic provider %q: %w", name, err)
+	}
+	return out, nil
 }
 
 // writeDynamicProviderConfig serializes params back into a real
