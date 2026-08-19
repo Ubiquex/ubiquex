@@ -559,6 +559,50 @@ func TestGeneratedRepo_SiblingConfigCollision_Escaped(t *testing.T) {
 	}
 }
 
+func TestResourceFile_DescriptionSource_RenderedAsDocComment(t *testing.T) {
+	rt := rt("aws_db_instance",
+		ir.Field{
+			WireName: "instance_class", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Optional: true, Description: "The instance type of the RDS instance.",
+			DescriptionSource: ir.DescriptionSourceModel,
+		},
+		ir.Field{
+			WireName: "allocated_storage", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarNumber},
+			Optional: true, Description: "Amount of storage, in gibibytes.",
+			DescriptionSource: ir.DescriptionSourceAIInferred,
+		},
+		ir.Field{
+			WireName: "master_password", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Required: true, DescriptionSource: ir.DescriptionSourceNone,
+		},
+	)
+	out, err := ResourceFile("db", "instance", rt, "")
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	mustContain(t, out, "// The instance type of the RDS instance.\n\tInstanceClass any")
+	mustContain(t, out, "// Amount of storage, in gibibytes. (AI-inferred)\n\tAllocatedStorage any")
+	// A DescriptionSourceNone field gets no comment at all -- no false
+	// signal is more honest than a fabricated one.
+	mustContain(t, out, "\tMasterPassword any")
+	mustNotContain(t, out, "// \n\tMasterPassword any")
+}
+
+func TestFieldDocComment_CollapsesNewlinesAndAbstainsOnNone(t *testing.T) {
+	sourced := fieldDocComment(ir.Field{Description: "Line one.\nLine two.", DescriptionSource: ir.DescriptionSourceModel}, "\t")
+	if sourced != "\t// Line one. Line two.\n" {
+		t.Fatalf("sourced comment = %q", sourced)
+	}
+	inferred := fieldDocComment(ir.Field{Description: "Generated.", DescriptionSource: ir.DescriptionSourceAIInferred}, "\t")
+	if inferred != "\t// Generated. (AI-inferred)\n" {
+		t.Fatalf("AI-inferred comment = %q", inferred)
+	}
+	if none := fieldDocComment(ir.Field{Description: "", DescriptionSource: ir.DescriptionSourceNone}, "\t"); none != "" {
+		t.Fatalf("DescriptionSourceNone comment = %q, want empty", none)
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

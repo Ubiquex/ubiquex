@@ -335,6 +335,35 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 	}
 }
 
+func TestResourceFile_DescriptionSource_RenderedAsTSDocComment(t *testing.T) {
+	rt := rt("aws_db_instance",
+		ir.Field{
+			WireName: "instance_class", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Optional: true, Description: "The instance type of the RDS instance.",
+			DescriptionSource: ir.DescriptionSourceModel,
+		},
+		ir.Field{
+			WireName: "allocated_storage", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarNumber},
+			Optional: true, Description: "Amount of storage, in gibibytes.",
+			DescriptionSource: ir.DescriptionSourceAIInferred,
+		},
+	)
+	out, err := ResourceFile("instance", rt)
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	mustContain(t, out, "  /** The instance type of the RDS instance. */\n  instanceClass?")
+	mustContain(t, out, "  /** Amount of storage, in gibibytes. (AI-inferred) */\n  allocatedStorage?")
+}
+
+func TestOneLineDescription_EscapesCommentTerminator(t *testing.T) {
+	got := oneLineDescription("unsafe */ injection\nattempt")
+	if strings.Contains(got, "*/") {
+		t.Fatalf("oneLineDescription left a literal comment terminator: %q", got)
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

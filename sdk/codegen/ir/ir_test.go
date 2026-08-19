@@ -305,6 +305,37 @@ func TestFromSchema_MalformedType_Errors(t *testing.T) {
 	}
 }
 
+// TestFromSchema_DescriptionSource proves FromSchema's own real default
+// behavior for the new DescriptionSource marker -- Model when the real
+// provider set a real, non-empty Description, None when it didn't
+// (FromSchema itself never invents text or calls an LLM -- see
+// Field.DescriptionSource's own doc comment for why AIInferred is never
+// set here).
+func TestFromSchema_DescriptionSource(t *testing.T) {
+	schema := &provider.Schema{
+		Block: provider.Block{
+			Attributes: []provider.Attribute{
+				{Name: "described", Type: json.RawMessage(`"string"`), Optional: true, Description: "a real, provider-supplied description"},
+				{Name: "undescribed", Type: json.RawMessage(`"string"`), Optional: true},
+			},
+		},
+	}
+	rt, err := FromSchema("aws_thing", schema)
+	if err != nil {
+		t.Fatalf("FromSchema: %v", err)
+	}
+	byName := map[string]Field{}
+	for _, f := range rt.Fields {
+		byName[f.WireName] = f
+	}
+	if got := byName["described"].DescriptionSource; got != DescriptionSourceModel {
+		t.Errorf("described.DescriptionSource = %q, want %q", got, DescriptionSourceModel)
+	}
+	if got := byName["undescribed"].DescriptionSource; got != DescriptionSourceNone {
+		t.Errorf("undescribed.DescriptionSource = %q, want %q", got, DescriptionSourceNone)
+	}
+}
+
 func TestFromSchema_NilSchema_Errors(t *testing.T) {
 	if _, err := FromSchema("aws_thing", nil); err == nil {
 		t.Fatal("FromSchema(nil): got nil error, want an error")

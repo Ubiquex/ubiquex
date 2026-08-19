@@ -302,6 +302,7 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configType
 		if err != nil {
 			return "", err
 		}
+		b.WriteString(fieldDocComment(f, "\t"))
 		fmt.Fprintf(&b, "\t%s any\n", idiomatic)
 	}
 	b.WriteString("}\n\n")
@@ -319,6 +320,35 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configType
 // `Required || Optional`.
 func fieldIsSettable(f ir.Field) bool {
 	return f.Required || f.Optional || !f.Computed
+}
+
+// fieldDocComment renders f.Description as a real Go doc comment line,
+// indented with pad, when there's anything to say -- empty string for
+// DescriptionSourceNone (nothing sourced, nothing generated: no comment
+// is more honest than an empty one). A DescriptionSourceAIInferred field
+// gets a visible "(AI-inferred)" suffix -- the provider-onboarding
+// pipeline's own founder-set requirement that the label be "genuinely
+// visible, not a footnote," applied at the one place a reader of
+// generated code actually looks: the field's own doc comment, not a
+// buried manifest.
+func fieldDocComment(f ir.Field, pad string) string {
+	desc := oneLineDescription(f.Description)
+	switch f.DescriptionSource {
+	case ir.DescriptionSourceModel:
+		return pad + "// " + desc + "\n"
+	case ir.DescriptionSourceAIInferred:
+		return pad + "// " + desc + " (AI-inferred)\n"
+	default:
+		return ""
+	}
+}
+
+// oneLineDescription collapses a real, source-model-carried description's
+// own internal newlines to spaces -- a real Go `//` comment line can't
+// itself contain a newline, and some real providers' own prose (found
+// live against Kubernetes' own CRD field descriptions) does.
+func oneLineDescription(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // resourceRenderer accumulates one resource type's own nested Config
@@ -482,6 +512,7 @@ func (r *resourceRenderer) goFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 			if _, err := r.goFieldMeta(inner.Type, name, inner.WireName); err != nil {
 				return "", err
 			}
+			body.WriteString(fieldDocComment(inner, "\t"))
 			fmt.Fprintf(&body, "\t%s any\n", innerIdiomatic)
 		}
 		body.WriteString("}\n")

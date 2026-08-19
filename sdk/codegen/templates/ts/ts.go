@@ -211,6 +211,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		b.WriteString(fieldDocComment(f, "  "))
 		b.WriteString(configFieldLine(idiomatic, f.Required, valueType))
 	}
 	b.WriteString("}\n\n")
@@ -228,6 +229,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		b.WriteString(fieldDocComment(f, "  "))
 		fmt.Fprintf(&b, "  %s: %s;\n", idiomatic, valueType)
 	}
 	b.WriteString("}\n\n")
@@ -255,6 +257,34 @@ func ResourceFile(localWireName string, rt *ir.ResourceType) (string, error) {
 // exactly how UBI-142 happened the first time: the nested case was
 // simply never given the top-level case's own treatment when it was
 // added.
+// fieldDocComment renders f.Description as a real TSDoc `/** ... */`
+// line above the field, indented with pad -- mirrors
+// sdk/codegen/templates/go's own fieldDocComment exactly (see that
+// function's doc comment for why AI-inferred gets a visible suffix and
+// DescriptionSourceNone gets no comment at all), using `/** */` rather
+// than `//` since that's the convention every real TS editor/tool
+// actually surfaces as hover documentation.
+func fieldDocComment(f ir.Field, pad string) string {
+	desc := oneLineDescription(f.Description)
+	switch f.DescriptionSource {
+	case ir.DescriptionSourceModel:
+		return pad + "/** " + desc + " */\n"
+	case ir.DescriptionSourceAIInferred:
+		return pad + "/** " + desc + " (AI-inferred) */\n"
+	default:
+		return ""
+	}
+}
+
+// oneLineDescription collapses internal newlines to spaces (a real
+// TSDoc `/** */` comment can't itself contain a newline cleanly) and
+// escapes a literal "*/" so a description can never prematurely close
+// the comment it's rendered inside.
+func oneLineDescription(s string) string {
+	joined := strings.Join(strings.Fields(s), " ")
+	return strings.ReplaceAll(joined, "*/", "* /")
+}
+
 func configFieldLine(idiomatic string, required bool, valueType string) string {
 	optionalMark := ""
 	if !required {
@@ -414,6 +444,7 @@ func (r *resourceRenderer) tsValueType(t ir.TypeRef, pathPrefix, wireName string
 			if err != nil {
 				return "", err
 			}
+			body.WriteString(fieldDocComment(inner, "  "))
 			body.WriteString(configFieldLine(innerIdiomatic, inner.Required, innerType))
 		}
 		body.WriteString("}\n")

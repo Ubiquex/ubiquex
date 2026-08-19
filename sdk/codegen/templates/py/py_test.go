@@ -374,6 +374,28 @@ func keys(m map[string]string) []string {
 	return out
 }
 
+func TestResourceFile_DescriptionSource_RenderedAsComment(t *testing.T) {
+	rt := rt("aws_db_instance",
+		ir.Field{
+			WireName: "instance_class", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Optional: true, Description: "The instance type of the RDS instance.",
+			DescriptionSource: ir.DescriptionSourceModel,
+		},
+		ir.Field{
+			WireName: "allocated_storage", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarNumber},
+			Optional: true, Description: "Amount of storage, in gibibytes.",
+			DescriptionSource: ir.DescriptionSourceAIInferred,
+		},
+	)
+	out, err := ResourceFile("instance", rt, "")
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	mustContain(t, out, "    # The instance type of the RDS instance.\n    instance_class: Any = None")
+	mustContain(t, out, "    # Amount of storage, in gibibytes. (AI-inferred)\n    allocated_storage: Any = None")
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {

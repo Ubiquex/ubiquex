@@ -414,6 +414,7 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 			return "", err
 		}
 		anyField = true
+		b.WriteString(fieldDocComment(f, "    "))
 		fmt.Fprintf(&b, "    %s: Any = None\n", idiomatic)
 	}
 	if !anyField {
@@ -433,6 +434,29 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 // function of the same name exactly.
 func fieldIsSettable(f ir.Field) bool {
 	return f.Required || f.Optional || !f.Computed
+}
+
+// fieldDocComment renders f.Description as a real, plain "# ..." comment
+// line above the field, indented with pad -- Python has no per-field
+// docstring convention a dataclass attribute actually supports at
+// runtime, so a comment line is the honest, visible choice (mirrors
+// sdk/codegen/templates/go's own fieldDocComment exactly; see that
+// function's doc comment for why AI-inferred gets a visible suffix and
+// DescriptionSourceNone gets no comment at all).
+func fieldDocComment(f ir.Field, pad string) string {
+	desc := oneLineDescription(f.Description)
+	switch f.DescriptionSource {
+	case ir.DescriptionSourceModel:
+		return pad + "# " + desc + "\n"
+	case ir.DescriptionSourceAIInferred:
+		return pad + "# " + desc + " (AI-inferred)\n"
+	default:
+		return ""
+	}
+}
+
+func oneLineDescription(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // resourceRenderer accumulates one resource type's own nested Config
@@ -534,6 +558,7 @@ func (r *resourceRenderer) pyFieldMeta(t ir.TypeRef, pathPrefix, wireName string
 				return "", err
 			}
 			anyField = true
+			body.WriteString(fieldDocComment(inner, "    "))
 			fmt.Fprintf(&body, "    %s: Any = None\n", innerIdiomatic)
 		}
 		if !anyField {
