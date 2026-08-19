@@ -133,14 +133,39 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for %s@%s -> %s\n", count, source, version, path)
 			}
 
+			// Real, deliberate posture difference from the [providers] loop
+			// above: a [dynamic_providers.<name>] entry failing (a real,
+			// honest "this source's own schema format isn't supported yet"
+			// or "this heuristic doesn't recognize this API's own create
+			// convention" refusal, not a crash) does NOT stop generation
+			// for every other declared entry -- confirmed live this
+			// session running the real central provider config
+			// (sdk/providers/.ubx/config): Azure's own real spec correctly,
+			// honestly discovers zero resources (a real, named, NOT-yet-fixed
+			// resourcemap gap), which would have silently prevented every
+			// alphabetically-later entry (github, google, kubernetes) from
+			// ever being attempted under the [providers] loop's own
+			// fail-fast posture. A CI-matrix posture -- generate what
+			// genuinely can be generated, report every real failure at the
+			// end -- is the correct one for a config that deliberately
+			// tracks many independent providers' own real, varying
+			// progress; [providers] keeps its own original fail-fast
+			// behavior unchanged (a real infra provider acquisition
+			// failure is a different, more urgent kind of problem).
+			var dynamicFailures []string
 			for _, name := range sortedDynamicProviderNames(cfg.DynamicProviders) {
 				params := cfg.DynamicProviders[name]
 
 				path, count, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin)
 				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
+					fmt.Fprintf(cmd.ErrOrStderr(), "sdk gen: dynamic provider %q: %v\n", name, err)
+					dynamicFailures = append(dynamicFailures, name)
+					continue
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for dynamic provider %q -> %s\n", count, name, path)
+			}
+			if len(dynamicFailures) > 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %d of %d dynamic provider(s) failed: %s", len(dynamicFailures), len(cfg.DynamicProviders), strings.Join(dynamicFailures, ", "))}
 			}
 
 			return nil

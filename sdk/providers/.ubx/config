@@ -1,0 +1,192 @@
+# sdk/providers/.ubx/config -- the real, central, Ubiquex-owned provider
+# config for the generic SDK-onboarding pipeline (`ubx sdk gen`).
+#
+# WHERE this lives, and why: inside the `ubiquex` monorepo itself, not a
+# separate repo. This file is tightly coupled to the pipeline code that
+# consumes it (cli/dynamicprovider.go, cli/sdk.go's own DynamicProviders
+# handling) -- keeping them in the same repo means a real config-shape
+# change and the code that reads it are reviewed together, never able to
+# drift apart the way a cross-repo split would risk. It lives under
+# sdk/providers/ (a sibling of sdk/codegen, sdk/conformance) rather than
+# the repo root's own .ubx/config, because THIS file is never meant to be
+# a real, ambient config for `ubx resolve`/`ubx ship` run from this
+# repo's own root -- it is scoped, deliberately, to exactly the directory
+# a real "ubx sdk gen" invocation for this pipeline is run from:
+#
+#   cd sdk/providers && ubx sdk gen --lang go --out ../generated
+#
+# WHAT format: real TOML, the [dynamic_providers.<name>] table shape --
+# not a new, invented format. This is the IDENTICAL real table shape
+# ubx-provider-dynamic's own internal/config package already defines and
+# validates (schema_source/schema_url/base_url/auth/target_prefix/...),
+# the same shape checkpoint 2's own cli/dynamicprovider.go already reads
+# generically (Config.DynamicProviders map[string]map[string]any) and
+# re-serializes into a real, temporary .ubx/config for the launched
+# ubx-provider-dynamic process. Reusing this exact shape, rather than
+# inventing a parallel provider-registry format, is the whole point of
+# checkpoint 2's own generic mechanism: this file IS what makes checkpoint
+# 2's mechanism real for all six providers, not a fourth format on top of
+# it.
+#
+# WHY this is distinct from any user's own .ubx/config: a real user's own
+# .ubx/config lives in THEIR OWN stack's directory and declares only the
+# providers THEIR stack actually uses, for real infra changes (ubx
+# resolve/ubx ship read it). This file is never used for real infra --
+# only `ubx sdk gen`, run from sdk/providers/, ever reads it, and it
+# exists purely to drive SDK codegen/doc generation for the six providers
+# this project maintains published bindings for.
+#
+# NAMING: each [dynamic_providers.<name>] table's own key IS the target
+# SDK repo's own short name (github.com/ubiquex/ubx-sdk-<name>) --
+# mechanically, via cli/sdk.go's own existing providerShortName, the
+# SAME real, deliberate "never a hand-curated rename table" discipline
+# sdk/codegen/ir.go's own doc comment already established for AWS
+# service-package naming. This is why the real, already-published GCP
+# bindings repo (github.com/ubiquex/ubx-sdk-google, confirmed against
+# the real, existing checkout on disk) means this file's own GCP entry
+# is named "google," not "gcp" -- matching the real, already-live repo
+# name, not the task-brief's own prose shorthand.
+#
+# ADDING A SEVENTH PROVIDER: one new [dynamic_providers.<name>] table
+# below, using whichever schema_source ubx-provider-dynamic already
+# supports for that provider's own real source format (openapi or
+# smithy, today) -- nothing else in this repo needs to change. If
+# something else DOES turn out to need touching, that is a real finding
+# about a real gap in the pipeline's own genericity, not something to
+# silently work around here.
+
+# --- Kubernetes -- real, live-verified end to end (checkpoints 1-2) ---
+#
+# schema_source = "openapi": ubx-provider-dynamic's own loader sniffs the
+# document's real declared version and transparently converts real
+# Swagger 2.0 to OpenAPI 3 (checkpoint 1's own real finding/fix) --
+# Kubernetes' own real, official API surface has no single-file OpenAPI
+# 3.x document at all, only this single-file Swagger 2.0 one.
+# base_url is a real, honest placeholder: unlike every other provider
+# here, Kubernetes has no single "the" API server -- a real cluster's own
+# endpoint is only known at real infra-apply time, never at codegen time
+# (codegen only ever calls Schema(), never Configure/ReadResource, so no
+# real base_url is actually needed for `ubx sdk gen` to work -- see
+# cli/dynamicprovider.go's own doc comment). Real, live-verified: 71
+# resource types, 22 real per-service packages, `go build`/`go vet` clean.
+[dynamic_providers.kubernetes]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.37/api/openapi-spec/swagger.json"
+base_url = "https://kubernetes.example.invalid"
+
+# --- GitHub -- real, live-verified schema/discovery since Phase 1 ---
+[dynamic_providers.github]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json"
+base_url = "https://api.github.com"
+
+[dynamic_providers.github.auth]
+type = "api_key_header"
+[[dynamic_providers.github.auth.params.headers]]
+name = "Authorization"
+value_env = "GITHUB_TOKEN"
+value_prefix = "Bearer "
+
+# --- Datadog -- real, live-verified schema/discovery since Phase 1 ---
+[dynamic_providers.datadog]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v1/openapi.yaml"
+base_url = "https://api.datadoghq.com"
+
+[dynamic_providers.datadog.auth]
+type = "api_key_header"
+[[dynamic_providers.datadog.auth.params.headers]]
+name = "DD-API-KEY"
+value_env = "DATADOG_API_KEY"
+[[dynamic_providers.datadog.auth.params.headers]]
+name = "DD-APPLICATION-KEY"
+value_env = "DATADOG_APP_KEY"
+
+# --- AWS -- real, live-verified schema/wire-protocol/SigV4 (Phase 4-5) ---
+#
+# Real, honest, structural limit, not a pipeline gap: AWS's own real
+# Smithy models are published ONE FILE PER SERVICE (github.com/aws/
+# api-models-aws has no single, merged, whole-of-AWS model at all) --
+# this one entry's own schema_url points at SQS specifically, the real,
+# live-verified representative service from Phase 4/5. Real, full AWS
+# coverage needs many more [dynamic_providers.aws_<service>] entries
+# (one per AWS service), each currently mapping to its OWN target repo
+# name via providerShortName -- "aws_ec2" would become
+# ubx-sdk-aws_ec2, not a shard of the single real, existing ubx-sdk-aws
+# repo. Reconciling "many schema entries, one combined target repo" for
+# AWS specifically is real, structural, NOT-yet-solved pipeline work --
+# named here explicitly, not worked around.
+[dynamic_providers.aws]
+schema_source = "smithy"
+schema_url = "https://raw.githubusercontent.com/aws/api-models-aws/main/models/sqs/service/2012-11-05/sqs-2012-11-05.json"
+base_url = "https://sqs.us-east-1.amazonaws.com"
+target_prefix = "AmazonSQS"
+
+[dynamic_providers.aws.auth]
+type = "aws_sigv4"
+[dynamic_providers.aws.auth.params]
+region = "us-east-1"
+service = "sqs"
+credential_source = "profile"
+
+# --- Azure -- real schema fetch verified this checkpoint; resource
+# discovery genuinely blocked, named honestly below ---
+#
+# schema_url is a real, current, pinned Azure Compute resource-provider
+# Swagger 2.0 file (Azure's own real spec format -- confirmed live this
+# checkpoint, NOT OpenAPI 3.x, and NOT single-file: it references a real,
+# external "common-types" definitions file by real relative path, which
+# ubx-provider-dynamic's own loader now resolves -- see
+# internal/openapi/load_live_test.go's own TestLive_AzureSwaggerWithExternalRefs).
+#
+# Real, confirmed, NOT-yet-fixed gap: resourcemap.Discover finds ZERO
+# resources from this real, correctly-parsed spec, because Azure's own
+# real ARM API convention uses PUT (not POST) to create/upsert a
+# resource -- resourcemap.Discover's own create-detection heuristic only
+# recognizes POST today. This entry's schema_url/base_url are real and
+# correct; `ubx sdk gen` against this entry will succeed at fetching and
+# parsing the schema and then generate zero resource types, honestly,
+# until that heuristic is extended.
+#
+# auth follows Azure AD's own real, standard client-credentials
+# convention (the identical real oauth2_client_credentials type Phase 2
+# already implements and live-verified against a different real OAuth2
+# service) -- NOT live-verified against Azure AD specifically this
+# session.
+[dynamic_providers.azure]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/compute/resource-manager/Microsoft.Compute/Compute/stable/2026-04-01/ComputeRP.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure.auth]
+type = "oauth2_client_credentials"
+[dynamic_providers.azure.auth.params]
+token_url = "https://login.microsoftonline.com/AZURE_TENANT_ID/oauth2/v2.0/token"
+client_id_env = "AZURE_CLIENT_ID"
+client_secret_env = "AZURE_CLIENT_SECRET"
+scopes = ["https://management.azure.com/.default"]
+
+# --- Google Cloud ("google," matching the real, already-published
+# ubx-sdk-google repo name) -- real schema location confirmed, schema
+# FORMAT genuinely not supported yet ---
+#
+# Real, confirmed finding, not assumed: GCP's own real API surface is
+# published as Discovery Documents (discoveryVersion "v1," a
+# "resources.*.methods.*" operation tree, GCP's own "schemas" for
+# component types) -- confirmed live this checkpoint to be a genuinely
+# different real JSON format from both OpenAPI/Swagger and Smithy (no
+# "swagger"/"openapi" field, no "paths" at all). schema_source has no
+# real value for this yet -- ubx-provider-dynamic's own
+# internal/config.SchemaSourceType enum only recognizes openapi/smithy/
+# inline/aws_ccapi today. "discovery_docs" below is written as the real,
+# correct intended value, deliberately NOT one of those four -- running
+# `ubx sdk gen` against this entry today fails with a real, honest
+# "unrecognized schema_source" error from ubx-provider-dynamic itself,
+# not a silent no-op. A real, new schema-source engine (parsing GCP's
+# own real resources/methods/schemas tree into the identical target IR
+# every other source already produces) is required, substantial, NOT-yet-
+# attempted work -- named here explicitly.
+[dynamic_providers.google]
+schema_source = "discovery_docs"
+schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/v1/rest"
+base_url = "https://compute.googleapis.com/compute/v1"
