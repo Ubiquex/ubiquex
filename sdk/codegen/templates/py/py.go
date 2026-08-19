@@ -348,11 +348,13 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 		configTypeName = configTypeNameOverride
 	}
 
+	// Real, deliberate, checkpoint-10 change: mirrors
+	// sdk/codegen/templates/go's own identical fix exactly -- nested
+	// dataclasses are now collected for EVERY real field, not just
+	// settable ones, so Attrs (below) has a real declared type for a
+	// computed-only field's own nested shape too.
 	r := &resourceRenderer{pascalName: pascalName}
 	for _, f := range rt.Fields {
-		if !fieldIsSettable(f) {
-			continue
-		}
 		if err := r.collectNestedDataclasses(f, pascalName); err != nil {
 			return "", err
 		}
@@ -418,6 +420,29 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 		fmt.Fprintf(&b, "    %s: Any = None\n", idiomatic)
 	}
 	if !anyField {
+		b.WriteString("    pass\n")
+	}
+	b.WriteString("\n")
+
+	// Attrs dataclass: EVERY real field, settable or computed-only --
+	// mirrors sdk/codegen/templates/go's own identical XxxAttrs struct
+	// (see that function's own doc comment for the full real finding
+	// and scope: a real, declared type giving every field's own real
+	// description a visible home, not yet wired to any real runtime
+	// computed-attribute-reading mechanism).
+	attrsTypeName := pascalName + "Attrs"
+	fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %s:\n", attrsTypeName)
+	var anyAttrField bool
+	for _, f := range rt.Fields {
+		idiomatic, err := pythonIdentifier(f.WireName)
+		if err != nil {
+			return "", err
+		}
+		anyAttrField = true
+		b.WriteString(fieldDocComment(f, "    "))
+		fmt.Fprintf(&b, "    %s: Any = None\n", idiomatic)
+	}
+	if !anyAttrField {
 		b.WriteString("    pass\n")
 	}
 	b.WriteString("\n")

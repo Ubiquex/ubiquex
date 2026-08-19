@@ -589,6 +589,65 @@ func TestResourceFile_DescriptionSource_RenderedAsDocComment(t *testing.T) {
 	mustNotContain(t, out, "// \n\tMasterPassword any")
 }
 
+// TestResourceFile_ComputedOnlyField_DescriptionVisibleInAttrs is the
+// real, direct regression test for checkpoint 10's own fix: a
+// computed-only field (Required=false, Optional=false, Computed=true --
+// the common real shape for id/node_id/created_at, confirmed live
+// checkpoint 6 to have NO rendering location anywhere in generated Go)
+// must now get a real, visible doc comment in the new Attrs struct, even
+// though it's correctly excluded from Config (fieldIsSettable's own
+// doc comment, unchanged).
+func TestResourceFile_ComputedOnlyField_DescriptionVisibleInAttrs(t *testing.T) {
+	rt := rt("github_label",
+		ir.Field{
+			WireName: "node_id", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Computed: true, Description: "The label's GraphQL node ID.",
+			DescriptionSource: ir.DescriptionSourceAIInferred,
+		},
+	)
+	out, err := ResourceFile("github", "label", rt, "")
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	// Never in Config -- computed-only, fieldIsSettable's own existing
+	// rule, unchanged.
+	configBlock := out[strings.Index(out, "type LabelConfig struct {"):]
+	configBlock = configBlock[:strings.Index(configBlock, "}")]
+	mustNotContain(t, configBlock, "NodeId")
+
+	// Now visible in Attrs, with the real, correct AI-inferred label.
+	mustContain(t, out, "type LabelAttrs struct {")
+	mustContain(t, out, "// The label's GraphQL node ID. (AI-inferred)\n\tNodeId any")
+}
+
+// TestResourceFile_ComputedOnlyNestedObject_GetsARealDeclaration is the
+// real, direct regression test for the deeper part of checkpoint 6's
+// own finding: a computed-only TOP-LEVEL object field's entire nested
+// subtree previously never got collected at all (collectNestedStructs
+// was gated by the identical fieldIsSettable filter as Config itself),
+// so a field like github_deployment_protection_rule's own "app" (an
+// object, computed-only) had no rendering location for ANY of its own
+// children either, at any depth.
+func TestResourceFile_ComputedOnlyNestedObject_GetsARealDeclaration(t *testing.T) {
+	rt := rt("github_deployment_protection_rule",
+		ir.Field{
+			WireName: "app", Computed: true,
+			Type: ir.TypeRef{Kind: ir.KindObject, Object: []ir.Field{
+				{WireName: "id", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarNumber},
+					Description: "The numeric ID of the GitHub App.", DescriptionSource: ir.DescriptionSourceAIInferred},
+			}},
+		},
+	)
+	out, err := ResourceFile("github", "deployment_protection_rule", rt, "")
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	mustContain(t, out, "type DeploymentProtectionRuleAttrs struct {")
+	mustContain(t, out, "// The numeric ID of the GitHub App. (AI-inferred)\n\tId any")
+}
+
 func TestFieldDocComment_CollapsesNewlinesAndAbstainsOnNone(t *testing.T) {
 	sourced := fieldDocComment(ir.Field{Description: "Line one.\nLine two.", DescriptionSource: ir.DescriptionSourceModel}, "\t")
 	if sourced != "\t// Line one. Line two.\n" {

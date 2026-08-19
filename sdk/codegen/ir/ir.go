@@ -349,6 +349,26 @@ func blockFields(b provider.Block, pathPrefix string) ([]Field, []string, error)
 // underscore), checked once here so an unrepresentable field is skipped
 // before it ever reaches template generation, rather than failing the
 // whole resource type there.
+//
+// Real, structural finding, checkpoint 10: a character-set check alone
+// is not sufficient -- a name whose own first non-underscore character
+// is a digit produces an INVALID Go/Python identifier once translated,
+// even though every individual character in it is individually allowed.
+// Confirmed live, GitHub's own real, published "reaction-rollup" schema
+// (github_commit_comment.reactions, among others): the real wire
+// property "-1" (GitHub's own thumbs-down reaction count) is
+// ToSnakeCase'd, upstream in ubx-provider-dynamic, into "_1" (the
+// leading "-" becomes "_", identical to every other separator
+// character) -- "_1" passes THIS check (both "_" and "1" are
+// individually allowed), but pascalCase's own segment-splitting (on
+// "_") then treats the leading underscore as an empty first segment,
+// silently drops it, and emits a bare "1" as the exported Go field
+// name -- a real Go parse failure ("expected '}', found 1"), not caught
+// until this field's own PARENT ("reactions") -- itself computed-only
+// at the top level -- became reachable for the first time via the new
+// Attrs struct (sdk/codegen/templates/go and .../py); Go/Python's own
+// prior, settable-fields-only nested-struct collection had never
+// visited this real field at all before.
 func isValidWireName(name string) bool {
 	if name == "" {
 		return false
@@ -357,6 +377,15 @@ func isValidWireName(name string) bool {
 		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' {
 			return false
 		}
+	}
+	// A name that is entirely underscores, or whose first non-underscore
+	// character is a digit, has no real, safe identifier to become in
+	// any target language -- pascalCase's own leading-underscore-strip
+	// (every language template applies the identical rule) would either
+	// produce an empty identifier or one starting with a digit.
+	trimmed := strings.TrimLeft(name, "_")
+	if trimmed == "" || (trimmed[0] >= '0' && trimmed[0] <= '9') {
+		return false
 	}
 	return true
 }

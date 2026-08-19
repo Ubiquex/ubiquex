@@ -396,6 +396,33 @@ func TestResourceFile_DescriptionSource_RenderedAsComment(t *testing.T) {
 	mustContain(t, out, "    # Amount of storage, in gibibytes. (AI-inferred)\n    allocated_storage: Any = None")
 }
 
+// TestResourceFile_ComputedOnlyField_DescriptionVisibleInAttrs is the
+// real, direct regression test for checkpoint 10's own fix -- mirrors
+// sdk/codegen/templates/go's own identical test exactly. A computed-only
+// field (Required=false, Optional=false, Computed=true) is correctly
+// excluded from Config (fieldIsSettable's own rule, unchanged) but must
+// now get a real, visible doc comment in the new Attrs dataclass.
+func TestResourceFile_ComputedOnlyField_DescriptionVisibleInAttrs(t *testing.T) {
+	rt := rt("github_label",
+		ir.Field{
+			WireName: "node_id", Type: ir.TypeRef{Kind: ir.KindScalar, Scalar: ir.ScalarString},
+			Computed: true, Description: "The label's GraphQL node ID.",
+			DescriptionSource: ir.DescriptionSourceAIInferred,
+		},
+	)
+	out, err := ResourceFile("label", rt, "")
+	if err != nil {
+		t.Fatalf("ResourceFile: %v", err)
+	}
+
+	configBlock := out[strings.Index(out, "class LabelConfig:"):]
+	configBlock = configBlock[:strings.Index(configBlock, "\n\n")]
+	mustNotContain(t, configBlock, "node_id")
+
+	mustContain(t, out, "class LabelAttrs:")
+	mustContain(t, out, "    # The label's GraphQL node ID. (AI-inferred)\n    node_id: Any = None")
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {

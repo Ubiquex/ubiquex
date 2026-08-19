@@ -378,6 +378,53 @@ func TestFromSchema_UnrepresentableFieldName_SkippedNotFatal(t *testing.T) {
 	}
 }
 
+// TestFromSchema_LeadingDigitAfterUnderscoreStrip_Skipped is the real,
+// direct regression test for checkpoint 10's own finding: a wire name
+// whose every individual character is allowed (letters/digits/
+// underscore) can still be unrepresentable, because pascalCase's own
+// leading-underscore strip can leave a bare leading digit. Confirmed
+// live against GitHub's own real, published "reaction-rollup" schema:
+// the real OpenAPI property "-1" (a thumbs-down reaction count) is
+// ToSnakeCase'd, upstream in ubx-provider-dynamic, into "_1" -- exactly
+// the wire name this test uses -- which previously passed
+// isValidWireName's own character-set-only check and reached
+// sdk/codegen/templates/go's own pascalCase, which silently dropped the
+// leading underscore and emitted a bare "1", an invalid Go identifier
+// (a real Go parse failure, "expected '}', found 1"). "_valid2" (a
+// digit, but not a LEADING one once the underscore is stripped) is
+// included as the real, deliberate control case, proving this isn't
+// rejecting every underscore-prefixed or digit-containing name, only
+// the ones that resolve to a leading digit.
+func TestFromSchema_LeadingDigitAfterUnderscoreStrip_Skipped(t *testing.T) {
+	schema := &provider.Schema{
+		Block: provider.Block{
+			Attributes: []provider.Attribute{
+				attr("name", `"string"`, false, true, false, false),
+				attr("_1", `"number"`, false, true, false, false),
+				attr("_valid2", `"number"`, false, true, false, false),
+			},
+		},
+	}
+
+	rt, err := FromSchema("github_commit_comment", schema)
+	if err != nil {
+		t.Fatalf("FromSchema: %v, want success (skip, not fail)", err)
+	}
+
+	var gotNames []string
+	for _, f := range rt.Fields {
+		gotNames = append(gotNames, f.WireName)
+	}
+	wantNames := []string{"name", "_valid2"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("Fields = %v, want %v (\"_1\" skipped, \"_valid2\" kept)", gotNames, wantNames)
+	}
+	wantSkipped := []string{"_1"}
+	if !reflect.DeepEqual(rt.SkippedFields, wantSkipped) {
+		t.Fatalf("SkippedFields = %v, want %v", rt.SkippedFields, wantSkipped)
+	}
+}
+
 func TestFromSchema_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 	// The conformance suite's own byte-identical-after-canonicalization
 	// discipline (docs/sdk.md) depends on codegen output never varying

@@ -232,11 +232,19 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configType
 		configTypeName = configTypeNameOverride
 	}
 
+	// Real, deliberate, checkpoint-10 change: nested structs are now
+	// collected for EVERY real field, not just settable ones --
+	// r.collectNestedStructs is already a real, dedup-by-shape cache
+	// (r.seenShapes), so calling it unconditionally is safe: an
+	// already-covered shape (referenced from Config, below) is a cache
+	// hit, and a NEWLY-covered shape (a computed-only field's own
+	// nested object, e.g. github_deployment_protection_rule's own
+	// "app" -- confirmed live, checkpoint 6, to previously have NO
+	// rendering location anywhere in generated Go at all) gets a real
+	// declaration for the first time, shared by both Config (below) and
+	// Attrs (below that).
 	r := &resourceRenderer{pascalName: pascalName}
 	for _, f := range rt.Fields {
-		if !fieldIsSettable(f) {
-			continue
-		}
 		if err := r.collectNestedStructs(f, pascalName); err != nil {
 			return "", err
 		}
@@ -298,6 +306,38 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configType
 		if !fieldIsSettable(f) {
 			continue
 		}
+		idiomatic, err := pascalCase(f.WireName)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(fieldDocComment(f, "\t"))
+		fmt.Fprintf(&b, "\t%s any\n", idiomatic)
+	}
+	b.WriteString("}\n\n")
+
+	// Attrs struct: EVERY real field, settable or computed-only -- the
+	// one real, visible place a computed-only field's own description
+	// (sourced or AI-inferred) can live in generated Go code at all.
+	// Mirrors sdk/codegen/templates/ts's own XxxAttrs interface, which
+	// already does this unconditionally (checkpoint 6's own real,
+	// confirmed finding: TS already showed the AI-inferred label
+	// correctly for these exact fields; Go and Python did not, because
+	// neither had ANY construct covering a computed-only field at all).
+	// Real, deliberate, honestly-scoped limitation, named here and in
+	// STATE.md, not silently implied complete: this is a real, declared
+	// Go type, but nothing in ubx-sdk-go's own runtime (a separate
+	// repo) currently constructs or returns a value of this shape --
+	// wiring a real computed-attribute-READING mechanism (the way
+	// ubx.Computed already gives a real, opaque, address-based
+	// reference for cross-resource wiring, never a materialized Go
+	// value) is separate, substantial, NOT-yet-attempted work. Attrs
+	// exists today purely so every field's own real description has a
+	// real, visible home, exactly the founder's own "the label is the
+	// integrity guarantee, make it genuinely visible" requirement, for
+	// a field class (computed-only) that had no such home before.
+	attrsTypeName := pascalName + "Attrs"
+	fmt.Fprintf(&b, "type %s struct {\n", attrsTypeName)
+	for _, f := range rt.Fields {
 		idiomatic, err := pascalCase(f.WireName)
 		if err != nil {
 			return "", err
