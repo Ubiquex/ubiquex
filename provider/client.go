@@ -35,6 +35,7 @@ type Option func(*config)
 type config struct {
 	handshakeTimeout time.Duration
 	extraEnv         []string
+	dir              string
 }
 
 // WithHandshakeTimeout overrides the default wait for the plugin's
@@ -48,6 +49,21 @@ func WithHandshakeTimeout(d time.Duration) Option {
 // magic cookie Launch always sets.
 func WithEnv(vars ...string) Option {
 	return func(c *config) { c.extraEnv = append(c.extraEnv, vars...) }
+}
+
+// WithDir sets the launched process's own working directory, overriding
+// the default (inherited from the current process). Real, load-bearing
+// need, not a hypothetical one: ubx-provider-dynamic (UBI-158) reads its
+// own config from ".ubx/config" relative to its own process cwd at
+// startup (internal/config's own doc comment explains why this can't wait
+// for ConfigureProvider) — a caller launching it from a directory other
+// than the target stack's own (a conformance harness's own scratch dir,
+// for one real example) needs a way to point it there without changing
+// the caller's own cwd, which Launch's own concurrent callers (this
+// package's own tests, and any future parallel caller) cannot safely
+// share as global process state.
+func WithDir(dir string) Option {
+	return func(c *config) { c.dir = dir }
 }
 
 // Client is a launched provider binary, connected over whichever tfplugin
@@ -73,6 +89,7 @@ func Launch(ctx context.Context, path string, opts ...Option) (*Client, error) {
 	}
 
 	cmd := exec.Command(path)
+	cmd.Dir = cfg.dir
 	cmd.Env = append(os.Environ(), magicCookieKey+"="+magicCookieValue)
 	cmd.Env = append(cmd.Env, "PLUGIN_PROTOCOL_VERSIONS="+supportedAppProtocolVersionsEnv())
 	cmd.Env = append(cmd.Env, cfg.extraEnv...)
@@ -134,6 +151,15 @@ func Launch(ctx context.Context, path string, opts ...Option) (*Client, error) {
 		conn:     conn,
 		stderr:   stderr,
 	}, nil
+}
+
+// Stderr returns everything the launched provider process has written to
+// its own stderr so far -- a real, generically useful diagnostic surface
+// (a provider's own panic/log output after a successful launch, not just
+// the handshake-failure case annotateWithStderr already surfaces), not
+// specific to any one caller.
+func (c *Client) Stderr() string {
+	return c.stderr.String()
 }
 
 // Close tears down the gRPC connection and terminates the provider process.

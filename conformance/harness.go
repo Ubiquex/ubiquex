@@ -130,6 +130,7 @@ func (a stateReaderAdapter) PlanResourceChange(ctx context.Context, resourceSche
 // AdoptMutateScanDiffConfig describes one conformance run.
 type AdoptMutateScanDiffConfig struct {
 	ProviderPath   string          // provider binary to Launch (real, or a fakeprovider fixture)
+	ProviderDir    string          // provider.WithDir -- see its own doc comment; empty means inherit this process's own cwd, the existing default every prior caller already gets
 	Source         string          // provider registry source (e.g. "hashicorp/helm"), for the (source, type)-keyed override table (UBI-24); optional, empty is fine for types with no overrides registered
 	Stack          string          // stack name for the generated proposals
 	Address        core.Address    // resource address (stack is redundant with Stack above but kept on Address for GenerateProposal's use)
@@ -186,7 +187,7 @@ func RunAdoptMutateScanDiff(t *testing.T, cfg AdoptMutateScanDiffConfig) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		client, err := provider.Launch(ctx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
+		client, err := provider.Launch(ctx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...), provider.WithDir(cfg.ProviderDir))
 		if err != nil {
 			t.Fatalf("%s: launch provider: %v", step, err)
 		}

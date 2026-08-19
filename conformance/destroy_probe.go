@@ -20,6 +20,7 @@ import (
 // destroy_probe_test.go.
 type DestroyProbeConfig struct {
 	ProviderPath   string
+	ProviderDir    string // see AdoptMutateScanDiffConfig.ProviderDir's own doc comment
 	Source         string
 	Version        string
 	Stack          string
@@ -100,7 +101,7 @@ func ProbeDestroyHonesty(ctx context.Context, l *core.Ledger, cfg DestroyProbeCo
 	// (RunAdoptMutateScanDiff's own scan closure).
 	shipCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	shipClient, err := provider.Launch(shipCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
+	shipClient, err := provider.Launch(shipCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...), provider.WithDir(cfg.ProviderDir))
 	if err != nil {
 		return nil, fmt.Errorf("destroy probe: launch provider (ship): %w", err)
 	}
@@ -125,7 +126,7 @@ func ProbeDestroyHonesty(ctx context.Context, l *core.Ledger, cfg DestroyProbeCo
 func probeAdopt(ctx context.Context, l *core.Ledger, salt []byte, timeout time.Duration, cfg DestroyProbeConfig) error {
 	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	client, err := provider.Launch(scanCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
+	client, err := provider.Launch(scanCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...), provider.WithDir(cfg.ProviderDir))
 	if err != nil {
 		return fmt.Errorf("launch provider (adopt): %w", err)
 	}

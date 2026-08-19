@@ -25,6 +25,7 @@ import (
 // doc comment.
 type LiveReadProbeConfig struct {
 	ProviderPath   string
+	ProviderDir    string // see AdoptMutateScanDiffConfig.ProviderDir's own doc comment
 	Source         string
 	Version        string
 	Stack          string
@@ -209,7 +210,7 @@ func liveRead(ctx context.Context, cfg LiveReadProbeConfig, lookup json.RawMessa
 	}
 	readCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	client, err := provider.Launch(readCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
+	client, err := provider.Launch(readCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...), provider.WithDir(cfg.ProviderDir))
 	if err != nil {
 		return nil, fmt.Errorf("launch provider: %w", err)
 	}
@@ -243,7 +244,7 @@ func liveScan(ctx context.Context, cfg LiveReadProbeConfig, l *core.Ledger, look
 	}
 	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	client, err := provider.Launch(scanCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...))
+	client, err := provider.Launch(scanCtx, cfg.ProviderPath, provider.WithEnv(cfg.ProviderEnv...), provider.WithDir(cfg.ProviderDir))
 	if err != nil {
 		return nil, fmt.Errorf("launch provider: %w", err)
 	}
