@@ -56,6 +56,73 @@ func TestBlockFromV6_NestedTypeAttribute(t *testing.T) {
 	}
 }
 
+// TestBlockFromV6_NestedTypeAttribute_MetadataSurvives is the real,
+// direct regression test for checkpoint 11's own fix: before it, this
+// exact real shape (a NestedType attribute's own children) had every
+// one of Description/Required/Optional/Computed/Sensitive silently
+// discarded -- only the bare cty.Type shape (proven by the sibling test
+// above) survived. Two levels deep, matching
+// TestBlockFromV6_NestedTypeAttribute_Recursive's own real shape, to
+// prove this isn't a one-level-only fix.
+func TestBlockFromV6_NestedTypeAttribute_MetadataSurvives(t *testing.T) {
+	block := &tfplugin6.Schema_Block{
+		Attributes: []*tfplugin6.Schema_Attribute{
+			{
+				Name: "spec",
+				NestedType: &tfplugin6.Schema_Object{
+					Nesting: tfplugin6.Schema_Object_SINGLE,
+					Attributes: []*tfplugin6.Schema_Attribute{
+						{
+							Name: "replicas", Type: []byte(`"number"`), Optional: true,
+							Description: "Number of desired pods.",
+						},
+						{
+							Name: "selector", Required: true, Sensitive: true,
+							Description: "A label selector.",
+							NestedType: &tfplugin6.Schema_Object{
+								Nesting: tfplugin6.Schema_Object_SINGLE,
+								Attributes: []*tfplugin6.Schema_Attribute{
+									{Name: "match_labels", Type: []byte(`["map","string"]`), Computed: true, Description: "matchLabels."},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	got, err := blockFromV6(block)
+	if err != nil {
+		t.Fatalf("blockFromV6: %v", err)
+	}
+	spec := got.Attributes[0]
+	if len(spec.NestedAttributes) != 2 {
+		t.Fatalf("spec.NestedAttributes = %+v, want 2", spec.NestedAttributes)
+	}
+	byName := map[string]Attribute{}
+	for _, a := range spec.NestedAttributes {
+		byName[a.Name] = a
+	}
+
+	replicas := byName["replicas"]
+	if replicas.Description != "Number of desired pods." || !replicas.Optional {
+		t.Fatalf("replicas = %+v, want the real description and Optional=true", replicas)
+	}
+
+	selector := byName["selector"]
+	if selector.Description != "A label selector." || !selector.Required || !selector.Sensitive {
+		t.Fatalf("selector = %+v, want the real description, Required=true, Sensitive=true", selector)
+	}
+	if len(selector.NestedAttributes) != 1 {
+		t.Fatalf("selector.NestedAttributes = %+v, want 1", selector.NestedAttributes)
+	}
+	matchLabels := selector.NestedAttributes[0]
+	if matchLabels.Name != "match_labels" || matchLabels.Description != "matchLabels." || !matchLabels.Computed {
+		t.Fatalf("selector.match_labels = %+v, want the real description two levels deep and Computed=true", matchLabels)
+	}
+}
+
 // TestBlockFromV6_NestedTypeAttribute_Nesting covers the three collection
 // nesting modes NestedType shares with NestedBlock's own Nesting field --
 // LIST/SET/MAP wrap the object type; SINGLE (and any unrecognized future

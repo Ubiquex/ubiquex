@@ -259,6 +259,81 @@ func TestFromSchema_ObjectTypedAttribute_Defensiveness(t *testing.T) {
 	}
 }
 
+// TestFromSchema_NestedAttributeMetadata_Survives is the real, direct
+// regression test for checkpoint 11's own fix: a nested (object-typed)
+// attribute's own real Description/Required/Optional/Computed/Sensitive
+// -- carried on provider.Attribute.NestedAttributes, the real,
+// per-nested-attribute metadata a plain cty.Type structurally cannot
+// hold -- must now reach the resulting ir.Field, at more than one
+// nesting depth, not just the top one. Confirmed live against
+// Kubernetes' own real kubernetes_apps_deployment.spec.replicas, whose
+// real source description previously vanished at exactly this point
+// (provider.schema.go's own nestedObjectCtyTypeFromV6, which flattens
+// NestedType into a bare cty.Type with no room for it) -- this test
+// exercises the identical real shape with a hermetic fixture, two
+// levels deep (spec.replicas, spec.selector.match_labels).
+func TestFromSchema_NestedAttributeMetadata_Survives(t *testing.T) {
+	schema := &provider.Schema{
+		Block: provider.Block{
+			Attributes: []provider.Attribute{
+				{
+					Name: "spec",
+					Type: json.RawMessage(`["object",{"replicas":"number","selector":["object",{"match_labels":["map","string"]}]}]`),
+					NestedAttributes: []provider.Attribute{
+						{
+							Name: "replicas", Optional: true,
+							Description: "Number of desired pods. This is a pointer to distinguish between explicit zero and not specified.",
+						},
+						{
+							Name: "selector", Required: true,
+							Description: "A label selector is a label query over a set of resources.",
+							NestedAttributes: []provider.Attribute{
+								{
+									Name: "match_labels", Optional: true,
+									Description: "matchLabels is a map of {key,value} pairs.",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	rt, err := FromSchema("kubernetes_apps_deployment", schema)
+	if err != nil {
+		t.Fatalf("FromSchema: %v", err)
+	}
+	if len(rt.Fields) != 1 || rt.Fields[0].WireName != "spec" {
+		t.Fatalf("Fields = %+v", rt.Fields)
+	}
+	spec := rt.Fields[0].Type.Object
+	byName := map[string]Field{}
+	for _, f := range spec {
+		byName[f.WireName] = f
+	}
+
+	replicas, ok := byName["replicas"]
+	if !ok || replicas.Description != "Number of desired pods. This is a pointer to distinguish between explicit zero and not specified." {
+		t.Fatalf("spec.replicas = %+v, want the real, preserved source description", replicas)
+	}
+	if !replicas.Optional || replicas.DescriptionSource != DescriptionSourceModel {
+		t.Fatalf("spec.replicas Optional/DescriptionSource = %v/%v, want true/%v", replicas.Optional, replicas.DescriptionSource, DescriptionSourceModel)
+	}
+
+	selector, ok := byName["selector"]
+	if !ok || !selector.Required || selector.Description == "" {
+		t.Fatalf("spec.selector = %+v, want Required=true and a real, preserved description", selector)
+	}
+
+	// Two levels deep -- spec.selector.match_labels -- proving this
+	// isn't just a one-level-deep fix.
+	matchLabels := selector.Type.Object[0]
+	if matchLabels.WireName != "match_labels" || matchLabels.Description != "matchLabels is a map of {key,value} pairs." {
+		t.Fatalf("spec.selector.match_labels = %+v, want the real, preserved description two levels deep", matchLabels)
+	}
+}
+
 // TestFromSchema_UnrepresentableNameInsideObjectTypedAttribute_Skipped
 // proves the SECOND, genuinely different place a real "$ref"-shaped name
 // can appear -- not wrapped in a NestedBlock at all (the case the

@@ -290,7 +290,7 @@ func blockFields(b provider.Block, pathPrefix string) ([]Field, []string, error)
 		if err != nil {
 			return nil, nil, fmt.Errorf("attribute %q: parse type: %w", a.Name, err)
 		}
-		ref, innerSkipped, err := typeRefFromCty(cty, dotPath(pathPrefix, a.Name))
+		ref, innerSkipped, err := typeRefFromCty(cty, dotPath(pathPrefix, a.Name), attrsByName(a.NestedAttributes))
 		if err != nil {
 			return nil, nil, fmt.Errorf("attribute %q: %w", a.Name, err)
 		}
@@ -434,7 +434,24 @@ func dotPath(prefix, name string) string {
 // this branch, not blockFields' own NestedBlocks one). pathPrefix
 // threads the same dot-path SkippedFields reporting blockFields already
 // establishes down through this recursion too.
-func typeRefFromCty(ty cty.Type, pathPrefix string) (TypeRef, []string, error) {
+// meta carries the real per-nested-attribute metadata
+// (Description/Required/Optional/Computed/Sensitive) provider.Attribute.NestedAttributes
+// preserves for whatever real tfplugin6 NestedType attribute ty was
+// derived from -- ty itself, being a plain cty.Type, has no room for any
+// of this (see provider.Attribute.NestedAttributes' own doc comment for
+// the full real finding: this data was silently discarded here before
+// checkpoint 11, for every real dynamic-provider-sourced nested field,
+// confirmed live against Kubernetes' own real
+// kubernetes_apps_deployment.spec.replicas, which has a real, rich
+// source description that never survived past this exact point). meta
+// is nil (not an error) for a scalar/list/set/map-of-scalar ty, or for
+// any real provider whose own nested shape came from the legacy
+// NestedBlock mechanism instead (v5, or a v6 provider that never used
+// NestedType at all) -- both real, honest "no extra metadata available"
+// cases, not failures; every field in that case simply keeps its own
+// real, honest zero-value Required/Optional/Computed/Description,
+// unchanged from before this fix.
+func typeRefFromCty(ty cty.Type, pathPrefix string, meta map[string]provider.Attribute) (TypeRef, []string, error) {
 	switch {
 	case ty == cty.String:
 		return TypeRef{Kind: KindScalar, Scalar: ScalarString}, nil, nil
@@ -445,19 +462,19 @@ func typeRefFromCty(ty cty.Type, pathPrefix string) (TypeRef, []string, error) {
 	case ty == cty.DynamicPseudoType:
 		return TypeRef{Kind: KindScalar, Scalar: ScalarDynamic}, nil, nil
 	case ty.IsListType():
-		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix, meta)
 		if err != nil {
 			return TypeRef{}, nil, err
 		}
 		return TypeRef{Kind: KindList, Element: &el}, skipped, nil
 	case ty.IsSetType():
-		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix, meta)
 		if err != nil {
 			return TypeRef{}, nil, err
 		}
 		return TypeRef{Kind: KindSet, Element: &el}, skipped, nil
 	case ty.IsMapType():
-		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix, meta)
 		if err != nil {
 			return TypeRef{}, nil, err
 		}
@@ -482,15 +499,45 @@ func typeRefFromCty(ty cty.Type, pathPrefix string) (TypeRef, []string, error) {
 				skipped = append(skipped, dotPath(pathPrefix, name))
 				continue
 			}
-			el, innerSkipped, err := typeRefFromCty(atys[name], dotPath(pathPrefix, name))
+			// m is the real, honest zero-value provider.Attribute{} when
+			// meta itself is nil or has no entry for this real name --
+			// exactly the same "no extra metadata available" case
+			// documented above, at every recursion depth, not just the
+			// top one.
+			m := meta[name]
+			el, innerSkipped, err := typeRefFromCty(atys[name], dotPath(pathPrefix, name), attrsByName(m.NestedAttributes))
 			if err != nil {
 				return TypeRef{}, nil, err
 			}
 			skipped = append(skipped, innerSkipped...)
-			fields = append(fields, Field{WireName: name, Type: el})
+			fields = append(fields, Field{
+				WireName:          name,
+				Type:              el,
+				Description:       m.Description,
+				Required:          m.Required,
+				Optional:          m.Optional,
+				Computed:          m.Computed,
+				Sensitive:         m.Sensitive,
+				DescriptionSource: descriptionSourceFor(m.Description),
+			})
 		}
 		return TypeRef{Kind: KindObject, Object: fields}, skipped, nil
 	default:
 		return TypeRef{}, nil, fmt.Errorf("unsupported cty type %s", ty.FriendlyName())
 	}
+}
+
+// attrsByName indexes attrs (provider.Attribute.NestedAttributes, in
+// real, deterministic wire order already) by name for typeRefFromCty's
+// own real per-recursion-level lookups -- nil in, nil out, the common
+// "no nested metadata at this level" case.
+func attrsByName(attrs []provider.Attribute) map[string]provider.Attribute {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make(map[string]provider.Attribute, len(attrs))
+	for _, a := range attrs {
+		out[a.Name] = a
+	}
+	return out
 }

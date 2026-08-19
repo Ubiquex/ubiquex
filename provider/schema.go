@@ -58,6 +58,41 @@ type Attribute struct {
 	Optional    bool
 	Computed    bool
 	Sensitive   bool
+
+	// NestedAttributes is the real, per-attribute metadata
+	// (Description/Required/Optional/Computed/Sensitive, recursively)
+	// for this attribute's own children, when it's a protocol v6
+	// NestedType attribute -- nil for a plain scalar/list/set/map-of-
+	// scalar attribute, or for a v5 attribute (protocol v5 has no
+	// NestedType concept at all).
+	//
+	// Real, structural finding, checkpoint 11: Type (above) is ALSO
+	// populated for a NestedType attribute (attributeTypeJSONFromV6
+	// flattens NestedType into the equivalent cty.Object/List/Set/Map
+	// type, so every existing consumer of Type -- ctyvalue.go's own
+	// real config-value encoding chief among them -- keeps working
+	// unchanged) -- but cty.Type, by design, carries VALUE SHAPE only,
+	// never per-attribute schema metadata; a nested attribute's own
+	// real Description/Required/Optional/Computed had nowhere to go at
+	// all before this field existed, and was silently discarded the
+	// moment nestedObjectCtyTypeFromV6 built that flattened cty.Type.
+	// Confirmed live, not assumed: Kubernetes' own real, live
+	// kubernetes_apps_deployment.spec.replicas carries a real, rich
+	// source description ("Number of desired pods...") that survived
+	// every layer of ubx-provider-dynamic's own translation and the
+	// real tfplugin6 RPC itself intact, then vanished at exactly this
+	// point -- traced field by field, not inferred. The code that
+	// wrote the original flattening (attributeTypeJSONFromV6's own doc
+	// comment) was correct for what it knew of at the time (the one
+	// real NestedType user found, UBI-112's
+	// kubernetes_validating_admission_policy_v1, a genuine rarity
+	// then) -- it simply predates ubx-provider-dynamic's own later
+	// design decision (internal/schema/translate.go) to build
+	// NestedType for EVERY real nested object in EVERY dynamic
+	// provider, which made what was a rare edge case the DOMINANT real
+	// shape for this whole pipeline's own schemas, without this file
+	// ever being revisited for it.
+	NestedAttributes []Attribute
 }
 
 // NestingMode mirrors tfplugin's Schema.NestedBlock.NestingMode, unified
@@ -138,14 +173,19 @@ func blockFromV6(b *tfplugin6.Schema_Block) (Block, error) {
 		if err != nil {
 			return Block{}, fmt.Errorf("attribute %q: %w", a.Name, err)
 		}
+		nested, err := nestedAttributesFromV6(a.NestedType)
+		if err != nil {
+			return Block{}, fmt.Errorf("attribute %q: %w", a.Name, err)
+		}
 		out.Attributes = append(out.Attributes, Attribute{
-			Name:        a.Name,
-			Type:        typeJSON,
-			Description: a.Description,
-			Required:    a.Required,
-			Optional:    a.Optional,
-			Computed:    a.Computed,
-			Sensitive:   a.Sensitive,
+			Name:             a.Name,
+			Type:             typeJSON,
+			Description:      a.Description,
+			Required:         a.Required,
+			Optional:         a.Optional,
+			Computed:         a.Computed,
+			Sensitive:        a.Sensitive,
+			NestedAttributes: nested,
 		})
 	}
 	for _, nb := range b.BlockTypes {
@@ -221,6 +261,43 @@ func nestedObjectCtyTypeFromV6(o *tfplugin6.Schema_Object) (cty.Type, error) {
 	default: // SINGLE, or an unrecognized/future mode -- treat as a bare object
 		return obj, nil
 	}
+}
+
+// nestedAttributesFromV6 recursively converts o's own real Attributes
+// into Attribute values, preserving each one's own real
+// Description/Required/Optional/Computed/Sensitive -- the real
+// per-nested-attribute metadata nestedObjectCtyTypeFromV6's own
+// flattened cty.Type has no room for at all (see Attribute.NestedAttributes'
+// own doc comment for the full real finding). Returns nil, nil for a
+// non-nested attribute (o == nil), the common case -- never an empty,
+// allocated slice, so a caller's own nil check (attrsByName, sdk/codegen/ir)
+// stays a simple, cheap length check.
+func nestedAttributesFromV6(o *tfplugin6.Schema_Object) ([]Attribute, error) {
+	if o == nil {
+		return nil, nil
+	}
+	out := make([]Attribute, 0, len(o.Attributes))
+	for _, a := range o.Attributes {
+		typeJSON, err := attributeTypeJSONFromV6(a)
+		if err != nil {
+			return nil, fmt.Errorf("nested attribute %q: %w", a.Name, err)
+		}
+		nested, err := nestedAttributesFromV6(a.NestedType)
+		if err != nil {
+			return nil, fmt.Errorf("nested attribute %q: %w", a.Name, err)
+		}
+		out = append(out, Attribute{
+			Name:             a.Name,
+			Type:             typeJSON,
+			Description:      a.Description,
+			Required:         a.Required,
+			Optional:         a.Optional,
+			Computed:         a.Computed,
+			Sensitive:        a.Sensitive,
+			NestedAttributes: nested,
+		})
+	}
+	return out, nil
 }
 
 func nestingModeFromV6(m tfplugin6.Schema_NestedBlock_NestingMode) NestingMode {
