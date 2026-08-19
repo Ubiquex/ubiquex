@@ -77,9 +77,10 @@ func newSDKCmd() *cobra.Command {
 // at all -- versus what's shared).
 func newSDKGenCmd() *cobra.Command {
 	var (
-		out     string
-		lang    string
-		timeout time.Duration
+		out                string
+		lang               string
+		timeout            time.Duration
+		dynamicProviderBin string
 	)
 
 	cmd := &cobra.Command{
@@ -114,8 +115,8 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 			}
-			if len(cfg.Providers) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: no [providers] declared in .ubx/config -- ubx sdk gen has no legacy single-provider fallback (codegen is a multi-provider-stacks-era feature); declare at least one source in [providers]")}
+			if len(cfg.Providers) == 0 && len(cfg.DynamicProviders) == 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: no [providers] or [dynamic_providers.<name>] declared in .ubx/config -- ubx sdk gen has no legacy single-provider fallback (codegen is a multi-provider-stacks-era feature); declare at least one source")}
 			}
 
 			if err := os.MkdirAll(out, 0o755); err != nil {
@@ -132,6 +133,16 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for %s@%s -> %s\n", count, source, version, path)
 			}
 
+			for _, name := range sortedDynamicProviderNames(cfg.DynamicProviders) {
+				params := cfg.DynamicProviders[name]
+
+				path, count, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for dynamic provider %q -> %s\n", count, name, path)
+			}
+
 			return nil
 		},
 	}
@@ -139,6 +150,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<source-sanitized>/sdk/<lang>/`)
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
+	cmd.Flags().StringVar(&dynamicProviderBin, "dynamic-provider-bin", "", `path to an already-built ubx-provider-dynamic binary, for [dynamic_providers.<name>] entries -- if unset, built on demand from a local checkout (UBX_PROVIDER_DYNAMIC_REPO, default "../ubx-provider-dynamic")`)
 
 	return cmd
 }
@@ -179,6 +191,52 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		return "", 0, fmt.Errorf("fetch schema for %s@%s: %w", source, version, err)
 	}
 
+	return writeGeneratedSDK(schemas, providerShortName(source), source, version, out, lang)
+}
+
+// generateOneDynamicProvider is generateOneProvider's own real sibling for
+// a [dynamic_providers.<name>] entry -- see cli/dynamicprovider.go's own
+// doc comment for why this is a genuinely different launch path (no
+// independent registry-acquired binary exists), sharing writeGeneratedSDK's
+// own identical codegen/output logic once a real schema dump is in hand,
+// so the two paths can never silently diverge in how they turn a
+// provider.Schemas into generated files. version is the real, honest
+// placeholder "dynamic" -- see resolveDynamicProviderBinary's own doc
+// comment for why no real per-target version pin exists yet.
+func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string) (path string, resourceCount int, err error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	repoPath := os.Getenv("UBX_PROVIDER_DYNAMIC_REPO")
+	if repoPath == "" {
+		repoPath = defaultDynamicProviderRepo
+	}
+	binPath, err := resolveDynamicProviderBinary(dynamicProviderBin, repoPath)
+	if err != nil {
+		return "", 0, err
+	}
+
+	schemas, err := dynamicProviderSchema(ctx, binPath, name, params)
+	if err != nil {
+		return "", 0, err
+	}
+
+	const version = "dynamic"
+	return writeGeneratedSDK(schemas, name, name, version, out, lang)
+}
+
+// writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's
+// own real, shared tail: schema -> sdk/codegen/ir -> lang-selected
+// template -> written repo-shaped tree. shortName is the generated repo's
+// own manifest name (github.com/ubiquex/ubx-sdk-<shortName>, ...);
+// source/version are recorded into the generated manifests/doc comments
+// verbatim, and source ALSO drives the real output directory name
+// (sanitizeSourceForFilename) -- identical for a real Terraform-registry
+// provider (its own real source string) and a dynamic provider (its own
+// declared [dynamic_providers.<name>] name, which needs no sanitizing
+// itself but shares the identical real code path rather than a parallel
+// one).
+func writeGeneratedSDK(schemas *provider.Schemas, shortName, source, version, out, lang string) (path string, resourceCount int, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -195,6 +253,17 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		if err != nil {
 			return "", 0, fmt.Errorf("%s@%s: %w", source, version, err)
 		}
+		// ir.FromSchema's own real "skip rather than fail the whole
+		// resource" discipline (a real field/nested-block whose wire name
+		// can't be safely represented in any real target language --
+		// confirmed live against Kubernetes' own real
+		// CustomResourceDefinition, whose real, official JSONSchemaProps
+		// type embeds literal "$ref"/"$schema" field names) -- reported
+		// here, not silently dropped: every skip is real, worth a human
+		// noticing, even though it doesn't fail generation.
+		for _, path := range resType.SkippedFields {
+			fmt.Fprintf(os.Stderr, "sdk gen: %s: skipped unrepresentable field %q (unsupported character for any real target language)\n", typeName, path)
+		}
 		types = append(types, resType)
 	}
 
@@ -209,17 +278,17 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	var checkErr error
 	switch lang {
 	case "go":
-		files, err = gotemplate.GeneratedRepo(providerShortName(source), source, version, types, resolveGoDirective(repoDir))
+		files, err = gotemplate.GeneratedRepo(shortName, source, version, types, resolveGoDirective(repoDir))
 		if err == nil {
 			checkErr = gotemplate.CheckRepoNoDuplicateDeclarations(files)
 		}
 	case "py":
-		files, err = pytemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		files, err = pytemplate.GeneratedRepo(shortName, source, version, types)
 		if err == nil {
 			checkErr = pytemplate.CheckRepoNoDuplicateDeclarations(files)
 		}
 	default:
-		files, err = tstemplate.GeneratedRepo(providerShortName(source), source, version, types)
+		files, err = tstemplate.GeneratedRepo(shortName, source, version, types)
 		if err == nil {
 			checkErr = tstemplate.CheckRepoNoDuplicateDeclarations(files)
 		}

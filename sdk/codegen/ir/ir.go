@@ -106,6 +106,25 @@ type Field struct {
 type ResourceType struct {
 	WireType string
 	Fields   []Field
+
+	// SkippedFields records every real, dot-path-named field (or nested
+	// block) this resource's own real schema declared but that FromSchema
+	// could not safely represent -- never silently dropped without a
+	// trace. Real, confirmed finding: Kubernetes' own real
+	// CustomResourceDefinition type embeds JSONSchemaProps, its own
+	// real, official representation of "an arbitrary JSON Schema as
+	// data" -- whose own real property list literally includes "$ref"
+	// and "$schema" as genuine field names (JSON Schema's own real
+	// keywords, modeled as K8s API fields, not a translation artifact).
+	// Every per-language template's own splitWireName already refuses
+	// (never guesses/coerces) a wire name outside plain ASCII
+	// lowercase+digit+underscore -- this is that same real, deliberate
+	// "abstain rather than silently mangle" discipline applied one layer
+	// up: skip the individual unrepresentable field, keep generating
+	// every other real, valid field on the same resource, and report
+	// exactly what was skipped rather than either failing the whole
+	// resource type or inventing an unverified rename.
+	SkippedFields []string
 }
 
 // ServiceAndLocalName splits a real provider wire type name into the
@@ -201,11 +220,11 @@ func FromSchema(wireType string, schema *provider.Schema) (*ResourceType, error)
 	if schema == nil {
 		return nil, fmt.Errorf("sdk/codegen/ir: FromSchema(%q): nil schema", wireType)
 	}
-	fields, err := blockFields(schema.Block)
+	fields, skipped, err := blockFields(schema.Block, "")
 	if err != nil {
 		return nil, fmt.Errorf("sdk/codegen/ir: FromSchema(%q): %w", wireType, err)
 	}
-	return &ResourceType{WireType: wireType, Fields: fields}, nil
+	return &ResourceType{WireType: wireType, Fields: fields, SkippedFields: skipped}, nil
 }
 
 // blockFields walks one schema block's own Attributes and NestedBlocks
@@ -213,19 +232,28 @@ func FromSchema(wireType string, schema *provider.Schema) (*ResourceType, error)
 // schema's own declared order (provider.Block's slices, not a map --
 // already deterministic, nothing to sort here; sorting only becomes
 // necessary once a cty.Type's own AttributeTypes() map is walked, inside
-// typeRefFromCty, below).
-func blockFields(b provider.Block) ([]Field, error) {
+// typeRefFromCty, below). pathPrefix is this block's own dot-path
+// location within the resource (e.g. "spec.versions" for a nested block
+// reached that way) -- purely for SkippedFields' own reporting, never
+// consulted for translation itself.
+func blockFields(b provider.Block, pathPrefix string) ([]Field, []string, error) {
 	fields := make([]Field, 0, len(b.Attributes)+len(b.NestedBlocks))
+	var skipped []string
 
 	for _, a := range b.Attributes {
+		if !isValidWireName(a.Name) {
+			skipped = append(skipped, dotPath(pathPrefix, a.Name))
+			continue
+		}
 		cty, err := ctyjson.UnmarshalType(a.Type)
 		if err != nil {
-			return nil, fmt.Errorf("attribute %q: parse type: %w", a.Name, err)
+			return nil, nil, fmt.Errorf("attribute %q: parse type: %w", a.Name, err)
 		}
-		ref, err := typeRefFromCty(cty)
+		ref, innerSkipped, err := typeRefFromCty(cty, dotPath(pathPrefix, a.Name))
 		if err != nil {
-			return nil, fmt.Errorf("attribute %q: %w", a.Name, err)
+			return nil, nil, fmt.Errorf("attribute %q: %w", a.Name, err)
 		}
+		skipped = append(skipped, innerSkipped...)
 		fields = append(fields, Field{
 			WireName:    a.Name,
 			Type:        ref,
@@ -238,10 +266,19 @@ func blockFields(b provider.Block) ([]Field, error) {
 	}
 
 	for _, nb := range b.NestedBlocks {
-		inner, err := blockFields(nb.Block)
-		if err != nil {
-			return nil, fmt.Errorf("nested block %q: %w", nb.TypeName, err)
+		if !isValidWireName(nb.TypeName) {
+			// The whole nested object is unrepresentable without a valid
+			// container name, regardless of whether its own inner fields
+			// would individually be fine -- reported as one skip, not
+			// descended into.
+			skipped = append(skipped, dotPath(pathPrefix, nb.TypeName))
+			continue
 		}
+		inner, innerSkipped, err := blockFields(nb.Block, dotPath(pathPrefix, nb.TypeName))
+		if err != nil {
+			return nil, nil, fmt.Errorf("nested block %q: %w", nb.TypeName, err)
+		}
+		skipped = append(skipped, innerSkipped...)
 		object := TypeRef{Kind: KindObject, Object: inner}
 		var ref TypeRef
 		switch nb.Nesting {
@@ -260,7 +297,35 @@ func blockFields(b provider.Block) ([]Field, error) {
 		fields = append(fields, Field{WireName: nb.TypeName, Type: ref})
 	}
 
-	return fields, nil
+	return fields, skipped, nil
+}
+
+// isValidWireName reports whether name is safe to carry through into a
+// generated identifier in every real, supported target language -- the
+// identical real character set each language template's own
+// splitWireName already enforces (plain ASCII lowercase letters, digits,
+// underscore), checked once here so an unrepresentable field is skipped
+// before it ever reaches template generation, rather than failing the
+// whole resource type there.
+func isValidWireName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// dotPath joins a path prefix and a field name for SkippedFields'
+// own reporting -- "" prefix means top-level, no leading dot.
+func dotPath(prefix, name string) string {
+	if prefix == "" {
+		return name
+	}
+	return prefix + "." + name
 }
 
 // typeRefFromCty converts a parsed cty.Type (already verified against a
@@ -277,34 +342,45 @@ func blockFields(b provider.Block) ([]Field, error) {
 // degrades to a correct IR translation instead of an opaque error,
 // mirroring encodeGenericValue's own "defensiveness, never actually
 // exercised" posture exactly.
-func typeRefFromCty(ty cty.Type) (TypeRef, error) {
+// typeRefFromCty also returns skipped -- real field names encountered
+// inside the IsObjectType branch, below, that isValidWireName rejects
+// (the identical real "$ref"/"$schema" case blockFields' own attribute
+// loop already handles, but reachable a SECOND, genuinely different way
+// here: a schema-level object appearing as the VALUE of a List/Set/Map
+// element or another Object's own attribute, never wrapped in a
+// NestedBlock at all -- confirmed live against Kubernetes' own real
+// CustomResourceDefinition, whose JSONSchemaProps-shaped fields reach
+// this branch, not blockFields' own NestedBlocks one). pathPrefix
+// threads the same dot-path SkippedFields reporting blockFields already
+// establishes down through this recursion too.
+func typeRefFromCty(ty cty.Type, pathPrefix string) (TypeRef, []string, error) {
 	switch {
 	case ty == cty.String:
-		return TypeRef{Kind: KindScalar, Scalar: ScalarString}, nil
+		return TypeRef{Kind: KindScalar, Scalar: ScalarString}, nil, nil
 	case ty == cty.Number:
-		return TypeRef{Kind: KindScalar, Scalar: ScalarNumber}, nil
+		return TypeRef{Kind: KindScalar, Scalar: ScalarNumber}, nil, nil
 	case ty == cty.Bool:
-		return TypeRef{Kind: KindScalar, Scalar: ScalarBool}, nil
+		return TypeRef{Kind: KindScalar, Scalar: ScalarBool}, nil, nil
 	case ty == cty.DynamicPseudoType:
-		return TypeRef{Kind: KindScalar, Scalar: ScalarDynamic}, nil
+		return TypeRef{Kind: KindScalar, Scalar: ScalarDynamic}, nil, nil
 	case ty.IsListType():
-		el, err := typeRefFromCty(ty.ElementType())
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
 		if err != nil {
-			return TypeRef{}, err
+			return TypeRef{}, nil, err
 		}
-		return TypeRef{Kind: KindList, Element: &el}, nil
+		return TypeRef{Kind: KindList, Element: &el}, skipped, nil
 	case ty.IsSetType():
-		el, err := typeRefFromCty(ty.ElementType())
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
 		if err != nil {
-			return TypeRef{}, err
+			return TypeRef{}, nil, err
 		}
-		return TypeRef{Kind: KindSet, Element: &el}, nil
+		return TypeRef{Kind: KindSet, Element: &el}, skipped, nil
 	case ty.IsMapType():
-		el, err := typeRefFromCty(ty.ElementType())
+		el, skipped, err := typeRefFromCty(ty.ElementType(), pathPrefix)
 		if err != nil {
-			return TypeRef{}, err
+			return TypeRef{}, nil, err
 		}
-		return TypeRef{Kind: KindMap, Element: &el}, nil
+		return TypeRef{Kind: KindMap, Element: &el}, skipped, nil
 	case ty.IsObjectType():
 		atys := ty.AttributeTypes()
 		names := make([]string, 0, len(atys))
@@ -319,15 +395,21 @@ func typeRefFromCty(ty cty.Type) (TypeRef, error) {
 		// cli/providerpool.go's sortedProviderSources already applies.
 		sort.Strings(names)
 		fields := make([]Field, 0, len(names))
+		var skipped []string
 		for _, name := range names {
-			el, err := typeRefFromCty(atys[name])
-			if err != nil {
-				return TypeRef{}, err
+			if !isValidWireName(name) {
+				skipped = append(skipped, dotPath(pathPrefix, name))
+				continue
 			}
+			el, innerSkipped, err := typeRefFromCty(atys[name], dotPath(pathPrefix, name))
+			if err != nil {
+				return TypeRef{}, nil, err
+			}
+			skipped = append(skipped, innerSkipped...)
 			fields = append(fields, Field{WireName: name, Type: el})
 		}
-		return TypeRef{Kind: KindObject, Object: fields}, nil
+		return TypeRef{Kind: KindObject, Object: fields}, skipped, nil
 	default:
-		return TypeRef{}, fmt.Errorf("unsupported cty type %s", ty.FriendlyName())
+		return TypeRef{}, nil, fmt.Errorf("unsupported cty type %s", ty.FriendlyName())
 	}
 }

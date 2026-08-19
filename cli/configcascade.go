@@ -370,7 +370,8 @@ var knownTopLevelKeys = map[string]bool{
 	"stack": true, "github_repo": true, "tf_dir": true,
 	"provider": true, "provider_config": true,
 	"providers": true, "provider_configs": true,
-	"k8s_audit": true, "ledger": true, "root": true,
+	"dynamic_providers": true,
+	"k8s_audit":         true, "ledger": true, "root": true,
 	"intent": true,
 }
 var knownProviderKeys = map[string]bool{"path": true, "source": true, "version": true}

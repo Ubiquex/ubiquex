@@ -259,6 +259,39 @@ func TestFromSchema_ObjectTypedAttribute_Defensiveness(t *testing.T) {
 	}
 }
 
+// TestFromSchema_UnrepresentableNameInsideObjectTypedAttribute_Skipped
+// proves the SECOND, genuinely different place a real "$ref"-shaped name
+// can appear -- not wrapped in a NestedBlock at all (the case the
+// sibling test above covers), but as a raw object-typed Attribute's own
+// AttributeTypes key (typeRefFromCty's own IsObjectType branch) --
+// confirmed live as the actual real path Kubernetes' own real
+// JSONSchemaProps-embedding fields take (ubx-provider-dynamic's own
+// translator represents a schema-nested-inside-a-List/Map/oneOf-branch
+// object this way, never as a NestedBlock).
+func TestFromSchema_UnrepresentableNameInsideObjectTypedAttribute_Skipped(t *testing.T) {
+	schema := &provider.Schema{
+		Block: provider.Block{
+			Attributes: []provider.Attribute{
+				attr("props", `["object",{"type":"string","$ref":"string"}]`, false, true, false, false),
+			},
+		},
+	}
+	rt, err := FromSchema("kubernetes_apiextensions_custom_resource_definition", schema)
+	if err != nil {
+		t.Fatalf("FromSchema: %v, want success (skip, not fail)", err)
+	}
+	if len(rt.Fields) != 1 || rt.Fields[0].WireName != "props" {
+		t.Fatalf("Fields = %+v, want the real \"props\" attribute to survive", rt.Fields)
+	}
+	obj := rt.Fields[0].Type
+	if len(obj.Object) != 1 || obj.Object[0].WireName != "type" {
+		t.Fatalf("props.Object = %+v, want only the real, valid \"type\" sub-field", obj.Object)
+	}
+	if len(rt.SkippedFields) != 1 || rt.SkippedFields[0] != "props.$ref" {
+		t.Fatalf("SkippedFields = %v, want [\"props.$ref\"]", rt.SkippedFields)
+	}
+}
+
 func TestFromSchema_MalformedType_Errors(t *testing.T) {
 	schema := &provider.Schema{
 		Block: provider.Block{
@@ -275,6 +308,42 @@ func TestFromSchema_MalformedType_Errors(t *testing.T) {
 func TestFromSchema_NilSchema_Errors(t *testing.T) {
 	if _, err := FromSchema("aws_thing", nil); err == nil {
 		t.Fatal("FromSchema(nil): got nil error, want an error")
+	}
+}
+
+// TestFromSchema_UnrepresentableFieldName_SkippedNotFatal proves the real
+// fix this checkpoint's own live Kubernetes codegen run found necessary:
+// a real field whose wire name contains a character no real target
+// language template can safely carry through (confirmed live against
+// Kubernetes' own real CustomResourceDefinition type, whose real,
+// official JSONSchemaProps embeds literal "$ref"/"$schema" field names)
+// is skipped, reported in SkippedFields, and does NOT fail the rest of
+// the resource's own real, valid fields.
+func TestFromSchema_UnrepresentableFieldName_SkippedNotFatal(t *testing.T) {
+	schema := &provider.Schema{
+		Block: provider.Block{
+			Attributes: []provider.Attribute{
+				attr("name", `"string"`, false, true, false, false),
+				attr("$ref", `"string"`, false, true, false, false),
+			},
+			NestedBlocks: []provider.NestedBlock{
+				{TypeName: "$schema", Nesting: provider.NestingSingle, Block: provider.Block{
+					Attributes: []provider.Attribute{attr("id", `"string"`, false, true, false, false)},
+				}},
+			},
+		},
+	}
+
+	rt, err := FromSchema("kubernetes_apiextensions_custom_resource_definition", schema)
+	if err != nil {
+		t.Fatalf("FromSchema: %v, want success (skip, not fail)", err)
+	}
+	if len(rt.Fields) != 1 || rt.Fields[0].WireName != "name" {
+		t.Fatalf("Fields = %+v, want exactly the real, valid \"name\" field", rt.Fields)
+	}
+	wantSkipped := []string{"$ref", "$schema"}
+	if !reflect.DeepEqual(rt.SkippedFields, wantSkipped) {
+		t.Fatalf("SkippedFields = %v, want %v", rt.SkippedFields, wantSkipped)
 	}
 }
 

@@ -42,6 +42,7 @@ type Config struct {
 	ProviderConfig         map[string]any            `toml:"provider_config" json:"provider_config"`
 	Providers              map[string]string         `toml:"providers" json:"providers"`
 	ProviderConfigs        map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
+	DynamicProviders       map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
 	Stack                  string                    `toml:"stack" json:"stack"`
 	GithubRepo             string                    `toml:"github_repo" json:"github_repo"`
 	GitlabProject          string                    `toml:"gitlab_project" json:"gitlab_project"`
@@ -169,6 +170,24 @@ type LedgerConfig struct {
 // executor.ApplierPool this table drives once it's populated, and
 // docs/resolver.md's own staged --source/--provider-version retirement
 // plan for what happens when both a table and a flag are given at once.
+//
+// DynamicProviders is genuinely different from Providers/ProviderConfigs,
+// not a third variant of the same idea: [providers] names a real,
+// independently-versioned Terraform-registry provider `ubx resolve`/
+// `ubx ship` acquire via provider.Acquire (a real, per-provider binary,
+// real infra changes flow through it). [dynamic_providers.<name>] names a
+// schema-derived SDK-codegen target served by the single, shared
+// ubx-provider-dynamic binary -- the identical real
+// [dynamic_providers.<name>] table shape that binary's own
+// internal/config package already defines and validates (schema_source/
+// schema_url/base_url/auth/...), captured here generically
+// (map[string]any, not a duplicated Go struct in a second repo) since
+// `ubx sdk gen`'s own job is only to re-serialize this table into a real
+// .ubx/config for the launched ubx-provider-dynamic process to read, never
+// to understand every one of its own fields itself. Real, deliberate
+// scope for now: only ever consumed by `ubx sdk gen` (schema dump only --
+// no Configure, no ApplyResourceChange, no real credentials needed to
+// generate typed bindings), never by ubx resolve/ship.
 
 // K8sAuditConfig is .ubx/config's [k8s_audit] table (UBI-22,
 // docs/architecture.md -- Kubernetes support): which EKS cluster's
