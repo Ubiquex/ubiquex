@@ -2,6 +2,34 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Generic provider onboarding pipeline: CHECKPOINT 13 -- the five configured providers' description generation is genuinely DONE, real coverage 94.2% described, the remaining 5.8% is real, verified abstention, not interruption, committed to main, 2026-08-19
+
+**Continuation, same no-ticket-ID arc.** Founder's own explicit close-out on checkpoint 12's own honest interruption: resume github (stopped at 262/3,639) and kubernetes (stopped at 4,019/11,858) once the DeepSeek account had balance again, verify azure/datadog/google's own reported "none" percentages are real abstentions and not silent gaps, report final real coverage with the explicit bar "none means the model looked and honestly declined, not never asked."
+
+**Verification of the three providers already reported complete**: re-checked azure/datadog/google's own saved run results (no new API calls needed) -- all three attempted their FULL real gap list with zero errors, and each provider's own recorded abstention count matches its own reported "none" count exactly (azure 123/123, datadog 178/178, google 330/330). Confirmed genuinely done before touching github/kubernetes at all, not assumed.
+
+**Resume, both real, both zero errors**: github's own real remaining gap (851 fields -- the 262 that errored on insufficient balance plus the 589 that had genuinely abstained in the interrupted first pass, gap-listing doesn't distinguish the two, so both got a real second chance) ran to completion, 0 errors, 496 new real descriptions, 355 genuine abstentions. Kubernetes' own real remaining gap (8,097 fields -- 581 errored plus 7,258 attempted for the first time since the first run stopped before ever reaching them) ran to completion, 0 errors, 7,339 new real descriptions, 758 genuine abstentions.
+
+**Real, final coverage, live-measured, generated Go verified to build clean for all six providers individually**:
+
+| Provider | Fields | Sourced | AI-inferred | None (genuine abstention) |
+|---|---:|---:|---:|---:|
+| aws | 4 | 0 (0%) | 4 (100%) | 0 (0%) |
+| azure | 2,138 | 1,164 (54%) | 851 (40%) | 123 (6%) |
+| datadog | 1,317 | 702 (53%) | 437 (33%) | 178 (14%) |
+| github | 4,826 | 1,174 (24%) | 3,297 (68%) | 355 (7%) |
+| google | 6,235 | 3,264 (52%) | 2,641 (42%) | 330 (5%) |
+| kubernetes | 15,492 | 3,634 (23%) | 11,100 (72%) | 758 (5%) |
+| **Total** | **30,012** | **9,938 (33.1%)** | **18,330 (61.1%)** | **1,744 (5.8%)** |
+
+**94.2% of all real fields across the five configured dynamic providers now carry a real description.** The remaining 5.8% (1,744 fields) is confirmed, by direct inspection of every real per-field result (not inferred from the aggregate percentage), to be genuine abstention -- the model was asked about every single one of them, at least once, and declined for a real, recorded reason (bare `id`/`name`/`mode`/`kind` with no real signal beyond the field name), not a silent gap from an interruption, error, or a field that was never asked. This checkpoint closes the "none means never asked" concern explicitly: it does not, anywhere in the five configured providers.
+
+**Verification discipline**: every checked-in `sdk/providers/descriptions/<provider>.json` merge only ever ADDS (existing entries from every prior checkpoint preserved untouched, confirmed by diff). Re-ran `ubx sdk gen --lang go` after the final merge; all six providers' generated Go trees `go build` clean against a real, local `ubx-sdk-go` runtime checkout, individually confirmed. Real gap-list re-generation after the final merge exactly matches the reported "none" counts for every provider (a real, direct cross-check, not just trusting the coverage-report line).
+
+**Key handling, confirmed as instructed, across every real call this checkpoint made**: in-memory `DEEPSEEK_API_KEY` env var only, `export`/`unset` around each script invocation, never written to any file. Grepped the scratchpad, both repos, and a broader home-directory sweep after every real run -- zero matches, except (unavoidably, unchanged from checkpoint 12's own account) the Claude Code session transcript recording the founder's own message containing the key.
+
+**Still honestly ahead, named explicitly by the founder as the next, separate piece of work, not started here**: AWS's own real config expansion -- currently SQS-only (4 fields) against a real corpus of 430 Smithy models, the "one Smithy file per service" structural gap named as far back as checkpoint 3, still unaddressed. Also still ahead: SigV4's own identical latent `credential_source=env` eager-validation gap (checkpoint 9); a real, functional Attrs-reading mechanism for Go/Python (checkpoint 10); Smithy's own real trait-based signal source (constraints/enum data for AWS specifically, never extracted, the same real gap checkpoint 5 first named for OpenAPI before it was fixed there); the real doc-corpus generation for any working provider; the full verification bar's remaining pieces; real REST wire execution for GCP; repo-creation automation; `version-watch.yml` wiring.
+
 ## Generic provider onboarding pipeline: CHECKPOINT 12 -- real DeepSeek generation run (--describe's own real alternative provider), a second real translator bug found and fixed first, real coverage now 68.1% described (sourced + AI-inferred) across 30,012 real fields, checked-in and committed, 2026-08-19
 
 **Continuation, same no-ticket-ID arc.** Founder's own sequencing: (1) run a real DeepSeek V4 Flash sample first as a go/no-go on generation quality; (2) fix a real, found bug in gap-list path construction for self-referential schemas before any full run; (3) regenerate gap lists, report the real corrected counts; (4) run full generation across all providers, commit as the checked-in artifact with the AI-inferred marker intact; (5) report real final coverage.
