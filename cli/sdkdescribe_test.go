@@ -38,7 +38,10 @@ func TestCollectJobs_SkipsAlreadyDescribed_WalksNestedInLockstepWithSignals(t *t
 		},
 	}
 
-	jobs := collectJobs("kubernetes", types, signals)
+	jobs, stale := collectJobsAndStale("kubernetes", types, signals, nil)
+	if len(stale) != 0 {
+		t.Fatalf("stale = %+v, want none (no checkedIn map given)", stale)
+	}
 	if len(jobs) != 2 {
 		t.Fatalf("got %d jobs, want 2 (spec, spec.replicas): %+v", len(jobs), jobs)
 	}
@@ -85,12 +88,15 @@ func TestEnrichDescriptions_CheckedInFile_FillsAndLabelsAIInferred(t *testing.T)
 		"github_repository": {"private": "Whether the repository is private."},
 	}
 
-	coverage, err := enrichDescriptions(context.Background(), "github", types, nil, enrichOptions{checkedIn: checkedIn})
+	coverage, prunedStale, err := enrichDescriptions(context.Background(), "github", types, nil, enrichOptions{checkedIn: checkedIn})
 	if err != nil {
 		t.Fatalf("enrichDescriptions: %v", err)
 	}
 	if coverage.Sourced != 1 || coverage.AIInferred != 1 || coverage.None != 0 {
 		t.Fatalf("coverage = %+v, want {Sourced:1 AIInferred:1 None:0}", coverage)
+	}
+	if prunedStale != 0 {
+		t.Fatalf("prunedStale = %d, want 0 (nothing stale here)", prunedStale)
 	}
 
 	private := types[0].Fields[1]
@@ -102,13 +108,82 @@ func TestEnrichDescriptions_CheckedInFile_FillsAndLabelsAIInferred(t *testing.T)
 	}
 }
 
+// TestEnrichDescriptions_StaleCheckedInEntry_PrunedNotAppliedWhenSourced
+// is the real, direct regression test for a real correctness check
+// found live: a field that used to be genuinely undescribed, got a
+// checked-in AI-inferred entry authored for it, and THEN gained a real
+// source description (a provider's own spec was updated to add one).
+// The real, correct behavior has two real, separate halves: (1) the
+// stale checked-in text must never overwrite the real source
+// description -- confirmed here to already hold, by construction
+// (collectJobsAndStale only ever builds a describeJob for a
+// DescriptionSourceNone field, so a field that resolved to
+// DescriptionSourceModel on THIS run never reaches the checked-in
+// lookup at all); (2) the now-permanently-unused checked-in entry must
+// be removed from the artifact, not left behind forever implying an
+// AI-inference happened that no longer applies.
+func TestEnrichDescriptions_StaleCheckedInEntry_PrunedNotAppliedWhenSourced(t *testing.T) {
+	types := []*ir.ResourceType{{
+		WireType: "github_repository",
+		Fields: []ir.Field{
+			// "private" now has a real source description -- as if
+			// GitHub's own spec added one after the checked-in entry
+			// below was authored against an earlier, undescribed spec.
+			func() ir.Field {
+				f := objField("private", ir.DescriptionSourceModel)
+				f.Description = "Whether the repository is private (the real, current source description)."
+				return f
+			}(),
+			objField("visibility", ir.DescriptionSourceNone),
+		},
+	}}
+	checkedIn := checkedInDescriptions{
+		"github_repository": {
+			"private":    "Whether the repository is private.", // stale -- must be pruned
+			"visibility": "The repository's visibility level.",  // still genuinely needed -- must survive
+		},
+	}
+
+	coverage, prunedStale, err := enrichDescriptions(context.Background(), "github", types, nil, enrichOptions{checkedIn: checkedIn})
+	if err != nil {
+		t.Fatalf("enrichDescriptions: %v", err)
+	}
+
+	// Half 1: the real source description was never overwritten.
+	private := types[0].Fields[0]
+	if private.Description != "Whether the repository is private (the real, current source description)." {
+		t.Fatalf("private.Description = %q, the stale checked-in text must never win over a real source description", private.Description)
+	}
+	if private.DescriptionSource != ir.DescriptionSourceModel {
+		t.Fatalf("private.DescriptionSource = %q, want %q", private.DescriptionSource, ir.DescriptionSourceModel)
+	}
+
+	// Half 2: the stale entry was pruned from the artifact, the still-real
+	// one was not.
+	if prunedStale != 1 {
+		t.Fatalf("prunedStale = %d, want 1 (only the now-stale \"private\" entry)", prunedStale)
+	}
+	if _, stillThere := checkedIn["github_repository"]["private"]; stillThere {
+		t.Fatalf("stale \"private\" entry was not pruned from checkedIn: %+v", checkedIn)
+	}
+	if desc, ok := checkedIn["github_repository"]["visibility"]; !ok || desc != "The repository's visibility level." {
+		t.Fatalf("still-genuinely-needed \"visibility\" entry was removed or altered: %+v", checkedIn)
+	}
+
+	// visibility itself still got filled from the (now-pruned-of-private)
+	// checkedIn map, proving pruning one entry doesn't disturb another.
+	if coverage.AIInferred != 1 || coverage.Sourced != 1 || coverage.None != 0 {
+		t.Fatalf("coverage = %+v, want {Sourced:1 AIInferred:1 None:0}", coverage)
+	}
+}
+
 func TestEnrichDescriptions_NoMechanism_LeavesFieldsAbstained(t *testing.T) {
 	types := []*ir.ResourceType{{
 		WireType: "github_repository",
 		Fields:   []ir.Field{objField("private", ir.DescriptionSourceNone)},
 	}}
 
-	coverage, err := enrichDescriptions(context.Background(), "github", types, nil, enrichOptions{})
+	coverage, _, err := enrichDescriptions(context.Background(), "github", types, nil, enrichOptions{})
 	if err != nil {
 		t.Fatalf("enrichDescriptions: %v", err)
 	}
@@ -137,7 +212,7 @@ func TestEnrichDescriptions_GapsOut_RecordsOnlyGenuinelyUndescribedFields(t *tes
 	}
 
 	gaps := map[string]map[string]gapFieldInfo{}
-	coverage, err := enrichDescriptions(context.Background(), "github", types, signals, enrichOptions{
+	coverage, _, err := enrichDescriptions(context.Background(), "github", types, signals, enrichOptions{
 		checkedIn: checkedIn,
 		gapsOut:   &gaps,
 	})
@@ -222,5 +297,41 @@ func TestWriteGapFile_WritesReadableJSONAtProviderPath(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"private"`) || !strings.Contains(string(raw), `"parent_context"`) {
 		t.Fatalf("gap file content missing expected keys: %s", raw)
+	}
+}
+
+// TestWriteCheckedInDescriptions_RoundTrips confirms
+// writeCheckedInDescriptions writes to the identical real path
+// loadCheckedInDescriptions reads from, and that a pruned map (with a
+// resource entry removed entirely, matching checkedInDescriptions.prune's
+// own behavior once a resource has no fields left) round-trips cleanly.
+func TestWriteCheckedInDescriptions_RoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	checkedIn := checkedInDescriptions{
+		"github_repository": {"visibility": "The repository's visibility level."},
+	}
+	if err := writeCheckedInDescriptions(dir, "github", checkedIn); err != nil {
+		t.Fatalf("writeCheckedInDescriptions: %v", err)
+	}
+
+	got, err := loadCheckedInDescriptions(dir, "github")
+	if err != nil {
+		t.Fatalf("loadCheckedInDescriptions: %v", err)
+	}
+	if got["github_repository"]["visibility"] != "The repository's visibility level." {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// TestCheckedInDescriptions_Prune_RemovesEmptyResourceEntry confirms
+// prune drops the resource's own entry entirely once its last field is
+// pruned, rather than leaving a real, empty {} block behind.
+func TestCheckedInDescriptions_Prune_RemovesEmptyResourceEntry(t *testing.T) {
+	checkedIn := checkedInDescriptions{
+		"github_repository": {"private": "stale"},
+	}
+	checkedIn.prune("github_repository", "private")
+	if _, ok := checkedIn["github_repository"]; ok {
+		t.Fatalf("expected the now-empty github_repository entry to be removed entirely, got %+v", checkedIn)
 	}
 }

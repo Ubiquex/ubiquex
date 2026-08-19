@@ -1251,12 +1251,6 @@
   "github_deployment_branch_policy": {
     "node_id": "The GraphQL node ID for the deployment branch policy."
   },
-  "github_deployment_protection_rule": {
-    "app.id": "The numeric ID of the GitHub App providing this deployment protection rule.",
-    "app.integration_url": "The URL of the GitHub App's integration page.",
-    "app.node_id": "The GraphQL node ID of the GitHub App.",
-    "app.slug": "The GitHub App's URL-friendly slug."
-  },
   "github_deployment_status": {
     "created_at": "The timestamp of when the deployment status was created, in ISO 8601 format (e.g., 2023-05-01T12:00:00Z).",
     "creator.avatar_url": "The URL of the avatar image for the user or bot that created the deployment status.",
@@ -3299,7 +3293,7 @@
     "vulnerabilities.package.name": "The name of the affected package within the specified ecosystem.",
     "vulnerabilities.patched_versions": "The range of versions that are patched by the security advisory for this vulnerability.",
     "vulnerabilities.vulnerable_functions": "A list of names of functions within the affected package that are vulnerable to the advisory.",
-    "vulnerabilities.vulnerable_version_range": "The vulnerable version range for the advisory, expressed as a semantic version range (e.g., '>= 1.0.0, < 2.0.0')."
+    "vulnerabilities.vulnerable_version_range": "The vulnerable version range for the advisory, expressed as a semantic version range (e.g., '\u003e= 1.0.0, \u003c 2.0.0')."
   },
   "github_repository_ruleset": {
     "_links.html": "The HTML link to the repository ruleset, as an object containing an 'href' property with the URL for viewing the ruleset in a browser.",

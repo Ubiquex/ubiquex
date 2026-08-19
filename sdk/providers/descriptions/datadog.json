@@ -1,15 +1,4 @@
 {
-  "datadog_api_key_response": {
-    "api_key.created": "Timestamp the API key was created.",
-    "api_key.created_by": "The Datadog user who created the API key.",
-    "api_key.key": "The API key's value.",
-    "api_key.name": "The name of the API key."
-  },
-  "datadog_application_key_response": {
-    "application_key.hash": "The application key's hashed value.",
-    "application_key.name": "The name of the application key.",
-    "application_key.owner": "The Datadog username or team that owns this application key."
-  },
   "datadog_dashboard": {
     "default_timeframe.from": "The start of the default time range for the dashboard, in epoch milliseconds.",
     "default_timeframe.to": "The end time of the default time range for the dashboard, expressed as a Unix timestamp.",
@@ -33,11 +22,6 @@
     "widgets.layout.width": "The width of the widget in grid units (columns) within the dashboard layout. The minimum allowed value is 0.",
     "widgets.layout.x": "The horizontal position (column) of the widget in the dashboard grid. Must be greater than or equal to 0.",
     "widgets.layout.y": "The vertical position of the widget on the dashboard grid, measured from the top. The value must be greater than or equal to 0."
-  },
-  "datadog_dashboard_list": {
-    "author.email": "The email address of the dashboard list's author.",
-    "author.handle": "The Datadog handle of the dashboard list's author.",
-    "author.name": "The display name of the dashboard list's author."
   },
   "datadog_logs_index": {
     "exclusion_filters.filter": "The filter object defines the query criteria that determine which logs are excluded from the index based on the exclusion filter's configuration.",
@@ -234,7 +218,7 @@
     "data.sli_specification.count.total_events_formula": "The formula used to calculate the total number of events for a count-based Service Level Indicator (SLI). It defines a query or formula that supplies the total events count for SLO computations.",
     "data.sli_specification.count.total_events_formula.formula": "Formula used to compute the total number of events for the SLI, typically a metric query defining the event count.",
     "data.sli_specification.time_slice": "The time-slice configuration for the SLI, which defines the query and threshold used to evaluate each time slice for the SLO.",
-    "data.sli_specification.time_slice.comparator": "The comparison operator used to evaluate the time slice query against the threshold. Valid values are `>` (greater than), `>=` (greater than or equal), `<` (less than), and `<=` (less than or equal).",
+    "data.sli_specification.time_slice.comparator": "The comparison operator used to evaluate the time slice query against the threshold. Valid values are `\u003e` (greater than), `\u003e=` (greater than or equal), `\u003c` (less than), and `\u003c=` (less than or equal).",
     "data.sli_specification.time_slice.query": "The query object that defines the metric or formula used to calculate the SLI for this time slice.",
     "data.sli_specification.time_slice.query.formulas": "List of formulas that compute the SLI from the time slice query's individual queries, using arithmetic expressions.",
     "data.sli_specification.time_slice.query.formulas.formula": "The formula expression used to combine query results in a time slice SLO, referencing query names as variables (e.g., 'a', 'a+b', 'sum(...)').",
@@ -262,7 +246,7 @@
     "sli_specification.count.total_events_formula": "The formula used to compute the total number of events for a count-based SLI, typically referencing query_a and query_b (e.g., 'a' or 'a+b').",
     "sli_specification.count.total_events_formula.formula": "The formula used to compute the total number of events for the count-based SLI. It accepts a Datadog query expression as a string.",
     "sli_specification.time_slice": "Time slice configuration for the SLO, specifying the query and threshold that define a good/bad time slice.",
-    "sli_specification.time_slice.comparator": "The comparison operator used to compare the time slice query value against the threshold to determine a good event. Common operators are '>', '>=', '<', and '<='.",
+    "sli_specification.time_slice.comparator": "The comparison operator used to compare the time slice query value against the threshold to determine a good event. Common operators are '\u003e', '\u003e=', '\u003c', and '\u003c='.",
     "sli_specification.time_slice.query": "The query that defines the SLI for the time slice SLO. This object contains the metric query and formula used to calculate the service level indicator.",
     "sli_specification.time_slice.query.formulas": "A list of formula objects that define the SLI calculation using the query results. Each formula includes a 'formula' string (e.g., 'query1 / query2') and optional 'limit'.",
     "sli_specification.time_slice.query.formulas.formula": "The formula expression to combine queries, such as 'a' or 'a+b'.",
@@ -302,7 +286,7 @@
     "config.request.basic_auth.secret_key": "The secret key (password) used with the username for HTTP basic authentication in the synthetic API test request.",
     "config.request.basic_auth.service_name": "The service name (SPN) for NTLM authentication within the basic auth configuration.",
     "config.request.basic_auth.token_api_authentication": "The API token used for token-based authentication in the basic auth configuration. This is typically used when the authentication type is set to 'token'.",
-    "config.request.basic_auth.token_prefix": "The prefix used in the Authorization header before the token (e.g., 'Bearer'). When set, the authorization header becomes '<token_prefix> <token>'.",
+    "config.request.basic_auth.token_prefix": "The prefix used in the Authorization header before the token (e.g., 'Bearer'). When set, the authorization header becomes '\u003ctoken_prefix\u003e \u003ctoken\u003e'.",
     "config.request.basic_auth.type": "The type of basic authentication to use. Valid values are `web` for standard HTTP basic auth and `ntlm` for NTLM authentication.",
     "config.request.basic_auth.username": "The username for basic authentication used in the API test request.",
     "config.request.basic_auth.workstation": "The Windows workstation name used for NTLM authentication. This is only relevant when the basic_auth configuration is set to NTLM authentication type.",

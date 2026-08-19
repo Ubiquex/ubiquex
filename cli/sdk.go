@@ -368,9 +368,23 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		gaps = map[string]map[string]gapFieldInfo{}
 		enrichOpts.gapsOut = &gaps
 	}
-	coverage, err = enrichDescriptions(ctx, source, types, signalsByType, enrichOpts)
+	var prunedStale int
+	coverage, prunedStale, err = enrichDescriptions(ctx, source, types, signalsByType, enrichOpts)
 	if err != nil {
 		return "", 0, coverage, fmt.Errorf("%s@%s: describe: %w", source, version, err)
+	}
+	// Real, direct fix: a checked-in entry whose own field gained a real
+	// source description since it was authored is stale (enrichDescriptions
+	// already pruned it from the in-memory checkedIn map) -- persist that
+	// pruned result back to the real file it came from, so the checked-in
+	// artifact itself stays accurate, not just this run's own in-memory
+	// state. Only touches disk when something was actually pruned; a
+	// normal run changes nothing here.
+	if prunedStale > 0 {
+		if err := writeCheckedInDescriptions(descriptionsDir, shortName, checkedIn); err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: write pruned checked-in descriptions: %w", source, version, err)
+		}
+		fmt.Fprintf(os.Stderr, "sdk gen: %s: pruned %d stale checked-in description(s) now covered by a real source description\n", source, prunedStale)
 	}
 	if gapsDir != "" {
 		if err := writeGapFile(gapsDir, shortName, gaps); err != nil {

@@ -157,6 +157,21 @@ func (c checkedInDescriptions) lookup(resource, relPath string) (string, bool) {
 	return desc, ok
 }
 
+// prune removes (resource, relPath) from c, deleting the resource's own
+// entry entirely once it has no fields left -- keeps the checked-in
+// artifact free of empty {} resource blocks a stale-entry removal would
+// otherwise leave behind.
+func (c checkedInDescriptions) prune(resource, relPath string) {
+	byField, ok := c[resource]
+	if !ok {
+		return
+	}
+	delete(byField, relPath)
+	if len(byField) == 0 {
+		delete(c, resource)
+	}
+}
+
 // enrichOptions controls which real enrichment mechanisms enrichDescriptions
 // applies, in order: checkedIn first (free, the real default path), then
 // gen (opt-in, real live API calls, --describe) for whatever's still
@@ -172,19 +187,39 @@ type enrichOptions struct {
 // enrichDescriptions walks every real field of every resource type in
 // types (recursively, through List/Set/Map/Object nesting), applying
 // opts' own real mechanisms in order, and returns the real, honest,
-// counted coverage split. A field already carrying
-// DescriptionSourceModel (the real provider's own prose) is never
-// touched -- every mechanism here only ever fills a genuine gap, never
-// overwrites or second-guesses a real, existing description.
-// signalsByType carries ubx-provider-dynamic's own real, per-resource
-// enum/constraint signal (nil for a [providers] real-registry source,
-// which has no such data at all -- see gapFieldInfo's own doc comment).
-func enrichDescriptions(ctx context.Context, providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal, opts enrichOptions) (descriptionCoverage, error) {
-	jobs := collectJobs(providerName, types, signalsByType)
+// counted coverage split, plus how many stale entries it pruned from
+// opts.checkedIn (see that field's own doc comment). A field already
+// carrying DescriptionSourceModel (the real provider's own prose) is
+// never touched by any enrichment mechanism -- every mechanism here
+// only ever fills a genuine gap, never overwrites or second-guesses a
+// real, existing description. signalsByType carries
+// ubx-provider-dynamic's own real, per-resource enum/constraint signal
+// (nil for a [providers] real-registry source, which has no such data
+// at all -- see gapFieldInfo's own doc comment).
+func enrichDescriptions(ctx context.Context, providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal, opts enrichOptions) (descriptionCoverage, int, error) {
+	jobs, stale := collectJobsAndStale(providerName, types, signalsByType, opts.checkedIn)
 
 	var coverage descriptionCoverage
 	for _, rt := range types {
 		countExisting(rt.Fields, &coverage)
+	}
+
+	// Real, direct fix for the real staleness gap this checkpoint's own
+	// verification found: the "sourced always wins" outcome above was
+	// already correct BY CONSTRUCTION (collectJobs, below, only ever
+	// builds a job for a DescriptionSourceNone field -- a field that
+	// gained a real source description on THIS run never reaches the
+	// checked-in lookup at all, so a stale entry could never overwrite
+	// a real one). What was genuinely missing: nothing ever removed
+	// that now-stale, now-permanently-unused entry from the checked-in
+	// artifact itself -- it just sat there forever, inert, implying a
+	// real AI-inference happened for a field that's actually sourced
+	// now. Pruned here, in opts.checkedIn directly (the caller's own
+	// loaded map, mutated in place) -- cli/sdk.go's own
+	// writeGeneratedSDK is responsible for persisting the pruned result
+	// back to disk when this count is non-zero.
+	for _, s := range stale {
+		opts.checkedIn.prune(s.resource, s.relPath)
 	}
 
 	var remaining []describeJob
@@ -203,7 +238,7 @@ func enrichDescriptions(ctx context.Context, providerName string, types []*ir.Re
 		var err error
 		jobs, err = runLiveDescribe(ctx, opts.gen, jobs, &coverage)
 		if err != nil {
-			return coverage, err
+			return coverage, len(stale), err
 		}
 	}
 
@@ -225,7 +260,7 @@ func enrichDescriptions(ctx context.Context, providerName string, types []*ir.Re
 	}
 	coverage.None += len(jobs)
 
-	return coverage, nil
+	return coverage, len(stale), nil
 }
 
 // runLiveDescribe calls gen.Describe for every real job, bounded to
@@ -272,15 +307,29 @@ func runLiveDescribe(ctx context.Context, gen *describe.Generator, jobs []descri
 	return stillNone, nil
 }
 
-// collectJobs walks every field of every resource type in types,
-// recursively through List/Set/Map/Object nesting (walkNested), pairing
-// each DescriptionSourceNone field with its own real signal (looked up
-// in signalsByType in exact lockstep with the field-tree walk) and its
-// own dotted relPath, relative to the resource root -- the real, stable
-// key both the checked-in descriptions file and the gap-list output
-// share.
-func collectJobs(providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal) []describeJob {
+// staleCheckedInEntry is one real (resource, relPath) checkedIn already
+// covers whose corresponding field is now DescriptionSourceModel -- a
+// real source description exists for it now, so the checked-in entry
+// is stale, dead weight, never read again by lookup (which only ever
+// consults a DescriptionSourceNone field).
+type staleCheckedInEntry struct {
+	resource string
+	relPath  string
+}
+
+// collectJobsAndStale walks every field of every resource type in
+// types, recursively through List/Set/Map/Object nesting (walkNested).
+// For each DescriptionSourceNone field, it pairs it with its own real
+// signal (looked up in signalsByType in exact lockstep with the
+// field-tree walk) and its own dotted relPath, relative to the resource
+// root -- the real, stable key both the checked-in descriptions file
+// and the gap-list output share -- into a describeJob. For EVERY field,
+// regardless of its own DescriptionSource, it also checks checkedIn for
+// a now-stale entry (see staleCheckedInEntry's own doc comment) -- one
+// real tree walk does both real jobs, rather than two.
+func collectJobsAndStale(providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal, checkedIn checkedInDescriptions) ([]describeJob, []staleCheckedInEntry) {
 	var jobs []describeJob
+	var stale []staleCheckedInEntry
 	var walk func(fields []ir.Field, resource, parentContext, relPath string, sigMap map[string]*fieldSignal)
 	walk = func(fields []ir.Field, resource, parentContext, relPath string, sigMap map[string]*fieldSignal) {
 		for i := range fields {
@@ -290,7 +339,8 @@ func collectJobs(providerName string, types []*ir.ResourceType, signalsByType ma
 			if sigMap != nil {
 				sig = sigMap[f.WireName]
 			}
-			if f.DescriptionSource == ir.DescriptionSourceNone {
+			switch f.DescriptionSource {
+			case ir.DescriptionSourceNone:
 				jobs = append(jobs, describeJob{
 					field:    f,
 					resource: resource,
@@ -306,6 +356,10 @@ func collectJobs(providerName string, types []*ir.ResourceType, signalsByType ma
 						Constraints:   sig.constraintStrings(),
 					},
 				})
+			case ir.DescriptionSourceModel:
+				if _, ok := checkedIn.lookup(resource, fieldRelPath); ok {
+					stale = append(stale, staleCheckedInEntry{resource: resource, relPath: fieldRelPath})
+				}
 			}
 			var childSigs map[string]*fieldSignal
 			if sig != nil {
@@ -319,7 +373,7 @@ func collectJobs(providerName string, types []*ir.ResourceType, signalsByType ma
 	for _, rt := range types {
 		walk(rt.Fields, rt.WireType, providerName+"."+rt.WireType, "", signalsByType[rt.WireType])
 	}
-	return jobs
+	return jobs, stale
 }
 
 func joinFieldPath(parent, name string) string {
@@ -415,6 +469,22 @@ func formatCoverageReport(perProvider map[string]descriptionCoverage, order []st
 		fmt.Fprintf(&b, "  %s: %s\n", name, c)
 	}
 	return b.String()
+}
+
+// writeCheckedInDescriptions writes checkedIn back to
+// dir/<providerFileName>.json -- the identical real path
+// loadCheckedInDescriptions reads from, matching writeGapFile's own
+// determinism (encoding/json already sorts map keys on Marshal). Called
+// only when enrichDescriptions actually pruned at least one real stale
+// entry (cli/sdk.go's own call site) -- a normal run with nothing stale
+// never touches this file at all.
+func writeCheckedInDescriptions(dir, providerFileName string, checkedIn checkedInDescriptions) error {
+	data, err := json.MarshalIndent(checkedIn, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, providerFileName+".json")
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
 // writeGapFile writes gaps (resource -> relPath -> gapFieldInfo) to
