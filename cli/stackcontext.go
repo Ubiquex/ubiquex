@@ -39,7 +39,7 @@ func buildStackConfigContext(cfg *Config, stack string) json.RawMessage {
 		Stack:           stack,
 		ProviderSource:  cfg.Provider.Source,
 		ProviderVersion: cfg.Provider.Version,
-		Providers:       cfg.Providers,
+		Providers:       cfg.ThirdpartyProviders,
 		LedgerStore:     cfg.Ledger.Store,
 		GithubRepo:      cfg.GithubRepo,
 		TFDir:           cfg.TFDir,

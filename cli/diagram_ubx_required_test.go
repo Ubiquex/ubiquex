@@ -31,7 +31,7 @@ func TestPlanShipTerminate_FromDiagram_UbxRequired_FullLifecycle(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

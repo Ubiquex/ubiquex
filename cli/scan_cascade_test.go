@@ -104,7 +104,7 @@ func TestScan_UsesLedgerRecordedLookup_WhenFlagNotGiven(t *testing.T) {
 
 // TestScan_MultiProviderConfig_NoProviderFlagsNeeded is UBI-49 finding
 // #4's own acceptance test: a stack whose only provider declaration is a
-// real [providers] table (no [provider]/--provider/--source at all) can
+// real [thirdparty_providers] table (no [provider]/--provider/--source at all) can
 // still run `ubx scan --type --name` -- previously "either --provider or
 // --source (with --provider-version) is required" even though the exact
 // same config already worked for `ubx scan --all`/`--discover`/`ubx ship`/
@@ -118,7 +118,7 @@ func TestScan_MultiProviderConfig_NoProviderFlagsNeeded(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "playground"
 
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

@@ -31,7 +31,7 @@ const docsConfigRef = "https://github.com/Ubiquex/ubiquex-docs, cli/config"
 // provider) was buried. Default output now is a MINIMAL RUNNABLE config:
 // a real stack (from --stack, or the directory's own name), and a real
 // provider if one was given via flags or a short TTY prompt -- written
-// straight into the modern [providers]/[provider_configs] map (docs/
+// straight into the modern [thirdparty_providers]/[provider_configs] map (docs/
 // architecture.md §Multi-provider stacks) never the legacy singular
 // [provider]/[provider_config] shape, which a brand-new user has no
 // reason to ever see. `--full` restores the old exhaustive, annotated
@@ -68,7 +68,7 @@ func newInitCmd() *cobra.Command {
 		Short: "Write a minimal, runnable .ubx/config.<format> -- real stack + provider if given, a pointer to the full reference for everything else",
 		Long: `Write .ubx/config.<format>, the defaults file every ubx command reads (docs/architecture.md — Config defaults
 and Config formats). Default output is minimal and runnable: stack (from --stack, or this directory's own name)
-and, if given, a provider -- written into the modern [providers]/[provider_configs] map, the same shape a
+and, if given, a provider -- written into the modern [thirdparty_providers]/[provider_configs] map, the same shape a
 multi-provider stack uses (never the legacy singular [provider]/[provider_config] table, which --provider's own
 local-binary-path escape hatch still writes for local/dev use -- see --provider below). Everything else
 (github_repo, tf_dir, k8s_audit, ledger, intent) is left out of the default output entirely rather than shown
@@ -223,7 +223,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 	cmd.Flags().BoolVar(&full, "full", false, "write the full, exhaustive annotated reference instead of the default minimal runnable config (every key, real values where given, commented examples for the rest)")
 	cmd.Flags().StringVar(&format, "format", "hcl", "config format to write: hcl (canonical), toml, or yaml (strict); falls back to ~/.ubx/config's own init_format, then hcl, if not given")
 	cmd.Flags().StringVar(&stack, "stack", "", "default stack name to write into the config (default: this directory's own name)")
-	cmd.Flags().StringVar(&source, "source", "", "default provider registry source, e.g. hashicorp/aws -- written into the modern [providers] map (mutually exclusive with --provider; requires --provider-version)")
+	cmd.Flags().StringVar(&source, "source", "", "default provider registry source, e.g. hashicorp/aws -- written into the modern [thirdparty_providers] map (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "default provider binary path -- a local/dev escape hatch, written into the legacy singular [provider] table (mutually exclusive with --source; there is no local-path slot in the modern map)")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "", `default provider config, e.g. {"region":"us-east-1"} -- merged with --region if both are given`)
@@ -410,7 +410,7 @@ func nextStepComment(stack string, hasProvider bool) string {
 // --- Minimal, runnable templates (UBI-59's own default) --------------------
 
 // renderConfigTemplateHCL builds the default, minimal .ubx/config.hcl:
-// a real stack, a real provider if one was given (modern [providers]
+// a real stack, a real provider if one was given (modern [thirdparty_providers]
 // map, or the legacy singular [provider] table for --provider's own
 // local-path escape hatch -- never both), real github_repo/tf_dir if
 // given, and a closing next-step pointer. Nothing else -- every other
@@ -430,7 +430,7 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider = {\n  path = %s\n}\n\n", literalValue(v.ProviderPath))
 	case v.Source != "":
-		fmt.Fprintf(&b, "providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		fmt.Fprintf(&b, "thirdparty_providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 		if len(v.ProviderConfig) > 0 {
 			b.WriteString("provider_configs = {\n")
 			fmt.Fprintf(&b, "  %s = {\n", literalValue(v.Source))
@@ -440,7 +440,7 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 			b.WriteString("  }\n}\n\n")
 		}
 	default:
-		b.WriteString("# providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n")
+		b.WriteString("# thirdparty_providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n")
 		b.WriteString("# provider_configs = {\n#   \"hashicorp/aws\" = {\n#     region = \"us-east-1\"\n#   }\n# }\n\n")
 	}
 
@@ -492,7 +492,7 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 		b.WriteString("[provider]\n")
 		fmt.Fprintf(&b, "path = %q\n\n", v.ProviderPath)
 	case v.Source != "":
-		b.WriteString("[providers]\n")
+		b.WriteString("[thirdparty_providers]\n")
 		fmt.Fprintf(&b, "%q = %q\n\n", v.Source, v.ProviderVersion)
 		if len(v.ProviderConfig) > 0 {
 			fmt.Fprintf(&b, "[provider_configs.%q]\n", v.Source)
@@ -502,7 +502,7 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 			b.WriteString("\n")
 		}
 	default:
-		b.WriteString("# [providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n#\n")
+		b.WriteString("# [thirdparty_providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n#\n")
 		b.WriteString("# [provider_configs.\"hashicorp/aws\"]\n# region = \"us-east-1\"\n\n")
 	}
 
@@ -542,7 +542,7 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider:\n  path: %s\n\n", literalValue(v.ProviderPath))
 	case v.Source != "":
-		fmt.Fprintf(&b, "providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		fmt.Fprintf(&b, "thirdparty_providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 		if len(v.ProviderConfig) > 0 {
 			fmt.Fprintf(&b, "provider_configs:\n  %s:\n", literalValue(v.Source))
 			for _, k := range sortedKeys(v.ProviderConfig) {
@@ -551,7 +551,7 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 			b.WriteString("\n")
 		}
 	default:
-		b.WriteString("# providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
+		b.WriteString("# thirdparty_providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
 		b.WriteString("# provider_configs:\n#   \"hashicorp/aws\":\n#     region: \"us-east-1\"\n\n")
 	}
 
@@ -605,7 +605,7 @@ func renderConfigTemplateFullTOML(v configTemplateValues) string {
 	b.WriteString("\n")
 
 	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch only;\n")
-	b.WriteString("# new stacks should prefer [providers] below instead.\n")
+	b.WriteString("# new stacks should prefer [thirdparty_providers] below instead.\n")
 	b.WriteString("[provider]\n")
 	switch {
 	case v.ProviderPath != "":
@@ -627,13 +627,13 @@ func renderConfigTemplateFullTOML(v configTemplateValues) string {
 	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
 	b.WriteString("# multi-provider alike.\n")
 	if v.Source != "" {
-		b.WriteString("[providers]\n")
+		b.WriteString("[thirdparty_providers]\n")
 		fmt.Fprintf(&b, "%q = %q\n\n", v.Source, v.ProviderVersion)
 	} else {
-		b.WriteString("# [providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n\n")
+		b.WriteString("# [thirdparty_providers]\n# \"hashicorp/aws\" = \"6.60.0\"\n\n")
 	}
 
-	b.WriteString("# Per-source provider configuration, for [providers] above.\n")
+	b.WriteString("# Per-source provider configuration, for [thirdparty_providers] above.\n")
 	if v.Source != "" && len(v.ProviderConfig) > 0 {
 		fmt.Fprintf(&b, "[provider_configs.%q]\n", v.Source)
 		for _, k := range sortedKeys(v.ProviderConfig) {
@@ -696,7 +696,7 @@ func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	b.WriteString("\n")
 
 	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch\n")
-	b.WriteString("# only; new stacks should prefer `providers` below instead.\n")
+	b.WriteString("# only; new stacks should prefer `thirdparty_providers` below instead.\n")
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider = {\n  path = %s\n  # source = \"hashicorp/aws\"\n  # version = \"6.54.0\"\n}\n", literalValue(v.ProviderPath))
@@ -712,12 +712,12 @@ func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
 	b.WriteString("# multi-provider alike.\n")
 	if v.Source != "" {
-		fmt.Fprintf(&b, "providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		fmt.Fprintf(&b, "thirdparty_providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	} else {
-		b.WriteString("# providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n\n")
+		b.WriteString("# thirdparty_providers = {\n#   \"hashicorp/aws\" = \"6.60.0\"\n# }\n\n")
 	}
 
-	b.WriteString("# Per-source provider configuration, for `providers` above.\n")
+	b.WriteString("# Per-source provider configuration, for `thirdparty_providers` above.\n")
 	if v.Source != "" && len(v.ProviderConfig) > 0 {
 		b.WriteString("provider_configs = {\n")
 		fmt.Fprintf(&b, "  %s = {\n", literalValue(v.Source))
@@ -777,7 +777,7 @@ func renderConfigTemplateFullYAML(v configTemplateValues) string {
 	b.WriteString("\n")
 
 	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch\n")
-	b.WriteString("# only; new stacks should prefer `providers` below instead.\n")
+	b.WriteString("# only; new stacks should prefer `thirdparty_providers` below instead.\n")
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider:\n  path: %s\n  # source: \"hashicorp/aws\"\n  # version: \"6.54.0\"\n", literalValue(v.ProviderPath))
@@ -793,12 +793,12 @@ func renderConfigTemplateFullYAML(v configTemplateValues) string {
 	b.WriteString("# pins only. The modern, preferred shape for any stack, single- or\n")
 	b.WriteString("# multi-provider alike.\n")
 	if v.Source != "" {
-		fmt.Fprintf(&b, "providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
+		fmt.Fprintf(&b, "thirdparty_providers:\n  %s: %s\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 	} else {
-		b.WriteString("# providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
+		b.WriteString("# thirdparty_providers:\n#   \"hashicorp/aws\": \"6.60.0\"\n\n")
 	}
 
-	b.WriteString("# Per-source provider configuration, for `providers` above.\n")
+	b.WriteString("# Per-source provider configuration, for `thirdparty_providers` above.\n")
 	if v.Source != "" && len(v.ProviderConfig) > 0 {
 		fmt.Fprintf(&b, "provider_configs:\n  %s:\n", literalValue(v.Source))
 		for _, k := range sortedKeys(v.ProviderConfig) {

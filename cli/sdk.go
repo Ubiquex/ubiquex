@@ -120,8 +120,8 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 			}
-			if len(cfg.Providers) == 0 && len(cfg.DynamicProviders) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: no [providers] or [dynamic_providers.<name>] declared in .ubx/config -- ubx sdk gen has no legacy single-provider fallback (codegen is a multi-provider-stacks-era feature); declare at least one source")}
+			if len(cfg.ThirdpartyProviders) == 0 && len(cfg.DynamicProviders) == 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: no [thirdparty_providers] or [dynamic_providers.<name>] declared in .ubx/config -- ubx sdk gen has no legacy single-provider fallback (codegen is a multi-provider-stacks-era feature); declare at least one source")}
 			}
 
 			if err := os.MkdirAll(out, 0o755); err != nil {
@@ -151,8 +151,8 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			perProviderCoverage := map[string]descriptionCoverage{}
 			var coverageOrder []string
 
-			for _, source := range sortedProviderSources(cfg.Providers) {
-				version := cfg.Providers[source]
+			for _, source := range sortedProviderSources(cfg.ThirdpartyProviders) {
+				version := cfg.ThirdpartyProviders[source]
 
 				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir)
 				if err != nil {

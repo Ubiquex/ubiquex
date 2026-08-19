@@ -347,14 +347,14 @@ func TestApplyProviderConfigDefault_CLIWins(t *testing.T) {
 	}
 }
 
-// --- [providers]/[provider_configs] (2026-07-18, UBI-43 session 4) -------
+// --- [thirdparty_providers]/[provider_configs] (2026-07-18, UBI-43 session 4) -------
 
 func TestLoadConfig_MultiProviderTables(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `
 stack = "payments"
 
-[providers]
+[thirdparty_providers]
 "hashicorp/aws" = "6.60.0"
 "hashicorp/helm" = "3.0.2"
 
@@ -371,12 +371,12 @@ kubeconfig = "~/.kube/config"
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	wantProviders := map[string]string{"hashicorp/aws": "6.60.0", "hashicorp/helm": "3.0.2"}
-	if len(cfg.Providers) != len(wantProviders) {
-		t.Fatalf("Providers = %+v, want %+v", cfg.Providers, wantProviders)
+	if len(cfg.ThirdpartyProviders) != len(wantProviders) {
+		t.Fatalf("Providers = %+v, want %+v", cfg.ThirdpartyProviders, wantProviders)
 	}
 	for source, version := range wantProviders {
-		if cfg.Providers[source] != version {
-			t.Errorf("Providers[%q] = %q, want %q", source, cfg.Providers[source], version)
+		if cfg.ThirdpartyProviders[source] != version {
+			t.Errorf("Providers[%q] = %q, want %q", source, cfg.ThirdpartyProviders[source], version)
 		}
 	}
 	if cfg.ProviderConfigs["hashicorp/aws"]["region"] != "us-east-1" {
@@ -388,9 +388,9 @@ kubeconfig = "~/.kube/config"
 }
 
 // TestLoadConfig_ProvidersAbsentIsNilNotEmptyMap confirms a single-provider
-// stack (no [providers] table at all -- every config predating this
+// stack (no [thirdparty_providers] table at all -- every config predating this
 // session) decodes to a genuinely nil (not just empty) map -- the one
-// signal cli/ship.go and cli/resolve.go check (len(cfg.Providers) > 0) to
+// signal cli/ship.go and cli/resolve.go check (len(cfg.ThirdpartyProviders) > 0) to
 // fall back to today's --provider/--source flow unchanged.
 func TestLoadConfig_ProvidersAbsentIsNilNotEmptyMap(t *testing.T) {
 	dir := t.TempDir()
@@ -401,8 +401,8 @@ func TestLoadConfig_ProvidersAbsentIsNilNotEmptyMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if len(cfg.Providers) != 0 {
-		t.Fatalf("Providers = %+v, want empty", cfg.Providers)
+	if len(cfg.ThirdpartyProviders) != 0 {
+		t.Fatalf("Providers = %+v, want empty", cfg.ThirdpartyProviders)
 	}
 }
 
@@ -439,8 +439,8 @@ func TestWarnIfLegacyProviderFlagsGiven_SourceGiven_WarnsNamingIt(t *testing.T) 
 	if !bytes.Contains(stderr.Bytes(), []byte("--source")) {
 		t.Fatalf("expected a warning naming --source, got: %s", stderr.String())
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("[providers]")) {
-		t.Fatalf("expected the warning to explain the [providers] table is the authority, got: %s", stderr.String())
+	if !bytes.Contains(stderr.Bytes(), []byte("[thirdparty_providers]")) {
+		t.Fatalf("expected the warning to explain the [thirdparty_providers] table is the authority, got: %s", stderr.String())
 	}
 }
 

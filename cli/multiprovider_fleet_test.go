@@ -52,7 +52,7 @@ func TestResourceTypeSchemaInspector_HasType(t *testing.T) {
 // launch (UBI-43 session 5).
 func TestDeclaredProvidersForInference_BuildsFromPool(t *testing.T) {
 	versions := map[string]string{"hashicorp/aws": "6.60.0", "hashicorp/helm": "3.0.2"}
-	pool, err := newProviderPool(nil, versions, nil)
+	pool, err := newProviderPool(nil, versions, nil, nil)
 	if err != nil {
 		t.Fatalf("newProviderPool: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestDeclaredProvidersForInference_BuildsFromPool(t *testing.T) {
 // ErrUnknownType.
 func TestDeclaredProvidersForInference_LaunchFailure_Propagates(t *testing.T) {
 	versions := map[string]string{"hashicorp/aws": "6.60.0"}
-	pool, err := newProviderPool(nil, versions, nil)
+	pool, err := newProviderPool(nil, versions, nil, nil)
 	if err != nil {
 		t.Fatalf("newProviderPool: %v", err)
 	}

@@ -224,9 +224,9 @@ consistency shows its own work instead of sitting silent.`,
 			// --source/--provider-version retirement plan for what happens
 			// when a table AND the singular flags are both given.
 			var pool executor.ApplierPool
-			if len(cfg.Providers) > 0 {
+			if len(cfg.ThirdpartyProviders) > 0 {
 				warnIfLegacyProviderFlagsGiven(cmd)
-				pp, err := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
+				pp, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
 				}

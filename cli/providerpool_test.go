@@ -27,7 +27,7 @@ type fakeApplierStub struct{ executor.Applier }
 // times a real launch would have happened, not just the end state.
 func newTestPool(t *testing.T, versions map[string]string, configs map[string]map[string]any) (*providerPool, *[]string) {
 	t.Helper()
-	pp, err := newProviderPool(nil, versions, configs)
+	pp, err := newProviderPool(nil, versions, nil, configs)
 	if err != nil {
 		t.Fatalf("newProviderPool: %v", err)
 	}
@@ -37,6 +37,120 @@ func newTestPool(t *testing.T, versions map[string]string, configs map[string]ma
 		return fakeApplierStub{}, &fakeCloser{}, nil
 	}
 	return pp, &launches
+}
+
+// TestResolveProviderPrecedence_ProvidersWinsOverThirdparty is this
+// session's own explicit deliverable: both namespaces declare "aws" --
+// [providers.aws] (ubx's own) and [thirdparty_providers] with
+// "hashicorp/aws" (whose own real short key is "aws", providerShortName's
+// identical derivation) -- and the resolved entry must be the DYNAMIC
+// one, never the thirdparty one.
+func TestResolveProviderPrecedence_ProvidersWinsOverThirdparty(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]map[string]any{
+			"aws": {"schema_source": "cloudformation"},
+		},
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	resolved := resolveProviderPrecedence(cfg)
+
+	got, ok := resolved["aws"]
+	if !ok {
+		t.Fatalf("resolved[aws] missing entirely, want a real entry")
+	}
+	if !got.Dynamic {
+		t.Fatalf("resolved[aws] = %+v, want Dynamic=true ([providers] must win over [thirdparty_providers])", got)
+	}
+	if got.Params["schema_source"] != "cloudformation" {
+		t.Fatalf("resolved[aws].Params = %+v, want schema_source=cloudformation from [providers.aws]", got.Params)
+	}
+}
+
+// TestResolveProviderPrecedence_ThirdpartyUsedWhenNoProvidersEntry proves
+// the other half of the rule: [thirdparty_providers.aws] (via
+// "hashicorp/aws") is used when [providers.aws] does not exist at all.
+func TestResolveProviderPrecedence_ThirdpartyUsedWhenNoProvidersEntry(t *testing.T) {
+	cfg := &Config{
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	resolved := resolveProviderPrecedence(cfg)
+
+	got, ok := resolved["aws"]
+	if !ok {
+		t.Fatalf("resolved[aws] missing, want the real thirdparty entry")
+	}
+	if got.Dynamic {
+		t.Fatalf("resolved[aws] = %+v, want Dynamic=false (no [providers.aws] declared)", got)
+	}
+	if got.Source != "hashicorp/aws" || got.Version != "6.60.0" {
+		t.Fatalf("resolved[aws] = %+v, want Source=hashicorp/aws Version=6.60.0", got)
+	}
+}
+
+// TestResolveProviderPrecedence_IndependentKeysBothSurvive proves
+// declaring different real keys in each namespace (no collision) keeps
+// both -- precedence only ever applies when the SAME key appears twice.
+func TestResolveProviderPrecedence_IndependentKeysBothSurvive(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]map[string]any{
+			"github": {"schema_source": "openapi"},
+		},
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	resolved := resolveProviderPrecedence(cfg)
+	if len(resolved) != 2 {
+		t.Fatalf("resolved = %+v, want exactly 2 independent entries", resolved)
+	}
+	if resolved["github"].Dynamic != true {
+		t.Errorf("resolved[github].Dynamic = %v, want true", resolved["github"].Dynamic)
+	}
+	if resolved["aws"].Dynamic != false {
+		t.Errorf("resolved[aws].Dynamic = %v, want false", resolved["aws"].Dynamic)
+	}
+}
+
+// TestProviderPool_DynamicRouting_LaunchesViaDynamicLaunch proves Get
+// routes a key declared in [providers] through the dynamic launch path,
+// never the thirdparty one -- the real mechanism a [providers.aws] entry
+// depends on to actually run infrastructure.
+func TestProviderPool_DynamicRouting_LaunchesViaDynamicLaunch(t *testing.T) {
+	pool, err := newProviderPool(nil, nil, map[string]map[string]any{"aws": {"schema_source": "cloudformation"}}, nil)
+	if err != nil {
+		t.Fatalf("newProviderPool: %v", err)
+	}
+	var thirdpartyLaunches, dynamicLaunches []string
+	pool.launch = func(ctx context.Context, source, version string) (executor.Applier, io.Closer, error) {
+		thirdpartyLaunches = append(thirdpartyLaunches, source+"@"+version)
+		return fakeApplierStub{}, &fakeCloser{}, nil
+	}
+	pool.dynamicLaunch = func(ctx context.Context, key, version string) (executor.Applier, io.Closer, error) {
+		dynamicLaunches = append(dynamicLaunches, key)
+		return fakeApplierStub{}, &fakeCloser{}, nil
+	}
+
+	app1, _, err := pool.Get(context.Background(), "aws", "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	app2, _, err := pool.Get(context.Background(), "aws", "")
+	if err != nil {
+		t.Fatalf("Get (second): %v", err)
+	}
+	if app1 != app2 {
+		t.Fatal("expected the identical cached Applier on the second Get")
+	}
+	if len(dynamicLaunches) != 1 {
+		t.Fatalf("dynamicLaunch called %d times, want exactly 1 (lazy, cached)", len(dynamicLaunches))
+	}
+	if len(thirdpartyLaunches) != 0 {
+		t.Fatalf("thirdparty launch called %d times, want 0 -- a [providers] key must never route through the real registry path", len(thirdpartyLaunches))
+	}
 }
 
 func TestProviderPool_LazyLaunch_CachedOnSecondGet(t *testing.T) {
@@ -146,7 +260,7 @@ func TestProviderPool_VersionEmpty_UsesPinned(t *testing.T) {
 }
 
 func TestProviderPool_LaunchFailure_Propagates(t *testing.T) {
-	pool, err := newProviderPool(nil, map[string]string{"hashicorp/aws": "6.60.0"}, nil)
+	pool, err := newProviderPool(nil, map[string]string{"hashicorp/aws": "6.60.0"}, nil, nil)
 	if err != nil {
 		t.Fatalf("newProviderPool: %v", err)
 	}

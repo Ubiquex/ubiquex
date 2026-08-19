@@ -105,7 +105,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 		checksum    string
 	)
 	if len(opts.Providers) > 0 {
-		pool, err = newProviderPool(salt, opts.Providers, opts.ProviderConfigs)
+		pool, err = newProviderPool(salt, opts.Providers, opts.Config.Providers, opts.ProviderConfigs)
 		if err != nil {
 			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: %w", err)}
 		}

@@ -167,7 +167,7 @@ func TestScanFleet_ShipShortHash_EndToEnd(t *testing.T) {
 
 // TestScanFleet_MultiProviderConfig_NoProviderFlagsNeeded proves the
 // fleet walk resolves each tracked address's own provider through the
-// modern [providers] map (declaredProvidersForInference/InferProvider,
+// modern [thirdparty_providers] map (declaredProvidersForInference/InferProvider,
 // the same mechanism status.go's own multi-provider fleet walk already
 // uses) rather than demanding --provider/--source on top of an already-
 // configured stack.
@@ -177,7 +177,7 @@ func TestScanFleet_MultiProviderConfig_NoProviderFlagsNeeded(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

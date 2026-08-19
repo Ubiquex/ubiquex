@@ -284,8 +284,8 @@ func draftFromDiagram(cmd *cobra.Command, cfg *Config, diagramPath, stack, summa
 		return nil, err
 	}
 
-	if len(cfg.Providers) == 0 {
-		return nil, errors.New("no [providers] declared in .ubx/config -- the diagram medium has no legacy single-provider fallback (like \"ubx sdk gen\", it's a post-multi-provider-stacks feature); declare at least one source in [providers]")
+	if len(cfg.ThirdpartyProviders) == 0 {
+		return nil, errors.New("no [thirdparty_providers] declared in .ubx/config -- the diagram medium has no legacy single-provider fallback (like \"ubx sdk gen\", it's a post-multi-provider-stacks feature); declare at least one source in [thirdparty_providers]")
 	}
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -348,8 +348,8 @@ func parseNeighborLedgerFlags(flags []string) (map[string]string, error) {
 // working, tested code outside its own scope.
 func loadDiagramProviders(ctx context.Context, cfg *Config) ([]resolver.DeclaredProvider, error) {
 	var providers []resolver.DeclaredProvider
-	for _, src := range sortedProviderSources(cfg.Providers) {
-		version := cfg.Providers[src]
+	for _, src := range sortedProviderSources(cfg.ThirdpartyProviders) {
+		version := cfg.ThirdpartyProviders[src]
 		parsed, err := provider.ParseSource(src)
 		if err != nil {
 			return nil, err

@@ -78,7 +78,7 @@ func TestInit_NoFlagsGiven_MinimalRunnableTemplate(t *testing.T) {
 	if !strings.Contains(content, "stack = \""+wantStack+"\"") {
 		t.Fatalf("expected a real stack line naming %q, got:\n%s", wantStack, content)
 	}
-	if !strings.Contains(content, "# providers = {") {
+	if !strings.Contains(content, "# thirdparty_providers = {") {
 		t.Fatalf("expected a short commented providers example, got:\n%s", content)
 	}
 	// "k8s_audit"/"ledger"/"intent" legitimately appear once, by name, in
@@ -97,8 +97,8 @@ func TestInit_NoFlagsGiven_MinimalRunnableTemplate(t *testing.T) {
 	if cfg.Stack != wantStack {
 		t.Fatalf("Stack = %q, want %q (derived from --dir)", cfg.Stack, wantStack)
 	}
-	if len(cfg.Providers) != 0 {
-		t.Fatalf("Providers = %v, want none (nothing was given)", cfg.Providers)
+	if len(cfg.ThirdpartyProviders) != 0 {
+		t.Fatalf("Providers = %v, want none (nothing was given)", cfg.ThirdpartyProviders)
 	}
 
 	if !strings.Contains(out, "next: add a provider") {
@@ -126,11 +126,11 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 		t.Errorf("Stack = %q, want payments", cfg.Stack)
 	}
 	// UBI-59: a provider given by flag is written into the MODERN
-	// [providers]/[provider_configs] map, never the legacy singular
+	// [thirdparty_providers]/[provider_configs] map, never the legacy singular
 	// [provider]/[provider_config] table -- a brand-new stack has no
 	// reason to ever see the legacy shape.
-	if cfg.Providers["hashicorp/aws"] != "6.54.0" {
-		t.Errorf("Providers[hashicorp/aws] = %q, want 6.54.0 (got %v)", cfg.Providers["hashicorp/aws"], cfg.Providers)
+	if cfg.ThirdpartyProviders["hashicorp/aws"] != "6.54.0" {
+		t.Errorf("Providers[hashicorp/aws] = %q, want 6.54.0 (got %v)", cfg.ThirdpartyProviders["hashicorp/aws"], cfg.ThirdpartyProviders)
 	}
 	if cfg.Provider.Source != "" || cfg.Provider.Version != "" {
 		t.Errorf("legacy Provider.Source/Version = %+v, want both empty -- the legacy shape must never be written when --source was given", cfg.Provider)
@@ -173,7 +173,7 @@ func TestInit_Region_AloneIsShorthandForProviderConfig(t *testing.T) {
 // TestInit_ProviderPath_StillWritesLegacySingularTable proves the local/
 // dev escape hatch (--provider <path>, no registry source) still works
 // exactly as before -- it's the one shape that genuinely can't live in
-// the modern map (no path slot in [providers]), so it keeps using
+// the modern map (no path slot in [thirdparty_providers]), so it keeps using
 // [provider] the same way it always did.
 func TestInit_ProviderPath_StillWritesLegacySingularTable(t *testing.T) {
 	dir := t.TempDir()
@@ -185,8 +185,8 @@ func TestInit_ProviderPath_StillWritesLegacySingularTable(t *testing.T) {
 	if cfg.Provider.Path != "/path/to/terraform-provider-aws" {
 		t.Fatalf("Provider.Path = %q, want /path/to/terraform-provider-aws", cfg.Provider.Path)
 	}
-	if len(cfg.Providers) != 0 {
-		t.Fatalf("Providers = %v, want none (a local path was given, not a registry source)", cfg.Providers)
+	if len(cfg.ThirdpartyProviders) != 0 {
+		t.Fatalf("Providers = %v, want none (a local path was given, not a registry source)", cfg.ThirdpartyProviders)
 	}
 	if !strings.Contains(out, "next: write an intent file") {
 		t.Fatalf("expected the has-a-provider next: hint (a local path still counts as configured), got: %s", out)
@@ -340,8 +340,8 @@ func TestInit_FormatYAML_WritesFullyQuotedFile(t *testing.T) {
 	}
 
 	cfg := loadConfigFrom(t, dir)
-	if cfg.Stack != "payments" || cfg.Providers["hashicorp/aws"] != "6.60.0" {
-		t.Fatalf("got Stack=%q Providers=%v, want payments/hashicorp/aws=6.60.0", cfg.Stack, cfg.Providers)
+	if cfg.Stack != "payments" || cfg.ThirdpartyProviders["hashicorp/aws"] != "6.60.0" {
+		t.Fatalf("got Stack=%q Providers=%v, want payments/hashicorp/aws=6.60.0", cfg.Stack, cfg.ThirdpartyProviders)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestInit_Full_PreservesTheAnnotatedEncyclopedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(b)
-	for _, want := range []string{"k8s_audit", "ledger", "# provider = {", "# providers = {", "github_repo"} {
+	for _, want := range []string{"k8s_audit", "ledger", "# provider = {", "# thirdparty_providers = {", "github_repo"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected --full to include %q, got:\n%s", want, content)
 		}
@@ -381,8 +381,8 @@ func TestInit_TTYPrompt_FillsInProvider(t *testing.T) {
 		t.Fatalf("expected the prompt itself in output, got: %s", out)
 	}
 	cfg := loadConfigFrom(t, dir)
-	if cfg.Providers["hashicorp/aws"] != "6.60.0" {
-		t.Fatalf("Providers = %v, want hashicorp/aws=6.60.0 from the TTY prompt", cfg.Providers)
+	if cfg.ThirdpartyProviders["hashicorp/aws"] != "6.60.0" {
+		t.Fatalf("Providers = %v, want hashicorp/aws=6.60.0 from the TTY prompt", cfg.ThirdpartyProviders)
 	}
 	if cfg.ProviderConfigs["hashicorp/aws"]["region"] != "us-east-1" {
 		t.Fatalf("ProviderConfigs = %v, want region=us-east-1 from the TTY prompt", cfg.ProviderConfigs)
@@ -400,8 +400,8 @@ func TestInit_TTYPrompt_BlankSourceSkipsProvider(t *testing.T) {
 		t.Fatalf("ubx init (TTY prompt, blank): %v\noutput: %s", err, out)
 	}
 	cfg := loadConfigFrom(t, dir)
-	if len(cfg.Providers) != 0 {
-		t.Fatalf("Providers = %v, want none -- a blank source must skip provider setup entirely", cfg.Providers)
+	if len(cfg.ThirdpartyProviders) != 0 {
+		t.Fatalf("Providers = %v, want none -- a blank source must skip provider setup entirely", cfg.ThirdpartyProviders)
 	}
 }
 

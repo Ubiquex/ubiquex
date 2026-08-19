@@ -407,7 +407,7 @@ func TestPlanShip_FromDoc_FullReceipt(t *testing.T) {
 
 // TestPlanShip_FromDiagram_ResolvesAndApplies mirrors
 // TestProposeFromDiagram_NoAmbiguity_RendersUnambiguousMessage's own setup
-// (a real UBX_PROVIDER_MIRROR-backed provider, a real [providers] table)
+// (a real UBX_PROVIDER_MIRROR-backed provider, a real [thirdparty_providers] table)
 // but drives it through `ubx plan --from-diagram` all the way to a fused
 // `ubx ship`, proving the diagram medium's own double provider-load
 // (documented in plan.go) still produces a correct, appliable result.
@@ -449,7 +449,7 @@ func TestProposeFromDiagram_EnrichThenResolve_Succeeds(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -529,7 +529,7 @@ func TestPlanFromDiagram_RequiredAttributeMissing_ResolveRefusesClearly(t *testi
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

@@ -86,8 +86,8 @@ func scanDrift(ctx context.Context, ledger *core.Ledger, cfg *Config, providerPa
 	}
 
 	var drifted []DriftedResource
-	if len(cfg.Providers) > 0 {
-		pool, err := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
+	if len(cfg.ThirdpartyProviders) > 0 {
+		pool, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +101,7 @@ func scanDrift(ctx context.Context, ledger *core.Ledger, cfg *Config, providerPa
 				provSrc, provVer = e.Provider.Source, e.Provider.Version
 			default:
 				if declared == nil {
-					declared, err = declaredProvidersForInference(ctx, pool, cfg.Providers)
+					declared, err = declaredProvidersForInference(ctx, pool, cfg.ThirdpartyProviders)
 					if err != nil {
 						return nil, err
 					}

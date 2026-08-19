@@ -40,7 +40,8 @@ type Config struct {
 		Version string `toml:"version" json:"version"`
 	} `toml:"provider" json:"provider"`
 	ProviderConfig         map[string]any            `toml:"provider_config" json:"provider_config"`
-	Providers              map[string]string         `toml:"providers" json:"providers"`
+	Providers              map[string]map[string]any `toml:"providers" json:"providers"`
+	ThirdpartyProviders    map[string]string         `toml:"thirdparty_providers" json:"thirdparty_providers"`
 	ProviderConfigs        map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
 	DynamicProviders       map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
 	Stack                  string                    `toml:"stack" json:"stack"`
@@ -139,55 +140,76 @@ type LedgerConfig struct {
 	External map[string]string `toml:"external" json:"external"`
 }
 
-// Providers/ProviderConfigs are .ubx/config's own [providers]/
-// [provider_configs] tables (2026-07-18, UBI-43 session 4,
-// docs/architecture.md §Multi-provider stacks): a stack's whole declared
-// provider set, and each one's own configuration. Deliberately two
-// separate tables, not one nested one -- [providers] is exactly the
-// shape docs/architecture.md's own design room text already ratified
-// (source → pinned version, a flat map, explicit pins only), never
-// reopened by this session; [provider_configs] is new, additive, this
-// session's own decision for the config shape the design left open
-// ("likely per-source config values"):
+// Providers/ThirdpartyProviders/ProviderConfigs are .ubx/config's own
+// [providers]/[thirdparty_providers]/[provider_configs] tables, a
+// stack's whole declared provider set (real infra, real
+// ubx resolve/ubx ship execution) and each one's own configuration.
 //
-//	[providers]
+// Real, deliberate two-namespace restructure, this session (2026-08-20):
+// prior to this session, ONE table -- also spelled [providers], a flat
+// `"hashicorp/aws" = "6.60.0"` map -- held every real, independently-
+// versioned Terraform-registry provider. That table is ThirdpartyProviders
+// now ([thirdparty_providers] on disk), its own real, existing shape kept
+// verbatim (source → pinned version, never reshaped into per-name
+// subtables -- the founder's own explicit instruction this session:
+// "adopt whatever the real existing shape is ... rather than inventing a
+// new one"). [providers] itself is a real, NEW meaning: ubx's own,
+// dynamic-provider-backed sources -- the identical real
+// map[string]map[string]any shape DynamicProviders already carries for
+// the SDK-codegen pipeline (schema_source/schema_url/base_url/auth/...),
+// reused here rather than inventing a second shape for the same real
+// underlying binary (ubx-provider-dynamic):
+//
+//	[providers.aws]
+//	schema_source = "cloudformation"
+//	schema_url    = "https://schema.cloudformation.us-east-1.amazonaws.com/CloudformationSchema.zip"
+//	base_url      = "https://cloudcontrolapi.us-east-1.amazonaws.com"
+//
+//	[thirdparty_providers]
 //	"hashicorp/aws"  = "6.60.0"
 //	"hashicorp/helm" = "3.0.2"
 //
 //	[provider_configs."hashicorp/aws"]
 //	region = "us-east-1"
 //
-//	[provider_configs."hashicorp/helm"]
-//	kubeconfig = "~/.kube/config"
+// Real, deliberate naming: [providers] means ubx's own; [thirdparty_providers]
+// means everyone else's -- the founder's own explicit framing for why two
+// namespaces exist at all: "that's where a user declares which provider
+// actually runs their infrastructure." Real precedence, when the SAME
+// real key is declared in both: [providers] always wins.
+// [thirdparty_providers]'s own real key IS the source string itself
+// ("hashicorp/aws"); its real, comparable SHORT key (for precedence
+// purposes only, the identical derivation cli/sdk.go's own
+// providerShortName already uses for SDK target-repo naming) is its
+// last "/" segment ("aws") -- see resolveProviderPrecedence
+// (providerpool.go) for the real, tested merge. A source with no
+// matching [provider_configs] entry gets an empty `{}` config -- exactly
+// `--provider-config`'s own existing default for a single-provider
+// stack, extended per-source rather than reinvented. All three are empty
+// (nil maps) for a single-provider stack that hasn't adopted this yet --
+// cli/ship.go and cli/resolve.go fall back to today's exact
+// --provider/--source/--provider-config flow unchanged when both are
+// empty; see cli/providerpool.go for the concrete executor.ApplierPool
+// this table drives once it's populated, and docs/resolver.md's own
+// staged --source/--provider-version retirement plan for what happens
+// when both a table and a flag are given at once.
 //
-// A source with no matching [provider_configs] entry gets an empty `{}`
-// config -- exactly `--provider-config`'s own existing default for a
-// single-provider stack, extended per-source rather than reinvented.
-// Both are empty (nil maps) for a single-provider stack that hasn't
-// adopted this yet -- cli/ship.go and cli/resolve.go fall back to
-// today's exact --provider/--source/--provider-config flow unchanged
-// when Providers is empty; see cli/providerpool.go for the concrete
-// executor.ApplierPool this table drives once it's populated, and
-// docs/resolver.md's own staged --source/--provider-version retirement
-// plan for what happens when both a table and a flag are given at once.
-//
-// DynamicProviders is genuinely different from Providers/ProviderConfigs,
-// not a third variant of the same idea: [providers] names a real,
-// independently-versioned Terraform-registry provider `ubx resolve`/
-// `ubx ship` acquire via provider.Acquire (a real, per-provider binary,
-// real infra changes flow through it). [dynamic_providers.<name>] names a
-// schema-derived SDK-codegen target served by the single, shared
-// ubx-provider-dynamic binary -- the identical real
-// [dynamic_providers.<name>] table shape that binary's own
-// internal/config package already defines and validates (schema_source/
-// schema_url/base_url/auth/...), captured here generically
-// (map[string]any, not a duplicated Go struct in a second repo) since
-// `ubx sdk gen`'s own job is only to re-serialize this table into a real
-// .ubx/config for the launched ubx-provider-dynamic process to read, never
-// to understand every one of its own fields itself. Real, deliberate
-// scope for now: only ever consumed by `ubx sdk gen` (schema dump only --
-// no Configure, no ApplyResourceChange, no real credentials needed to
-// generate typed bindings), never by ubx resolve/ship.
+// DynamicProviders ([dynamic_providers.<name>], sdk/providers/.ubx/config)
+// is genuinely different from Providers/ThirdpartyProviders/ProviderConfigs,
+// not a fourth variant of the same idea -- and its OWN table name is
+// deliberately NOT touched by this session's restructure (the founder's
+// own explicit instruction: "leave the [dynamic_providers] naming alone.
+// It's internal to codegen, not user-facing"). It names a schema-derived
+// SDK-codegen target served by the single, shared ubx-provider-dynamic
+// binary, captured here generically (map[string]any, not a duplicated Go
+// struct in a second repo) since `ubx sdk gen`'s own job is only to
+// re-serialize this table into a real .ubx/config for the launched
+// ubx-provider-dynamic process to read, never to understand every one of
+// its own fields itself. Scope, historically: only ever consumed by
+// `ubx sdk gen` (schema dump only), never by ubx resolve/ship -- this
+// session's own new [providers] table is what makes a dynamic-provider-
+// backed source usable for REAL infra through ubx resolve/ship for the
+// first time, a real, deliberate expansion of scope, not a silent one.
 
 // K8sAuditConfig is .ubx/config's [k8s_audit] table (UBI-22,
 // docs/architecture.md -- Kubernetes support): which EKS cluster's
@@ -320,7 +342,7 @@ func applyProviderConfigDefault(cmd *cobra.Command, providerConfig *string, cfg 
 // a script written before this stack adopted the table) gets a warning,
 // not a silent override or a hard error. Config always wins; the flags
 // are simply ignored, loudly. Callers only reach this once they've
-// already confirmed cfg.Providers is non-empty -- it doesn't re-check
+// already confirmed cfg.ThirdpartyProviders is non-empty -- it doesn't re-check
 // that itself, so it can't be misused as the sole gate.
 func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
 	var given []string
@@ -333,7 +355,7 @@ func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
 		return
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"warning: %s ignored -- this stack declares a [providers] table in .ubx/config, which is the authority for a multi-provider stack\n",
+		"warning: %s ignored -- this stack declares a [thirdparty_providers] table in .ubx/config, which is the authority for a multi-provider stack\n",
 		strings.Join(given, ", "))
 }
 

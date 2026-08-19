@@ -34,7 +34,7 @@ func TestPlanShip_FromDiagram_UbxRequired_JSONBlockStringValue_RoundTripsVerbati
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -139,7 +139,7 @@ func TestPlanShip_FromDiagram_UbxRequired_LiteralValueMismatch_NeverResolves_UBI
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

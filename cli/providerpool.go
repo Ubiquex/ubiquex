@@ -26,12 +26,14 @@ import (
 // amendment) -- never a single global blob assumed correct for every
 // provider.
 type providerPool struct {
-	mu       sync.Mutex
-	versions map[string]string          // source -> pinned version, from [providers]
-	configs  map[string]json.RawMessage // source -> resolved provider_config JSON, from [provider_configs]
-	launch   launchFunc                 // real provider.Acquire/Launch in production, swappable in tests
-	launched map[string]executor.Applier
-	closers  []io.Closer
+	mu            sync.Mutex
+	versions      map[string]string          // source -> pinned version, from [thirdparty_providers]
+	dynamic       map[string]map[string]any  // key -> [providers.<key>] params, ubx's own
+	configs       map[string]json.RawMessage // source/key -> resolved provider_config JSON, from [provider_configs]
+	launch        launchFunc                 // real provider.Acquire/Launch in production, swappable in tests
+	dynamicLaunch launchFunc                 // real ubx-provider-dynamic launch, swappable in tests
+	launched      map[string]executor.Applier
+	closers       []io.Closer
 }
 
 // launchFunc acquires and launches source@version, returning a ready
@@ -42,11 +44,15 @@ type providerPool struct {
 type launchFunc func(ctx context.Context, source, version string) (executor.Applier, io.Closer, error)
 
 // newProviderPool builds a providerPool from .ubx/config's own
-// [providers]/[provider_configs] tables (versions/configs, already
-// decoded -- see applyMultiProviderConfig) plus salt, the same per-ledger
-// value newApplier already needs for redaction. Real Acquire/Launch,
-// lazy, exactly like the single-provider flow this generalizes.
-func newProviderPool(salt []byte, versions map[string]string, configs map[string]map[string]any) (*providerPool, error) {
+// [thirdparty_providers]/[provider_configs] tables (versions/configs,
+// already decoded -- see applyMultiProviderConfig) plus salt, the same
+// per-ledger value newApplier already needs for redaction. Real
+// Acquire/Launch, lazy, exactly like the single-provider flow this
+// generalizes. dynamic is [providers] (ubx's own, real, dynamic-
+// provider-backed sources, this session's own real addition) -- nil or
+// empty for every call site that hasn't started declaring one yet, in
+// which case Get behaves exactly as it always has.
+func newProviderPool(salt []byte, versions map[string]string, dynamic map[string]map[string]any, configs map[string]map[string]any) (*providerPool, error) {
 	resolvedConfigs := make(map[string]json.RawMessage, len(configs))
 	for source, cfg := range configs {
 		b, err := json.Marshal(cfg)
@@ -56,10 +62,12 @@ func newProviderPool(salt []byte, versions map[string]string, configs map[string
 		resolvedConfigs[source] = b
 	}
 	return &providerPool{
-		versions: versions,
-		configs:  resolvedConfigs,
-		launch:   newRealLaunchFunc(salt),
-		launched: map[string]executor.Applier{},
+		versions:      versions,
+		dynamic:       dynamic,
+		configs:       resolvedConfigs,
+		launch:        newRealLaunchFunc(salt),
+		dynamicLaunch: newDynamicProviderLaunchFunc(salt, dynamic),
+		launched:      map[string]executor.Applier{},
 	}, nil
 }
 
@@ -100,12 +108,16 @@ func (p *providerPool) Get(ctx context.Context, source, version string) (executo
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if _, isDynamic := p.dynamic[source]; isDynamic {
+		return p.getDynamic(ctx, source)
+	}
+
 	pinned, declared := p.versions[source]
 	if !declared {
-		return nil, nil, fmt.Errorf("provider %q is not declared in this stack's [providers] config", source)
+		return nil, nil, fmt.Errorf("provider %q is not declared in this stack's [thirdparty_providers] config", source)
 	}
 	if version != "" && version != pinned {
-		return nil, nil, fmt.Errorf("provider %q is pinned to %s in this stack's [providers] config, but this proposal recorded %s -- re-resolve against the current config", source, pinned, version)
+		return nil, nil, fmt.Errorf("provider %q is pinned to %s in this stack's [thirdparty_providers] config, but this proposal recorded %s -- re-resolve against the current config", source, pinned, version)
 	}
 
 	config := p.configs[source]
@@ -123,6 +135,34 @@ func (p *providerPool) Get(ctx context.Context, source, version string) (executo
 		return nil, nil, err
 	}
 	p.launched[key] = app
+	p.closers = append(p.closers, closer)
+	return app, config, nil
+}
+
+// getDynamic is Get's own real routing branch for a key declared under
+// [providers] (ubx's own, dynamic-provider-backed) -- called with p.mu
+// already held. Real, deliberate difference from the thirdparty path:
+// no version concept at all (ubx-provider-dynamic has no real,
+// independently-pinned release process yet, the same honest gap
+// dynamicprovider.go's own resolveDynamicProviderBinary doc comment
+// already names) -- launched at most once per key, per this pool's own
+// lifetime, exactly like a thirdparty provider.
+func (p *providerPool) getDynamic(ctx context.Context, key string) (executor.Applier, json.RawMessage, error) {
+	config := p.configs[key]
+	if config == nil {
+		config = json.RawMessage("{}")
+	}
+
+	cacheKey := "dynamic:" + key
+	if app, ok := p.launched[cacheKey]; ok {
+		return app, config, nil
+	}
+
+	app, closer, err := p.dynamicLaunch(ctx, key, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	p.launched[cacheKey] = app
 	p.closers = append(p.closers, closer)
 	return app, config, nil
 }
@@ -179,6 +219,48 @@ func declaredProvidersForInference(ctx context.Context, pool *providerPool, vers
 		})
 	}
 	return declared, nil
+}
+
+// resolvedProviderSource is one real, precedence-resolved entry for a
+// given short key -- either ubx's own dynamic-provider-backed source
+// (Dynamic=true, Params from [providers.<key>]) or a real
+// Terraform-registry thirdparty source (Dynamic=false, Source/Version
+// from [thirdparty_providers]).
+type resolvedProviderSource struct {
+	Key     string
+	Dynamic bool
+	Params  map[string]any // set when Dynamic
+	Source  string         // set when !Dynamic
+	Version string         // set when !Dynamic
+}
+
+// resolveProviderPrecedence merges cfg.Providers ([providers], ubx's
+// own) and cfg.ThirdpartyProviders ([thirdparty_providers], real
+// Terraform-registry sources) into one real, deterministic set, keyed by
+// short name -- [providers] always wins when the SAME real key is
+// declared in both, the founder's own explicit precedence rule for this
+// session's two-namespace restructure ("[providers] means ubx's own,
+// [thirdparty_providers] means everyone else's ... if both namespaces
+// declare the same key, [providers] wins").
+//
+// [thirdparty_providers] itself stays exactly its real, existing flat
+// map[string]string shape (source -> pinned version, never reshaped);
+// its own real, comparable short key -- for precedence comparison only,
+// this function never changes what's actually stored or how Get looks
+// providers up -- is its source string's last "/" segment
+// (providerShortName, the identical real derivation cli/sdk.go already
+// uses for SDK target-repo naming, reused here rather than a second
+// derivation of the same real idea).
+func resolveProviderPrecedence(cfg *Config) map[string]resolvedProviderSource {
+	out := make(map[string]resolvedProviderSource, len(cfg.ThirdpartyProviders)+len(cfg.Providers))
+	for source, version := range cfg.ThirdpartyProviders {
+		key := providerShortName(source)
+		out[key] = resolvedProviderSource{Key: key, Source: source, Version: version}
+	}
+	for key, params := range cfg.Providers {
+		out[key] = resolvedProviderSource{Key: key, Dynamic: true, Params: params}
+	}
+	return out
 }
 
 // sortedProviderSources returns versions' own keys, sorted -- determinism

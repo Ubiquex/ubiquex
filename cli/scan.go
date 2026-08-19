@@ -95,7 +95,7 @@ func newScanCmd() *cobra.Command {
 				if tfstatePath == "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all requires --tfstate")}
 				}
-				if len(cfg.Providers) > 0 {
+				if len(cfg.ThirdpartyProviders) > 0 {
 					warnIfLegacyProviderFlagsGiven(cmd)
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -111,7 +111,7 @@ func newScanCmd() *cobra.Command {
 					Source:          source,
 					ProviderVersion: providerVersion,
 					ProviderConfig:  providerConfig,
-					Providers:       cfg.Providers,
+					Providers:       cfg.ThirdpartyProviders,
 					ProviderConfigs: cfg.ProviderConfigs,
 					Timeout:         timeout,
 				})
@@ -127,7 +127,7 @@ func newScanCmd() *cobra.Command {
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: %w", err)}
 				}
-				if len(cfg.Providers) > 0 {
+				if len(cfg.ThirdpartyProviders) > 0 {
 					warnIfLegacyProviderFlagsGiven(cmd)
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -146,7 +146,7 @@ func newScanCmd() *cobra.Command {
 					Source:          source,
 					ProviderVersion: providerVersion,
 					ProviderConfig:  providerConfig,
-					Providers:       cfg.Providers,
+					Providers:       cfg.ThirdpartyProviders,
 					ProviderConfigs: cfg.ProviderConfigs,
 					Timeout:         timeout,
 					NoAttribution:   noAttribution,
@@ -189,7 +189,7 @@ func newScanCmd() *cobra.Command {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, err)}
 				}
 				defer closeLedger()
-				if len(cfg.Providers) > 0 {
+				if len(cfg.ThirdpartyProviders) > 0 {
 					warnIfLegacyProviderFlagsGiven(cmd)
 				}
 				st := newStylerFull(cmd, fullHashes)
@@ -235,12 +235,12 @@ func newScanCmd() *cobra.Command {
 			// is a [providers] table (the same table --all/--discover/ship/
 			// status already honor) -- unreadable there without falling
 			// back to flags the stack doesn't otherwise need. When
-			// cfg.Providers is declared, infer which source owns
+			// cfg.ThirdpartyProviders is declared, infer which source owns
 			// resourceType (a real, free schema check -- see
 			// inferProviderForType) instead of the legacy path.
-			if len(cfg.Providers) > 0 {
+			if len(cfg.ThirdpartyProviders) > 0 {
 				warnIfLegacyProviderFlagsGiven(cmd)
-				inferredSource, inferredVersion, ierr := inferProviderForType(ctx, cfg.Providers, resourceType)
+				inferredSource, inferredVersion, ierr := inferProviderForType(ctx, cfg.ThirdpartyProviders, resourceType)
 				if ierr != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, ierr)}
 				}

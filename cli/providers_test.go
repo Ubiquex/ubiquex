@@ -43,7 +43,7 @@ func TestProvidersCheck_UpToDate(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "payments"
 
-providers = {
+thirdparty_providers = {
   "hashicorp/aws" = "6.54.0"
 }
 `)
@@ -67,7 +67,7 @@ func TestProvidersCheck_NewerAvailable_ExitCode1(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "payments"
 
-providers = {
+thirdparty_providers = {
   "hashicorp/aws" = "6.50.0"
 }
 `)
@@ -93,7 +93,7 @@ func TestProvidersCheck_Write_BumpsInPlace(t *testing.T) {
 	original := `# a hand-written comment that must survive
 stack = "payments"
 
-providers = {
+thirdparty_providers = {
   "hashicorp/aws" = "6.50.0"
 }
 `
@@ -133,8 +133,8 @@ func TestProvidersCheck_NoProvidersDeclared_Errors(t *testing.T) {
 
 	out, err := runUbx(t, nil, "providers", "check")
 	requireExitCode(t, err, 2, out)
-	if !strings.Contains(err.Error(), "[providers]") {
-		t.Fatalf("expected the error to name the missing [providers] table, got: %v", err)
+	if !strings.Contains(err.Error(), "[thirdparty_providers]") {
+		t.Fatalf("expected the error to name the missing [thirdparty_providers] table, got: %v", err)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestProvidersCheck_MultipleProviders_SortedDeterministic(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "payments"
 
-providers = {
+thirdparty_providers = {
   "hashicorp/google" = "5.0.0",
   "hashicorp/aws" = "6.54.0"
 }
@@ -187,7 +187,7 @@ func TestProvidersCheck_RegistryUnreachable_ExitCode2(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "payments"
 
-providers = {
+thirdparty_providers = {
   "hashicorp/aws" = "6.54.0"
 }
 `)

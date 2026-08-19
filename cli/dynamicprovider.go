@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/ubiquex/ubiquex/core/executor"
 	"github.com/ubiquex/ubiquex/provider"
 )
 
@@ -183,6 +185,61 @@ func dynamicProviderSignals(ctx context.Context, binPath, name string, params ma
 		return nil, fmt.Errorf("parse signal output for dynamic provider %q: %w", name, err)
 	}
 	return out, nil
+}
+
+// newDynamicProviderLaunchFunc is providerPool's own real launchFunc for
+// a key declared under [providers] (ubx's own, dynamic-provider-backed)
+// -- this session's own real addition, the first time a dynamic-
+// provider-backed source becomes usable for REAL infra through
+// ubx resolve/ubx ship, not just `ubx sdk gen`'s schema-only dump
+// (dynamicProviderSchema above). Reuses the identical real
+// resolveDynamicProviderBinary/writeDynamicProviderConfig/
+// provider.Launch machinery that function already established -- the
+// one real difference is this keeps the launched client OPEN (wrapped
+// into a real executor.Applier via newApplier, exactly like
+// newRealLaunchFunc does for a Terraform-registry provider) rather than
+// closing it immediately after one schema call.
+//
+// Real, honest, deliberate scope boundary, named not hidden: binPath
+// resolution here always uses the ambient UBX_PROVIDER_DYNAMIC_REPO /
+// defaultDynamicProviderRepo convention (no --dynamic-provider-bin flag
+// threaded through every real command this touches, `ubx sdk gen`'s own
+// only current caller) -- extending that flag to ubx resolve/ubx ship/
+// ubx propose/etc. is real, separate, not-yet-done work.
+func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any) launchFunc {
+	return func(ctx context.Context, key, _ string) (executor.Applier, io.Closer, error) {
+		params, ok := dynamic[key]
+		if !ok {
+			return nil, nil, fmt.Errorf("provider %q is not declared in this stack's [providers] config", key)
+		}
+		repoPath := os.Getenv("UBX_PROVIDER_DYNAMIC_REPO")
+		if repoPath == "" {
+			repoPath = defaultDynamicProviderRepo
+		}
+		binPath, err := resolveDynamicProviderBinary("", repoPath)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		workDir, err := os.MkdirTemp("", "ubx-dynamic-provider-"+key)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := writeDynamicProviderConfig(workDir, key, params); err != nil {
+			os.RemoveAll(workDir)
+			return nil, nil, err
+		}
+
+		client, err := provider.Launch(ctx, binPath,
+			provider.WithDir(workDir),
+			provider.WithEnv("UBX_DYNAMIC_PROVIDER_NAME="+key),
+		)
+		os.RemoveAll(workDir) // the launched process has already read the config by the time Launch returns
+		if err != nil {
+			return nil, nil, fmt.Errorf("launch ubx-provider-dynamic for %q: %w", key, err)
+		}
+		return newApplier(client.Provider, salt, "ubiquex/dynamic/"+key), client, nil
+	}
 }
 
 // writeDynamicProviderConfig serializes params back into a real

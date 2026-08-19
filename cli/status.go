@@ -171,9 +171,9 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			// (resolver.InferProvider), built lazily here (only launching
 			// every declared provider if at least one entry actually
 			// needs it) rather than always paying for it up front.
-			if len(cfg.Providers) > 0 {
+			if len(cfg.ThirdpartyProviders) > 0 {
 				warnIfLegacyProviderFlagsGiven(cmd)
-				pool, err := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
+				pool, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 				}
@@ -193,7 +193,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 						provSource, provVersion = e.Provider.Source, e.Provider.Version
 					default:
 						if declared == nil {
-							declared, err = declaredProvidersForInference(ctx, pool, cfg.Providers)
+							declared, err = declaredProvidersForInference(ctx, pool, cfg.ThirdpartyProviders)
 							if err != nil {
 								return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 							}

@@ -363,13 +363,13 @@ func joinProvenancePath(base, key string) string {
 
 // knownTopLevelKeys/knownProviderKeys/knownK8sAuditKeys are the fixed,
 // known shape of config -- everything else in warnUnknownKeys' walk is
-// freeform by design (provider_config/providers/provider_configs, whose
-// keys are provider-defined, not ubx-defined) and never checked below
-// its own top-level table name.
+// freeform by design (provider_config/providers/thirdparty_providers/
+// provider_configs, whose keys are provider-defined, not ubx-defined)
+// and never checked below its own top-level table name.
 var knownTopLevelKeys = map[string]bool{
 	"stack": true, "github_repo": true, "tf_dir": true,
 	"provider": true, "provider_config": true,
-	"providers": true, "provider_configs": true,
+	"providers": true, "thirdparty_providers": true, "provider_configs": true,
 	"dynamic_providers": true,
 	"k8s_audit":         true, "ledger": true, "root": true,
 	"intent": true,

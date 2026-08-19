@@ -27,7 +27,7 @@ import (
 func newProvidersCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "providers",
-		Short: "Check and update this stack's own pinned [providers] versions against the real Terraform Registry",
+		Short: "Check and update this stack's own pinned [thirdparty_providers] versions against the real Terraform Registry",
 	}
 	cmd.AddCommand(newProvidersCheckCmd())
 	return cmd
@@ -50,7 +50,7 @@ func newProvidersCmd() *cobra.Command {
 //     Adding this ticket's own check as shell would have made it the
 //     13th independent copy of the identical curl+jq+sort logic, in a
 //     DIFFERENT repo family with a genuinely different write target
-//     ([providers] in a stack's own config, not a bindings repo's own
+//     ([thirdparty_providers] in a stack's own config, not a bindings repo's own
 //     VERSION file) -- the two were always going to diverge in every
 //     detail except the registry call itself; centralizing that ONE
 //     shared piece in Go, once, tested, is the only way "shared" means
@@ -64,7 +64,7 @@ func newProvidersCmd() *cobra.Command {
 //     coverage able to catch either beforehand.
 //  4. `ubx` already owns the ONE piece of information this check
 //     actually needs -- .ubx/config's own real, already-parsed
-//     [providers] table and its own cascade PROVENANCE (which real file
+//     [thirdparty_providers] table and its own cascade PROVENANCE (which real file
 //     supplied which pin) -- through `LoadConfigResolved`, already
 //     built, already tested. A shell script re-deriving "where is the
 //     provider pin declared" by grepping/regexing a config file by hand
@@ -74,7 +74,7 @@ func newProvidersCmd() *cobra.Command {
 // UBI-99 itself never built a subcommand for its OWN registry check) are
 // real but don't outweigh the above: UBI-99's own workflow only ever
 // needed to check ONE hardcoded provider for ONE repo family it fully
-// controls, never asked to generalize; this ticket's own [providers]
+// controls, never asked to generalize; this ticket's own [thirdparty_providers]
 // table can name an arbitrary number of providers, in a stack repo ubx
 // has no other special relationship to, which is exactly the shape a
 // reusable primitive earns its own existence for.
@@ -86,15 +86,15 @@ func newProvidersCheckCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Query the real Terraform Registry for a newer version of every provider declared in [providers]",
-		Long: `Reads .ubx/config's own [providers] table (the same source of truth "ubx resolve"/"ubx ship" already
+		Short: "Query the real Terraform Registry for a newer version of every provider declared in [thirdparty_providers]",
+		Long: `Reads .ubx/config's own [thirdparty_providers] table (the same source of truth "ubx resolve"/"ubx ship" already
 read) and queries the real, unauthenticated Terraform Registry "list versions" endpoint
 (https://registry.terraform.io/v1/providers/:namespace/:type/versions -- UBI-99's own proven, live-verified call
 shape) for each declared provider's own latest real release, excluding pre-releases.
 
 Exit code matches "ubx status --drift"'s own established contract (UBI-20): 0 if every pin is already current,
 1 if a newer version is available for at least one provider (a real, actionable signal a CI workflow can branch
-on -- never a hard failure on its own), 2 on a real error (registry unreachable, no [providers] declared, ...).
+on -- never a hard failure on its own), 2 on a real error (registry unreachable, no [thirdparty_providers] declared, ...).
 
 --write additionally rewrites the affected provider's own version pin, IN PLACE, in whichever real file the
 cascade's own provenance names as that key's source -- a targeted substitution preserving every other line
@@ -110,8 +110,8 @@ well-scoped thing, the caller owns the surrounding workflow" posture.`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("providers check: %w", err)}
 			}
-			if len(rc.Config.Providers) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("providers check: no [providers] declared in .ubx/config -- declare at least one source to check")}
+			if len(rc.Config.ThirdpartyProviders) == 0 {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("providers check: no [thirdparty_providers] declared in .ubx/config -- declare at least one source to check")}
 			}
 
 			var versionsOpts []provider.VersionsOption
@@ -124,8 +124,8 @@ well-scoped thing, the caller owns the surrounding workflow" posture.`,
 			}
 
 			var anyNewer bool
-			for _, source := range sortedProviderSources(rc.Config.Providers) {
-				pinned := rc.Config.Providers[source]
+			for _, source := range sortedProviderSources(rc.Config.ThirdpartyProviders) {
+				pinned := rc.Config.ThirdpartyProviders[source]
 
 				parsed, err := provider.ParseSource(source)
 				if err != nil {
@@ -148,7 +148,7 @@ well-scoped thing, the caller owns the surrounding workflow" posture.`,
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s -> %s available\n", source, pinned, latest)
 
 				if write {
-					key := "providers." + strconv.Quote(source)
+					key := "thirdparty_providers." + strconv.Quote(source)
 					file, ok := rc.Provenance[key]
 					if !ok {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("providers check: --write: no provenance recorded for %s -- this shouldn't happen for an already-loaded provider pin", source)}

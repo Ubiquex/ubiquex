@@ -105,7 +105,7 @@ func TestPlan_FromDiagram_StackFromConfig_NoFlag(t *testing.T) {
 	writeConfig(t, dir, `
 stack = "playground"
 
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

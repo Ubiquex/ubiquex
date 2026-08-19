@@ -36,12 +36,12 @@ func writeMirrorProvider(t *testing.T, mirrorDir, namespace, typ, version string
 func TestSDKGen_NoProvidersDeclared_Errors(t *testing.T) {
 	dir := t.TempDir()
 	withConfigSearchDir(t, dir)
-	writeConfig(t, dir, "") // no [providers] table at all
+	writeConfig(t, dir, "") // no [thirdparty_providers] table at all
 
 	out, err := runUbx(t, nil, "sdk", "gen", "--out", filepath.Join(dir, "out"))
 	requireExitCode(t, err, 2, out)
-	if !strings.Contains(err.Error(), "[providers]") {
-		t.Fatalf("expected the error to name the missing [providers] table, got: %v", err)
+	if !strings.Contains(err.Error(), "[thirdparty_providers]") {
+		t.Fatalf("expected the error to name the missing [thirdparty_providers] table, got: %v", err)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestSDKGen_MultipleLanguagesSameOut_DoNotCollide(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -120,7 +120,7 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -236,7 +236,7 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -356,7 +356,7 @@ func TestSDKGen_ExistingGoModDirective_PreservedNotOverwritten(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -405,7 +405,7 @@ func TestSDKGen_NoExistingGoMod_FallsBackToRuntimeGoVersion(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -440,7 +440,7 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

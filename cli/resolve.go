@@ -292,10 +292,10 @@ func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, re
 // (propose.go) already documents for its own, symmetric loop.
 func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, providerPath, source, providerVersion *string) ([]resolver.DeclaredProvider, error) {
 	var providers []resolver.DeclaredProvider
-	if len(cfg.Providers) > 0 {
+	if len(cfg.ThirdpartyProviders) > 0 {
 		warnIfLegacyProviderFlagsGiven(cmd)
-		for _, src := range sortedProviderSources(cfg.Providers) {
-			version := cfg.Providers[src]
+		for _, src := range sortedProviderSources(cfg.ThirdpartyProviders) {
+			version := cfg.ThirdpartyProviders[src]
 			parsed, err := provider.ParseSource(src)
 			if err != nil {
 				return nil, err

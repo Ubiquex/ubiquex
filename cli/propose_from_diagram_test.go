@@ -13,15 +13,15 @@ import (
 func TestProposeFromDiagram_NoProvidersDeclared_Errors(t *testing.T) {
 	dir := t.TempDir()
 	withConfigSearchDir(t, dir)
-	writeConfig(t, dir, "") // no [providers] table at all
+	writeConfig(t, dir, "") // no [thirdparty_providers] table at all
 
 	diagramPath := filepath.Join(dir, "topo.d2")
 	writeFile(t, diagramPath, "payments: {\n  vpc: main-vpc\n}\n")
 
 	out, err := runUbx(t, nil, "propose", "--from-diagram", diagramPath, "--stack", "payments")
 	requireExitCode(t, err, 2, out)
-	if !strings.Contains(err.Error(), "[providers]") {
-		t.Fatalf("expected the error to name the missing [providers] table, got: %v", err)
+	if !strings.Contains(err.Error(), "[thirdparty_providers]") {
+		t.Fatalf("expected the error to name the missing [thirdparty_providers] table, got: %v", err)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestProposeFromDiagram_EndToEnd_ViaMirror(t *testing.T) {
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 
@@ -164,7 +164,7 @@ func TestProposeFromDiagram_NoAmbiguity_RendersUnambiguousMessage(t *testing.T) 
 	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
 	withConfigSearchDir(t, dir)
 	writeConfig(t, dir, `
-[providers]
+[thirdparty_providers]
 "fake/widget" = "0.1.0"
 `)
 

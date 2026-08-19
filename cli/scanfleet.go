@@ -91,8 +91,8 @@ func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.L
 		return nil
 	}
 
-	if len(cfg.Providers) > 0 {
-		pool, perr := newProviderPool(salt, cfg.Providers, cfg.ProviderConfigs)
+	if len(cfg.ThirdpartyProviders) > 0 {
+		pool, perr := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 		if perr != nil {
 			return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, perr)}
 		}
@@ -110,7 +110,7 @@ func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.L
 				provSource, provVersion = e.Provider.Source, e.Provider.Version
 			default:
 				if declared == nil {
-					declared, err = declaredProvidersForInference(ctx, pool, cfg.Providers)
+					declared, err = declaredProvidersForInference(ctx, pool, cfg.ThirdpartyProviders)
 					if err != nil {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, err)}
 					}
