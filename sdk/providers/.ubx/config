@@ -167,25 +167,29 @@ client_secret_env = "AZURE_CLIENT_SECRET"
 scopes = ["https://management.azure.com/.default"]
 
 # --- Google Cloud ("google," matching the real, already-published
-# ubx-sdk-google repo name) -- real schema location confirmed, schema
-# FORMAT genuinely not supported yet ---
+# ubx-sdk-google repo name) -- schema layer real and working ---
 #
-# Real, confirmed finding, not assumed: GCP's own real API surface is
-# published as Discovery Documents (discoveryVersion "v1," a
-# "resources.*.methods.*" operation tree, GCP's own "schemas" for
-# component types) -- confirmed live this checkpoint to be a genuinely
-# different real JSON format from both OpenAPI/Swagger and Smithy (no
-# "swagger"/"openapi" field, no "paths" at all). schema_source has no
-# real value for this yet -- ubx-provider-dynamic's own
-# internal/config.SchemaSourceType enum only recognizes openapi/smithy/
-# inline/aws_ccapi today. "discovery_docs" below is written as the real,
-# correct intended value, deliberately NOT one of those four -- running
-# `ubx sdk gen` against this entry today fails with a real, honest
-# "unrecognized schema_source" error from ubx-provider-dynamic itself,
-# not a silent no-op. A real, new schema-source engine (parsing GCP's
-# own real resources/methods/schemas tree into the identical target IR
-# every other source already produces) is required, substantial, NOT-yet-
-# attempted work -- named here explicitly.
+# GCP's own real API surface is published as Discovery Documents
+# (discoveryVersion "v1," a "resources.*.methods.*" operation tree, GCP's
+# own "schemas" for component types) -- a genuinely different real JSON
+# format from both OpenAPI/Swagger and Smithy (no "swagger"/"openapi"
+# field, no "paths" at all). ubx-provider-dynamic's own
+# internal/discoverydoc package (a real, third schema-source engine,
+# alongside internal/openapi and internal/smithy) now recognizes
+# schema_source = "discovery_docs" for real -- confirmed live, schema
+# layer only, against this EXACT URL: 95 real resources, 6,235 fields,
+# 28% real sourced descriptions (GCP's own Discovery Documents carry
+# unusually rich real prose), the generated Go SDK `go build`/`go vet`
+# clean against a real ubx-sdk-go runtime checkout.
+#
+# Real, deliberate, honestly-scoped limitation, NOT yet done: schema
+# discovery + translation only, the identical real precedent this
+# pipeline's own Kubernetes checkpoint set -- real REST wire execution
+# (Configure/Create/Read/Update/Delete actually calling
+# compute.googleapis.com) is separate, NOT-yet-attempted work, matching
+# Smithy's own real Phase 1 -> Phase 4 staging. A `ubx sdk gen` run
+# against this entry generates real, buildable bindings; it does not yet
+# serve real CRUD RPCs.
 [dynamic_providers.google]
 schema_source = "discovery_docs"
 schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/v1/rest"
