@@ -142,24 +142,28 @@ region = "us-east-1"
 service = "cloudcontrolapi"
 credential_source = "profile"
 
-# --- Azure -- real schema fetch verified this checkpoint; resource
-# discovery genuinely blocked, named honestly below ---
+# --- Azure -- real schema fetch and real resource discovery both
+# verified working, live ---
 #
 # schema_url is a real, current, pinned Azure Compute resource-provider
-# Swagger 2.0 file (Azure's own real spec format -- confirmed live this
-# checkpoint, NOT OpenAPI 3.x, and NOT single-file: it references a real,
-# external "common-types" definitions file by real relative path, which
-# ubx-provider-dynamic's own loader now resolves -- see
-# internal/openapi/load_live_test.go's own TestLive_AzureSwaggerWithExternalRefs).
+# Swagger 2.0 file (Azure's own real spec format, NOT OpenAPI 3.x, and
+# NOT single-file: it references a real, external "common-types"
+# definitions file by real relative path, which ubx-provider-dynamic's
+# own loader resolves -- see internal/openapi/load_live_test.go's own
+# TestLive_AzureSwaggerWithExternalRefs).
 #
-# Real, confirmed, NOT-yet-fixed gap: resourcemap.Discover finds ZERO
-# resources from this real, correctly-parsed spec, because Azure's own
-# real ARM API convention uses PUT (not POST) to create/upsert a
-# resource -- resourcemap.Discover's own create-detection heuristic only
-# recognizes POST today. This entry's schema_url/base_url are real and
-# correct; `ubx sdk gen` against this entry will succeed at fetching and
-# parsing the schema and then generate zero resource types, honestly,
-# until that heuristic is extended.
+# The real gap this comment used to describe here (Azure's own real ARM
+# API convention uses PUT, not POST, to create/upsert a resource, and
+# resourcemap.Discover's own create-detection heuristic only recognized
+# POST) was fixed in ubx-provider-dynamic commit a61e489 ("resourcemap:
+# recognize PUT-to-item-path as a real, generic create signal -- fixes
+# Azure ARM's own real convention"), 2026-08-19 -- this comment was
+# simply never updated afterward, and caused a real, live misreport one
+# phase later (UBI-175 Phase 2 read this comment and reported Azure as
+# still blocked) before being caught and corrected in UBI-175 Phase 3 by
+# re-running the current binary against this exact entry: 19 real
+# resource types discovered, zero errors. `ubx sdk gen` against this
+# entry works end to end today.
 #
 # auth follows Azure AD's own real, standard client-credentials
 # convention (the identical real oauth2_client_credentials type Phase 2
