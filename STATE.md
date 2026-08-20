@@ -2,6 +2,28 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## AWS CFN description coverage: measured, real, no generation, 2026-08-20 (no Linear ticket ID given)
+
+**Investigation only, per the founder's own explicit scope** ("Do not generate descriptions yet. Numbers first."). No config, pipeline, or generation changes -- a temporary `cmd/debugtmp` measurement program (real `ubx-provider-dynamic` binary freshly built from the sibling checkout, launched schema-fetch-only against the real, live CFN registry, same safety posture as every prior investigation this arc) was created, run, and deleted; nothing checked in.
+
+**Same live counting method as every other provider, confirmed by reading the real code, not assumed**: `ir.FromSchema` per resource, then the identical recursive walk `cli/sdkdescribe.go`'s own `countExisting`/`walkNested` already use (`DescriptionSourceModel` vs `DescriptionSourceNone`, recursing into every `KindObject` field and List/Set/Map-of-object element, at every depth) -- replicated verbatim in the throwaway measurement program rather than reinvented.
+
+**Real, live numbers, 1,700 real built resources, 0 conversion failures**:
+
+| | Raw (all 1,700 resources) | Excluding 3 QuickSight outliers |
+|---|---:|---:|
+| Total fields | 126,624 | 49,167 |
+| Sourced | 16,415 (13.0%) | 16,325 (33.2%) |
+| None | 110,209 (87.0%) | 32,842 (66.8%) |
+
+The founder's own expectation ("meaningfully better than the 0% Smithy gave") is real but narrower than it sounded: CFN's own real per-property "description" field IS genuinely populated far more often than Smithy's real trait system ever was for this pipeline -- but the aggregate rate is nowhere near the human-facing-docs assumption might suggest, and three resource types alone (`AWS::QuickSight::Dashboard`/`Analysis`/`Template`) are responsible for the difference: real, live-confirmed 707 real `definitions` in the Dashboard type's own raw 336KB schema file (not a translator bug -- QuickSight's real visual/chart-configuration schema genuinely is this deep and combinatorially large), expanding to 77,457 of the 126,624 total fields at a real ~0.1% sourced rate, dragging the whole-corpus average down hard. Both numbers are real and reported; neither is "the" number -- the raw one is the apples-to-apples figure matching every other provider's own reported total, the excluded one is the more representative "typical AWS resource" figure.
+
+**Nested-description-loss bug (checkpoint 11, the historical arc) confirmed NOT recurring here**: live-verified two ways. (1) Structural -- real, live samples of nested `KindObject` fields (`aws_lambda_layer_version.content.s3_bucket`, `aws_ecr_public_repository.repository_catalog_data.about_text`, and others) correctly carry `DescriptionSourceModel`, proving the recursive walk finds real nested descriptions, not just top-level ones. (2) Textual -- `aws_lambda_layer_version.content.s3_bucket`'s real, live description text through the FULL pipeline (`internal/cloudformation.convertSchema` -> `internal/schema.Translator` -> the real tfplugin6 wire protocol -> `provider/schema.go`'s decode -> `ir.FromSchema`) is byte-for-byte identical to the raw CFN source text ("The Amazon S3 bucket of the layer archive."), confirmed by direct comparison, not assumed. checkpoint 11's own fix (`Attribute.NestedAttributes`) lives in the shared, provider-agnostic wire-decode layer (`provider/schema.go`), so this was expected to hold for CFN too -- confirmed live rather than left assumed.
+
+**The real gap, answering the founder's own explicit question**: the prior 5-provider generation arc's own combined real total (checkpoint 13) was Sourced 9,938 + AI-inferred 18,330 = **28,268 real descriptions generated or sourced across everything done so far**. AWS/CFN's own remaining `None` gap alone is **110,209** (raw) or **32,842** (excluding the QuickSight outliers) -- even the smaller, outlier-excluded number is larger than everything generated across all five other providers combined; the raw, apples-to-apples number is roughly 3.9x that combined total. DeepSeek generation for AWS, if it proceeds, is not a small addition -- it is the largest single piece of work this whole description-generation arc has done, by a wide margin, real and measured, not estimated.
+
+**Not started here, per the founder's own explicit instruction**: no description generation, no config changes (AWS's real central `sdk/providers/.ubx/config` entry remains SQS-only Smithy, the CFN registry is still not wired into it), no decision made about whether/how to proceed given this real, much-larger-than-expected number.
+
 ## Resolver preference gap closed: [providers] reachable through ordinary `ubx resolve` use, 2026-08-20 (no Linear ticket ID given)
 
 **Real, precise fix, one layer up, exactly as scoped.** The prior checkpoint's own honest gap: `providerPool.Get` already routed a `[providers]`-declared key through a real `ubx-provider-dynamic` launch, but `core/resolver.InferProvider` only ever ranks whichever declared-provider set it's handed, and nothing fed it a set that reflected `[providers]`-over-`[thirdparty_providers]` precedence for an unrecorded resource. Confirmed by direct reading, not assumed: `InferProvider` itself needed zero changes. The real fix lives in `cli/resolve.go`'s own `loadResolveProviders` (the exact function `ubx resolve`/`ubx plan` call) -- it now iterates `resolveProviderPrecedence`'s own real, resolved set (one entry per real key, `[providers]` wins on collision) instead of `cfg.ThirdpartyProviders` directly. A shadowed `[thirdparty_providers]` entry for the same real key is never even fetched, let alone offered to `InferProvider` as a live, losing candidate.
