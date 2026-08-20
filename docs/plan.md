@@ -2,6 +2,25 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session, closes the arc
+  the two entries directly below opened) third and final resume of AWS
+  description generation, the real, never-attempted 7,350-field
+  remainder the entry below left open. Completed in full this time --
+  0 errored, 764 new genuine abstentions, 6,586 new real descriptions,
+  merged with zero collisions. Real spend investigated via DeepSeek's
+  own `/user/balance` endpoint queried before/after ($4.77 -> $1.50,
+  $3.27 real spend for 8,004,185 real tokens across 7,350 calls) --
+  each response's own `usage.completion_tokens_details.reasoning_tokens`
+  field showed 66-131 hidden reasoning tokens per call, roughly as
+  large as the visible one-sentence description itself, which is the
+  real explanation for why the first two rounds exhausted their
+  balances faster than naive Flash per-field pricing would predict.
+  Real, final AWS coverage: 16,325 sourced, 30,063 AI-inferred, 2,779
+  genuinely abstained (all three rounds), 0 never attempted, 77,457
+  excluded. The founder's own stated target ("an empty never-attempted
+  bucket") is met. See STATE.md's own checkpoint for the full real
+  numbers.
+
 - 2026-08-20 -- (no Linear ticket ID given this session, same arc as the
   entry directly below) resume of AWS description generation against
   the real, remaining 19,411-field gap the entry below left open. Real,

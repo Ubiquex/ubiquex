@@ -2,6 +2,28 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## AWS description generation closed out, third resume run completed in full, real spend data captured, 2026-08-20 (no Linear ticket ID given)
+
+**Real, precise third resume, not a re-ask of anything already answered**: the current real gap list (9,365 fields: 2,015 already-genuinely-abstained across the first two rounds + 7,350 never-attempted) was diffed against BOTH prior rounds' own real recorded results -- every field with `abstained: true` in either round was excluded before a single new call ran. The real, computed job set was exactly 7,350 fields, matching the founder's own stated count exactly.
+
+**Completed in full this time -- no third interruption**: all 7,350 jobs ran to completion, 0 errored, 764 new genuine abstentions, 6,586 new real descriptions. Merged into the checked-in `sdk/providers/descriptions/aws.json` (zero collisions) -- file now 1,437 resources, 30,064 entries.
+
+**Real per-call cost investigation, as asked**: DeepSeek's own `/user/balance` endpoint was queried before and after the run (real account balance, not an estimate) -- $4.77 before, $1.50 after, **$3.27 real spend** for this run. The run's own captured `usage` field from every real API response totals 8,004,185 tokens (3,089,882 prompt + 4,914,303 completion) across 7,350 calls -- an average of ~1,089 tokens per field, of which ~668 are completion tokens for what should be a one-sentence output. A 5-call smoke test before the full run showed why directly: each response's `usage.completion_tokens_details.reasoning_tokens` field showed 66-131 hidden reasoning tokens per call (roughly as large as the visible description itself), invisible in the JSON output but billed as real completion tokens. This is the real, concrete explanation for why the first two rounds exhausted their balances far faster (40.9% and 62.1% of their own respective job counts) than a naive per-field Flash-pricing estimate would predict: the model is reasoning at length internally before emitting each one-sentence description, and every one of those hidden tokens is real, billed spend, not free chain-of-thought.
+
+**Real, live-measured final coverage for AWS, THIS run's own checkpoint**:
+
+| | Fields | % of 126,624 |
+|---|---:|---:|
+| Sourced (real CFN description) | 16,325 | 12.9% |
+| AI-inferred (DeepSeek, all three rounds) | 30,063 | 23.7% |
+| None -- genuinely abstained (all three rounds: 1,446 + 569 + 764) | 2,779 | 2.2% |
+| None -- never attempted | 0 | 0% |
+| Excluded (describe_exclude, QuickSight) | 77,457 | 61.2% |
+
+**Founder's own stated target for this resume -- "an empty never-attempted bucket" -- MET**: the never-attempted count is real, confirmed, zero. Of AWS's real, non-excluded 49,167 fields, 46,388 (94.3%) are now described (sourced + AI-inferred) or genuinely, honestly declined (2,779, 5.7%) -- every one of the 49,167 has had a real, first attempt.
+
+**Never self-merged, verification discipline unchanged**: whole repo untouched by Go changes this checkpoint (only the checked-in descriptions artifact). `cmd/ubx` rebuilt fresh from the exact working-tree commit (`572a517`) before every real `ubx sdk gen` invocation this checkpoint. `sdk/generated` was written twice this checkpoint purely to obtain real coverage numbers (once for the pre-run gap list, once for the post-merge final count), deleted both times -- still never committed for any provider in this arc. Repo-wide grep sweep for the real DeepSeek key (`/Users/roozbeh/Ubiquex/`, plus the session scratchpad) run clean (exit 1, no matches) immediately after the run, the merge, and again as the last act before this checkpoint.
+
 ## AWS description generation resumed, real second interruption, honestly reported, not fully closed, 2026-08-20 (no Linear ticket ID given)
 
 **Real, precise resume, not a re-ask of anything already answered**: the real, current gap list (20,857 fields) was diffed against the prior run's own real, recorded results -- every field that already got a genuine abstention (1,446) was excluded from the job set before a single new call was made, confirmed live: the real, computed resume set was exactly 19,411 fields, matching the founder's own stated count exactly before any generation ran. Real 5-call smoke test passed first (4 real descriptions, 1 real, correctly-reasoned abstention on a generic `tags.value` field, zero errors) confirming the topped-up key had balance.
