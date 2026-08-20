@@ -33,28 +33,50 @@ import (
 
 // descriptionCoverage is one provider's own real, honest tally --
 // exactly the three real DescriptionSource states, counted, never
-// estimated or extrapolated from a sample.
+// estimated or extrapolated from a sample, plus Excluded (below).
 type descriptionCoverage struct {
 	Sourced    int // DescriptionSourceModel -- the real provider's own prose
 	AIInferred int // DescriptionSourceAIInferred -- checked-in or live-generated, labeled visibly
 	None       int // DescriptionSourceNone -- genuinely undescribed: abstained, or not yet authored
+
+	// Excluded is real fields belonging to a resource this provider's own
+	// config declared pathological via describe_exclude (describeexclude.go)
+	// -- generated normally (codegen never sees this exclusion), but never
+	// enriched, never counted toward None, never listed in a gap file.
+	// Confirmed live, not assumed: AWS's real CloudFormation registry
+	// includes AWS::QuickSight::Dashboard/Analysis/Template, three
+	// resources whose real, deeply-nested visual/chart-configuration
+	// schemas alone total 77,457 of the registry's 126,624 real fields at
+	// a ~0.1% real sourced rate -- deeply-nested visualization
+	// definitions nobody hand-authors, generating descriptions for them
+	// is real, measured waste, not a hypothetical one. Reported
+	// separately rather than silently folded into None so the coverage
+	// report stays honest about what was actually attempted versus what
+	// was deliberately never asked.
+	Excluded int
 }
 
-func (c descriptionCoverage) total() int { return c.Sourced + c.AIInferred + c.None }
+func (c descriptionCoverage) total() int { return c.Sourced + c.AIInferred + c.None + c.Excluded }
 
 // String renders a real, human-readable coverage line -- the exact shape
-// the founder asked to see reported "per provider."
+// the founder asked to see reported "per provider." The Excluded segment
+// is only ever shown when non-zero, so a provider with no real
+// describe_exclude entries renders exactly as it always has.
 func (c descriptionCoverage) String() string {
 	total := c.total()
 	if total == 0 {
 		return "0 fields"
 	}
-	return fmt.Sprintf("%d fields: %d sourced (%.0f%%), %d AI-inferred (%.0f%%), %d none (%.0f%%)",
+	s := fmt.Sprintf("%d fields: %d sourced (%.0f%%), %d AI-inferred (%.0f%%), %d none (%.0f%%)",
 		total,
 		c.Sourced, 100*float64(c.Sourced)/float64(total),
 		c.AIInferred, 100*float64(c.AIInferred)/float64(total),
 		c.None, 100*float64(c.None)/float64(total),
 	)
+	if c.Excluded > 0 {
+		s += fmt.Sprintf(", %d excluded (%.0f%%, describe_exclude)", c.Excluded, 100*float64(c.Excluded)/float64(total))
+	}
+	return s
 }
 
 // enrichDescriptionsConcurrency bounds how many real, concurrent Claude

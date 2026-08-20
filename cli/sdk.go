@@ -154,7 +154,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			for _, source := range sortedProviderSources(cfg.ThirdpartyProviders) {
 				version := cfg.ThirdpartyProviders[source]
 
-				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir)
+				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir, cfg.ProviderConfigs[source])
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
@@ -232,7 +232,15 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 // provider gets its own fresh timeout budget, never one shared budget
 // that a slow first provider could eat into a fast second one's own
 // allowance.
-func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+// providerConfig is [provider_configs.<source>]'s own real table
+// (cfg.ProviderConfigs[source], already generic map[string]any) -- the
+// real, provider-agnostic home for a thirdparty provider's own
+// describe_exclude list (cli/describeexclude.go), the identical real
+// key/shape a [dynamic_providers.<name>] table's own params carries
+// directly. nil for a source with no [provider_configs] entry at all,
+// exactly like every other real per-source config value this pipeline
+// already reads that way.
+func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, providerConfig map[string]any) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -260,7 +268,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	// enum/constraint signal from in the first place -- a real, separate,
 	// unaddressed limitation of THIS source, not something writeGeneratedSDK
 	// can make up for.
-	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, nil)
+	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, nil, describeExcludeFromParams(providerConfig))
 }
 
 // generateOneDynamicProvider is generateOneProvider's own real sibling for
@@ -303,7 +311,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 	}
 
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, signalsByType)
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, signalsByType, describeExcludeFromParams(params))
 }
 
 // writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's
@@ -317,7 +325,12 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // declared [dynamic_providers.<name>] name, which needs no sanitizing
 // itself but shares the identical real code path rather than a parallel
 // one).
-func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, signalsByType map[string]map[string]*fieldSignal) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+// describeExclude is cli/describeexclude.go's own real, general,
+// config-declared exclusion set (nil and empty both mean "nothing
+// excluded"): every name in it is skipped for description generation
+// only -- codegen below always receives the full, unfiltered types
+// built from schemas, unchanged.
+func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, signalsByType map[string]map[string]*fieldSignal, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -368,10 +381,23 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		gaps = map[string]map[string]gapFieldInfo{}
 		enrichOpts.gapsOut = &gaps
 	}
+
+	// describe_exclude's own real effect: a resource named here never
+	// reaches enrichDescriptions at all (no checked-in lookup, no
+	// --describe call, no gap-file entry) -- codegen already ran above
+	// against the full, unfiltered types, so an excluded resource still
+	// generates completely normally, it just never gets a description
+	// attempt. Its real field count is tallied into Excluded directly
+	// (countAllFields, cli/describeexclude.go), the identical recursive
+	// rule every other coverage bucket already uses.
+	describeTypes, excludedTypes := partitionDescribeTypes(types, describeExclude)
 	var prunedStale int
-	coverage, prunedStale, err = enrichDescriptions(ctx, source, types, signalsByType, enrichOpts)
+	coverage, prunedStale, err = enrichDescriptions(ctx, source, describeTypes, signalsByType, enrichOpts)
 	if err != nil {
 		return "", 0, coverage, fmt.Errorf("%s@%s: describe: %w", source, version, err)
+	}
+	for _, rt := range excludedTypes {
+		coverage.Excluded += countAllFields(rt.Fields)
 	}
 	// Real, direct fix: a checked-in entry whose own field gained a real
 	// source description since it was authored is stale (enrichDescriptions

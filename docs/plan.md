@@ -2,6 +2,27 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session) real, general
+  `describe_exclude` config mechanism for the SDK-onboarding pipeline:
+  any provider's own config (`[dynamic_providers.<name>]` for a dynamic
+  provider, `[provider_configs.<source>]` for a real Terraform-registry
+  one, identical key/shape either way) may name resource types whose
+  real field count is pathological relative to their real usage --
+  excluded from description generation only, codegen is unaffected, a
+  new `Excluded` bucket in the real coverage report. Built provider-
+  agnostic first (`cli/describeexclude.go`, zero AWS-specific logic,
+  real hermetic tests), then used to move AWS's own central config entry
+  from SQS-only Smithy to the real, full CloudFormation registry
+  (`schema_source = "cloudformation"`), excluding the three real
+  QuickSight resources the prior checkpoint found responsible for 61%
+  of the registry's own real field count at a ~0.1% sourced rate. Real
+  DeepSeek generation against the real, remaining 32,841-field gap ran
+  to 13,431 fields (40.9%) before a real `HTTP 402 Insufficient Balance`
+  stopped it, exactly as instructed -- 11,984 real descriptions merged
+  into the checked-in artifact, 1,446 real abstentions, real remaining
+  gap for a future resume is 19,411. See STATE.md's own checkpoint for
+  the full real numbers.
+
 - 2026-08-20 -- (no Linear ticket ID given this session, same arc as the
   entry directly below) closes the resolver preference gap that entry
   named as not yet done: `core/resolver.InferProvider` needed no change

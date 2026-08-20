@@ -102,31 +102,44 @@ value_env = "DATADOG_API_KEY"
 name = "DD-APPLICATION-KEY"
 value_env = "DATADOG_APP_KEY"
 
-# --- AWS -- real, live-verified schema/wire-protocol/SigV4 (Phase 4-5) ---
+# --- AWS -- real, full CloudFormation-registry coverage (this checkpoint) ---
 #
-# Real, honest, structural limit, not a pipeline gap: AWS's own real
-# Smithy models are published ONE FILE PER SERVICE (github.com/aws/
-# api-models-aws has no single, merged, whole-of-AWS model at all) --
-# this one entry's own schema_url points at SQS specifically, the real,
-# live-verified representative service from Phase 4/5. Real, full AWS
-# coverage needs many more [dynamic_providers.aws_<service>] entries
-# (one per AWS service), each currently mapping to its OWN target repo
-# name via providerShortName -- "aws_ec2" would become
-# ubx-sdk-aws_ec2, not a shard of the single real, existing ubx-sdk-aws
-# repo. Reconciling "many schema entries, one combined target repo" for
-# AWS specifically is real, structural, NOT-yet-solved pipeline work --
-# named here explicitly, not worked around.
+# Superseded the earlier SQS-only Smithy entry: AWS's own real Smithy
+# models are published one file per service (github.com/aws/
+# api-models-aws has no single, merged, whole-of-AWS model), a real,
+# structural limit this pipeline never worked around for Smithy
+# specifically. schema_source = "cloudformation" doesn't have that
+# limit -- one real, live registry zip (schema.cloudformation.<region>.
+# amazonaws.com) covers every real AWS::-namespaced CFN resource type at
+# once (1,705 real types live-fetched, 1,700 built). Real execution goes
+# through Cloud Control API, a fixed, generic, resource-type-agnostic
+# operation set (internal/cloudformation/ccapi in ubx-provider-dynamic)
+# -- base_url is CCAPI's own real, single regional endpoint, unrelated
+# to how many resource types this one entry serves.
+#
+# describe_exclude (cli/describeexclude.go): AWS::QuickSight::Dashboard/
+# Analysis/Template are real, deeply-nested visualization-definition
+# schemas (707 real "definitions" in Dashboard's own 336KB raw schema
+# file, confirmed live, not a translator bug) that expand to 77,457 of
+# the registry's 126,624 real fields at a real ~0.1% sourced rate --
+# deeply-nested visual/chart configuration nobody hand-authors. Excluded
+# from description generation only; all three still generate completely
+# normal, full bindings.
 [dynamic_providers.aws]
-schema_source = "smithy"
-schema_url = "https://raw.githubusercontent.com/aws/api-models-aws/main/models/sqs/service/2012-11-05/sqs-2012-11-05.json"
-base_url = "https://sqs.us-east-1.amazonaws.com"
-target_prefix = "AmazonSQS"
+schema_source = "cloudformation"
+schema_url = "https://schema.cloudformation.us-east-1.amazonaws.com/CloudformationSchema.zip"
+base_url = "https://cloudcontrolapi.us-east-1.amazonaws.com"
+describe_exclude = [
+  "aws_quick_sight_dashboard",
+  "aws_quick_sight_analysis",
+  "aws_quick_sight_template",
+]
 
 [dynamic_providers.aws.auth]
 type = "aws_sigv4"
 [dynamic_providers.aws.auth.params]
 region = "us-east-1"
-service = "sqs"
+service = "cloudcontrolapi"
 credential_source = "profile"
 
 # --- Azure -- real schema fetch verified this checkpoint; resource
