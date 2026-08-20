@@ -2,6 +2,30 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase 5: real intros written for Datadog, GitHub, Kubernetes, GCP Compute -- 259/259, 0 genuine skips, three-way split proven real, 2026-08-20
+
+**Scope, exactly as given**: continue the intro-writing checkpoint through Datadog (25), GitHub (68), Kubernetes (71), GCP Compute (95) -- AWS held back deliberately, its own scale earning a separate decision once the approach is proven at these sizes. Carry the variant rule forward explicitly: a resource with no dedicated vendor page may still be a real, narrower scope of a concept that has one, sourced from that parent rather than skipped -- only skip when nothing real exists anywhere, verified by looking.
+
+**Real totals, three-way split, all four providers**:
+
+| Provider | Direct | Parent-concept | Skipped | Total |
+|---|---:|---:|---:|---:|
+| Datadog | 22 | 3 | 0 | 25 |
+| GitHub | 54 | 14 | 0 | 68 |
+| Kubernetes | 63 | 8 | 0 | 71 |
+| GCP Compute | 71 | 24 | 0 | 95 |
+| **Total** | **210** | **49** | **0** | **259** |
+
+**Zero genuine skips across all four -- a real, notable contrast with Azure's own checkpoint (1 skip, `azure_interconnect_block`).** Every one of 259 resources across four real vendor doc ecosystems had findable, real explanatory content, even where finding it took real work: GitHub's `stack`/`task` needed the actual OpenAPI schema cross-referenced first (`pull-request-stack`, `code-scanning-variant-analysis-repo-task`) before a search even knew what to look for; GCP's `rollout_plan` looked like a possible skip on the first search (bare REST listing only) until a second, more targeted one found real content -- caught before being wrongly marked skipped, matching the ticket's own "verified by looking, not assumed" bar in the direction that actually matters (not skipping something real, not the reverse).
+
+**A second real, notable finding, Kubernetes specifically**: roughly a third of its 71 resources (admission policies, DRA device taints and pool-status requests, ServiceCIDR/IPAddress, LeaseCandidate, ClusterTrustBundle, PodCertificateRequest, PodGroup/Workload gang scheduling, the lifecycle.k8s.io eviction API) are genuinely new Kubernetes features from 2026 releases up to v1.36 -- past this session's own knowledge cutoff. Every one verified live via WebSearch against kubernetes.io before writing, not assumed or guessed from older, remembered API shapes -- the well-established core resources (Pod, Deployment, Service) were written directly from solid existing knowledge without a fresh fetch, since nothing about their real shape is cutoff-sensitive the way the newer APIs are.
+
+**The parent-concept rule's own real shape, confirmed at scale**: GCP Compute's 24 parent-concept cases are almost entirely one real, consistent pattern -- a `region_*`/`zone_*` resource is, by Google's own documentation, explicitly the same real concept as its global counterpart, just scoped narrower (`region_backend_service` from `backend_service`, and so on). GitHub's and Kubernetes's own parent-concept cases are more varied (a binding activating a policy, a per-repo task inside a broader analysis run, an org-scoped variant of a repo-scoped mechanism) -- confirming the rule generalizes across genuinely different real documentation shapes, not just the one pattern Azure's own checkpoint first surfaced it in.
+
+**Verified, not assumed**: every provider's resource-name set cross-checked programmatically against the real, live docs corpus before writing (GCP's own 95 checked for exact-match with zero typos and zero omissions). Artifacts only -- `git status` confirmed no `.mdx` page touched across any of the four commits. Zero em dashes, checked directly on every new/changed file, not sampled. Each provider committed and pushed separately, confirmed live via the GitHub API after every push, not batched into one commit at the end.
+
+**Running total across all five providers checkpointed so far (Azure + these four)**: 278 real intros written, 53 sourced from a parent concept, 1 genuine skip. AWS remains the only provider left, deliberately -- its own real scale (30,142 description entries, the vast majority of the corpus by any measure) is different enough in kind, not just degree, to warrant its own decision rather than a mechanical continuation of this same checkpoint rhythm.
+
 ## UBI-175 Phase 5 checkpoint: real intros written for Azure Compute (18/19), sourcing approach proven before scaling, 2026-08-20
 
 **Scope, exactly as given**: write real intro paragraphs into `artifacts/<provider>/intros.json`, one per resource, summarized from the vendor's own real overview documentation in ubx's own words -- never copied verbatim, never filler where no real overview exists. Smallest checkpoint first, before scaling to the rest: Azure Compute, 19 resources (the same set Phase 4 just regenerated).
