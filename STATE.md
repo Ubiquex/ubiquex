@@ -2,6 +2,18 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## AI-inferred label collapsed from a per-field paragraph to a per-field marker plus one page-level note, 2026-08-20 (no Linear ticket ID given)
+
+**Real regression, founder-caught**: the AI-inferred label's own first version repeated a real, full three-line explanation on every single AI-inferred field. On a page with dozens of inferred fields (a real, confirmed shape, not hypothetical) that boilerplate dwarfed the real content -- browser-test.mdx alone dropped from 159 real lines of repeated explanation to a net -102 lines once fixed.
+
+**The fix, in `ubiquex-docs`' `gen_provider_docs.py`**: `ai_inferred_marker(f)` now returns a short, bold, inline suffix appended directly to the description sentence -- `" **(AI-inferred)**"`, genuinely a marker, not a paragraph, still visually distinct (bold) without any custom Mintlify component. The fuller explanation moved to a new `ai_inferred_note`/`AI_INFERRED_NOTE`, rendered via Mintlify's own real `<Note>` component (already proven live in this exact corpus -- `render_response_field`'s own cycle-detection/depth-backstop messages already use it), shown AT MOST ONCE per page, immediately before "## Input properties" -- only on a page that actually has at least one real AI-inferred field anywhere. Considered adding this to `concepts/sdk-depth.mdx` instead (the one existing concepts page closest to this topic) but that page's own real, stated scope is "no AI at all" for the SDK evaluation medium specifically -- a different concern from generated-binding description provenance -- and no concepts page for SDK codegen/bindings exists yet; creating one was more scope than asked, so the once-per-page note was the real, correct choice here, not a default.
+
+**`any_ai_inferred` walks the full nested field tree**, not just top level -- reusing the identical class of fix this session's own earlier checkpoint already made for `render_response_field` itself (100% of Datadog's real AI-inferred fields are nested; a top-level-only check would have silently shown the note on zero pages).
+
+**Real, live re-verification after regenerating Datadog from scratch**: the note appears exactly once on each of the same 10 pages that carry AI-inferred content (confirmed via `grep -c`), zero repetition, zero pages with a note but no AI-inferred content. `mint validate` clean, 26/26 real `go build` (literal content, unchanged from the prior checkpoint since this fix touches only MDX prose, not code blocks), 26/26 `ast.parse`, zero em dashes. Zero already-shipped, non-Datadog pages touched, confirmed via `git status`.
+
+**Committed and pushed**: `ubiquex-docs` (`scripts/resource-reference-gen/gen_provider_docs.py`, `resource-reference/datadog/**` regenerated in place) -- never self-merged, confirmed via `gh api` against the real remote.
+
 ## Docs corpus regeneration -- mechanical tier removed, Datadog corrected to richer tier, 2026-08-20 (no Linear ticket ID given)
 
 **The prior checkpoint shipped the wrong tier.** The founder caught it directly: Datadog's 26 real pages were bare fragments (no `package main`, no `func main(){}`), not the complete, runnable programs matching the existing 4,197-page corpus's own richer template. Asked to diagnose before fixing.
