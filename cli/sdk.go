@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,6 +87,8 @@ func newSDKGenCmd() *cobra.Command {
 		describeModel      string
 		descriptionsDir    string
 		gapsDir            string
+		dumpIRDir          string
+		only               string
 	)
 
 	cmd := &cobra.Command{
@@ -151,10 +154,15 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			perProviderCoverage := map[string]descriptionCoverage{}
 			var coverageOrder []string
 
+			onlyNames := parseOnlyNames(only)
+
 			for _, source := range sortedProviderSources(cfg.ThirdpartyProviders) {
+				if onlyNames != nil && !onlyNames[source] {
+					continue
+				}
 				version := cfg.ThirdpartyProviders[source]
 
-				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir, cfg.ProviderConfigs[source])
+				path, count, coverage, err := generateOneProvider(cmd.Context(), timeout, source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, cfg.ProviderConfigs[source])
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
@@ -184,9 +192,12 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			// failure is a different, more urgent kind of problem).
 			var dynamicFailures []string
 			for _, name := range sortedDynamicProviderNames(cfg.DynamicProviders) {
+				if onlyNames != nil && !onlyNames[name] {
+					continue
+				}
 				params := cfg.DynamicProviders[name]
 
-				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir)
+				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "sdk gen: dynamic provider %q: %v\n", name, err)
 					dynamicFailures = append(dynamicFailures, name)
@@ -215,8 +226,29 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 	cmd.Flags().StringVar(&describeModel, "describe-model", "", `model for --describe (default: `+describe.DefaultModel+`)`)
 	cmd.Flags().StringVar(&descriptionsDir, "descriptions-dir", defaultDescriptionsDir, `directory of real, checked-in <provider>.json description files (resource -> dotted field path -> description text) this command reads at zero cost and applies to any field a source model left undescribed, labeled "AI-inferred" in generated doc comments -- the real default enrichment path; pass "" to disable entirely`)
 	cmd.Flags().StringVar(&gapsDir, "list-undescribed", "", `directory to write one real <provider>.json gap file per declared source, listing every field STILL undescribed after --descriptions-dir/--describe (type, required/optional/computed, parent context, and any real enum/constraint signal found) -- the structured "what's missing" list a description-authoring pass (this session or a future one) reads; unset (default) writes nothing`)
+	cmd.Flags().StringVar(&dumpIRDir, "dump-ir", "", `directory to write real, post-enrichment IR JSON instead of running codegen -- one <dump-ir>/<source-or-dynamic-name>/<wire_type>.json file per resource type, the marshaled []ir.Field (WireName, Type, Description, Required/Optional/Computed/Sensitive, DescriptionSource -- "source"/"ai-inferred"/""), identical shape to ubiquex-docs' own dump_schema.go tool but with real checked-in/--describe enrichment already applied (that tool never enriches at all). --lang is accepted but unused when this is set. The real replacement for that tool's own tfplugin-only reimplementation now that every declared provider (thirdparty and dynamic alike) can be dumped through this one shared, already-tested path`)
+	cmd.Flags().StringVar(&only, "only", "", `comma-separated list of provider names to restrict generation to (a [thirdparty_providers] source string or a [dynamic_providers.<name>] name) -- unset (default) generates every declared provider, matching prior behavior exactly`)
 
 	return cmd
+}
+
+// parseOnlyNames turns --only's raw comma-separated value into a lookup
+// set; a nil return (the unset case) is load-bearing -- every caller
+// checks `onlyNames != nil` before consulting it, since a real, empty
+// set would otherwise be indistinguishable from "restrict to nothing"
+// and silently generate zero providers instead of every declared one.
+func parseOnlyNames(only string) map[string]bool {
+	if only == "" {
+		return nil
+	}
+	names := map[string]bool{}
+	for _, n := range strings.Split(only, ",") {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			names[n] = true
+		}
+	}
+	return names
 }
 
 // generateOneProvider acquires+launches one provider, fetches its real
@@ -240,7 +272,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 // directly. nil for a source with no [provider_configs] entry at all,
 // exactly like every other real per-source config value this pipeline
 // already reads that way.
-func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, providerConfig map[string]any) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateOneProvider(ctx context.Context, timeout time.Duration, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, providerConfig map[string]any) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -268,7 +300,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	// enum/constraint signal from in the first place -- a real, separate,
 	// unaddressed limitation of THIS source, not something writeGeneratedSDK
 	// can make up for.
-	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, nil, describeExcludeFromParams(providerConfig))
+	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, nil, describeExcludeFromParams(providerConfig))
 }
 
 // generateOneDynamicProvider is generateOneProvider's own real sibling for
@@ -280,7 +312,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 // provider.Schemas into generated files. version is the real, honest
 // placeholder "dynamic" -- see resolveDynamicProviderBinary's own doc
 // comment for why no real per-target version pin exists yet.
-func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -311,7 +343,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 	}
 
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, signalsByType, describeExcludeFromParams(params))
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, describeExcludeFromParams(params))
 }
 
 // writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's
@@ -330,7 +362,23 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // excluded"): every name in it is skipped for description generation
 // only -- codegen below always receives the full, unfiltered types
 // built from schemas, unchanged.
-func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir string, signalsByType map[string]map[string]*fieldSignal, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+// irSchemaEntry/irFieldsWrapper are --dump-ir's own combined
+// schema.json shape -- ubiquex-docs' own gen_mechanical_pages.py reads
+// exactly these three keys per wire type (rec["service"],
+// rec["localName"], rec["ir"]["Fields"]), a real, external contract
+// this struct's json tags exist solely to satisfy; never used for
+// anything on this side of the pipeline beyond marshaling.
+type irSchemaEntry struct {
+	Service   string          `json:"service"`
+	LocalName string          `json:"localName"`
+	IR        irFieldsWrapper `json:"ir"`
+}
+
+type irFieldsWrapper struct {
+	Fields []ir.Field `json:"Fields"`
+}
+
+func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, signalsByType map[string]map[string]*fieldSignal, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -416,6 +464,67 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		if err := writeGapFile(gapsDir, shortName, gaps); err != nil {
 			return "", 0, coverage, fmt.Errorf("%s@%s: write gap file: %w", source, version, err)
 		}
+	}
+
+	// --dump-ir's own real exit: types already carries the full,
+	// post-enrichment result (describeTypes' own *ir.ResourceType
+	// pointers were mutated in place by enrichDescriptions above,
+	// excludedTypes' own entries keep FromSchema's original Model/None
+	// values, both are still real members of this same slice) -- write
+	// one <dumpIRDir>/<shortName>/<WireType>.json per resource type and
+	// return before ever reaching a language template. Identical file
+	// shape to ubiquex-docs' own dump_schema.go tool
+	// (json.MarshalIndent(rt.Fields, ...)) so its downstream consumers
+	// (gen_provider_docs.py's per-resource splice tier) need no
+	// structural change to keep reading these dumps -- only
+	// DescriptionSource is new information, since that tool never
+	// enriches at all.
+	//
+	// ALSO writes <dumpIRDir>/<shortName>/schema.json, the combined,
+	// whole-provider shape gen_mechanical_pages.py's own
+	// generate_mechanical_provider expects ({wire: {service, localName,
+	// ir: {Fields}}}) -- ubiquex-docs' own README documents this shape
+	// as a real input but no committed tool ever produced it (the
+	// original 4-provider corpus's own schema_all.json files were
+	// assembled ad hoc, off the record); computed here instead of
+	// reimplemented in Python, since ir.ServiceAndLocalName is this
+	// package's own real, already-tested logic -- a second, drifted
+	// copy of AWS-service-boundary-splitting in a docs script is
+	// exactly the kind of duplication this codebase's own conventions
+	// (docs/architecture.md) warn against.
+	if dumpIRDir != "" {
+		dumpDir := filepath.Join(dumpIRDir, shortName)
+		if err := os.MkdirAll(dumpDir, 0o755); err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: %w", source, version, err)
+		}
+		combined := make(map[string]irSchemaEntry, len(types))
+		for _, rt := range types {
+			data, err := json.MarshalIndent(rt.Fields, "", "  ")
+			if err != nil {
+				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal %s: %w", source, version, rt.WireType, err)
+			}
+			outPath := filepath.Join(dumpDir, rt.WireType+".json")
+			if err := os.WriteFile(outPath, data, 0o644); err != nil {
+				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: write %s: %w", source, version, outPath, err)
+			}
+			service, local, err := ir.ServiceAndLocalName(rt.WireType)
+			if err != nil {
+				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: %s: %w", source, version, rt.WireType, err)
+			}
+			combined[rt.WireType] = irSchemaEntry{
+				Service:   service,
+				LocalName: local,
+				IR:        irFieldsWrapper{Fields: rt.Fields},
+			}
+		}
+		schemaData, err := json.MarshalIndent(combined, "", "  ")
+		if err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal schema.json: %w", source, version, err)
+		}
+		if err := os.WriteFile(filepath.Join(dumpDir, "schema.json"), schemaData, 0o644); err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: write schema.json: %w", source, version, err)
+		}
+		return dumpDir, len(types), coverage, nil
 	}
 
 	// UBI-138: <out>/<source-sanitized> is the real repo-shaped output

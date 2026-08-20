@@ -2,6 +2,22 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session) `ubx sdk gen`
+  gained `--dump-ir <dir>` and `--only <names>`. `--dump-ir` reuses the
+  real, already-tested acquisition+enrichment path both thirdparty
+  and dynamic providers share, writes real post-enrichment IR JSON
+  (per-resource, plus a combined whole-provider `schema.json`) instead
+  of running codegen -- the real, provider-agnostic replacement for
+  `ubiquex-docs`' own `dump_schema.go` tool, which only ever worked for
+  a tfplugin source and never applied checked-in-description
+  enrichment. Built to prove the real documentation-corpus
+  regeneration pipeline (all six providers moving from HashiCorp-
+  tfplugin-sourced to ubx-provider-dynamic-sourced schemas, ubx's own
+  derived naming) end to end on Datadog first, per the founder's own
+  mandatory phasing. See STATE.md's own checkpoint for the full real
+  account, including three corpus-scale bugs found in `ubiquex-docs`'
+  own previously-unexercised mechanical-tier tooling along the way.
+
 - 2026-08-20 -- (no Linear ticket ID given this session, closes the arc
   the two entries directly below opened) third and final resume of AWS
   description generation, the real, never-attempted 7,350-field

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -628,9 +629,200 @@ func mustContainSDK(t *testing.T, haystack, needle string) {
 	}
 }
 
+// TestParseOnlyNames_EmptyStringIsNilNotEmptySet is the real, load-
+// bearing edge case parseOnlyNames' own doc comment names: an unset
+// --only must mean "generate everything" (nil), never "generate
+// nothing" (an empty, non-nil set) -- a bug here would silently zero
+// out every existing `ubx sdk gen` invocation that never passes --only
+// at all.
+func TestParseOnlyNames_EmptyStringIsNilNotEmptySet(t *testing.T) {
+	if got := parseOnlyNames(""); got != nil {
+		t.Fatalf("parseOnlyNames(\"\") = %#v, want nil", got)
+	}
+	got := parseOnlyNames("aws, datadog ,github")
+	want := map[string]bool{"aws": true, "datadog": true, "github": true}
+	if len(got) != len(want) {
+		t.Fatalf("parseOnlyNames(\"aws, datadog ,github\") = %#v, want %#v", got, want)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("parseOnlyNames(\"aws, datadog ,github\") missing %q", name)
+		}
+	}
+}
+
 func mustNotContainSDK(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if strings.Contains(haystack, needle) {
 		t.Fatalf("output unexpectedly contains %s:\n%s", fmt.Sprintf("%q", needle), haystack)
+	}
+}
+
+// TestSDKGen_DumpIR_WritesEnrichedIRJSONAndSkipsCodegen is the real,
+// live-verified proof for the ubiquex-docs corpus regeneration's own
+// schema-acquisition problem: dump_schema.go (checked into ubiquex-docs)
+// only ever calls provider.Launch directly, which works for a
+// [thirdparty_providers] tfplugin source but has no equivalent path at
+// all for a [dynamic_providers.<name>] entry (see cli/dynamicprovider.go's
+// own doc comment on generateOneDynamicProvider -- "no independent
+// registry-acquired binary exists"), and never applies the checked-in-
+// descriptions enrichment either way. --dump-ir reuses this command's
+// own already-tested acquisition+enrichment path for BOTH provider
+// kinds and writes the identical real []ir.Field JSON shape that tool
+// already produces, but with real DescriptionSource values baked in.
+// This test proves both halves: fake_widget's own real schema leaves
+// "name" undescribed (fakeprovider's ok-v6 mode sets no wire
+// Description), a checked-in descriptions.json fills it in, and the
+// dump JSON shows DescriptionSource "ai-inferred" for it -- while
+// codegen itself never runs at all (no package.json/go.mod anywhere
+// under --out).
+func TestSDKGen_DumpIR_WritesEnrichedIRJSONAndSkipsCodegen(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+	outDir := filepath.Join(dir, "generated")
+	dumpDir := filepath.Join(dir, "ir-dump")
+	descDir := filepath.Join(dir, "descriptions")
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[thirdparty_providers]
+"fake/widget" = "0.1.0"
+`)
+
+	if err := os.MkdirAll(descDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkedIn := checkedInDescriptions{
+		"fake_widget": {"name": "A real, checked-in test description."},
+	}
+	if err := writeCheckedInDescriptions(descDir, "widget", checkedIn); err != nil {
+		t.Fatalf("writeCheckedInDescriptions: %v", err)
+	}
+
+	out, err := runUbx(t, []string{
+		"FAKEPROVIDER_MODE=ok-v6",
+		"UBX_PROVIDER_MIRROR=" + mirrorDir,
+	}, "sdk", "gen", "--out", outDir, "--dump-ir", dumpDir, "--descriptions-dir", descDir)
+	if err != nil {
+		t.Fatalf("ubx sdk gen --dump-ir: %v\noutput: %s", err, out)
+	}
+
+	dumpPath := filepath.Join(dumpDir, "widget", "fake_widget.json")
+	data, err := os.ReadFile(dumpPath)
+	if err != nil {
+		t.Fatalf("reading dump-ir output %s: %v", dumpPath, err)
+	}
+
+	var fields []struct {
+		WireName          string `json:"WireName"`
+		Description       string `json:"Description"`
+		DescriptionSource string `json:"DescriptionSource"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("dump-ir output is not the expected []ir.Field JSON shape: %v\n%s", err, data)
+	}
+
+	var sawName bool
+	for _, f := range fields {
+		if f.WireName != "name" {
+			continue
+		}
+		sawName = true
+		if f.Description != "A real, checked-in test description." {
+			t.Errorf("name field Description = %q, want the real checked-in text", f.Description)
+		}
+		if f.DescriptionSource != "ai-inferred" {
+			t.Errorf("name field DescriptionSource = %q, want \"ai-inferred\"", f.DescriptionSource)
+		}
+	}
+	if !sawName {
+		t.Fatalf("dump-ir output has no \"name\" field at all: %s", data)
+	}
+
+	// The combined schema.json -- ubiquex-docs' own gen_mechanical_pages.py
+	// reads exactly this shape (rec["service"], rec["localName"],
+	// rec["ir"]["Fields"]) for a whole-provider run; no committed tool
+	// produced it before this flag existed.
+	schemaData, err := os.ReadFile(filepath.Join(dumpDir, "widget", "schema.json"))
+	if err != nil {
+		t.Fatalf("reading dump-ir schema.json: %v", err)
+	}
+	var schema map[string]struct {
+		Service   string `json:"service"`
+		LocalName string `json:"localName"`
+		IR        struct {
+			Fields []struct {
+				WireName string `json:"WireName"`
+			} `json:"Fields"`
+		} `json:"ir"`
+	}
+	if err := json.Unmarshal(schemaData, &schema); err != nil {
+		t.Fatalf("schema.json is not the expected combined shape: %v\n%s", err, schemaData)
+	}
+	entry, ok := schema["fake_widget"]
+	if !ok {
+		t.Fatalf("schema.json missing fake_widget entry: %s", schemaData)
+	}
+	// fake_widget's own two-token wire name ("fake"_"widget") derives
+	// service AND local name both "widget" -- the same real, documented
+	// shape TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror's own
+	// doc comment already establishes for this exact fake schema.
+	if entry.Service != "widget" || entry.LocalName != "widget" {
+		t.Errorf("fake_widget service/localName = %q/%q, want \"widget\"/\"widget\"", entry.Service, entry.LocalName)
+	}
+	if len(entry.IR.Fields) == 0 {
+		t.Errorf("fake_widget schema.json entry has zero fields")
+	}
+
+	// The real, load-bearing negative: --dump-ir must never also run
+	// codegen -- no repo-shaped tree, no package.json, nothing under
+	// --out at all.
+	if entries, err := os.ReadDir(outDir); err == nil && len(entries) > 0 {
+		t.Fatalf("--dump-ir wrote to --out as well, expected zero codegen output: %v", entries)
+	} else if err == nil {
+		// outDir exists but is empty -- also fine, MkdirAll runs
+		// unconditionally before the provider loop.
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("unexpected error checking --out: %v", err)
+	}
+}
+
+// TestSDKGen_Only_RestrictsToNamedProvider proves --only filters BOTH
+// the [thirdparty_providers] and [dynamic_providers.<name>] loops by
+// name, so a docs-corpus rebuild (or any other caller) can target one
+// provider at a time without waiting on every other declared source --
+// the "prove the pipeline on one provider first" phasing this flag
+// exists for.
+func TestSDKGen_Only_RestrictsToNamedProvider(t *testing.T) {
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+	outDir := filepath.Join(dir, "generated")
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	writeMirrorProvider(t, mirrorDir, "fake", "other", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[thirdparty_providers]
+"fake/widget" = "0.1.0"
+"fake/other" = "0.1.0"
+`)
+
+	out, err := runUbx(t, []string{
+		"FAKEPROVIDER_MODE=ok-v6",
+		"UBX_PROVIDER_MIRROR=" + mirrorDir,
+	}, "sdk", "gen", "--out", outDir, "--only", "fake/widget")
+	if err != nil {
+		t.Fatalf("ubx sdk gen --only fake/widget: %v\noutput: %s", err, out)
+	}
+
+	if _, err := os.Stat(filepath.Join(outDir, "fake-widget")); err != nil {
+		t.Fatalf("expected fake-widget to be generated (named by --only): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "fake-other")); !os.IsNotExist(err) {
+		t.Fatalf("expected fake-other to be SKIPPED (not named by --only), got err=%v", err)
+	}
+	if strings.Contains(out, "fake/other") {
+		t.Fatalf("--only fake/widget should never even mention fake/other in output: %s", out)
 	}
 }
