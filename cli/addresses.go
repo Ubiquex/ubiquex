@@ -26,7 +26,7 @@ import (
 // which addresses exist, active or, with --all, tombstoned) and this
 // command's own provider-schema fetch (which attributes are referenceable
 // on each one, at the version it was ACTUALLY built against, never
-// whatever [providers] happens to pin today -- see resolveAddressProviders'
+// whatever [thirdparty_providers] happens to pin today -- see resolveAddressProviders'
 // own doc comment for why providerPool is the wrong tool here). Never
 // itself an exit-1 "finding" the way `ubx verify`/`ubx status --drift`
 // produce one -- 0 on any successful inventory, including an empty one, 2
@@ -207,7 +207,7 @@ type addressAttribute struct {
 // own pattern, cli/propose.go), then lists each entry's own resource
 // type's referenceable attributes from it. Deliberately NOT providerPool
 // (cli/providerpool.go): providerPool.Get refuses to launch any version
-// other than whatever [providers] currently pins, by design ("re-resolve
+// other than whatever [thirdparty_providers] currently pins, by design ("re-resolve
 // against the current config") -- exactly wrong here, since the whole
 // point is each resource's own RECORDED version, which may be older (or
 // from a source no longer declared at all) than today's config. An entry

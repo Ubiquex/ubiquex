@@ -23,7 +23,7 @@ import (
 // "Bulk onboarding" section for the full design this implements.
 //
 // Providers/ProviderConfigs (UBI-43 session 5) is .ubx/config's own
-// [providers]/[provider_configs] tables, non-empty for a real
+// [thirdparty_providers]/[provider_configs] tables, non-empty for a real
 // multi-provider stack -- when set, every enumerated resource gets its
 // provider inferred fresh by type (resolver.InferProvider) against the
 // declared set, since a tfstate-imported resource has no ledger history
@@ -92,7 +92,7 @@ func runScanAll(ctx context.Context, out io.Writer, opts scanAllOptions) error {
 	}
 
 	// docs/architecture.md's own "Bulk onboarding" section, generalized for
-	// UBI-43 session 5: a real [providers] table means every enumerated
+	// UBI-43 session 5: a real [thirdparty_providers] table means every enumerated
 	// resource gets its provider inferred fresh by type, since a
 	// tfstate-imported resource has no ledger history to carry a recorded
 	// provider forward from at all (unlike cli/status.go's mixed legacy/

@@ -18,8 +18,9 @@ import (
 // UBI-43): multi-provider stacks" client pool) -- the one place that
 // bridges core/executor's provider-import-free ApplierPool interface and
 // the real provider.Acquire/provider.Launch machinery, driven by
-// .ubx/config's own [providers]/[provider_configs] tables (cli/config.go).
-// Launches lazily, on the first Get for a given source@version, and never
+// .ubx/config's own [thirdparty_providers]/[providers]/[provider_configs]
+// tables (cli/config.go). Launches lazily, on the first Get for a given
+// source@version, and never
 // more than once per invocation; hands back that provider's own resolved
 // config alongside its Applier every time (docs/architecture.md
 // §Multi-provider stacks' own per-provider configuration, this session's

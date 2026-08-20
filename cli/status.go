@@ -162,7 +162,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			}
 
 			// docs/executor.md's own "Scan/status/fleet" section: a real
-			// [providers] table means grouping the fleet by each
+			// [thirdparty_providers] table means grouping the fleet by each
 			// resource's own recorded provider instead of one --source
 			// flag. A legacy/adopted entry with no recorded provider of
 			// its own gets one inferred fresh by type, against every

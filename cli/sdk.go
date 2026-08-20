@@ -41,8 +41,8 @@ func newSDKCmd() *cobra.Command {
 // fallback the way "ubx resolve"/"ubx ship" still carry for pre-UBI-43
 // compatibility -- codegen is a UBI-33/34-era feature, introduced after
 // multi-provider stacks already landed, so there is no legacy shape to
-// stay compatible with; requiring a real [providers] table is a real,
-// deliberate scope decision, not an oversight.
+// stay compatible with; requiring a real [thirdparty_providers] table is
+// a real, deliberate scope decision, not an oversight.
 //
 // Two CLI details docs/sdk.md's own "Out of scope" list named as
 // "deliberately left to the session that builds it" are decided here,
@@ -90,8 +90,8 @@ func newSDKGenCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "gen",
-		Short: "Generate typed bindings for every provider declared in [providers] -- local, never published",
-		Long: `Reads .ubx/config's own [providers] table (the same source of truth "ubx resolve"/"ubx ship" already read),
+		Short: "Generate typed bindings for every provider declared in [thirdparty_providers] -- local, never published",
+		Long: `Reads .ubx/config's own [thirdparty_providers] table (the same source of truth "ubx resolve"/"ubx ship" already read),
 acquires each declared provider's real binary at its pinned version, dumps its real schema (no Configure, no
 credentials needed -- a pure local gRPC call against the launched binary), and writes idiomatic bindings under
 --out in the language named by --lang ("ts", "go", or "py") whose generated field map maps back to the provider's
@@ -107,7 +107,7 @@ their manifests/source trees into one directory.
 Always regenerates from the exact config-pinned version's real, freshly-acquired schema -- never a stale cache
 from a different version (the same provider.Acquire version-pinned cache discipline "ubx scan"/"ubx accept
 --reverify-with" already trust). Generated files are meant to be committed to git like any other reviewable
-generated code (docs/sdk.md); re-run this command after bumping a provider's pinned version in [providers].`,
+generated code (docs/sdk.md); re-run this command after bumping a provider's pinned version in [thirdparty_providers].`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -163,7 +163,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				coverageOrder = append(coverageOrder, source)
 			}
 
-			// Real, deliberate posture difference from the [providers] loop
+			// Real, deliberate posture difference from the [thirdparty_providers] loop
 			// above: a [dynamic_providers.<name>] entry failing (a real,
 			// honest "this source's own schema format isn't supported yet"
 			// or "this heuristic doesn't recognize this API's own create
@@ -174,12 +174,12 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 			// honestly discovers zero resources (a real, named, NOT-yet-fixed
 			// resourcemap gap), which would have silently prevented every
 			// alphabetically-later entry (github, google, kubernetes) from
-			// ever being attempted under the [providers] loop's own
+			// ever being attempted under the [thirdparty_providers] loop's own
 			// fail-fast posture. A CI-matrix posture -- generate what
 			// genuinely can be generated, report every real failure at the
 			// end -- is the correct one for a config that deliberately
 			// tracks many independent providers' own real, varying
-			// progress; [providers] keeps its own original fail-fast
+			// progress; [thirdparty_providers] keeps its own original fail-fast
 			// behavior unchanged (a real infra provider acquisition
 			// failure is a different, more urgent kind of problem).
 			var dynamicFailures []string

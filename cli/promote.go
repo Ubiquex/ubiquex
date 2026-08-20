@@ -280,7 +280,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 	cmd.Flags().StringVar(&to, "to", "", "target environment's own directory -- its own .ubx/config, ledger, and providers, independent of --ledger-dir (required)")
 	cmd.Flags().StringVar(&toStack, "to-stack", "", "target stack name, if it differs from the source proposal's own stack name (defaults to the source's own stack -- the common case: same stack, different environment directory)")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary for the target (mutually exclusive with --source)")
-	cmd.Flags().StringVar(&source, "source", "", "provider source address for the target, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version; unused if --to's own config declares [providers])")
+	cmd.Flags().StringVar(&source, "source", "", "provider source address for the target, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version; unused if --to's own config declares [thirdparty_providers])")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire for the target (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under --to's own .ubx/plans/ regardless)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "timeout for re-drafting (a .md source's own intent-provider round trip) and for the target's own provider acquisition/schema fetch -- one shared budget for the whole command")

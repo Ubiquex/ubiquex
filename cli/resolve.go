@@ -281,7 +281,7 @@ func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, re
 // (docs/resolver.md's "Amendment (UBI-43): multi-provider stacks"),
 // extracted so `ubx plan` (UBI-49) can resolve any medium input through
 // the identical, unmodified path rather than a second copy of it: a stack
-// with a real [providers] table in .ubx/config gets a genuine
+// with a real [thirdparty_providers] table in .ubx/config gets a genuine
 // multi-provider set, one declared provider per entry, each launched to
 // fetch its own schema; a single-provider stack (no table) keeps working
 // exactly as it always has, one provider launched, wrapped as the

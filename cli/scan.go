@@ -232,7 +232,7 @@ func newScanCmd() *cobra.Command {
 			// UBI-49 finding #4: single-resource scan used to resolve a
 			// provider ONLY through the legacy singular --provider/--source
 			// flags/[provider] config, even on a stack whose real authority
-			// is a [providers] table (the same table --all/--discover/ship/
+			// is a [thirdparty_providers] table (the same table --all/--discover/ship/
 			// status already honor) -- unreadable there without falling
 			// back to flags the stack doesn't otherwise need. When
 			// cfg.ThirdpartyProviders is declared, infer which source owns

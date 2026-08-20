@@ -214,7 +214,7 @@ consistency shows its own work instead of sitting silent.`,
 			}
 
 			// docs/executor.md's own "Amendment (UBI-43): multi-provider
-			// stacks" client pool -- a stack with a real [providers] table
+			// stacks" client pool -- a stack with a real [thirdparty_providers] table
 			// in .ubx/config gets a genuine multi-entry pool (cli/providerpool.go),
 			// lazily launching whichever providers this specific proposal's
 			// own nodes actually need; a single-provider stack (no table)

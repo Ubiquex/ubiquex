@@ -48,7 +48,7 @@ type DriftedResource struct {
 // never an error: a fleet with SOME resources ubx currently can't read
 // shouldn't block rendering or override-generation for the ones it CAN.
 // Mirrors newStatusCmd's own single-provider/multi-provider branching
-// exactly (cli/status.go), so a real user's own [providers] config
+// exactly (cli/status.go), so a real user's own [thirdparty_providers] config
 // works here identically to how it already does for `ubx status
 // --drift`.
 func scanDrift(ctx context.Context, ledger *core.Ledger, cfg *Config, providerPath, source, providerVersion, providerConfig string, fleet []core.FleetEntry) ([]DriftedResource, error) {

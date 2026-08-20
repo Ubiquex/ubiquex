@@ -76,7 +76,7 @@ const enrichDescriptionsConcurrency = 8
 // only by re-running and comparing the coverage report against what a
 // real checked-in file should have changed). "descriptions", a plain
 // sibling of .ubx/, is correct for both this pipeline's own real
-// sdk/providers/ CWD and a generic per-project [providers]-only user
+// sdk/providers/ CWD and a generic per-project [thirdparty_providers]-only user
 // running from their own repo root.
 const defaultDescriptionsDir = "descriptions"
 
@@ -98,7 +98,7 @@ type describeJob struct {
 // session, or a future one) has to work with: name/type/required-optional-
 // computed/parent-context always, enum/constraints when
 // ubx-provider-dynamic's own --dump-signals mode found real data for
-// this field (empty for a [providers] real-registry source, which has
+// this field (empty for a [thirdparty_providers] real-registry source, which has
 // no OpenAPI/Smithy document to extract enum/constraints from at all --
 // a real, separate, still-unaddressed limitation of THAT source, not
 // this mechanism).
@@ -194,7 +194,7 @@ type enrichOptions struct {
 // only ever fills a genuine gap, never overwrites or second-guesses a
 // real, existing description. signalsByType carries
 // ubx-provider-dynamic's own real, per-resource enum/constraint signal
-// (nil for a [providers] real-registry source, which has no such data
+// (nil for a [thirdparty_providers] real-registry source, which has no such data
 // at all -- see gapFieldInfo's own doc comment).
 func enrichDescriptions(ctx context.Context, providerName string, types []*ir.ResourceType, signalsByType map[string]map[string]*fieldSignal, opts enrichOptions) (descriptionCoverage, int, error) {
 	jobs, stale := collectJobsAndStale(providerName, types, signalsByType, opts.checkedIn)
@@ -457,7 +457,7 @@ func derefOrInvalid(ref *ir.TypeRef) ir.TypeRef {
 
 // formatCoverageReport renders the real, per-provider coverage lines the
 // founder asked to see -- called once, after every declared source
-// (both [providers] and [dynamic_providers.<name>]) has been enriched.
+// (both [thirdparty_providers] and [dynamic_providers.<name>]) has been enriched.
 func formatCoverageReport(perProvider map[string]descriptionCoverage, order []string) string {
 	var b strings.Builder
 	b.WriteString("real description coverage:\n")

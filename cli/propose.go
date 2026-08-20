@@ -336,7 +336,7 @@ func parseNeighborLedgerFlags(flags []string) (map[string]string, error) {
 }
 
 // loadDiagramProviders acquires and launches every provider declared in
-// [providers], fetches its schema for diagram.Parse's own type-inference
+// [thirdparty_providers], fetches its schema for diagram.Parse's own type-inference
 // pass (UBI-43's InferProvider, reused unchanged), and closes each client
 // immediately after -- newSchemaInspector wraps only the already-fetched
 // static schema data, so there's no need to hold clients open until the

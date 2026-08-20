@@ -42,7 +42,7 @@ func resolveProviderBinary(ctx context.Context, providerPath, source, version st
 // inferProviderForType is UBI-49 finding #4's own answer to "which
 // declared provider owns this resource type" for a single-resource,
 // read-only caller (cli/scan.go's per-resource mode) that has a
-// [providers] table (versions) but no per-resource provider hint to
+// [thirdparty_providers] table (versions) but no per-resource provider hint to
 // consult -- unlike resolver.InferProvider, which works from an
 // already-loaded []resolver.DeclaredProvider (each carrying a live
 // SchemaInspector), this launches each declared source in turn (sorted,
