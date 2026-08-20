@@ -21,9 +21,12 @@
   regionZones, regionInstances). Found and fixed, in `ubx-provider-
   dynamic`, a real, trivial `singularize` bug mishandling "-es" English
   plurals ("addresses" -> "addresse", "policies" -> "policie") that
-  had 22 real resources shipping under misspelled names -- pushed to
-  the real, existing, still-open draft PR #5, never merged, never
-  pushed to main. Full verification bar clean (95/95 real go build on
+  had 22 real resources shipping under misspelled names -- the first
+  fix over-corrected and briefly shipped "licenses" -> "licens" as a
+  new regression, caught by re-reading real generated output before
+  reporting done and fixed in a real second round (both pushed to the
+  real, existing, still-open draft PR #5, never merged, never pushed
+  to main). Full verification bar clean (95/95 real go build on
   literal content, 95/95 deno fmt, 95/95 ast.parse, mint validate/
   broken-links clean, real DOM overflow crawl zero findings, zero em
   dashes, zero pages outside the scoped compute change touched). See
