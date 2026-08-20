@@ -2,6 +2,26 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## AWS description generation resumed, real second interruption, honestly reported, not fully closed, 2026-08-20 (no Linear ticket ID given)
+
+**Real, precise resume, not a re-ask of anything already answered**: the real, current gap list (20,857 fields) was diffed against the prior run's own real, recorded results -- every field that already got a genuine abstention (1,446) was excluded from the job set before a single new call was made, confirmed live: the real, computed resume set was exactly 19,411 fields, matching the founder's own stated count exactly before any generation ran. Real 5-call smoke test passed first (4 real descriptions, 1 real, correctly-reasoned abstention on a generic `tags.value` field, zero errors) confirming the topped-up key had balance.
+
+**Real, second interruption, stopped and reported exactly as instructed, not pushed through**: the resume run reached 12,062 of 19,411 real jobs (62.1%) before a second real `HTTP 402 Insufficient Balance`. Stopped immediately -- zero calls burned past the second real 402. Real breakdown of the 12,062 attempted this round: 11,492 real, non-abstained descriptions, 569 real, genuine new abstentions, 1 real error (the 402 itself). All 11,492 merged into the checked-in `sdk/providers/descriptions/aws.json` (zero collisions with the 23,478... wait, 11,986 entries already present) -- confirmed via a real `grep` sweep of the entire working tree afterward that the key never touched disk, matching this arc's own standing discipline, both before the smoke test and after the full run.
+
+**Real, live-measured final coverage for AWS, this checkpoint** (via the real, unmodified `ubx sdk gen` coverage report, re-run after the merge, fresh binary matching the exact working-tree commit):
+
+| | Fields | % of 126,624 |
+|---|---:|---:|
+| Sourced (real CFN description) | 16,325 | 12.9% |
+| AI-inferred (DeepSeek, both rounds) | 23,477 | 18.5% |
+| None -- genuinely abstained (both rounds: 1,446 + 569) | 2,015 | 1.6% |
+| None -- still never attempted (7,349) + this round's own error (1) | 7,350 | 5.8% |
+| Excluded (describe_exclude, QuickSight) | 77,457 | 61.2% |
+
+**Real, honest answer to the founder's own explicit target ("nothing remains in the never-attempted bucket")**: not yet met. 39,802 of AWS's real, non-excluded 49,167 fields (81.0%) are now described (sourced + AI-inferred), up from 57.6% last checkpoint -- but a real, non-zero never-attempted remainder (7,350 fields) still exists, because the topped-up balance ran out a second time before the resume set was fully exhausted. This was not silently rounded down to "basically done" -- the real number is reported plainly, and whether/when to top up and resume again a third time is the founder's own next call, not assumed or pushed forward without being asked.
+
+**Never self-merged, verification discipline unchanged**: whole repo `go build`/`go vet`/`go test ./...` clean, no Go code changed this checkpoint (only the checked-in descriptions artifact). `cmd/ubx` rebuilt fresh from the exact working-tree commit before every real `ubx sdk gen` invocation. `sdk/generated` was written again this checkpoint (this time via the documented `--out ../generated` convention, not the wrong-path mistake from the prior checkpoint) purely to obtain the real coverage report, then deleted again afterward -- still never committed for any provider in this arc, a deliberate, unchanged decision, not an oversight.
+
 ## Real, general describe_exclude mechanism + AWS CFN generation, real interruption reported honestly, 2026-08-20 (no Linear ticket ID given)
 
 **Real, general, provider-agnostic exclusion mechanism built first, confirmed not AWS-specific by reading the code, not asserted**: `cli/describeexclude.go` (new file, zero AWS-specific logic) adds `describe_exclude`, a real config key any provider's own table can declare -- `[dynamic_providers.<name>]`'s own top-level params for a dynamic provider, `[provider_configs.<source>]` for a real Terraform-registry (thirdparty) one, identical key, identical shape, identical extraction code (`describeExcludeFromParams`) either way. A resource named there is skipped for description generation ONLY -- `writeGeneratedSDK` (cli/sdk.go) splits `types` into `describeTypes`/`excludedTypes` (`partitionDescribeTypes`) right before calling `enrichDescriptions`, but codegen itself (the lang-template call, a few lines earlier) always sees the full, unfiltered `types` -- an excluded resource generates completely normal bindings, it only ever skips the checked-in-lookup/`--describe`/gap-file steps. `descriptionCoverage` gained a fourth real bucket, `Excluded` (counted via `countAllFields`, the identical recursive rule every other bucket already uses), rendered in the coverage report only when non-zero so every other provider's own report line is byte-for-byte unchanged. Real, hermetic tests (`cli/describeexclude_test.go`): the real TOML-array shape, an absent key, a wrong-shaped value failing open (never panics, never excludes everything), non-string elements skipped, the partition split, and the coverage-string rendering rule -- all passing before AWS's own config was touched at all.

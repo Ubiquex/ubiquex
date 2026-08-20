@@ -2,6 +2,22 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session, same arc as the
+  entry directly below) resume of AWS description generation against
+  the real, remaining 19,411-field gap the entry below left open. Real,
+  precise resume set (excluded the 1,446 fields that already got a real,
+  honest abstention, never re-asked) matched the founder's own stated
+  count exactly before any call ran. Reached 12,062 of 19,411 (62.1%)
+  before a SECOND real `HTTP 402 Insufficient Balance`, stopped
+  immediately per instruction -- 11,492 real descriptions merged (zero
+  collisions), 569 new real abstentions. Real, live-measured coverage
+  this checkpoint: 16,325 sourced, 23,477 AI-inferred, 2,015 genuinely
+  abstained (both rounds), 7,350 still never attempted, 77,457 excluded.
+  The founder's own stated target for this resume ("nothing remains in
+  the never-attempted bucket") was NOT met -- a real, non-zero
+  never-attempted remainder still exists pending a further top-up and
+  resume. See STATE.md's own checkpoint for the full real numbers.
+
 - 2026-08-20 -- (no Linear ticket ID given this session) real, general
   `describe_exclude` config mechanism for the SDK-onboarding pipeline:
   any provider's own config (`[dynamic_providers.<name>]` for a dynamic
