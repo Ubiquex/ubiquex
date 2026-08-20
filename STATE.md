@@ -2,6 +2,49 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Docs corpus regeneration -- phase 3 (Kubernetes) onboarded, redirect problem exercised for real, alpha/beta collision confirmed still live, 2026-08-20 (no Linear ticket ID given)
+
+**Scope**: onboard Kubernetes -- the first provider in this arc with a real predecessor corpus (81 old pages), the largest by field count so far (15,492 vs GitHub's 4,826), and the provider the founder flagged for a real, known naming collision (alpha/beta API versions colliding in the generic OpenAPI resourcemap). Same pipeline as phases 1/2, zero new code needed for generation itself.
+
+### Finding 1: the redirect problem, exercised for real, all 81 old pages accounted for
+
+Old corpus: 81 real pages (title-extracted wire types, e.g. `kubernetes_deployment_v1`), all from `hashicorp/kubernetes`'s own flat, per-version-suffixed naming. New corpus: 71 real resource types across 22 services, group-qualified naming (`kubernetes_apps_deployment`, no version in the name at all -- `ir.ServiceAndLocalName` derives service+noun only). A real, live diff (title vs. schema.json, not guessed) sorted every old page into three real buckets:
+
+- **66 clean, unambiguous matches** -- stripping the old wire type's own version suffix (`_v1`, `_v2beta2`, ...) and comparing against the new schema's own `localName` landed on exactly one real candidate.
+- **5 probable matches, real but naming-convention-mismatched** -- `kubernetes_api_service{,_v1}` -> `apiregistration/apiservice`, `kubernetes_csi_driver{,_v1}` -> `storage/csidriver`, `kubernetes_daemonset` (a real, legacy, pre-`_v1`-convention HashiCorp resource name, distinct from the separate real `kubernetes_daemon_set_v1`) -> `apps/daemon_set`. Same real Kubernetes Kind on both sides, confirmed by matching after stripping underscores entirely -- not textually identical but not genuinely ambiguous either (each had exactly one real candidate both passes). Redirected.
+- **10 genuinely orphaned, no real successor exists** -- real redirects written for none of these, real content loss the founder should see plainly:
+  - 8 are `hashicorp/kubernetes`'s own Terraform-provider-specific convenience resources with no OpenAPI/API-object equivalent at all, by design: `kubernetes_annotations`, `kubernetes_labels`, `kubernetes_env` (patch metadata/env on an existing object), `kubernetes_manifest` (raw-YAML escape hatch), `kubernetes_node_taint` (patch taints outside Node's own spec), `kubernetes_config_map_v1_data`/`kubernetes_secret_v1_data` (manage only the `.data` field of an existing object), `kubernetes_default_service_account{,_v1}` (adopt the namespace's auto-created default SA -- conceptually distinct from the general ServiceAccount CRUD resource, which DID get a real, clean redirect).
+  - 1, `kubernetes_token_request_v1`, is a real K8s API Kind (`authentication.k8s.io/v1`) that the generic resourcemap's own CRUD-shape heuristic structurally cannot discover: TokenRequest is POST-only (generate-and-return, no GET-by-id), and `resourcemap.Discover` requires a matching read (GET) operation to consider something a resource at all. A different kind of gap than the other 9 -- fixable in principle by extending the discovery heuristic, not a permanent, by-design absence -- but out of this phase's own scope.
+
+71 real redirects written to `docs.json` (verified live against the actual generated file tree before writing -- every destination path confirmed to exist, not assumed). 66 + 5 + 10 = 81, every real old page accounted for.
+
+### Finding 2: the alpha/beta collision, confirmed still live, real numbers, not fixed
+
+Live-measured this session (the ubx-provider-dynamic binary run directly with `--dump-signals` against the real, current config, capturing its own real stderr Notes -- these Notes are NOT surfaced through `ubx sdk gen`'s own normal output at all, confirmed: the tfplugin6 RPC launch path (`provider.Launch`) never carries them back, only a direct subprocess run does): **71 resources generated from what would be 94 real candidates without the collision** (92 was the founder's own prior estimate; 94 is what this session's own direct count found -- a real, small discrepancy, not reconciled further, both numbers point at the same real, live phenomenon). 23 real `seenTypeNames` collisions total, of which:
+- **21 are genuine alpha/beta/version collisions across 14 distinct Kubernetes Kinds** -- `splitQualifiedRefName` (`internal/resourcemap/resourcemap.go`) deliberately extracts and then DISCARDS the real API version token from a qualified schema ref name (`io.k8s.api.apps.v1.Deployment` -> service "apps", noun "deployment", version thrown away) -- by design, confirmed via the function's own doc comment, not an oversight. Real, worth-flagging nuance beyond a simple "alpha loses to stable": path-sort order, not API maturity, decides the winner -- `autoscaling_horizontal_pod_autoscaler` keeps the OLDER `v1` over the real, current, preferred `v2` (lexical "v1" < "v2"); `scheduling_pod_group`/`scheduling_workload` keep `v1alpha3` over the real, more mature `v1beta1` (lexical "v1alpha3" < "v1beta1"). Not always "newest wins," not always "most stable wins" -- purely alphabetical.
+- **2 are a separate, unrelated collision**: `/pods/{name}/proxy`, `/nodes/{name}/proxy`, `/services/{name}/proxy` are three real, genuinely distinct Kubernetes sub-resources that all derive the identical generic noun "proxy" from their own read path (no qualified ref name to disambiguate them) -- a real, different limitation of the same generic naming scheme, not the alpha/beta issue.
+
+**Not fixed this phase**, per the founder's own explicit instruction -- the real fix (deriving type-name uniqueness from something version-preserving, e.g. the response schema's own real `$ref`/id rather than the derived display name) is a real design decision that was discussed but never made, and forcing one now would be exactly the kind of unilateral call this session's own standing discipline avoids. Reported plainly instead: the shipped Kubernetes corpus genuinely, silently omits 21 real API-version variants across 14 Kinds, and picks the wrong (older/less mature) variant in at least 3 of the 14 cases where a real choice existed.
+
+### Real, live-measured verification
+
+| | Result |
+|---|---|
+| Real `.mdx` pages | 85 (71 resource + 14 landing: 1 top-level + 13 service-level) |
+| Real `go build` against the LITERAL page content, zero wrapper | 71/71 OK |
+| Real `deno fmt --check` | 71/71 clean |
+| Real `ast.parse` | 71/71 clean |
+| Em dashes | 0 |
+| `mint validate` (redirects included) | clean |
+| `mint broken-links` | clean, zero "kubernetes/" mentions |
+| Real DOM overflow crawl (`mint dev` live) | 0 page-level overflow, 0 uncontained blocks, worst contained case 827px (still under the 911px precedent) |
+| Real redirects written | 71, every destination file confirmed to exist before writing |
+| Non-kubernetes pages touched | 0, confirmed via `git status` (3 real `M` entries are paths that legitimately persisted across old/new: top-level index + 2 service landing pages whose service name happened to survive) |
+
+**Three of six providers onboarded (Datadog, GitHub, Kubernetes). AWS, Azure, GCP remain -- each will exercise the redirect problem again, and Azure/GCP have never been measured for their own version of the alpha/beta-style collision (worth checking, not assumed clean).**
+
+**Committed and pushed**: `ubiquex-docs` (`docs.json`, `resource-reference/kubernetes/**` replaced) -- never self-merged, confirmed via `gh api` against the real remote. No `ubiquex`/`ubx-provider-dynamic` code changes this session.
+
 ## Docs corpus regeneration -- phase 2 (GitHub) onboarded, pipeline proven provider-agnostic, 2026-08-20 (no Linear ticket ID given)
 
 **Scope**: onboard GitHub through the now-corrected pipeline (richer tier only, `gen_new_provider_pages.py`, real inline AI-inferred markers plus a once-per-page `<Note>`) -- the exact same process phase 1's own corrected Datadog run used, no new code written this session at all. GitHub, like Datadog, has zero legacy pages (never one of the original four providers), so the redirect problem (old path with no clean successor) still does not get exercised -- stays open for whichever of aws/azure/gcp/kubernetes goes next.

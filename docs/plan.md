@@ -3,6 +3,28 @@
 ## Changelog
 
 - 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
+  regeneration phase 3: Kubernetes onboarded, the first provider in
+  this arc with a real predecessor corpus, exercising the redirect
+  problem for real. Real diff of all 81 old pages against the new
+  71-resource schema: 66 clean + 5 probable (same real Kind, naming-
+  convention mismatch, e.g. "apiservice" vs "api_service") redirects
+  written to docs.json, 10 genuinely orphaned (8 real Terraform-
+  provider-specific convenience resources with no OpenAPI equivalent
+  by design, 1 real API Kind -- TokenRequest -- the generic discovery
+  heuristic structurally can't find since it's POST-only). Also
+  confirmed, live, that the alpha/beta API-version collision the
+  founder flagged is still real: 23 seenTypeNames collisions (21
+  genuine version collisions across 14 Kinds, 2 unrelated "proxy"
+  noun collisions), not fixed this phase per explicit instruction --
+  the real fix needs a version-preserving type-naming decision that
+  was discussed but never made. Full verification bar clean (71/71
+  real go build on literal content, 71/71 deno fmt, 71/71 ast.parse,
+  mint validate/broken-links clean including the new redirects, real
+  DOM overflow crawl zero findings, zero em dashes, zero non-
+  kubernetes pages touched). See STATE.md's own checkpoint for the
+  full real account.
+
+- 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
   regeneration phase 2: GitHub onboarded through the corrected
   richer-tier-only pipeline, same process as phase 1's own corrected
   Datadog run, zero new code needed. 68 real resource types across 43
