@@ -2,6 +2,20 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase 5 checkpoint: real intros written for Azure Compute (18/19), sourcing approach proven before scaling, 2026-08-20
+
+**Scope, exactly as given**: write real intro paragraphs into `artifacts/<provider>/intros.json`, one per resource, summarized from the vendor's own real overview documentation in ubx's own words -- never copied verbatim, never filler where no real overview exists. Smallest checkpoint first, before scaling to the rest: Azure Compute, 19 resources (the same set Phase 4 just regenerated).
+
+**Real sourcing mechanism, proven this checkpoint**: `WebSearch` + `WebFetch` against `learn.microsoft.com`, live, this session -- no paid API, matching the ticket's own cost model exactly ("first onboarding happens locally via Claude Code"). 14 of 19 resources map 1:1 to their own real, dedicated Microsoft Learn overview page (Availability Sets, Capacity Reservations + Groups, Dedicated Hosts + Groups, Compute Gallery images, Proximity Placement Groups, VM Restore Points + Collections, SSH public keys, Virtual Machines, Run Command, VM Extensions, Virtual Machine Scale Sets). 4 more (`diagnostic_run_command`, `scale_set_extension`, `scale_set_vm`, `scale_set_vmextension`) have no page of their own but are real, documented narrower scopings of a concept that does (Run Command; VM Extensions/Scale Sets applied per-instance) -- summarized honestly as that variant, genuinely sourced from real content, not treated as a missing-overview skip.
+
+**One real, verified skip**: `azure_interconnect_block`. Checked live, not assumed -- `WebSearch` then `WebFetch` against the real Azure Compute REST API reference confirmed "InterconnectBlock" appears only as an example filename (`VirtualMachine_Get_InstanceView_WithInterconnectBlock.json`), zero real explanatory prose anywhere. Skipped per the ticket's own explicit rule -- a visible gap beats a paragraph invented from a bare field name.
+
+**Real counts**: 18 written, 1 skipped (genuine, verified absence of a vendor overview), 19 total real universe -- matches Phase 4's own newly-regenerated resource count exactly. `artifacts/azure/manifest.json` records the real written/skipped lists and the sourcing account above, so the next provider's own onboarding is resumable rather than needing a recount, per the ticket's own manifest requirement.
+
+**Artifacts only, verified**: `git status` confirmed only `intros.json`/`manifest.json` changed -- no `.mdx` page touched, no regeneration attempted. Zero em dashes (checked both new/changed files directly). Committed and pushed directly to `ubiquex-docs` `main`, confirmed live via the GitHub API.
+
+**Still ahead**: the other 5 providers (AWS's own 30,142-entry universe is the largest by far; Datadog/GitHub/Kubernetes/GCP-compute all still real, un-started work) -- this checkpoint's own job was proving the sourcing approach works and getting real counts before committing to that scale, not finishing it.
+
 ## UBI-175 Phase 4: Azure Compute regenerated (approved sequence step 1), real AWS redirect-diff report delivered (step 2), stale config comment fixed, 2026-08-20
 
 **Scope, exactly as approved**: regenerate Azure Compute's 19 real resources through the same mechanism GCP Compute already proved, real three-bucket redirect analysis, leave the other ~1,084 Azure pages untouched; then a real, numbers-only AWS redirect-diff report (no regeneration); fix the stale Azure config comment Phase 3 caught causing a real misreport.
