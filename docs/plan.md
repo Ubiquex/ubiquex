@@ -2,6 +2,29 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session, corrects the
+  entry directly below) the prior checkpoint shipped the WRONG page
+  tier for Datadog -- bare fragments, not the complete runnable
+  programs matching the existing 4,197-page corpus. Real root cause:
+  `gen_complete_pages.py`'s own splice tool requires a page to already
+  exist, so onboarding a brand-new provider had no real path to the
+  richer tier at all; the sparse "mechanical" tier (never meant to be
+  final output, confirmed live: 100% of the existing corpus is
+  already richer-tier) shipped instead. Fixed by removing the sparse
+  tier entirely (`build_resource_page`, `gen_mechanical_pages.py`) and
+  adding a real, standalone richer-tier generator
+  (`generate_richer_provider`, `gen_new_provider_pages.py`) that needs
+  no pre-existing page. Also found and fixed: `verify_go_blocks.py`
+  had been silently wrapping bare fragments in a synthetic
+  package/func shell before compiling them, so its own "26/26 OK"
+  never proved the literal page content compiled -- now compiles the
+  extracted block unmodified, with zero wrapping. Datadog regenerated
+  from scratch; confirmed structurally identical to a real, live
+  Google page (package main, imports, func main, ubx.Main(ubx.Stack),
+  all four mediums). No further providers onboarded this session, per
+  the founder's own explicit instruction. See STATE.md's own
+  checkpoint for the full real account.
+
 - 2026-08-20 -- (no Linear ticket ID given this session) `ubx sdk gen`
   gained `--dump-ir <dir>` and `--only <names>`. `--dump-ir` reuses the
   real, already-tested acquisition+enrichment path both thirdparty

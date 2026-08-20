@@ -2,6 +2,44 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Docs corpus regeneration -- mechanical tier removed, Datadog corrected to richer tier, 2026-08-20 (no Linear ticket ID given)
+
+**The prior checkpoint shipped the wrong tier.** The founder caught it directly: Datadog's 26 real pages were bare fragments (no `package main`, no `func main(){}`), not the complete, runnable programs matching the existing 4,197-page corpus's own richer template. Asked to diagnose before fixing.
+
+**Real diagnosis, reported before any change**: not a flag passed wrong. `gen_provider_docs.py` has two genuinely separate builder functions -- `build_resource_page` (sparse, called only from the now-removed `gen_mechanical_pages.py`) and `build_resource_page_complete` (richer, called only from `gen_complete_pages.py`). The real, structural root cause: `gen_complete_pages.py`'s own `generate_one` hard-requires a page to ALREADY EXIST at the target path ("no existing page... run gen_mechanical_pages.py first") -- it has no standalone path to create a new richer-tier page from nothing. The documented, historical workflow for all four original providers was always two phases: mechanical tier writes a sparse skeleton, richer tier immediately splices over it, resource by resource -- by the time any of those four shipped, 100% had already been migrated, confirmed live this session (4230/4230 real pages already carry `package main`). The mechanical tier's sparse output was NEVER meant to be a final, delivered state, only a transient scaffold. This session ran only the scaffold phase for Datadog and never ran the required splice, shipping the intermediate as if it were final.
+
+**The `go build` question, confirmed exactly as the founder suspected**: the prior checkpoint's `verify_go_blocks.py` reported 26/26 OK only because a `wrap_bare_fragment` adapter silently reconstructed a real `package main`/`func main(){}` wrapper around the bare fragment before compiling it. The literal page content, copy-pasted as shown, does not compile (`expected 'package', found 'import'`, confirmed live) -- the tool was verifying its own reconstruction, not the real page. Removed entirely, not patched: `verify_go_blocks.py` now compiles the literal, unmodified extracted block with zero wrapping, exactly the founder's own instruction ("needs to compile examples as real standalone programs").
+
+**The real fix, in `ubiquex-docs`**:
+- `build_resource_page` (sparse builder) and its own dead-only-after-this-removal helpers (`pick_example_fields`) deleted outright -- confirmed first that `literal_go`/`literal_ts`/`literal_py`/`pick_inner_example_field` are NOT dead (real, load-bearing fallback inside `field_literal_with_preamble`, the richer tier's own literal renderer), so those stayed.
+- New `generate_richer_provider` (`gen_provider_docs.py`) is the ONLY full-provider page-writing path left: builds a complete `build_resource_page_complete` page directly for a resource with no existing page, reusing the same nav-fragment/service-index/top-level-index structural logic the old mechanical driver had (that part was always tier-agnostic).
+- `REAL_SDK_REPO_ID` moved from `gen_complete_pages.py` (its former sole owner) into `gen_provider_docs.py`, one shared table, `datadog`/`github` entries added -- both now real generators import the same table rather than risk two drifting copies.
+- `build_resource_page_complete` gained the identical `bindings_status="local_only"` handling the sparse tier had already needed (Go: a real `go.mod replace` directive comment, not a relative import -- the same correctness bug from the prior checkpoint would have recurred here untested; TS: a real local import path; Python: an honest `PYTHONPATH` comment) -- this tier had NEVER been exercised for an unpublished provider before Datadog, a real, previously-latent gap.
+- `gen_mechanical_pages.py` deleted outright, replaced by `gen_new_provider_pages.py` (calls `generate_richer_provider`). `gen_complete_pages.py` kept -- still real, legitimate for touching up individual resources on an already-complete-tier corpus -- but its own error message now says so explicitly instead of pointing at the removed tool.
+- `dump_schema.go`'s own superseded-notice, README.md, and every stale in-file comment referencing the removed tier updated to stop pointing at dead tools.
+
+**Real, live-measured re-verification, Datadog regenerated from scratch via `gen_new_provider_pages.py`**:
+
+| | Result |
+|---|---|
+| Structural identity vs. a real, live Google page (`resource-reference/gcp/alloydb/backup.mdx`) | Confirmed: `package main`, `import (...)`, `func main() { ubx.Main(ubx.Stack("payments", func() { ubx.Intent(...); ubx.Resource(...) })) }` -- identical shape. TS `export default stack(...)`, Python `if __name__ == "__main__": ubx.run(...)`, Markdown scenario -- all four mediums present on every page. |
+| Real `.mdx` pages | 30 (26 resource + 4 landing), same count as the corrected-tier run |
+| Real `go build` against the LITERAL page content, zero wrapper | 26/26 OK |
+| Real `deno fmt --check` | 26/26 clean |
+| Real `ast.parse` | 26/26 clean |
+| Em dashes | 0 |
+| `mint validate` | clean |
+| `mint broken-links` | clean, zero "datadog" mentions |
+| Real DOM overflow crawl (`mint dev` live, UBI-172 still resolved this session) | 0 page-level overflow, 0 uncontained blocks, worst contained case 683px (unchanged from the prior checkpoint's own measurement) |
+| AI-inferred label | Still renders correctly, 10 pages, unchanged from the prior checkpoint (the nested-description fix and the label logic both live in code paths the tier swap didn't touch) |
+| Already-shipped (non-Datadog) pages touched | 0, confirmed via `git status` |
+
+One cosmetic, harmless difference from most already-shipped pages, noted for transparency rather than fixed: freshly-written richer-tier pages get `build_resource_page_complete`'s own frontmatter description ("A complete, runnable X program..."), while historically-SPLICED pages kept whatever frontmatter their original mechanical-tier write had ("Real, generated bindings for X.") -- `gen_complete_pages.py`'s splice only ever replaces the `## Example` section, never frontmatter. Not a structural defect; not touched this session.
+
+**Per the founder's own explicit instruction, no further providers are onboarded this session.** The prior checkpoint's own open "redirect problem" question (Datadog has no legacy pages, so it doesn't exercise the risk) remains open for the next phase.
+
+**Committed and pushed**: `ubiquex-docs` (`scripts/resource-reference-gen/{gen_provider_docs.py,gen_complete_pages.py,gen_new_provider_pages.py,verify_go_blocks.py,dump_schema.go,README.md}`, `gen_mechanical_pages.py` deleted, `resource-reference/datadog/**` regenerated in place) -- never self-merged, confirmed via `gh api` against the real remote.
+
 ## Docs corpus regeneration under ubx's own derived naming -- phase 1 (Datadog) proven, checkpoint, 2026-08-20 (no Linear ticket ID given)
 
 **Scope, per the founder's own mandatory phasing instruction**: prove the real, full regeneration pipeline end to end on ONE provider before touching the other five. Datadog chosen as the smaller of the two candidates after the real, corrected field count (1,317 real fields vs Kubernetes' 15,492) -- not a guess, the same real number this arc's own prior description-generation checkpoint already established live.
