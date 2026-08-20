@@ -166,6 +166,44 @@ type LedgerConfig struct {
 //	base_url      = "https://cloudcontrolapi.us-east-1.amazonaws.com"
 //
 //	[thirdparty_providers]
+//
+// A [providers.<name>] entry supports a SECOND real shape as of the very
+// next session the same day: source+version instead of
+// schema_source+schema_url --
+//
+//	[providers.aws]
+//	source  = "ubiquex/aws"
+//	version = "1.2.0"
+//
+// This is the fix for the real problem the schema_url shape above still
+// has: schema_url is fetched live, over the network, on every single
+// launch -- no pinning, no reproducibility, no way to reconstruct the
+// exact schema a past build used. source+version instead names a real,
+// versioned, GitHub-Releases-distributed schema SNAPSHOT (provider.
+// SchemaSource/provider.AcquireSchema; the snapshot format itself is
+// ubx-provider-dynamic's own internal/snapshot package) -- resolved once
+// via provider.AcquireSchema's own mirror-first/cache-second/verify-
+// once-trust-forever discipline (copied verbatim from provider.Acquire's
+// real HashiCorp-provider-binary acquisition path), then read by the
+// launched ubx-provider-dynamic process with ZERO network calls at schema
+// resolution time (UBX_SNAPSHOT_PATH, main.go's own snapshotPathEnvVar
+// branch). cli/dynamicprovider.go's own pinnedSchemaFields/
+// dynamicProviderEnv decide which of the two real shapes a given entry is
+// -- mechanically, by field presence (source vs. schema_url never share a
+// field name) -- for every real call site that launches
+// ubx-provider-dynamic (dynamicProviderSchema, `ubx sdk gen`'s own schema
+// dump; newDynamicProviderLaunchFunc, `ubx resolve`/`ubx ship`'s real
+// execution path).
+//
+// Real, honest, deliberate scope boundary: only schema_source = "openapi"
+// has a real snapshot-generation path today (internal/snapshot's own doc
+// comment, ubx-provider-dynamic) -- a CloudFormation/Smithy/Discovery-Doc
+// -sourced entry (AWS/GCP today) can only use the live schema_url shape
+// until each of those gets its own real Generate function. Both shapes
+// stay real and supported side by side for exactly that reason, not as a
+// transitional stopgap with a fixed retirement date.
+//
+//	[thirdparty_providers]
 //	"hashicorp/aws"  = "6.60.0"
 //	"hashicorp/helm" = "3.0.2"
 //

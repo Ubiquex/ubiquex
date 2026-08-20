@@ -115,10 +115,86 @@ func resolveDynamicProviderBinary(explicitPath, repoPath string) (string, error)
 // beside it, not inside it.
 const defaultDynamicProviderRepo = "../ubx-provider-dynamic"
 
-// dynamicProviderSchema launches ubx-provider-dynamic once against a
-// real, temporary .ubx/config containing exactly one
-// [dynamic_providers.<name>] table (params, the same generic
-// map[string]any Config.DynamicProviders[name] already carries), and
+// pinnedSchemaFields extracts "source"/"version" from a
+// [providers.<name>]/[dynamic_providers.<name>] entry's own params --
+// real, mechanical presence-based detection of which of the two real
+// entry shapes this is. The pinned shape (source+version,
+// provider.AcquireSchema-backed, zero network at schema resolution time)
+// and the live shape (schema_source/schema_url,
+// writeDynamicProviderConfig-backed, a real fetch on every launch) never
+// share a field name, so checking for "source" alone decides,
+// unambiguously, which one a given entry is -- never inferred from
+// anything else.
+//
+// version is deliberately required the moment source is present: a
+// pinned entry with no version would have to mean "latest," and
+// provider.AcquireSchema (like provider.Acquire one level down) never
+// does that resolution -- an explicit version is what makes "reconstruct
+// the schema a past build used" possible at all, the entire reason this
+// mechanism exists (see internal/snapshot's own doc comment,
+// ubx-provider-dynamic).
+func pinnedSchemaFields(params map[string]any) (source, version string, ok bool, err error) {
+	rawSource, hasSource := params["source"]
+	if !hasSource {
+		return "", "", false, nil
+	}
+	source, isString := rawSource.(string)
+	if !isString {
+		return "", "", false, fmt.Errorf("\"source\" must be a string, got %T", rawSource)
+	}
+	rawVersion, hasVersion := params["version"]
+	if !hasVersion {
+		return "", "", false, fmt.Errorf("%q declares \"source\" but no \"version\" -- a pinned schema source requires an explicit version, never \"latest\"", source)
+	}
+	version, isString = rawVersion.(string)
+	if !isString {
+		return "", "", false, fmt.Errorf("\"version\" must be a string, got %T", rawVersion)
+	}
+	return source, version, true, nil
+}
+
+// dynamicProviderEnv resolves the real env vars a launched
+// ubx-provider-dynamic process needs to serve name, and prepares workDir
+// to match. Two real, mutually exclusive shapes, chosen by
+// pinnedSchemaFields:
+//
+//   - Pinned (source+version present): provider.AcquireSchema resolves a
+//     verified, cached, or freshly-downloaded-and-verified snapshot file
+//     with zero involvement from workDir at all -- the launched process
+//     reads UBX_SNAPSHOT_PATH directly (main.go's own
+//     snapshotPathEnvVar branch, checked before .ubx/config would even be
+//     loaded), so workDir is left empty, not written to.
+//   - Live (existing shape, schema_source/schema_url/...): unchanged --
+//     writeDynamicProviderConfig writes the real, temporary
+//     [dynamic_providers.<name>] table the launched process fetches
+//     schema_url through, exactly as before this function existed.
+func dynamicProviderEnv(ctx context.Context, workDir, name string, params map[string]any) ([]string, error) {
+	src, version, pinned, err := pinnedSchemaFields(params)
+	if err != nil {
+		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
+	}
+	if pinned {
+		schemaSrc, err := provider.ParseSchemaSource(src)
+		if err != nil {
+			return nil, fmt.Errorf("[providers.%s].source: %w", name, err)
+		}
+		result, err := provider.AcquireSchema(ctx, schemaSrc, version)
+		if err != nil {
+			return nil, fmt.Errorf("acquire schema for %q: %w", name, err)
+		}
+		return []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name, "UBX_SNAPSHOT_PATH=" + result.Path}, nil
+	}
+
+	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+		return nil, err
+	}
+	return []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name}, nil
+}
+
+// dynamicProviderSchema launches ubx-provider-dynamic once against name's
+// own real config entry (params, the same generic map[string]any
+// Config.DynamicProviders[name]/Config.Providers[name] already carries --
+// live-shaped or pinned-shaped, dynamicProviderEnv decides which), and
 // returns its real GetProviderSchema dump -- no Configure call, no real
 // credentials needed, matching this whole file's own real "schema dump
 // only" scope.
@@ -129,13 +205,14 @@ func dynamicProviderSchema(ctx context.Context, binPath, name string, params map
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+	env, err := dynamicProviderEnv(ctx, workDir, name, params)
+	if err != nil {
 		return nil, err
 	}
 
 	client, err := provider.Launch(ctx, binPath,
 		provider.WithDir(workDir),
-		provider.WithEnv("UBX_DYNAMIC_PROVIDER_NAME="+name),
+		provider.WithEnv(env...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("launch ubx-provider-dynamic for %q: %w", name, err)
@@ -191,7 +268,24 @@ func loadDynamicProviderSchema(ctx context.Context, name string, params map[stri
 // real, honestly EMPTY (not nil, not an error) result for a
 // schema_source this binary doesn't yet extract signals for (Smithy --
 // AWS, today), matching that binary's own "skip, don't fail" answer.
+//
+// Real, honest, deliberate scope boundary, named not hidden: a PINNED
+// entry (source+version) returns a real, clear error instead of silently
+// degrading -- --dump-signals is a plain subprocess reading a real,
+// temporary .ubx/config, and main.go's own snapshotPathEnvVar branch
+// (runServeSnapshot) never wires that mode into --dump-signals at all
+// (only into real tfplugin6 serving). generateOneDynamicProvider's own
+// caller already treats a dynamicProviderSignals error as non-fatal
+// ("skip, don't fail" -- sdk.go), so this surfaces as the identical real,
+// visible warning a Smithy provider's own missing-signals case already
+// produces, not a silent gap.
 func dynamicProviderSignals(ctx context.Context, binPath, name string, params map[string]any) (map[string]map[string]*fieldSignal, error) {
+	if _, _, pinned, err := pinnedSchemaFields(params); err != nil {
+		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
+	} else if pinned {
+		return nil, fmt.Errorf("[providers.%s]: --dump-signals is not yet wired to a pinned schema source (source+version) -- only the live schema_url shape supports signal extraction today", name)
+	}
+
 	workDir, err := os.MkdirTemp("", "ubx-sdk-gen-signals-"+name)
 	if err != nil {
 		return nil, err
@@ -253,14 +347,15 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := writeDynamicProviderConfig(workDir, key, params); err != nil {
+		env, err := dynamicProviderEnv(ctx, workDir, key, params)
+		if err != nil {
 			os.RemoveAll(workDir)
 			return nil, nil, err
 		}
 
 		client, err := provider.Launch(ctx, binPath,
 			provider.WithDir(workDir),
-			provider.WithEnv("UBX_DYNAMIC_PROVIDER_NAME="+key),
+			provider.WithEnv(env...),
 		)
 		os.RemoveAll(workDir) // the launched process has already read the config by the time Launch returns
 		if err != nil {
