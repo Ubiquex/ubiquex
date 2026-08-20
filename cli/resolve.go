@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -277,46 +278,107 @@ func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, re
 	}
 }
 
+// fetchThirdpartySchema/fetchDynamicSchema are loadResolveProviders' own
+// two real, swappable per-entry schema fetchers -- package-level seams
+// (the same convention scandiscover.go's own newDiscoveryTaggingAPI/
+// newDiscoveryStateReader already establish) so a hermetic test can
+// prove the real precedence rule (a resolved [providers] entry never
+// even calls fetchThirdpartySchema for the same real key) without
+// launching a real provider binary or a real ubx-provider-dynamic
+// checkout. Production always uses the real Acquire/Launch/Schema/Close
+// sequence and the real loadDynamicProviderSchema, respectively.
+var fetchThirdpartySchema = func(ctx context.Context, source, version string) (*provider.Schemas, error) {
+	parsed, err := provider.ParseSource(source)
+	if err != nil {
+		return nil, err
+	}
+	result, err := provider.Acquire(ctx, parsed, version)
+	if err != nil {
+		return nil, fmt.Errorf("acquire provider %s@%s: %w", source, version, err)
+	}
+	client, err := provider.Launch(ctx, result.Path)
+	if err != nil {
+		return nil, fmt.Errorf("launch provider %s@%s: %w", source, version, err)
+	}
+	schemas, err := client.Provider.Schema(ctx)
+	closeErr := client.Close()
+	if err != nil {
+		return nil, fmt.Errorf("fetch schema for %s@%s: %w", source, version, err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close provider %s@%s: %w", source, version, closeErr)
+	}
+	return schemas, nil
+}
+
+var fetchDynamicSchema = loadDynamicProviderSchema
+
 // loadResolveProviders is `ubx resolve`'s own provider-loading logic
 // (docs/resolver.md's "Amendment (UBI-43): multi-provider stacks"),
 // extracted so `ubx plan` (UBI-49) can resolve any medium input through
 // the identical, unmodified path rather than a second copy of it: a stack
-// with a real [thirdparty_providers] table in .ubx/config gets a genuine
-// multi-provider set, one declared provider per entry, each launched to
-// fetch its own schema; a single-provider stack (no table) keeps working
-// exactly as it always has, one provider launched, wrapped as the
-// one-element case. Every launched client is closed before this function
-// returns -- newSchemaInspector wraps only the already-fetched static
-// schema data (schemainspector.go), so there is no need to hold a client
-// open past its own schema fetch, the same reasoning loadDiagramProviders
-// (propose.go) already documents for its own, symmetric loop.
+// with a real [thirdparty_providers] and/or [providers] table in
+// .ubx/config gets a genuine multi-provider set, one declared provider
+// per real key, each launched to fetch its own schema; a single-provider
+// stack (neither table) keeps working exactly as it always has, one
+// provider launched, wrapped as the one-element case.
+//
+// Amendment (2026-08-20): closes the resolver preference gap the prior
+// checkpoint named -- providerPool.Get already routed a [providers] key
+// through a real dynamic-provider launch, but this function built its
+// own declared set directly from cfg.ThirdpartyProviders, so a
+// [providers] entry was never even a candidate for an unrecorded
+// resource's own inference. Now iterates resolveProviderPrecedence's own
+// real, precedence-resolved set (one entry per real key, [providers]
+// wins on collision -- the identical real rule providerPool.Get already
+// applies) instead of cfg.ThirdpartyProviders directly.
+//
+// Real, deliberate choice, not declaredProvidersForInference (the
+// mechanism status/scanall/scanfleet/drift already share for their own
+// legacy/adopted-Fleet-entry inference), flagged here rather than
+// silently reused: that function's own resourceTypeSchemaInspector
+// wraps StateReader.Schema's opaque map[string]any, a real, deliberate
+// stub whose own doc comment says IsComputed/IsSensitive are "always-
+// false stubs" because InferProvider (that function's only real caller)
+// never calls either -- confirmed live, not assumed, this session: a
+// real required-attribute-missing resolve test regressed to silently
+// succeeding when this function was first routed through that shared
+// helper, because ubx resolve's own downstream validation DOES read
+// richer schema data past mere type ownership. Each real provider here
+// keeps fetching a real, full *provider.Schemas via the two swappable
+// fetchThirdpartySchema/fetchDynamicSchema seams below (the identical
+// real package-level-var convention scandiscover.go's own
+// newDiscoveryTaggingAPI/newDiscoveryStateReader already establish for
+// hermetic testability) -- production always resolves a real provider;
+// cli/resolve_test.go's own hermetic tests swap in fakes to prove the
+// real precedence rule without launching anything real. The pool
+// declaredProvidersForInference itself uses is not needed here at all.
 func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, providerPath, source, providerVersion *string) ([]resolver.DeclaredProvider, error) {
-	var providers []resolver.DeclaredProvider
-	if len(cfg.ThirdpartyProviders) > 0 {
+	resolved := resolveProviderPrecedence(cfg)
+	if len(resolved) > 0 {
 		warnIfLegacyProviderFlagsGiven(cmd)
-		for _, src := range sortedProviderSources(cfg.ThirdpartyProviders) {
-			version := cfg.ThirdpartyProviders[src]
-			parsed, err := provider.ParseSource(src)
+		keys := make([]string, 0, len(resolved))
+		for k := range resolved {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		var providers []resolver.DeclaredProvider
+		for _, key := range keys {
+			r := resolved[key]
+			if r.Dynamic {
+				schemas, err := fetchDynamicSchema(ctx, r.Key, r.Params)
+				if err != nil {
+					return nil, err
+				}
+				providers = append(providers, resolver.DeclaredProvider{Source: r.Key, Version: "", Schema: newSchemaInspector(schemas)})
+				continue
+			}
+			schemas, err := fetchThirdpartySchema(ctx, r.Source, r.Version)
 			if err != nil {
 				return nil, err
 			}
-			result, err := provider.Acquire(ctx, parsed, version)
-			if err != nil {
-				return nil, fmt.Errorf("acquire provider %s@%s: %w", src, version, err)
-			}
-			client, err := provider.Launch(ctx, result.Path)
-			if err != nil {
-				return nil, fmt.Errorf("launch provider %s@%s: %w", src, version, err)
-			}
-			schemas, err := client.Provider.Schema(ctx)
-			closeErr := client.Close()
-			if err != nil {
-				return nil, fmt.Errorf("fetch schema for %s@%s: %w", src, version, err)
-			}
-			if closeErr != nil {
-				return nil, fmt.Errorf("close provider %s@%s: %w", src, version, closeErr)
-			}
-			providers = append(providers, resolver.DeclaredProvider{Source: src, Version: version, Schema: newSchemaInspector(schemas)})
+			providers = append(providers, resolver.DeclaredProvider{Source: r.Source, Version: r.Version, Schema: newSchemaInspector(schemas)})
 		}
 		return providers, nil
 	}

@@ -142,13 +142,13 @@ func runScanDiscover(ctx context.Context, out io.Writer, opts scanDiscoverOption
 	// --source, matching this command's own "identity only, no read
 	// unless there's something to read" posture.
 	if adoptableCount > 0 {
-		if len(opts.Providers) > 0 {
+		if len(opts.Providers) > 0 || len(opts.Config.Providers) > 0 {
 			pool, err = newProviderPool(salt, opts.Providers, opts.Config.Providers, opts.ProviderConfigs)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: %w", err)}
 			}
 			defer pool.Close()
-			declared, err = declaredProvidersForInference(ctx, pool, opts.Providers)
+			declared, err = declaredProvidersForInference(ctx, pool, resolvedProviderVersions(opts.Config))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: %w", err)}
 			}

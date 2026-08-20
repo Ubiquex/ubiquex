@@ -2,6 +2,42 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session, same arc as the
+  entry directly below) closes the resolver preference gap that entry
+  named as not yet done: `core/resolver.InferProvider` needed no change
+  at all (it only ranks whichever declared-provider set it's handed);
+  the real fix is in `cli/resolve.go`'s own `loadResolveProviders` (the
+  function `ubx resolve`/`ubx plan` call for an unrecorded resource's own
+  provider inference), which now iterates `resolveProviderPrecedence`'s
+  real, precedence-resolved set instead of `cfg.ThirdpartyProviders`
+  directly -- a shadowed `[thirdparty_providers]` entry for a key also
+  declared under `[providers]` is never even fetched, let alone offered
+  to `InferProvider` as a competing candidate. The identical fix reaches
+  `declaredProvidersForInference` (a new `resolvedProviderVersions`
+  helper), the mechanism `status`/`scan --all`/`scan --stack`/
+  `scan --discover`/`drift` all share for a legacy/adopted Fleet entry's
+  own fresh-by-type inference. Real, deliberate implementation split:
+  `ubx resolve` does not reuse `declaredProvidersForInference`'s own
+  `providerPool`-based path, because that path's own
+  `resourceTypeSchemaInspector` is a real, deliberate stub
+  (`IsComputed`/`IsSensitive` always false, since `InferProvider` -- its
+  only real caller there -- never calls either) -- confirmed live, not
+  assumed, when a first attempt at unifying the two paths regressed a
+  real required-attribute-missing resolve test from a correct refusal to
+  a silent success, because `ubx resolve`'s own downstream validation
+  reads real schema data past mere type ownership. `loadResolveProviders`
+  keeps fetching a real, full `*provider.Schemas` per declared source
+  instead, through two new swappable seams
+  (`fetchThirdpartySchema`/`fetchDynamicSchema`, the identical real
+  convention `cli/scandiscover.go`'s own `newDiscoveryTaggingAPI`/
+  `newDiscoveryStateReader` already establish). Real, hermetic tests
+  prove both directions -- a stack declaring `aws` under both namespaces
+  resolves through the dynamic entry, never launching the shadowed
+  thirdparty one at all; a stack declaring only `[thirdparty_providers.aws]`
+  correctly falls through to the real HashiCorp binary -- at both the
+  `loadResolveProviders` level (`cli/resolve_test.go`) and the
+  `declaredProvidersForInference` level (`cli/multiprovider_fleet_test.go`).
+  Whole repo `go build`/`go vet`/`go test ./...` clean, no regressions.
 - 2026-08-20 -- (no Linear ticket ID given this session) real, breaking
   restructure of `.ubx/config`'s provider-declaration surface into two
   namespaces: `[providers]` now means ubx's own, dynamic-provider-backed

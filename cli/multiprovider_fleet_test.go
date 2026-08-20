@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core/executor"
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // schemaStubApplier is a fakeApplierStub with a real, scriptable Schema()
@@ -122,5 +123,56 @@ func TestDeclaredProvidersForInference_LaunchFailure_Propagates(t *testing.T) {
 
 	if _, err := declaredProvidersForInference(context.Background(), pool, versions); err == nil {
 		t.Fatal("expected the launch failure to propagate")
+	}
+}
+
+// TestDeclaredProvidersForInference_ResolvedVersions_PrecedenceReachesInferProvider
+// proves the same real precedence rule loadResolveProviders enforces for
+// `ubx resolve` also reaches the legacy/adopted-Fleet-entry inference
+// path status.go/scanall.go/scanfleet.go/drift.go/scandiscover.go share
+// (resolvedProviderVersions feeding declaredProvidersForInference): a
+// stack declaring "aws" under both [providers] and [thirdparty_providers]
+// resolves through the dynamic entry, and the shadowed thirdparty entry
+// is never even launched.
+func TestDeclaredProvidersForInference_ResolvedVersions_PrecedenceReachesInferProvider(t *testing.T) {
+	cfg := &Config{
+		Providers: map[string]map[string]any{
+			"aws": {"schema_source": "cloudformation"},
+		},
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	pool, err := newProviderPool(nil, cfg.ThirdpartyProviders, cfg.Providers, nil)
+	if err != nil {
+		t.Fatalf("newProviderPool: %v", err)
+	}
+	var thirdpartyLaunches, dynamicLaunches []string
+	pool.launch = func(ctx context.Context, source, version string) (executor.Applier, io.Closer, error) {
+		thirdpartyLaunches = append(thirdpartyLaunches, source+"@"+version)
+		return schemaStubApplier{types: []string{"aws_sqs_queue"}}, io.NopCloser(nil), nil
+	}
+	pool.dynamicLaunch = func(ctx context.Context, key, version string) (executor.Applier, io.Closer, error) {
+		dynamicLaunches = append(dynamicLaunches, key)
+		return schemaStubApplier{types: []string{"aws_sqs_queue"}}, io.NopCloser(nil), nil
+	}
+
+	declared, err := declaredProvidersForInference(context.Background(), pool, resolvedProviderVersions(cfg))
+	if err != nil {
+		t.Fatalf("declaredProvidersForInference: %v", err)
+	}
+	if len(dynamicLaunches) != 1 || dynamicLaunches[0] != "aws" {
+		t.Fatalf("dynamic launches = %v, want exactly one for key \"aws\"", dynamicLaunches)
+	}
+	if len(thirdpartyLaunches) != 0 {
+		t.Fatalf("thirdparty launches = %v, want zero -- the shadowed [thirdparty_providers] entry must never be launched", thirdpartyLaunches)
+	}
+
+	winner, err := resolver.InferProvider(declared, "aws_sqs_queue", nil)
+	if err != nil {
+		t.Fatalf("InferProvider: %v", err)
+	}
+	if winner.Source != "aws" {
+		t.Fatalf("InferProvider resolved Source=%q, want \"aws\" (ubx-provider-dynamic), not the HashiCorp binary", winner.Source)
 	}
 }

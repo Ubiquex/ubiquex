@@ -264,6 +264,57 @@ func resolveProviderPrecedence(cfg *Config) map[string]resolvedProviderSource {
 	return out
 }
 
+// resolvedProviderVersions closes the resolver preference gap named in
+// the prior checkpoint: providerPool.Get already routes a [providers]
+// key through the real dynamic launch, but nothing fed InferProvider a
+// declared-provider set that reflected that same precedence -- an
+// unrecorded resource's own inference (`ubx resolve`'s own
+// loadResolveProviders, and every legacy/adopted Fleet entry inferred
+// fresh via declaredProvidersForInference: status/scanall/scanfleet/
+// drift) only ever built its declared set from
+// cfg.ThirdpartyProviders directly, so a [providers] entry was never
+// even a candidate, reachable only by a caller that already knew to
+// ask for it by its dynamic key.
+//
+// Real, deliberate fix shape: resolveProviderPrecedence already computes
+// the correct, precedence-resolved set (one entry per real key, dynamic
+// wins on collision) -- this function only re-shapes that same real
+// result into the map[string]string declaredProvidersForInference (and
+// providerPool.Get) already accept, version="" for a dynamic entry
+// (Get's own dynamic branch ignores version entirely, matching
+// getDynamic's own doc comment: no real per-target version pin exists
+// for a dynamic provider yet). No new inference logic was needed --
+// InferProvider itself never changes; it only ever sees whichever
+// declared set it's handed, and a precedence-collapsed set means the
+// shadowed thirdparty entry is never even launched, not just never
+// picked among two live candidates.
+func resolvedProviderVersions(cfg *Config) map[string]string {
+	resolved := resolveProviderPrecedence(cfg)
+	out := make(map[string]string, len(resolved))
+	for _, r := range resolved {
+		if r.Dynamic {
+			// A dynamic entry's own real routing key is the [providers.<key>]
+			// table key itself (pool.dynamic's own keying, providerPool.Get's
+			// doc comment) -- version="" since getDynamic ignores it entirely
+			// (no real per-target version pin exists for a dynamic provider
+			// yet, see that method's own doc comment).
+			out[r.Key] = ""
+		} else {
+			// A thirdparty entry's own real routing key is the FULL real
+			// registry source string ("hashicorp/aws"), matching
+			// pool.versions' own keying (cfg.ThirdpartyProviders' own real
+			// keys, never short-keyed) -- this is also the exact string a
+			// resolved proposal records into its own IR node `provider`
+			// field, so it must stay the real source, not r.Key (the short
+			// form is only ever used for precedence COMPARISON, never as a
+			// stand-in for the real identity thirdparty providers are
+			// launched/recorded by).
+			out[r.Source] = r.Version
+		}
+	}
+	return out
+}
+
 // sortedProviderSources returns versions' own keys, sorted -- determinism
 // is a feature (CLAUDE.md's own standing rule): a stack's declared
 // provider set is a Go map once decoded from TOML, and anything that

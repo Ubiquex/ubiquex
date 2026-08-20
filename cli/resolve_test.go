@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // writeIntentFile is a small helper: marshal an ubx:intent/v1 file to disk
@@ -271,5 +277,124 @@ func TestResolveAccept_CrossStackPin_StaleBlocksAccept(t *testing.T) {
 	// And confirm it truly never reached the stack's own ledger.
 	if _, statErr := os.Stat(filepath.Join(stackDir, ".ubx", "ledger.lock")); statErr == nil {
 		t.Fatal("ledger.lock should not exist -- the stale-pinned proposal must not have been accepted")
+	}
+}
+
+// fakeSchemas is a real, minimal *provider.Schemas reporting ownership of
+// exactly the resource types named -- resolveProviderTestFetchers' own
+// real stand-in for a real provider's own GetProviderSchema response.
+func fakeSchemas(types ...string) *provider.Schemas {
+	resources := make(map[string]*provider.Schema, len(types))
+	for _, t := range types {
+		resources[t] = &provider.Schema{}
+	}
+	return &provider.Schemas{Resources: resources}
+}
+
+// TestLoadResolveProviders_BothNamespacesDeclareSameKey_PrefersProviders
+// is this checkpoint's own real, explicit deliverable: a stack declaring
+// "aws" under BOTH [providers] and [thirdparty_providers] resolves an
+// unrecorded resource's own type through the dynamic (ubx-provider-
+// dynamic) entry, never the real HashiCorp binary -- the same real
+// precedence rule providerPool.Get already enforced, now reachable
+// through ordinary `ubx resolve` use, not just a caller that already
+// knows to ask for the dynamic key by name. Proven at the real
+// loadResolveProviders level (not just resolveProviderPrecedence's own
+// map, and not declaredProvidersForInference's separate, weaker-schema
+// mechanism) -- the exact function `ubx resolve`/`ubx plan` call.
+func TestLoadResolveProviders_BothNamespacesDeclareSameKey_PrefersProviders(t *testing.T) {
+	origThirdparty, origDynamic := fetchThirdpartySchema, fetchDynamicSchema
+	defer func() { fetchThirdpartySchema, fetchDynamicSchema = origThirdparty, origDynamic }()
+
+	var thirdpartyCalls, dynamicCalls []string
+	fetchThirdpartySchema = func(ctx context.Context, source, version string) (*provider.Schemas, error) {
+		thirdpartyCalls = append(thirdpartyCalls, source+"@"+version)
+		return fakeSchemas("aws_sqs_queue"), nil
+	}
+	fetchDynamicSchema = func(ctx context.Context, name string, params map[string]any) (*provider.Schemas, error) {
+		dynamicCalls = append(dynamicCalls, name)
+		return fakeSchemas("aws_sqs_queue"), nil
+	}
+
+	cfg := &Config{
+		Providers: map[string]map[string]any{
+			"aws": {"schema_source": "cloudformation"},
+		},
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	providerPath, source, providerVersion := "", "", ""
+	declared, err := loadResolveProviders(context.Background(), &cobra.Command{}, cfg, &providerPath, &source, &providerVersion)
+	if err != nil {
+		t.Fatalf("loadResolveProviders: %v", err)
+	}
+
+	if len(dynamicCalls) != 1 || dynamicCalls[0] != "aws" {
+		t.Fatalf("dynamic fetch calls = %v, want exactly one call for key \"aws\"", dynamicCalls)
+	}
+	if len(thirdpartyCalls) != 0 {
+		t.Fatalf("thirdparty fetch calls = %v, want zero -- a [providers] entry must shadow the same real key's [thirdparty_providers] entry entirely, never launch it at all", thirdpartyCalls)
+	}
+	if len(declared) != 1 || declared[0].Source != "aws" {
+		t.Fatalf("declared providers = %+v, want exactly one entry with Source=\"aws\" (the dynamic key)", declared)
+	}
+
+	winner, err := resolver.InferProvider(declared, "aws_sqs_queue", nil)
+	if err != nil {
+		t.Fatalf("InferProvider: %v", err)
+	}
+	if winner.Source != "aws" {
+		t.Fatalf("InferProvider resolved Source=%q, want \"aws\" (ubx-provider-dynamic), not the HashiCorp binary", winner.Source)
+	}
+}
+
+// TestLoadResolveProviders_OnlyThirdpartyDeclared_FallsThroughToHashiCorp
+// is this checkpoint's own real inverse proof: with only
+// [thirdparty_providers.aws] ("hashicorp/aws") declared and no
+// [providers.aws] at all, resolution correctly falls through to the real
+// HashiCorp binary -- precedence never invents a dynamic entry that was
+// never declared.
+func TestLoadResolveProviders_OnlyThirdpartyDeclared_FallsThroughToHashiCorp(t *testing.T) {
+	origThirdparty, origDynamic := fetchThirdpartySchema, fetchDynamicSchema
+	defer func() { fetchThirdpartySchema, fetchDynamicSchema = origThirdparty, origDynamic }()
+
+	var thirdpartyCalls, dynamicCalls []string
+	fetchThirdpartySchema = func(ctx context.Context, source, version string) (*provider.Schemas, error) {
+		thirdpartyCalls = append(thirdpartyCalls, source+"@"+version)
+		return fakeSchemas("aws_sqs_queue"), nil
+	}
+	fetchDynamicSchema = func(ctx context.Context, name string, params map[string]any) (*provider.Schemas, error) {
+		dynamicCalls = append(dynamicCalls, name)
+		return fakeSchemas("aws_sqs_queue"), nil
+	}
+
+	cfg := &Config{
+		ThirdpartyProviders: map[string]string{
+			"hashicorp/aws": "6.60.0",
+		},
+	}
+	providerPath, source, providerVersion := "", "", ""
+	declared, err := loadResolveProviders(context.Background(), &cobra.Command{}, cfg, &providerPath, &source, &providerVersion)
+	if err != nil {
+		t.Fatalf("loadResolveProviders: %v", err)
+	}
+
+	if len(thirdpartyCalls) != 1 || thirdpartyCalls[0] != "hashicorp/aws@6.60.0" {
+		t.Fatalf("thirdparty fetch calls = %v, want exactly one call for hashicorp/aws@6.60.0", thirdpartyCalls)
+	}
+	if len(dynamicCalls) != 0 {
+		t.Fatalf("dynamic fetch calls = %v, want zero -- no [providers] entry was declared", dynamicCalls)
+	}
+	if len(declared) != 1 || declared[0].Source != "hashicorp/aws" {
+		t.Fatalf("declared providers = %+v, want exactly one entry with Source=\"hashicorp/aws\"", declared)
+	}
+
+	winner, err := resolver.InferProvider(declared, "aws_sqs_queue", nil)
+	if err != nil {
+		t.Fatalf("InferProvider: %v", err)
+	}
+	if winner.Source != "hashicorp/aws" {
+		t.Fatalf("InferProvider resolved Source=%q, want \"hashicorp/aws\"", winner.Source)
 	}
 }

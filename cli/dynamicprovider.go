@@ -149,6 +149,38 @@ func dynamicProviderSchema(ctx context.Context, binPath, name string, params map
 	return schemas, nil
 }
 
+// resolveAmbientDynamicProviderBinary resolves a real, usable
+// ubx-provider-dynamic binary using only the ambient
+// UBX_PROVIDER_DYNAMIC_REPO env var (or defaultDynamicProviderRepo) --
+// the shared real binPath-resolution logic newDynamicProviderLaunchFunc
+// and loadDynamicProviderSchema both need, factored out rather than
+// duplicated a third time. See newDynamicProviderLaunchFunc's own doc
+// comment for the real, honest scope boundary this implies (no
+// --dynamic-provider-bin-equivalent flag for ubx resolve/ubx ship/etc.
+// yet).
+func resolveAmbientDynamicProviderBinary() (string, error) {
+	repoPath := os.Getenv("UBX_PROVIDER_DYNAMIC_REPO")
+	if repoPath == "" {
+		repoPath = defaultDynamicProviderRepo
+	}
+	return resolveDynamicProviderBinary("", repoPath)
+}
+
+// loadDynamicProviderSchema is `ubx resolve`'s own real entry point for
+// fetching a [providers.<name>] entry's real schema (cli/resolve.go's
+// own loadResolveProviders) -- resolves the real binary via the same
+// ambient convention every other real dynamic-provider call site uses,
+// then reuses dynamicProviderSchema unchanged (schema-fetch-then-close,
+// the identical real shape resolve's own thirdparty branch already has
+// for a real Terraform-registry provider).
+func loadDynamicProviderSchema(ctx context.Context, name string, params map[string]any) (*provider.Schemas, error) {
+	binPath, err := resolveAmbientDynamicProviderBinary()
+	if err != nil {
+		return nil, err
+	}
+	return dynamicProviderSchema(ctx, binPath, name, params)
+}
+
 // dynamicProviderSignals runs the SAME ubx-provider-dynamic binary a
 // second time, as a real, plain subprocess -- --dump-signals (see that
 // flag's own doc comment in ubx-provider-dynamic's cmd/ubx-provider-dynamic/main.go
@@ -212,11 +244,7 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		if !ok {
 			return nil, nil, fmt.Errorf("provider %q is not declared in this stack's [providers] config", key)
 		}
-		repoPath := os.Getenv("UBX_PROVIDER_DYNAMIC_REPO")
-		if repoPath == "" {
-			repoPath = defaultDynamicProviderRepo
-		}
-		binPath, err := resolveDynamicProviderBinary("", repoPath)
+		binPath, err := resolveAmbientDynamicProviderBinary()
 		if err != nil {
 			return nil, nil, err
 		}

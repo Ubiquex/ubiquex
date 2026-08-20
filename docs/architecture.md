@@ -2938,14 +2938,59 @@ infra through `ubx resolve`/`ubx ship`, not just `ubx sdk gen`'s
 schema-only dump. `sdk/providers/.ubx/config`'s own `[dynamic_providers]`
 table name is unchanged; it stays internal to codegen.
 
-Real, honest, not-yet-done scope boundary: `core/resolver`'s own
-provider-inference logic does not yet automatically prefer a
-`[providers]`-declared source when inferring an unrecorded resource's
-provider from its type alone — the routing mechanism above is real and
-tested (`cli/providerpool_test.go`), but today it only fires for a call
-that already knows to pass the dynamic key as `source`. Extending
-`resolver.InferProvider` itself to consider `[providers]` is real,
-separate, future work, not silently assumed done here.
+**Amendment (2026-08-20): the gap above is closed.** `resolver.InferProvider`
+itself needed no change at all — it only ever ranks whatever declared-
+provider set it's handed; the real fix lives one layer up, in how that
+set gets built. `cli/resolve.go`'s own `loadResolveProviders` (the exact
+function `ubx resolve`/`ubx plan` call to infer an unrecorded resource's
+provider) now iterates `resolveProviderPrecedence`'s own real,
+precedence-resolved set — one entry per real key, `[providers]` winning
+on collision — instead of `cfg.ThirdpartyProviders` directly, so a
+shadowed `[thirdparty_providers]` entry for the same real key is never
+even fetched, let alone offered to `InferProvider` as a competing
+candidate. The identical fix applies to `declaredProvidersForInference`
+(via the new `resolvedProviderVersions` helper), the mechanism
+`status`/`scan --all`/`scan --stack`/`scan --discover`/`drift` all share
+for a legacy/adopted Fleet entry's own fresh-by-type inference — one
+real precedence rule, reached from every real place inference happens,
+not just `providerPool.Get`.
+
+Real, deliberate implementation split, not an oversight: `ubx resolve`
+does NOT route through `declaredProvidersForInference`'s own
+`providerPool`-based mechanism, despite the two being conceptually
+identical — `declaredProvidersForInference`'s own `resourceTypeSchemaInspector`
+wraps `StateReader.Schema`'s opaque `map[string]any`, a real, deliberate
+stub whose `IsComputed`/`IsSensitive` are always false because
+`InferProvider` (its only real caller there) never calls either.
+Confirmed live, not assumed, this session: routing `ubx resolve` through
+that same shared helper regressed a real required-attribute-missing
+resolve test from a correct refusal to a silent success, because
+`ubx resolve`'s own downstream validation reads richer schema data than
+mere type ownership. `loadResolveProviders` keeps fetching a real, full
+`*provider.Schemas` for every declared source instead — the identical
+real `dynamicProviderSchema`/Acquire-Launch-Schema-Close sequences it
+always used, now selected per real, precedence-resolved key rather than
+unconditionally from `[thirdparty_providers]`.
+
+Real, hermetic tests prove both directions at the `loadResolveProviders`
+level itself (`cli/resolve_test.go`,
+`TestLoadResolveProviders_BothNamespacesDeclareSameKey_PrefersProviders`/
+`..._OnlyThirdpartyDeclared_FallsThroughToHashiCorp`) via two swappable
+package-level seams (`fetchThirdpartySchema`/`fetchDynamicSchema`, the
+identical real convention `cli/scandiscover.go`'s own
+`newDiscoveryTaggingAPI`/`newDiscoveryStateReader` already establish) —
+proving the real declared-provider set `InferProvider` receives, and
+that the shadowed entry is never even launched, not just never picked
+among two live candidates. A matching test
+(`TestDeclaredProvidersForInference_ResolvedVersions_PrecedenceReachesInferProvider`)
+proves the identical real rule for the `declaredProvidersForInference`
+side.
+
+Real, honest, still-not-done scope boundary: `--dynamic-provider-bin`/
+`UBX_PROVIDER_DYNAMIC_REPO`-equivalent flag support for `ubx resolve`
+itself remains ambient-env-var-only (matching `newDynamicProviderLaunchFunc`'s
+own identical, already-documented scope boundary) — no new CLI flag was
+added this checkpoint either.
 
 Companion real work, a separate repo (`ubx-provider-dynamic`, branch
 `onboarding-pipeline-kubernetes-checkpoint`, PR #5, still open/draft):

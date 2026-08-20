@@ -897,11 +897,19 @@ describes is now `[thirdparty_providers]` (`cfg.ThirdpartyProviders`);
 `[providers]` itself is a real, different, new meaning (ubx's own,
 dynamic-provider-backed sources). See docs/architecture.md's own
 "Amendment (2026-08-20): `[providers]` splits into two namespaces" for
-the full design and real precedence rule — not restated here, since
-`resolve.go`'s own eager-launch behavior described above is otherwise
-unchanged (it still only ever eagerly launches thirdparty sources;
-`core/resolver`'s own inference does not yet consider `[providers]`,
-named as real, separate, not-yet-done work there).
+the full design and real precedence rule.
+
+**Second amendment, same day**: `resolve.go`'s own eager-launch loop
+described above is no longer thirdparty-only. `loadResolveProviders` now
+iterates `resolveProviderPrecedence`'s real, resolved set (one entry per
+real key, `[providers]` winning on collision) instead of
+`cfg.ThirdpartyProviders` directly — a resource with no recorded
+provider correctly infers through a `[providers]`-declared dynamic
+source when one exists for its type's owning key, not just a real
+Terraform-registry one. `InferProvider` itself needed no change; the fix
+is entirely in what declared-provider set it's handed. See
+docs/architecture.md's own matching amendment for the full real design
+and test list.
 
 **Live-verified, not just hermetic**: a real multi-provider `ubx resolve`
 → `ubx accept` → `ubx ship` chain against two genuinely separate
