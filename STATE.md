@@ -2,6 +2,37 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Docs corpus regeneration -- phase 2 (GitHub) onboarded, pipeline proven provider-agnostic, 2026-08-20 (no Linear ticket ID given)
+
+**Scope**: onboard GitHub through the now-corrected pipeline (richer tier only, `gen_new_provider_pages.py`, real inline AI-inferred markers plus a once-per-page `<Note>`) -- the exact same process phase 1's own corrected Datadog run used, no new code written this session at all. GitHub, like Datadog, has zero legacy pages (never one of the original four providers), so the redirect problem (old path with no clean successor) still does not get exercised -- stays open for whichever of aws/azure/gcp/kubernetes goes next.
+
+**Real, live numbers**: 68 resource types across 43 services (vs. Datadog's 26/19), 4,826 fields (1,174 sourced 24%, 3,297 AI-inferred 68%, 355 none 7%) -- matching the founder's own stated 4,826 exactly. 86 real `.mdx` pages (68 resource + 18 landing: 1 top-level + 17 service-level; zero index-collision cases this time, unlike Datadog's `datadog_logs_index`, since no GitHub resource's own local name is literally "index"). No published `ubx-sdk-github{,-go,-py,-ts}` repos exist (confirmed live via `gh repo view`, same as Datadog) -- `bindings_status="local_only"` used identically.
+
+**The finding that matters: zero GitHub-specific code was needed anywhere.** Every real mechanism that made this run work was already generic, proven once on Datadog and reused unmodified:
+- `ir.FromSchema`'s own unrepresentable-character skip (SkippedFields) correctly, generically handled GitHub's real `reactions.+1`/`reactions._1`/`enterprise-team` field names (JSON's own literal reaction-emoji keys, not valid in any target language identifier) -- reported via stderr, never silently dropped, zero new code.
+- The AWS-tuned field-literal heuristics (`is_json_policy_field`, `is_arn_like_field`, etc. in `field_literal_with_preamble`) correctly matched ZERO GitHub fields (confirmed via a real grep for `trustPolicy`/`accessPolicy`/hardcoded ARN literals across the whole generated corpus) -- they stayed silent rather than misfiring on a provider they were never tuned for, exactly the fail-safe behavior a real, generic heuristic should have.
+- `ir.ServiceAndLocalName`'s own bare wire.split("_") rule produced the identical class of oddly-generic, single-word service groupings GitHub's own real wire names hit (`get/budget`, `full/repository`, `simple/user`, `stack/stack`, `task/task`) that AWS's own bare two-token types (`aws_key_pair` -> "key") already produced -- cosmetically odd nav labels ("Get", "Full", "Simple", "Stack"), but correct, unbroken, and not a new class of bug this provider introduced.
+- `REAL_SDK_REPO_ID`/`SCHEMA_SOURCE_LABEL` already had real, confirmed `github` entries from the phase-1 checkpoint's own general-purpose table build -- no new entry needed this session.
+
+**Real, live-measured verification, all clean**:
+
+| | Result |
+|---|---|
+| Real `.mdx` pages | 86 (68 resource + 18 landing) |
+| Real `go build` against the LITERAL page content, zero wrapper | 68/68 OK |
+| Real `deno fmt --check` | 68/68 clean |
+| Real `ast.parse` | 68/68 clean |
+| Em dashes | 0 |
+| `mint validate` | clean |
+| `mint broken-links` | clean, zero "github/" mentions in the real output |
+| Real DOM overflow crawl (`mint dev` live) | 0 page-level overflow, 0 uncontained blocks, worst contained case 530px |
+| AI-inferred marker/note | 58 of 68 pages carry the once-per-page `<Note>` (matching the 68% AI-inferred rate), each exactly once; inline `**(AI-inferred)**` marker confirmed on individual fields |
+| Already-shipped (non-GitHub, non-Datadog) pages touched | 0, confirmed via `git status` |
+
+**Two providers onboarded, zero redirect-problem data yet.** Next phase (whichever of aws/azure/gcp/kubernetes) is where an old page's own successor path first gets tested for real.
+
+**Committed and pushed**: `ubiquex-docs` (`docs.json`, `resource-reference/github/**`, new) -- never self-merged, confirmed via `gh api` against the real remote. No `ubiquex` (monorepo) code changes this session -- the pipeline built in phase 1 needed nothing new.
+
 ## AI-inferred label collapsed from a per-field paragraph to a per-field marker plus one page-level note, 2026-08-20 (no Linear ticket ID given)
 
 **Real regression, founder-caught**: the AI-inferred label's own first version repeated a real, full three-line explanation on every single AI-inferred field. On a page with dozens of inferred fields (a real, confirmed shape, not hypothetical) that boilerplate dwarfed the real content -- browser-test.mdx alone dropped from 159 real lines of repeated explanation to a net -102 lines once fixed.

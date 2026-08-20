@@ -2,6 +2,22 @@
 
 ## Changelog
 
+- 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
+  regeneration phase 2: GitHub onboarded through the corrected
+  richer-tier-only pipeline, same process as phase 1's own corrected
+  Datadog run, zero new code needed. 68 real resource types across 43
+  services, 4,826 fields (matching the founder's own stated count
+  exactly), 86 real pages. The real finding: every mechanism that made
+  this work -- unrepresentable-field skipping, AWS-tuned field-literal
+  heuristics staying silent rather than misfiring, service/local-name
+  splitting -- was already generic, proven once on Datadog and reused
+  unmodified; GitHub needed no provider-specific code anywhere. Full
+  verification bar clean (68/68 real go build on literal content,
+  68/68 deno fmt, 68/68 ast.parse, mint validate/broken-links clean,
+  real DOM overflow crawl zero findings, zero em dashes, zero already-
+  shipped pages touched). Redirect problem still not exercised (GitHub
+  has no legacy pages either). See STATE.md's own checkpoint.
+
 - 2026-08-20 -- (no Linear ticket ID given this session, corrects the
   entry directly below) the prior checkpoint shipped the WRONG page
   tier for Datadog -- bare fragments, not the complete runnable
