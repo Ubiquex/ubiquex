@@ -3,6 +3,33 @@
 ## Changelog
 
 - 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
+  regeneration phase 4: GCP onboarded, scoped to Compute only after a
+  real, live-discovered config gap -- only 171 of the old corpus's
+  1,332 GCP pages are `google_compute_*`, the other 1,161 span ~40
+  real GCP products never configured in `.ubx/config` at all. Asked
+  the founder rather than deleting 1,161 real pages the new pipeline
+  can't yet regenerate; confirmed scope to Compute, leave the rest on
+  old HashiCorp-sourced content. Real redirect diff: 81 clean, 0
+  probable/ambiguous, 90 genuinely orphaned (39 real Terraform IAM-
+  binding convenience resources, 51 mostly Terraform's own
+  decomposition of one real API object into several resources). Also
+  confirmed live: GCP's own version-collision risk (Discovery
+  Documents share an identical `name` field across channels) is real
+  but dormant -- zero collisions today since only one document
+  (compute/v1) is configured; and the POST-only/no-GET-by-id discovery
+  gap Kubernetes surfaced generalizes to GCP too (3 real nodes: advice,
+  regionZones, regionInstances). Found and fixed, in `ubx-provider-
+  dynamic`, a real, trivial `singularize` bug mishandling "-es" English
+  plurals ("addresses" -> "addresse", "policies" -> "policie") that
+  had 22 real resources shipping under misspelled names -- pushed to
+  the real, existing, still-open draft PR #5, never merged, never
+  pushed to main. Full verification bar clean (95/95 real go build on
+  literal content, 95/95 deno fmt, 95/95 ast.parse, mint validate/
+  broken-links clean, real DOM overflow crawl zero findings, zero em
+  dashes, zero pages outside the scoped compute change touched). See
+  STATE.md's own checkpoint for the full real account.
+
+- 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
   regeneration phase 3: Kubernetes onboarded, the first provider in
   this arc with a real predecessor corpus, exercising the redirect
   problem for real. Real diff of all 81 old pages against the new

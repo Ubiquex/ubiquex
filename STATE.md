@@ -2,6 +2,49 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Docs corpus regeneration -- phase 4 (GCP Compute) onboarded, scoped after a real, live-discovered config gap; a real singularize bug found and fixed, 2026-08-20 (no Linear ticket ID given)
+
+### Real, mid-phase scope decision: GCP compute-only, not all of GCP
+
+Before touching anything, the real diff showed only 171 of the old corpus's 1,332 GCP pages are `google_compute_*` -- the other 1,161 span ~40 real GCP products (BigQuery, Storage, IAM, Pub/Sub, ...) that were never configured in `sdk/providers/.ubx/config` at all (`[dynamic_providers.google]` has exactly one `schema_url`, `compute/v1`). Replacing the whole corpus would have deleted 1,161 real pages for products the new pipeline has no way to regenerate yet -- not a naming/discovery gap, a real, structural config gap. Asked the founder directly rather than guess; confirmed: scope this phase to Compute only, leave the other 1,161 pages untouched on their old HashiCorp-tfplugin-sourced content, generate/merge only `resource-reference/gcp/compute/` and the corresponding one nav subgroup + one CardGroup card in the shared top-level `resource-reference/gcp/index.mdx`, leaving its other ~39 real service entries and the other 117 nav subgroups untouched. This is a real, generic risk the same phasing discipline should re-check for Azure/AWS too -- neither has been confirmed to have full multi-service config coverage either.
+
+### Finding 1: GCP's own version-collision question -- confirmed, does not fire today
+
+`internal/discoverydoc/discoverydoc.go`'s own `typeName := providerName + "_" + doc.Name + "_" + noun` uses the Discovery Document's own top-level `name` field (e.g. "compute"), which Google keeps IDENTICAL across real channel/version variants (v1, beta) of the same product -- confirmed by reading the real code, exactly the risk the founder named. But since only ONE `schema_url` (`compute/v1`) is configured today, only one document is ever discovered per run -- there is no second "compute" document in the same pipeline invocation to collide with. Live-confirmed, not assumed: ran the real `ubx-provider-dynamic` binary directly (`--dump-signals` against the real, current config, same technique phase 3 used) -- **zero real `seenTypeNames` collisions** in the currently-configured compute/v1 document. The real risk is dormant, not absent -- it would fire the moment a second Discovery Document shared a `name` with an already-configured one, which is exactly what would happen if `beta` were ever added alongside `v1` without a real fix.
+
+### Finding 2: the POST-only/no-GET-by-id discovery gap generalizes to GCP -- confirmed, real count
+
+Kubernetes lost `kubernetes_token_request_v1` because `resourcemap.Discover` requires a "get" method to consider a node a resource at all. `discoverydoc.Discover` has the structurally identical requirement (`if get, ok := r.Methods["get"]; ok && get != nil`). Live-checked directly against the real, current compute/v1 Discovery Document (not assumed): **3 real resource-tree nodes have methods but no "get" at all** -- `advice` (calendarMode, a real advisory/planning RPC-shaped endpoint, not resource-shaped at all), `regionZones` (list-only, a real collection browse endpoint), `regionInstances` (bulkInsert-only, a real POST-only bulk-create action). None is as consequential as TokenRequest (a core K8s auth primitive) -- these are real but comparatively minor GCP Compute endpoints -- but the structural finding is confirmed: this is a real, generic discovery-layer limitation shared by both schema-source formats, not something Kubernetes-specific.
+
+### Finding 3 (not asked for, found along the way): a real, trivial `singularize` bug, fixed
+
+While building the real redirect diff, 22 of the (then) 114 "orphaned" old pages turned out not to be orphaned at all -- `discoverydoc.go`'s own `singularize(s string) string { return strings.TrimSuffix(s, "s") }` mishandles every real English "-es" plural, a pattern GCP's own vocabulary hits constantly: "addresses" -> "addresse", "policies" -> "policie", "proxies" -> "proxie". 22 real Compute resources were shipping under genuinely misspelled type names and doc URLs. Fixed in `ubx-provider-dynamic` (a narrow, well-known singularization rule, not a design decision -- unlike the real alpha/beta version-naming question phase 3 left open, this one has a single correct behavior), real hermetic test added, whole `ubx-provider-dynamic` test suite re-run clean. **Never self-merged**: pushed to the real, existing, already-open draft PR #5 (`onboarding-pipeline-kubernetes-checkpoint`) that already tracks this arc's other `ubx-provider-dynamic` changes -- not merged to `main`, left for the founder's own review. GCP's own schema/pages/redirects were regenerated fresh AFTER this fix, not before (the stale, pre-fix 114-orphan analysis was discarded, never shipped).
+
+### The redirect problem, three buckets, scoped to the real 171 compute pages
+
+- **81 clean, unambiguous redirects** -- written to `docs.json`, every destination file confirmed to exist before writing.
+- **0 probable, 0 ambiguous** -- GCP's own old naming (`google_compute_<noun>`, no version suffix at all, unlike Kubernetes) needed no fuzzy second pass; every real match was exact once the singularize bug was fixed.
+- **90 genuinely orphaned, no redirect written**: 39 are `hashicorp/google`'s own real `*_iam_binding`/`*_iam_member`/`*_iam_policy` resources -- a Terraform-specific convenience layer over Cloud IAM's own separate `setIamPolicy`/`getIamPolicy` calls, structurally never going to be separate Discovery-Document-derived resources, the same class of gap Kubernetes' `annotations`/`labels`/`env` were. The remaining 51 are mostly the identical pattern one level further: Terraform decomposing ONE real Compute API object into several purpose-built resources (a Router's own nested NAT/peer/interface arrays modeled as separate `google_compute_router_*` resources; `managed_ssl_certificate` vs. `ssl_certificate` splitting one real endpoint by a type field; project-level settings sub-fields). A handful (`resize_request`, `network_endpoint` variants) don't appear as top-level Discovery-Document resource-tree keys at all under their expected name and weren't chased down further this session -- worth a closer structural look in a future session, not resolved here.
+
+### Real, live-measured verification (scoped to the real 96 changed files)
+
+| | Result |
+|---|---|
+| Real `.mdx` pages in `resource-reference/gcp/compute/` | 96 (95 resource + 1 landing) |
+| Real `go build` against the LITERAL page content, zero wrapper | 95/95 OK |
+| Real `deno fmt --check` | 95/95 clean |
+| Real `ast.parse` | 95/95 clean |
+| Em dashes | 0 |
+| `mint validate` (redirects included) | clean |
+| `mint broken-links` | clean -- 6 real "gcp/compute" mentions, all the same pre-existing class of false positive already established in phase 1/2/3 (real external GCP docs URLs and regex-pattern text in generated examples, not real internal links) |
+| Real DOM overflow crawl (`mint dev` live) | 0 page-level overflow, 0 uncontained blocks, worst contained case 776px |
+| Real redirects written | 81, every destination confirmed to exist before writing |
+| Pages outside `gcp/compute/` + `docs.json` + the one shared top-level index line touched | 0, confirmed via `git status` |
+
+**Four of six providers onboarded (Datadog, GitHub, Kubernetes, GCP-compute-only). AWS and Azure remain -- both need the same upfront config-coverage check this phase's own founder-confirmed scope decision came from, before assuming a full-corpus replacement is even the right shape of work.**
+
+**Committed and pushed**: `ubiquex-docs` (`docs.json`, `resource-reference/gcp/compute/**` replaced, `resource-reference/gcp/index.mdx` corrected) -- never self-merged, confirmed via `gh api` against the real remote. `ubx-provider-dynamic` (`internal/discoverydoc/discoverydoc.go`, `discoverydoc_test.go`) -- pushed to the real, existing, still-open draft PR #5, never merged, never pushed to `main`.
+
 ## Docs corpus regeneration -- phase 3 (Kubernetes) onboarded, redirect problem exercised for real, alpha/beta collision confirmed still live, 2026-08-20 (no Linear ticket ID given)
 
 **Scope**: onboard Kubernetes -- the first provider in this arc with a real predecessor corpus (81 old pages), the largest by field count so far (15,492 vs GitHub's 4,826), and the provider the founder flagged for a real, known naming collision (alpha/beta API versions colliding in the generic OpenAPI resourcemap). Same pipeline as phases 1/2, zero new code needed for generation itself.
