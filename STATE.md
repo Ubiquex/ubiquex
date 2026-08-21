@@ -2,6 +2,39 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase 5: AWS CFN intros complete -- 1,437/1,437, all six providers' real status verified in one place, 2026-08-21
+
+**AWS is done.** Every one of the 1,437 real CFN resource types in `sdk/providers/descriptions/aws.json` now has a real intro in `ubiquex-docs/artifacts/aws/intros.json`, written across 13 batches spanning several sessions (indices 0-96 through 1197-1436). Verified directly against the CFN resource list itself, not inferred from batch arithmetic: `set(cfn_keys) - set(intros_keys)` is empty, zero missing. `intros.json` holds 1,438 entries -- the 1,437 CFN-scoped entries plus exactly one pre-existing, out-of-scope entry (`aws_iam_role_policy_attachment`, HashiCorp-named, predates the CFN scoping decision, was never part of this corpus to begin with, per the manifest's own `cfn_corpus_scope.note`). No `needs_verification` entries remain (the two carried over from batch 8 were resolved with fresh WebSearch at the start of this arc).
+
+**Real cumulative totals, all 13 batches**:
+
+| | Direct | Parent-concept | Skipped | Total |
+|---|---:|---:|---:|---:|
+| AI-written across 13 batches | 781 | 650 | 0 | 1,431 |
+| Pre-existing hand-authored (in CFN scope) | -- | -- | -- | 6 |
+| **CFN corpus total** | | | | **1,437** |
+
+Zero genuine skips across the entire 1,437-resource corpus. The final batch alone (index 1197-1436, 238 resources -- SageMaker's large nested family through X-Ray) split 118 direct / 120 parent-concept / 0 skipped.
+
+**Hand-authored intros confirmed untouched**, read back directly this session: `aws_s3_bucket`, `aws_ecr_repository`, `aws_sqs_queue`, `aws_iam_policy`, `aws_iam_role`, `aws_iam_role_policy_attachment`, `aws_vpc` -- all 7 still carry their distinct Phase 2 voice and hand-wrapped formatting, none were ever in the write path of any batch script.
+
+**Twenty-plus AWS services turned out closed, discontinued, or in maintenance mode across this arc** -- each dated and marked explicitly past vs. upcoming relative to the session's own current date, per the founder's own standing rule that this is a different fact for a reader, not just "deprecated." Notable ones, past: Kinesis Data Analytics for SQL (Jan 27 2026), AWS Panorama (May 31 2026), Amazon QLDB (Jul 31 2025), AWS RoboMaker (Sep 10 2025), AWS SimSpace Weaver and Amazon Connect Voice ID (both May 20 2026), AWS WAF Classic global+regional (Sep 30 2025), EC2-Classic itself (Aug 15 2023 -- corrected in place this arc from a wrong Aug 2022 date caught in batch 11's own RDS DBSecurityGroup entries). Upcoming, not yet past: Amazon Pinpoint's engagement layer (Oct 30 2026 -- transactional channel APIs unaffected, live on under AWS End User Messaging/SES, a partial retirement written as such rather than a blanket one), AWS Proton (Oct 7 2026). QuickSight is the corpus's third rename after Connect and AppStream (-> Amazon Quick Suite Oct 2025, -> Amazon Quick in 2026), CloudFormation namespace staying on the old name in every case, same as the other two.
+
+**All six providers' real completion status, verified directly against each provider's own manifest.json this session, recorded here in one place as asked**:
+
+| Provider | Intros written | Real full universe | Status |
+|---|---:|---:|---|
+| AWS | 1,437 | 1,437 (CFN registry) | **Complete.** Entire real resource universe covered. |
+| Datadog | 25 | 25 (docs-corpus pages) | **Complete.** `total_entries` == `docs_corpus.pages`; manifest says "nothing to resume." |
+| GitHub | 68 | 68 (docs-corpus pages) | **Complete.** Same as Datadog -- full real universe covered. |
+| Kubernetes | 71 | 71 (docs-corpus pages) | **Complete.** Same as Datadog -- full real universe covered. |
+| GCP | 95 | ~1,256 (Compute only, of a much larger real surface) | **Compute slice complete, provider not.** ~1,161 non-compute GCP resources remain with zero real description content anywhere -- explicit, known, and explicitly out of this ticket's scope per the manifest's own `last_migration` note; needs a separate Discovery-Doc config-expansion effort not started. |
+| Azure | 18 + 1 genuine skip (`azure_interconnect_block`, verified zero real content anywhere) | ~1,103 (Compute only, of a much larger real surface) | **Compute slice complete, provider not.** ~1,084 non-compute Azure pages remain 100% HashiCorp-sourced with zero real description content -- same category of known gap as GCP, same future work needed. |
+
+Only AWS, Datadog, GitHub, and Kubernetes have their entire real resource universe covered. GCP and Azure are each complete for the Compute-only slice this ticket regenerated in Phase 4, not for the provider as a whole -- that distinction is real and load-bearing, not a technicality: roughly 2,245 non-compute Azure+GCP resources combined still have zero real description content, and closing that gap is separate, un-started work requiring config expansion this ticket never scoped in.
+
+**Never self-merged.** Every AWS batch this arc was a direct commit to `ubiquex-docs` `main` under the founder's own git identity, pushed, and verified live via the GitHub API after every push -- never inferred from a local push's own exit code. Artifacts only throughout: `git status` confirmed only `intros.json`/`manifest.json` changed on every commit, no `.mdx` page ever touched. Zero em dashes, checked directly on every new/changed file each batch, not sampled.
+
 ## UBI-175 Phase 5: real intros written for Datadog, GitHub, Kubernetes, GCP Compute -- 259/259, 0 genuine skips, three-way split proven real, 2026-08-20
 
 **Scope, exactly as given**: continue the intro-writing checkpoint through Datadog (25), GitHub (68), Kubernetes (71), GCP Compute (95) -- AWS held back deliberately, its own scale earning a separate decision once the approach is proven at these sizes. Carry the variant rule forward explicitly: a resource with no dedicated vendor page may still be a real, narrower scope of a concept that has one, sourced from that parent rather than skipped -- only skip when nothing real exists anywhere, verified by looking.
