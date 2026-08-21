@@ -8907,12 +8907,7 @@
     "vpc_security_group_ids": "The list of VPC security group IDs to associate with the DocumentDB cluster, controlling which network security groups can access the cluster."
   },
   "aws_doc_db_dbcluster_parameter_group": {
-    "description": "A user-supplied description of the DB cluster parameter group, which is required when creating the group and helps identify its purpose.",
-    "family": "The database engine family that this DocDB cluster parameter group applies to (e.g., 'docdb3.6' or 'docdb4.0'), which determines the set of parameters available for the cluster.",
     "id": "The name of the DocumentDB cluster parameter group, which serves as its unique identifier.",
-    "name": "The name of the DB cluster parameter group; if omitted, CloudFormation generates a unique name for the group.",
-    "parameters": "The parameters block defines the individual parameters (name, value, and apply method) to associate with the DocumentDB cluster parameter group.",
-    "tags": "A list of key-value pairs (tags) to assign to the DocumentDB DB cluster parameter group for resource categorization and management.",
     "tags.key": "The key of a key-value tag attached to the DocumentDB cluster parameter group, used to identify and categorize the resource within AWS.",
     "tags.value": "The value portion of a tag attached to the DocumentDB cluster parameter group, which together with the tag key forms a key-value label used to categorize and manage the resource."
   },
