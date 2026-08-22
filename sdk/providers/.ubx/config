@@ -2333,3 +2333,23 @@ base_url = "https://management.azure.com"
 schema_source = "openapi"
 schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/authorization/resource-manager/Microsoft.Authorization/Authorization/stable/2020-10-01/RoleAssignmentScheduleRequest.json"
 base_url = "https://management.azure.com"
+
+[dynamic_providers.google_iam]
+schema_source = "discovery_docs"
+schema_url = "https://iam.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://iam.googleapis.com"
+
+[dynamic_providers.google_datamigration]
+schema_source = "discovery_docs"
+schema_url = "https://datamigration.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://datamigration.googleapis.com"
+
+[dynamic_providers.google_identitytoolkit]
+schema_source = "discovery_docs"
+schema_url = "https://identitytoolkit.googleapis.com/$discovery/rest?version=v2"
+base_url = "https://identitytoolkit.googleapis.com"
+
+[dynamic_providers.google_connectors]
+schema_source = "discovery_docs"
+schema_url = "https://connectors.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://connectors.googleapis.com"
