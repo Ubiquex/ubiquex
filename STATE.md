@@ -2,6 +2,51 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase D addendum: Azure doubling correction, 2026-08-22
+
+The founder caught two live URLs still showing name doubling
+(`azure_azure_kusto_kusto_cluster_principal_assignment`,
+`azure_analysisservices_analysisservices_analysis_services_server`) --
+GCP had a doubling correction from Phase B, Azure never got the
+equivalent. Root cause was broader than GCP's: 54 Azure family names
+declared in `.ubx/config` itself carry the doubling (`azure_dns_dns`,
+...), plus 5 more families where only one resource's own trailing
+segment coincides with its family's trailing token -- 62 families, 282
+wire + 27 localName corrections. Added `azure_corrected_wire`/
+`azure_corrected_local` (general leftmost-longest-adjacent-token-repeat
+collapse, not a fixed prefix) to `build_regen_schema.py`, plus one
+confirmed one-off (`azure_azure_kusto_kusto`'s own dump-ir "service"
+field read "azure" instead of "kusto" -- its real spec-repo folder is
+literally named "azure-kusto", a spurious extra token, not real API-name
+text). Azure's descriptions.json/intros.json were authored against the
+RAW wire (no correction existed before) -- fixed by injecting
+descriptions under the raw wire and aliasing intros onto the corrected
+key, so the ~282 affected resources keep their real Phase B/C text
+instead of falling back to boilerplate.
+
+Regenerated only the 62 affected families (283 pages). Removed 27 stale
+files plus one now-empty `resource-reference/azure/azure/` (this
+session's own prior byproduct of the missing correction, not an old-
+HashiCorp orphan -- the founder's "leave all 1,815 old pages in place"
+instruction is untouched). One old HashiCorp page
+(`azurerm_synapse_workspace`) resolved in place as a side effect (its
+slug now coincides with the corrected new slug), dropping Azure's
+orphan count by one. Repointed 40 of the 91 Azure PROBABLE redirects in
+`docs.json` (10 needed an actual path change; 30 already pointed at the
+unmoved file). Verified: 283/283 pass `verify_regen_corpus.py` (1 same
+known benign false positive), 283/283 pass `ast.parse`, 2/2 spot-checked
+Kusto Go examples pass a real `go build`, `mint validate` passes, all
+421 redirects resolve. Committed `791f5269`, pushed, verified live via
+the GitHub API.
+
+Delivered the founder's requested named lists (not just counts) of
+genuinely-uncovered services: 209 GCP + 178 Azure resource types whose
+service isn't onboarded by any of the 122/287 families at all (Azure's
+178 is post-doubling-fix; GCP's 209 unchanged). Sent as two files,
+grouped by product.
+
+---
+
 ## UBI-175 Phase D: GCP+Azure page regeneration -- pages+redirects committed and pushed, orphan decision pending with the founder, 2026-08-22
 
 **Scope**: regenerated the actual `.mdx` docs pages for GCP (654 pages, 122 non-Compute families) and Azure (1,029 pages, 287 non-Compute families) from the completed Phase B/C artifacts, replacing the old HashiCorp-derived corpus (`google_*`/`azurerm_*` pages predating the switch to `ubx-provider-dynamic`) with the real dynamic-provider naming/content. GCP Compute (95 resources) and Azure's own Compute-domain "azure" schema_name (19 resources) were already regenerated in an earlier Phase 6 session and out of scope here.
