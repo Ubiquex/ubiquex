@@ -2,6 +2,32 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase C: GCP+Azure resource-type intros -- COMPLETE, 0/1,687 remaining, verified against the live artifact, 2026-08-22
+
+**Scope**: live-researched, two-search-minimum intros for every GCP and Azure resource type added by the config-expansion effort that didn't already have one -- same discipline as the AWS intros pass (summarize from the vendor's own overview docs in ubx's own words, parent-concept sourcing where a resource is a documented narrower scope of one that has its own page, skip only when there is genuinely no explanatory text anywhere, verify service status and recency live rather than trust training-data knowledge).
+
+**Real universe, not the quoted estimate**: the founder's own instruction quoted 656 GCP + 993 Azure = 1,649. Derived the real, current universe directly from the live artifact instead (the set of distinct wire-type prefixes in each provider's own `descriptions.json`, minus what already had an intro) -- same honest-drift discipline as Phase B's own field-count reconciliation. GCP matched almost exactly (657, one off due to a `google_siteVerification_web_resource` naming-case artifact). Azure came in higher (1,030 vs 993) -- Azure's schema is live-fetched and evidently grew by ~37 resource types between when that estimate was made and this session; recorded openly in `artifacts/azure/manifest.json`, not silently reconciled.
+
+**Real per-provider totals, verified directly against the live `descriptions.json` wire-type universe, not estimated**:
+
+| Provider | Real universe (live) | Written | Remaining |
+|---|---:|---:|---:|
+| GCP | 657 | 657 | **0** |
+| Azure | 1,030 | 1,030 (1,029 direct + 1 legitimately pre-skipped) | **0** |
+| **Total** | **1,687** | **1,687** | **0** |
+
+Azure's one exception (`azure_interconnect_block`) was already correctly skipped in a prior pass -- verified live back then as having zero real explanatory content anywhere in Microsoft's own docs (only a bare example filename in a REST reference). Not re-litigated this session; carried forward as the honest, already-verified skip it is.
+
+**Real renames and genuinely new features caught by live verification, not assumed from training-data knowledge** -- the exact failure mode the founder named up front, based on what the AWS pass found (twenty-plus closed/deprecated services, several renames): Vertex AI -> Gemini Enterprise Agent Platform, Dataplex Universal Catalog -> Knowledge Catalog, Vertex AI Search/Discovery Engine -> Agent Search (rename in progress, both names still circulate), Anywhere Cache -> Rapid Cache (part of the new Cloud Storage Rapid family), Azure AI Foundry also being called Microsoft Foundry, Microsoft Playwright Testing retired 2026-03-08 in favor of Playwright Workspaces (Azure App Testing), Azure Dedicated HSM retiring (no new onboarding since 2025-08) in favor of Azure Cloud HSM. Genuinely new features verified live rather than invented from a bare field name: Cloud Multicast for VPC (GCP VPC never historically supported multicast), Agent Gateway/Registry/Identity (Gemini Enterprise Agent Platform's 2026 governance layer), Google Cloud Secure Access Connect, Network Security Integration (packet intercept/mirroring deployment groups), Oracle Exadata on Exascale Infrastructure (both clouds), Cosmos DB Fleets (multitenant account management, preview), the AI Gateway tier of Azure API Management (2026 public preview), Pure Storage Cloud for Azure VMware Solution (GA November 2025), Azure NetApp Files' S3-compatible object REST API, AKS identity bindings (preview, addresses federated-credential quota limits at scale), Azure Storage Actions / storage task assignments, Azure Resource Manager's EU Data Boundary.
+
+**Parent-concept sourcing used where it was the honest call, not a shortcut**: 88 `azure_sql_*` and 45 `azure_apimanagement_*` families were each a single real, narrower sub-resource of the same Azure SQL Database/Managed Instance or API Management product (threat protection settings, vulnerability assessment baselines, backup retention policies, workspace-scoped variants of already-covered resources) rather than a separate product needing its own vendor overview research -- same discipline as the region_*/zone_* and Oracle Exadata-VM-cluster parent-concept pattern already established for GCP/AWS. Two genuinely non-product schema artifacts (`azure_web_openapi_default_error_response`, `azure_advisor_advisor_arm_error_response`, `azure_analysisservices_analysisservices_error_response`) are standard API error envelopes, not deployable resources -- described honestly as such rather than a fabricated product concept invented to fill the slot.
+
+**Verified, not assumed**: every batch's own key set checked directly against the live artifact after merging (`intro_merge.py`, a new tool built this session mirroring `gap_fill_merge.py`'s own skip-don't-overwrite discipline); zero em-dashes in any new content (grepped both providers' `intros.json` and `manifest.json` directly, not sampled); both providers' final state re-verified end to end against the live `descriptions.json` wire-type universe immediately before this entry was written (752/752 GCP, 1048/1048 Azure, both zero real gaps). 16 GCP-side commits and 19 Azure-side commits, one per batch, each to `ubiquex-docs` `main` directly under the founder's own git identity, each pushed and confirmed live via the GitHub API -- never inferred from a local push's own exit code, matching this repo's own rule 5/8 discipline. Never self-merged.
+
+**What's left**: nothing on Phase B or Phase C for either provider -- both are done, both fully verified against the live artifact. The founder's own next call to make: whether UBI-175 has further phases, or whether this closes the ticket.
+
+---
+
 ## UBI-175 Phase B: GCP+Azure gap-fill descriptions -- COMPLETE, 0/97,545 remaining, verified against a fresh live dump, 2026-08-22
 
 **Closed the last 21,724 fields flagged as remaining at the end of the previous session's entry** (below). Same discipline throughout: family-level dictionaries for anything large/repeated enough to warrant one, individual two-search-verified authorship for anything that wasn't, `source` tagged `ai-dictionary` vs `ai-individual` per entry, never a guess written without a real convention or a real search behind it.
