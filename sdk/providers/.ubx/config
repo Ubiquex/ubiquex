@@ -2269,3 +2269,67 @@ base_url = "https://management.azure.com"
 schema_source = "openapi"
 schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/workloads/resource-manager/Microsoft.Workloads/stable/2023-04-01/monitors.json"
 base_url = "https://management.azure.com"
+[dynamic_providers.azure_applicationinsights_components]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2015-05-01/components_API.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_applicationinsights_webtests]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2015-05-01/webTests_API.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_applicationinsights_apikeys]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2015-05-01/componentApiKeys_API.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_applicationinsights_proactivedetection]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2015-05-01/componentProactiveDetection_API.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_applicationinsights_workbooks]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/applicationinsights/resource-manager/Microsoft.Insights/ApplicationInsights/stable/2023-06-01/workbooks_API.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_dataprotection_dataprotection]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/dataprotection/resource-manager/Microsoft.DataProtection/DataProtection/stable/2026-06-01/dataprotection.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_devtestlabs_dtl]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/devtestlabs/resource-manager/Microsoft.DevTestLab/DevTestLabs/stable/2018-09-15/DTL.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_hybridcompute_openapi]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/hybridcompute/resource-manager/Microsoft.HybridCompute/HybridCompute/stable/2026-07-15/openapi.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_resourceconnector_appliances]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/resourceconnector/resource-manager/Microsoft.ResourceConnector/ResourceConnector/stable/2022-10-27/appliances.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_servicenetworking_trafficcontroller]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/servicenetworking/resource-manager/Microsoft.ServiceNetworking/ServiceNetworking/stable/2025-01-01/TrafficController.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_cpim_externalidentities]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/cpim/resource-manager/Microsoft.AzureActiveDirectory/ExternalIdentities/stable/2021-04-01/externalIdentities.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_authorization_roleeligibilityschedulerequest]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/authorization/resource-manager/Microsoft.Authorization/Authorization/stable/2020-10-01/RoleEligibilityScheduleRequest.json"
+base_url = "https://management.azure.com"
+
+[dynamic_providers.azure_authorization_roleassignmentschedulerequest]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/authorization/resource-manager/Microsoft.Authorization/Authorization/stable/2020-10-01/RoleAssignmentScheduleRequest.json"
+base_url = "https://management.azure.com"
