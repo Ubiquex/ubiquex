@@ -2,6 +2,24 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase E correction: the "extraction bug" was not a bug -- investigated, not fixed, 2026-08-22
+
+Last session's Phase E report claimed a real `ubx-provider-dynamic` traversal bug: `loadBalancer.json`'s own `loadBalancingRules`/`outboundRules`/`probes` paths exist in the already-fetched spec but only 3 of 6+ resource types got extracted. That claim was wrong, caught by going back and reading `ubx-provider-dynamic`'s own `internal/resourcemap/resourcemap.go` plus the real spec paths directly rather than stopping at "the path exists."
+
+**Real finding**: `loadBalancingRules/{name}`, `outboundRules/{name}`, `probes/{name}` have ONLY a `get` operation in the real spec -- no `put`/`post`/`patch`/`delete` at all. ARM's real pattern for these three is a read-only per-item view; the only way to create/modify one is a PUT on the PARENT LoadBalancer with the rule embedded in its own array property (a real, well-known ARM sub-resource shape Terraform itself handles via read-modify-write on the parent). `resourcemap.Discover`'s own CRUD model requires an independent create operation on the SAME resource by design (`resourcemap_test.go` already asserts this exact "no matching create -> skip with a Note" behavior is intentional) -- correctly, deliberately excludes exactly this shape as documented out-of-Phase-1-scope. Not a bug. Supporting the embedded-array-in-parent pattern would be a real, separate FEATURE (composing a resource from a read-only item path plus its parent's own PUT), not a fix, and was not attempted.
+
+Checked the other four products the prior report speculated might share the same shape, each against the live spec directly, not assumed: **route** (`azurerm_route`) already correctly extracted and onboarded (`azure_network_virtualnetwork_route`, real independent PUT/DELETE exists). **Route Server** does not exist as its own ARM resource type in the current spec at all (no `Microsoft.Network/routeServers` path found via a live GitHub code search) -- Terraform's own resource is built from `virtualHub` + config, not a separate API resource. **Point-to-Site VPN Gateway** already correctly extracted and onboarded (`azure_network_virtualwan_p2_svpn_gateway`, real independent PUT/PATCH/DELETE exists). **Firewall rule collections** (`azurerm_firewall_application_rule_collection`/`_nat_rule_collection`) have zero matching paths in the current `firewall.json` at all -- likely superseded by Firewall Policy rule collection groups (already onboarded), a real product evolution, not a spec gap.
+
+Spot-checked one more already-onboarded multi-resource family (`applicationGateway.json`) as a sanity check beyond the 5 flagged products -- same result, resourcemap correctly extracts every real CRUD-shaped resource and correctly skips every read-only metadata/available-options endpoint.
+
+**Conclusion**: no `ubx-provider-dynamic` bug found or fixed. No resources anywhere in the 435-family Azure config -- or by extension GCP/AWS/other providers, never independently checked but sharing the same `resourcemap` code path -- are being silently dropped by this mechanism. Nothing was invisible; the 46 new Azure resources already dumped in the prior session are the real, complete count for those 13 families. Safe to proceed to descriptions/intros without redoing that work.
+
+**Nothing committed this session** -- pure investigation, no code or config changed. `ubx-provider-dynamic` working tree confirmed clean throughout (`git status --short`, empty).
+
+**What's next**: write Phase B descriptions + Phase C intros for the 46 already-confirmed new Azure resources (next distinct phase, per this project's own never-interleave discipline). Blueprint and Custom Providers confirmed skipped (preview-only, stable-only convention holds, founder confirmed). GCP's own discovery-doc research for its 129 real remaining resources (founder confirmed the IAM Workforce/Workload Pool and Tags stripping deviation was correct) has not started.
+
+---
+
 ## UBI-175 Phase E: close the Azure coverage gap -- config phase done (13 entries, 46 resources, 1,512 fields), descriptions/intros NOT started, GCP corrected count delivered, 2026-08-22
 
 **The founder's core claim verified true**: the 178 "genuinely uncovered" Azure products from the prior session's `orphan_classify.py` report were mostly a classifier artifact and a config gap, not a real source limitation. Corrected in stages, each verified directly (never assumed):
