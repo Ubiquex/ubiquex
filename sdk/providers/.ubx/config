@@ -2353,3 +2353,8 @@ base_url = "https://identitytoolkit.googleapis.com"
 schema_source = "discovery_docs"
 schema_url = "https://connectors.googleapis.com/$discovery/rest?version=v1"
 base_url = "https://connectors.googleapis.com"
+
+[dynamic_providers.google_iampolicies]
+schema_source = "discovery_docs"
+schema_url = "https://iam.googleapis.com/$discovery/rest?version=v2"
+base_url = "https://iam.googleapis.com"
