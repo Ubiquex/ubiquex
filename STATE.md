@@ -2,6 +2,14 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## Cleanup: deleted a real, already-superseded branch, not forgotten work, 2026-08-22
+
+Last entry flagged `claude/ubx-llm-credential-mechanism-kv6vkb` as a possibly-forgotten unmerged PR. Founder corrected: it was deliberately rejected, a secondary session built it, and the primary session re-implemented the same fix with proper context. Verified before deleting, not taken on trust: main's real `IntentProviderKey` (`UBX_SERVER_INTENT_PROVIDER_KEY`/`--intent-provider-key`, `server/config.go`, commit `a6c6824`, Roozbeh Shafiee, 2026-08-14 23:29:42, part of `UBI-28 Phase 2` GitLab support) forwards the same real LLM/intent-provider API key into every `ubx plan` subprocess for markdown-authored proposals -- the identical problem the rejected branch's own commit described, landed ~2 hours later, backed by a real `docs/intent-provider.md`. Deleted `origin/claude/ubx-llm-credential-mechanism-kv6vkb` (`git push origin --delete`), confirmed gone via a direct `git ls-remote` against GitHub, not inferred from the push output alone.
+
+The inline-schema-source ticket from the same prior entry is drafted (`/private/tmp/.../scratchpad/inline-schema-source-ticket.md`) but not yet filed -- Linear MCP isn't authenticated in this environment; needs the founder to run `/mcp` and connect it.
+
+---
+
 ## UBI-175 Phase E: onboarding-pipeline-kubernetes-checkpoint merged to ubx-provider-dynamic main; inline schema source confirmed unimplemented, 2026-08-22
 
 **Corrected a real miscount from the prior entry**: that entry said "8 real, already-pushed commits ahead of main" -- the real number, recounted and reported before merging, is **14** (13 pre-existing + the discoverydoc.go fix). Caught only when actually asked to report the count precisely; flagging so the pattern (state a round number, don't recount before it matters) doesn't repeat.
