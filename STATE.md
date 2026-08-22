@@ -2,6 +2,44 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase D: GCP+Azure page regeneration -- pages+redirects committed and pushed, orphan decision pending with the founder, 2026-08-22
+
+**Scope**: regenerated the actual `.mdx` docs pages for GCP (654 pages, 122 non-Compute families) and Azure (1,029 pages, 287 non-Compute families) from the completed Phase B/C artifacts, replacing the old HashiCorp-derived corpus (`google_*`/`azurerm_*` pages predating the switch to `ubx-provider-dynamic`) with the real dynamic-provider naming/content. GCP Compute (95 resources) and Azure's own Compute-domain "azure" schema_name (19 resources) were already regenerated in an earlier Phase 6 session and out of scope here.
+
+**Two real generator defects found and fixed in `ubiquex-docs/scripts/resource-reference-gen/gen_provider_docs.py` itself, not worked around**: `generate_richer_provider` never actually threaded real intros through to `build_resource_page_complete` for whole-provider runs (added an `intros_by_provider` param, wired via `real_intro_for`); and `frontmatter_description_from_intro` split "first sentence" on any literal `". "`, breaking mid-word on any intro using "e.g."/"i.e."/"etc." (175 of 1,687 real intros use one of these -- added abbreviation-aware `_sentence_split`).
+
+**bindings_status decision**: local_only for every page. A real check against the published `ubx-sdk-google` clone found 175/656 non-Compute GCP wire keys present by name, but the repo is 8 days stale with real field-level mismatches even on superficially-matching keys (found earlier this session) -- reported to the founder, not acted on. `ubx-sdk-azure`'s published content is 100% under the separate old "azurerm" identity, zero overlap with "azure" at all.
+
+**Verification**: 654/654 GCP + 1029/1029 Azure Python examples pass a real `ast.parse`; 9/9 spot-checked Go examples (3 families, both providers) pass a real `go build`; `verify_regen_corpus.py` (new -- reuses `verify_against_golden.py`'s own real static checks at full-corpus scale instead of a hand-picked sample) flags only 7 false positives (AI-inferred fields nested past the existing render-depth limit, correctly un-rendered) plus the 1 known `google_siteverification` generation gap already documented in Phase C.
+
+**Three-bucket redirect analysis** (`redirect_diff.py`, new -- same CLEAN/PROBABLE/ORPHANED methodology as the GCP Compute/Kubernetes/AWS Phase 4 precedents, token-boundary-safe matching after an earlier substring-match false positive was caught and fixed: `azurerm_api_connection` was character-matching against `azure_automation_openapi_connection` purely because "openapi" ends in the substring "api"):
+
+| | GCP | Azure |
+|---|---:|---:|
+| Resolved in place (same URL, upgraded, zero redirect needed) | 175 | 0 |
+| CLEAN | 0 | 0 |
+| PROBABLE (written to `docs.json`) | 169 | 91 |
+| ORPHANED (reported, untouched) | 818 | 997 |
+
+260 PROBABLE redirects written to `ubiquex-docs/docs.json` and committed. **Orphans not touched at all** -- 818 GCP + 997 Azure old pages have no successor in the new source, same shape as the AWS Phase 4 finding (more orphaned than replaced).
+
+**Orphan composition split** (`orphan_classify.py`, new -- a real, mechanical service-name-presence signal, refined twice after spot-checking caught real misses: GCP's own `bigtableadmin` family didn't textually match old `google_bigtable_*` wires until a reverse-prefix check was added, and Azure's `web`/Microsoft.Web family didn't match old `azurerm_app_service_*` wires until a live-wire-body substring check was added on top of the service-dir check):
+
+| | GCP (818) | Azure (997) |
+|---|---:|---:|
+| Service already onboarded, TF-shaped concept (iam/assoc/attach/assign) with no new-source equivalent | 309 | 40 |
+| Service already onboarded, other decomposition/deprecated variant | 300 | 780 |
+| Service NOT onboarded yet, TF-shaped concept | 77 | 9 |
+| Service NOT onboarded yet, other (genuine product/feature gap) | 132 | 168 |
+
+Reported to the founder with this split, plus the standing caveat that this is a mechanical text-matching signal (spot-checked, not a semantic guarantee) -- final read requested from the founder before any orphan action.
+
+**Committed and pushed, verified live via the GitHub API** (rule 5/8 discipline): `9eaaa2ed` on `ubiquex-docs` `main`. Never self-merged.
+
+**What's next**: founder review of the orphan split above -- no orphan deletion without an explicit decision. Old PROBABLE-matched page files were left in place (not deleted) per explicit instruction to report before touching anything else -- deletion of those, if wanted, is still open.
+
+---
+
 ## UBI-175 Phase C: GCP+Azure resource-type intros -- COMPLETE, 0/1,687 remaining, verified against the live artifact, 2026-08-22
 
 **Scope**: live-researched, two-search-minimum intros for every GCP and Azure resource type added by the config-expansion effort that didn't already have one -- same discipline as the AWS intros pass (summarize from the vendor's own overview docs in ubx's own words, parent-concept sourcing where a resource is a documented narrower scope of one that has its own page, skip only when there is genuinely no explanatory text anywhere, verify service status and recency live rather than trust training-data knowledge).
