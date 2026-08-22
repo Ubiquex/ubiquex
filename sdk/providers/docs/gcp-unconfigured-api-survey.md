@@ -41,24 +41,33 @@ resources total, including an exact per-family match (Apigee: 45 = 45).
 - **88 of 186 have real, discoverable, CRUD-shaped resources: 309
   total** (308 after removing the `siteVerification` duplicate).
 
-## Scope decision (founder confirmed)
+## Scope decision (founder confirmed) -- durable, deliberate, not a gap
 
 The 87 real APIs split into cloud-infrastructure APIs and
 Workspace/consumer/ad-tech APIs -- none of the existing 128 configured
 families are Workspace/ad-tech, confirming this project's own
-established scope. Founder confirmed: **infrastructure only.**
+established scope. Founder confirmed: **infrastructure only.** This is
+a real, deliberate scope decision, not an oversight -- recorded here so
+a future session doesn't rediscover these 208 resources as "missing
+coverage" and spend time re-onboarding them.
 
 - **34 infra APIs, 97 real resources** -- configured this session (see
   companion `ubiquex-docs/artifacts/gcp/manifest.json` note and
   `sdk/providers/.ubx/config`'s own new block for the full list and
   real live-verified `--dump-ir` counts, generated with zero failures,
   exact match with the Discover() replication: 97 = 97).
-- **52 Workspace/consumer/ad-tech APIs, 194 resources** (includes
+- **52 Workspace/consumer/ad-tech APIs, 208 real resources**
+  (corrected from an earlier, wrong "194" this same session first
+  reported -- a real arithmetic mistake, not a re-survey; the
+  underlying per-API counts in `gcp-unconfigured-api-survey-results.json`
+  were always correct, only the summed total was wrong) -- includes
   `walletobjects`, reclassified after an initial pass placed it in
-  infra by mistake -- it is a consumer passes/tickets product, not
-  cloud infrastructure) -- deliberately not configured. Real examples:
-  Gmail (10), Drive (6), Calendar (4), Classroom (11), DFA Reporting
-  (28), Display Video (20), Tag Manager (13), AdSense (2+2).
+  infra by mistake, since it's a consumer passes/tickets product, not
+  cloud infrastructure. **Deliberately not configured, permanently, by
+  design, not a TODO.** Real examples: Gmail (10), Drive (6), Calendar
+  (4), Classroom (11), DFA Reporting (28), Display Video (20), Tag
+  Manager (13), AdSense (2+2), DoubleClick Bid Manager/Search Ads (2),
+  Authorized Buyers Marketplace (2), Merchant Center/`content` (11).
 - **1 duplicate test variant skipped**: `prod_tt_sasportal` (3
   resources, identical shape to the real `sasportal`, which was
   configured instead -- a `(Testing)`-suffixed API in Google's own
@@ -72,7 +81,7 @@ the 190 unconfigured APIs earlier this session (before the full
 survey) found real, substantial resource counts consistent with a much
 larger candidate pool than "128 families" -- the full 190-API survey
 confirms this: 309 real resources existed outside config before this
-session, most of them (194) in Workspace/ad-tech APIs this project has
+session, most of them (208) in Workspace/ad-tech APIs this project has
 never configured a single one of. The commit's own two numbers are
 internally consistent (1,111 + 48 auth-gated/blocked = 1,159 exactly),
 consistent with a broader research pass that surveyed more APIs than
