@@ -1,0 +1,269 @@
+{
+  "analyticshub": {
+    "discovered": 3,
+    "resources": [
+      "google_analyticshub_data_exchange",
+      "google_analyticshub_listing",
+      "google_analyticshub_query_template"
+    ]
+  },
+  "androiddeviceprovisioning": {
+    "discovered": 1,
+    "resources": [
+      "google_androiddeviceprovisioning_configuration"
+    ]
+  },
+  "androidenterprise": {
+    "discovered": 5,
+    "resources": [
+      "google_androidenterprise_enterprise",
+      "google_androidenterprise_storelayoutcluster",
+      "google_androidenterprise_storelayoutpage",
+      "google_androidenterprise_user",
+      "google_androidenterprise_webapp"
+    ]
+  },
+  "androidmanagement": {
+    "discovered": 4,
+    "resources": [
+      "google_androidmanagement_enterprise",
+      "google_androidmanagement_enrollment_token",
+      "google_androidmanagement_migration_token",
+      "google_androidmanagement_web_app"
+    ]
+  },
+  "apigateway": {
+    "discovered": 3,
+    "resources": [
+      "google_apigateway_api",
+      "google_apigateway_config",
+      "google_apigateway_gateway"
+    ]
+  },
+  "apim": {
+    "discovered": 2,
+    "resources": [
+      "google_apim_observation_job",
+      "google_apim_observation_source"
+    ]
+  },
+  "baremetalsolution": {
+    "discovered": 3,
+    "resources": [
+      "google_baremetalsolution_nfs_share",
+      "google_baremetalsolution_provisioning_config",
+      "google_baremetalsolution_snapshot"
+    ]
+  },
+  "batch": {
+    "discovered": 1,
+    "resources": [
+      "google_batch_job"
+    ]
+  },
+  "chromemanagement": {
+    "discovered": 2,
+    "resources": [
+      "google_chromemanagement_connector_config",
+      "google_chromemanagement_command"
+    ]
+  },
+  "cloudbilling": {
+    "discovered": 1,
+    "resources": [
+      "google_cloudbilling_billing_account"
+    ]
+  },
+  "cloudchannel": {
+    "discovered": 5,
+    "resources": [
+      "google_cloudchannel_channel_partner_link",
+      "google_cloudchannel_channel_partner_repricing_config",
+      "google_cloudchannel_customer",
+      "google_cloudchannel_customer_repricing_config",
+      "google_cloudchannel_entitlement"
+    ]
+  },
+  "cloudcontrolspartner": {
+    "discovered": 1,
+    "resources": [
+      "google_cloudcontrolspartner_customer"
+    ]
+  },
+  "cloudnumberregistry": {
+    "discovered": 4,
+    "resources": [
+      "google_cloudnumberregistry_custom_range",
+      "google_cloudnumberregistry_ipam_admin_scope",
+      "google_cloudnumberregistry_realm",
+      "google_cloudnumberregistry_registry_book"
+    ]
+  },
+  "cloudsupport": {
+    "discovered": 3,
+    "resources": [
+      "google_cloudsupport_case",
+      "google_cloudsupport_comment",
+      "google_cloudsupport_support_event_subscription"
+    ]
+  },
+  "contactcenteraiplatform": {
+    "discovered": 1,
+    "resources": [
+      "google_contactcenteraiplatform_contact_center"
+    ]
+  },
+  "contentwarehouse": {
+    "discovered": 4,
+    "resources": [
+      "google_contentwarehouse_document_schema",
+      "google_contentwarehouse_document",
+      "google_contentwarehouse_rule_set",
+      "google_contentwarehouse_synonym_set"
+    ]
+  },
+  "datastore": {
+    "discovered": 1,
+    "resources": [
+      "google_datastore_index"
+    ]
+  },
+  "firebaseappdistribution": {
+    "discovered": 1,
+    "resources": [
+      "google_firebaseappdistribution_group"
+    ]
+  },
+  "firebasedatabase": {
+    "discovered": 1,
+    "resources": [
+      "google_firebasedatabase_instance"
+    ]
+  },
+  "ftp": {
+    "discovered": 2,
+    "resources": [
+      "google_ftp_server",
+      "google_ftp_user"
+    ]
+  },
+  "metastore": {
+    "discovered": 4,
+    "resources": [
+      "google_metastore_federation",
+      "google_metastore_service",
+      "google_metastore_backup",
+      "google_metastore_metadata_import"
+    ]
+  },
+  "policysimulator": {
+    "discovered": 2,
+    "resources": [
+      "google_policysimulator_replay",
+      "google_policysimulator_org_policy_violations_preview"
+    ]
+  },
+  "rapidmigrationassessment": {
+    "discovered": 2,
+    "resources": [
+      "google_rapidmigrationassessment_annotation",
+      "google_rapidmigrationassessment_collector"
+    ]
+  },
+  "saasservicemgmt": {
+    "discovered": 8,
+    "resources": [
+      "google_saasservicemgmt_release",
+      "google_saasservicemgmt_rollout_kind",
+      "google_saasservicemgmt_rollout",
+      "google_saasservicemgmt_saa",
+      "google_saasservicemgmt_tenant",
+      "google_saasservicemgmt_unit_kind",
+      "google_saasservicemgmt_unit_operation",
+      "google_saasservicemgmt_unit"
+    ]
+  },
+  "sasportal": {
+    "discovered": 3,
+    "resources": [
+      "google_sasportal_deployment",
+      "google_sasportal_device",
+      "google_sasportal_node"
+    ]
+  },
+  "speech": {
+    "discovered": 2,
+    "resources": [
+      "google_speech_custom_class",
+      "google_speech_phrase_set"
+    ]
+  },
+  "testing": {
+    "discovered": 2,
+    "resources": [
+      "google_testing_device_session",
+      "google_testing_test_matrice"
+    ]
+  },
+  "toolresults": {
+    "discovered": 4,
+    "resources": [
+      "google_toolresults_history",
+      "google_toolresults_execution",
+      "google_toolresults_step",
+      "google_toolresults_perf_sample_sery"
+    ]
+  },
+  "tpu": {
+    "discovered": 2,
+    "resources": [
+      "google_tpu_node",
+      "google_tpu_queued_resource"
+    ]
+  },
+  "translate": {
+    "discovered": 5,
+    "resources": [
+      "google_translate_adaptive_mt_dataset",
+      "google_translate_dataset",
+      "google_translate_glossary",
+      "google_translate_glossary_entry",
+      "google_translate_model"
+    ]
+  },
+  "vision": {
+    "discovered": 3,
+    "resources": [
+      "google_vision_product_set",
+      "google_vision_product",
+      "google_vision_reference_image"
+    ]
+  },
+  "vmmigration": {
+    "discovered": 10,
+    "resources": [
+      "google_vmmigration_group",
+      "google_vmmigration_image_import",
+      "google_vmmigration_source",
+      "google_vmmigration_datacenter_connector",
+      "google_vmmigration_disk_migration_job",
+      "google_vmmigration_migrating_vm",
+      "google_vmmigration_clone_job",
+      "google_vmmigration_cutover_job",
+      "google_vmmigration_utilization_report",
+      "google_vmmigration_target_project"
+    ]
+  },
+  "websecurityscanner": {
+    "discovered": 1,
+    "resources": [
+      "google_websecurityscanner_scan_config"
+    ]
+  },
+  "workflowexecutions": {
+    "discovered": 1,
+    "resources": [
+      "google_workflowexecutions_execution"
+    ]
+  }
+}

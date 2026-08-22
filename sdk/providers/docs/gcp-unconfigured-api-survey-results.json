@@ -1,0 +1,1143 @@
+{
+  "abusiveexperiencereport": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=1, no_get=1)"
+  },
+  "acceleratedmobilepageurl": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "accessapproval": {
+    "discovered": 0,
+    "reason": "6 resource node(s) found, all read-only/no-create (no_create=3, no_get=3)"
+  },
+  "addressvalidation": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "adexchangebuyer2": {
+    "discovered": 5,
+    "resources": [
+      "google_adexchangebuyer2_client",
+      "google_adexchangebuyer2_invitation",
+      "google_adexchangebuyer2_creative",
+      "google_adexchangebuyer2_proposal",
+      "google_adexchangebuyer2_filter_set"
+    ]
+  },
+  "adexperiencereport": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=1, no_get=1)"
+  },
+  "admin": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=3, no_get=2)"
+  },
+  "admob": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=1, no_get=4)"
+  },
+  "adsense": {
+    "discovered": 2,
+    "resources": [
+      "google_adsense_adunit",
+      "google_adsense_customchannel"
+    ]
+  },
+  "adsenseplatform": {
+    "discovered": 2,
+    "resources": [
+      "google_adsenseplatform_account",
+      "google_adsenseplatform_site"
+    ]
+  },
+  "advisorynotifications": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=2, no_get=2)"
+  },
+  "agentidentitycredentials": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "airquality": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=0, no_get=4)"
+  },
+  "alertcenter": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=1, no_get=2)"
+  },
+  "analyticsadmin": {
+    "discovered": 7,
+    "resources": [
+      "google_analyticsadmin_property",
+      "google_analyticsadmin_conversion_event",
+      "google_analyticsadmin_custom_dimension",
+      "google_analyticsadmin_custom_metric",
+      "google_analyticsadmin_data_stream",
+      "google_analyticsadmin_measurement_protocol_secret",
+      "google_analyticsadmin_key_event"
+    ]
+  },
+  "analyticsdata": {
+    "discovered": 1,
+    "resources": [
+      "google_analyticsdata_audience_export"
+    ]
+  },
+  "analyticshub": {
+    "discovered": 3,
+    "resources": [
+      "google_analyticshub_data_exchange",
+      "google_analyticshub_listing",
+      "google_analyticshub_query_template"
+    ]
+  },
+  "androiddeveloperidstatus": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "androiddeviceprovisioning": {
+    "discovered": 1,
+    "resources": [
+      "google_androiddeviceprovisioning_configuration"
+    ]
+  },
+  "androidenterprise": {
+    "discovered": 5,
+    "resources": [
+      "google_androidenterprise_enterprise",
+      "google_androidenterprise_storelayoutcluster",
+      "google_androidenterprise_storelayoutpage",
+      "google_androidenterprise_user",
+      "google_androidenterprise_webapp"
+    ]
+  },
+  "androidmanagement": {
+    "discovered": 4,
+    "resources": [
+      "google_androidmanagement_enterprise",
+      "google_androidmanagement_enrollment_token",
+      "google_androidmanagement_migration_token",
+      "google_androidmanagement_web_app"
+    ]
+  },
+  "androidpublisher": {
+    "discovered": 7,
+    "resources": [
+      "google_androidpublisher_device_tier_config",
+      "google_androidpublisher_edit",
+      "google_androidpublisher_track",
+      "google_androidpublisher_inappproduct",
+      "google_androidpublisher_subscription",
+      "google_androidpublisher_offer",
+      "google_androidpublisher_variant"
+    ]
+  },
+  "apigateway": {
+    "discovered": 3,
+    "resources": [
+      "google_apigateway_api",
+      "google_apigateway_config",
+      "google_apigateway_gateway"
+    ]
+  },
+  "apim": {
+    "discovered": 2,
+    "resources": [
+      "google_apim_observation_job",
+      "google_apim_observation_source"
+    ]
+  },
+  "appsmarket": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "areainsights": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "authorizedbuyersmarketplace": {
+    "discovered": 2,
+    "resources": [
+      "google_authorizedbuyersmarketplace_client",
+      "google_authorizedbuyersmarketplace_user"
+    ]
+  },
+  "baremetalsolution": {
+    "discovered": 3,
+    "resources": [
+      "google_baremetalsolution_nfs_share",
+      "google_baremetalsolution_provisioning_config",
+      "google_baremetalsolution_snapshot"
+    ]
+  },
+  "batch": {
+    "discovered": 1,
+    "resources": [
+      "google_batch_job"
+    ]
+  },
+  "blogger": {
+    "discovered": 2,
+    "resources": [
+      "google_blogger_page",
+      "google_blogger_post"
+    ]
+  },
+  "books": {
+    "discovered": 0,
+    "reason": "24 resource node(s) found, all read-only/no-create (no_create=12, no_get=12)"
+  },
+  "businessprofileperformance": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "calendar": {
+    "discovered": 4,
+    "resources": [
+      "google_calendar_acl",
+      "google_calendar_calendar_list",
+      "google_calendar_calendar",
+      "google_calendar_event"
+    ]
+  },
+  "chat": {
+    "discovered": 4,
+    "resources": [
+      "google_chat_custom_emoji",
+      "google_chat_space",
+      "google_chat_member",
+      "google_chat_message"
+    ]
+  },
+  "checks": {
+    "discovered": 0,
+    "reason": "7 resource node(s) found, all read-only/no-create (no_create=5, no_get=2)"
+  },
+  "chromemanagement": {
+    "discovered": 2,
+    "resources": [
+      "google_chromemanagement_connector_config",
+      "google_chromemanagement_command"
+    ]
+  },
+  "chromepolicy": {
+    "discovered": 0,
+    "reason": "6 resource node(s) found, all read-only/no-create (no_create=1, no_get=5)"
+  },
+  "chromeuxreport": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "chromewebstore": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "civicinfo": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "classroom": {
+    "discovered": 11,
+    "resources": [
+      "google_classroom_course",
+      "google_classroom_announcement",
+      "google_classroom_add_on_attachment",
+      "google_classroom_course_work",
+      "google_classroom_rubric",
+      "google_classroom_course_work_material",
+      "google_classroom_student",
+      "google_classroom_teacher",
+      "google_classroom_topic",
+      "google_classroom_invitation",
+      "google_classroom_guardian_invitation"
+    ]
+  },
+  "cloudbilling": {
+    "discovered": 1,
+    "resources": [
+      "google_cloudbilling_billing_account"
+    ]
+  },
+  "cloudchannel": {
+    "discovered": 5,
+    "resources": [
+      "google_cloudchannel_channel_partner_link",
+      "google_cloudchannel_channel_partner_repricing_config",
+      "google_cloudchannel_customer",
+      "google_cloudchannel_customer_repricing_config",
+      "google_cloudchannel_entitlement"
+    ]
+  },
+  "cloudcommerceprocurement": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "cloudcontrolspartner": {
+    "discovered": 1,
+    "resources": [
+      "google_cloudcontrolspartner_customer"
+    ]
+  },
+  "clouderrorreporting": {
+    "discovered": 0,
+    "reason": "8 resource node(s) found, all read-only/no-create (no_create=2, no_get=6)"
+  },
+  "cloudlocationfinder": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "cloudnumberregistry": {
+    "discovered": 4,
+    "resources": [
+      "google_cloudnumberregistry_custom_range",
+      "google_cloudnumberregistry_ipam_admin_scope",
+      "google_cloudnumberregistry_realm",
+      "google_cloudnumberregistry_registry_book"
+    ]
+  },
+  "cloudproductregistry": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=3, no_get=0)"
+  },
+  "cloudprofiler": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "cloudsearch": {
+    "discovered": 2,
+    "resources": [
+      "google_cloudsearch_datasource",
+      "google_cloudsearch_searchapplication"
+    ]
+  },
+  "cloudshell": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "cloudsupport": {
+    "discovered": 3,
+    "resources": [
+      "google_cloudsupport_case",
+      "google_cloudsupport_comment",
+      "google_cloudsupport_support_event_subscription"
+    ]
+  },
+  "cloudtrace": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "contactcenteraiplatform": {
+    "discovered": 1,
+    "resources": [
+      "google_contactcenteraiplatform_contact_center"
+    ]
+  },
+  "content": {
+    "discovered": 11,
+    "resources": [
+      "google_content_account",
+      "google_content_collection",
+      "google_content_conversionsource",
+      "google_content_datafeed",
+      "google_content_checkoutsetting",
+      "google_content_po",
+      "google_content_productdeliverytime",
+      "google_content_product",
+      "google_content_promotion",
+      "google_content_region",
+      "google_content_returnpolicyonline"
+    ]
+  },
+  "contentwarehouse": {
+    "discovered": 4,
+    "resources": [
+      "google_contentwarehouse_document_schema",
+      "google_contentwarehouse_document",
+      "google_contentwarehouse_rule_set",
+      "google_contentwarehouse_synonym_set"
+    ]
+  },
+  "css": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=2, no_get=3)"
+  },
+  "customsearch": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "databasecenter": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=0, no_get=4)"
+  },
+  "datamanager": {
+    "discovered": 3,
+    "resources": [
+      "google_datamanager_user_list_direct_license",
+      "google_datamanager_user_list_global_license",
+      "google_datamanager_user_list"
+    ]
+  },
+  "dataportability": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=0, no_get=4)"
+  },
+  "datastore": {
+    "discovered": 1,
+    "resources": [
+      "google_datastore_index"
+    ]
+  },
+  "developerknowledge": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=1, no_get=1)"
+  },
+  "dfareporting": {
+    "discovered": 28,
+    "resources": [
+      "google_dfareporting_account_user_profile",
+      "google_dfareporting_ad",
+      "google_dfareporting_advertiser_group",
+      "google_dfareporting_advertiser_landing_page",
+      "google_dfareporting_advertiser",
+      "google_dfareporting_campaign",
+      "google_dfareporting_content_category",
+      "google_dfareporting_creative_field_value",
+      "google_dfareporting_creative_field",
+      "google_dfareporting_creative_group",
+      "google_dfareporting_creative",
+      "google_dfareporting_directory_site",
+      "google_dfareporting_dynamic_feed",
+      "google_dfareporting_dynamic_profile",
+      "google_dfareporting_event_tag",
+      "google_dfareporting_floodlight_activity",
+      "google_dfareporting_floodlight_activity_group",
+      "google_dfareporting_placement_group",
+      "google_dfareporting_placement_strategy",
+      "google_dfareporting_placement",
+      "google_dfareporting_remarketing_list",
+      "google_dfareporting_report",
+      "google_dfareporting_site",
+      "google_dfareporting_siz",
+      "google_dfareporting_studio_creative",
+      "google_dfareporting_subaccount",
+      "google_dfareporting_targeting_template",
+      "google_dfareporting_user_role"
+    ]
+  },
+  "digitalassetlinks": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "discovery": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "displayvideo": {
+    "discovered": 20,
+    "resources": [
+      "google_displayvideo_advertiser",
+      "google_displayvideo_ad_asset",
+      "google_displayvideo_ad_group_ad",
+      "google_displayvideo_ad_group",
+      "google_displayvideo_assigned_targeting_option",
+      "google_displayvideo_campaign",
+      "google_displayvideo_channel",
+      "google_displayvideo_creative",
+      "google_displayvideo_insertion_order",
+      "google_displayvideo_line_item",
+      "google_displayvideo_location_list",
+      "google_displayvideo_negative_keyword_list",
+      "google_displayvideo_custom_bidding_algorithm",
+      "google_displayvideo_rule",
+      "google_displayvideo_script",
+      "google_displayvideo_first_party_and_partner_audience",
+      "google_displayvideo_guaranteed_order",
+      "google_displayvideo_inventory_source_group",
+      "google_displayvideo_inventory_source",
+      "google_displayvideo_user"
+    ]
+  },
+  "docs": {
+    "discovered": 1,
+    "resources": [
+      "google_docs_document"
+    ]
+  },
+  "domains": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=3, no_get=0)"
+  },
+  "doubleclickbidmanager": {
+    "discovered": 1,
+    "resources": [
+      "google_doubleclickbidmanager_query"
+    ]
+  },
+  "doubleclicksearch": {
+    "discovered": 1,
+    "resources": [
+      "google_doubleclicksearch_conversion"
+    ]
+  },
+  "drive": {
+    "discovered": 6,
+    "resources": [
+      "google_drive_comment",
+      "google_drive_drive",
+      "google_drive_file",
+      "google_drive_permission",
+      "google_drive_reply",
+      "google_drive_teamdrive"
+    ]
+  },
+  "driveactivity": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "drivelabels": {
+    "discovered": 1,
+    "resources": [
+      "google_drivelabels_label"
+    ]
+  },
+  "factchecktools": {
+    "discovered": 1,
+    "resources": [
+      "google_factchecktools_page"
+    ]
+  },
+  "fcm": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "fcmdata": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "firebaseappdistribution": {
+    "discovered": 1,
+    "resources": [
+      "google_firebaseappdistribution_group"
+    ]
+  },
+  "firebasecrashlytics": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=2, no_get=3)"
+  },
+  "firebasedatabase": {
+    "discovered": 1,
+    "resources": [
+      "google_firebasedatabase_instance"
+    ]
+  },
+  "firebasedynamiclinks": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=0, no_get=3)"
+  },
+  "firebasehosting": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "firebaseml": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "firebasestorage": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=1, no_get=2)"
+  },
+  "fitness": {
+    "discovered": 1,
+    "resources": [
+      "google_fitness_data_source"
+    ]
+  },
+  "forms": {
+    "discovered": 1,
+    "resources": [
+      "google_forms_form"
+    ]
+  },
+  "ftp": {
+    "discovered": 2,
+    "resources": [
+      "google_ftp_server",
+      "google_ftp_user"
+    ]
+  },
+  "games": {
+    "discovered": 0,
+    "reason": "14 resource node(s) found, all read-only/no-create (no_create=6, no_get=8)"
+  },
+  "gamesConfiguration": {
+    "discovered": 2,
+    "resources": [
+      "google_gamesConfiguration_achievement_configuration",
+      "google_gamesConfiguration_leaderboard_configuration"
+    ]
+  },
+  "gamesManagement": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=0, no_get=5)"
+  },
+  "gmail": {
+    "discovered": 10,
+    "resources": [
+      "google_gmail_draft",
+      "google_gmail_label",
+      "google_gmail_message",
+      "google_gmail_identity",
+      "google_gmail_keypair",
+      "google_gmail_delegate",
+      "google_gmail_filter",
+      "google_gmail_forwarding_address",
+      "google_gmail_send_a",
+      "google_gmail_smime_info"
+    ]
+  },
+  "gmailpostmastertools": {
+    "discovered": 2,
+    "resources": [
+      "google_gmailpostmastertools_domain",
+      "google_gmailpostmastertools_user"
+    ]
+  },
+  "groupsmigration": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "groupssettings": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=1, no_get=0)"
+  },
+  "health": {
+    "discovered": 1,
+    "resources": [
+      "google_health_data_point"
+    ]
+  },
+  "homegraph": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "iamcredentials": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=0, no_get=3)"
+  },
+  "indexing": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "jobs": {
+    "discovered": 3,
+    "resources": [
+      "google_jobs_tenant",
+      "google_jobs_company",
+      "google_jobs_job"
+    ]
+  },
+  "keep": {
+    "discovered": 1,
+    "resources": [
+      "google_keep_note"
+    ]
+  },
+  "kgsearch": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "kmsinventory": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=0, no_get=4)"
+  },
+  "language": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "libraryagent": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "licensing": {
+    "discovered": 1,
+    "resources": [
+      "google_licensing_license_assignment"
+    ]
+  },
+  "localservices": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "manufacturers": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "marketingplatformadmin": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=1, no_get=1)"
+  },
+  "meet": {
+    "discovered": 1,
+    "resources": [
+      "google_meet_space"
+    ]
+  },
+  "merchantapi": {
+    "discovered": 2,
+    "resources": [
+      "google_merchantapi_merchant_review",
+      "google_merchantapi_product_review"
+    ]
+  },
+  "metastore": {
+    "discovered": 4,
+    "resources": [
+      "google_metastore_federation",
+      "google_metastore_service",
+      "google_metastore_backup",
+      "google_metastore_metadata_import"
+    ]
+  },
+  "mybusinessaccountmanagement": {
+    "discovered": 1,
+    "resources": [
+      "google_mybusinessaccountmanagement_account"
+    ]
+  },
+  "mybusinessbusinessinformation": {
+    "discovered": 0,
+    "reason": "7 resource node(s) found, all read-only/no-create (no_create=2, no_get=5)"
+  },
+  "mybusinesslodging": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "mybusinessnotifications": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "mybusinessplaceactions": {
+    "discovered": 1,
+    "resources": [
+      "google_mybusinessplaceactions_place_action_link"
+    ]
+  },
+  "mybusinessverifications": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=0, no_get=3)"
+  },
+  "oauth2": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "ondemandscanning": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=1, no_get=2)"
+  },
+  "pagespeedonline": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "paymentsresellersubscription": {
+    "discovered": 1,
+    "resources": [
+      "google_paymentsresellersubscription_subscription"
+    ]
+  },
+  "people": {
+    "discovered": 2,
+    "resources": [
+      "google_people_contact_group",
+      "google_people_people"
+    ]
+  },
+  "places": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=1, no_get=1)"
+  },
+  "playcustomapp": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "playdeveloperreporting": {
+    "discovered": 0,
+    "reason": "14 resource node(s) found, all read-only/no-create (no_create=10, no_get=4)"
+  },
+  "playgrouping": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "playintegrity": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "policyanalyzer": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=0, no_get=3)"
+  },
+  "policysimulator": {
+    "discovered": 2,
+    "resources": [
+      "google_policysimulator_replay",
+      "google_policysimulator_org_policy_violations_preview"
+    ]
+  },
+  "policytroubleshooter": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "pollen": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=0, no_get=2)"
+  },
+  "prod_tt_sasportal": {
+    "discovered": 3,
+    "resources": [
+      "google_prod_tt_sasportal_deployment",
+      "google_prod_tt_sasportal_device",
+      "google_prod_tt_sasportal_node"
+    ]
+  },
+  "publicca": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "rapidmigrationassessment": {
+    "discovered": 2,
+    "resources": [
+      "google_rapidmigrationassessment_annotation",
+      "google_rapidmigrationassessment_collector"
+    ]
+  },
+  "readerrevenuesubscriptionlinking": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=1, no_get=0)"
+  },
+  "realtimebidding": {
+    "discovered": 3,
+    "resources": [
+      "google_realtimebidding_pretargeting_config",
+      "google_realtimebidding_creative",
+      "google_realtimebidding_user_list"
+    ]
+  },
+  "recommendationengine": {
+    "discovered": 1,
+    "resources": [
+      "google_recommendationengine_catalog_item"
+    ]
+  },
+  "recommender": {
+    "discovered": 0,
+    "reason": "14 resource node(s) found, all read-only/no-create (no_create=8, no_get=6)"
+  },
+  "reseller": {
+    "discovered": 2,
+    "resources": [
+      "google_reseller_customer",
+      "google_reseller_subscription"
+    ]
+  },
+  "retail": {
+    "discovered": 4,
+    "resources": [
+      "google_retail_product",
+      "google_retail_control",
+      "google_retail_model",
+      "google_retail_serving_config"
+    ]
+  },
+  "runtimeconfig": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "saasservicemgmt": {
+    "discovered": 8,
+    "resources": [
+      "google_saasservicemgmt_release",
+      "google_saasservicemgmt_rollout_kind",
+      "google_saasservicemgmt_rollout",
+      "google_saasservicemgmt_saa",
+      "google_saasservicemgmt_tenant",
+      "google_saasservicemgmt_unit_kind",
+      "google_saasservicemgmt_unit_operation",
+      "google_saasservicemgmt_unit"
+    ]
+  },
+  "safebrowsing": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=1, no_get=3)"
+  },
+  "sasportal": {
+    "discovered": 3,
+    "resources": [
+      "google_sasportal_deployment",
+      "google_sasportal_device",
+      "google_sasportal_node"
+    ]
+  },
+  "script": {
+    "discovered": 3,
+    "resources": [
+      "google_script_project",
+      "google_script_deployment",
+      "google_script_version"
+    ]
+  },
+  "searchads360": {
+    "discovered": 0,
+    "reason": "100 resource node(s) found, all read-only/no-create (no_create=2, no_get=98)"
+  },
+  "searchconsole": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=2, no_get=3)"
+  },
+  "serviceconsumermanagement": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=1, no_get=2)"
+  },
+  "servicecontrol": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "servicenetworking": {
+    "discovered": 0,
+    "reason": "9 resource node(s) found, all read-only/no-create (no_create=4, no_get=5)"
+  },
+  "serviceusage": {
+    "discovered": 0,
+    "reason": "2 resource node(s) found, all read-only/no-create (no_create=2, no_get=0)"
+  },
+  "sheets": {
+    "discovered": 1,
+    "resources": [
+      "google_sheets_spreadsheet"
+    ]
+  },
+  "siteVerification": {
+    "discovered": 1,
+    "resources": [
+      "google_siteVerification_web_resource"
+    ]
+  },
+  "slides": {
+    "discovered": 1,
+    "resources": [
+      "google_slides_presentation"
+    ]
+  },
+  "smartdevicemanagement": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=3, no_get=0)"
+  },
+  "solar": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=2, no_get=1)"
+  },
+  "speech": {
+    "discovered": 2,
+    "resources": [
+      "google_speech_custom_class",
+      "google_speech_phrase_set"
+    ]
+  },
+  "streetviewpublish": {
+    "discovered": 2,
+    "resources": [
+      "google_streetviewpublish_photo",
+      "google_streetviewpublish_photo_sequence"
+    ]
+  },
+  "sts": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=0, no_get=5)"
+  },
+  "tagmanager": {
+    "discovered": 13,
+    "resources": [
+      "google_tagmanager_container",
+      "google_tagmanager_environment",
+      "google_tagmanager_workspace",
+      "google_tagmanager_client",
+      "google_tagmanager_folder",
+      "google_tagmanager_gtag_config",
+      "google_tagmanager_tag",
+      "google_tagmanager_template",
+      "google_tagmanager_transformation",
+      "google_tagmanager_trigger",
+      "google_tagmanager_variable",
+      "google_tagmanager_zone",
+      "google_tagmanager_user_permission"
+    ]
+  },
+  "tasks": {
+    "discovered": 2,
+    "resources": [
+      "google_tasks_tasklist",
+      "google_tasks_task"
+    ]
+  },
+  "testing": {
+    "discovered": 2,
+    "resources": [
+      "google_testing_device_session",
+      "google_testing_test_matrice"
+    ]
+  },
+  "texttospeech": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=1, no_get=4)"
+  },
+  "threatintelligence": {
+    "discovered": 0,
+    "reason": "6 resource node(s) found, all read-only/no-create (no_create=4, no_get=2)"
+  },
+  "toolresults": {
+    "discovered": 4,
+    "resources": [
+      "google_toolresults_history",
+      "google_toolresults_execution",
+      "google_toolresults_step",
+      "google_toolresults_perf_sample_sery"
+    ]
+  },
+  "tpu": {
+    "discovered": 2,
+    "resources": [
+      "google_tpu_node",
+      "google_tpu_queued_resource"
+    ]
+  },
+  "trafficdirector": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "translate": {
+    "discovered": 5,
+    "resources": [
+      "google_translate_adaptive_mt_dataset",
+      "google_translate_dataset",
+      "google_translate_glossary",
+      "google_translate_glossary_entry",
+      "google_translate_model"
+    ]
+  },
+  "travelimpactmodel": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "vault": {
+    "discovered": 4,
+    "resources": [
+      "google_vault_matter",
+      "google_vault_export",
+      "google_vault_hold",
+      "google_vault_saved_query"
+    ]
+  },
+  "verifiedaccess": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "versionhistory": {
+    "discovered": 0,
+    "reason": "4 resource node(s) found, all read-only/no-create (no_create=0, no_get=4)"
+  },
+  "videointelligence": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=2, no_get=1)"
+  },
+  "vision": {
+    "discovered": 3,
+    "resources": [
+      "google_vision_product_set",
+      "google_vision_product",
+      "google_vision_reference_image"
+    ]
+  },
+  "vmmigration": {
+    "discovered": 10,
+    "resources": [
+      "google_vmmigration_group",
+      "google_vmmigration_image_import",
+      "google_vmmigration_source",
+      "google_vmmigration_datacenter_connector",
+      "google_vmmigration_disk_migration_job",
+      "google_vmmigration_migrating_vm",
+      "google_vmmigration_clone_job",
+      "google_vmmigration_cutover_job",
+      "google_vmmigration_utilization_report",
+      "google_vmmigration_target_project"
+    ]
+  },
+  "walletobjects": {
+    "discovered": 15,
+    "resources": [
+      "google_walletobjects_eventticketclas",
+      "google_walletobjects_eventticketobject",
+      "google_walletobjects_flightclas",
+      "google_walletobjects_flightobject",
+      "google_walletobjects_genericclas",
+      "google_walletobjects_genericobject",
+      "google_walletobjects_giftcardclas",
+      "google_walletobjects_giftcardobject",
+      "google_walletobjects_issuer",
+      "google_walletobjects_loyaltyclas",
+      "google_walletobjects_loyaltyobject",
+      "google_walletobjects_offerclas",
+      "google_walletobjects_offerobject",
+      "google_walletobjects_transitclas",
+      "google_walletobjects_transitobject"
+    ]
+  },
+  "webcontentpublisher": {
+    "discovered": 2,
+    "resources": [
+      "google_webcontentpublisher_publication",
+      "google_webcontentpublisher_cta"
+    ]
+  },
+  "webfonts": {
+    "discovered": 0,
+    "reason": "1 resource node(s) found, all read-only/no-create (no_create=0, no_get=1)"
+  },
+  "webrisk": {
+    "discovered": 0,
+    "reason": "5 resource node(s) found, all read-only/no-create (no_create=1, no_get=4)"
+  },
+  "websecurityscanner": {
+    "discovered": 1,
+    "resources": [
+      "google_websecurityscanner_scan_config"
+    ]
+  },
+  "workflowexecutions": {
+    "discovered": 1,
+    "resources": [
+      "google_workflowexecutions_execution"
+    ]
+  },
+  "workspaceevents": {
+    "discovered": 2,
+    "resources": [
+      "google_workspaceevents_subscription",
+      "google_workspaceevents_push_notification_config"
+    ]
+  },
+  "youtube": {
+    "discovered": 0,
+    "reason": "32 resource node(s) found, all read-only/no-create (no_create=1, no_get=31)"
+  },
+  "youtubeAnalytics": {
+    "discovered": 0,
+    "reason": "3 resource node(s) found, all read-only/no-create (no_create=0, no_get=3)"
+  },
+  "youtubereporting": {
+    "discovered": 1,
+    "resources": [
+      "google_youtubereporting_job"
+    ]
+  }
+}

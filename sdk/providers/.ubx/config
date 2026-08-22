@@ -2358,3 +2358,180 @@ base_url = "https://connectors.googleapis.com"
 schema_source = "discovery_docs"
 schema_url = "https://iam.googleapis.com/$discovery/rest?version=v2"
 base_url = "https://iam.googleapis.com"
+
+# UBI-175: GCP infra-API config expansion, survey-verified live via a real
+# Discover() replication against Google's own public Discovery Service
+# directory (312 total APIs, 190 not yet configured, 34 of those confirmed
+# real cloud-infrastructure APIs with real CRUD-shaped resources -- the
+# other 53 with resources are Workspace/consumer/ad-tech APIs, deliberately
+# out of scope for an infrastructure engine, not onboarded here.
+
+[dynamic_providers.google_analyticshub]
+schema_source = "discovery_docs"
+schema_url = "https://analyticshub.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://analyticshub.googleapis.com"
+
+[dynamic_providers.google_androiddeviceprovisioning]
+schema_source = "discovery_docs"
+schema_url = "https://androiddeviceprovisioning.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://androiddeviceprovisioning.googleapis.com"
+
+[dynamic_providers.google_androidenterprise]
+schema_source = "discovery_docs"
+schema_url = "https://androidenterprise.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://androidenterprise.googleapis.com"
+
+[dynamic_providers.google_androidmanagement]
+schema_source = "discovery_docs"
+schema_url = "https://androidmanagement.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://androidmanagement.googleapis.com"
+
+[dynamic_providers.google_apigateway]
+schema_source = "discovery_docs"
+schema_url = "https://apigateway.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://apigateway.googleapis.com"
+
+[dynamic_providers.google_apim]
+schema_source = "discovery_docs"
+schema_url = "https://apim.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://apim.googleapis.com"
+
+[dynamic_providers.google_baremetalsolution]
+schema_source = "discovery_docs"
+schema_url = "https://baremetalsolution.googleapis.com/$discovery/rest?version=v2"
+base_url = "https://baremetalsolution.googleapis.com"
+
+[dynamic_providers.google_batch]
+schema_source = "discovery_docs"
+schema_url = "https://batch.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://batch.googleapis.com"
+
+[dynamic_providers.google_chromemanagement]
+schema_source = "discovery_docs"
+schema_url = "https://chromemanagement.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://chromemanagement.googleapis.com"
+
+[dynamic_providers.google_cloudbilling]
+schema_source = "discovery_docs"
+schema_url = "https://cloudbilling.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://cloudbilling.googleapis.com"
+
+[dynamic_providers.google_cloudchannel]
+schema_source = "discovery_docs"
+schema_url = "https://cloudchannel.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://cloudchannel.googleapis.com"
+
+[dynamic_providers.google_cloudcontrolspartner]
+schema_source = "discovery_docs"
+schema_url = "https://cloudcontrolspartner.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://cloudcontrolspartner.googleapis.com"
+
+[dynamic_providers.google_cloudnumberregistry]
+schema_source = "discovery_docs"
+schema_url = "https://cloudnumberregistry.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://cloudnumberregistry.googleapis.com"
+
+[dynamic_providers.google_cloudsupport]
+schema_source = "discovery_docs"
+schema_url = "https://cloudsupport.googleapis.com/$discovery/rest?version=v2"
+base_url = "https://cloudsupport.googleapis.com"
+
+[dynamic_providers.google_contactcenteraiplatform]
+schema_source = "discovery_docs"
+schema_url = "https://contactcenteraiplatform.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://contactcenteraiplatform.googleapis.com"
+
+[dynamic_providers.google_contentwarehouse]
+schema_source = "discovery_docs"
+schema_url = "https://contentwarehouse.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://contentwarehouse.googleapis.com"
+
+[dynamic_providers.google_datastore]
+schema_source = "discovery_docs"
+schema_url = "https://datastore.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://datastore.googleapis.com"
+
+[dynamic_providers.google_firebaseappdistribution]
+schema_source = "discovery_docs"
+schema_url = "https://firebaseappdistribution.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://firebaseappdistribution.googleapis.com"
+
+[dynamic_providers.google_firebasedatabase]
+schema_source = "discovery_docs"
+schema_url = "https://firebasedatabase.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://firebasedatabase.googleapis.com"
+
+[dynamic_providers.google_ftp]
+schema_source = "discovery_docs"
+schema_url = "https://ftp.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://ftp.googleapis.com"
+
+[dynamic_providers.google_metastore]
+schema_source = "discovery_docs"
+schema_url = "https://metastore.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://metastore.googleapis.com"
+
+[dynamic_providers.google_policysimulator]
+schema_source = "discovery_docs"
+schema_url = "https://policysimulator.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://policysimulator.googleapis.com"
+
+[dynamic_providers.google_rapidmigrationassessment]
+schema_source = "discovery_docs"
+schema_url = "https://rapidmigrationassessment.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://rapidmigrationassessment.googleapis.com"
+
+[dynamic_providers.google_saasservicemgmt]
+schema_source = "discovery_docs"
+schema_url = "https://saasservicemgmt.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://saasservicemgmt.googleapis.com"
+
+[dynamic_providers.google_sasportal]
+schema_source = "discovery_docs"
+schema_url = "https://sasportal.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://sasportal.googleapis.com"
+
+[dynamic_providers.google_speech]
+schema_source = "discovery_docs"
+schema_url = "https://speech.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://speech.googleapis.com"
+
+[dynamic_providers.google_testing]
+schema_source = "discovery_docs"
+schema_url = "https://testing.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://testing.googleapis.com"
+
+[dynamic_providers.google_toolresults]
+schema_source = "discovery_docs"
+schema_url = "https://toolresults.googleapis.com/$discovery/rest?version=v1beta3"
+base_url = "https://toolresults.googleapis.com"
+
+[dynamic_providers.google_tpu]
+schema_source = "discovery_docs"
+schema_url = "https://tpu.googleapis.com/$discovery/rest?version=v2"
+base_url = "https://tpu.googleapis.com"
+
+[dynamic_providers.google_translate]
+schema_source = "discovery_docs"
+schema_url = "https://translation.googleapis.com/$discovery/rest?version=v3"
+base_url = "https://translation.googleapis.com"
+
+[dynamic_providers.google_vision]
+schema_source = "discovery_docs"
+schema_url = "https://vision.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://vision.googleapis.com"
+
+[dynamic_providers.google_vmmigration]
+schema_source = "discovery_docs"
+schema_url = "https://vmmigration.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://vmmigration.googleapis.com"
+
+[dynamic_providers.google_websecurityscanner]
+schema_source = "discovery_docs"
+schema_url = "https://websecurityscanner.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://websecurityscanner.googleapis.com"
+
+[dynamic_providers.google_workflowexecutions]
+schema_source = "discovery_docs"
+schema_url = "https://workflowexecutions.googleapis.com/$discovery/rest?version=v1"
+base_url = "https://workflowexecutions.googleapis.com"
