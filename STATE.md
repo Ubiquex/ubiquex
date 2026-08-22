@@ -2,6 +2,32 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175 Phase E: close the Azure coverage gap -- config phase done (13 entries, 46 resources, 1,512 fields), descriptions/intros NOT started, GCP corrected count delivered, 2026-08-22
+
+**The founder's core claim verified true**: the 178 "genuinely uncovered" Azure products from the prior session's `orphan_classify.py` report were mostly a classifier artifact and a config gap, not a real source limitation. Corrected in stages, each verified directly (never assumed):
+
+1. **68 removed** -- classifier false positives from an overly-aggressive short-service-dir-name filter and a substring-matching gap: DNS record types (9, all covered by the already-onboarded `azure_dns_dns`), Linux/Windows Web+Function App and Static Web App (11, all covered by `azure_web_openapi_site`'s own `kind` discriminator), Bot Service variants (3), Qumulo (1, already onboarded as `azure_liftrqumulo`), Video Indexer (1, already onboarded as `azure_vi`), CDN/Front Door next-gen (14, covered by `azure_cdn_openapi`), MSSQL (25, all Terraform-shaped renames of the already-onboarded 84 `azure_sql_*` families), subnet associations (2, Terraform-only joins) and the base Load Balancer resource (1).
+2. **53 more removed** -- same pattern, found while checking the founder's own named examples: Lighthouse (2, `azure_managedservices_*`), Spring Cloud (19, `azure_appplatform_*`), Sentinel (27, `azure_securityinsights_openapi_*`), User Assigned Identity (1, `azure_msi_managedidentity_identity`), AI Foundry (2, `azure_cognitiveservices_*`), tenant-scope template deployment (1, `azure_resources_deployments_deployment_extended`).
+3. **Remaining 57 real candidates checked directly against Azure/azure-rest-api-specs.** Two more already-onboarded catches (both would have been silent config duplicates if not caught): `azure_hybridkubernetes_connectedclusters` (Arc Kubernetes' own cluster resource -- missed because "arc" false-matched inside "seArch" in the founder's own live-wire grep) and `azure_codesigning_codesigningaccount` (Trusted Signing -- the real RP folder is "codesigning", not "trustedsigning"). Both duplicate additions removed before commit.
+
+**13 real new `[dynamic_providers.*]` entries added and verified** (`ubx sdk gen --dump-ir`, exit 0, all 13): Application Insights (5 of 6 files -- Microsoft.Insights' own core components/webTests/apiKeys/proactiveDetection specs never graduated past 2015-05-01 stable; `analyticsItems_API.json` confirmed to have zero CRUD-shaped resources, not added), Data Protection, DevTest Labs, Arc-enabled servers (Microsoft.HybridCompute), Arc resource bridge (Microsoft.ResourceConnector), Application Load Balancer (Microsoft.ServiceNetworking), Azure AD B2C (folder "cpim"), PIM eligible + active role assignments (Microsoft.Authorization's own separate 2020-10-01 stable file, never reached by the already-declared 2022-04-01 entries). **46 resource types, 1,512 fields total**, real dump verified clean.
+
+**Confirmed genuinely absent (not added, real limitation)**: Blueprint and Custom Providers each have ONLY ever had preview spec versions (Custom Providers: a single 2018-09-01-preview in 7+ years) -- adding either would be the first `/preview/` entry in this project's 435-family config, a real convention break, flagged for the founder rather than silently done.
+
+**Confirmed CORE TOOL bug, not a config gap, explicitly out of scope for a docs-repo session**: `azure_network_loadbalancer`'s own already-declared `loadBalancer.json` defines `loadBalancingRules`/`outboundRules`/`probes` as real, separate CRUD-shaped paths (read directly from the live spec file) that `ubx-provider-dynamic`'s own type synthesis simply never produced resource types for -- only 3 of 6+ real resource types in the SAME already-fetched file. Likely the same shape for route/route_server/point-to-site VPN gateway and firewall rule collections (not yet confirmed with the same rigor). Needs a real `ubx-provider-dynamic` fix, not a `.ubx/config` change.
+
+**Still open, not yet researched with full rigor**: `arc_kubernetes_provisioned_cluster` (1, no `hybridcontainerservice` spec folder found yet), Disk Access/Disk Encryption Set/Shared Image Gallery Application (4, Compute-domain, not yet checked against `specification/compute`), classic Front Door -- `azurerm_frontdoor`/`_custom_https_configuration`/`_firewall_policy`/`_rules_engine` (4, real `specification/frontdoor` folder exists but deprecation status vs. the already-covered next-gen AFD not yet confirmed).
+
+**Descriptions and intros for the 46 new resources: NOT started.** Per this project's own established discipline (Phase B and Phase C were always separate, sequential, never-interleaved phases across this entire effort), this is queued as the next distinct phase rather than rushed in the same pass as the config-discovery work above.
+
+**GCP: real remaining count after stripping Terraform-shaped IAM variants, delivered before any writing** (per the founder's own explicit instruction) -- **129**, down from 209. Stripped: every literal `_iam_binding`/`_iam_member`/`_iam_policy`/`_association`/`_attachment`/`_assignment` suffix (77) plus the rest of the IAP product family (3 more -- IAP's whole purpose is access control, unlike IAM Workforce/Workload Identity Pool and Tags, whose OWN base resources were deliberately kept as real gaps rather than stripped, since they're substantive resources, not permission bindings on something else -- a real, explicit deviation from a literal reading of the founder's own message, flagged for their review rather than silently applied). GCP's own azure-rest-api-specs-equivalent research (Google Discovery Documents, for the 129) has not started.
+
+**Committed and pushed, verified live via the GitHub API**: `4781cce` on `ubiquex` `main` (config). `ubiquex-docs` unchanged this phase (no pages regenerated yet -- that's after descriptions/intros are written). Never self-merged.
+
+**What's next**: founder decision on (a) Blueprint/Custom Providers preview-only inclusion, (b) whether to file the `ubx-provider-dynamic` traversal-gap finding as its own ticket before or separately from this one, (c) pacing -- write Azure descriptions+intros for the 46 new resources next, or do GCP's discovery-doc research for the 129 first.
+
+---
+
 ## UBI-175 Phase D addendum: Azure doubling correction, 2026-08-22
 
 The founder caught two live URLs still showing name doubling
