@@ -2,6 +2,22 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175: AWS path split + CFN regeneration complete (1709 pages), golden bindings_status corrected, real GCP/Azure non-Compute gap sizes verified live, 2026-08-22
+
+**Step 1 (AWS path split)**: moved the 1,684-page HashiCorp-derived AWS corpus from `resource-reference/aws/` to `resource-reference/aws-hashicorp/` unchanged (`git mv`, 1,899 renames). 2,319 redirects added/repointed, 3 pre-existing redirects caught and fixed before they'd have silently broken. New `"AWS (HashiCorp)"` nav group. Committed `6096016c`/`791c41c7` (a real staging mistake -- `git add` silently dropped `docs.json` from the first commit -- caught by `git show --stat` after committing, not assumed, fixed in a second commit).
+
+**Step 2 (AWS CFN regeneration)**: generated all **1,709** live CFN resource types into the now-empty `resource-reference/aws/`, same generator fixes as GCP/Azure/Datadog/GitHub/Kubernetes. Uniform `bindings_status=local_only` -- a real `scan_go/scan_py/scan_ts` pass against the actual cloned `ubx-sdk-aws` repo (not name matching) found it's the pre-existing HashiCorp corpus, not CFN; only 408/1709 wires coincidentally share a name, proving nothing about matching fields (same trap as GCP's earlier 175/656 finding). Found and fixed two real bugs along the way: (1) 7 hand-authored intros had embedded literal newlines corrupting YAML frontmatter on 4 live pages -- fixed at `real_intro_for`'s shared chokepoint in `gen_provider_docs.py`, benefits every provider; (2) `provider_display` was set to "Amazon Web Services", diverging from the already-approved golden page's "AWS" on every AI-inferred field line -- corrected. New "AWS" nav group (212 services, 1,709 pages). Removed 490 Step-1 redirects that now collide with these live pages (the live page wins). 1,709/1,709 pass static checks, `ast.parse`, gofmt/deno-check spot-checks, `mint validate`. Committed `268fb9ea`, pushed, verified live via GitHub API.
+
+**Golden page re-review**: `golden/aws/template.mdx` was `published` on the theory ubx-sdk-aws covers this CFN resource -- corrected to `local_only` per the finding above (`98893485`), verified byte-identical to the real corpus page.
+
+**Real GCP/Azure non-Compute gap, verified live** (not from old estimates): a same-day-earlier commit (`901c4f5`) expanded provider config to 128 `google_<api>` and 304 `azure_<rp>_<file>` families. Live `--dump-ir` against all of them: **GCP has 782 real resource types, only 97 have any intro -- 685 are a genuinely unstarted gap** (config only, zero description/intro/page content). **Azure has 1,095 real resource types, 1,094 already have intros** -- only 9 missing + 8 stale to prune, far smaller than STATE.md's older "~1,084 remain" figure; most of that gap was closed by work not captured in the entries below. Neither GCP nor Azure has an AWS-style HashiCorp/CFN path split yet.
+
+**Never self-merged.** No em dashes. Full session report given to the founder inline; not repeated here.
+
+**What's next**: founder decision on whether/when to start the real GCP non-Compute docs work (685 resources, config-only today) -- the single largest remaining item in this whole initiative. Azure's small residual (9 missing + 8 stale) is a quick follow-up whenever picked up. GCP/Azure path splits (mirroring `aws-hashicorp/`) not yet decided or needed.
+
+---
+
 ## Cleanup: deleted a real, already-superseded branch, not forgotten work, 2026-08-22
 
 Last entry flagged `claude/ubx-llm-credential-mechanism-kv6vkb` as a possibly-forgotten unmerged PR. Founder corrected: it was deliberately rejected, a secondary session built it, and the primary session re-implemented the same fix with proper context. Verified before deleting, not taken on trust: main's real `IntentProviderKey` (`UBX_SERVER_INTENT_PROVIDER_KEY`/`--intent-provider-key`, `server/config.go`, commit `a6c6824`, Roozbeh Shafiee, 2026-08-14 23:29:42, part of `UBI-28 Phase 2` GitLab support) forwards the same real LLM/intent-provider API key into every `ubx plan` subprocess for markdown-authored proposals -- the identical problem the rejected branch's own commit described, landed ~2 hours later, backed by a real `docs/intent-provider.md`. Deleted `origin/claude/ubx-llm-credential-mechanism-kv6vkb` (`git push origin --delete`), confirmed gone via a direct `git ls-remote` against GitHub, not inferred from the push output alone.
