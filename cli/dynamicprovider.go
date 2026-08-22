@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -222,6 +223,31 @@ func dynamicProviderSchema(ctx context.Context, binPath, name string, params map
 	schemas, err := client.Provider.Schema(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch schema for dynamic provider %q: %w", name, err)
+	}
+	// Real observability gap, found while reconciling a real GCP coverage
+	// discrepancy (UBI-175): ubx-provider-dynamic's own discoverydoc/
+	// cloudformation/resourcemap Build() and Discover() calls already
+	// print a real, specific skip-reason Note per excluded candidate
+	// resource ("no matching create", "already claimed", "no usable
+	// schema", ...) to the launched subprocess's own stderr -- but
+	// Client.Stderr() (provider/client.go), which captures exactly that
+	// output, was never called by any caller until now, so every one of
+	// those notes was silently discarded on every real `ubx sdk gen`/
+	// `ubx resolve`/`ubx ship` run. Surfacing them here, once, at the
+	// single real chokepoint every dynamic-provider schema fetch already
+	// goes through, rather than at each of dynamicProviderSchema's own
+	// several call sites separately.
+	// client.Stderr() captures the subprocess's ENTIRE stderr, including
+	// go-plugin/tf6server's own internal trace-level JSON protocol
+	// logging and unrelated warnings -- real noise, not notes. Only the
+	// lines carrying main.go's own real "ubx-provider-dynamic: " prefix
+	// (every one of its genuine skip-reason Note prints, across
+	// discoverydoc/cloudformation/resourcemap/smithy alike) are the
+	// actual diagnostic surface this fix exists for.
+	for _, line := range strings.Split(client.Stderr(), "\n") {
+		if strings.HasPrefix(line, "ubx-provider-dynamic: ") {
+			fmt.Fprintln(os.Stderr, line)
+		}
 	}
 	return schemas, nil
 }
