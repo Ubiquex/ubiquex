@@ -2,6 +2,22 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-175: the 722 (738 live) orphaned service landing pages fixed across all providers, 2026-08-23
+
+**Task**: every service subgroup's own `index.mdx` overview page existed on disk and built cleanly, but was never linked from the sidebar -- `root` pointed at the first resource page instead. Re-measured live rather than trusting the quoted 722/730 (this session's own prior GCP work had already added ~25 more index pages since that count was taken): **747 landing pages total, 738 orphaned, 9 already reachable** by coincidence (a real resource whose own name reduces to "index", e.g. `google_aiplatform_index` is Vertex AI's real Index resource, not an overview page -- left untouched).
+
+**Root vs pages-array, decided empirically, not from the schema docs alone**: stood up a real `mint dev` and inspected the rendered sidebar HTML directly. A subgroup's header renders as a `<button aria-expanded>` with no `href` -- pure expand/collapse, never a navigable link (confirmed further: viewing a non-root page in a group still shows the group as "active", so `root` isn't even used for that). Its only real, observable effect is a data-attribute for exact-match styling. **Pointing `root` at the landing page alone would not have made it reachable** -- the only fix that actually links the page is adding it to the subgroup's own `pages` array. `root` was also repointed to match the new first entry, but only where it already tracked `pages[0]` (1,103 of 1,107 subgroups) -- the 4 AWS (HashiCorp) groups with a deliberately curated `root` (ECR/IAM/RDS/S3, pointing at the canonical resource rather than the alphabetically-first one) were left untouched.
+
+**A real complication found and resolved, not guessed past**: 604 landing pages had exactly one owning subgroup (clean). 134 live in directories shared by more than one category subgroup -- mostly Azure/AWS legacy mechanical-split directories (the old wire-prefix scheme, e.g. `resource-reference/aws/app/`) coexisting with the newer vendor-derived categories built during the earlier category-derivation rewrite. Linking the landing page into only one subgroup would misrepresent it, since its own card-grid content spans resources filed under all of them (verified directly, e.g. `azure/maps/index.mdx` lists resources that live in both the "Maps" and "Microsoft.Maps" subgroups) -- linked into every subgroup drawing pages from that directory instead of guessing an owner.
+
+**Verified**: 738 -> 0 orphans (checked against the real committed baseline, not just in-memory state), 0 dangling refs, 0 duplicate entries within any single subgroup's own `pages` list, `mint validate` passes. Live-rendering spot-check via `mint dev` + direct HTML inspection confirmed the landing page now appears as a real `<a href>` sidebar entry, not just JSON metadata.
+
+**Committed and pushed, verified live via the GitHub API**: `ubiquex-docs@81de4071`. Never self-merged. No em dashes.
+
+**What's next**: nothing further flagged this session on this front. The 134-directory legacy mechanical-split/vendor-derived-category overlap (AWS/Azure) noted above is now correctly linked from both sides, but the underlying duplicate categorization itself (should `Microsoft.Maps` and `Maps` really be two separate subgroups) is a real, separate categorization question, not touched here.
+
+---
+
 ## UBI-175: the 34 new GCP infra families finished end to end -- 100% description coverage, pages generated, wired into nav, 2026-08-23
 
 **Task, as given**: "Finish the 965 individual descriptions, then the 34 new families need pages generated and added to nav, they have intros and descriptions but no pages yet. Report when both are done." Both done, both verified live, in that order.
