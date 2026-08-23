@@ -59,6 +59,57 @@ func TestMergeDynamicProviderGroupMembers_CollidingResourceType_ErrorsNotSilentO
 	}
 }
 
+func TestMergeDynamicProviderGroupMembers_ExcludedCollision_DropsExcludedSideNotBothOrError(t *testing.T) {
+	// UBI-175 Datadog v1/v2: a declared exclude on the losing member
+	// resolves the collision by dropping that member's own entry --
+	// the other member's entry wins under its own plain, unprefixed
+	// wire name. Distinct from the no-exclude case above, which must
+	// still fail loud.
+	members := []dynamicProviderGroupMember{
+		{name: "datadog", schemas: fakeGroupSchemas("event_response", "monitor")},
+		{name: "datadog_v2", schemas: fakeGroupSchemas("event_response", "incident"), exclude: map[string]bool{"event_response": true}},
+	}
+
+	merged, _, _, err := mergeDynamicProviderGroupMembers("datadog_all", members)
+	if err != nil {
+		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
+	}
+	if len(merged.Resources) != 3 {
+		t.Fatalf("expected 3 merged resource types (event_response once, plus monitor and incident), got %d: %v", len(merged.Resources), merged.Resources)
+	}
+	for _, want := range []string{"event_response", "monitor", "incident"} {
+		if _, ok := merged.Resources[want]; !ok {
+			t.Errorf("expected merged Resources to contain %q", want)
+		}
+	}
+}
+
+func TestGroupExcludeFromParams_ParsesNestedMemberTable(t *testing.T) {
+	params := map[string]any{
+		"exclude": map[string]any{
+			"datadog_v2": []any{"event_response", "application_key_response", "user_response"},
+		},
+	}
+	exclude, err := groupExcludeFromParams(params)
+	if err != nil {
+		t.Fatalf("groupExcludeFromParams: %v", err)
+	}
+	member := exclude["datadog_v2"]
+	if len(member) != 3 || !member["event_response"] || !member["application_key_response"] || !member["user_response"] {
+		t.Errorf("expected 3 excluded names for datadog_v2, got: %v", member)
+	}
+}
+
+func TestGroupExcludeFromParams_Absent_ReturnsNilNotError(t *testing.T) {
+	exclude, err := groupExcludeFromParams(map[string]any{"members": []any{"a"}})
+	if err != nil {
+		t.Fatalf("groupExcludeFromParams: %v", err)
+	}
+	if exclude != nil {
+		t.Errorf("expected nil exclude when no exclude table declared, got: %v", exclude)
+	}
+}
+
 func TestMergeDynamicProviderGroupMembers_CollidingDataSource_Errors(t *testing.T) {
 	members := []dynamicProviderGroupMember{
 		{name: "a", schemas: &provider.Schemas{DataSources: map[string]*provider.Schema{"shared_ds": {}}}},
@@ -120,7 +171,7 @@ func TestMergeDynamicProviderGroupMembers_NoSignalsOrExcludes_ReturnsNilNotEmpty
 }
 
 func TestGenerateDynamicProviderGroup_NoMembers_Errors(t *testing.T) {
-	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", "empty-group", nil, nil, "", "", "", nil, "", "", "")
+	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", "empty-group", nil, nil, nil, "", "", "", nil, "", "", "")
 	if err == nil {
 		t.Fatal("expected an error for a group with zero declared members, got nil")
 	}

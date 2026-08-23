@@ -75,9 +75,20 @@ schema_url = "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.
 base_url = "https://kubernetes.example.invalid"
 
 # --- GitHub -- real, live-verified schema/discovery since Phase 1 ---
+#
+# schema_url repointed to ghec (GitHub Enterprise Cloud), UBI-175's own
+# real, confirmed coverage-gap closure: ghec is a clean superset of
+# api.github.com -- all 68 resources this entry previously generated are
+# present with equal-or-richer fields (confirmed live, zero regressions),
+# plus 12 genuinely new resources. GHEC is not a separate hostname --
+# GitHub.com customers on an Enterprise Cloud plan are served by this
+# same real api.github.com REST API, just a richer published spec -- so
+# base_url is unchanged. A straight repoint, not a second entry: unlike
+# Datadog v1/v2 below, there is no genuinely separate content to merge,
+# only a richer description of the identical live API.
 [dynamic_providers.github]
 schema_source = "openapi"
-schema_url = "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json"
+schema_url = "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/ghec/ghec.json"
 base_url = "https://api.github.com"
 
 [dynamic_providers.github.auth]
@@ -101,6 +112,87 @@ value_env = "DATADOG_API_KEY"
 [[dynamic_providers.datadog.auth.params.headers]]
 name = "DD-APPLICATION-KEY"
 value_env = "DATADOG_APP_KEY"
+
+# --- Datadog v2 -- UBI-175 coverage-gap closure: v1 alone yields 26 real
+# resources, Datadog's own v2 OpenAPI spec (same repo/branch) yields 148,
+# 145 of them genuinely new (not a v1 replacement/superset -- 23 of v1's
+# own 26 have no v2 equivalent at all: monitor, dashboard, downtime,
+# logs_index, logs_pipeline, host_tags, all four synthetics_* types, and
+# 15 others -- both entries stay configured, neither retires the other).
+#
+# A separate [dynamic_providers.<name>] table because TOML requires a
+# unique key and "datadog" is already this file's own v1 entry -- but
+# wire_name = "datadog" (ubx-provider-dynamic PR #7, feat/wire-name-
+# override, open, NOT yet merged as of this entry) makes every resource
+# this entry produces carry the SAME plain "datadog_" public prefix v1's
+# own resources carry, not a version-revealing "datadog_v2_" one. Before
+# that field existed, the table's own key was the only input to wire
+# naming -- see that PR's own description for the full real account.
+#
+# Real collision count, confirmed against this entry's own actual
+# wire_name="datadog" output (not the earlier, naive-prefix estimate
+# from before wire_name existed, which counted 3): datadog_event_response
+# does NOT collide -- v2's own Phase 2 same-provider tie-break (a
+# genuinely different v2 endpoint sharing event_response's response
+# schema) bumps ITS OWN losing candidate to a self-disambiguated
+# "datadog_v2_event_response" before this entry's output ever reaches
+# the group merge below, leaving v1's plain datadog_event_response
+# untouched and v2's own event-response variant surviving under a
+# distinct name -- both real, neither excluded. Only 2 of v2's 148
+# resources actually collide by generated wire name with v1's own
+# richer version: datadog_application_key_response (v1: 5 fields, v2: 3)
+# and datadog_user_response (v1: 9 fields, v2: 3) -- v1 wins both,
+# resolved below, at merge time, by
+# [dynamic_provider_groups.datadog_all]'s own exclude table, not here.
+#
+# Until PR #7 merges, `ubx sdk gen` against this entry requires a local
+# ubx-provider-dynamic checkout built from that branch
+# (UBX_PROVIDER_DYNAMIC_REPO) -- the real, published binary does not yet
+# recognize wire_name and would silently fall back to this table's own
+# key ("datadog_v2"), reintroducing the exact version-leak this entry
+# exists to avoid. Flagged here so a future session never assumes
+# "configured" means "safe against the published binary" without
+# checking PR #7's own real merge state first.
+[dynamic_providers.datadog_v2]
+schema_source = "openapi"
+schema_url = "https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v2/openapi.yaml"
+base_url = "https://api.datadoghq.com"
+wire_name = "datadog"
+
+[dynamic_providers.datadog_v2.auth]
+type = "api_key_header"
+[[dynamic_providers.datadog_v2.auth.params.headers]]
+name = "DD-API-KEY"
+value_env = "DATADOG_API_KEY"
+[[dynamic_providers.datadog_v2.auth.params.headers]]
+name = "DD-APPLICATION-KEY"
+value_env = "DATADOG_APP_KEY"
+
+# [dynamic_provider_groups.datadog_all]: merges the v1 and v2 entries
+# above into ONE combined "datadog" repo identity, the same real
+# mechanism [dynamic_provider_groups.google_all] already established.
+# exclude drops v2's own 2 real colliding names (see datadog_v2's own
+# doc comment) before the merge's own collision check runs -- v1's
+# richer version reaches the merged output under the plain, unprefixed
+# name; v2's copy never does. Every other one of v2's resources
+# (including its own self-disambiguated datadog_v2_event_response)
+# merges in unaffected. Values here are FULL wire type names (this
+# table's own values, unlike the earlier draft that used bare local
+# names before the real output was checked) -- generateDynamicProvider
+# Group's own fetch-time validation fails loud if any of these does not
+# literally exist in datadog_v2's own real schema.
+[dynamic_provider_groups.datadog_all]
+repo_name = "datadog"
+members = [
+  "datadog",
+  "datadog_v2",
+]
+
+[dynamic_provider_groups.datadog_all.exclude]
+datadog_v2 = [
+  "datadog_application_key_response",
+  "datadog_user_response",
+]
 
 # --- AWS -- real, full CloudFormation-registry coverage (this checkpoint) ---
 #

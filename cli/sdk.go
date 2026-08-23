@@ -228,8 +228,12 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: dynamic provider group %q: %w", groupName, err)}
 				}
 				repoName := repoNameFromGroupParams(groupParams, groupName)
+				exclude, err := groupExcludeFromParams(groupParams)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: dynamic provider group %q: %w", groupName, err)}
+				}
 
-				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, repoName, members, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
+				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, repoName, members, exclude, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
@@ -357,6 +361,62 @@ func repoNameFromGroupParams(params map[string]any, groupName string) string {
 		return groupName
 	}
 	return s
+}
+
+// groupExcludeKey is a [dynamic_provider_groups.<name>] table's own
+// optional per-member collision resolution: a nested
+// [dynamic_provider_groups.<name>.exclude] table, keyed by member name,
+// each value a list of that member's own wire type names to drop before
+// the merge step. The smallest real addition that lets two members
+// genuinely disagree on a handful of overlapping resource names without
+// either failing the whole group (mergeDynamicProviderGroupMembers' own
+// default) or laundering the disagreement into the public wire name via
+// a version-revealing prefix (UBI-175 Datadog v1/v2: 3 of v2's 148
+// resources collide by name with v1's own richer versions -- v1 should
+// win all three, under its own plain, unprefixed name, not a
+// "datadog_v2_" one). Declaring an excluded name that member's own
+// schema doesn't actually contain is a config error (stale or
+// misspelled), not a safe no-op -- generateDynamicProviderGroup's own
+// fetch loop validates this against each member's real, live schema
+// before merging, matching groupMembersFromParams' "fail loud on a
+// config author's mistake" discipline.
+const groupExcludeKey = "exclude"
+
+// groupExcludeFromParams reads a group's own optional exclude table,
+// returning member name -> set of wire type names to drop from that
+// member before merging. A missing exclude table is the common case
+// (nil, not an error) -- most groups have no overlapping members.
+func groupExcludeFromParams(params map[string]any) (map[string]map[string]bool, error) {
+	raw, ok := params[groupExcludeKey]
+	if !ok {
+		return nil, nil
+	}
+	byMember, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%q must be a table of member name -> array of strings", groupExcludeKey)
+	}
+	out := make(map[string]map[string]bool, len(byMember))
+	for member, rawList := range byMember {
+		list, ok := rawList.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%q.%q must be an array of strings", groupExcludeKey, member)
+		}
+		names := make(map[string]bool, len(list))
+		for _, v := range list {
+			s, ok := v.(string)
+			if !ok || s == "" {
+				return nil, fmt.Errorf("%q.%q contains a non-string or empty entry: %v", groupExcludeKey, member, v)
+			}
+			names[s] = true
+		}
+		if len(names) > 0 {
+			out[member] = names
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // generateOneProvider acquires+launches one provider, fetches its real
@@ -497,7 +557,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // identical wire type name, a real, worth-surfacing anomaly, not routine
 // overlap this function should paper over by letting the second member
 // silently clobber the first's entry in the merged map.
-func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName, repoName string, memberNames []string, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName, repoName string, memberNames []string, exclude map[string]map[string]bool, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	if len(memberNames) == 0 {
 		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: no members declared", groupName)
 	}
@@ -533,11 +593,21 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 			signalsByType = nil
 		}
 
+		memberExclude := exclude[name]
+		for excludedName := range memberExclude {
+			_, inResources := schemas.Resources[excludedName]
+			_, inDataSources := schemas.DataSources[excludedName]
+			if !inResources && !inDataSources {
+				return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: member %q: exclude entry %q not found in that member's own schema -- stale or misspelled", groupName, name, excludedName)
+			}
+		}
+
 		members = append(members, dynamicProviderGroupMember{
 			name:            name,
 			schemas:         schemas,
 			signalsByType:   signalsByType,
 			describeExclude: describeExcludeFromParams(params),
+			exclude:         memberExclude,
 		})
 	}
 
@@ -562,6 +632,12 @@ type dynamicProviderGroupMember struct {
 	schemas         *provider.Schemas
 	signalsByType   map[string]map[string]*fieldSignal
 	describeExclude map[string]bool
+	// exclude is this member's own wire type names to drop before
+	// merging -- config-declared collision resolution (groupExcludeKey),
+	// distinct from describeExclude (which still generates full
+	// bindings, only skipping description generation). A name in here
+	// never reaches merged.Resources/DataSources at all for this member.
+	exclude map[string]bool
 }
 
 // mergeDynamicProviderGroupMembers is generateDynamicProviderGroup's own
@@ -580,12 +656,18 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 
 	for _, m := range members {
 		for typeName, schema := range m.schemas.Resources {
+			if m.exclude[typeName] {
+				continue
+			}
 			if _, exists := merged.Resources[typeName]; exists {
 				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: resource type %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
 			merged.Resources[typeName] = schema
 		}
 		for typeName, schema := range m.schemas.DataSources {
+			if m.exclude[typeName] {
+				continue
+			}
 			if _, exists := merged.DataSources[typeName]; exists {
 				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: data source %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
