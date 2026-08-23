@@ -120,7 +120,7 @@ func TestMergeDynamicProviderGroupMembers_NoSignalsOrExcludes_ReturnsNilNotEmpty
 }
 
 func TestGenerateDynamicProviderGroup_NoMembers_Errors(t *testing.T) {
-	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", nil, nil, "", "", "", nil, "", "", "")
+	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", "empty-group", nil, nil, "", "", "", nil, "", "", "")
 	if err == nil {
 		t.Fatal("expected an error for a group with zero declared members, got nil")
 	}
@@ -161,5 +161,30 @@ func TestGroupMembersFromParams_EmptyList_Errors(t *testing.T) {
 func TestGroupMembersFromParams_NonStringEntry_Errors(t *testing.T) {
 	if _, err := groupMembersFromParams(map[string]any{"members": []any{"a", 42}}); err == nil {
 		t.Fatal("expected an error for a non-string members entry, got nil")
+	}
+}
+
+func TestRepoNameFromGroupParams_NoOverride_DefaultsToGroupName(t *testing.T) {
+	got := repoNameFromGroupParams(map[string]any{}, "google_all")
+	if got != "google_all" {
+		t.Errorf("expected default to groupName %q, got %q", "google_all", got)
+	}
+}
+
+func TestRepoNameFromGroupParams_Override_UsedInstead(t *testing.T) {
+	// The real bug this override exists to fix: a group named "google_all"
+	// (distinct from its own "google" member, avoiding the --only
+	// ambiguity) must still be able to claim the real repo identity
+	// "google" that member already uses.
+	got := repoNameFromGroupParams(map[string]any{"repo_name": "google"}, "google_all")
+	if got != "google" {
+		t.Errorf("expected repo_name override %q, got %q", "google", got)
+	}
+}
+
+func TestRepoNameFromGroupParams_WrongType_FallsBackToGroupName(t *testing.T) {
+	got := repoNameFromGroupParams(map[string]any{"repo_name": 42}, "google_all")
+	if got != "google_all" {
+		t.Errorf("expected fallback to groupName on wrong-typed repo_name, got %q", got)
 	}
 }

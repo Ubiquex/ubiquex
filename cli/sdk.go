@@ -222,12 +222,14 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				if onlyNames != nil && !onlyNames[groupName] {
 					continue
 				}
-				members, err := groupMembersFromParams(cfg.DynamicProviderGroups[groupName])
+				groupParams := cfg.DynamicProviderGroups[groupName]
+				members, err := groupMembersFromParams(groupParams)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: dynamic provider group %q: %w", groupName, err)}
 				}
+				repoName := repoNameFromGroupParams(groupParams, groupName)
 
-				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, members, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
+				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, repoName, members, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
@@ -326,6 +328,35 @@ func groupMembersFromParams(params map[string]any) ([]string, error) {
 		return nil, fmt.Errorf("%q is empty", groupMembersKey)
 	}
 	return members, nil
+}
+
+// groupRepoNameKey is a [dynamic_provider_groups.<name>] table's own
+// optional override for writeGeneratedSDK's shortName (the real
+// published repo identity, github.com/ubiquex/ubx-sdk-<repoName>) --
+// separate from the table's own key (the --only match target) precisely
+// so a group can be named distinctly from any of its own members while
+// still claiming the real repo identity one of those members already
+// uses. See generateDynamicProviderGroup's own doc comment for the real,
+// live bug this decoupling fixes: a group named identically to one of
+// its own members (both "google") made --only google match both the
+// standalone entry and the group in the same run, both writing to the
+// same output path.
+const groupRepoNameKey = "repo_name"
+
+// repoNameFromGroupParams reads a group's own optional repo_name
+// override, defaulting to groupName (the table's own key) when absent --
+// the common case for a group whose name never collides with a member's
+// own name.
+func repoNameFromGroupParams(params map[string]any, groupName string) string {
+	raw, ok := params[groupRepoNameKey]
+	if !ok {
+		return groupName
+	}
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return groupName
+	}
+	return s
 }
 
 // generateOneProvider acquires+launches one provider, fetches its real
@@ -429,11 +460,27 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // independently (the identical per-entry fetch generateOneDynamicProvider
 // itself does), merges their Resources/DataSources/signals into one
 // combined provider.Schemas, and calls writeGeneratedSDK exactly ONCE
-// with shortName=groupName -- the real mechanism this pipeline was
+// with shortName=repoName -- the real mechanism this pipeline was
 // missing (sdk/providers/.ubx/config's own "NAMING CAVEAT" comment on the
 // google_<api> block: "None of these 128 entries has a real per-API
 // repo... If a real multi-source-into-one-repo codegen mechanism gets
 // built later, this block should be revisited"). This is that mechanism.
+//
+// groupName (the [dynamic_provider_groups.<name>] table's own key, the
+// --only match target) and repoName (writeGeneratedSDK's own shortName,
+// the real published repo identity: github.com/ubiquex/ubx-sdk-<repoName>)
+// are DELIBERATELY separate parameters, not the same string reused twice
+// -- a real bug this function's own first live run caught: naming a
+// group identically to its own real per-API member (both "google") made
+// --only google match BOTH the standalone [dynamic_providers.google]
+// entry AND this group, writing to the same output path from two
+// different code paths in the same run. repoName is the ONLY thing
+// writeGeneratedSDK ever sees; source is set to repoName verbatim (not a
+// decorated description) because source ALSO drives the real output
+// directory name via sanitizeSourceForFilename -- a second real bug this
+// same first run caught, a decorated source string ("google (aggregated
+// from 162 dynamic_providers entries)") sanitizes to a mangled directory
+// name nothing else in this pipeline would ever look for.
 //
 // Members keep working standalone via `--only <member-name>` unchanged
 // (a group is purely additive over the existing per-entry entries, never
@@ -450,7 +497,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // identical wire type name, a real, worth-surfacing anomaly, not routine
 // overlap this function should paper over by letting the second member
 // silently clobber the first's entry in the merged map.
-func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName string, memberNames []string, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName, repoName string, memberNames []string, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	if len(memberNames) == 0 {
 		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: no members declared", groupName)
 	}
@@ -500,8 +547,7 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 	}
 
 	const version = "dynamic"
-	source := fmt.Sprintf("%s (aggregated from %d dynamic_providers entries)", groupName, len(memberNames))
-	return writeGeneratedSDK(ctx, merged, groupName, source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedDescribeExclude)
+	return writeGeneratedSDK(ctx, merged, repoName, repoName, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedDescribeExclude)
 }
 
 // dynamicProviderGroupMember is one already-fetched [dynamic_providers.<name>]

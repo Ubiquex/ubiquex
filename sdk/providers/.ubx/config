@@ -239,12 +239,14 @@ base_url = "https://compute.googleapis.com/compute/v1"
 # field counts.
 #
 # The real multi-source-into-one-repo mechanism this comment used to say
-# "should be revisited" for now exists: [dynamic_provider_groups.google]
+# "should be revisited" for now exists: [dynamic_provider_groups.google_all]
 # below fetches every one of these entries (plus the original
 # google/compute entry above) and merges them into ONE combined
-# provider.Schemas before codegen, so `ubx sdk gen --only google --out .`
+# provider.Schemas before codegen, so `ubx sdk gen --only google_all --out .`
 # produces the real, single, github.com/ubiquex/ubx-sdk-google-shaped
-# tree covering the full corpus, matching that repo's own real identity.
+# tree covering the full corpus, matching that repo's own real identity
+# (the group is keyed "google_all", not "google" -- see that table's own
+# header comment for the real collision naming it "google" caused).
 
 [dynamic_providers.google_accesscontextmanager]
 schema_source = "discovery_docs"
@@ -856,19 +858,38 @@ base_url = "https://workstations.googleapis.com"
 # every listed member independently, unions their Resources/DataSources/
 # signals/describe_exclude (a real collision across members fails loud,
 # never silently picks one), and calls writeGeneratedSDK ONCE with
-# shortName = this table's own key. `ubx sdk gen --only google --out .`
-# generates the group, not the bare [dynamic_providers.google] Compute-only
-# entry above -- `--only google_dataflow` (etc.) still generates that ONE
-# member standalone, unaffected; a group is purely additive.
+# shortName = repo_name (falling back to this table's own key if unset).
 #
-# [dynamic_provider_groups.google]: every real GCP Discovery Doc entry
-# above (the original google/compute entry plus all 161 google_<api>
-# entries), merged into the single, real, published github.com/ubiquex/
-# ubx-sdk-google identity -- the real fix for the gap the google_<api>
-# block's own NAMING CAVEAT comment named ("no such repo exists or is
-# planned" is no longer true; this table is that repo's real, full
-# source list).
-[dynamic_provider_groups.google]
+# Table key vs repo_name, real bug this file's own first live run caught:
+# this table was originally keyed "google" too, identically to the
+# standalone [dynamic_providers.google] Compute-only entry above --
+# `--only google` matched BOTH in the same run, both writing to the same
+# output path (the second write silently landing on top of the first).
+# Keyed "google_all" instead (distinct from every real
+# [dynamic_providers.<name>] entry, so `--only google_all` can never
+# collide with a standalone target), with repo_name = "google" carrying
+# the real published repo identity separately -- see
+# generateDynamicProviderGroup's own doc comment (cli/sdk.go) for the
+# full account, including a second, related bug this same run caught
+# (source driving the output DIRECTORY name too, via
+# sanitizeSourceForFilename -- fixed by setting source = repoName
+# verbatim, not a decorated description).
+#
+# `ubx sdk gen --only google_all --out .` generates the group under the
+# real "google" repo identity -- `--only google` still means the bare
+# Compute-only entry above, `--only google_dataflow` (etc.) still
+# generates that ONE member standalone, unaffected; a group is purely
+# additive.
+#
+# [dynamic_provider_groups.google_all]: every real GCP Discovery Doc
+# entry above (the original google/compute entry plus all 161
+# google_<api> entries), merged into the single, real, published
+# github.com/ubiquex/ubx-sdk-google identity -- the real fix for the gap
+# the google_<api> block's own NAMING CAVEAT comment named ("no such
+# repo exists or is planned" is no longer true; this table is that
+# repo's real, full source list).
+[dynamic_provider_groups.google_all]
+repo_name = "google"
 members = [
   "google",
   "google_accesscontextmanager",
