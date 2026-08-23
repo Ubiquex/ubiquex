@@ -219,24 +219,32 @@ base_url = "https://compute.googleapis.com/compute/v1"
 # schema_url/base_url pulled directly from that API's own live discovery
 # document (baseUrl field), not guessed from a naming pattern. Named
 # google_<api id> rather than a second bare "google" entry: ubx-provider-dynamic
-# schemas one discovery doc per entry, and these are 128 distinct real docs,
-# not one. Schema/discovery layer only, matching the existing google/compute
-# entry's own real, honestly-scoped limitation -- no live CRUD wiring here.
+# schemas one discovery doc per entry, and these are 161 distinct real docs
+# (this comment previously said 128, stale as of a later config-expansion
+# phase; corrected against a real count of this file's own entries, not
+# re-asserted from memory), not one. Schema/discovery layer only, matching
+# the existing google/compute entry's own real, honestly-scoped limitation
+# -- no live CRUD wiring here.
 #
 # NAMING CAVEAT, read before touching this block: cli/sdk.go's
 # generateOneDynamicProvider passes a [dynamic_providers.<name>] table's own
 # key straight through as writeGeneratedSDK's shortName, which becomes the
 # generated output's own claimed manifest repo identity
-# (github.com/ubiquex/ubx-sdk-<shortName>). None of these 128 entries has a
-# real per-API repo -- there is exactly one real, published GCP bindings
-# repo, github.com/ubiquex/ubx-sdk-google, covering the original
-# google/compute entry above. These google_<api> entries exist ONLY to let
+# (github.com/ubiquex/ubx-sdk-<shortName>). None of these 161 entries has a
+# real per-API repo of its own -- never run a real publish/write step
+# against one directly expecting it to land in a real
+# ubx-sdk-google_<api> repo, because no such repo exists or is planned.
+# Standalone (`--only google_<api>`), each entry still exists to let
 # `ubx sdk gen --dump-ir`/schema-fetch report real per-product resource and
-# field counts for this session's docs-artifact work; never run a real
-# publish/write step against one expecting it to land in a real
-# ubx-sdk-google_<api> repo, because no such repo exists or is planned. If a
-# real multi-source-into-one-repo codegen mechanism gets built later, this
-# block should be revisited rather than treated as the final shape.
+# field counts.
+#
+# The real multi-source-into-one-repo mechanism this comment used to say
+# "should be revisited" for now exists: [dynamic_provider_groups.google]
+# below fetches every one of these entries (plus the original
+# google/compute entry above) and merges them into ONE combined
+# provider.Schemas before codegen, so `ubx sdk gen --only google --out .`
+# produces the real, single, github.com/ubiquex/ubx-sdk-google-shaped
+# tree covering the full corpus, matching that repo's own real identity.
 
 [dynamic_providers.google_accesscontextmanager]
 schema_source = "discovery_docs"
@@ -841,6 +849,191 @@ base_url = "https://workloadmanager.googleapis.com"
 schema_source = "discovery_docs"
 schema_url = "https://workstations.googleapis.com/$discovery/rest?version=v1"
 base_url = "https://workstations.googleapis.com"
+
+# --- Dynamic provider GROUPS: merge multiple [dynamic_providers.<name>]
+# entries into ONE combined output, real repo. cli/sdk.go's own
+# generateDynamicProviderGroup/mergeDynamicProviderGroupMembers -- fetches
+# every listed member independently, unions their Resources/DataSources/
+# signals/describe_exclude (a real collision across members fails loud,
+# never silently picks one), and calls writeGeneratedSDK ONCE with
+# shortName = this table's own key. `ubx sdk gen --only google --out .`
+# generates the group, not the bare [dynamic_providers.google] Compute-only
+# entry above -- `--only google_dataflow` (etc.) still generates that ONE
+# member standalone, unaffected; a group is purely additive.
+#
+# [dynamic_provider_groups.google]: every real GCP Discovery Doc entry
+# above (the original google/compute entry plus all 161 google_<api>
+# entries), merged into the single, real, published github.com/ubiquex/
+# ubx-sdk-google identity -- the real fix for the gap the google_<api>
+# block's own NAMING CAVEAT comment named ("no such repo exists or is
+# planned" is no longer true; this table is that repo's real, full
+# source list).
+[dynamic_provider_groups.google]
+members = [
+  "google",
+  "google_accesscontextmanager",
+  "google_agentidentity",
+  "google_agentregistry",
+  "google_aiplatform",
+  "google_alloydb",
+  "google_analyticshub",
+  "google_androiddeviceprovisioning",
+  "google_androidenterprise",
+  "google_androidmanagement",
+  "google_apigateway",
+  "google_apigee",
+  "google_apihub",
+  "google_apikeys",
+  "google_apim",
+  "google_appengine",
+  "google_apphub",
+  "google_artifactregistry",
+  "google_assuredworkloads",
+  "google_backupdr",
+  "google_baremetalsolution",
+  "google_batch",
+  "google_beyondcorp",
+  "google_biglake",
+  "google_bigquery",
+  "google_bigqueryconnection",
+  "google_bigquerydatapolicy",
+  "google_bigquerydatatransfer",
+  "google_bigqueryreservation",
+  "google_bigtableadmin",
+  "google_billingbudgets",
+  "google_binaryauthorization",
+  "google_blockchainnodeengine",
+  "google_certificatemanager",
+  "google_ces",
+  "google_chromemanagement",
+  "google_cloudasset",
+  "google_cloudbilling",
+  "google_cloudbuild",
+  "google_cloudchannel",
+  "google_cloudcontrolspartner",
+  "google_clouddeploy",
+  "google_cloudfunctions",
+  "google_cloudidentity",
+  "google_cloudkms",
+  "google_cloudnumberregistry",
+  "google_cloudquotas",
+  "google_cloudresourcemanager",
+  "google_cloudscheduler",
+  "google_cloudsupport",
+  "google_cloudtasks",
+  "google_composer",
+  "google_config",
+  "google_connectors",
+  "google_contactcenteraiplatform",
+  "google_contactcenterinsights",
+  "google_container",
+  "google_containeranalysis",
+  "google_contentwarehouse",
+  "google_datacatalog",
+  "google_dataflow",
+  "google_dataform",
+  "google_datafusion",
+  "google_datalineage",
+  "google_datamigration",
+  "google_datapipelines",
+  "google_dataplex",
+  "google_dataproc",
+  "google_datastore",
+  "google_datastream",
+  "google_deploymentmanager",
+  "google_developerconnect",
+  "google_dialogflow",
+  "google_discoveryengine",
+  "google_dlp",
+  "google_dns",
+  "google_documentai",
+  "google_essentialcontacts",
+  "google_eventarc",
+  "google_file",
+  "google_firebase",
+  "google_firebaseappcheck",
+  "google_firebaseappdistribution",
+  "google_firebaseapphosting",
+  "google_firebasedatabase",
+  "google_firebasedataconnect",
+  "google_firebaserules",
+  "google_firestore",
+  "google_ftp",
+  "google_gkebackup",
+  "google_gkehub",
+  "google_gkeonprem",
+  "google_healthcare",
+  "google_hypercomputecluster",
+  "google_iam",
+  "google_iampolicies",
+  "google_iap",
+  "google_identitytoolkit",
+  "google_ids",
+  "google_logging",
+  "google_looker",
+  "google_lustre",
+  "google_managedidentities",
+  "google_managedkafka",
+  "google_memcache",
+  "google_metastore",
+  "google_migrationcenter",
+  "google_ml",
+  "google_modelarmor",
+  "google_monitoring",
+  "google_netapp",
+  "google_networkconnectivity",
+  "google_networkmanagement",
+  "google_networksecurity",
+  "google_networkservices",
+  "google_notebooks",
+  "google_observability",
+  "google_oracledatabase",
+  "google_orgpolicy",
+  "google_osconfig",
+  "google_oslogin",
+  "google_parallelstore",
+  "google_parametermanager",
+  "google_policysimulator",
+  "google_privateca",
+  "google_privilegedaccessmanager",
+  "google_pubsub",
+  "google_pubsublite",
+  "google_rapidmigrationassessment",
+  "google_recaptchaenterprise",
+  "google_redis",
+  "google_run",
+  "google_saasservicemgmt",
+  "google_sasportal",
+  "google_secretmanager",
+  "google_securesourcemanager",
+  "google_securitycenter",
+  "google_securityposture",
+  "google_servicedirectory",
+  "google_servicemanagement",
+  "google_siteverification",
+  "google_sourcerepo",
+  "google_spanner",
+  "google_speech",
+  "google_sqladmin",
+  "google_storage",
+  "google_storagebatchoperations",
+  "google_storagetransfer",
+  "google_testing",
+  "google_toolresults",
+  "google_tpu",
+  "google_transcoder",
+  "google_translate",
+  "google_vision",
+  "google_vmmigration",
+  "google_vmwareengine",
+  "google_vpcaccess",
+  "google_websecurityscanner",
+  "google_workflowexecutions",
+  "google_workflows",
+  "google_workloadmanager",
+  "google_workstations",
+]
+
 
 # --- Azure, non-Compute product families (UBI-175 config-expansion phase) ---
 #

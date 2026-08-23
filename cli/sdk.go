@@ -208,6 +208,34 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				coverageOrder = append(coverageOrder, name)
 			}
 
+			// Groups are purely additive over the [dynamic_providers.<name>]
+			// loop above -- a member entry keeps working standalone via
+			// --only <member-name> unchanged; a group entry's own name is
+			// a SEPARATE --only target that fetches every member fresh
+			// and merges them into one writeGeneratedSDK call. Fail-fast,
+			// not CI-matrix: an aggregation missing a real member's own
+			// resources would silently under-report the combined repo's
+			// own true coverage, a worse failure mode than the
+			// [thirdparty_providers] loop's own fail-fast reasoning
+			// already accepts for a different kind of failure.
+			for _, groupName := range sortedGroupNames(cfg.DynamicProviderGroups) {
+				if onlyNames != nil && !onlyNames[groupName] {
+					continue
+				}
+				members, err := groupMembersFromParams(cfg.DynamicProviderGroups[groupName])
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: dynamic provider group %q: %w", groupName, err)}
+				}
+
+				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, members, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "generated %d resource type(s) for dynamic provider group %q (%d members) -> %s\n", count, groupName, len(members), path)
+				perProviderCoverage[groupName] = coverage
+				coverageOrder = append(coverageOrder, groupName)
+			}
+
 			fmt.Fprint(cmd.OutOrStdout(), formatCoverageReport(perProviderCoverage, coverageOrder))
 
 			if len(dynamicFailures) > 0 {
@@ -249,6 +277,55 @@ func parseOnlyNames(only string) map[string]bool {
 		}
 	}
 	return names
+}
+
+// sortedGroupNames mirrors sortedDynamicProviderNames/sortedProviderSources'
+// own determinism discipline (sort.Strings before ranging a Go map) for
+// [dynamic_provider_groups.<name>] entries specifically.
+func sortedGroupNames(m map[string]map[string]any) []string {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// groupMembersKey is the real, well-known config key a
+// [dynamic_provider_groups.<name>] table declares its member
+// [dynamic_providers.<name>] entries under.
+const groupMembersKey = "members"
+
+// groupMembersFromParams extracts a [dynamic_provider_groups.<name>]
+// table's own real "members" list -- same real []any-of-string TOML
+// decode shape describeExcludeFromParams already handles for
+// describe_exclude, but unlike that mechanism, a missing/malformed/empty
+// members list here is a real config error, not a safe no-op default: a
+// declared group with no real members to fetch is never a legitimate
+// "nothing to exclude"-style absence, it is a config author's mistake
+// worth failing loud on immediately, not discovering later as an empty
+// generated repo.
+func groupMembersFromParams(params map[string]any) ([]string, error) {
+	raw, ok := params[groupMembersKey]
+	if !ok {
+		return nil, fmt.Errorf("no %q key declared", groupMembersKey)
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%q must be an array of strings", groupMembersKey)
+	}
+	members := make([]string, 0, len(list))
+	for _, v := range list {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			return nil, fmt.Errorf("%q contains a non-string or empty entry: %v", groupMembersKey, v)
+		}
+		members = append(members, s)
+	}
+	if len(members) == 0 {
+		return nil, fmt.Errorf("%q is empty", groupMembersKey)
+	}
+	return members, nil
 }
 
 // generateOneProvider acquires+launches one provider, fetches its real
@@ -344,6 +421,145 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 
 	const version = "dynamic"
 	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, describeExcludeFromParams(params))
+}
+
+// generateDynamicProviderGroup is generateOneDynamicProvider's own real
+// sibling for a [dynamic_provider_groups.<name>] entry: fetches EVERY
+// member [dynamic_providers.<member>] entry's own real schema
+// independently (the identical per-entry fetch generateOneDynamicProvider
+// itself does), merges their Resources/DataSources/signals into one
+// combined provider.Schemas, and calls writeGeneratedSDK exactly ONCE
+// with shortName=groupName -- the real mechanism this pipeline was
+// missing (sdk/providers/.ubx/config's own "NAMING CAVEAT" comment on the
+// google_<api> block: "None of these 128 entries has a real per-API
+// repo... If a real multi-source-into-one-repo codegen mechanism gets
+// built later, this block should be revisited"). This is that mechanism.
+//
+// Members keep working standalone via `--only <member-name>` unchanged
+// (a group is purely additive over the existing per-entry entries, never
+// a replacement for them) -- the schema-dump/docs use every google_<api>
+// entry already serves is untouched.
+//
+// Collision handling is fail-loud, not silently-overwrite: this
+// pipeline's real, existing per-entry wire-type naming already prefixes
+// every generated type with its own declared entry name (confirmed live:
+// google_siteverification's own generated type is
+// google_siteverification_site_verification_web_resource, never a bare
+// site_verification_web_resource) -- so a real collision across two
+// distinct member entries would mean two members share a genuinely
+// identical wire type name, a real, worth-surfacing anomaly, not routine
+// overlap this function should paper over by letting the second member
+// silently clobber the first's entry in the merged map.
+func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName string, memberNames []string, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+	if len(memberNames) == 0 {
+		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: no members declared", groupName)
+	}
+
+	repoPath := os.Getenv("UBX_PROVIDER_DYNAMIC_REPO")
+	if repoPath == "" {
+		repoPath = defaultDynamicProviderRepo
+	}
+	binPath, err := resolveDynamicProviderBinary(dynamicProviderBin, repoPath)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+
+	members := make([]dynamicProviderGroupMember, 0, len(memberNames))
+	for _, name := range memberNames {
+		params, ok := dynamicProviders[name]
+		if !ok {
+			return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: member %q is not declared in [dynamic_providers.%s]", groupName, name, name)
+		}
+
+		memberCtx, cancel := context.WithTimeout(ctx, timeout)
+		schemas, err := dynamicProviderSchema(memberCtx, binPath, name, params)
+		cancel()
+		if err != nil {
+			return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: member %q: %w", groupName, name, err)
+		}
+
+		memberCtx, cancel = context.WithTimeout(ctx, timeout)
+		signalsByType, sigErr := dynamicProviderSignals(memberCtx, binPath, name, params)
+		cancel()
+		if sigErr != nil {
+			fmt.Fprintf(os.Stderr, "sdk gen: dynamic provider group %q: member %q: signal collection failed, continuing without enum/constraint context: %v\n", groupName, name, sigErr)
+			signalsByType = nil
+		}
+
+		members = append(members, dynamicProviderGroupMember{
+			name:            name,
+			schemas:         schemas,
+			signalsByType:   signalsByType,
+			describeExclude: describeExcludeFromParams(params),
+		})
+	}
+
+	merged, mergedSignals, mergedDescribeExclude, err := mergeDynamicProviderGroupMembers(groupName, members)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+
+	const version = "dynamic"
+	source := fmt.Sprintf("%s (aggregated from %d dynamic_providers entries)", groupName, len(memberNames))
+	return writeGeneratedSDK(ctx, merged, groupName, source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedDescribeExclude)
+}
+
+// dynamicProviderGroupMember is one already-fetched [dynamic_providers.<name>]
+// entry's own real schema/signal/exclude data -- generateDynamicProviderGroup's
+// own live fetch loop builds these, mergeDynamicProviderGroupMembers
+// combines them. Kept as a separate step (not inlined into the fetch
+// loop) so the merge itself -- collision detection above all -- is a
+// pure function taking already-fetched data, hermetically unit-testable
+// without a real ubx-provider-dynamic binary.
+type dynamicProviderGroupMember struct {
+	name            string
+	schemas         *provider.Schemas
+	signalsByType   map[string]map[string]*fieldSignal
+	describeExclude map[string]bool
+}
+
+// mergeDynamicProviderGroupMembers is generateDynamicProviderGroup's own
+// pure merge step: unions every member's Resources/DataSources/signals/
+// describeExclude into one combined provider.Schemas. See
+// generateDynamicProviderGroup's own doc comment for why a collision
+// fails loud rather than silently picking one member's entry over
+// another's.
+func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProviderGroupMember) (*provider.Schemas, map[string]map[string]*fieldSignal, map[string]bool, error) {
+	merged := &provider.Schemas{
+		Resources:   map[string]*provider.Schema{},
+		DataSources: map[string]*provider.Schema{},
+	}
+	mergedSignals := map[string]map[string]*fieldSignal{}
+	mergedDescribeExclude := map[string]bool{}
+
+	for _, m := range members {
+		for typeName, schema := range m.schemas.Resources {
+			if _, exists := merged.Resources[typeName]; exists {
+				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: resource type %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
+			}
+			merged.Resources[typeName] = schema
+		}
+		for typeName, schema := range m.schemas.DataSources {
+			if _, exists := merged.DataSources[typeName]; exists {
+				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: data source %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
+			}
+			merged.DataSources[typeName] = schema
+		}
+		for typeName, sig := range m.signalsByType {
+			mergedSignals[typeName] = sig
+		}
+		for excluded := range m.describeExclude {
+			mergedDescribeExclude[excluded] = true
+		}
+	}
+
+	if len(mergedSignals) == 0 {
+		mergedSignals = nil
+	}
+	if len(mergedDescribeExclude) == 0 {
+		mergedDescribeExclude = nil
+	}
+	return merged, mergedSignals, mergedDescribeExclude, nil
 }
 
 // writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's

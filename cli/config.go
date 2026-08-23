@@ -44,6 +44,7 @@ type Config struct {
 	ThirdpartyProviders    map[string]string         `toml:"thirdparty_providers" json:"thirdparty_providers"`
 	ProviderConfigs        map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
 	DynamicProviders       map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
+	DynamicProviderGroups  map[string]map[string]any `toml:"dynamic_provider_groups" json:"dynamic_provider_groups"`
 	Stack                  string                    `toml:"stack" json:"stack"`
 	GithubRepo             string                    `toml:"github_repo" json:"github_repo"`
 	GitlabProject          string                    `toml:"gitlab_project" json:"gitlab_project"`
