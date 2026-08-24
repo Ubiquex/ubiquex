@@ -304,6 +304,32 @@ schema_source = "discovery_docs"
 schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/v1/rest"
 base_url = "https://compute.googleapis.com/compute/v1"
 
+# Compute's own beta/alpha release channels -- real, live, distinct
+# Discovery Documents (confirmed: compute/beta yields 99 real Discover()
+# resources, compute/alpha yields 107, against v1's own 127; overlap
+# with v1's own typeNames is real and expected, most of a channel's own
+# resources are richer/earlier previews of the same resource v1 already
+# has). Google's own Discovery Document keeps "name" identical across
+# channels ("compute" on all three), so without version_qualifier set,
+# every one of these would silently collide with (and get dropped by)
+# the [dynamic_providers.google] entry above's own typeNames -- see
+# ubx-provider-dynamic's own config.Provider.VersionQualifier doc
+# comment for the full real fix. version_qualifier threads "beta"/
+# "alpha" between the API name and the noun, so these land as
+# google_compute_beta_<noun>/google_compute_alpha_<noun>, distinct from
+# google_compute_<noun> (v1, the entry above, unaffected).
+[dynamic_providers.google_compute_beta]
+schema_source = "discovery_docs"
+schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/beta/rest"
+base_url = "https://compute.googleapis.com/compute/beta"
+version_qualifier = "beta"
+
+[dynamic_providers.google_compute_alpha]
+schema_source = "discovery_docs"
+schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/alpha/rest"
+base_url = "https://compute.googleapis.com/compute/alpha"
+version_qualifier = "alpha"
+
 # --- Google Cloud, non-Compute product families (UBI-175 config-expansion phase) ---
 #
 # Same real discovery_docs schema_source as [dynamic_providers.google] above,
@@ -984,6 +1010,8 @@ base_url = "https://workstations.googleapis.com"
 repo_name = "google"
 members = [
   "google",
+  "google_compute_beta",
+  "google_compute_alpha",
   "google_accesscontextmanager",
   "google_agentidentity",
   "google_agentregistry",
