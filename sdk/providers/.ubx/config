@@ -304,6 +304,32 @@ schema_source = "discovery_docs"
 schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/v1/rest"
 base_url = "https://compute.googleapis.com/compute/v1"
 
+# Compute's own beta/alpha release channels -- real, live, distinct
+# Discovery Documents (confirmed: compute/beta yields 99 real Discover()
+# resources, compute/alpha yields 107, against v1's own 127; overlap
+# with v1's own typeNames is real and expected, most of a channel's own
+# resources are richer/earlier previews of the same resource v1 already
+# has). Google's own Discovery Document keeps "name" identical across
+# channels ("compute" on all three), so without version_qualifier set,
+# every one of these would silently collide with (and get dropped by)
+# the [dynamic_providers.google] entry above's own typeNames -- see
+# ubx-provider-dynamic's own config.Provider.VersionQualifier doc
+# comment for the full real fix. version_qualifier threads "beta"/
+# "alpha" between the API name and the noun, so these land as
+# google_compute_beta_<noun>/google_compute_alpha_<noun>, distinct from
+# google_compute_<noun> (v1, the entry above, unaffected).
+[dynamic_providers.google_compute_beta]
+schema_source = "discovery_docs"
+schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/beta/rest"
+base_url = "https://compute.googleapis.com/compute/beta"
+version_qualifier = "beta"
+
+[dynamic_providers.google_compute_alpha]
+schema_source = "discovery_docs"
+schema_url = "https://www.googleapis.com/discovery/v1/apis/compute/alpha/rest"
+base_url = "https://compute.googleapis.com/compute/alpha"
+version_qualifier = "alpha"
+
 # --- Google Cloud, non-Compute product families (UBI-175 config-expansion phase) ---
 #
 # Same real discovery_docs schema_source as [dynamic_providers.google] above,
@@ -980,10 +1006,703 @@ base_url = "https://workstations.googleapis.com"
 # the google_<api> block's own NAMING CAVEAT comment named ("no such
 # repo exists or is planned" is no longer true; this table is that
 # repo's real, full source list).
+
+# --- GCP beta/alpha coverage batch 2 (remaining 73 APIs) ---
+# Same version_qualifier mechanism as google_compute_beta/alpha above --
+# see that entry's own comment for the full real reason this exists.
+
+[dynamic_providers.google_agentidentity_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://agentidentity.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://agentidentity.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_agentidentity_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://agentidentity.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://agentidentity.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_agentregistry_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://agentregistry.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://agentregistry.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_aiplatform_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://aiplatform.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://aiplatform.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_alloydb_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://alloydb.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://alloydb.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_alloydb_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://alloydb.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://alloydb.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_appengine_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://appengine.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://appengine.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_appengine_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://appengine.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://appengine.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_apphub_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://apphub.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://apphub.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_artifactregistry_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://artifactregistry.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://artifactregistry.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_artifactregistry_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://artifactregistry.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://artifactregistry.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_assuredworkloads_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://assuredworkloads.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://assuredworkloads.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_beyondcorp_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://beyondcorp.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://beyondcorp.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_bigqueryconnection_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://bigqueryconnection.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://bigqueryconnection.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_billingbudgets_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://billingbudgets.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://billingbudgets.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_binaryauthorization_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://binaryauthorization.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://binaryauthorization.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_ces_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://ces.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://ces.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_cloudfunctions_v2alpha]
+schema_source = "discovery_docs"
+schema_url = "https://cloudfunctions.googleapis.com/$discovery/rest?version=v2alpha"
+base_url = "https://cloudfunctions.googleapis.com"
+version_qualifier = "v2alpha"
+
+[dynamic_providers.google_cloudfunctions_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://cloudfunctions.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://cloudfunctions.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_cloudidentity_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://cloudidentity.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://cloudidentity.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_cloudresourcemanager_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://cloudresourcemanager.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://cloudresourcemanager.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_cloudresourcemanager_v2beta1]
+schema_source = "discovery_docs"
+schema_url = "https://cloudresourcemanager.googleapis.com/$discovery/rest?version=v2beta1"
+base_url = "https://cloudresourcemanager.googleapis.com"
+version_qualifier = "v2beta1"
+
+[dynamic_providers.google_cloudscheduler_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://cloudscheduler.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://cloudscheduler.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_cloudtasks_v2beta2]
+schema_source = "discovery_docs"
+schema_url = "https://cloudtasks.googleapis.com/$discovery/rest?version=v2beta2"
+base_url = "https://cloudtasks.googleapis.com"
+version_qualifier = "v2beta2"
+
+[dynamic_providers.google_cloudtasks_v2beta3]
+schema_source = "discovery_docs"
+schema_url = "https://cloudtasks.googleapis.com/$discovery/rest?version=v2beta3"
+base_url = "https://cloudtasks.googleapis.com"
+version_qualifier = "v2beta3"
+
+[dynamic_providers.google_composer_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://composer.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://composer.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_container_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://container.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://container.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_containeranalysis_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://containeranalysis.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://containeranalysis.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_containeranalysis_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://containeranalysis.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://containeranalysis.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_datacatalog_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://datacatalog.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://datacatalog.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_dataform_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://dataform.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://dataform.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_datafusion_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://datafusion.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://datafusion.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_datastream_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://datastream.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://datastream.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_deploymentmanager_alpha]
+schema_source = "discovery_docs"
+schema_url = "https://deploymentmanager.googleapis.com/$discovery/rest?version=alpha"
+base_url = "https://deploymentmanager.googleapis.com"
+version_qualifier = "alpha"
+
+[dynamic_providers.google_deploymentmanager_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://deploymentmanager.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://deploymentmanager.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_dialogflow_v2beta1]
+schema_source = "discovery_docs"
+schema_url = "https://dialogflow.googleapis.com/$discovery/rest?version=v2beta1"
+base_url = "https://dialogflow.googleapis.com"
+version_qualifier = "v2beta1"
+
+[dynamic_providers.google_dialogflow_v3beta1]
+schema_source = "discovery_docs"
+schema_url = "https://dialogflow.googleapis.com/$discovery/rest?version=v3beta1"
+base_url = "https://dialogflow.googleapis.com"
+version_qualifier = "v3beta1"
+
+[dynamic_providers.google_discoveryengine_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://discoveryengine.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://discoveryengine.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_discoveryengine_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://discoveryengine.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://discoveryengine.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_dns_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://dns.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://dns.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_documentai_v1beta3]
+schema_source = "discovery_docs"
+schema_url = "https://documentai.googleapis.com/$discovery/rest?version=v1beta3"
+base_url = "https://documentai.googleapis.com"
+version_qualifier = "v1beta3"
+
+[dynamic_providers.google_file_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://file.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://file.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_firebaseappcheck_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://firebaseappcheck.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://firebaseappcheck.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_firebaseapphosting_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://firebaseapphosting.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://firebaseapphosting.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_firebasedataconnect_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://firebasedataconnect.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://firebasedataconnect.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_firestore_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://firestore.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://firestore.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_firestore_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://firestore.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://firestore.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_gkehub_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://gkehub.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://gkehub.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_gkehub_v2alpha]
+schema_source = "discovery_docs"
+schema_url = "https://gkehub.googleapis.com/$discovery/rest?version=v2alpha"
+base_url = "https://gkehub.googleapis.com"
+version_qualifier = "v2alpha"
+
+[dynamic_providers.google_gkehub_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://gkehub.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://gkehub.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_gkehub_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://gkehub.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://gkehub.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_gkehub_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://gkehub.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://gkehub.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_healthcare_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://healthcare.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://healthcare.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_managedidentities_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://managedidentities.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://managedidentities.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_managedidentities_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://managedidentities.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://managedidentities.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_memcache_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://memcache.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://memcache.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_migrationcenter_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://migrationcenter.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://migrationcenter.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_netapp_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://netapp.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://netapp.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_networkconnectivity_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://networkconnectivity.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://networkconnectivity.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_networkmanagement_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://networkmanagement.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://networkmanagement.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_networksecurity_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://networksecurity.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://networksecurity.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_networkservices_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://networkservices.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://networkservices.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_osconfig_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://osconfig.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://osconfig.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_osconfig_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://osconfig.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://osconfig.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_osconfig_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://osconfig.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://osconfig.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_oslogin_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://oslogin.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://oslogin.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_oslogin_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://oslogin.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://oslogin.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_parallelstore_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://parallelstore.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://parallelstore.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_pubsub_v1beta1a]
+schema_source = "discovery_docs"
+schema_url = "https://pubsub.googleapis.com/$discovery/rest?version=v1beta1a"
+base_url = "https://pubsub.googleapis.com"
+version_qualifier = "v1beta1a"
+
+[dynamic_providers.google_pubsub_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://pubsub.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://pubsub.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_redis_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://redis.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://redis.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_secretmanager_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://secretmanager.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://secretmanager.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_secretmanager_v1beta2]
+schema_source = "discovery_docs"
+schema_url = "https://secretmanager.googleapis.com/$discovery/rest?version=v1beta2"
+base_url = "https://secretmanager.googleapis.com"
+version_qualifier = "v1beta2"
+
+[dynamic_providers.google_securitycenter_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://securitycenter.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://securitycenter.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_servicedirectory_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://servicedirectory.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://servicedirectory.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_sqladmin_v1beta4]
+schema_source = "discovery_docs"
+schema_url = "https://sqladmin.googleapis.com/$discovery/rest?version=v1beta4"
+base_url = "https://sqladmin.googleapis.com"
+version_qualifier = "v1beta4"
+
+[dynamic_providers.google_vpcaccess_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://vpcaccess.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://vpcaccess.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_workflows_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://workflows.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://workflows.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_workstations_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://workstations.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://workstations.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_iam_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://iam.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://iam.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_datamigration_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://datamigration.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://datamigration.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_analyticshub_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://analyticshub.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://analyticshub.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_apigateway_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://apigateway.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://apigateway.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_cloudcontrolspartner_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://cloudcontrolspartner.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://cloudcontrolspartner.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_cloudsupport_v2beta]
+schema_source = "discovery_docs"
+schema_url = "https://cloudsupport.googleapis.com/$discovery/rest?version=v2beta"
+base_url = "https://cloudsupport.googleapis.com"
+version_qualifier = "v2beta"
+
+[dynamic_providers.google_firebaseappdistribution_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://firebaseappdistribution.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://firebaseappdistribution.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_ftp_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://ftp.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://ftp.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_metastore_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://metastore.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://metastore.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_metastore_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://metastore.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://metastore.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_policysimulator_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://policysimulator.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://policysimulator.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_saasservicemgmt_v1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://saasservicemgmt.googleapis.com/$discovery/rest?version=v1beta1"
+base_url = "https://saasservicemgmt.googleapis.com"
+version_qualifier = "v1beta1"
+
+[dynamic_providers.google_speech_v1p1beta1]
+schema_source = "discovery_docs"
+schema_url = "https://speech.googleapis.com/$discovery/rest?version=v1p1beta1"
+base_url = "https://speech.googleapis.com"
+version_qualifier = "v1p1beta1"
+
+[dynamic_providers.google_tpu_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://tpu.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://tpu.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_tpu_v2alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://tpu.googleapis.com/$discovery/rest?version=v2alpha1"
+base_url = "https://tpu.googleapis.com"
+version_qualifier = "v2alpha1"
+
+[dynamic_providers.google_vmmigration_v1alpha1]
+schema_source = "discovery_docs"
+schema_url = "https://vmmigration.googleapis.com/$discovery/rest?version=v1alpha1"
+base_url = "https://vmmigration.googleapis.com"
+version_qualifier = "v1alpha1"
+
+[dynamic_providers.google_websecurityscanner_v1alpha]
+schema_source = "discovery_docs"
+schema_url = "https://websecurityscanner.googleapis.com/$discovery/rest?version=v1alpha"
+base_url = "https://websecurityscanner.googleapis.com"
+version_qualifier = "v1alpha"
+
+[dynamic_providers.google_websecurityscanner_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://websecurityscanner.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://websecurityscanner.googleapis.com"
+version_qualifier = "v1beta"
+
+[dynamic_providers.google_workflowexecutions_v1beta]
+schema_source = "discovery_docs"
+schema_url = "https://workflowexecutions.googleapis.com/$discovery/rest?version=v1beta"
+base_url = "https://workflowexecutions.googleapis.com"
+version_qualifier = "v1beta"
+
 [dynamic_provider_groups.google_all]
 repo_name = "google"
 members = [
+  "google_agentidentity_v1alpha",
+  "google_agentidentity_v1beta",
+  "google_agentregistry_v1alpha",
+  "google_aiplatform_v1beta1",
+  "google_alloydb_v1alpha",
+  "google_alloydb_v1beta",
+  "google_appengine_v1alpha",
+  "google_appengine_v1beta",
+  "google_apphub_v1alpha",
+  "google_artifactregistry_v1beta1",
+  "google_artifactregistry_v1beta2",
+  "google_assuredworkloads_v1beta1",
+  "google_beyondcorp_v1alpha",
+  "google_bigqueryconnection_v1beta1",
+  "google_billingbudgets_v1beta1",
+  "google_binaryauthorization_v1beta1",
+  "google_ces_v1beta",
+  "google_cloudfunctions_v2alpha",
+  "google_cloudfunctions_v2beta",
+  "google_cloudidentity_v1beta1",
+  "google_cloudresourcemanager_v1beta1",
+  "google_cloudresourcemanager_v2beta1",
+  "google_cloudscheduler_v1beta1",
+  "google_cloudtasks_v2beta2",
+  "google_cloudtasks_v2beta3",
+  "google_composer_v1beta1",
+  "google_container_v1beta1",
+  "google_containeranalysis_v1alpha1",
+  "google_containeranalysis_v1beta1",
+  "google_datacatalog_v1beta1",
+  "google_dataform_v1beta1",
+  "google_datafusion_v1beta1",
+  "google_datastream_v1alpha1",
+  "google_deploymentmanager_alpha",
+  "google_deploymentmanager_v2beta",
+  "google_dialogflow_v2beta1",
+  "google_dialogflow_v3beta1",
+  "google_discoveryengine_v1alpha",
+  "google_discoveryengine_v1beta",
+  "google_dns_v1beta2",
+  "google_documentai_v1beta3",
+  "google_file_v1beta1",
+  "google_firebaseappcheck_v1beta",
+  "google_firebaseapphosting_v1beta",
+  "google_firebasedataconnect_v1beta",
+  "google_firestore_v1beta1",
+  "google_firestore_v1beta2",
+  "google_gkehub_v1alpha",
+  "google_gkehub_v2alpha",
+  "google_gkehub_v1beta",
+  "google_gkehub_v1beta1",
+  "google_gkehub_v2beta",
+  "google_healthcare_v1beta1",
+  "google_managedidentities_v1alpha1",
+  "google_managedidentities_v1beta1",
+  "google_memcache_v1beta2",
+  "google_migrationcenter_v1alpha1",
+  "google_netapp_v1beta1",
+  "google_networkconnectivity_v1alpha1",
+  "google_networkmanagement_v1beta1",
+  "google_networksecurity_v1beta1",
+  "google_networkservices_v1beta1",
+  "google_osconfig_v1alpha",
+  "google_osconfig_v1beta",
+  "google_osconfig_v2beta",
+  "google_oslogin_v1alpha",
+  "google_oslogin_v1beta",
+  "google_parallelstore_v1beta",
+  "google_pubsub_v1beta1a",
+  "google_pubsub_v1beta2",
+  "google_redis_v1beta1",
+  "google_secretmanager_v1beta1",
+  "google_secretmanager_v1beta2",
+  "google_securitycenter_v1beta1",
+  "google_servicedirectory_v1beta1",
+  "google_sqladmin_v1beta4",
+  "google_vpcaccess_v1beta1",
+  "google_workflows_v1beta",
+  "google_workstations_v1beta",
+  "google_iam_v2beta",
+  "google_datamigration_v1beta1",
+  "google_analyticshub_v1beta1",
+  "google_apigateway_v1beta",
+  "google_cloudcontrolspartner_v1beta",
+  "google_cloudsupport_v2beta",
+  "google_firebaseappdistribution_v1alpha",
+  "google_ftp_v1alpha",
+  "google_metastore_v1alpha",
+  "google_metastore_v1beta",
+  "google_policysimulator_v1beta",
+  "google_saasservicemgmt_v1beta1",
+  "google_speech_v1p1beta1",
+  "google_tpu_v1alpha1",
+  "google_tpu_v2alpha1",
+  "google_vmmigration_v1alpha1",
+  "google_websecurityscanner_v1alpha",
+  "google_websecurityscanner_v1beta",
+  "google_workflowexecutions_v1beta",
   "google",
+  "google_compute_beta",
+  "google_compute_alpha",
   "google_accesscontextmanager",
   "google_agentidentity",
   "google_agentregistry",
