@@ -34,6 +34,41 @@ func writeMirrorProvider(t *testing.T, mirrorDir, namespace, typ, version string
 	}
 }
 
+// TestSDKGen_StaleBuild_RefusesToRun is checkBuildFreshness's own real
+// end-to-end proof, run through the actual `sdk gen` command rather
+// than just the helper function directly: UBI-186 follow-up's own
+// real, live-found failure (a full six-provider regeneration ran end
+// to end against a binary built from a stale commit, emitting the
+// wrong binding type for every generated data source, before anyone
+// noticed) must now be refused before any real generation work starts
+// -- checked ahead of even the "no providers declared" validation, so
+// staleness is always the first real failure reported, never masked by
+// an unrelated config error.
+func TestSDKGen_StaleBuild_RefusesToRun(t *testing.T) {
+	dir := t.TempDir()
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, "") // config content is irrelevant -- staleness must be caught first
+
+	origVersion := Version
+	Version = "dev"
+	t.Cleanup(func() { Version = origVersion })
+	origBuildInfo := buildInfoRevision
+	buildInfoRevision = func() string { return "7bcff87" }
+	t.Cleanup(func() { buildInfoRevision = origBuildInfo })
+	origHEAD := currentGitHEAD
+	currentGitHEAD = func() string { return "028451e" }
+	t.Cleanup(func() { currentGitHEAD = origHEAD })
+
+	out, err := runUbx(t, nil, "sdk", "gen", "--out", filepath.Join(dir, "out"))
+	requireExitCode(t, err, 2, out)
+	if !strings.Contains(err.Error(), "7bcff87") || !strings.Contains(err.Error(), "028451e") {
+		t.Fatalf("expected the error to name both the stale build commit and current HEAD, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "thirdparty_providers") {
+		t.Fatalf("expected staleness to be caught before the unrelated config validation, got: %v", err)
+	}
+}
+
 func TestSDKGen_NoProvidersDeclared_Errors(t *testing.T) {
 	dir := t.TempDir()
 	withConfigSearchDir(t, dir)
