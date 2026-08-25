@@ -6921,6 +6921,101 @@ plan's own Slice 8 that stayed design-only/untouched respectively — see
 docs/blueprint.md's own "Offline delivery + redistribution: Slice 8"
 section for exactly why each was scoped that way.
 
+### ubx.Data authoring path (UBI-178)
+
+Discovery-only data source support (UBI-186, an earlier phase) let a
+shipped stack's own live data sources be observed; this arc is the other
+half -- authoring one directly in a program, the same way `resource()`
+already works. Four pieces, staged and reported between each, in
+dependency order:
+
+**Piece 1** (PR #20, not yet merged): `IntentDocument` gains a top-level
+`data_sources[]` array, sibling to `resources[]` (which is hardcoded
+`op: "create"` and can't be reused for a read-only lookup). Documented in
+docs/schema.md's own "Amendment: data sources" section, alongside a real,
+test-confirmed correction: a data source's own `Type` string uses an
+underscore (`"data_aws_ec2_instance"`), not a dot
+(`"data.aws_ec2_instance"`, the convention an earlier session phase's own
+doc comment had wrongly assumed) -- a dotted Type breaks
+`core.Address.String()`/`ParseAddress`'s own round-trip
+(`strings.SplitN(s, ".", 3)`), confirmed via a real, disposable Go test
+before locking in the design. `core/scan.go`'s own
+`VerifyDataSourceFreshness` doc comment (already shipped, from a prior
+phase) was corrected to match.
+
+**Piece 2** (3 PRs, one per language submodule, none yet merged):
+`Collector.addDataSource` in `sdk/go/runtime`, `sdk/ts/runtime`,
+`sdk/py/ubx_sdk` -- returns the same `Computed`-shaped handle a resource
+returns, so a data source's result feeds into a resource's config
+identically (references stay uniform, a deliberate design decision, not
+an oversight). Each runtime's `addDataSource` is a direct structural
+mirror of its own `addResource` -- same duplicate-address check, same
+marker-walking, same blueprint-provenance wiring -- per explicit
+direction that drift across three runtimes was the real risk here, not a
+per-language reimplementation.
+
+**Piece 3** (2 PRs: `core/resolver-data-sources` #21 for the resolver
+mechanism, `cli/data-source-provider-wiring` #22 stacked on it for CLI
+wiring, neither yet merged): `core/resolver.Resolve` executes the real
+lookup and records it in `resolution.inputs` with `Kind: "data_source"`,
+reusing `ObservedHash`/`Lookup` exactly as `"live_state"` already does
+(this reuse pre-dated this arc, from `core/scan.go`'s
+`VerifyDataSourceFreshness`, merged earlier as PR #18 -- piece 1 only
+documented it). The real architectural conflict found and resolved before
+writing any code: `core.DoubleRun` requires byte-identical output across
+two calls to catch nondeterministic resolution logic, but a live provider
+read is an external, changing input, not nondeterministic code -- running
+it twice risks both cost and a spurious mismatch. Fixed with a
+per-`Resolve`-call read cache (`dataSourceReadCache`, created fresh
+before `DoubleRun`, discarded after -- never longer-lived, since a cache
+surviving across separate `Resolve` calls would silently serve a later
+plan stale data). `resolve`/`plan`/`promote`/`terminate` all gained a
+live provider connection (`attachDataSourceReaders`,
+`cli/datasourcereader.go`) gated entirely on the intent document actually
+declaring `data_sources[]`, so the overwhelming majority of stacks see no
+change in connection lifetime at all. A live read failing mid-walk
+surfaces as a new, distinguishable `ErrDataSourceReadFailed`, never
+`ErrDoubleRunMismatch` or anything resembling a nondeterminism finding.
+
+**Piece 4** (PR TBD, branched fresh from `main` -- independent of piece
+3's still-unmerged resolver changes): SDK codegen emits a `data`
+namespace mirroring the resource namespace it sits beside --
+`aws.data.ec2.Instance` alongside `aws.ec2.Instance` -- across Go, TS, and
+Python. Per explicit direction, this is a real extension of
+`ir.ServiceAndLocalNameForType` itself (new `namespace` return value,
+driven by a new `ResourceType.IsDataSource` bool), not a parallel
+wrapper function -- the same function decides both resource and data
+source naming, in one place, the discipline that would have caught the
+Azure/GCP service-doubling bugs (UBI-98) sooner had it been followed
+there from the start. service/localWireName derivation is byte-for-byte
+unchanged by `IsDataSource`; only the namespace segment is new, and a
+real provider's data source can share its WireType with a resource of
+the same name (hashicorp/aws's own `aws_instance` is both) without
+colliding, confirmed by a same-WireType test in all three language
+template packages. `cli/sdk.go`'s `writeGeneratedSDK` now collects
+`schemas.DataSources` the same way it already collects `schemas.Resources`
+before this piece, tagging each `IsDataSource`. Found and fixed two real,
+adjacent collisions this same-WireType-sharing exposed once data sources
+started flowing through pipelines that pre-dated this arc and were never
+built to expect them: `--dump-ir`'s own per-type JSON dump and combined
+`schema.json` were keyed by bare `WireType` (a data source would have
+silently overwritten its same-named resource's dump); and description
+enrichment's own checked-in-description/gap-file lookups were keyed the
+same way (a data source's field descriptions could have silently
+cross-contaminated its resource counterpart's). Both fixed with the same
+`"data_"` key prefix docs/schema.md's own piece-1 amendment already
+established for the resolver's intent-document convention, rather than a
+third, different disambiguation scheme. Not built: a fakeprovider mirror
+fixture declaring a real data source schema, so `ubx sdk gen`'s own
+existing `--dump-ir`/`ViaMirror` integration tests could exercise this
+end to end through the real CLI -- the fakeprovider test double has no
+`DataSourceSchemas` support at all today, and building that out is real,
+separately-scopable test infrastructure work, not a gap silently left
+untested: the namespace derivation itself (`ir.ServiceAndLocalNameForType`)
+and all three languages' full `GeneratedRepo` output (paths, package
+identity, same-WireType coexistence, zero collisions) are covered
+directly, hermetically, without it.
+
 ## Deferred (explicitly not now)
 
 a real policy engine (UBI-27's resolver carries a policy-stub hook,

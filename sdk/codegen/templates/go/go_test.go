@@ -253,7 +253,7 @@ func TestResourceFile_RecursiveShape_FieldMapLiteralIsHoistedAndShared(t *testin
 	}
 	requireGoToolchain(t)
 	buildGeneratedRepo(t, map[string]string{
-		"sdk/go/go.mod": "module github.com/ubiquex/ubx-sdk-aws/sdk/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n",
+		"sdk/go/go.mod":     "module github.com/ubiquex/ubx-sdk-aws/sdk/go\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n",
 		"sdk/go/thing/a.go": out,
 	})
 }
@@ -372,6 +372,60 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	mustContain(t, files["sdk/go/aws/iam/role.go"], "var Role = ubx.ResourceBinding{")
 	mustContain(t, files["sdk/go/aws/iam/role_policy_attachment.go"], "var RolePolicyAttachment = ubx.ResourceBinding{")
 	mustContain(t, files["sdk/go/aws/iam/role_policy_attachment.go"], `WireType: "aws_iam_role_policy_attachment",`)
+
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
+	}
+}
+
+// TestGeneratedRepo_DataSourceNamespace is UBI-178 piece 4's own real
+// proof: a data source (rt.IsDataSource, mirroring how RealNamespace is
+// already threaded in post-FromSchema, cli/sdk.go) lands under an extra
+// "data" directory ahead of its service, its own package name is still
+// just "ec2" (the import path alone encodes "data," never the package
+// declaration), and it coexists with a same-WireType resource
+// ("aws_instance" as both a resource and a data source, hashicorp/aws's
+// own real shape) without either colliding or merging into the other's
+// directory.
+func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
+	resource := rt("aws_instance", scalarField("id", ir.ScalarString, false, false, true, false))
+	resource.RealNamespace = "ec2"
+
+	dataSource := rt("aws_instance", scalarField("id", ir.ScalarString, true, false, false, false))
+	dataSource.RealNamespace = "ec2"
+	dataSource.IsDataSource = true
+
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", []*ir.ResourceType{resource, dataSource}, "1.23")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+
+	wantPaths := []string{
+		"sdk/go/go.mod",
+		"sdk/go/aws/ec2/doc.go", "sdk/go/aws/ec2/instance.go",
+		"sdk/go/aws/data/ec2/doc.go", "sdk/go/aws/data/ec2/instance.go",
+	}
+	for _, p := range wantPaths {
+		if _, ok := files[p]; !ok {
+			t.Errorf("GeneratedRepo: missing expected path %q, got paths: %v", p, keys(files))
+		}
+	}
+	if len(files) != len(wantPaths) {
+		t.Errorf("GeneratedRepo: got %d files, want %d: %v", len(files), len(wantPaths), keys(files))
+	}
+
+	mustContain(t, files["sdk/go/aws/ec2/doc.go"], "package ec2")
+	mustContain(t, files["sdk/go/aws/ec2/instance.go"], "package ec2")
+	mustContain(t, files["sdk/go/aws/ec2/instance.go"], "var Instance = ubx.ResourceBinding{")
+
+	// The data source's own package is ALSO just "ec2" -- the "data"
+	// segment lives only in the import path, never the package
+	// declaration itself, so a consumer writes ec2.Instance under both
+	// import paths, never a redundant DataInstance/InstanceData name.
+	mustContain(t, files["sdk/go/aws/data/ec2/doc.go"], "package ec2")
+	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], "package ec2")
+	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], "var Instance = ubx.ResourceBinding{")
+	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], `WireType: "aws_instance",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
 		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)

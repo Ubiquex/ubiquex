@@ -86,20 +86,34 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 		rt    *ir.ResourceType
 		local string
 	}
-	byService := map[string][]entry{}
-	var services []string
+	// pkgKey is UBI-178 piece 4's own real path-identity: namespace is ""
+	// for an ordinary resource, "data" for a data source
+	// (ir.ServiceAndLocalNameForType's own doc comment) -- keyed
+	// separately from service so a resource and its same-named data
+	// source counterpart (hashicorp/aws's own "aws_instance" is both)
+	// never merge into the same directory/package, the same real
+	// collision ir.ServiceAndLocalNameForType exists to prevent.
+	type pkgKey struct{ namespace, service string }
+	byService := map[pkgKey][]entry{}
+	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		service, local, err := ir.ServiceAndLocalNameForType(rt)
+		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/go: %w", err)
 		}
 		service = goPackageIdent(service)
-		if _, ok := byService[service]; !ok {
-			services = append(services, service)
+		key := pkgKey{namespace, service}
+		if _, ok := byService[key]; !ok {
+			pkgKeys = append(pkgKeys, key)
 		}
-		byService[service] = append(byService[service], entry{rt, local})
+		byService[key] = append(byService[key], entry{rt, local})
 	}
-	sort.Strings(services)
+	sort.Slice(pkgKeys, func(i, j int) bool {
+		if pkgKeys[i].namespace != pkgKeys[j].namespace {
+			return pkgKeys[i].namespace < pkgKeys[j].namespace
+		}
+		return pkgKeys[i].service < pkgKeys[j].service
+	})
 
 	files := map[string]string{
 		"sdk/go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/sdk/go\n\ngo %s\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName, goDirective),
@@ -115,8 +129,22 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 	// Go PACKAGE declarations do), so shortName needs no guarding here the
 	// way pyModuleIdent guards it for Python's own dotted-import
 	// requirement, below.
-	for _, service := range services {
-		files["sdk/go/"+shortName+"/"+service+"/doc.go"] = PackageDoc(service, source, version)
+	for _, key := range pkgKeys {
+		service := key.service
+		// dir is shortName/service for an ordinary resource, exactly the
+		// pre-UBI-178 path, and shortName/data/service for a data source
+		// -- "data" is the one, real extra segment
+		// ir.ServiceAndLocalNameForType's own namespace return value
+		// contributes, inserted ahead of service, never folded into the
+		// package name itself (package %s below stays just "ec2", the
+		// same identifier a resource's own ec2 package already uses --
+		// only the import path nests one level deeper).
+		dir := shortName
+		if key.namespace != "" {
+			dir += "/" + key.namespace
+		}
+		dir += "/" + service
+		files["sdk/go/"+dir+"/doc.go"] = PackageDoc(service, source, version)
 
 		// UBI-108: a real, live-verified collision class hashicorp/aws
 		// never surfaced -- a sibling resource in this SAME service
@@ -129,14 +157,14 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 		// Go specifically (ResourceFile's own doc comment has the full
 		// account, including the 3 real hits this found).
 		siblingPascalNames := map[string]bool{}
-		for _, e := range byService[service] {
+		for _, e := range byService[key] {
 			pn, err := pascalCase(e.local)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: local name %q: %w", e.rt.WireType, e.local, err)
 			}
 			siblingPascalNames[pn] = true
 		}
-		for _, e := range byService[service] {
+		for _, e := range byService[key] {
 			pn, err := pascalCase(e.local)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: local name %q: %w", e.rt.WireType, e.local, err)
@@ -170,7 +198,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 			if strings.HasSuffix(fileLocal, "_test") {
 				fileLocal += "_"
 			}
-			path := "sdk/go/" + shortName + "/" + service + "/" + fileLocal + ".go"
+			path := "sdk/go/" + dir + "/" + fileLocal + ".go"
 			if _, exists := files[path]; exists {
 				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
 			}

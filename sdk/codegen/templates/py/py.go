@@ -101,10 +101,20 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		pascal   string
 		fileStem string
 	}
-	byService := map[string][]entry{}
-	var services []string
+	// pkgKey mirrors sdk/codegen/templates/go's own identical fix
+	// (UBI-178 piece 4): namespace is "" for an ordinary resource, "data"
+	// for a data source (ir.ServiceAndLocalNameForType's own doc
+	// comment), keyed separately from service so a resource and its
+	// same-named data source counterpart never merge into the same
+	// dotted-import package. namespace itself needs no pyModuleIdent
+	// guard -- it's always the fixed literal "" or "data" (never
+	// wire-derived), and "data" is neither a Python keyword nor
+	// digit-leading.
+	type pkgKey struct{ namespace, service string }
+	byService := map[pkgKey][]entry{}
+	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		service, local, err := ir.ServiceAndLocalNameForType(rt)
+		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/py: %w", err)
 		}
@@ -114,17 +124,23 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/py: %s: local name %q: %w", rt.WireType, local, err)
 		}
-		if _, ok := byService[service]; !ok {
-			services = append(services, service)
+		key := pkgKey{namespace, service}
+		if _, ok := byService[key]; !ok {
+			pkgKeys = append(pkgKeys, key)
 		}
 		// fileStem is deliberately separate from local: local (the FULL,
 		// untruncated name) is what pascal above -- and ResourceFile's own
 		// internal pascalCase(e.local) below -- derive the exported class
 		// name from; only the on-disk module name and the `from .X
 		// import` line get the length cap, never the public identifier.
-		byService[service] = append(byService[service], entry{rt, local, pascal, ir.FileStem(local)})
+		byService[key] = append(byService[key], entry{rt, local, pascal, ir.FileStem(local)})
 	}
-	sort.Strings(services)
+	sort.Slice(pkgKeys, func(i, j int) bool {
+		if pkgKeys[i].namespace != pkgKeys[j].namespace {
+			return pkgKeys[i].namespace < pkgKeys[j].namespace
+		}
+		return pkgKeys[i].service < pkgKeys[j].service
+	})
 
 	// UBI-106: every service package nests under a namespace directory
 	// (e.g. aws/iam/, never iam/ at the repo root) -- fixes a real
@@ -149,8 +165,23 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		"sdk/python/pyproject.toml": pyprojectTOML(shortName, source, version),
 		root + "/__init__.py":       PackageDoc(source, version),
 	}
-	for _, service := range services {
-		entries := byService[service]
+	for _, key := range pkgKeys {
+		service := key.service
+		entries := byService[key]
+		// dir is root/service for an ordinary resource, unchanged from
+		// before UBI-178, and root/data/service for a data source. The
+		// "data" segment gets no __init__.py of its own -- an implicit
+		// PEP 420 namespace package, mirroring how pythonNamespaceRoot
+		// ("ubx") itself is left implicit above; it stays entirely within
+		// this one distribution (unlike "ubx", never shared across
+		// providers), so an explicit __init__.py would be equally valid,
+		// but nothing needs to live directly in it (every real resource
+		// or data source is one level deeper, in data/<service>/) so
+		// there is nothing for one to re-export.
+		dir := root
+		if key.namespace != "" {
+			dir += "/" + key.namespace
+		}
 
 		// UBI-108's own real, live-verified collision class hashicorp/aws
 		// never surfaced but hashicorp/google@7.40.0 did (3 real hits,
@@ -178,7 +209,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 				names[i].config = e.pascal + "Config_"
 			}
 		}
-		files[root+"/"+service+"/__init__.py"] = ServicePackageDoc(source, version, names)
+		files[dir+"/"+service+"/__init__.py"] = ServicePackageDoc(source, version, names)
 		for i, e := range entries {
 			configOverride := ""
 			if names[i].config != e.pascal+"Config" {
@@ -188,7 +219,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
 			}
-			path := root + "/" + service + "/" + e.fileStem + ".py"
+			path := dir + "/" + service + "/" + e.fileStem + ".py"
 			if _, exists := files[path]; exists {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
 			}

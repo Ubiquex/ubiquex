@@ -393,7 +393,22 @@ func collectJobsAndStale(providerName string, types []*ir.ResourceType, signalsB
 		}
 	}
 	for _, rt := range types {
-		walk(rt.Fields, rt.WireType, providerName+"."+rt.WireType, "", signalsByType[rt.WireType])
+		// UBI-178 piece 4: a real provider's data source can share its
+		// WireType with a resource of the same name (hashicorp/aws's own
+		// "aws_instance" is both) -- resourceKey disambiguates with the
+		// identical "data_" prefix cli/sdk.go's own --dump-ir path
+		// already uses, so a data source's checked-in description/gap-
+		// file entries never collide with (or silently overwrite) its
+		// same-named resource counterpart's. signalsByType is keyed the
+		// same way; a data source simply has no entries there yet (no
+		// "data_"-prefixed CFN-derived signal source exists), which only
+		// means its own live Claude calls get no enum/constraint hints,
+		// not a correctness issue.
+		resourceKey := rt.WireType
+		if rt.IsDataSource {
+			resourceKey = "data_" + rt.WireType
+		}
+		walk(rt.Fields, resourceKey, providerName+"."+resourceKey, "", signalsByType[resourceKey])
 	}
 	return jobs, stale
 }

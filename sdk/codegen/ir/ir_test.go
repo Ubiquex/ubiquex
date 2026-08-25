@@ -616,9 +616,12 @@ func TestServiceAndLocalNameForType_EmptyNamespaceFallsThrough(t *testing.T) {
 	cases := []string{"aws_ecr_repository", "aws_vpc", "kubernetes_deployment_v1"}
 	for _, wireType := range cases {
 		wantService, wantLocal, wantErr := ServiceAndLocalName(wireType)
-		gotService, gotLocal, gotErr := ServiceAndLocalNameForType(&ResourceType{WireType: wireType})
+		gotNamespace, gotService, gotLocal, gotErr := ServiceAndLocalNameForType(&ResourceType{WireType: wireType})
 		if (gotErr == nil) != (wantErr == nil) || gotService != wantService || gotLocal != wantLocal {
-			t.Fatalf("ServiceAndLocalNameForType(%q, no override) = (%q, %q, %v), want (%q, %q, %v)", wireType, gotService, gotLocal, gotErr, wantService, wantLocal, wantErr)
+			t.Fatalf("ServiceAndLocalNameForType(%q, no override) = (%q, %q, %q, %v), want (\"\", %q, %q, %v)", wireType, gotNamespace, gotService, gotLocal, gotErr, wantService, wantLocal, wantErr)
+		}
+		if gotNamespace != "" {
+			t.Fatalf("ServiceAndLocalNameForType(%q, IsDataSource=false) namespace = %q, want \"\"", wireType, gotNamespace)
 		}
 	}
 }
@@ -656,12 +659,57 @@ func TestServiceAndLocalNameForType_RealNamespaceOverride(t *testing.T) {
 		{"aws_ec2", "ec2", "ec2", "ec2"},
 	}
 	for _, c := range cases {
-		service, local, err := ServiceAndLocalNameForType(&ResourceType{WireType: c.wireType, RealNamespace: c.realNamespace})
+		namespace, service, local, err := ServiceAndLocalNameForType(&ResourceType{WireType: c.wireType, RealNamespace: c.realNamespace})
 		if err != nil {
 			t.Fatalf("ServiceAndLocalNameForType(%q, %q): %v", c.wireType, c.realNamespace, err)
 		}
 		if service != c.service || local != c.local {
 			t.Fatalf("ServiceAndLocalNameForType(%q, %q) = (%q, %q), want (%q, %q)", c.wireType, c.realNamespace, service, local, c.service, c.local)
+		}
+		if namespace != "" {
+			t.Fatalf("ServiceAndLocalNameForType(%q, %q, IsDataSource=false) namespace = %q, want \"\"", c.wireType, c.realNamespace, namespace)
+		}
+	}
+}
+
+// TestServiceAndLocalNameForType_DataSourceNamespace is UBI-178 piece 4's
+// own real proof: IsDataSource alone controls the namespace return value
+// ("data" when true, "" otherwise), while service/localWireName are
+// derived completely unchanged by it -- whether via the mechanical
+// fallback (no RealNamespace) or the RealNamespace override path, a data
+// source's own service/local split matches its same-named resource
+// counterpart exactly, since both genuinely belong to the same real
+// service.
+func TestServiceAndLocalNameForType_DataSourceNamespace(t *testing.T) {
+	cases := []struct {
+		name          string
+		wireType      string
+		realNamespace string
+	}{
+		{"mechanical split, no RealNamespace", "aws_ecr_repository", ""},
+		{"RealNamespace override", "aws_instance", "ec2"},
+	}
+	for _, c := range cases {
+		resource := &ResourceType{WireType: c.wireType, RealNamespace: c.realNamespace}
+		dataSource := &ResourceType{WireType: c.wireType, RealNamespace: c.realNamespace, IsDataSource: true}
+
+		resNamespace, resService, resLocal, err := ServiceAndLocalNameForType(resource)
+		if err != nil {
+			t.Fatalf("%s: resource: %v", c.name, err)
+		}
+		if resNamespace != "" {
+			t.Fatalf("%s: resource namespace = %q, want \"\"", c.name, resNamespace)
+		}
+
+		dsNamespace, dsService, dsLocal, err := ServiceAndLocalNameForType(dataSource)
+		if err != nil {
+			t.Fatalf("%s: data source: %v", c.name, err)
+		}
+		if dsNamespace != "data" {
+			t.Fatalf("%s: data source namespace = %q, want \"data\"", c.name, dsNamespace)
+		}
+		if dsService != resService || dsLocal != resLocal {
+			t.Fatalf("%s: data source (service, local) = (%q, %q), want identical to its resource counterpart (%q, %q) -- IsDataSource must never change service/local derivation", c.name, dsService, dsLocal, resService, resLocal)
 		}
 	}
 }

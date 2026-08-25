@@ -743,9 +743,16 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 // rec["localName"], rec["ir"]["Fields"]), a real, external contract
 // this struct's json tags exist solely to satisfy; never used for
 // anything on this side of the pipeline beyond marshaling.
+//
+// Namespace is UBI-178 piece 4's own real, additive field ("data" for a
+// data source, "" for an ordinary resource -- ir.ServiceAndLocalNameForType's
+// own return value, unchanged otherwise) -- a new key an existing,
+// unmodified gen_mechanical_pages.py simply never reads, not a change to
+// the three keys it already depends on.
 type irSchemaEntry struct {
 	Service   string          `json:"service"`
 	LocalName string          `json:"localName"`
+	Namespace string          `json:"namespace,omitempty"`
 	IR        irFieldsWrapper `json:"ir"`
 }
 
@@ -764,7 +771,23 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 	// TYPES within one provider's own schema dump.
 	sort.Strings(resourceTypeNames)
 
-	types := make([]*ir.ResourceType, 0, len(resourceTypeNames))
+	// UBI-178 piece 4: schemas.DataSources gets the identical collection
+	// treatment as schemas.Resources just below, sorted for the same
+	// determinism reason, and feeds the SAME combined `types` slice --
+	// everything downstream (description enrichment, --dump-ir, each
+	// language's own GeneratedRepo) already operates generically on this
+	// one slice and needs no separate awareness of resource vs. data
+	// source. Only ir.ResourceType.IsDataSource itself distinguishes them,
+	// read by ir.ServiceAndLocalNameForType (the one, real place that
+	// decides the "data" namespace segment) -- never duplicated as a
+	// second copy of that decision here or in any template.
+	dataSourceTypeNames := make([]string, 0, len(schemas.DataSources))
+	for typeName := range schemas.DataSources {
+		dataSourceTypeNames = append(dataSourceTypeNames, typeName)
+	}
+	sort.Strings(dataSourceTypeNames)
+
+	types := make([]*ir.ResourceType, 0, len(resourceTypeNames)+len(dataSourceTypeNames))
 	for _, typeName := range resourceTypeNames {
 		resType, err := ir.FromSchema(typeName, schemas.Resources[typeName])
 		if err != nil {
@@ -789,6 +812,26 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 			fmt.Fprintf(os.Stderr, "sdk gen: %s: skipped unrepresentable field %q (unsupported character for any real target language)\n", typeName, path)
 		}
 		types = append(types, resType)
+	}
+	for _, typeName := range dataSourceTypeNames {
+		dsType, err := ir.FromSchema(typeName, schemas.DataSources[typeName])
+		if err != nil {
+			return "", 0, descriptionCoverage{}, fmt.Errorf("%s@%s: %w", source, version, err)
+		}
+		// namespacesByType is reused unchanged, not a separate
+		// data-source-only map: a real provider's data source and its
+		// same-named resource counterpart (hashicorp/aws's own
+		// "aws_instance" is both) genuinely belong to the same real
+		// service, so the identical CFN-derived namespace applies to
+		// both -- confirmed by ir.ServiceAndLocalNameForType's own test
+		// (TestServiceAndLocalNameForType_DataSourceNamespace), not
+		// assumed here.
+		dsType.RealNamespace = namespacesByType[typeName]
+		dsType.IsDataSource = true
+		for _, path := range dsType.SkippedFields {
+			fmt.Fprintf(os.Stderr, "sdk gen: %s: skipped unrepresentable field %q (unsupported character for any real target language)\n", typeName, path)
+		}
+		types = append(types, dsType)
 	}
 
 	// checkpoint 6's own real, cost-driven redesign: fill every real
@@ -885,17 +928,37 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 			if err != nil {
 				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal %s: %w", source, version, rt.WireType, err)
 			}
-			outPath := filepath.Join(dumpDir, rt.WireType+".json")
+			// UBI-178 piece 4: a real provider's data source can share
+			// its WireType with a resource of the same name
+			// (hashicorp/aws's own "aws_instance" is both) -- dumpKey
+			// disambiguates with the identical "data_" prefix
+			// docs/schema.md's own "Amendment: data sources" already
+			// established for the resolver's own intent-document Type
+			// convention, rather than inventing a second, different one
+			// here. A resource's own dumpKey is untouched (bare
+			// rt.WireType, exactly as before this change).
+			dumpKey := rt.WireType
+			if rt.IsDataSource {
+				dumpKey = "data_" + rt.WireType
+			}
+			outPath := filepath.Join(dumpDir, dumpKey+".json")
 			if err := os.WriteFile(outPath, data, 0o644); err != nil {
 				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: write %s: %w", source, version, outPath, err)
 			}
-			service, local, err := ir.ServiceAndLocalName(rt.WireType)
+			// ir.ServiceAndLocalNameForType, not the plain
+			// ir.ServiceAndLocalName -- this dump is supposed to reflect
+			// what GeneratedRepo actually produced for the same rt
+			// (RealNamespace and, now, IsDataSource included); the plain
+			// split would silently disagree with the real generated
+			// output for any type carrying a real namespace override.
+			namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
 			if err != nil {
 				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: %s: %w", source, version, rt.WireType, err)
 			}
-			combined[rt.WireType] = irSchemaEntry{
+			combined[dumpKey] = irSchemaEntry{
 				Service:   service,
 				LocalName: local,
+				Namespace: namespace,
 				IR:        irFieldsWrapper{Fields: rt.Fields},
 			}
 		}
