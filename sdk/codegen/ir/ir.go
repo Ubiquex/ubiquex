@@ -168,6 +168,22 @@ type ResourceType struct {
 	// exactly what was skipped rather than either failing the whole
 	// resource type or inventing an unverified rename.
 	SkippedFields []string
+
+	// RealNamespace is UBI-98's own fix: a real, authoritative per-
+	// resource-type service identity (CloudFormation's own namespace
+	// field for AWS, e.g. "ec2"; Smithy's own endpointPrefix trait for
+	// AWS data sources later), when the schema source has one to give.
+	// Empty for every provider that never had this problem in the first
+	// place (Azure/GCP/Kubernetes/GitHub/Datadog build their wire type
+	// fresh from real identity already, confirmed live this session
+	// against 1,096 real Azure and 1,543 real Google wire types: zero
+	// true mismatches) -- ServiceAndLocalNameForType falls back to the
+	// existing mechanical WireType split whenever this is empty, so
+	// those five providers are byte-for-byte unaffected. Populated by
+	// writeGeneratedSDK (cli/sdk.go) from ubx-provider-dynamic's own
+	// --dump-namespaces output, not by FromSchema itself, which has no
+	// access to any source outside the one *provider.Schema it's given.
+	RealNamespace string
 }
 
 // ServiceAndLocalName splits a real provider wire type name into the
@@ -252,6 +268,81 @@ func ServiceAndLocalName(wireType string) (service, localWireName string, err er
 		localWireName = service + "_" + tokens[2]
 	default:
 		localWireName = strings.Join(tokens[2:], "_")
+	}
+	return service, localWireName, nil
+}
+
+// ServiceAndLocalNameForType is ServiceAndLocalName's own real fix
+// (UBI-98): when rt.RealNamespace is set, use it directly as service
+// instead of guessing from a mechanical split of rt.WireType. Confirmed
+// live this session against the real, published AWS CFN registry: 60 of
+// 408 confirmed real HashiCorp-name resources land in the wrong package
+// under the plain split (aws_instance -> "instance," never "ec2"; every
+// multi-word real AWS service -- API Gateway, Amazon MQ, Elastic
+// Beanstalk -- truncated to its first word alone). rt.RealNamespace is
+// empty for every provider that never had this problem (see its own doc
+// comment) -- this function falls straight through to
+// ServiceAndLocalName(rt.WireType) in that case, so Azure/GCP/
+// Kubernetes/GitHub/Datadog templates get byte-for-byte the same output
+// they always did.
+//
+// The real namespace string alone only replaces the SERVICE half of the
+// answer -- localWireName still has to be derived from rt.WireType,
+// since that's the only place the resource's own local name lives. A
+// naive "always strip len(namespace) leading tokens" would break the
+// common case where the real namespace and the wire type's own
+// remainder never actually share a prefix at all (aws_instance's own
+// remainder is "instance," which shares nothing with the real
+// namespace "ec2" -- the historical HashiCorp name simply never encoded
+// which service "instance" belongs to). So this only strips a REAL,
+// confirmed token-run match: accumulate rt.WireType's own remainder
+// tokens (after the provider prefix) one at a time, comparing the
+// underscore-free run against RealNamespace itself (CFN's real
+// namespace strings -- "apigateway," "amazonmq" -- carry no internal
+// separator, but HashiCorp's own Terraform convention word-splits them:
+// "api_gateway," "amazon_mq"), and only strips the tokens that
+// genuinely accumulate to an exact match. No match found (aws_instance
+// vs "ec2"): the entire remainder is kept as localWireName, unchanged --
+// exactly the real, correct outcome, just filed under the real
+// namespace instead of the wrong mechanical guess. Match found (aws_api_gateway_deployment
+// vs "apigateway"): "api"+"gateway" accumulates to "apigateway," so
+// those two tokens are stripped and localWireName is "deployment," not
+// "gateway_deployment." A match that consumes every remaining token
+// (localWireName would otherwise be empty) falls back to the namespace
+// itself, mirroring ServiceAndLocalName's own len(tokens)==2 case
+// directly above.
+func ServiceAndLocalNameForType(rt *ResourceType) (service, localWireName string, err error) {
+	if rt.RealNamespace == "" {
+		return ServiceAndLocalName(rt.WireType)
+	}
+
+	tokens := strings.Split(rt.WireType, "_")
+	if len(tokens) < 2 || tokens[0] == "" {
+		return "", "", fmt.Errorf("sdk/codegen/ir: ServiceAndLocalNameForType(%q): wire type must be at least \"<provider>_<local>\"", rt.WireType)
+	}
+	service = strings.ToLower(rt.RealNamespace)
+	remainder := tokens[1:]
+
+	normNamespace := service
+	acc := ""
+	matchedThrough := -1
+	for i, tok := range remainder {
+		acc += strings.ToLower(tok)
+		if acc == normNamespace {
+			matchedThrough = i
+			break
+		}
+		if len(acc) > len(normNamespace) {
+			break
+		}
+	}
+
+	if matchedThrough == -1 {
+		localWireName = strings.Join(remainder, "_")
+	} else if matchedThrough == len(remainder)-1 {
+		localWireName = service
+	} else {
+		localWireName = strings.Join(remainder[matchedThrough+1:], "_")
 	}
 	return service, localWireName, nil
 }

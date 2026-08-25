@@ -607,6 +607,65 @@ func TestServiceAndLocalName_TooFewTokens_Errors(t *testing.T) {
 	}
 }
 
+// TestServiceAndLocalNameForType_EmptyNamespaceFallsThrough proves the
+// zero-cost guarantee every non-AWS provider depends on: an empty
+// RealNamespace produces byte-for-byte the same result as plain
+// ServiceAndLocalName, for every case that function's own tests above
+// already cover.
+func TestServiceAndLocalNameForType_EmptyNamespaceFallsThrough(t *testing.T) {
+	cases := []string{"aws_ecr_repository", "aws_vpc", "kubernetes_deployment_v1"}
+	for _, wireType := range cases {
+		wantService, wantLocal, wantErr := ServiceAndLocalName(wireType)
+		gotService, gotLocal, gotErr := ServiceAndLocalNameForType(&ResourceType{WireType: wireType})
+		if (gotErr == nil) != (wantErr == nil) || gotService != wantService || gotLocal != wantLocal {
+			t.Fatalf("ServiceAndLocalNameForType(%q, no override) = (%q, %q, %v), want (%q, %q, %v)", wireType, gotService, gotLocal, gotErr, wantService, wantLocal, wantErr)
+		}
+	}
+}
+
+// TestServiceAndLocalNameForType_RealNamespaceOverride is UBI-98's own
+// real fix, covering every real case found live against the actual
+// published AWS CFN registry this session: the EC2/VPC bare-name family
+// (no shared token at all between the wire type and the real namespace),
+// multi-word real services the plain split truncates
+// (api_gateway/amazon_mq/elastic_beanstalk), and a resource that's
+// already correctly service-prefixed (unaffected either way).
+func TestServiceAndLocalNameForType_RealNamespaceOverride(t *testing.T) {
+	cases := []struct {
+		wireType, realNamespace, service, local string
+	}{
+		// EC2/VPC bare-name family -- zero shared tokens with "ec2", so
+		// the entire remainder survives as local, unchanged, just filed
+		// under the real namespace instead of the wrong mechanical guess.
+		{"aws_instance", "ec2", "ec2", "instance"},
+		{"aws_vpc", "ec2", "ec2", "vpc"},
+		{"aws_security_group", "ec2", "ec2", "security_group"},
+		// multi-word real services -- the plain split would truncate to
+		// "api"/"amazon"/"elastic"; the real namespace's own token run
+		// gets matched and stripped in full.
+		{"aws_api_gateway_deployment", "apigateway", "apigateway", "deployment"},
+		{"aws_amazon_mq_broker", "amazonmq", "amazonmq", "broker"},
+		{"aws_elastic_beanstalk_application", "elasticbeanstalk", "elasticbeanstalk", "application"},
+		// already correctly prefixed -- the real namespace's token run
+		// matches exactly what ServiceAndLocalName's own mechanical
+		// split already finds, unaffected either way.
+		{"aws_ecr_repository", "ecr", "ecr", "repository"},
+		// a match that consumes every remaining token falls back to the
+		// namespace itself, mirroring ServiceAndLocalName's own bare
+		// two-token convention.
+		{"aws_ec2", "ec2", "ec2", "ec2"},
+	}
+	for _, c := range cases {
+		service, local, err := ServiceAndLocalNameForType(&ResourceType{WireType: c.wireType, RealNamespace: c.realNamespace})
+		if err != nil {
+			t.Fatalf("ServiceAndLocalNameForType(%q, %q): %v", c.wireType, c.realNamespace, err)
+		}
+		if service != c.service || local != c.local {
+			t.Fatalf("ServiceAndLocalNameForType(%q, %q) = (%q, %q), want (%q, %q)", c.wireType, c.realNamespace, service, local, c.service, c.local)
+		}
+	}
+}
+
 // TestServiceAndLocalName_NoCollisions_RealFullProviderSchema is this
 // derivation's own must-hold property, checked against the real, full
 // hashicorp/aws@6.54.0 schema's own 1,682 wire type names (a static

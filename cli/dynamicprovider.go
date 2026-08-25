@@ -339,6 +339,58 @@ func dynamicProviderSignals(ctx context.Context, binPath, name string, params ma
 	return out, nil
 }
 
+// dynamicProviderNamespaces is dynamicProviderSignals' own real sibling
+// for UBI-98's fix: --dump-namespaces (ubx-provider-dynamic's own doc
+// comment on that flag has the full real account) returns a real,
+// authoritative per-resource-type service identity -- CloudFormation's
+// own namespace field for AWS resources, Smithy's own endpointPrefix
+// trait for AWS data sources later -- that sdk/codegen/ir's own
+// ServiceAndLocalNameForType uses instead of guessing from a mechanical
+// split of the flat wire type name. Empty (real, not an error) for
+// every provider that never had this problem: Azure/GCP/Kubernetes/
+// GitHub/Datadog build their wire type fresh from real identity
+// already, confirmed live against all 1,096 real Azure and 1,543 real
+// Google wire types (zero true mismatches).
+//
+// Identical real launch shape to dynamicProviderSignals -- same
+// temporary config, same subprocess, same non-fatal-on-error treatment
+// by this function's own caller (generateOneDynamicProvider/
+// generateDynamicProviderGroup already treat a dynamicProviderSignals
+// error as "skip, don't fail"; this is the identical real posture).
+func dynamicProviderNamespaces(ctx context.Context, binPath, name string, params map[string]any) (map[string]string, error) {
+	if _, _, pinned, err := pinnedSchemaFields(params); err != nil {
+		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
+	} else if pinned {
+		return nil, fmt.Errorf("[providers.%s]: --dump-namespaces is not yet wired to a pinned schema source (source+version) -- only the live schema_url shape supports namespace extraction today", name)
+	}
+
+	workDir, err := os.MkdirTemp("", "ubx-sdk-gen-namespaces-"+name)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(workDir)
+
+	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, binPath, "--dump-namespaces")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "UBX_DYNAMIC_PROVIDER_NAME="+name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("dump namespaces for dynamic provider %q: %w\n%s", name, err, stderr.String())
+	}
+
+	var out map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		return nil, fmt.Errorf("parse namespace output for dynamic provider %q: %w", name, err)
+	}
+	return out, nil
+}
+
 // newDynamicProviderLaunchFunc is providerPool's own real launchFunc for
 // a key declared under [providers] (ubx's own, dynamic-provider-backed)
 // -- this session's own real addition, the first time a dynamic-

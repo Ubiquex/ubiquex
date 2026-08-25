@@ -463,12 +463,15 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 		return "", 0, descriptionCoverage{}, fmt.Errorf("fetch schema for %s@%s: %w", source, version, err)
 	}
 
-	// nil signalsByType: a real registry-acquired provider has no
-	// OpenAPI/Smithy document at all for this codebase to have extracted
-	// enum/constraint signal from in the first place -- a real, separate,
-	// unaddressed limitation of THIS source, not something writeGeneratedSDK
-	// can make up for.
-	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, nil, describeExcludeFromParams(providerConfig))
+	// nil signalsByType/namespacesByType: a real registry-acquired
+	// provider has no OpenAPI/Smithy/CFN document at all for this
+	// codebase to have extracted either signal from in the first place
+	// -- a real, separate, unaddressed limitation of THIS source, not
+	// something writeGeneratedSDK can make up for. This is also why
+	// UBI-98's own fix never touches a thirdparty-registry-sourced
+	// provider at all: nil namespacesByType means ServiceAndLocalNameForType
+	// falls straight through to the original mechanical split, unchanged.
+	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, nil, nil, describeExcludeFromParams(providerConfig))
 }
 
 // generateOneDynamicProvider is generateOneProvider's own real sibling for
@@ -510,8 +513,19 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 		signalsByType = nil
 	}
 
+	// UBI-98: real per-resource-type service identity, the identical
+	// "supplementary, skip don't fail" posture signalsByType above
+	// already established -- a failure here means ServiceAndLocalNameForType
+	// falls back to the original mechanical split for this provider,
+	// not a failed generation.
+	namespacesByType, nsErr := dynamicProviderNamespaces(ctx, binPath, name, params)
+	if nsErr != nil {
+		fmt.Fprintf(os.Stderr, "sdk gen: dynamic provider %q: namespace collection failed, continuing with the mechanical wire-type split: %v\n", name, nsErr)
+		namespacesByType = nil
+	}
+
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, describeExcludeFromParams(params))
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, namespacesByType, describeExcludeFromParams(params))
 }
 
 // generateDynamicProviderGroup is generateOneDynamicProvider's own real
@@ -593,6 +607,14 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 			signalsByType = nil
 		}
 
+		memberCtx, cancel = context.WithTimeout(ctx, timeout)
+		namespacesByType, nsErr := dynamicProviderNamespaces(memberCtx, binPath, name, params)
+		cancel()
+		if nsErr != nil {
+			fmt.Fprintf(os.Stderr, "sdk gen: dynamic provider group %q: member %q: namespace collection failed, continuing with the mechanical wire-type split: %v\n", groupName, name, nsErr)
+			namespacesByType = nil
+		}
+
 		memberExclude := exclude[name]
 		for excludedName := range memberExclude {
 			_, inResources := schemas.Resources[excludedName]
@@ -603,21 +625,22 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 		}
 
 		members = append(members, dynamicProviderGroupMember{
-			name:            name,
-			schemas:         schemas,
-			signalsByType:   signalsByType,
-			describeExclude: describeExcludeFromParams(params),
-			exclude:         memberExclude,
+			name:             name,
+			schemas:          schemas,
+			signalsByType:    signalsByType,
+			namespacesByType: namespacesByType,
+			describeExclude:  describeExcludeFromParams(params),
+			exclude:          memberExclude,
 		})
 	}
 
-	merged, mergedSignals, mergedDescribeExclude, err := mergeDynamicProviderGroupMembers(groupName, members)
+	merged, mergedSignals, mergedNamespaces, mergedDescribeExclude, err := mergeDynamicProviderGroupMembers(groupName, members)
 	if err != nil {
 		return "", 0, descriptionCoverage{}, err
 	}
 
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, merged, repoName, repoName, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedDescribeExclude)
+	return writeGeneratedSDK(ctx, merged, repoName, repoName, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedNamespaces, mergedDescribeExclude)
 }
 
 // dynamicProviderGroupMember is one already-fetched [dynamic_providers.<name>]
@@ -628,10 +651,11 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 // pure function taking already-fetched data, hermetically unit-testable
 // without a real ubx-provider-dynamic binary.
 type dynamicProviderGroupMember struct {
-	name            string
-	schemas         *provider.Schemas
-	signalsByType   map[string]map[string]*fieldSignal
-	describeExclude map[string]bool
+	name             string
+	schemas          *provider.Schemas
+	signalsByType    map[string]map[string]*fieldSignal
+	namespacesByType map[string]string
+	describeExclude  map[string]bool
 	// exclude is this member's own wire type names to drop before
 	// merging -- config-declared collision resolution (groupExcludeKey),
 	// distinct from describeExclude (which still generates full
@@ -646,12 +670,13 @@ type dynamicProviderGroupMember struct {
 // generateDynamicProviderGroup's own doc comment for why a collision
 // fails loud rather than silently picking one member's entry over
 // another's.
-func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProviderGroupMember) (*provider.Schemas, map[string]map[string]*fieldSignal, map[string]bool, error) {
+func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProviderGroupMember) (*provider.Schemas, map[string]map[string]*fieldSignal, map[string]string, map[string]bool, error) {
 	merged := &provider.Schemas{
 		Resources:   map[string]*provider.Schema{},
 		DataSources: map[string]*provider.Schema{},
 	}
 	mergedSignals := map[string]map[string]*fieldSignal{}
+	mergedNamespaces := map[string]string{}
 	mergedDescribeExclude := map[string]bool{}
 
 	for _, m := range members {
@@ -660,7 +685,7 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 				continue
 			}
 			if _, exists := merged.Resources[typeName]; exists {
-				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: resource type %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
+				return nil, nil, nil, nil, fmt.Errorf("dynamic provider group %q: resource type %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
 			merged.Resources[typeName] = schema
 		}
@@ -669,12 +694,15 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 				continue
 			}
 			if _, exists := merged.DataSources[typeName]; exists {
-				return nil, nil, nil, fmt.Errorf("dynamic provider group %q: data source %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
+				return nil, nil, nil, nil, fmt.Errorf("dynamic provider group %q: data source %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
 			merged.DataSources[typeName] = schema
 		}
 		for typeName, sig := range m.signalsByType {
 			mergedSignals[typeName] = sig
+		}
+		for typeName, ns := range m.namespacesByType {
+			mergedNamespaces[typeName] = ns
 		}
 		for excluded := range m.describeExclude {
 			mergedDescribeExclude[excluded] = true
@@ -684,10 +712,13 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 	if len(mergedSignals) == 0 {
 		mergedSignals = nil
 	}
+	if len(mergedNamespaces) == 0 {
+		mergedNamespaces = nil
+	}
 	if len(mergedDescribeExclude) == 0 {
 		mergedDescribeExclude = nil
 	}
-	return merged, mergedSignals, mergedDescribeExclude, nil
+	return merged, mergedSignals, mergedNamespaces, mergedDescribeExclude, nil
 }
 
 // writeGeneratedSDK is generateOneProvider's/generateOneDynamicProvider's
@@ -722,7 +753,7 @@ type irFieldsWrapper struct {
 	Fields []ir.Field `json:"Fields"`
 }
 
-func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, signalsByType map[string]map[string]*fieldSignal, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, signalsByType map[string]map[string]*fieldSignal, namespacesByType map[string]string, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -739,6 +770,13 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		if err != nil {
 			return "", 0, descriptionCoverage{}, fmt.Errorf("%s@%s: %w", source, version, err)
 		}
+		// UBI-98: real, authoritative service identity when this source
+		// had one to give (namespacesByType is nil/empty for every
+		// provider that doesn't -- see writeGeneratedSDK's own callers).
+		// ir.ResourceType.RealNamespace's own doc comment has the full
+		// real account of why this can't be computed inside FromSchema
+		// itself.
+		resType.RealNamespace = namespacesByType[typeName]
 		// ir.FromSchema's own real "skip rather than fail the whole
 		// resource" discipline (a real field/nested-block whose wire name
 		// can't be safely represented in any real target language --
