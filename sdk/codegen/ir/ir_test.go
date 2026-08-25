@@ -1247,3 +1247,57 @@ aws_workspacesweb_user_settings_association aws_xray_encryption_config aws_xray_
 aws_xray_indexing_rule aws_xray_resource_policy aws_xray_sampling_rule
 aws_xray_trace_segment_destination
 `)
+
+// TestFileStem_ShortName_Unchanged proves the common case (every real
+// name across AWS/Datadog/GitHub/Google/Kubernetes today, and all but
+// one Azure name) never gets touched.
+func TestFileStem_ShortName_Unchanged(t *testing.T) {
+	got := FileStem("backup_short_term_retention_policy")
+	if got != "backup_short_term_retention_policy" {
+		t.Fatalf("got %q, want unchanged", got)
+	}
+}
+
+// TestFileStem_LongName_TruncatedWithDeterministicSuffix proves the real,
+// live-found case (UBI-143): a 100-character Azure compound name, over
+// JSR's 95-char path-component cap, comes back under maxFileStem (80)
+// with a content-derived suffix, never a bare truncation that could
+// collide with a sibling sharing the same 71-character prefix.
+func TestFileStem_LongName_TruncatedWithDeterministicSuffix(t *testing.T) {
+	name := "managedrestorabledroppeddatabasebackupshorttermretentionpolicies_backup_short_term_retention_policie"
+	got := FileStem(name)
+	if len(got) != maxFileStem {
+		t.Fatalf("got length %d, want exactly maxFileStem (%d): %q", len(got), maxFileStem, got)
+	}
+	if !strings.HasPrefix(got, name[:maxFileStem-9]) {
+		t.Fatalf("got %q, want a prefix of the original name", got)
+	}
+}
+
+// TestFileStem_Deterministic_AcrossRepeatedCalls proves the same real
+// requirement TestFromSchema_Deterministic_AcrossRepeatedCalls already
+// pins for schema translation: the same name must always produce the
+// same file stem, run after run (docs/schema.md's own "anything feeding
+// generated output must be canonical and reproducible" -- a shortened
+// file path is generated output the same way a hash is).
+func TestFileStem_Deterministic_AcrossRepeatedCalls(t *testing.T) {
+	name := "managedinstanceadvancedthreatprotectionsettings_managed_instance_advanced_threat_protection"
+	first := FileStem(name)
+	for i := 0; i < 5; i++ {
+		if got := FileStem(name); got != first {
+			t.Fatalf("call %d: got %q, want %q (same every call)", i, got, first)
+		}
+	}
+}
+
+// TestFileStem_TwoLongNamesSharingAPrefix_NeverCollide proves the actual
+// risk a bare truncation (no suffix) would create: two different real
+// Azure resources sharing the same first 71+ characters must still
+// resolve to two different file stems.
+func TestFileStem_TwoLongNamesSharingAPrefix_NeverCollide(t *testing.T) {
+	a := "managedinstanceadvancedthreatprotectionsettings_managed_instance_advanced_threat_protection"
+	b := "manageddatabaseadvancedthreatprotectionsettings_managed_database_advanced_threat_protection"
+	if FileStem(a) == FileStem(b) {
+		t.Fatalf("two different names collided on the same file stem: %q", FileStem(a))
+	}
+}
