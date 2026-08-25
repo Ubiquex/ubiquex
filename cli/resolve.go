@@ -30,14 +30,20 @@ import (
 // does: it reads some input (an intent file, not live drift) and produces
 // a draft proposal, which `ubx propose`/`ubx accept` then take unchanged.
 //
-// Unlike scan/status/ship, resolve never reads live provider state at all
-// -- docs/resolver.md's own contract names "live state via
-// core.StateReader" as an input, but the actual implementation (UBI-27
-// session 2) never needed it: a change proposal's "before" comes from the
-// ledger's own FoldState, not a fresh cloud read (that happens later, at
-// ship time, the same way it already does for drift_revert). A provider
-// is still launched here, for exactly one reason: its schema is what
-// SchemaInspector answers Computed/Sensitive/HasType questions against.
+// Unlike scan/status/ship, resolve mostly never reads live provider
+// state -- docs/resolver.md's own contract names "live state via
+// core.StateReader" as an input, but the original implementation
+// (UBI-27 session 2) never needed it: a change proposal's "before"
+// comes from the ledger's own FoldState, not a fresh cloud read (that
+// happens later, at ship time, the same way it already does for
+// drift_revert). A provider is launched here for schema either way --
+// SchemaInspector answers Computed/Sensitive/HasType questions against
+// it. The one real exception (UBI-178, docs/schema.md's own "Amendment:
+// data sources"): a data_sources[] entry's own lookup genuinely does
+// need a real, live read, executed by resolver.Resolve itself, in topo
+// order, as part of producing the draft proposal -- attachDataSourceReaders
+// (below) is what gives it a real connection to do that with, gated
+// entirely on the intent document actually declaring one.
 func newResolveCmd() *cobra.Command {
 	var (
 		ledgerDir       string
@@ -204,6 +210,20 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 			defer closeLedger()
+
+			// UBI-178: a real, live connection for whichever provider(s)
+			// own a referenced data_sources[] type -- gated entirely on
+			// the intent document actually having one (attachDataSourceReaders'
+			// own doc comment); returns (nil, nil) immediately otherwise,
+			// so a stack with no data sources sees no change in
+			// connection lifetime at all.
+			dsCloser, err := attachDataSourceReaders(ctx, cfg, ledger, providers, intent.DataSources, providerPath, source, providerVersion)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+			}
+			if dsCloser != nil {
+				defer dsCloser.Close()
+			}
 
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {

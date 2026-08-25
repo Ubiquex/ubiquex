@@ -115,6 +115,20 @@ by design (docs/cli-output-spec.md principle 6).`,
 				Destroys:      args,
 			}
 
+			// UBI-178: a terminate-built intent never declares
+			// data_sources[] (Destroys only, above) -- this is here for
+			// the same reason every other resolver.Resolve call site now
+			// carries it, not because this one is expected to ever
+			// actually need it: attachDataSourceReaders' own len(dataSources)
+			// == 0 gate returns (nil, nil) immediately either way.
+			dsCloser, err := attachDataSourceReaders(ctx, cfg, ledger, providers, intent.DataSources, providerPath, source, providerVersion)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("terminate: %w", err)}
+			}
+			if dsCloser != nil {
+				defer dsCloser.Close()
+			}
+
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("terminate: %w", err)}
