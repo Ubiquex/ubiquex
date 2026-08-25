@@ -235,6 +235,58 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	}
 }
 
+// TestGeneratedRepo_DataSourceNamespace is UBI-178 piece 4's own real
+// proof, mirroring sdk/codegen/templates/go's own identical test: a data
+// source (rt.IsDataSource) lands under an extra "data" package ahead of
+// its service, and coexists with a same-WireType resource
+// ("aws_instance" as both a resource and a data source, hashicorp/aws's
+// own real shape) at a genuinely distinct dotted-import path.
+func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
+	resource := rt("aws_instance", scalarField("id", ir.ScalarString, false, false, true, false))
+	resource.RealNamespace = "ec2"
+
+	dataSource := rt("aws_instance", scalarField("id", ir.ScalarString, true, false, false, false))
+	dataSource.RealNamespace = "ec2"
+	dataSource.IsDataSource = true
+
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", []*ir.ResourceType{resource, dataSource})
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+
+	wantPaths := []string{
+		"sdk/python/pyproject.toml",
+		"sdk/python/ubx/aws/__init__.py",
+		"sdk/python/ubx/aws/ec2/__init__.py", "sdk/python/ubx/aws/ec2/instance.py",
+		"sdk/python/ubx/aws/data/ec2/__init__.py", "sdk/python/ubx/aws/data/ec2/instance.py",
+	}
+	for _, p := range wantPaths {
+		if _, ok := files[p]; !ok {
+			t.Errorf("GeneratedRepo: missing expected path %q, got paths: %v", p, keys(files))
+		}
+	}
+	if len(files) != len(wantPaths) {
+		t.Errorf("GeneratedRepo: got %d files, want %d: %v", len(files), len(wantPaths), keys(files))
+	}
+
+	// "data" itself never gets an __init__.py -- an implicit PEP 420
+	// namespace package, exactly the same treatment "ubx" itself already
+	// gets above (nothing lives directly in it; every real type is one
+	// level deeper, under data/<service>/).
+	if _, ok := files["sdk/python/ubx/aws/data/__init__.py"]; ok {
+		t.Fatalf("GeneratedRepo: must NOT emit ubx/aws/data/__init__.py (would make \"data\" a regular package with nothing to export): %v", keys(files))
+	}
+
+	mustContain(t, files["sdk/python/ubx/aws/ec2/instance.py"], "Instance = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/data/ec2/__init__.py"], "from .instance import Instance, InstanceConfig")
+	mustContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], "Instance = ubx.ResourceBinding(")
+	mustContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], `wire_type="aws_instance",`)
+
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has real declaration collisions: %v", err)
+	}
+}
+
 func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),

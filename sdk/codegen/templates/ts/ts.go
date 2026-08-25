@@ -60,19 +60,31 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		rt    *ir.ResourceType
 		local string
 	}
-	byService := map[string][]entry{}
-	var services []string
+	// pkgKey mirrors sdk/codegen/templates/go's own identical fix
+	// (UBI-178 piece 4): namespace is "" for an ordinary resource, "data"
+	// for a data source (ir.ServiceAndLocalNameForType's own doc
+	// comment), keyed separately from service so a resource and its
+	// same-named data source counterpart never land at the same path.
+	type pkgKey struct{ namespace, service string }
+	byService := map[pkgKey][]entry{}
+	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		service, local, err := ir.ServiceAndLocalNameForType(rt)
+		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/ts: %w", err)
 		}
-		if _, ok := byService[service]; !ok {
-			services = append(services, service)
+		key := pkgKey{namespace, service}
+		if _, ok := byService[key]; !ok {
+			pkgKeys = append(pkgKeys, key)
 		}
-		byService[service] = append(byService[service], entry{rt, local})
+		byService[key] = append(byService[key], entry{rt, local})
 	}
-	sort.Strings(services)
+	sort.Slice(pkgKeys, func(i, j int) bool {
+		if pkgKeys[i].namespace != pkgKeys[j].namespace {
+			return pkgKeys[i].namespace < pkgKeys[j].namespace
+		}
+		return pkgKeys[i].service < pkgKeys[j].service
+	})
 
 	files := map[string]string{
 		"sdk/typescript/package.json": packageJSON(shortName, source, version),
@@ -85,14 +97,23 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// resolution is purely path-based (confirmed live, UBI-98 session 2)
 	// -- no identifier-validity guard needed for shortName as a path
 	// segment, unlike Python's own dotted-import requirement below.
-	for _, service := range services {
-		files["sdk/typescript/"+shortName+"/"+service+"/doc.ts"] = PackageDoc(source, version)
-		for _, e := range byService[service] {
+	for _, key := range pkgKeys {
+		// dir is shortName/service for an ordinary resource, unchanged
+		// from before UBI-178, and shortName/data/service for a data
+		// source -- see sdk/codegen/templates/go's own identical dir
+		// construction for the full account.
+		dir := shortName
+		if key.namespace != "" {
+			dir += "/" + key.namespace
+		}
+		dir += "/" + key.service
+		files["sdk/typescript/"+dir+"/doc.ts"] = PackageDoc(source, version)
+		for _, e := range byService[key] {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: %w", e.rt.WireType, err)
 			}
-			path := "sdk/typescript/" + shortName + "/" + service + "/" + ir.FileStem(e.local) + ".ts"
+			path := "sdk/typescript/" + dir + "/" + ir.FileStem(e.local) + ".ts"
 			if _, exists := files[path]; exists {
 				// ir.FileStem's own hash-suffix collision odds are
 				// astronomically low, never trusted alone -- a real path

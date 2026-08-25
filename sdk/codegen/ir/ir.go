@@ -184,6 +184,19 @@ type ResourceType struct {
 	// --dump-namespaces output, not by FromSchema itself, which has no
 	// access to any source outside the one *provider.Schema it's given.
 	RealNamespace string
+
+	// IsDataSource marks this ResourceType as derived from
+	// provider.Schemas.DataSources rather than .Resources (UBI-178 piece
+	// 4, docs/schema.md's own "Amendment: data sources"). Threaded in by
+	// the caller (writeGeneratedSDK, cli/sdk.go) after FromSchema
+	// returns, exactly like RealNamespace above -- FromSchema itself has
+	// no access to which of provider.Schemas' two maps a given
+	// (typeName, schema) pair came from. A real provider's data source
+	// and resource can share the identical WireType (e.g. hashicorp/aws's
+	// own "aws_instance" names both a resource and a data source) --
+	// this bit, not WireType, is what ServiceAndLocalNameForType reads to
+	// keep the two from landing at the same generated path.
+	IsDataSource bool
 }
 
 // ServiceAndLocalName splits a real provider wire type name into the
@@ -311,14 +324,34 @@ func ServiceAndLocalName(wireType string) (service, localWireName string, err er
 // (localWireName would otherwise be empty) falls back to the namespace
 // itself, mirroring ServiceAndLocalName's own len(tokens)==2 case
 // directly above.
-func ServiceAndLocalNameForType(rt *ResourceType) (service, localWireName string, err error) {
+//
+// namespace is UBI-178 piece 4's own real extension of this same
+// function, not a separate wrapper: rt.IsDataSource is the one input
+// that decides it ("data" when true, "" for an ordinary resource), read
+// here so every per-language template asks this ONE function where a
+// type belongs, in every dimension, rather than each template carrying
+// its own copy of "and also check IsDataSource" -- the exact kind of
+// duplicated-in-multiple-files namespace logic that let the Azure/GCP
+// service-doubling bugs (UBI-98) go unfound for as long as they did.
+// service/localWireName are derived completely unchanged by
+// rt.IsDataSource -- a data source's own service/local split is governed
+// by the identical RealNamespace-or-mechanical-split logic below, since a
+// data source and its same-named resource counterpart (hashicorp/aws's
+// own "aws_instance" is both) genuinely belong to the same real service.
+// namespace is the only new axis, and it alone is what keeps the two from
+// landing at the same generated path.
+func ServiceAndLocalNameForType(rt *ResourceType) (namespace, service, localWireName string, err error) {
+	if rt.IsDataSource {
+		namespace = "data"
+	}
 	if rt.RealNamespace == "" {
-		return ServiceAndLocalName(rt.WireType)
+		service, localWireName, err = ServiceAndLocalName(rt.WireType)
+		return namespace, service, localWireName, err
 	}
 
 	tokens := strings.Split(rt.WireType, "_")
 	if len(tokens) < 2 || tokens[0] == "" {
-		return "", "", fmt.Errorf("sdk/codegen/ir: ServiceAndLocalNameForType(%q): wire type must be at least \"<provider>_<local>\"", rt.WireType)
+		return "", "", "", fmt.Errorf("sdk/codegen/ir: ServiceAndLocalNameForType(%q): wire type must be at least \"<provider>_<local>\"", rt.WireType)
 	}
 	service = strings.ToLower(rt.RealNamespace)
 	remainder := tokens[1:]
@@ -344,7 +377,7 @@ func ServiceAndLocalNameForType(rt *ResourceType) (service, localWireName string
 	} else {
 		localWireName = strings.Join(remainder[matchedThrough+1:], "_")
 	}
-	return service, localWireName, nil
+	return namespace, service, localWireName, nil
 }
 
 // maxFileStem caps a generated file's own base name (never the exported
