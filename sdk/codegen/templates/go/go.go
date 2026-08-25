@@ -166,11 +166,15 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 			// need to change, only the map key a real consumer's
 			// `go build` never sees. Same trailing-underscore convention
 			// the *Config collision above already uses.
-			fileLocal := e.local
+			fileLocal := ir.FileStem(e.local)
 			if strings.HasSuffix(fileLocal, "_test") {
 				fileLocal += "_"
 			}
-			files["sdk/go/"+shortName+"/"+service+"/"+fileLocal+".go"] = content
+			path := "sdk/go/" + shortName + "/" + service + "/" + fileLocal + ".go"
+			if _, exists := files[path]; exists {
+				return nil, fmt.Errorf("sdk/codegen/templates/go: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
+			}
+			files[path] = content
 		}
 	}
 	return files, nil

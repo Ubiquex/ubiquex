@@ -10,6 +10,8 @@
 package ir
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -252,6 +254,46 @@ func ServiceAndLocalName(wireType string) (service, localWireName string, err er
 		localWireName = strings.Join(tokens[2:], "_")
 	}
 	return service, localWireName, nil
+}
+
+// maxFileStem caps a generated file's own base name (never the exported
+// identifier -- pascalCase always derives from the full, untruncated
+// localWireName, in every template, so this never touches a package's
+// public API surface). JSR's own publish policy caps the last path
+// component at 95 characters (jsr.io/docs/quotas-and-limits); this is
+// deliberately well under that, not flush against it -- found live
+// (UBI-143) against real ARM compound operation-group names: one Azure
+// resource was already at 103 characters, and 7 more were already within
+// 20 characters of the 95-char cap the day this was added. Applied in
+// ir.FileStem, called identically by every language template (ts/go/py),
+// so a long resource's file name stays in lockstep across all three --
+// never special-cased in just one template.
+const maxFileStem = 80
+
+// FileStem derives a filesystem- and registry-safe base file name for
+// one resource type's own generated file, from ServiceAndLocalName's own
+// localWireName. Short names pass through unchanged (every real name
+// across AWS/Datadog/GitHub/Google/Kubernetes today, and all but one
+// Azure name). A name over maxFileStem is truncated and given a
+// deterministic, content-derived suffix -- never a counter or insertion
+// index, which would silently renumber every OTHER long name the moment
+// one new resource type is added earlier in a provider's own sorted
+// list (GeneratedRepo sorts by WireType before iterating; a counter
+// would violate docs/schema.md's own "anything feeding generated output
+// must be canonical and reproducible" the same way an unhashed timestamp
+// would). The suffix is 8 hex characters of SHA-256(localWireName) -- at
+// this file count (thousands, not millions, per provider) collision odds
+// are astronomically low, and every template's own GeneratedRepo still
+// hard-fails on any real path collision regardless (never trusts the
+// hash alone).
+func FileStem(localWireName string) string {
+	if len(localWireName) <= maxFileStem {
+		return localWireName
+	}
+	sum := sha256.Sum256([]byte(localWireName))
+	suffix := hex.EncodeToString(sum[:])[:8]
+	truncated := localWireName[:maxFileStem-len(suffix)-1]
+	return truncated + "_" + suffix
 }
 
 // FromSchema translates one real provider resource schema

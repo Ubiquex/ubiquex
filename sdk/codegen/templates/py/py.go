@@ -96,9 +96,10 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].WireType < sorted[j].WireType })
 
 	type entry struct {
-		rt     *ir.ResourceType
-		local  string
-		pascal string
+		rt       *ir.ResourceType
+		local    string
+		pascal   string
+		fileStem string
 	}
 	byService := map[string][]entry{}
 	var services []string
@@ -116,7 +117,12 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 		if _, ok := byService[service]; !ok {
 			services = append(services, service)
 		}
-		byService[service] = append(byService[service], entry{rt, local, pascal})
+		// fileStem is deliberately separate from local: local (the FULL,
+		// untruncated name) is what pascal above -- and ResourceFile's own
+		// internal pascalCase(e.local) below -- derive the exported class
+		// name from; only the on-disk module name and the `from .X
+		// import` line get the length cap, never the public identifier.
+		byService[service] = append(byService[service], entry{rt, local, pascal, ir.FileStem(local)})
 	}
 	sort.Strings(services)
 
@@ -167,7 +173,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 
 		names := make([]exportedName, len(entries))
 		for i, e := range entries {
-			names[i] = exportedName{local: e.local, pascal: e.pascal, config: e.pascal + "Config"}
+			names[i] = exportedName{local: e.fileStem, pascal: e.pascal, config: e.pascal + "Config"}
 			if siblingPascalNames[e.pascal+"Config"] {
 				names[i].config = e.pascal + "Config_"
 			}
@@ -182,7 +188,11 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: %w", e.rt.WireType, err)
 			}
-			files[root+"/"+service+"/"+e.local+".py"] = content
+			path := root + "/" + service + "/" + e.fileStem + ".py"
+			if _, exists := files[path]; exists {
+				return nil, fmt.Errorf("sdk/codegen/templates/py: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
+			}
+			files[path] = content
 		}
 	}
 	return files, nil

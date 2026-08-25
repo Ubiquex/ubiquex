@@ -92,7 +92,17 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			if err != nil {
 				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: %w", e.rt.WireType, err)
 			}
-			files["sdk/typescript/"+shortName+"/"+service+"/"+e.local+".ts"] = content
+			path := "sdk/typescript/" + shortName + "/" + service + "/" + ir.FileStem(e.local) + ".ts"
+			if _, exists := files[path]; exists {
+				// ir.FileStem's own hash-suffix collision odds are
+				// astronomically low, never trusted alone -- a real path
+				// collision here fails the generation outright rather
+				// than silently letting one resource's file clobber
+				// another's (the same `files["path"] = content` map
+				// write that would otherwise just overwrite in place).
+				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
+			}
+			files[path] = content
 		}
 	}
 	return files, nil
