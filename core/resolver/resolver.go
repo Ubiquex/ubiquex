@@ -105,6 +105,28 @@ type DeclaredProvider struct {
 	Source  string
 	Version string
 	Schema  SchemaInspector
+
+	// Reader and ProviderConfig were added 2026-08-25 (docs/schema.md's
+	// own "Amendment: data sources", UBI-178) -- both nil for every
+	// DeclaredProvider before this and for the overwhelming majority
+	// after it: Resolve has never needed a live connection (only ever a
+	// schema snapshot, fetched once by the caller and the connection
+	// closed immediately -- see cli's own loadResolveProviders), and
+	// still doesn't for a stack with no data_sources[]. Populated only
+	// by a caller resolving a stack that DOES declare one, for whichever
+	// declared provider(s) actually own a referenced data source type --
+	// core.StateReader (not the wider executor.Applier a real caller's
+	// own provider pool hands back; Reader is declared against the
+	// narrower read-only interface deliberately, so this package can
+	// never accidentally apply anything, and never needs to import
+	// core/executor to accept the value at all -- Go's structural typing
+	// lets an Applier satisfy this field directly). See
+	// resolveDataSources' own doc comment for how these get used, and
+	// dataSourceReadCache's own for why a real, live read only ever
+	// happens once per Resolve call despite DoubleRun calling resolveOnce
+	// twice.
+	Reader         core.StateReader
+	ProviderConfig json.RawMessage
 }
 
 // schemaComputedAdapter curries a SchemaInspector to one resource type,
@@ -214,7 +236,15 @@ type IntentFile struct {
 	Stack         string           `json:"stack"`
 	Intent        core.Intent      `json:"intent"`
 	Resources     []ResourceIntent `json:"resources"`
-	Destroys      []string         `json:"destroys,omitempty"`
+	// DataSources was added 2026-08-25 (docs/schema.md's own "Amendment:
+	// data sources", UBI-178): a sibling array to Resources, never a
+	// variant of it -- see DataSourceIntent's own doc comment for the
+	// full account. Purely additive and optional; every intent file
+	// produced before this amendment leaves it nil and is completely
+	// unaffected -- resolveOnce's own data-source pass is a no-op when
+	// this is empty.
+	DataSources []DataSourceIntent `json:"data_sources,omitempty"`
+	Destroys    []string           `json:"destroys,omitempty"`
 
 	// BlueprintCalls was added 2026-08-04 (UBI-74 Slice 5): one entry per
 	// blueprint invocation this document names -- a diagram's own
@@ -447,6 +477,42 @@ const (
 	OpModify = "modify"
 )
 
+// DataSourceIntent is one entry of IntentFile.DataSources
+// (docs/schema.md's own "Amendment: data sources"). Deliberately its
+// own type, not ResourceIntent with Op left blank: a data_sources[]
+// entry carries no Op at all, since the array itself is the
+// discriminator (every entry in it is a read, never a create/modify),
+// the same reasoning Destroys already established for why a destroy is
+// a sibling array rather than an "op" value.
+//
+// Lookup plays the role Config plays for a ResourceIntent -- the query
+// parameters sent to the provider's real read -- but is named
+// differently because a data source has no desired end-state to
+// submit, only something to look up with; its own legal values are
+// identical to Config's (plain JSON, or $ref/$secret/$cross markers,
+// resolved by the exact same machinery).
+//
+// No DependsOn field, unlike ResourceIntent: v1 scope is SDK-authored
+// data sources only (Collector.addDataSource, all three runtimes),
+// which always express a dependency through $ref inside Lookup itself
+// -- there is no lossy authoring medium yet (the diagram/md mediums
+// ResourceIntent.DependsOn exists for) that could need a topology-only
+// escape hatch for a data source. A real, named, deliberately deferred
+// gap, not an oversight -- add if a future medium needs it, mirroring
+// DependsOn's own real addition history rather than guessing ahead of
+// time.
+//
+// No Provider *ProviderHint field either, for the identical reason:
+// not yet needed by anything real, added the same way ResourceIntent's
+// own Provider hint was -- when a genuine ambiguous-ownership case is
+// found, not speculatively.
+type DataSourceIntent struct {
+	Type    string              `json:"type"`
+	Name    string              `json:"name"`
+	Lookup  json.RawMessage     `json:"lookup"`
+	Sources []core.IntentSource `json:"sources,omitempty"`
+}
+
 var (
 	// ErrUnknownIntentKind means IntentFile.Kind isn't "ubx:intent/v1".
 	ErrUnknownIntentKind = errors.New("resolve: unrecognized intent file kind")
@@ -493,6 +559,44 @@ var (
 	// ErrModifyTargetMissing means op "modify" names an address the
 	// ledger has never recorded (docs/resolver-adversarial.md row 9).
 	ErrModifyTargetMissing = errors.New("resolve: op \"modify\" names an address the ledger has never recorded -- did you mean \"create\"?")
+
+	// ErrDuplicateDataSource means two data_sources[] entries in the same
+	// file name the same (stack, type, name) address -- ErrDuplicateResource's
+	// own real sibling (docs/schema.md's own "Amendment: data sources"),
+	// kept as a distinct error rather than reused so the message names
+	// the right array; a data source can never collide with a resource
+	// address either way (DataSourceIntent.Type always carries the real
+	// "data_" prefix that amendment pins, so the two address spaces never
+	// actually overlap).
+	ErrDuplicateDataSource = errors.New("resolve: duplicate data source address in intent file")
+
+	// ErrDataSourceLookupNotConcrete means a data_sources[] entry's own
+	// resolved Lookup still carries a $ref/$cross/$secret/$computed/
+	// $ephemeral marker somewhere within it -- unlike a resource's own
+	// resolvedConfig (where a surviving $computed marker is legitimate,
+	// deferred to real ship-time substitution) a data source's own read
+	// happens synchronously, right now, during resolve: there is no
+	// later ship-time step to fill in a deferred value, and nothing to
+	// look up with a $secret marker's own backend/path envelope instead
+	// of the real secret material. A lookup referencing a sibling
+	// resource's own schema-Computed attribute (its real "id," not known
+	// until that resource ships) is the expected, common real trigger --
+	// a data source cannot look something up by a value that doesn't
+	// exist yet.
+	ErrDataSourceLookupNotConcrete = errors.New("resolve: data source lookup still references a value that is not yet concrete (a sibling resource's own not-yet-created attribute, or an unresolved marker)")
+
+	// ErrDataSourceReadFailed means a data_sources[] entry's own real,
+	// live provider read failed mid-resolution -- an ordinary, real
+	// failure (the provider rejected the lookup, the resource genuinely
+	// doesn't exist, a network error, ...), never wrapped in or confused
+	// with core.ErrDoubleRunMismatch: DoubleRun's own short-circuit ("a,
+	// err := fn(); if err != nil { return nil, err }") means an error
+	// returned from the FIRST of its own two resolveOnce invocations
+	// propagates directly, never reaching the byte-comparison line at
+	// all -- this error can only ever surface as itself, exactly what
+	// "a provider read failing is an ordinary error with its own
+	// message, not anything resembling nondeterminism" requires.
+	ErrDataSourceReadFailed = errors.New("resolve: data source read failed")
 
 	// ErrRefNotFound means a $ref/$cross doesn't resolve to any known
 	// resource or attribute path (docs/resolver-adversarial.md row 3).
@@ -747,10 +851,122 @@ func VerifyPins(p *core.Proposal) error {
 // package-private, never exposed.
 type batchEntry struct {
 	ri             ResourceIntent
+	di             *DataSourceIntent // non-nil for a data_sources[] entry; ri is then the zero value, never read directly -- use typeName()/rawValue()/sources() instead
 	addr           core.Address
-	provider       DeclaredProvider // which declared provider owns ri.Type, set before any value resolution (docs/resolver.md's own amendment)
+	provider       DeclaredProvider // which declared provider owns ri.Type/di.Type, set before any value resolution (docs/resolver.md's own amendment)
 	rawEdges       []string         // canonical addresses this entry's raw $ref targets, restricted to this batch
 	resolvedConfig map[string]interface{}
+}
+
+// isDataSource reports whether e came from data_sources[] rather than
+// resources[].
+func (e *batchEntry) isDataSource() bool { return e.di != nil }
+
+// typeName returns e's own real wire type, regardless of which array it
+// came from -- the one accessor every shared pass (edge scanning, value
+// resolution, resolveRef) uses instead of reaching into ri.Type/di.Type
+// directly, so neither array's own zero-value fields for the OTHER kind
+// ever leak into a real decision by accident.
+func (e *batchEntry) typeName() string {
+	if e.di != nil {
+		return e.di.Type
+	}
+	return e.ri.Type
+}
+
+// rawValue returns e's own not-yet-resolved raw JSON -- Config for a
+// resource, Lookup for a data source. Both carry the identical legal
+// value shapes (plain JSON, or $ref/$secret/$cross markers) and go
+// through the exact same resolveValue/scanRefEdges machinery either
+// way.
+func (e *batchEntry) rawValue() json.RawMessage {
+	if e.di != nil {
+		return e.di.Lookup
+	}
+	return e.ri.Config
+}
+
+// sources returns e's own real provenance list (docs/blueprint.md's
+// own "Provenance" section) -- ResourceIntent.Sources and
+// DataSourceIntent.Sources are the identical shape, reused, not two
+// conventions.
+func (e *batchEntry) sources() []core.IntentSource {
+	if e.di != nil {
+		return e.di.Sources
+	}
+	return e.ri.Sources
+}
+
+// rawValueLabel names e's own rawValue() for an error message -- purely
+// cosmetic (which real field a decode failure is about), never a
+// behavioral branch.
+func rawValueLabel(e *batchEntry) string {
+	if e.isDataSource() {
+		return "lookup"
+	}
+	return "config"
+}
+
+// dataSourceReadCache memoizes a real, live data-source read across
+// resolveOnce's own two core.DoubleRun invocations -- scoped to exactly
+// one Resolve call (a fresh instance is created inside Resolve itself,
+// immediately before calling core.DoubleRun, and passed into both
+// invocations via the closure). DoubleRun requires resolveOnce to
+// produce byte-identical output across two calls, to catch genuine code
+// nondeterminism (map iteration, uninitialized state) as a hard failure
+// -- a real, live provider read is not "nondeterministic code," it's an
+// external, honestly-changing input, and if resolveOnce performed it
+// twice, the world could legitimately have moved between the two calls
+// (a live system, not a frozen snapshot the way ledger state and
+// provider schema already are for every other part of resolution),
+// which DoubleRun would then misreport as ErrDoubleRunMismatch -- a
+// code-determinism bug -- when the real cause is an ordinary, benign
+// external state change. Reading once and reusing the identical bytes
+// on both invocations keeps DoubleRun checking exactly what it was
+// built to check.
+//
+// A cache instance must never outlive one Resolve call. One that did
+// would silently serve a LATER Resolve call's own data source lookup a
+// STALE observed value an EARLIER call read -- exactly the staleness
+// data sources exist to catch, reintroduced by the one mechanism this
+// package uses to keep DoubleRun from misfiring on them. This is why
+// newDataSourceReadCache is only ever called from inside Resolve
+// itself, never at package scope, never memoized across calls.
+type dataSourceReadCache struct {
+	reads map[string]dataSourceRead
+}
+
+type dataSourceRead struct {
+	observed json.RawMessage
+	hash     string
+}
+
+func newDataSourceReadCache() *dataSourceReadCache {
+	return &dataSourceReadCache{reads: map[string]dataSourceRead{}}
+}
+
+// get returns addr's own real observed read (and its ObservedHash),
+// performing the real, live read via reader only the first time this
+// exact address is requested from this cache instance -- every
+// subsequent call (the second DoubleRun invocation, or a genuine second
+// reference to the same address within one resolveOnce pass) reuses the
+// cached bytes, never touching the provider again. A real read failure
+// is never cached (so a transient failure on the first invocation
+// doesn't silently poison a retry within the same process -- though in
+// practice DoubleRun's own short-circuit-on-error means a failure here
+// already ends the whole Resolve call before a second invocation could
+// ever occur).
+func (c *dataSourceReadCache) get(ctx context.Context, reader core.StateReader, addr core.Address, providerSource string, providerConfig, lookup json.RawMessage) (observed json.RawMessage, hash string, err error) {
+	key := addr.String()
+	if cached, ok := c.reads[key]; ok {
+		return cached.observed, cached.hash, nil
+	}
+	observed, hash, err = core.ReadAndFingerprint(ctx, reader, addr, providerSource, providerConfig, lookup)
+	if err != nil {
+		return nil, "", err
+	}
+	c.reads[key] = dataSourceRead{observed: observed, hash: hash}
+	return observed, hash, nil
 }
 
 // Resolve resolves intent against l's current ledger state and schema
@@ -789,8 +1005,20 @@ type batchEntry struct {
 func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string) (*core.Proposal, error) {
 	resolvedAt := time.Now().UTC().Format(time.RFC3339)
 	var resolved *core.Proposal
+	// dsCache is scoped to exactly this one Resolve call -- created
+	// fresh here, on every call, never a package-level or otherwise
+	// longer-lived cache. See dataSourceReadCache's own doc comment for
+	// why it exists at all (DoubleRun calls resolveOnce twice; this is
+	// what keeps a real, live data source read from happening twice) and
+	// why living any longer than one Resolve call would be a real bug,
+	// not just an inefficiency: a cache reused across separate Resolve
+	// calls would silently serve a LATER plan's own data source lookup a
+	// STALE value an EARLIER call observed -- exactly the staleness data
+	// sources exist to catch, reintroduced by the one mechanism meant to
+	// keep DoubleRun from misfiring on them.
+	dsCache := newDataSourceReadCache()
 	_, err := core.DoubleRun(func() ([]byte, error) {
-		p, err := resolveOnce(l, providers, intent, knownDependents, resolvedAt)
+		p, err := resolveOnce(l, providers, intent, knownDependents, resolvedAt, dsCache)
 		if err != nil {
 			return nil, err
 		}
@@ -807,7 +1035,7 @@ func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, k
 	return resolved, nil
 }
 
-func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string) (*core.Proposal, error) {
+func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string, dsCache *dataSourceReadCache) (*core.Proposal, error) {
 	if intent.Kind != IntentFileKind {
 		return nil, fmt.Errorf("%w: got %q", ErrUnknownIntentKind, intent.Kind)
 	}
@@ -815,8 +1043,8 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		return nil, fmt.Errorf("%w (%d entries)", ErrUnexpandedBlueprintCalls, len(intent.BlueprintCalls))
 	}
 
-	batch := make(map[string]*batchEntry, len(intent.Resources))
-	order := make([]string, 0, len(intent.Resources))
+	batch := make(map[string]*batchEntry, len(intent.Resources)+len(intent.DataSources))
+	order := make([]string, 0, len(intent.Resources)+len(intent.DataSources))
 
 	for _, ri := range intent.Resources {
 		prov, err := InferProvider(providers, ri.Type, ri.Provider)
@@ -851,6 +1079,29 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		order = append(order, key)
 	}
 
+	// data_sources[] -- no Op, no FoldState existence check: a data
+	// source is never expected to be present or absent in the ledger,
+	// it isn't a managed resource at all (docs/schema.md's own
+	// "Amendment: data sources"). Real, deliberate scope note: a
+	// provider hint isn't accepted here yet (DataSourceIntent's own doc
+	// comment has why) -- InferProvider is called with a nil hint,
+	// exactly like a ResourceIntent with no "provider" field set.
+	for i := range intent.DataSources {
+		di := &intent.DataSources[i]
+		prov, err := InferProvider(providers, di.Type, nil)
+		if err != nil {
+			return nil, err
+		}
+		addr := core.Address{Stack: intent.Stack, Type: di.Type, Name: di.Name}
+		key := addr.String()
+		if _, dup := batch[key]; dup {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateDataSource, addr)
+		}
+
+		batch[key] = &batchEntry{di: di, addr: addr, provider: prov}
+		order = append(order, key)
+	}
+
 	// docs/resolver.md's "Amendment (2026-07-17, UBI-30): destroys" --
 	// parsed and presence-validated before any resources[] value
 	// resolution, so its target set can be threaded into resolveValue/
@@ -866,8 +1117,8 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 	for _, key := range order {
 		e := batch[key]
 		var raw interface{}
-		if err := json.Unmarshal(e.ri.Config, &raw); err != nil {
-			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
+		if err := json.Unmarshal(e.rawValue(), &raw); err != nil {
+			return nil, fmt.Errorf("resolve %s: decode %s: %w", e.addr, rawValueLabel(e), err)
 		}
 		// UBI-66: schema-key validation runs here, at resolve time,
 		// against the exact schema InferProvider already resolved this
@@ -875,30 +1126,48 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		// batch (every wrong key, on every resource) before any of it is
 		// returned, so a single refusal names every mistake at once
 		// rather than one-at-a-time.
-		if configMap, ok := raw.(map[string]interface{}); ok {
-			for _, issue := range e.provider.Schema.UnknownConfigKeys(e.ri.Type, configMap) {
-				keyErrs = append(keyErrs, configKeyError{addr: e.addr, typeName: e.ri.Type, issue: issue})
-			}
-			// UBI-90: the same batch, the same schema, the same "collect
-			// everything, join into one refusal" discipline -- confirms
-			// EVERY Required attribute actually has a value, not just that
-			// every present key is a real one. Runs for both create and
-			// modify (a modify's own drafted config is expected to
-			// reproduce every currently-recorded attribute unchanged
-			// unless intentionally changed, UBI-85's own "full-state
-			// config, matching create's own convention" -- a Required
-			// attribute is never also Computed in a real schema, so this
-			// never conflicts with the modify-only Computed-attribute
-			// auto-fill below).
-			for _, issue := range e.provider.Schema.MissingRequiredKeys(e.ri.Type, configMap) {
-				keyErrs = append(keyErrs, requiredAttributeError{addr: e.addr, typeName: e.ri.Type, issue: issue})
+		//
+		// Real, deliberate scope note (UBI-178): skipped entirely for a
+		// data source entry. UnknownConfigKeys/MissingRequiredKeys both
+		// validate against a RESOURCE's own create-shaped schema
+		// (SchemaInspector's real, only implementation today) -- no
+		// provider this pipeline talks to publishes a schema for a data
+		// source's own lookup-parameter shape yet (discovery, UBI-186,
+		// found the real candidates; serving that schema over a real
+		// provider RPC is separate, unbuilt work). A malformed lookup
+		// still fails loudly, just later, at the real read below
+		// (ErrDataSourceReadFailed), rather than being silently
+		// pretended validated here against a schema that doesn't exist.
+		if !e.isDataSource() {
+			if configMap, ok := raw.(map[string]interface{}); ok {
+				for _, issue := range e.provider.Schema.UnknownConfigKeys(e.ri.Type, configMap) {
+					keyErrs = append(keyErrs, configKeyError{addr: e.addr, typeName: e.ri.Type, issue: issue})
+				}
+				// UBI-90: the same batch, the same schema, the same "collect
+				// everything, join into one refusal" discipline -- confirms
+				// EVERY Required attribute actually has a value, not just that
+				// every present key is a real one. Runs for both create and
+				// modify (a modify's own drafted config is expected to
+				// reproduce every currently-recorded attribute unchanged
+				// unless intentionally changed, UBI-85's own "full-state
+				// config, matching create's own convention" -- a Required
+				// attribute is never also Computed in a real schema, so this
+				// never conflicts with the modify-only Computed-attribute
+				// auto-fill below).
+				for _, issue := range e.provider.Schema.MissingRequiredKeys(e.ri.Type, configMap) {
+					keyErrs = append(keyErrs, requiredAttributeError{addr: e.addr, typeName: e.ri.Type, issue: issue})
+				}
 			}
 		}
 		edges, err := scanRefEdges(raw, batch)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}
-		edges, err = unionDependsOn(edges, e.ri.DependsOn, batch, destroySet, l, e.addr)
+		var dependsOnHint []string
+		if !e.isDataSource() {
+			dependsOnHint = e.ri.DependsOn
+		}
+		edges, err = unionDependsOn(edges, dependsOnHint, batch, destroySet, l, e.addr)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}
@@ -917,25 +1186,99 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 	for _, key := range topoOrder {
 		e := batch[key]
 		var raw interface{}
-		if err := json.Unmarshal(e.ri.Config, &raw); err != nil {
-			return nil, fmt.Errorf("resolve %s: decode config: %w", e.addr, err)
+		if err := json.Unmarshal(e.rawValue(), &raw); err != nil {
+			return nil, fmt.Errorf("resolve %s: decode %s: %w", e.addr, rawValueLabel(e), err)
 		}
-		resolvedVal, inputs, err := resolveValue(raw, "", e.ri.Type, e.addr.String(), l, e.provider.Schema, batch, destroySet)
+		resolvedVal, inputs, err := resolveValue(raw, "", e.typeName(), e.addr.String(), l, e.provider.Schema, batch, destroySet)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
 		}
 		resolvedMap, ok := resolvedVal.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("resolve %s: config must be a JSON object", e.addr)
+			return nil, fmt.Errorf("resolve %s: %s must be a JSON object", e.addr, rawValueLabel(e))
 		}
-		e.resolvedConfig = resolvedMap
 		resolutionInputs = append(resolutionInputs, inputs...)
+
+		if !e.isDataSource() {
+			e.resolvedConfig = resolvedMap
+			continue
+		}
+
+		// UBI-178: a data source's own real read happens HERE, in topo
+		// order, interleaved with ordinary value resolution -- not in
+		// the create/modify loop below, and not deferred to after this
+		// loop finishes. This is load-bearing, not a style choice:
+		// resolveRef (refs.go) dot-gets into a REFERENCED entry's own
+		// resolvedConfig, and topo order only guarantees a dependency's
+		// resolvedConfig is set before a DEPENDENT's own value resolves
+		// -- if the real read happened in a later, separate pass, a
+		// sibling resource's own $ref into this data source's result
+		// would find resolvedConfig still nil and hit resolveRef's own
+		// "referenced before it was resolved (topo order bug)" internal
+		// error, even though nothing is actually wrong.
+		//
+		// Unlike a resource's own resolvedConfig (the submitted create
+		// config -- a partial, desired-state view; genuinely
+		// schema-Computed attributes like "id" are deferred to $computed,
+		// docs/schema.md's own deferred-materialization amendment), a
+		// data source's resolvedConfig is set to the FULL real observed
+		// read result: nothing about a data source is ever "submitted,"
+		// every attribute is equally already-known the moment the read
+		// returns, so a sibling's $ref into ANY of its attributes always
+		// resolves to a real, concrete value immediately -- see
+		// resolveRef's own `target.di == nil` guard for the other half
+		// of this (never defers a data source's own attribute to
+		// $computed, since there is nothing to defer).
+		if containsMarker(resolvedMap) {
+			return nil, fmt.Errorf("%w: %s", ErrDataSourceLookupNotConcrete, e.addr)
+		}
+		resolvedLookupBytes, err := json.Marshal(resolvedMap)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: marshal resolved lookup: %w", e.addr, err)
+		}
+		if e.provider.Reader == nil {
+			return nil, fmt.Errorf("%w: %s: provider %q has no live read access for this resolve call -- a stack with data_sources[] needs a caller that keeps a real connection open (docs/schema.md's own \"Amendment: data sources\")", ErrDataSourceReadFailed, e.addr, e.provider.Source)
+		}
+		// context.Background(), not a caller-supplied ctx: Resolve has
+		// never taken a context parameter (a deliberate "pure
+		// computation over already-fetched inputs" signature, ~85 real
+		// call sites across this package's own tests plus 4 real
+		// production callers) -- threading one through now, for a
+		// capability the overwhelming majority of stacks don't use at
+		// all, would touch every one of them for a real but secondary
+		// benefit (mid-read cancellation). A real, named, deliberately
+		// deferred gap, not hidden: a data source read currently cannot
+		// be interrupted by a caller's own ctx cancellation the way
+		// other real I/O in this codebase can.
+		observed, hash, err := dsCache.get(context.Background(), e.provider.Reader, e.addr, e.provider.Source, e.provider.ProviderConfig, resolvedLookupBytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", ErrDataSourceReadFailed, e.addr, err)
+		}
+		var observedMap map[string]interface{}
+		if err := json.Unmarshal(observed, &observedMap); err != nil {
+			return nil, fmt.Errorf("%w: %s: provider returned a non-object read result: %w", ErrDataSourceReadFailed, e.addr, err)
+		}
+		e.resolvedConfig = observedMap
+		resolutionInputs = append(resolutionInputs, core.ResolutionInput{
+			Kind:         "data_source",
+			Resource:     e.addr.String(),
+			ObservedHash: hash,
+			Lookup:       resolvedLookupBytes,
+		})
 	}
 
 	var creates []json.RawMessage
 	var modifies []core.Modification
 	for _, key := range topoOrder {
 		e := batch[key]
+		// A data source entry already produced its own real
+		// resolution.inputs entry above (the only output it ever has --
+		// there is nothing to create or modify, docs/schema.md's own
+		// "Amendment: data sources": "resolves into a resolution.inputs[]
+		// entry only").
+		if e.isDataSource() {
+			continue
+		}
 		dependsOn := append([]string(nil), e.rawEdges...)
 		sort.Strings(dependsOn)
 
