@@ -309,6 +309,20 @@ propose-time PR trailer hash, etc.).`,
 			}
 			defer closeLedger()
 
+			// UBI-178: gated entirely on the intent document actually
+			// having data_sources[] -- see attachDataSourceReaders' own
+			// doc comment (cli/datasourcereader.go).
+			dsCloser, err := attachDataSourceReaders(ctx, cfg, ledger, providers, intent.DataSources, providerPath, source, providerVersion)
+			if err != nil {
+				if showedDraftProgress {
+					fmt.Fprintln(outWriter)
+				}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+			}
+			if dsCloser != nil {
+				defer dsCloser.Close()
+			}
+
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
 				if showedDraftProgress {

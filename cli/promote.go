@@ -227,6 +227,19 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			}
 			defer closeTarget()
 
+			// UBI-178: gated entirely on the intent document actually
+			// having data_sources[] -- see attachDataSourceReaders' own
+			// doc comment (cli/datasourcereader.go). Resolves against the
+			// TARGET stack's own config/ledger, matching resolver.Resolve's
+			// own call just below.
+			dsCloser, err := attachDataSourceReaders(ctx, targetCfg, targetLedger, providers, intent.DataSources, providerPath, source, providerVersion)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}
+			}
+			if dsCloser != nil {
+				defer dsCloser.Close()
+			}
+
 			np, err := resolver.Resolve(targetLedger, providers, intent, knownDependents)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}
