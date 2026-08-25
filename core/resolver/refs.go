@@ -514,7 +514,18 @@ func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, dest
 		if target.resolvedConfig == nil {
 			return nil, nil, fmt.Errorf("resolve: internal: %s referenced before it was resolved (topo order bug)", addrStr)
 		}
-		if target.provider.Schema.IsComputed(target.ri.Type, attrPath) {
+		// UBI-178: the IsComputed-triggered $computed deferral only ever
+		// applies to a RESOURCE reference -- a genuinely real gap for a
+		// resource (its own schema-Computed attributes, like "id," don't
+		// exist yet at resolve time; deferred to real ship-time
+		// substitution, docs/schema.md's own deferred-materialization
+		// amendment). A data source has no such gap: its own real read
+		// already happened, synchronously, earlier in this exact topo
+		// walk (resolveOnce's own value-resolution loop) -- by the time
+		// ANY other entry could reach this branch referencing it, every
+		// one of its attributes is already a real, concrete, observed
+		// value, never something to defer.
+		if target.di == nil && target.provider.Schema.IsComputed(target.ri.Type, attrPath) {
 			return map[string]interface{}{
 				markerComputed: map[string]interface{}{"from": to},
 			}, nil, nil
@@ -525,7 +536,7 @@ func resolveRef(inner map[string]interface{}, batch map[string]*batchEntry, dest
 		}
 		if isComputedMarker(val) {
 			return nil, nil, fmt.Errorf("%w: %s.%s resolved to $computed, but %s's own schema says this attribute is concrete",
-				ErrComputedWhereConcreteRequired, addrStr, attrPath, target.ri.Type)
+				ErrComputedWhereConcreteRequired, addrStr, attrPath, target.typeName())
 		}
 		return val, nil, nil
 	}
