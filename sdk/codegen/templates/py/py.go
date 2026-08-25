@@ -407,8 +407,21 @@ func ResourceFile(localWireName string, rt *ir.ResourceType, configTypeNameOverr
 	// new shared FieldMap dict as a side effect (r.fieldMapDecls), which
 	// must be written to the file BEFORE this descriptor references it
 	// by name.
+	// UBI-178 piece 4's own real, live-found gap -- see
+	// sdk/codegen/templates/go's own identical ResourceFile fix for the
+	// full account: ubx_sdk's own DataSourceBinding is a deliberately
+	// distinct dataclass from ResourceBinding ("so a codegen'd module can
+	// never pass a resource's own binding to data() or vice versa by
+	// accident without at least a type-checker catching it," that
+	// dataclass's own doc comment), and data() (Python's own real
+	// top-level function) is typed to take DataSourceBinding
+	// specifically.
+	bindingType := "ubx.ResourceBinding"
+	if rt.IsDataSource {
+		bindingType = "ubx.DataSourceBinding"
+	}
 	var descriptor strings.Builder
-	fmt.Fprintf(&descriptor, "%s = ubx.ResourceBinding(\n", pascalName)
+	fmt.Fprintf(&descriptor, "%s = %s(\n", pascalName, bindingType)
 	fmt.Fprintf(&descriptor, "    wire_type=%q,\n", rt.WireType)
 	descriptor.WriteString("    fields={\n")
 	for _, f := range rt.Fields {

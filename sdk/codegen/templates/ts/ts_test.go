@@ -257,8 +257,17 @@ func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
 		t.Errorf("GeneratedRepo: got %d files, want %d: %v", len(files), len(wantPaths), keys(files))
 	}
 
-	mustContain(t, files["sdk/typescript/aws/ec2/instance.ts"], "export const Instance:")
-	mustContain(t, files["sdk/typescript/aws/data/ec2/instance.ts"], "export const Instance:")
+	mustContain(t, files["sdk/typescript/aws/ec2/instance.ts"], "export const Instance: ResourceBinding<")
+	// UBI-178 piece 4's own real, live-found fix: a data source's own
+	// binding const must be typed DataSourceBinding, not ResourceBinding
+	// -- @ubx/sdk's own real data() function is typed to take
+	// DataSourceBinding specifically, a deliberately distinct interface
+	// from ResourceBinding. This test's own original, looser "export
+	// const Instance:" assertion (matching either type name) is why this
+	// shipped unnoticed -- tightened here, mirroring the go/py sibling
+	// fixes.
+	mustContain(t, files["sdk/typescript/aws/data/ec2/instance.ts"], "export const Instance: DataSourceBinding<")
+	mustNotContain(t, files["sdk/typescript/aws/data/ec2/instance.ts"], ": ResourceBinding<")
 	mustContain(t, files["sdk/typescript/aws/data/ec2/instance.ts"], `wireType: "aws_instance",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
