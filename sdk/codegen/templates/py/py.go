@@ -104,7 +104,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	byService := map[string][]entry{}
 	var services []string
 	for _, rt := range sorted {
-		service, local, err := ir.ServiceAndLocalName(rt.WireType)
+		service, local, err := ir.ServiceAndLocalNameForType(rt)
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/py: %w", err)
 		}

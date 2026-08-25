@@ -24,7 +24,7 @@ func TestMergeDynamicProviderGroupMembers_UnionsDistinctMembers(t *testing.T) {
 		{name: "google_bigquery", schemas: fakeGroupSchemas("google_bigquery_dataset", "google_bigquery_table")},
 	}
 
-	merged, _, _, err := mergeDynamicProviderGroupMembers("google", members)
+	merged, _, _, _, err := mergeDynamicProviderGroupMembers("google", members)
 	if err != nil {
 		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestMergeDynamicProviderGroupMembers_CollidingResourceType_ErrorsNotSilentO
 		{name: "google_bigquery", schemas: fakeGroupSchemas("google_shared_thing")},
 	}
 
-	_, _, _, err := mergeDynamicProviderGroupMembers("google", members)
+	_, _, _, _, err := mergeDynamicProviderGroupMembers("google", members)
 	if err == nil {
 		t.Fatal("expected an error on a real resource-type collision across members, got nil")
 	}
@@ -70,7 +70,7 @@ func TestMergeDynamicProviderGroupMembers_ExcludedCollision_DropsExcludedSideNot
 		{name: "datadog_v2", schemas: fakeGroupSchemas("event_response", "incident"), exclude: map[string]bool{"event_response": true}},
 	}
 
-	merged, _, _, err := mergeDynamicProviderGroupMembers("datadog_all", members)
+	merged, _, _, _, err := mergeDynamicProviderGroupMembers("datadog_all", members)
 	if err != nil {
 		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestMergeDynamicProviderGroupMembers_CollidingDataSource_Errors(t *testing.
 		{name: "b", schemas: &provider.Schemas{DataSources: map[string]*provider.Schema{"shared_ds": {}}}},
 	}
 
-	_, _, _, err := mergeDynamicProviderGroupMembers("group", members)
+	_, _, _, _, err := mergeDynamicProviderGroupMembers("group", members)
 	if err == nil {
 		t.Fatal("expected an error on a real data-source collision across members, got nil")
 	}
@@ -141,7 +141,7 @@ func TestMergeDynamicProviderGroupMembers_MergesSignalsAndDescribeExclude(t *tes
 		},
 	}
 
-	_, signals, exclude, err := mergeDynamicProviderGroupMembers("group", members)
+	_, signals, _, exclude, err := mergeDynamicProviderGroupMembers("group", members)
 	if err != nil {
 		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
 	}
@@ -153,17 +153,48 @@ func TestMergeDynamicProviderGroupMembers_MergesSignalsAndDescribeExclude(t *tes
 	}
 }
 
+// TestMergeDynamicProviderGroupMembers_MergesNamespaces is UBI-98's own
+// real coverage: namespacesByType unions across members exactly like
+// signalsByType does, since a real dynamic_provider_group (e.g.
+// azure_all/google_all) is the same real code path AWS's own future
+// group-based data-source generation will need too.
+func TestMergeDynamicProviderGroupMembers_MergesNamespaces(t *testing.T) {
+	members := []dynamicProviderGroupMember{
+		{
+			name:             "aws",
+			schemas:          fakeGroupSchemas("aws_instance"),
+			namespacesByType: map[string]string{"aws_instance": "ec2"},
+		},
+		{
+			name:             "aws_route53",
+			schemas:          fakeGroupSchemas("aws_route53_record"),
+			namespacesByType: map[string]string{"aws_route53_record": "route53"},
+		},
+	}
+
+	_, _, namespaces, _, err := mergeDynamicProviderGroupMembers("group", members)
+	if err != nil {
+		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
+	}
+	if len(namespaces) != 2 || namespaces["aws_instance"] != "ec2" || namespaces["aws_route53_record"] != "route53" {
+		t.Errorf("expected namespaces for both aws_instance and aws_route53_record, got: %v", namespaces)
+	}
+}
+
 func TestMergeDynamicProviderGroupMembers_NoSignalsOrExcludes_ReturnsNilNotEmptyMap(t *testing.T) {
 	members := []dynamicProviderGroupMember{
 		{name: "a", schemas: fakeGroupSchemas("a_thing")},
 	}
 
-	_, signals, exclude, err := mergeDynamicProviderGroupMembers("group", members)
+	_, signals, namespaces, exclude, err := mergeDynamicProviderGroupMembers("group", members)
 	if err != nil {
 		t.Fatalf("mergeDynamicProviderGroupMembers: %v", err)
 	}
 	if signals != nil {
 		t.Errorf("expected nil signals when no member has any, got: %v", signals)
+	}
+	if namespaces != nil {
+		t.Errorf("expected nil namespaces when no member has any, got: %v", namespaces)
 	}
 	if exclude != nil {
 		t.Errorf("expected nil describeExclude when no member has any, got: %v", exclude)
