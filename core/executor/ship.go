@@ -1312,6 +1312,33 @@ func shipChange(ctx context.Context, l *core.Ledger, pool ApplierPool, providerS
 		return nil, ErrNotAccepted
 	}
 
+	// UBI-178: a data_source resolution.inputs entry never appears in
+	// delta.Modifies -- it changes nothing, it's a pure read -- so the
+	// per-node core.VerifyFreshness call further down (this function's
+	// own concurrent walk) never reaches it. Checked here, once, before
+	// any node work starts, so a stale data source halts the whole ship
+	// before touching a single resource, not partway through. Skipped
+	// entirely when there are none (the overwhelmingly common case
+	// today, since no real caller produces this Kind yet) -- same
+	// "don't spend an unneeded pool.Get/ReadResource round trip"
+	// discipline this file already applies elsewhere.
+	hasDataSource := false
+	for _, in := range p.Resolution.Inputs {
+		if in.Kind == "data_source" {
+			hasDataSource = true
+			break
+		}
+	}
+	if hasDataSource {
+		app, providerConfig, err := pool.Get(ctx, providerSource, "")
+		if err != nil {
+			return nil, fmt.Errorf("ship: %w", err)
+		}
+		if err := core.VerifyDataSourceFreshness(ctx, app, providerSource, providerConfig, p); err != nil {
+			return nil, fmt.Errorf("ship: %w", err)
+		}
+	}
+
 	nodes, err := changeNodesOf(p)
 	if err != nil {
 		return nil, fmt.Errorf("ship: %w", err)

@@ -648,3 +648,56 @@ func VerifyFreshness(ctx context.Context, prov StateReader, l *Ledger, addr Addr
 	}
 	return fmt.Errorf("%w: %s recorded %s, now %s", ErrStaleObservation, addr, recorded, fresh)
 }
+
+// VerifyDataSourceFreshness re-checks every "data_source"-kind
+// resolution.inputs entry in p, unconditionally -- UBI-178's own "no new
+// ledger machinery" claim is real for STORAGE (Kind: "data_source"
+// reuses the exact same ResolutionInput shape "live_state" already
+// established -- ObservedHash/Lookup, nothing new) but was incomplete
+// for VERIFICATION: VerifyFreshness above is only ever called per
+// Delta.Modifies target (core/executor/ship.go, both call sites,
+// confirmed by reading them directly) -- a data source result never
+// appears in a delta at all, it changes nothing, so nothing would ever
+// re-check it without this. This is that missing pass, not a variant of
+// the existing one: it iterates the WHOLE resolution.inputs slice
+// itself rather than looking up one target's own single entry, since
+// there is no delta entry to loop over in the first place.
+//
+// Deliberately stricter than VerifyFreshness's own FoldState/
+// DiffAttributes/FilterNormalizationNoise fallback: that fallback exists
+// for a real, specific provider-fidelity gap in how a MANAGED resource's
+// own recorded state round-trips (this file's own doc comment on
+// VerifyFreshness has the full account) -- whether the identical
+// tolerance is correct for an arbitrary data source read is a real,
+// separate, unanswered question, not assumed away by copying the same
+// fallback here. A genuine hash mismatch always refuses; there is no
+// silent-pass path.
+//
+// Each entry's own Resource field is expected to parse as an Address
+// (ParseAddress) whose Type carries the data-source-vs-resource
+// distinction by convention (e.g. "data.aws_ec2_instance", never a bare
+// resource type) -- the same three-component (stack, type, name) shape
+// every other address in this codebase already uses, deliberately not a
+// new struct.
+func VerifyDataSourceFreshness(ctx context.Context, prov StateReader, providerSource string, providerConfig json.RawMessage, p *Proposal) error {
+	for _, in := range p.Resolution.Inputs {
+		if in.Kind != "data_source" {
+			continue
+		}
+		addr, ok := ParseAddress(in.Resource)
+		if !ok {
+			return fmt.Errorf("verify data source freshness: %q is not a valid address", in.Resource)
+		}
+		if len(in.Lookup) == 0 {
+			return fmt.Errorf("verify data source freshness: resolution.inputs entry for %s has no recorded lookup key", addr)
+		}
+		_, fresh, _, err := readAndFingerprint(ctx, prov, addr, providerSource, providerConfig, in.Lookup)
+		if err != nil {
+			return fmt.Errorf("verify data source freshness: %w", err)
+		}
+		if fresh != in.ObservedHash {
+			return fmt.Errorf("%w: %s recorded %s, now %s", ErrStaleObservation, addr, in.ObservedHash, fresh)
+		}
+	}
+	return nil
+}
