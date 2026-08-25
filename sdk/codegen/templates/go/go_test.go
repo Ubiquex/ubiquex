@@ -424,7 +424,15 @@ func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
 	// import paths, never a redundant DataInstance/InstanceData name.
 	mustContain(t, files["sdk/go/aws/data/ec2/doc.go"], "package ec2")
 	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], "package ec2")
-	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], "var Instance = ubx.ResourceBinding{")
+	// UBI-178 piece 4's own real, live-found fix: a data source's own
+	// binding var must be ubx.DataSourceBinding, not ubx.ResourceBinding
+	// -- ubx-sdk-go's own real Data() function is typed to take
+	// DataSourceBinding specifically, a deliberately distinct type from
+	// ResourceBinding (found downstream, validating a real docs page
+	// against the real runtime, not caught by this test's own original,
+	// too-loose assertion).
+	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], "var Instance = ubx.DataSourceBinding{")
+	mustNotContain(t, files["sdk/go/aws/data/ec2/instance.go"], "ubx.ResourceBinding")
 	mustContain(t, files["sdk/go/aws/data/ec2/instance.go"], `WireType: "aws_instance",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {

@@ -294,8 +294,26 @@ func ResourceFile(pkgName, localWireName string, rt *ir.ResourceType, configType
 	// itself has no declare-before-use ordering requirement within one
 	// package, but every other declaration here follows that order
 	// anyway).
+	// UBI-178 piece 4's own real, live-found gap (found downstream, this
+	// session, while validating a real docs page against the real Data()
+	// function): ubx-sdk-go's own DataSourceBinding is a deliberately
+	// DISTINCT type from ResourceBinding (its own doc comment: "a
+	// distinct dataclass... so a codegen'd module can never pass a
+	// resource's own binding to data() or vice versa by accident without
+	// at least a type-checker catching it") -- every data source this
+	// template generated before this fix declared its binding var as
+	// ResourceBinding regardless, which Data() (declared to take
+	// DataSourceBinding specifically) refuses to compile against at all.
+	// Never wired into ANY real consumer before now, so this shipped
+	// silently: go build on the generated repo ALONE never calls Data(),
+	// only a real caller importing the package and writing a real
+	// ubx.Data(...) call would ever hit the type mismatch.
+	bindingType := "ubx.ResourceBinding"
+	if rt.IsDataSource {
+		bindingType = "ubx.DataSourceBinding"
+	}
 	var descriptor strings.Builder
-	fmt.Fprintf(&descriptor, "var %s = ubx.ResourceBinding{\n", pascalName)
+	fmt.Fprintf(&descriptor, "var %s = %s{\n", pascalName, bindingType)
 	fmt.Fprintf(&descriptor, "\tWireType: %q,\n", rt.WireType)
 	descriptor.WriteString("\tFields: ubx.FieldMap{\n")
 	for _, f := range rt.Fields {

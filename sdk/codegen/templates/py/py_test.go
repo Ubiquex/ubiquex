@@ -279,7 +279,12 @@ func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
 
 	mustContain(t, files["sdk/python/ubx/aws/ec2/instance.py"], "Instance = ubx.ResourceBinding(")
 	mustContain(t, files["sdk/python/ubx/aws/data/ec2/__init__.py"], "from .instance import Instance, InstanceConfig")
-	mustContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], "Instance = ubx.ResourceBinding(")
+	// UBI-178 piece 4's own real, live-found fix: a data source's own
+	// binding var must be ubx.DataSourceBinding, not ubx.ResourceBinding
+	// -- see sdk/codegen/templates/go's own identical test fix for the
+	// full account.
+	mustContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], "Instance = ubx.DataSourceBinding(")
+	mustNotContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], "ubx.ResourceBinding")
 	mustContain(t, files["sdk/python/ubx/aws/data/ec2/instance.py"], `wire_type="aws_instance",`)
 
 	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
