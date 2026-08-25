@@ -2033,6 +2033,131 @@ non-embedded `$ref`-to-a-`$computed`-sibling-field check, refs.go's
 `ErrComputedWhereConcreteRequired`), `core/executor/ship.go`
 (`containsComputedMarker`, `substituteComputed`'s new `case string:`).
 
+### Amendment: data sources — `data_sources[]`, a new `ResolutionInput.Kind`, and a naming correction (2026-08-25, UBI-178)
+
+Every `ubx:intent/v1` document so far only ever declares things to be
+created or modified (`resources[]`) — there was no way to declare "look
+this up," a genuinely different intent (a read, never submitted to a
+provider as desired state) that the existing `resources[].op` enum
+(`"create"`/`"modify"`) cannot represent without lying about what it
+means. This amendment adds the missing half: a sibling top-level array,
+not a third `op` value on the existing one.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": { "summary": "...", "sources": [] },
+  "resources": [
+    {
+      "type": "aws_iam_role_policy",
+      "name": "read-primary",
+      "op": "create",
+      "config": { "role": { "$ref": { "to": "payments.data_aws_ec2_instance.primary.id" } } }
+    }
+  ],
+  "data_sources": [
+    {
+      "type": "data_aws_ec2_instance",
+      "name": "primary",
+      "lookup": { "id": "i-0123456789abcdef0" },
+      "sources": [{ "kind": "blueprint", "ref": "..." }]
+    }
+  ]
+}
+```
+
+- **`data_sources[]`** is a new top-level array, a sibling of
+  `resources[]`, never a variant of it. `resources[].op` exists because
+  one array holds two different intents (`create`/`modify`) that must
+  be disambiguated per entry. `data_sources[]` never holds anything but
+  a read — the array itself is the discriminator, so entries carry no
+  `op` field at all. Adding one (e.g. `"op": "read"`) would be a field
+  that can never say anything else.
+- **`data_sources[].type`** is the data source's own wire type, `data_`
+  prefixed onto the flat, already-established provider type
+  (`data_aws_ec2_instance`) — **underscore, never a literal dot**. A
+  dotted form (`"data.aws_ec2_instance"`, what `core/scan.go`'s own
+  `VerifyDataSourceFreshness` doc comment said when that function was
+  added, UBI-178 session 1) does not actually round-trip through
+  `Address.String()`/`ParseAddress()`: `ParseAddress` splits on the
+  first two dots only (`strings.SplitN(s, ".", 3)`), so a dotted `Type`
+  gets truncated at its own first dot and the remainder bleeds into
+  `Name`. Confirmed directly (not assumed) with a real round-trip test
+  before this amendment was written: `Address{Type:
+  "data.aws_ec2_instance", Name: "primary"}.String()` parses back as
+  `Type: "data"`, `Name: "aws_ec2_instance.primary"` — wrong. The
+  underscore form round-trips exactly, and matches every other wire
+  type in this codebase, none of which have ever contained a dot.
+  Nothing in the merged code actually constructs a dotted address yet
+  (the bug lived only in that function's own doc comment, corrected
+  alongside this amendment), so this is a documentation fix, not a
+  behavior revert.
+- **`data_sources[].lookup`** plays `config`'s own role — the thing
+  `resources[].config` is for resource intent — but is named
+  differently because a data source has no desired end-state to
+  submit, only query parameters to read with; reusing `config`'s own
+  name for a fundamentally different meaning would be actively
+  misleading. Same legal values as `config`: plain JSON scalars/
+  objects/arrays, or `$ref`/`$secret`/`$cross` markers, resolved by the
+  identical `resolveValue`/`scanRefEdges`/`unionDependsOn` machinery
+  `config` already uses (those functions are generic over
+  `interface{}`, never resource-specific) — a lookup legitimately
+  referencing a sibling resource's own computed output (e.g. looking
+  an instance up by an ID a same-batch create just produced) resolves
+  exactly the way a resource's `config` referencing the same thing
+  would.
+- **`data_sources[].sources`** is the identical, optional
+  blueprint-provenance mechanism `resources[].sources` already has —
+  unchanged shape, reused as-is.
+
+**A new `resolution.inputs[].kind`: `"data_source"`.** This part of the
+wire shape already shipped (UBI-178 session 1, `core/scan.go`'s
+`VerifyDataSourceFreshness`) ahead of this amendment documenting it —
+recorded here now, not a new decision:
+
+```json
+{
+  "kind": "data_source",
+  "resource": "payments.data_aws_ec2_instance.primary",
+  "observed_hash": "sha256:<hex, of the real read result>",
+  "lookup": { "id": "i-0123456789abcdef0" }
+}
+```
+
+Reuses `ObservedHash`/`Lookup` exactly as `"live_state"` entries already
+do (docs/schema.md's own "Amendment: persist resource lookup key",
+above) — no new fields on `ResolutionInput`. `lookup` here is the fully
+*resolved* value of `data_sources[].lookup` (markers substituted away,
+same as `Delta.Creates[].config` is the resolved form of
+`resources[].config`) — persisted so a proposal can be independently
+re-verified later (`VerifyDataSourceFreshness`) without the caller
+re-supplying what was used to look the resource up the first time, the
+identical real reason `Lookup` was added to `"live_state"` entries in
+the first place.
+
+A `data_sources[]` entry resolves into a `resolution.inputs[]` entry
+only — it produces no `Delta.Creates`/`Delta.Modifies` node of its own
+(there is nothing to create or modify), but its own resolved result
+DOES become referenceable: the resolver's own per-address batch entry
+(`resolvedConfig`) gets populated from the real read result exactly the
+way a create's gets populated from submitted config, so `$ref`
+resolution (`refs.go`'s `resolveRef`) treats a data source's resolved
+attributes identically to a sibling resource's — the same "references
+stay uniform" property the SDK's own `Computed` handle already
+guarantees at the authoring layer, carried through resolution rather
+than only promised at the API surface.
+
+**No `schema_version` bump.** `data_sources[]` is a new, self-contained
+array in the intent file (the resolver's own input, never itself
+hashed or stored in the ledger — same posture `resources[]` already
+has); `"data_source"` is a new, purely additive `ResolutionInput.Kind`
+value, the same "extensible list, new kind, no re-pin" discipline
+`"cross_stack_pin"`/`"cross_stack_orphan_check"`/`"destroy_target"`
+each already established. Nothing about `Proposal`'s own ratified
+hashed-content shape, domain prefix, or canonicalization rules changes.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

@@ -675,10 +675,14 @@ func VerifyFreshness(ctx context.Context, prov StateReader, l *Ledger, addr Addr
 //
 // Each entry's own Resource field is expected to parse as an Address
 // (ParseAddress) whose Type carries the data-source-vs-resource
-// distinction by convention (e.g. "data.aws_ec2_instance", never a bare
-// resource type) -- the same three-component (stack, type, name) shape
-// every other address in this codebase already uses, deliberately not a
-// new struct.
+// distinction by convention (e.g. "data_aws_ec2_instance", underscore,
+// never a literal dot -- a dotted form does not survive
+// Address.String()/ParseAddress's own round trip, ParseAddress splits
+// on the first two dots only, docs/schema.md's own "Amendment: data
+// sources" has the full real account, corrected here alongside that
+// amendment rather than left disagreeing with it) -- the same
+// three-component (stack, type, name) shape every other address in
+// this codebase already uses, deliberately not a new struct.
 func VerifyDataSourceFreshness(ctx context.Context, prov StateReader, providerSource string, providerConfig json.RawMessage, p *Proposal) error {
 	for _, in := range p.Resolution.Inputs {
 		if in.Kind != "data_source" {
