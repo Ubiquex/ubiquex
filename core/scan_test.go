@@ -405,3 +405,140 @@ func TestVerifyFreshness_RealChangeStillBlocksAlongsideNoise(t *testing.T) {
 		t.Fatalf("got %v, want ErrStaleObservation -- a real change must still block even alongside pure normalization noise on another attribute", err)
 	}
 }
+
+// UBI-178: VerifyDataSourceFreshness's own real tests. No real caller
+// produces a "data_source"-kind resolution.inputs entry yet -- the
+// declarative pipeline (ubx.Data, IntentDocument's own new field,
+// Collector.addDataSource) doesn't exist across any of the three
+// runtimes as of this session -- so these hand-construct the Proposal
+// directly, proving the verification LOGIC itself is correct in
+// isolation, the same adversarial-first discipline this file's own
+// VerifyFreshness tests already use. fakeProvider's own Schema() only
+// ever registers "aws_s3_bucket" -- reused as-is here rather than a
+// literal "data.aws_s3_bucket" string, since this test proves the
+// iteration/hash-compare logic, not the real address-naming convention
+// (ir.go/codegen's own job, not yet built).
+
+func TestVerifyDataSourceFreshness_PassesWhenUnchanged(t *testing.T) {
+	addr := Address{Stack: "payments", Type: "aws_s3_bucket", Name: "existing_bucket"}
+	state := json.RawMessage(`{"id":"prod-logs","region":"us-east-1"}`)
+	hash, err := ObservedHash(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := &fakeProvider{state: state}
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "data_source", Resource: addr.String(), ObservedHash: hash, Lookup: json.RawMessage(`{"id":"prod-logs"}`)},
+		}},
+	}
+
+	if err := VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal); err != nil {
+		t.Fatalf("VerifyDataSourceFreshness: %v", err)
+	}
+}
+
+// TestVerifyDataSourceFreshness_BlocksWhenLookedUpValueChanged is the
+// real case this whole pass exists for: UBI-178's own worked example --
+// a data source's own looked-up value moved after resolve time, and
+// nothing else in this proposal (no resource in delta.Modifies) would
+// otherwise ever notice, because VerifyFreshness's own per-modification
+// loop never reaches a "data_source" entry.
+func TestVerifyDataSourceFreshness_BlocksWhenLookedUpValueChanged(t *testing.T) {
+	addr := Address{Stack: "payments", Type: "aws_s3_bucket", Name: "existing_bucket"}
+	recordedState := json.RawMessage(`{"id":"prod-logs","region":"us-east-1"}`)
+	recordedHash, err := ObservedHash(recordedState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "data_source", Resource: addr.String(), ObservedHash: recordedHash, Lookup: json.RawMessage(`{"id":"prod-logs"}`)},
+		}},
+	}
+
+	// The real bucket this data source looked up got moved to a
+	// different region by someone else, after this proposal resolved.
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"prod-logs","region":"eu-west-1"}`)}
+
+	err = VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal)
+	if !errors.Is(err, ErrStaleObservation) {
+		t.Fatalf("got %v, want ErrStaleObservation", err)
+	}
+}
+
+// TestVerifyDataSourceFreshness_IgnoresNonDataSourceKinds proves the
+// unconditional iteration doesn't re-verify -- or, worse, misinterpret
+// -- a "live_state"/"cross_stack_pin"/other Kind entry as if it were a
+// data source. A live_state entry's own Resource is a real resource
+// address VerifyFreshness already owns checking; this pass must leave
+// it alone even when it's sitting right next to a data_source entry in
+// the same slice.
+func TestVerifyDataSourceFreshness_IgnoresNonDataSourceKinds(t *testing.T) {
+	liveAddr := Address{Stack: "payments", Type: "aws_s3_bucket", Name: "managed"}
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			// A deliberately WRONG hash/lookup for the live_state entry --
+			// if VerifyDataSourceFreshness touched it at all, this would
+			// fail. It must not even look.
+			{Kind: "live_state", Resource: liveAddr.String(), ObservedHash: "deliberately-wrong", Lookup: json.RawMessage(`{"id":"whatever"}`)},
+		}},
+	}
+	fp := &fakeProvider{readErr: errors.New("ReadResource must never be called for a non-data_source entry")}
+
+	if err := VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal); err != nil {
+		t.Fatalf("VerifyDataSourceFreshness: %v (should have skipped the only entry, it isn't Kind data_source)", err)
+	}
+}
+
+// TestVerifyDataSourceFreshness_MissingLookupErrors proves a
+// data_source entry recorded without its own lookup key (should be
+// structurally impossible once the real resolve-time producer exists,
+// but this pass must never silently treat "no lookup" as "trivially
+// fresh") fails loud, mirroring VerifyFreshness's own identical guard.
+func TestVerifyDataSourceFreshness_MissingLookupErrors(t *testing.T) {
+	addr := Address{Stack: "payments", Type: "aws_s3_bucket", Name: "existing_bucket"}
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "data_source", Resource: addr.String(), ObservedHash: "somehash"},
+		}},
+	}
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"prod-logs"}`)}
+
+	err := VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal)
+	if err == nil {
+		t.Fatal("expected an error for a data_source entry with no recorded lookup key, got nil")
+	}
+}
+
+// TestVerifyDataSourceFreshness_InvalidAddressErrors proves a
+// malformed Resource field (not real "<stack>.<type>.<name>") fails
+// loud rather than panicking or silently skipping.
+func TestVerifyDataSourceFreshness_InvalidAddressErrors(t *testing.T) {
+	proposal := &Proposal{
+		SchemaVersion: SchemaVersion,
+		Stack:         "payments",
+		Kind:          KindChange,
+		Resolution: Resolution{Inputs: []ResolutionInput{
+			{Kind: "data_source", Resource: "not-a-real-address", ObservedHash: "somehash", Lookup: json.RawMessage(`{"id":"x"}`)},
+		}},
+	}
+	fp := &fakeProvider{state: json.RawMessage(`{"id":"x"}`)}
+
+	err := VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal)
+	if err == nil {
+		t.Fatal("expected an error for a malformed Resource address, got nil")
+	}
+}
