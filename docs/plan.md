@@ -2,6 +2,33 @@
 
 ## Changelog
 
+- 2026-08-26 -- UBI-182 provider schema snapshots, design decided and
+  build sequence recorded (full plan:
+  `/Users/roozbeh/.claude/plans/cryptic-questing-sphinx.md`). Snapshot
+  after translation, one implementation not four -- `openapi`,
+  `cloudformation`, `smithy`, and `discovery_docs` all converge on the
+  same `map[string]*tfprotov6.Schema` via `internal/schema.Translator
+  .BuildTopLevel`, so `ubx-provider-dynamic`'s `internal/snapshot`
+  package gets one shared `generateFromSchemas` core plus a thin
+  `Generate<Source>`/`Load<Source>` adapter pair per source, rather than
+  four independent implementations. One `ubx-schema-<provider>` repo per
+  provider (matching the existing `ubx-sdk-*` pattern), snapshot
+  committed at the repo root rather than release-only, so a reviewer
+  sees the real diff on every version bump. `[providers.<name>]`'s dual
+  meaning (pinned vs. live-fetch, a forced compromise while only
+  `openapi` had snapshot support) collapses to pinned-only once all four
+  sources can produce snapshots. Staged one provider end to end
+  (Kubernetes, confirmed smaller than Datadog and already routing
+  through `openapi` via Swagger 2.0 conversion -- needs zero new
+  generation code) before the other five, matching the same staging
+  discipline that caught real bugs in the data source work. Stage A
+  (generation for the three missing sources) and Stage B (pinned
+  `--dump-signals`/`--dump-namespaces`) built and PR'd in
+  `ubx-provider-dynamic` (`#16`, not yet merged); Stages C-F (`ubiquex`
+  stops refusing pinned entries, the `ubx-schema-kubernetes` pilot repo,
+  the `[providers.<name>]` collapse, rollout to the other five
+  providers) not yet started. Full detail in STATE.md.
+
 - 2026-08-20 -- (no Linear ticket ID given this session) docs corpus
   regeneration phase 4: GCP onboarded, scoped to Compute only after a
   real, live-discovered config gap -- only 171 of the old corpus's
