@@ -59,6 +59,47 @@ func TestMergeDynamicProviderGroupMembers_CollidingResourceType_ErrorsNotSilentO
 	}
 }
 
+// TestMergeDynamicProviderGroupMembers_MultipleCollisions_ReportsSameOneEveryRun
+// is UBI-190's own real regression: with two or more genuinely
+// unresolved collisions present in the same merge (the real, live
+// Datadog v1/v2 shape, confirmed against the actual live spec before
+// this fix -- application_key_response and user_response both
+// colliding at once), the merge must fail loud on the SAME
+// alphabetically-first colliding type name every time, not whichever
+// one Go's own randomized map iteration order happens to hit first.
+// Before the fix, this exact scenario (live-verified, not simulated)
+// reported "application_key_response" on some runs and "user_response"
+// on others against byte-identical input -- ordering-dependence
+// CLAUDE.md's own determinism rule forbids and UBI-182's snapshot
+// hashing depends on not happening. Runs the merge many times over the
+// same map-shaped input specifically because a single run cannot
+// distinguish "always deterministic" from "got lucky once" -- Go's
+// randomized map order needs several draws to surface if sorting
+// didn't actually fix it.
+func TestMergeDynamicProviderGroupMembers_MultipleCollisions_ReportsSameOneEveryRun(t *testing.T) {
+	var firstErr string
+	for i := 0; i < 50; i++ {
+		members := []dynamicProviderGroupMember{
+			{name: "datadog", schemas: fakeGroupSchemas("datadog_application_key_response", "datadog_user_response", "datadog_monitor")},
+			{name: "datadog_v2", schemas: fakeGroupSchemas("datadog_application_key_response", "datadog_user_response", "datadog_incident")},
+		}
+		_, _, _, _, err := mergeDynamicProviderGroupMembers("datadog_all", members)
+		if err == nil {
+			t.Fatal("expected an error on real, unresolved collisions, got nil")
+		}
+		if i == 0 {
+			firstErr = err.Error()
+			if !strings.Contains(firstErr, "datadog_application_key_response") {
+				t.Errorf("expected the alphabetically-first colliding type to be reported, got: %v", firstErr)
+			}
+			continue
+		}
+		if err.Error() != firstErr {
+			t.Fatalf("collision report varied across runs of identical input (run %d):\nfirst: %s\nnow:   %s", i, firstErr, err.Error())
+		}
+	}
+}
+
 func TestMergeDynamicProviderGroupMembers_ExcludedCollision_DropsExcludedSideNotBothOrError(t *testing.T) {
 	// UBI-175 Datadog v1/v2: a declared exclude on the losing member
 	// resolves the collision by dropping that member's own entry --

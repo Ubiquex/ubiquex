@@ -684,23 +684,53 @@ func mergeDynamicProviderGroupMembers(groupName string, members []dynamicProvide
 	mergedDescribeExclude := map[string]bool{}
 
 	for _, m := range members {
-		for typeName, schema := range m.schemas.Resources {
+		// UBI-190: typeName must be walked in sorted order, not the
+		// map's own native range order -- Go deliberately randomizes
+		// map iteration per process, so with two or more real
+		// collisions present in the same member (a real, live case:
+		// Datadog's v1/v2 group has carried exactly two, application_key_response
+		// and user_response, both currently excluded in config but not
+		// guaranteed to stay that way as Datadog's own live, unpinned
+		// spec evolves), which one this loop's fail-fast hits FIRST --
+		// and therefore which one the error below names -- varied
+		// between otherwise-identical runs of the identical binary
+		// against byte-identical (fetch-cache-pinned) input, confirmed
+		// live: 3 runs, same input, same binary, reported
+		// "application_key_response" twice and "user_response" once.
+		// Exactly the class of nondeterminism CLAUDE.md's own
+		// determinism rule ("no map-iteration ordering anywhere feeding
+		// a hash") forbids and UBI-182's snapshot hashing depends on
+		// not happening -- sorting first makes the reported collision
+		// (always the alphabetically-first colliding typeName) and the
+		// merged map's own resulting content identical across runs
+		// regardless of Go's own internal map order.
+		resourceTypeNames := make([]string, 0, len(m.schemas.Resources))
+		for typeName := range m.schemas.Resources {
+			resourceTypeNames = append(resourceTypeNames, typeName)
+		}
+		sort.Strings(resourceTypeNames)
+		for _, typeName := range resourceTypeNames {
 			if m.exclude[typeName] {
 				continue
 			}
 			if _, exists := merged.Resources[typeName]; exists {
 				return nil, nil, nil, nil, fmt.Errorf("dynamic provider group %q: resource type %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
-			merged.Resources[typeName] = schema
+			merged.Resources[typeName] = m.schemas.Resources[typeName]
 		}
-		for typeName, schema := range m.schemas.DataSources {
+		dataSourceTypeNames := make([]string, 0, len(m.schemas.DataSources))
+		for typeName := range m.schemas.DataSources {
+			dataSourceTypeNames = append(dataSourceTypeNames, typeName)
+		}
+		sort.Strings(dataSourceTypeNames)
+		for _, typeName := range dataSourceTypeNames {
 			if m.exclude[typeName] {
 				continue
 			}
 			if _, exists := merged.DataSources[typeName]; exists {
 				return nil, nil, nil, nil, fmt.Errorf("dynamic provider group %q: data source %q is declared by more than one member (last: %q) -- real collision, not routine overlap, refusing to silently pick one", groupName, typeName, m.name)
 			}
-			merged.DataSources[typeName] = schema
+			merged.DataSources[typeName] = m.schemas.DataSources[typeName]
 		}
 		for typeName, sig := range m.signalsByType {
 			mergedSignals[typeName] = sig
