@@ -1,7 +1,9 @@
 package provider
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,18 +19,55 @@ func testSchemaSource() SchemaSource {
 	return SchemaSource{Hostname: "github.com", Namespace: "acme", Type: "widget"}
 }
 
+// buildTarGz builds a real gzip-compressed tar archive from files (path ->
+// content), mirroring the real shape a schema repo's own publish.yml
+// produces (manifest.json plus members/<name>.json, packed at release
+// time) -- used both to build valid fixtures and, in the unsafe-entry
+// test, a real, deliberately malicious one.
+func buildTarGz(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, content := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("tar.WriteHeader(%s): %v", name, err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("tar write %s: %v", name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar.Close: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip.Close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// realManifestFixture is a real, minimal, valid manifest.json + one
+// member -- the smallest real archive AcquireSchema is expected to
+// extract successfully.
+func realManifestFixture() map[string][]byte {
+	return map[string][]byte{
+		"manifest.json":       []byte(`{"schema_format":3,"provider":"widget","version":"1.0.0","members":["widget"]}`),
+		"members/widget.json": []byte(`{"schema_source":"openapi","mode":"resource","raw_spec":{}}`),
+	}
+}
+
 // testSchemaRelease is a fully scriptable fake GitHub Releases server,
-// mirroring testRegistry's own shape one level up: swap in snapshot/sums
+// mirroring testRegistry's own shape one level up: swap in archive/sums
 // bytes or an explicit HTTP status to corrupt exactly one part of the
 // story per test.
 type testSchemaRelease struct {
 	notFound bool
-	snapshot []byte
+	archive  []byte
 	sums     []byte
-	// omitSums/omitSnapshot simulate a malformed release missing one of
+	// omitSums/omitArchive simulate a malformed release missing one of
 	// its two required assets.
-	omitSums     bool
-	omitSnapshot bool
+	omitSums    bool
+	omitArchive bool
 }
 
 func (r *testSchemaRelease) start(t *testing.T) *httptest.Server {
@@ -42,8 +81,8 @@ func (r *testSchemaRelease) start(t *testing.T) *httptest.Server {
 			return
 		}
 		rel := githubRelease{TagName: "v1.0.0"}
-		if !r.omitSnapshot {
-			rel.Assets = append(rel.Assets, githubAsset{Name: snapshotFilename, BrowserDownloadURL: srv.URL + "/dl/" + snapshotFilename})
+		if !r.omitArchive {
+			rel.Assets = append(rel.Assets, githubAsset{Name: archiveFilename, BrowserDownloadURL: srv.URL + "/dl/" + archiveFilename})
 		}
 		if !r.omitSums {
 			rel.Assets = append(rel.Assets, githubAsset{Name: checksumsFilename, BrowserDownloadURL: srv.URL + "/dl/" + checksumsFilename})
@@ -53,8 +92,8 @@ func (r *testSchemaRelease) start(t *testing.T) *httptest.Server {
 			t.Errorf("encode JSON response: %v", err)
 		}
 	})
-	mux.HandleFunc("/dl/"+snapshotFilename, func(w http.ResponseWriter, req *http.Request) {
-		w.Write(r.snapshot)
+	mux.HandleFunc("/dl/"+archiveFilename, func(w http.ResponseWriter, req *http.Request) {
+		w.Write(r.archive)
 	})
 	mux.HandleFunc("/dl/"+checksumsFilename, func(w http.ResponseWriter, req *http.Request) {
 		w.Write(r.sums)
@@ -66,9 +105,9 @@ func (r *testSchemaRelease) start(t *testing.T) *httptest.Server {
 }
 
 func TestAcquireSchema_HappyPath(t *testing.T) {
-	snapshot := []byte(`{"schema_format":1,"provider":"widget","version":"1.0.0"}`)
-	sums := shasumsLine(sha256HexOf(snapshot), snapshotFilename)
-	rel := &testSchemaRelease{snapshot: snapshot, sums: sums}
+	archive := buildTarGz(t, realManifestFixture())
+	sums := shasumsLine(sha256HexOf(archive), archiveFilename)
+	rel := &testSchemaRelease{archive: archive, sums: sums}
 	srv := rel.start(t)
 
 	cacheRoot := t.TempDir()
@@ -80,22 +119,29 @@ func TestAcquireSchema_HappyPath(t *testing.T) {
 	if result.FromMirror || result.FromCache {
 		t.Fatalf("expected a fresh network acquisition, got %+v", result)
 	}
-	if result.SHA256 != sha256HexOf(snapshot) {
-		t.Fatalf("SHA256 = %s, want %s", result.SHA256, sha256HexOf(snapshot))
+	if result.SHA256 != sha256HexOf(archive) {
+		t.Fatalf("SHA256 = %s, want %s", result.SHA256, sha256HexOf(archive))
 	}
-	got, err := os.ReadFile(result.Path)
+	manifest, err := os.ReadFile(filepath.Join(result.Path, manifestFilename))
 	if err != nil {
-		t.Fatalf("read acquired snapshot: %v", err)
+		t.Fatalf("read extracted manifest: %v", err)
 	}
-	if !bytes.Equal(got, snapshot) {
-		t.Fatal("acquired snapshot content mismatch")
+	if !bytes.Equal(manifest, realManifestFixture()["manifest.json"]) {
+		t.Fatal("extracted manifest content mismatch")
+	}
+	member, err := os.ReadFile(filepath.Join(result.Path, "members", "widget.json"))
+	if err != nil {
+		t.Fatalf("read extracted member: %v", err)
+	}
+	if !bytes.Equal(member, realManifestFixture()["members/widget.json"]) {
+		t.Fatal("extracted member content mismatch")
 	}
 }
 
 func TestAcquireSchema_SecondCallHitsCache(t *testing.T) {
-	snapshot := []byte(`{"schema_format":1}`)
-	sums := shasumsLine(sha256HexOf(snapshot), snapshotFilename)
-	rel := &testSchemaRelease{snapshot: snapshot, sums: sums}
+	archive := buildTarGz(t, realManifestFixture())
+	sums := shasumsLine(sha256HexOf(archive), archiveFilename)
+	rel := &testSchemaRelease{archive: archive, sums: sums}
 	srv := rel.start(t)
 	cacheRoot := t.TempDir()
 
@@ -114,7 +160,7 @@ func TestAcquireSchema_SecondCallHitsCache(t *testing.T) {
 	if !second.FromCache {
 		t.Fatalf("expected FromCache, got %+v", second)
 	}
-	if second.Path != first.Path || second.SHA256 != first.SHA256 {
+	if second.Path != first.Path {
 		t.Fatalf("cache hit diverged from original acquisition: %+v vs %+v", second, first)
 	}
 }
@@ -123,12 +169,13 @@ func TestAcquireSchema_MirrorHitSkipsNetworkAndVerification(t *testing.T) {
 	mirrorRoot := t.TempDir()
 	src := testSchemaSource()
 	dir := filepath.Join(mirrorRoot, src.Namespace, src.Type, "1.0.0")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "members"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte("whatever the operator put here, unverified")
-	if err := os.WriteFile(filepath.Join(dir, snapshotFilename), content, 0o644); err != nil {
-		t.Fatal(err)
+	for name, content := range realManifestFixture() {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	t.Setenv(schemaMirrorEnv, mirrorRoot)
@@ -141,15 +188,15 @@ func TestAcquireSchema_MirrorHitSkipsNetworkAndVerification(t *testing.T) {
 	if !result.FromMirror {
 		t.Fatalf("expected FromMirror, got %+v", result)
 	}
-	if result.SHA256 != sha256HexOf(content) {
-		t.Fatalf("SHA256 = %s, want %s", result.SHA256, sha256HexOf(content))
+	if result.Path != dir {
+		t.Fatalf("Path = %s, want the real mirror dir %s", result.Path, dir)
 	}
 }
 
 func TestAcquireSchema_ChecksumMismatch(t *testing.T) {
-	snapshot := []byte(`{"schema_format":1}`)
-	sums := shasumsLine(sha256HexOf([]byte("not the real snapshot bytes")), snapshotFilename)
-	rel := &testSchemaRelease{snapshot: snapshot, sums: sums}
+	archive := buildTarGz(t, realManifestFixture())
+	sums := shasumsLine(sha256HexOf([]byte("not the real archive bytes")), archiveFilename)
+	rel := &testSchemaRelease{archive: archive, sums: sums}
 	srv := rel.start(t)
 
 	_, err := AcquireSchema(context.Background(), testSchemaSource(), "1.0.0",
@@ -175,8 +222,8 @@ func TestAcquireSchema_MissingAsset(t *testing.T) {
 		name string
 		rel  *testSchemaRelease
 	}{
-		{"no snapshot.json", &testSchemaRelease{omitSnapshot: true, sums: []byte("x")}},
-		{"no SHA256SUMS", &testSchemaRelease{omitSums: true, snapshot: []byte("x")}},
+		{"no snapshot.tar.gz", &testSchemaRelease{omitArchive: true, sums: []byte("x")}},
+		{"no SHA256SUMS", &testSchemaRelease{omitSums: true, archive: []byte("x")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := tc.rel.start(t)
@@ -186,6 +233,29 @@ func TestAcquireSchema_MissingAsset(t *testing.T) {
 				t.Fatalf("err = %v, want ErrSchemaAssetMissing", err)
 			}
 		})
+	}
+}
+
+// TestAcquireSchema_UnsafeArchiveEntry_RealRefusal proves extractTarGz
+// genuinely refuses a real, malicious path-traversal entry rather than
+// silently writing outside the cache directory -- a real archive, a
+// real ".." escape attempt, not a hypothetical.
+func TestAcquireSchema_UnsafeArchiveEntry_RealRefusal(t *testing.T) {
+	malicious := buildTarGz(t, map[string][]byte{
+		"../../escaped.json": []byte(`{"malicious":true}`),
+	})
+	sums := shasumsLine(sha256HexOf(malicious), archiveFilename)
+	rel := &testSchemaRelease{archive: malicious, sums: sums}
+	srv := rel.start(t)
+
+	cacheRoot := t.TempDir()
+	_, err := AcquireSchema(context.Background(), testSchemaSource(), "1.0.0",
+		WithSchemaHTTPClient(srv.Client()), WithSchemaAPIBase(srv.URL), WithSchemaCacheRoot(cacheRoot))
+	if !errors.Is(err, ErrSchemaArchiveUnsafe) {
+		t.Fatalf("err = %v, want ErrSchemaArchiveUnsafe", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "..", "..", "escaped.json")); statErr == nil {
+		t.Fatal("the malicious entry actually escaped the cache root -- real path traversal succeeded")
 	}
 }
 

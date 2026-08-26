@@ -90,17 +90,23 @@ func TestDynamicProviderEnv_LiveMode_WritesConfig(t *testing.T) {
 // own already-tested UBX_SCHEMA_MIRROR short-circuit (provider/acquireschema.go)
 // -- real production code, no seam/mock substituted, just a local mirror
 // directory so no network is needed. Confirms UBX_SNAPSHOT_PATH is set to
-// the real mirrored file and that workDir gets no .ubx/config at all, per
-// runServeSnapshot's own doc comment: a pinned launch reads
-// UBX_SNAPSHOT_PATH directly and never even looks for .ubx/config.
+// the real mirrored group DIRECTORY (UBI-182's own manifest.json +
+// members/<name>.json shape, not a single file) and that workDir gets no
+// .ubx/config at all, per runServeSnapshot's own doc comment: a pinned
+// launch reads UBX_SNAPSHOT_PATH directly and never even looks for
+// .ubx/config.
 func TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig(t *testing.T) {
 	mirrorRoot := t.TempDir()
 	snapDir := filepath.Join(mirrorRoot, "ubiquex", "aws", "1.2.0")
-	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(snapDir, "members"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte(`{"schema_format":1,"provider":"aws","version":"1.2.0"}`)
-	if err := os.WriteFile(filepath.Join(snapDir, "snapshot.json"), content, 0o644); err != nil {
+	manifest := []byte(`{"schema_format":3,"provider":"aws","version":"1.2.0","members":["aws"]}`)
+	member := []byte(`{"schema_source":"cloudformation","mode":"resource","raw_spec":{}}`)
+	if err := os.WriteFile(filepath.Join(snapDir, "manifest.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, "members", "aws.json"), member, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("UBX_SCHEMA_MIRROR", mirrorRoot)
@@ -128,12 +134,15 @@ func TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig(t *testing
 	if gotSnapshotPath == "" {
 		t.Fatal("UBX_SNAPSHOT_PATH not set in pinned mode")
 	}
-	got, err := os.ReadFile(gotSnapshotPath)
-	if err != nil {
-		t.Fatalf("read resolved snapshot path: %v", err)
+	if gotSnapshotPath != snapDir {
+		t.Fatalf("UBX_SNAPSHOT_PATH = %q, want the real mirrored group directory %q", gotSnapshotPath, snapDir)
 	}
-	if string(got) != string(content) {
-		t.Fatalf("resolved snapshot content mismatch: got %s, want %s", got, content)
+	got, err := os.ReadFile(filepath.Join(gotSnapshotPath, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read resolved manifest: %v", err)
+	}
+	if string(got) != string(manifest) {
+		t.Fatalf("resolved manifest content mismatch: got %s, want %s", got, manifest)
 	}
 
 	if _, err := os.Stat(filepath.Join(workDir, ".ubx", "config")); !errors.Is(err, os.ErrNotExist) {
@@ -152,21 +161,26 @@ func TestDynamicProviderEnv_PinnedSourceInvalid_Errors(t *testing.T) {
 	}
 }
 
-// setUpPinnedSchemaMirror puts a real, minimal snapshot at
-// <root>/ubiquex/widget/1.0.0/snapshot.json and points UBX_SCHEMA_MIRROR
-// at it -- the same real, already-proven provider.AcquireSchema
-// short-circuit TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig
+// setUpPinnedSchemaMirror puts a real, minimal group snapshot at
+// <root>/ubiquex/widget/1.0.0/ (UBI-182's own manifest.json +
+// members/<name>.json shape) and points UBX_SCHEMA_MIRROR at it -- the
+// same real, already-proven provider.AcquireSchema short-circuit
+// TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig
 // already uses, reused here so dynamicProviderSignals/dynamicProviderNamespaces
 // resolve a real pinned entry with zero network.
 func setUpPinnedSchemaMirror(t *testing.T) {
 	t.Helper()
 	mirrorRoot := t.TempDir()
 	snapDir := filepath.Join(mirrorRoot, "ubiquex", "widget", "1.0.0")
-	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(snapDir, "members"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte(`{"schema_format":1,"provider":"widget","version":"1.0.0"}`)
-	if err := os.WriteFile(filepath.Join(snapDir, "snapshot.json"), content, 0o644); err != nil {
+	manifest := []byte(`{"schema_format":3,"provider":"widget","version":"1.0.0","members":["widget"]}`)
+	member := []byte(`{"schema_source":"openapi","mode":"resource","raw_spec":{}}`)
+	if err := os.WriteFile(filepath.Join(snapDir, "manifest.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, "members", "widget.json"), member, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("UBX_SCHEMA_MIRROR", mirrorRoot)
