@@ -2,6 +2,37 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-185 follow-up: AWS genuinely published (npm/PyPI/Go all agree at 2.0.0), but its first real publish deleted a real committed file -- fixed, restored, PRs open, azure/datadog/github/google/kubernetes not yet re-dispatched, 2026-08-26
+
+**Scope**: all seven prior PRs merged. Dispatch the six provider repos one at a time, verifying each against npm/PyPI/Go proxy directly rather than trusting the workflow's own exit status, per the founder's own explicit instruction. Expected: aws 2.0.0, azure 1.0.0, datadog 1.1.0, github 1.1.0, google 1.1.0, kubernetes 1.0.0.
+
+**AWS dispatched first -- genuinely published, all three registries independently confirmed to agree**: `npm registry.npmjs.org/@ubx%2fsdk-aws/2.0.0` -> `2.0.0`; `pypi.org/pypi/ubx-sdk-aws/2.0.0/json` -> `2.0.0`; Go proxy (queried at the REAL module path, `.../sdk/go/v2/@v/v2.0.0.info` -- go.mod declares `module .../sdk/go/v2`, confirmed before querying rather than assumed) -> `v2.0.0`. All three genuinely agree.
+
+**The workflow's own final "Verify registries agree" step reported failure anyway -- a real, AWS-specific, pre-existing bug in that step's own Go proxy query, not a publish problem**: that step's own `curl` still queries `.../sdk/go/@v/v$version.info` (no `/v2`), which 404s / resolves the wrong module for any v2+ Go module -- confirmed the actual run: npm, PyPI, and the Go tag all showed `success`, `Commit version bump` shows `success` (so `main` genuinely carries the real, published version), and only `Verify registries agree` shows `failure`. Exactly why the founder's own instruction was to verify independently rather than trust the exit status -- confirmed live, not hypothetical. Not fixed this session (cosmetic -- the commit already landed by the time this step runs, so a false failure here can't corrupt anything) -- named as a real follow-up, not silently left for the next person to rediscover.
+
+**A third, more serious bug found immediately after, before dispatching anything else -- real data loss on AWS's own real `main`, caught and reverted the same session**: `git log` on AWS's real `sdk/typescript/package.json` showed the "bump to v2.0.0" commit **deleted the file** (9 lines removed, not modified). Root cause: `build-npm.mjs`'s own `npm install --no-save` step mutates the real, committed `package.json` as an npm side effect regardless of `--no-save`; the script's own `rmSync` afterward discarded it entirely rather than restoring it, and nothing downstream ever put it back before "Commit version bump" `git add`-ed whatever was left on disk -- nothing, after the delete. This bug already existed before this session (untouched by any of the prior fixes), but had never actually been exercised end to end successfully for any of the six repos until AWS's dispatch just now -- confirmed directly: datadog/github/kubernetes's own `main` still has their `package.json` intact, from an earlier, different commit that predates npm ever being wired in (their 2026-08-24 publish never reached this step for real).
+
+**Fixed at the root, verified locally before applying, and would have compounded across all five remaining repos if not caught here first**: `build-npm.mjs` now saves the real file's content before `npm install` runs and writes it back verbatim afterward, instead of discarding it. Verified by actually running the fixed script locally (azure, which still had an intact `package.json` to test against) and diffing before/after: byte-identical. Applied identically to all six repos (byte-identical `md5sum` before and after, matching this project's own "port the fix to the whole family" convention) -- PRs `ubx-sdk-aws#12`, `ubx-sdk-azure#13`, `ubx-sdk-datadog#9`, `ubx-sdk-github#10`, `ubx-sdk-google#16`, `ubx-sdk-kubernetes#10`. Separately restored AWS's own already-deleted file on a second PR (`ubx-sdk-aws#13`) from its last real, committed content (already at the correct 2.0.0, no further bump needed).
+
+**Also checked, before reporting, whether this same pipeline would produce a misleading commit for the three backfill-only repos once the fix lands**: replicated the "Bump version" step's own rewrite logic locally against datadog's real, current files with the version held constant (1.1.0 -> 1.1.0, the real no-op case for datadog/github/kubernetes) -- `package.json`/`deno.json`/`pyproject.toml` all come back byte-identical to their current committed content. Confirms the "Commit version bump" step will correctly detect nothing changed and skip committing for these three once the deletion fix is in place, not produce a hollow "bump" commit with nothing real behind it.
+
+**Real state as of this entry**:
+
+| Repo | npm | PyPI | Go proxy | Status |
+|---|---|---|---|---|
+| `@ubx/sdk` (runtime) | 1.0.0, live | n/a | n/a | done |
+| aws | **2.0.0, live, verified** | **2.0.0, live, verified** | **v2.0.0, live, verified (queried at the real /v2 module path)** | published; two follow-up PRs open (verify-step path bug not fixed, package.json restored) |
+| azure / google | not yet re-dispatched | stale | stale | blocked on `#13`/`#16` merge (package.json-deletion fix) |
+| datadog / github / kubernetes | not yet dispatched | already correct | already correct | blocked on `#9`/`#10`/`#10` merge (package.json-deletion fix) |
+
+No registry disagreement to flag yet beyond AWS's own workflow-diagnostic false negative (explained above, not a real disagreement) -- the real three-way agreement check for azure/datadog/github/google/kubernetes hasn't run yet.
+
+**Committed and pushed, all seven PRs open, none merged (never self-merge)**: `ubx-sdk-aws#12`, `ubx-sdk-aws#13`, `ubx-sdk-azure#13`, `ubx-sdk-datadog#9`, `ubx-sdk-github#10`, `ubx-sdk-google#16`, `ubx-sdk-kubernetes#10`. All verified `CLEAN`/`MERGEABLE`.
+
+**What's next**: founder review/merge of these seven PRs (order-independent; AWS's `#12` and `#13` touch different files so either order is fine). Once merged, dispatch azure, datadog, github, google, kubernetes in turn, each independently re-verified against all three registries directly -- this session stopped after AWS specifically to avoid repeating the same file-deletion bug across the other five before the fix could land. The AWS "Verify registries agree" `/v2`-path bug remains open, real, and not yet fixed -- worth a small follow-up PR whenever convenient, though it blocks nothing.
+
+---
+
 ## UBI-185: @ubx/sdk runtime published and independently verified; the six provider repos found blocked by two real, previously-unknown bugs, both fixed, PRs open, none published yet, 2026-08-26
 
 **Scope**: the npm cooldown on `@ubx/sdk` expired -- publish it via `workflow_dispatch` on `ubx-sdk-typescript`, verify independently against npm's own specific-version endpoint (not the workflow's own exit status), then publish the six provider repos one at a time (aws 2.0.0, azure 1.0.0, datadog 1.1.0, github 1.1.0, google 1.1.0, kubernetes 1.0.0), each verified against npm/PyPI/Go proxy directly. Named risk to watch: Azure/Google previously failed when JSR errored before PyPI ran; confirm PyPI actually lands for both now that npm has replaced JSR.
