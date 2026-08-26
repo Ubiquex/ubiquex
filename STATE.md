@@ -2,6 +2,30 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-189 follow-up: Azure data source artifacts done, fourth provider, 2026-08-26
+
+**Scope**: same approach again, applied to Azure's 1606 data sources -- sibling-derived intros first, then fresh intros, then depth-0 field descriptions. Founder gave specific counts up front (690 exact + 1 singular + 94 substring, 43% derivable) plus the 18 named self-referential outlier wires to watch.
+
+**A real count discrepancy, flagged live rather than silently reconciled or silently substituted**: the directory-scoped matching method that worked cleanly for GitHub and Datadog gave only 246 exact matches for Azure at first -- far short of the founder's own 690. Root cause: Azure's own real resource-page basename convention drops the leading service-directory token (e.g. wire `azure_securityinsights_openapi_automation_rule`'s own real sibling page is `securityinsights/openapi-automation-rule`, not `securityinsights/securityinsights-openapi-automation-rule`), which the first matching attempt didn't account for. Fixed by matching against the data source's own real local slug (already service-dir-stripped) instead of the full wire, which raised the count to 936 exact + 102 substring -- the substring figure (102, narrowing to 94 after verification) matched the founder's own cited 94 almost exactly, but the exact-match figure still didn't reconcile to 690. Reported the discrepancy directly rather than guessing further or silently using either number; founder reviewed and chose to proceed on the larger, reproducible 936, which then went through the same rigorous verification as the 94.
+
+**936 exact-match intros derived mechanically, not hand-authored one at a time** -- infeasible at this scale by hand. Pulled each real sibling resource's own real intro text (from `artifacts/azure/intros.json` where present, its own real frontmatter description otherwise -- confirmed live that zero of the 936 lacked real, non-boilerplate content anywhere), then swapped the resource's own leading self-reference for "It" so the sentence continues naturally. Spot-verified on a random sample of 20+ for grammatical correctness before trusting it at scale.
+
+**94 substring matches, 102 raw candidates, 8 rejected after real verification** -- 2 of the 8 involved named outlier wires (`route_table`, `virtual_network`) matched to an unrelated sibling purely by coincidental substring overlap (`virtualnetwork-route`, `virtualnetwork-virtual-network-peering`) -- exactly the kind of false positive the founder's own outlier warning was meant to catch, and it did. The other 6 were real scope mismatches (`customer` vs `customer_policy`, `table_service_properties` vs a single table, a Cosmos DB-Mongo-specific migration variant matched to a generic cross-engine wire).
+
+**576 fresh orphan intros authored individually**, batched by real Azure product family (App Service 65, API Management 40, Networking 39, and 103 more, 106 families total) -- the largest single fresh-authoring pass in this sequence so far, bigger than Datadog's 431.
+
+**2464 depth-0 field descriptions, 100% of the real gap** -- an explicit dictionary of common ARM/generic terms (api_version, subscription_id, filter, top, skip, and similar) plus a verified suffix rule for Azure's own path-parameter convention (anything ending `_name`/`_id` gets "The real name/identifier of the X this lookup is scoped to," generated from the field's own prefix, not hand-typed per name) -- covered all 438 distinct missing field names.
+
+**The 18 named outliers confirmed NOT to balloon the depth-0 count, exactly as the founder asked to verify**: their own 58 matched dump files contribute only 172 of 5584 total depth-0 fields, 3.08% -- the same real neutralization the depth cap already provided for the resource-side gap-fill (91% raw share collapsing to 4.9% at depth<=4, per the earlier scoping investigation) holds here too, now confirmed at depth 0 specifically.
+
+**Verified**: `mint validate` clean; zero unreachable pages (1606/1606 reachable both directions); `docs.json` zero-line diff; all 1082 pre-existing intro entries and 90113 pre-existing description entries confirmed content-identical; `descriptions.json`/`intros.json` diffs are pure insertions (9856/1608 lines) plus the expected trailing-comma change on the prior-last entry (Azure's own manifest/intros/descriptions files sort `azure_...` before `data_...`, the OPPOSITE of GitHub/Datadog where `data_` sorts first -- insertion point had to go at the end, not the start, caught before it produced a spurious full-file diff).
+
+**Committed and pushed, PR open, not merged (never self-merge)**: branch `docs/azure-data-source-artifacts`, `ubiquex-docs#38`, based on `docs/datadog-data-source-artifacts` (`#37`, itself based on `#36` based on the still-open `#35`) since it carries the prerequisite wiring. Verified `CLEAN`/`MERGEABLE`.
+
+**What's next**: AWS (4526 data sources, largest, least sibling-derivable at 14% per the original scoping) -- the last provider in the sequence. Expect a much larger fresh-authoring share than any provider so far; the Azure lesson (verify the real resource-basename convention before trusting a sibling-match count) is worth re-checking against AWS's own known CFN-vs-Smithy directory divergence before assuming any matching heuristic transfers directly.
+
+---
+
 ## UBI-189 follow-up: Datadog data source artifacts done, third provider after Kubernetes and GitHub, 2026-08-26
 
 **Scope**: same approach again, applied to Datadog's 445 data sources -- sibling-derived intros first, then fresh intros, then depth-0 field descriptions.
