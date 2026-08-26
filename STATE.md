@@ -2,6 +2,24 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-189 follow-up: Datadog data source artifacts done, third provider after Kubernetes and GitHub, 2026-08-26
+
+**Scope**: same approach again, applied to Datadog's 445 data sources -- sibling-derived intros first, then fresh intros, then depth-0 field descriptions.
+
+**A real, structural difference from GitHub found before trusting the sibling-match numbers**: the same name-matching heuristic that gave GitHub 61/249 sibling-derivable found only 32 raw candidates for Datadog (far below GitHub's own rate), and field-name overlap -- which corroborated GitHub's matches -- was USELESS here: nearly every Datadog v2 API response shares the identical JSON:API envelope (`data`/`included`/`meta`), so virtually every candidate pair "overlaps" on that alone regardless of real relatedness. Confirmed live by checking all 32 pairs' real field content. Manually vetted each one by real product knowledge instead: 18 rejected (3-way name ambiguity like `notification_rule` matching unrelated resources across monitor/notification/team; or reductive matches like 6 `monitor_*` endpoints and 10 `metric_*` endpoints that are each their own real, distinct feature, not narrower views of the matched resource). Final: 14 sibling-derived, 431 fresh.
+
+**Founder asked before committing to the 431-entry fresh-authoring load**: flagged the real scope difference (14/445 = 3.1% sibling-derivable vs GitHub's 24.5%, 170 distinct product families, some obscure) before writing any fresh content, rather than assuming the same per-entry effort as GitHub would scale cleanly. Founder chose full per-entry accuracy over a lighter templated pass. All 431 authored individually, batched by real product family for consistency (LLM Observability 24, Synthetics 18, Security Monitoring 17, Incident Management 16, and 166 smaller families down to many singletons).
+
+**Descriptions were a smaller lift than GitHub's, for a real structural reason, not less rigor**: 557 missing of 1305 total depth-0 fields (well under half GitHub's 1357), because most Datadog data source lookups take only 1-3 real JSON:API-style ID/pagination arguments rather than a wide flat field list. 221 distinct field names covered 100% of the real gap via the same frequency-prioritized-dictionary strategy as GitHub.
+
+**Verified**: `mint validate` clean; zero unreachable pages (445/445 reachable both directions); `docs.json` zero-line diff (134 orphans' nav placement, from UBI-189's earlier `categories.json`-driven pass, was already correct -- same `gen_all_data_source_pages.py` orphan-write fix from the GitHub pass applies here too); all 1109 pre-existing description entries and 172 pre-existing intro entries confirmed byte-identical; `descriptions.json`/`intros.json` diffs are pure insertions (2228/445 lines), zero unexpected deletions, valid JSON, still globally sorted.
+
+**Committed and pushed, PR open, not merged (never self-merge)**: branch `docs/datadog-data-source-artifacts`, `ubiquex-docs#37`, based on `docs/github-data-source-artifacts` (`#36`, itself based on the still-open `#35`) since it carries the prerequisite generator wiring and the orphan-page-write fix. Verified `CLEAN`/`MERGEABLE`.
+
+**What's next**: Azure (1606 data sources), then AWS (4526, hardest, least sibling-derivable at 14%), per the original approved provider order. Azure's own self-referential `network/virtualnetwork` family outlier (18 of 1,606 resources accounting for 91% of raw uncapped field count) was already flagged in an earlier entry below -- the depth-0 scope neutralizes it, but worth re-reading that entry before starting Azure rather than rediscovering it.
+
+---
+
 ## UBI-189 follow-up: GitHub data source artifacts done, second provider after Kubernetes, 2026-08-26
 
 **Scope**: same approach as Kubernetes, applied to GitHub's 249 data sources -- sibling-derived intros first, then fresh intros, then depth-0 field descriptions. Founder's own instruction: "Continue with GitHub, 249 data sources... 48 exact plus 18 substring, then fresh for the rest, then depth-0 field descriptions... verify no bare-wire keys slipped in, since GitHub has 48 exact matches that would collide."
