@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-182: kubernetes_ds genuinely closed -- both PRs merged, real v2.0.0 release published, both group members (kubernetes resource + kubernetes_ds data source) independently verified zero-network against the actual live release, negative control confirmed the proxy poisoning is real; Stage F (Datadog) starting next, 2026-08-27
+## UBI-182: Stage F Datadog pilot built and PR'd -- real 4-member group (v1/v2 resource, v1/v2 data source) generated from Datadog's live specs, all counts verified real, archive extraction re-confirmed against a real Datadog tar.gz; PR open, not merged, 2026-08-27
 
 **Scope**: four pieces -- (1) snapshot generation for cloudformation/smithy/discoverydoc, one shared implementation since all four sources converge post-translation; confirm whether Kubernetes (openapi via Swagger 2.0 conversion) already works; (2) real `ubx-schema-<provider>` repos, snapshot committed not release-only; (3) `dynamicProviderSignals`/`dynamicProviderNamespaces` stop refusing pinned entries; (4) collapse `[providers.<name>]`'s dual meaning once all four sources support snapshots. Founder's own instruction: build one provider end to end (Kubernetes or Datadog, whichever smaller) before the other five, same staging discipline that caught real bugs in the data source work.
 
@@ -117,6 +117,20 @@ Both real tests built `ubx-provider-dynamic` from a clean, disposable worktree a
 **`kubernetes_ds` is now genuinely, completely closed** -- the actual bar "Stage D complete" should have been held to from the start: both real members of `repo_name=kubernetes`'s own group are pinned, both independently verified zero-network against the real, live, published release, not just one half of it.
 
 **What's next**: Stage F, starting with Datadog (smallest after Kubernetes, per the founder's own original staging instruction) -- now with both real designs (group container, resource/data-source mode) already proven end to end on a real 2-member group, ready to scale to Datadog's real 4-member group (2 resource, 2 data-source, v1/v2 with exclude-based collision resolution at the ubiquex codegen level -- a separate, already-existing concern from the snapshot mechanism itself, unaffected by pinning).
+
+---
+
+**Datadog pilot built end to end, real counts confirmed, PR open, not merged**: real `.ubx/config` written matching the live `sdk/providers/.ubx/config`'s own four real Datadog entries exactly (`datadog`/`datadog_v2` resource mode, `datadog_ds`/`datadog_v2_ds` data-source mode, same real auth shape). Generated via the merged `origin/main` binary's own `--generate-snapshot-group --group-repo-name=datadog --group-members=datadog,datadog_v2,datadog_ds,datadog_v2_ds`. Real, first-ever group version `1.0.0` (schema_format 3) -- no predecessor to supersede here, unlike Kubernetes' own `v1.0.0`->`v2.0.0` correction, so no hand-edit needed this time.
+
+Real counts, reloaded through `LoadSplit`+`LoadOpenAPIMember`, not assumed: `datadog` 26 resources, `datadog_v2` 152 resources, `datadog_ds` 79 data sources, `datadog_v2_ds` 450 data sources -- the two data-source counts match this project's own already-documented UBI-186 real numbers exactly (v1 79, v2 450); the v1 resource count matches the live config's own comment (26) exactly; v2's real count (152) has drifted slightly from that same comment's own recorded 148 -- expected, real drift in Datadog's own live spec over time, not a bug (the whole reason a live fetch is used at all).
+
+Created `github.com/Ubiquex/ubx-schema-datadog` (public, matching convention). Same layout as Kubernetes: `manifest.json` + `members/<name>.json`, `hash-watch.yml`/`publish.yml` adapted for the real 4-member config. Built the exact real `snapshot.tar.gz` `publish.yml` will produce (2.38MB compressed from ~26.6MB raw content -- real, well within every real limit) and confirmed it extracts correctly through the real, actual `extractTarGz` in `ubiquex`'s own `provider` package, a second real confirmation of that code path beyond Kubernetes' own.
+
+PR `ubx-schema-datadog#1`, open, not merged (never self-merge).
+
+**Not done**: founder review/merge of `ubx-schema-datadog#1`; dispatching `publish.yml` for the real release; pinning all four real members (`[providers.datadog]`, `[providers.datadog_v2]`, `[providers.datadog_ds]`, `[providers.datadog_v2_ds]`) in `ubiquex`; the same two-process, negative-control-verified zero-network proof against the real, live release, this time across four real members instead of two.
+
+**What's next**: founder review/merge of `ubx-schema-datadog#1`. Once merged: dispatch `publish.yml`, pin all four real members, and run the same real, live verification Kubernetes already got.
 
 ---
 
