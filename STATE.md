@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-182: provider schema snapshots -- Stage D complete end to end for Kubernetes, real v1.0.0 release published, [providers.kubernetes] pinned and verified with zero network on a cache hit via a real, two-process live test (not just config-shape reasoning); NextVersion's own 0.1.0-vs-1.0.0 default fixed in ubx-provider-dynamic, PR open, not yet merged; Stage E not started, 2026-08-26
+## UBI-182: Stage F (datadog next) blocked before any code was written -- a real, pre-existing gap found: the snapshot mechanism has no data-source-mode support at all, and no answer for a multi-entry group's own single published identity; affects the majority of every remaining provider's real surface, and means Kubernetes' own "Stage D complete" claim was half-true (kubernetes_ds was never covered), 2026-08-26
 
 **Scope**: four pieces -- (1) snapshot generation for cloudformation/smithy/discoverydoc, one shared implementation since all four sources converge post-translation; confirm whether Kubernetes (openapi via Swagger 2.0 conversion) already works; (2) real `ubx-schema-<provider>` repos, snapshot committed not release-only; (3) `dynamicProviderSignals`/`dynamicProviderNamespaces` stop refusing pinned entries; (4) collapse `[providers.<name>]`'s dual meaning once all four sources support snapshots. Founder's own instruction: build one provider end to end (Kubernetes or Datadog, whichever smaller) before the other five, same staging discipline that caught real bugs in the data source work.
 
@@ -49,7 +49,30 @@ Both real tests built `ubx-provider-dynamic` from a clean, disposable worktree a
 
 **Committed and pushed directly to `ubiquex` main**: `cli/dynamicprovider_pinned_live_test.go` (and the earlier `STATE.md` checkpoints for this arc).
 
-**What's next**: founder review/merge of `ubx-provider-dynamic#17` (the `NextVersion` default fix -- doesn't block anything already done, since Kubernetes' own committed version was already hand-corrected before this default existed as code; it only matters for Stage F's five remaining providers). Reporting here, before Stage E, per the founder's own explicit instruction: collapsing `[providers.<name>]`'s dual meaning changes config semantics for every provider, and Kubernetes is still the only one pinned -- Stage E should not proceed without a real go/no-go from the founder.
+**`ubx-provider-dynamic#17` merged by the founder directly.** Stage E held per explicit instruction -- collapsing `[providers.<name>]` before the other five providers have a real, published pin would break aws/azure/google/github/datadog with no path back (nothing left relying on live-fetch is what makes the collapse safe). Stage F ordered next: datadog first (smallest after Kubernetes), one provider fully through before the rest, same staging discipline, report between providers.
+
+**Stage F stopped before any Datadog-specific code, on a real, confirmed architectural gap found while surveying `sdk/providers/.ubx/config` for Datadog's own real entries** (not guessed, not assumed -- read directly): every real provider's schema is NOT one `[dynamic_providers.<name>]` entry -- it's a GROUP (`dynamic_provider_groups.<x>_all`, `repo_name` = the real published identity) merging multiple named entries, and a large fraction of those entries are `data_sources = true` (data-source mode, a structurally different discovery+translation pipeline from resource mode -- `resourcemap.BuildDataSources`/`smithy.BuildDataSources`/`discoverydoc.BuildDataSources`, not `dynserver.Build`/`smithy.Build`/`discoverydoc.Build`). Real counts, read directly from the live config:
+
+| Group | repo_name | total members | data-source members |
+|---|---|---|---|
+| kubernetes_all | kubernetes | 2 | 1 (`kubernetes_ds`) |
+| github_all | github | 2 | 1 (`github_ds`) |
+| datadog_all | datadog | 4 | 2 (`datadog_ds`, `datadog_v2_ds`) |
+| aws_data_all | aws | 430 | 429 (`aws_data_*`; only the CFN `aws` entry itself is resource-mode) |
+| google_all | google | 524 | 262 |
+| azure_all | azure | 604 | 302 |
+
+**Confirmed directly against the real code, not inferred**: `internal/snapshot.Snapshot` has no field recording resource-vs-data-source mode at all. `GenerateOpenAPI` (pre-existing, unchanged by UBI-182) always calls `dynserver.Build` (resource discovery) -- never `resourcemap.BuildDataSources`, regardless of `cfg.DataSources`. `runServeSnapshot`'s openapi branch always builds `&dynserver.Server{Resources: resources, ...}` -- never `DataSources: ...`. This is a real, pre-existing gap in the ORIGINAL openapi-only snapshot mechanism (predates UBI-182), not something this session introduced for openapi -- but Stage A's own new `GenerateCloudFormation`/`GenerateSmithy`/`GenerateDiscoveryDoc` (this session's work) replicated the identical resource-only scope for the three new sources too, without closing the gap: `GenerateSmithy` always calls `smithy.Build`, never `smithy.BuildDataSources`, the same real asymmetry `run()`'s own live-fetch branch already handles correctly for AWS's real data sources today.
+
+**Real consequence, not hypothetical**: a `[providers.<name>]`-pinned data-source-mode entry today would not fail loud -- it would silently serve RESOURCE-shaped schemas instead of data-source-shaped ones (or, for cloudformation/smithy/discoverydoc, `--generate-snapshot` would just be missing entirely for that mode). This means Kubernetes' own prior "Stage D complete end to end" entry was only half true: `[dynamic_providers.kubernetes]` (resource mode, `repo_name=kubernetes`'s smaller half) is genuinely pinned and verified; `kubernetes_ds` (the group's OTHER real member) was never attempted and would misbehave if pinned today under the current mechanism.
+
+**Two real, separate open design questions, not decided here, reported instead of guessed at**:
+1. Data-source-mode snapshot support: `Snapshot` needs a mode field (or equivalent), and all three of `GenerateOpenAPI`/`GenerateSmithy`/`GenerateDiscoveryDoc` (CloudFormation has no data-source concept, confirmed earlier this arc) plus `runServeSnapshot`/`--dump-signals`/`--dump-namespaces` need a real data-source branch mirroring `run()`'s own live-fetch logic -- a real, scoped `ubx-provider-dynamic` change, not small (touches every source but CFN).
+2. Group-level identity: a provider's real published `ubx-schema-<name>` identity is the GROUP (`repo_name`), not any one member -- but the snapshot mechanism only knows how to generate/pin ONE entry at a time. Datadog alone needs 4 real per-entry snapshots (2 resource, 2 data-source) reconciled into ONE coherent, versioned, pinnable artifact; AWS needs 430. No existing mechanism merges multiple snapshots into one identity, or represents "this release covers members X, Y, Z" at all.
+
+**Not done**: no `ubx-schema-datadog` repo created, no snapshot generated, no code written for Datadog. Stopped here deliberately -- proceeding would either produce an incomplete artifact (2 of 4 real members) or require inventing an unreviewed design for both gaps above, exactly the "surfaces once, not five times" case the founder asked to catch early.
+
+**What's next**: founder direction on both open questions before any further Stage F work -- this is a real, cross-cutting design decision affecting every remaining provider, not a per-provider implementation detail.
 
 ---
 
