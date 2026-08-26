@@ -289,42 +289,34 @@ func loadDynamicProviderSchema(ctx context.Context, name string, params map[stri
 // flag's own doc comment in ubx-provider-dynamic's cmd/ubx-provider-dynamic/main.go
 // for why this can't ride the same provider.Launch/go-plugin connection
 // dynamicProviderSchema above uses: go-plugin's own real handshake
-// protocol already owns that process's stdout). Reuses the identical
-// real, temporary .ubx/config dynamicProviderSchema writes. Returns a
-// real, honestly EMPTY (not nil, not an error) result for a
-// schema_source this binary doesn't yet extract signals for (Smithy --
-// AWS, today), matching that binary's own "skip, don't fail" answer.
+// protocol already owns that process's stdout). Returns a real, honestly
+// EMPTY (not nil, not an error) result for a schema_source this binary
+// doesn't yet extract signals for (Smithy -- AWS data sources, today),
+// matching that binary's own "skip, don't fail" answer.
 //
-// Real, honest, deliberate scope boundary, named not hidden: a PINNED
-// entry (source+version) returns a real, clear error instead of silently
-// degrading -- --dump-signals is a plain subprocess reading a real,
-// temporary .ubx/config, and main.go's own snapshotPathEnvVar branch
-// (runServeSnapshot) never wires that mode into --dump-signals at all
-// (only into real tfplugin6 serving). generateOneDynamicProvider's own
-// caller already treats a dynamicProviderSignals error as non-fatal
-// ("skip, don't fail" -- sdk.go), so this surfaces as the identical real,
-// visible warning a Smithy provider's own missing-signals case already
-// produces, not a silent gap.
+// UBI-182: reuses dynamicProviderEnv, the identical real pinned/live
+// branch dynamicProviderSchema already goes through -- a pinned entry
+// (source+version) now resolves a real snapshot via provider.AcquireSchema
+// and the subprocess reads it via UBX_SNAPSHOT_PATH (main.go's own
+// snapshotPathEnvVar branch, wired into --dump-signals as of UBI-182's
+// ubx-provider-dynamic Stage B), the same way it already reads
+// UBX_SNAPSHOT_PATH for real tfplugin6 serving. No more hard refusal for
+// a pinned entry.
 func dynamicProviderSignals(ctx context.Context, binPath, name string, params map[string]any) (map[string]map[string]*fieldSignal, error) {
-	if _, _, pinned, err := pinnedSchemaFields(params); err != nil {
-		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
-	} else if pinned {
-		return nil, fmt.Errorf("[providers.%s]: --dump-signals is not yet wired to a pinned schema source (source+version) -- only the live schema_url shape supports signal extraction today", name)
-	}
-
 	workDir, err := os.MkdirTemp("", "ubx-sdk-gen-signals-"+name)
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+	env, err := dynamicProviderEnv(ctx, workDir, name, params)
+	if err != nil {
 		return nil, err
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, "--dump-signals")
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "UBX_DYNAMIC_PROVIDER_NAME="+name)
+	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -353,30 +345,27 @@ func dynamicProviderSignals(ctx context.Context, binPath, name string, params ma
 // Google wire types (zero true mismatches).
 //
 // Identical real launch shape to dynamicProviderSignals -- same
-// temporary config, same subprocess, same non-fatal-on-error treatment
-// by this function's own caller (generateOneDynamicProvider/
-// generateDynamicProviderGroup already treat a dynamicProviderSignals
-// error as "skip, don't fail"; this is the identical real posture).
+// dynamicProviderEnv pinned/live branch, same subprocess, same
+// non-fatal-on-error treatment by this function's own caller
+// (generateOneDynamicProvider/generateDynamicProviderGroup already treat
+// a dynamicProviderSignals error as "skip, don't fail"; this is the
+// identical real posture). UBI-182: no more hard refusal for a pinned
+// entry, matching dynamicProviderSignals' own fix.
 func dynamicProviderNamespaces(ctx context.Context, binPath, name string, params map[string]any) (map[string]string, error) {
-	if _, _, pinned, err := pinnedSchemaFields(params); err != nil {
-		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
-	} else if pinned {
-		return nil, fmt.Errorf("[providers.%s]: --dump-namespaces is not yet wired to a pinned schema source (source+version) -- only the live schema_url shape supports namespace extraction today", name)
-	}
-
 	workDir, err := os.MkdirTemp("", "ubx-sdk-gen-namespaces-"+name)
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(workDir)
 
-	if err := writeDynamicProviderConfig(workDir, name, params); err != nil {
+	env, err := dynamicProviderEnv(ctx, workDir, name, params)
+	if err != nil {
 		return nil, err
 	}
 
 	cmd := exec.CommandContext(ctx, binPath, "--dump-namespaces")
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "UBX_DYNAMIC_PROVIDER_NAME="+name)
+	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

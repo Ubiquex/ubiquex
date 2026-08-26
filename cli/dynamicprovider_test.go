@@ -151,3 +151,101 @@ func TestDynamicProviderEnv_PinnedSourceInvalid_Errors(t *testing.T) {
 		t.Fatal("expected an error for an unparseable source address")
 	}
 }
+
+// setUpPinnedSchemaMirror puts a real, minimal snapshot at
+// <root>/ubiquex/widget/1.0.0/snapshot.json and points UBX_SCHEMA_MIRROR
+// at it -- the same real, already-proven provider.AcquireSchema
+// short-circuit TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig
+// already uses, reused here so dynamicProviderSignals/dynamicProviderNamespaces
+// resolve a real pinned entry with zero network.
+func setUpPinnedSchemaMirror(t *testing.T) {
+	t.Helper()
+	mirrorRoot := t.TempDir()
+	snapDir := filepath.Join(mirrorRoot, "ubiquex", "widget", "1.0.0")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"schema_format":1,"provider":"widget","version":"1.0.0"}`)
+	if err := os.WriteFile(filepath.Join(snapDir, "snapshot.json"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UBX_SCHEMA_MIRROR", mirrorRoot)
+}
+
+// writeFakeDumpBinary writes a real, tiny, executable shell script standing
+// in for ubx-provider-dynamic's own --dump-signals/--dump-namespaces
+// behavior -- it reports back (as real JSON output, decoded by the
+// caller under test) whether it actually saw UBX_SNAPSHOT_PATH set and no
+// .ubx/config in its own working directory, the exact real contract a
+// pinned launch is supposed to honor (dynamicProviderEnv's own doc
+// comment). Real subprocess exec, not a mocked Go call -- proves
+// dynamicProviderSignals/dynamicProviderNamespaces actually reach a
+// pinned launch now, instead of asserting on dynamicProviderEnv alone.
+func writeFakeDumpBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fake-ubx-provider-dynamic")
+	script := `#!/bin/sh
+seen="no"
+if [ -n "$UBX_SNAPSHOT_PATH" ] && [ ! -e .ubx/config ]; then
+  seen="yes"
+fi
+case "$1" in
+  --dump-signals)
+    echo "{\"pinned_snapshot_path_seen\": {\"$seen\": {\"pattern\": \"ok\"}}}"
+    ;;
+  --dump-namespaces)
+    echo "{\"pinned_snapshot_path_seen\": \"$seen\"}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestDynamicProviderSignals_PinnedMode_NoLongerRefused is UBI-182 Stage
+// C's own real regression guard: a pinned entry (source+version) used to
+// return a hard, immediate error here ("--dump-signals is not yet wired
+// to a pinned schema source") before ever launching anything. It must now
+// resolve the real snapshot via the mirror, launch the subprocess with
+// UBX_SNAPSHOT_PATH set and no .ubx/config, and return real, decoded
+// signal output.
+func TestDynamicProviderSignals_PinnedMode_NoLongerRefused(t *testing.T) {
+	setUpPinnedSchemaMirror(t)
+	binPath := writeFakeDumpBinary(t)
+
+	out, err := dynamicProviderSignals(context.Background(), binPath, "widget", map[string]any{
+		"source":  "ubiquex/widget",
+		"version": "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("dynamicProviderSignals: %v", err)
+	}
+	if _, ok := out["pinned_snapshot_path_seen"]["yes"]; !ok {
+		t.Fatalf("subprocess did not see a real UBX_SNAPSHOT_PATH with no .ubx/config: %v", out)
+	}
+}
+
+// TestDynamicProviderNamespaces_PinnedMode_NoLongerRefused is
+// TestDynamicProviderSignals_PinnedMode_NoLongerRefused's own identical
+// sibling for --dump-namespaces.
+func TestDynamicProviderNamespaces_PinnedMode_NoLongerRefused(t *testing.T) {
+	setUpPinnedSchemaMirror(t)
+	binPath := writeFakeDumpBinary(t)
+
+	out, err := dynamicProviderNamespaces(context.Background(), binPath, "widget", map[string]any{
+		"source":  "ubiquex/widget",
+		"version": "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("dynamicProviderNamespaces: %v", err)
+	}
+	if out["pinned_snapshot_path_seen"] != "yes" {
+		t.Fatalf("subprocess did not see a real UBX_SNAPSHOT_PATH with no .ubx/config: %v", out)
+	}
+}
