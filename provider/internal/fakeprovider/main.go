@@ -293,6 +293,43 @@ func (s *fakeProviderServerV6) GetProviderSchema(context.Context, *tfplugin6.Get
 				},
 			},
 		},
+		// DataSourceSchemas (UBI-178 piece 4 follow-up): "fake_widget" here
+		// deliberately shares its own name with the RESOURCE schema above --
+		// a real provider's own data source and resource commonly do
+		// (hashicorp/aws's own "aws_instance" is both, per
+		// ir.ResourceType.IsDataSource's own doc comment) -- so this fixture
+		// exercises the exact same-WireType collision
+		// ir.ServiceAndLocalNameForType's own "data" namespace segment exists
+		// to keep apart, not just a data source in isolation. Before this
+		// entry existed, no fakeprovider mode ever served a real
+		// DataSourceSchemas at all: provider.Schemas.DataSources was always
+		// empty end to end through the real `ubx sdk gen` CLI path, so
+		// nothing ever exercised writeGeneratedSDK's own
+		// IsDataSource=true branch, ir.FromSchema against a real data-source
+		// schema, or any per-language template's own DataSourceBinding
+		// rendering through the actual wire protocol -- only through
+		// hermetic, hand-built ir.ResourceType fixtures. That gap is why the
+		// ResourceBinding/DataSourceBinding template swap (UBI-178 piece 4)
+		// shipped through `go build`/`deno check`/`ast.parse` on generated
+		// output unnoticed: none of those checks ever called the generated
+		// code, and nothing ever generated a REAL data source to check.
+		// Shape: name (Required) is the real lookup argument a caller
+		// supplies; id/tags (Computed) are what a real lookup would return --
+		// deliberately NOT identical Required/Optional/Computed markings to
+		// the resource above, so Config/Attrs assertions can't pass by
+		// accident from stale copy-paste.
+		DataSourceSchemas: map[string]*tfplugin6.Schema{
+			"fake_widget": {
+				Version: 1,
+				Block: &tfplugin6.Schema_Block{
+					Attributes: []*tfplugin6.Schema_Attribute{
+						{Name: "name", Type: []byte(`"string"`), Required: true},
+						{Name: "id", Type: []byte(`"string"`), Computed: true},
+						{Name: "tags", Type: []byte(`["map","string"]`), Computed: true},
+					},
+				},
+			},
+		},
 	}, nil
 }
 
@@ -446,6 +483,22 @@ func (s *fakeProviderServerV5) GetSchema(context.Context, *tfplugin5.GetProvider
 						{Name: "id", Type: []byte(`"string"`), Computed: true},
 						{Name: "name", Type: []byte(`"string"`), Required: true},
 						{Name: "tags", Type: []byte(`["map","string"]`), Optional: true},
+					},
+				},
+			},
+		},
+		// DataSourceSchemas -- see fakeProviderServerV6.GetProviderSchema's
+		// own identical DataSourceSchemas entry for the full account of why
+		// this exists and why it deliberately reuses "fake_widget" as both
+		// a resource and a data source name.
+		DataSourceSchemas: map[string]*tfplugin5.Schema{
+			"fake_widget": {
+				Version: 1,
+				Block: &tfplugin5.Schema_Block{
+					Attributes: []*tfplugin5.Schema_Attribute{
+						{Name: "name", Type: []byte(`"string"`), Required: true},
+						{Name: "id", Type: []byte(`"string"`), Computed: true},
+						{Name: "tags", Type: []byte(`["map","string"]`), Computed: true},
 					},
 				},
 			},
