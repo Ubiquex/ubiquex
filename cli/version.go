@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -81,6 +83,73 @@ func versionString() string {
 		v += "-dirty"
 	}
 	return v
+}
+
+// currentGitHEAD returns the short (7-char) commit SHA of the git repo
+// the current working directory is inside, or "" if the cwd isn't
+// inside one (or `git` itself isn't on PATH) -- a package var, the same
+// override-in-tests shape buildInfoRevision/buildInfoDirty already use,
+// so checkBuildFreshness's own tests never depend on a real git
+// checkout's actual state.
+var currentGitHEAD = func() string {
+	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	head := strings.TrimSpace(string(out))
+	if len(head) < 7 {
+		return ""
+	}
+	return head[:7]
+}
+
+// checkBuildFreshness is UBI-186 follow-up's own real, live-found fix:
+// a full six-provider `ubx sdk gen` regeneration once ran end to end
+// against a binary built from a stale commit (a PR branch's own tip,
+// created before a real fix had merged into main) -- every generated
+// data source silently carried the wrong binding type, and nothing
+// caught the mismatch before generation started, only an unrelated
+// manual spot-check hours later. This closes that gap: called at the
+// top of `sdk gen`'s own RunE, before any real generation work begins.
+//
+// Deliberately compares against the CURRENT git HEAD of whatever
+// checkout the command is running from, not literally "main" -- an
+// active development session legitimately builds and tests from a
+// feature branch (this whole real fix was found and built that way),
+// and requiring literal "main" would false-positive on that entirely
+// normal workflow. "Binary was built from exactly what's currently
+// checked out, whatever that is" is the real, general property that
+// actually prevents the failure mode found live: build, then `git
+// checkout` something else (a different branch, or the same branch
+// after a merge landed) without rebuilding.
+//
+// Only activates for a local "dev" build with a known VCS-stamped
+// commit -- Version != "dev" means a real, released/tagged build,
+// which was never built against anyone's local checkout and has
+// nothing meaningful to compare against. Skips silently (returns nil,
+// not an error) when the commit or the git HEAD can't be determined at
+// all -- built outside a git checkout, VCS stamping disabled, git not
+// on PATH, or cwd genuinely outside any git repo -- rather than
+// blocking a use this check was never meant to police.
+func checkBuildFreshness() error {
+	if Version != "dev" {
+		return nil
+	}
+	built := buildInfoRevision()
+	if built == "" {
+		return nil
+	}
+	head := currentGitHEAD()
+	if head == "" {
+		return nil
+	}
+	if built == head {
+		return nil
+	}
+	return fmt.Errorf(
+		"ubx was built from commit %s, but this checkout's current HEAD is %s -- rebuild (`make build`) before running generation. A stale binary here previously ran a full multi-provider regeneration silently emitting the wrong codegen output for every data source (UBI-186 follow-up) before anyone noticed",
+		built, head,
+	)
 }
 
 func newVersionCmd() *cobra.Command {

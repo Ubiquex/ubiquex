@@ -115,6 +115,10 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkBuildFreshness(); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
+			}
+
 			if lang != "ts" && lang != "go" && lang != "py" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: --lang must be \"ts\", \"go\", or \"py\", got %q", lang)}
 			}
