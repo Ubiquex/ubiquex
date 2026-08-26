@@ -2,6 +2,40 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-185: CLOSED -- all six provider repos + the runtime genuinely published, all three registries independently verified per repo, AWS's own verify-step bug fixed, 2026-08-26
+
+**Scope**: all seven pending PRs merged. Dispatch azure, datadog, github, google, kubernetes -- one at a time, each independently verified against npm/PyPI/Go proxy directly. Confirm datadog/github/kubernetes move only on npm (the skip-if-live logic from the prior fix). Confirm `package.json` survives each publish now that the save-restore fix is in. Then fix AWS's own verify-step Go proxy path bug (pre-v2, 404s on the real v2 module).
+
+**All five dispatched, one at a time, all green including the final verify step -- no repeat of AWS's own two prior bugs**: `package.json` confirmed present on `origin/main` after every single one of the five (the save-restore fix holds under real CI, not just the local test that verified it before merge).
+
+**Azure and Google -- full three-registry bump, exactly as expected**: `committed=1.0.0`/`1.1.0`, both live registries were genuinely stale (`0.2.1` each), so the ordinary "committed ahead of live -- publish as-is" branch fired, all three registries moved together. Independently verified: npm/PyPI/Go proxy all agree at `1.0.0` (azure) and `1.1.0` (google).
+
+**Datadog, GitHub, Kubernetes -- the skip-if-live logic confirmed correct under real conditions, not just the earlier hand trace**: read the real run logs directly for each, not just the final "success" status. All three show the exact same real pattern: `Determine version` logs `committed=<v>, live PyPI=<v>, live npm=<none>` then `sdk/go/v<v> already tagged -- backfilling any missing registry at the same committed version, not bumping`; `Publish to npm` shows a REAL `npm notice Publishing to https://registry.npmjs.org/...` (not skipped); `Publish to PyPI` and `Tag the source commit` both show `<registry> already has <v> -- skipping (backfilling a different registry)` (correctly skipped, not re-uploaded/re-tagged). Independently verified all three registries agree at the target version for all three repos (`1.1.0`/`1.1.0`/`1.0.0`), and confirmed no spurious "sdk: bump to..." commit landed on any of the three `main`s -- `git log` shows only the real merge commits, nothing else, matching the earlier prediction that a same-version rewrite produces a byte-identical file and "Commit version bump" correctly finds nothing to commit.
+
+**One real operational lesson, not a bug**: independent PyPI specific-version queries (`pypi.org/pypi/<project>/<version>/json`) 404'd immediately after several of these publishes (azure, google) despite the workflow's own upload log showing a genuine, successful `twine upload` (real progress bar, real "View at: https://pypi.org/project/.../<version>/" confirmation URL). Retried with backoff instead of concluding failure -- resolved within 20-40 seconds every time. PyPI's specific-version JSON endpoint has real, live propagation lag distinct from the main upload succeeding; a single immediate 404 there is not evidence of a failed publish, matches this project's own already-documented finding that PyPI verification needs a real retry window, not a one-shot check.
+
+**AWS's own verify-step bug (named at the end of the prior entry) fixed**: `Verify registries agree`'s own Go proxy query hardcoded `.../sdk/go/@v/...`, never accounting for `go.mod`'s own real `/v2` module suffix (Go's required convention once a module's major version is 2+, which AWS's real `go.mod` already declares post-UBI-98). Fixed by reading the real module path from `go.mod` directly at verify time instead of hardcoding it -- also means this never goes stale again on a future v3+ bump, not just patched for v2 specifically. Verified against the real, already-published `v2.0.0`: the derived path resolves correctly on the real Go proxy. PR `ubx-sdk-aws#14`, open, not merged.
+
+**Real, final, fully verified state -- all seven packages, independently confirmed, nothing left disagreeing**:
+
+| Repo | npm | PyPI | Go proxy | Agree? |
+|---|---|---|---|---|
+| `@ubx/sdk` (runtime) | 1.0.0 | n/a | n/a | yes |
+| aws | 2.0.0 | 2.0.0 | v2.0.0 (real /v2 module) | yes |
+| azure | 1.0.0 | 1.0.0 | v1.0.0 | yes |
+| datadog | 1.1.0 | 1.1.0 (already live pre-npm) | v1.1.0 (already live pre-npm) | yes |
+| github | 1.1.0 | 1.1.0 (already live pre-npm) | v1.1.0 (already live pre-npm) | yes |
+| google | 1.1.0 | 1.1.0 | v1.1.0 | yes |
+| kubernetes | 1.0.0 | 1.0.0 (already live pre-npm) | v1.0.0 (already live pre-npm) | yes |
+
+Zero repos disagree across their own three registries. UBI-185's own real goal -- every one of the six provider repos able to `npm install`/`pip install`/`go get` a real, live, matching-version `@ubx/sdk` dependency -- is real and live as of this entry.
+
+**Committed and pushed, PR open, not merged (never self-merge)**: branch `fix/verify-step-go-v2-module-path`, `ubx-sdk-aws#14`, based on current `main`. Verified `CLEAN`/`MERGEABLE`.
+
+**What's next**: founder review/merge of `#14` (cosmetic-only, blocks nothing -- AWS is already fully, correctly published). UBI-185 itself is otherwise closed -- no further provider repos pending, no further registry gaps known. The AWS `Verify registries agree` fix could reasonably be ported to the other five repos too (none currently have a v2+ module, so none are currently broken by this same bug, but the same go.mod-derived approach would make all six immune to it recurring on a future major bump) -- named as a real, optional hardening follow-up, not done this session since the founder's own ask was scoped to AWS specifically.
+
+---
+
 ## UBI-185 follow-up: AWS genuinely published (npm/PyPI/Go all agree at 2.0.0), but its first real publish deleted a real committed file -- fixed, restored, PRs open, azure/datadog/github/google/kubernetes not yet re-dispatched, 2026-08-26
 
 **Scope**: all seven prior PRs merged. Dispatch the six provider repos one at a time, verifying each against npm/PyPI/Go proxy directly rather than trusting the workflow's own exit status, per the founder's own explicit instruction. Expected: aws 2.0.0, azure 1.0.0, datadog 1.1.0, github 1.1.0, google 1.1.0, kubernetes 1.0.0.
