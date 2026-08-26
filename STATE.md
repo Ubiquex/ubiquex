@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-182: provider schema snapshots -- plan approved, Stage A+B (snapshot generation for cloudformation/smithy/discovery_docs, pinned --dump-signals/--dump-namespaces) built and PR'd in ubx-provider-dynamic, Stages C-F not started, 2026-08-26
+## UBI-182: provider schema snapshots -- Stage A+B PR'd in ubx-provider-dynamic (#16, open), Stage C landed on ubiquex main, Stages D-F not started, 2026-08-26
 
 **Scope**: four pieces -- (1) snapshot generation for cloudformation/smithy/discoverydoc, one shared implementation since all four sources converge post-translation; confirm whether Kubernetes (openapi via Swagger 2.0 conversion) already works; (2) real `ubx-schema-<provider>` repos, snapshot committed not release-only; (3) `dynamicProviderSignals`/`dynamicProviderNamespaces` stop refusing pinned entries; (4) collapse `[providers.<name>]`'s dual meaning once all four sources support snapshots. Founder's own instruction: build one provider end to end (Kubernetes or Datadog, whichever smaller) before the other five, same staging discipline that caught real bugs in the data source work.
 
@@ -16,9 +16,17 @@
 
 **Committed and pushed, PR open, not merged (never self-merge)**: `feat/ubi182-snapshot-sources`, `ubx-provider-dynamic#16`. Verified `CLEAN`/`MERGEABLE` via `gh pr view`.
 
-**Not built yet**: Stage C (`ubiquex`'s `dynamicProviderSignals`/`dynamicProviderNamespaces` stop refusing pinned entries -- depends on `#16` merging, since it calls the new pinned-snapshot code path), Stage D (new `ubx-schema-kubernetes` repo, hash-watch + publish workflows, real GitHub Release, real pin in `sdk/providers/.ubx/config`, real `AcquireSchema` verification against the live release), Stage E (`[providers.<name>]` dual-meaning collapse -- confirmed safe, zero real entries exist in the live config today, but sequenced after Stage D proves the pinned path end to end), Stage F (datadog/azure/google/github/aws rollout, AWS's real CFN+Smithy dual-source question deferred to when AWS is reached). `docs/plan.md` changelog entry for this design decision (CLAUDE.md rule 4) also not yet written -- next action, alongside this entry.
+**Stage C built and pushed directly to `ubiquex` main** (per CLAUDE.md's own direct-commit-allowed rule for this repo -- distinct from `ubx-provider-dynamic`'s own separate-repo never-self-merge PR discipline): `cli/dynamicprovider.go`'s `dynamicProviderSignals` and `dynamicProviderNamespaces` both dropped their hard refusal for a pinned entry (source+version) and now call the existing `dynamicProviderEnv` helper -- the identical real pinned/live branch `dynamicProviderSchema` already used -- instead of unconditionally calling `writeDynamicProviderConfig`. A pinned entry now resolves a real snapshot via `provider.AcquireSchema` and launches the subprocess with `UBX_SNAPSHOT_PATH` set (reaching Stage B's new binary branch); a live entry is completely unchanged. Two new hermetic tests (`TestDynamicProviderSignals_PinnedMode_NoLongerRefused`, `TestDynamicProviderNamespaces_PinnedMode_NoLongerRefused`) prove this against a real subprocess exec (a small shell-script test double, not a mocked Go call) that reports back whether it actually saw `UBX_SNAPSHOT_PATH` set and no `.ubx/config` in its own working directory -- the real contract, not just that `dynamicProviderEnv` alone still works (already covered).
 
-**What's next**: founder review/merge of `ubx-provider-dynamic#16`. Once merged, Stage C in `ubiquex` (`cli/dynamicprovider.go`), then Stage D's `ubx-schema-kubernetes` pilot repo end to end.
+**A real, pre-existing, unrelated local-checkout issue found and fixed along the way, not caused by this change**: `go test ./cli/...` initially failed on four SDK-gen tests with `undefined: ubx.DataSourceBinding` -- traced to `sdk/go`/`sdk/ts`/`sdk/py` submodule checkouts being rewound behind what `ubiquex`'s own `main` already has committed (missing the `data-source-collector` PR merges). Not a code bug -- `git submodule update` alone (no content change, just syncing the local working tree to the already-committed pointers) fixed it; confirmed via `git diff --submodule=log` before touching anything, not assumed. `sdk/providers/descriptions/aws.json` remains modified on disk from before this session, left untouched (not this arc's concern).
+
+**Verified real**: `go build`/`go vet`/`go test ./...` clean across the whole repo (not just `cli/`), `gofmt -l` clean on both touched files.
+
+**Committed and pushed directly to `ubiquex` main** (two commits: `0ac4f18` housekeeping, `5bcc10d` Stage C itself).
+
+**Not built yet**: Stage D (new `ubx-schema-kubernetes` repo, hash-watch + publish workflows, real GitHub Release, real pin in `sdk/providers/.ubx/config`, real `AcquireSchema` verification against the live release), Stage E (`[providers.<name>]` dual-meaning collapse -- confirmed safe, zero real entries exist in the live config today, but sequenced after Stage D proves the pinned path end to end), Stage F (datadog/azure/google/github/aws rollout, AWS's real CFN+Smithy dual-source question deferred to when AWS is reached).
+
+**What's next**: founder review/merge of `ubx-provider-dynamic#16` (Stage C already calls the code path it adds, so the pinned signals/namespaces path is exercised today only via the mirror/hermetic tests -- a real end-to-end run against a real dynamic provider needs `#16` merged first, since `resolveDynamicProviderBinary` builds from the local checkout's current `main`, not this session's worktree branch). Then Stage D's `ubx-schema-kubernetes` pilot repo end to end.
 
 ---
 
