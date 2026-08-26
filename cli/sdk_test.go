@@ -173,7 +173,7 @@ func TestSDKGen_GeneratesBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx sdk gen: %v\noutput: %s", err, out)
 	}
-	wantStdout := "generated 1 resource type(s) for fake/widget@0.1.0 -> " + genDir
+	wantStdout := "generated 2 resource type(s) for fake/widget@0.1.0 -> " + genDir
 	if !strings.Contains(out, wantStdout) {
 		t.Fatalf("unexpected stdout: %s\nwant to contain: %s", out, wantStdout)
 	}
@@ -287,7 +287,7 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx sdk gen --lang go: %v\noutput: %s", err, out)
 	}
-	wantStdout := "generated 1 resource type(s) for fake/widget@0.1.0 -> " + genDir
+	wantStdout := "generated 2 resource type(s) for fake/widget@0.1.0 -> " + genDir
 	if !strings.Contains(out, wantStdout) {
 		t.Fatalf("unexpected stdout: %s\nwant to contain: %s", out, wantStdout)
 	}
@@ -492,7 +492,7 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx sdk gen --lang py: %v\noutput: %s", err, out)
 	}
-	wantStdout := "generated 1 resource type(s) for fake/widget@0.1.0 -> " + genDir
+	wantStdout := "generated 2 resource type(s) for fake/widget@0.1.0 -> " + genDir
 	if !strings.Contains(out, wantStdout) {
 		t.Fatalf("unexpected stdout: %s\nwant to contain: %s", out, wantStdout)
 	}
@@ -554,6 +554,122 @@ func TestSDKGen_GeneratesPyBindingsFromRealSchema_ViaMirror(t *testing.T) {
 	// The real, final import a consumer writes goes through the service
 	// package's own re-export, never the file-stutter path.
 	assertPyRepoImports(t, repoDir, "ubx.widget.widget", "Widget", "WidgetConfig")
+}
+
+// TestSDKGen_GeneratesDataSourceBindingsFromRealSchema_ViaMirror is
+// UBI-178 piece 4's own real, end-to-end gap: fakeprovider (this
+// repo's own tfplugin fixture) never served a real DataSourceSchemas
+// entry until this test's own fixture was added, so
+// provider.Schemas.DataSources was always empty through the real `ubx
+// sdk gen` CLI path -- writeGeneratedSDK's own IsDataSource=true
+// branch, ir.FromSchema against a real data-source schema, and every
+// per-language template's own DataSourceBinding rendering were only
+// ever exercised by hermetic, hand-built ir.ResourceType fixtures
+// (sdk/codegen/templates/*_test.go) or a hand-written stand-in runtime
+// (consumer_test.go's own ubxFixtureSource) -- never the real,
+// separate ubx-sdk-{go,ts,python} repos' own actual, shipped code. That
+// gap is exactly why the ResourceBinding/DataSourceBinding template
+// swap shipped silently through go build/deno check/ast.parse on
+// generated output: none of those checks ever called the generated
+// code, and nothing ever generated a real data source to check in the
+// first place.
+//
+// "fake_widget" deliberately names BOTH the resource and the data
+// source (fakeprovider's own real schema -- see its own
+// DataSourceSchemas doc comment) -- proving the "data" namespace
+// segment ir.ServiceAndLocalNameForType/each template's own pkgKey
+// keeps a same-named pair from colliding at the same generated path,
+// not just that a lone, uniquely-named data source generates
+// something.
+//
+// Runs all three languages, since the historical swap affected all
+// three templates. Go and TypeScript additionally get a real compile/
+// typecheck against their own real, separate runtime -- the git
+// submodule at sdk/go, sdk/ts, not a hermetic stand-in -- confirming
+// the generated code is not just textually plausible but genuinely
+// buildable against what a real consumer's own `go build`/`deno check`
+// resolves. Python's own real weaker guarantee (data() performs no
+// isinstance check, STATE.md's own UBI-186 follow-up finding) is
+// exercised the same honest way: a real import, not a stronger
+// assertion this language's own runtime doesn't actually make.
+func TestSDKGen_GeneratesDataSourceBindingsFromRealSchema_ViaMirror(t *testing.T) {
+	requirePython3(t)
+	requireDenoCLI(t)
+
+	dir := t.TempDir()
+	mirrorDir := t.TempDir()
+	outDir := filepath.Join(dir, "generated")
+
+	writeMirrorProvider(t, mirrorDir, "fake", "widget", "0.1.0")
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `
+[thirdparty_providers]
+"fake/widget" = "0.1.0"
+`)
+
+	env := []string{
+		"FAKEPROVIDER_MODE=ok-v6",
+		"UBX_PROVIDER_MIRROR=" + mirrorDir,
+	}
+	genDir := filepath.Join(outDir, "fake-widget")
+
+	for _, lang := range []string{"go", "ts", "py"} {
+		if out, err := runUbx(t, env, "sdk", "gen", "--out", outDir, "--lang", lang); err != nil {
+			t.Fatalf("ubx sdk gen --lang %s: %v\noutput: %s", lang, err, out)
+		}
+	}
+
+	// Go: shortName/data/service/local.go for the data source,
+	// shortName/service/local.go for the resource -- same package name
+	// "widget," different directory, never merged (go.go's own pkgKey
+	// doc comment).
+	goDS, err := os.ReadFile(filepath.Join(genDir, "sdk", "go", "widget", "data", "widget", "widget.go"))
+	if err != nil {
+		t.Fatalf("reading go data source file: %v", err)
+	}
+	mustContainSDK(t, string(goDS), "var Widget = ubx.DataSourceBinding{")
+	mustNotContainSDK(t, string(goDS), "ubx.ResourceBinding")
+
+	goRes, err := os.ReadFile(filepath.Join(genDir, "sdk", "go", "widget", "widget", "widget.go"))
+	if err != nil {
+		t.Fatalf("reading go resource file: %v", err)
+	}
+	mustContainSDK(t, string(goRes), "var Widget = ubx.ResourceBinding{")
+	mustNotContainSDK(t, string(goRes), "ubx.DataSourceBinding")
+
+	tsDS, err := os.ReadFile(filepath.Join(genDir, "sdk", "typescript", "widget", "data", "widget", "widget.ts"))
+	if err != nil {
+		t.Fatalf("reading ts data source file: %v", err)
+	}
+	mustContainSDK(t, string(tsDS), "DataSourceBinding<WidgetConfig, WidgetAttrs>")
+	mustNotContainSDK(t, string(tsDS), ": ResourceBinding<")
+
+	tsRes, err := os.ReadFile(filepath.Join(genDir, "sdk", "typescript", "widget", "widget", "widget.ts"))
+	if err != nil {
+		t.Fatalf("reading ts resource file: %v", err)
+	}
+	mustContainSDK(t, string(tsRes), "ResourceBinding<WidgetConfig, WidgetAttrs>")
+	mustNotContainSDK(t, string(tsRes), "DataSourceBinding<")
+
+	pyDS, err := os.ReadFile(filepath.Join(genDir, "sdk", "python", "ubx", "widget", "data", "widget", "widget.py"))
+	if err != nil {
+		t.Fatalf("reading py data source file: %v", err)
+	}
+	mustContainSDK(t, string(pyDS), "Widget = ubx.DataSourceBinding(")
+	mustNotContainSDK(t, string(pyDS), "ubx.ResourceBinding(")
+
+	pyRes, err := os.ReadFile(filepath.Join(genDir, "sdk", "python", "ubx", "widget", "widget", "widget.py"))
+	if err != nil {
+		t.Fatalf("reading py resource file: %v", err)
+	}
+	mustContainSDK(t, string(pyRes), "Widget = ubx.ResourceBinding(")
+	mustNotContainSDK(t, string(pyRes), "ubx.DataSourceBinding(")
+
+	// The real proof: compiles/type-checks/imports against the real,
+	// separate runtime repos (git submodules), not a hermetic stand-in.
+	assertGoRepoCompiles(t, filepath.Join(genDir, "sdk", "go"))
+	assertTSRepoChecks(t, filepath.Join(genDir, "sdk", "typescript"))
+	assertPyRepoImports(t, filepath.Join(genDir, "sdk", "python"), "ubx.widget.data.widget.widget", "Widget", "WidgetConfig")
 }
 
 // requirePython3 skips a test when python3 isn't on PATH -- this
