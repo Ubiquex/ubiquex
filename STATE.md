@@ -2,6 +2,24 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
+## UBI-189 follow-up: the adjacent SDK-import doubling (same 272 Azure pages), fixed at the generator this time, 2026-08-26
+
+**What it was**: the intro-prose fix's own PR left one thing flagged, not fixed -- the same 272 Azure pages also carry the doubling in every printed `--only` value, `go.mod replace` comment, and go/ts/py import path (`azure_advisor_advisor` as an import segment, not just prose). Worse than the prose bug: copying the printed command or import off a page gives one that silently does not resolve, confirmed live against the real `ubx` CLI -- `ubx sdk gen --only azure_advisor_advisor` matches zero real providers (no error, just nothing generated), `--only azure_advisor` matches the real, declared one.
+
+**Real origin, found not assumed**: `gen_provider_docs.py`'s own `go_gen_cmd`/`go_pkg_import_path`/`ts_import_path`/`py_gen_cmd` render `schema_name` verbatim into every one of those strings -- never derived from the wire type at all, confirmed by reading every `schema_name` use site. `regen_pages.py` (the real Phase D regeneration driver, still the canonical entry point) passes `schema_name=family` straight from its own `families_file` input, and applies the established wire/localName/service doubling correction (`azure_corrected_wire`/`azure_corrected_local`/`azure_corrected_service`) to everything EXCEPT the family name itself -- the one gap. Verified directly against `.ubx/config`'s own real `[dynamic_providers.azure_*]` section names (603 of them) that the doubled family strings baked into the pages (`azure_advisor_advisor`, `azure_azure_kusto_kusto`, ...) were never real declared families at all, not a cosmetic variant of one.
+
+**Fixed at the source, per the founder's own explicit instruction (not just patched on the page)**: `regen_pages.py` now runs the identical fixed-point `azure_corrected_wire` collapse over each family name too, before it becomes `schema_name` -- so every FUTURE regeneration renders a command that actually resolves, not just this corpus. Verified the fix is a true no-op against all 603 real `azure_*` families (none of them change), so nothing that was already correct gets touched.
+
+**Then patched the 272 already-published pages directly** (2448 occurrences, literal string replace of the exact wrong family name -- same mechanism as the prose fix, same reason: a generator fix alone never reaches pages already generated).
+
+**Checked all six providers this time, not assumed Azure-only**: swept every published page's own `--only` value against the real, complete list of 1566 declared provider families across all six. Zero instances anywhere except Azure -- GCP's own doubling correction (`gcp_corrected_key`) never had this specific family-name-in-config pathology to begin with (its bug is API-name duplication WITHIN a wire, not a doubled TOML section name), and AWS/Kubernetes/GitHub/Datadog have no correction mechanism because they never needed one.
+
+**Verified**: `gofmt` clean on a random sample of patched Go blocks (a literal string shortening inside comments/import paths, syntactically inert either way, but checked rather than assumed). `mint validate`: success, zero warnings.
+
+**Committed and pushed, PR open, not merged (never self-merge)**: branch `docs/azure-family-import-doubling`, `ubiquex-docs#33`, verified live via `gh api` (`MERGEABLE`/`CLEAN`). Builds on `ubiquex-docs#32` (merged, `7943d75c`) -- branched fresh from that merged state, not off the stale pre-merge branch (the exact mistake that caused PR #31's own conflict, not repeated here).
+
+---
+
 ## UBI-189 follow-up: PR #31 conflict resolved (bad branch ancestry, not a real content conflict), then 276 doubled intro-prose self-references fixed, 2026-08-26
 
 **PR #31 conflict, root cause and fix**: the branch had been created off local `main` (stale, pre-PR #30) while `docs.json`'s own CONTENT was manually overwritten to match `origin/main` post-PR #30 -- the file content matched but the git PARENT didn't, so GitHub's merge compared two independently-computed diffs against the old base and found real, spurious structural conflicts. Not resolved by picking hunks: reset local `main` to fresh `origin/main`, recreated the branch for real (recovering the two generator scripts' content from the still-dangling old commit via `git show <sha>:<path>`, no retyping), re-ran both scripts against the correctly-ancestored `docs.json`. Identical placement counts both times, `mint validate` clean, `git merge-base --is-ancestor origin/main HEAD` true (genuine fast-forward). Force-pushed with `--force-with-lease` (own unmerged branch), PR #31 went CONFLICTING -> MERGEABLE/CLEAN, merged by the founder (`08102454`).
