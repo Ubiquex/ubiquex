@@ -65,8 +65,15 @@ picked this up yet.
 
 - Never trust a "published"/"live" claim for a shared runtime or per-provider
   bindings repo from this monorepo's own state alone — verify against the real,
-  separate repo/registry directly (CLAUDE.md rule 8; this bit the project twice,
-  UBI-131).
+  separate repo/registry directly: a real `git log`/`diff` against the actual
+  separate repo, or a real registry query (the Go module proxy, `jsr.io`,
+  `pypi.org`), never infer "published" from a commit to the monorepo's own
+  copy alone (CLAUDE.md rule 8). This bit the project twice: UBI-131's own Go
+  fix was reported "committed and pushed" across multiple session summaries
+  when only the monorepo's own copy had changed — the separate, real
+  `ubx-sdk-go` repo was never touched, still showing its original scaffold
+  commit a full day later, caught only when the founder pushed back and a
+  real `git log` was run against the actual separate repo.
 - Every `ubx-schema-*`/`ubx-sdk-*`/`ubx-provider-dynamic` PR is opened, never
   self-merged — the founder merges. Direct commits to `ubiquex`'s own `main` are
   the one allowed exception (CLAUDE.md's git rules).
