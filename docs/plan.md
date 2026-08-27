@@ -2,6 +2,30 @@
 
 ## Changelog
 
+- 2026-08-27 -- UBI-182 Stage E built: `[providers.<name>]`'s dual
+  meaning (pinned vs. live-fetch) collapses to pinned-only, now that
+  every real provider has a real published pin (Stage F, same day).
+  `pinnedDynamicProviderEnv` (`cli/dynamicprovider.go`) is the new,
+  narrower real path both real `[providers.<name>]` consumers use
+  (`newDynamicProviderLaunchFunc`'s own `providerPool.Get`, and
+  `loadDynamicProviderSchema`'s own `ubx resolve`/`ubx plan` path) --
+  source+version required, a live-fetch-shaped entry now fails loud
+  with a real, named error pointing at `[dynamic_providers.<name>]`
+  instead of silently falling through. `dynamicProviderEnv` itself
+  (the original, still-shared dual-shape function) is untouched --
+  `[dynamic_providers.<name>]` still needs its own real live-fetch-by-
+  default, pinned-if-declared shape for `ubx sdk gen`'s regeneration-
+  from-live-spec purpose, and this collapse was always scoped to
+  `[providers.<name>]` only. Filed and fixed along the way: Azure's own
+  real, published 604-member group's ~54-56s real load-to-first-RPC
+  time (`provider.Launch`'s 10s default handshake timeout was far too
+  tight) -- root-caused precisely (not the parse/translate/merge work,
+  ~11s and fast; the `GetProviderSchema` RPC round trip itself, ~41s,
+  open question) and filed as its own ticket, `UBI-195`, rather than
+  folded silently into this stage. `docs/architecture.md`'s own
+  `[providers.<name>]` example corrected (it showed the now-invalid
+  live-fetch shape). Full detail in STATE.md.
+
 - 2026-08-27 -- UBI-182 Stage F CLOSED, all six real providers
   (kubernetes, datadog, github, google, aws, azure) published and
   live-verified. Azure -- the last one, and the last real blocker named

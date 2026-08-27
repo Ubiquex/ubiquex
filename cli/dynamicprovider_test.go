@@ -263,3 +263,73 @@ func TestDynamicProviderNamespaces_PinnedMode_NoLongerRefused(t *testing.T) {
 		t.Fatalf("subprocess did not see a real UBX_SNAPSHOT_PATH with no .ubx/config: %v", out)
 	}
 }
+
+// TestPinnedDynamicProviderEnv_PinnedMode_Succeeds is
+// TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig's own
+// real sibling for pinnedDynamicProviderEnv -- [providers.<name>]'s own,
+// now-sole real shape, post-collapse (UBI-182 Stage E). Proves a real
+// pinned entry still resolves correctly through the new, narrower
+// function, against the identical real provider.AcquireSchema
+// UBX_SCHEMA_MIRROR short-circuit, no network needed.
+func TestPinnedDynamicProviderEnv_PinnedMode_Succeeds(t *testing.T) {
+	setUpPinnedSchemaMirror(t)
+
+	env, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+		"source":  "ubiquex/widget",
+		"version": "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("pinnedDynamicProviderEnv: %v", err)
+	}
+	var gotName, gotSnapshotPath string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "UBX_DYNAMIC_PROVIDER_NAME="); ok {
+			gotName = v
+		}
+		if v, ok := strings.CutPrefix(kv, "UBX_SNAPSHOT_PATH="); ok {
+			gotSnapshotPath = v
+		}
+	}
+	if gotName != "widget" {
+		t.Errorf("UBX_DYNAMIC_PROVIDER_NAME = %q, want widget", gotName)
+	}
+	if gotSnapshotPath == "" {
+		t.Fatal("UBX_SNAPSHOT_PATH not set")
+	}
+}
+
+// TestPinnedDynamicProviderEnv_LiveShapedParams_FailsLoud is UBI-182
+// Stage E's own real, direct proof: a [providers.<name>] entry shaped
+// like a live-fetch [dynamic_providers.<name>] one (schema_source/
+// schema_url, no source/version) used to silently fall through to a
+// real live fetch under the OLD dual-meaning dynamicProviderEnv. It must
+// now fail loud, immediately, with a real, named error pointing at
+// [dynamic_providers.<name>] as the correct table -- never attempt
+// writeDynamicProviderConfig or any live fetch at all.
+func TestPinnedDynamicProviderEnv_LiveShapedParams_FailsLoud(t *testing.T) {
+	_, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+		"schema_source": "openapi",
+		"schema_url":    "https://example.invalid/spec.json",
+	})
+	if err == nil {
+		t.Fatal("expected a real error for a live-shaped [providers.<name>] entry -- the dual meaning is supposed to be gone")
+	}
+	if !strings.Contains(err.Error(), "must be pinned") || !strings.Contains(err.Error(), "dynamic_providers") {
+		t.Fatalf("error %v doesn't explain the real collapse (must name both the pinned requirement and dynamic_providers as the live-fetch alternative)", err)
+	}
+}
+
+// TestPinnedDynamicProviderEnv_MissingVersion_Errors proves
+// pinnedSchemaFields' own existing "source without version" error still
+// propagates correctly through the new, narrower function.
+func TestPinnedDynamicProviderEnv_MissingVersion_Errors(t *testing.T) {
+	_, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+		"source": "ubiquex/widget",
+	})
+	if err == nil {
+		t.Fatal("expected an error for source without version")
+	}
+	if !strings.Contains(err.Error(), "version") {
+		t.Fatalf("error %v doesn't mention the missing version", err)
+	}
+}

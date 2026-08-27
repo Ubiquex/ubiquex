@@ -2992,6 +2992,40 @@ itself remains ambient-env-var-only (matching `newDynamicProviderLaunchFunc`'s
 own identical, already-documented scope boundary) — no new CLI flag was
 added this checkpoint either.
 
+**Amendment (2026-08-27, UBI-182 Stage E): `[providers.<name>]`'s dual
+meaning collapses to pinned-only.** The live-fetch shape the example
+above showed (`schema_source`/`schema_url`/`base_url`/`auth`) is no
+longer valid under `[providers.<name>]` at all — every real provider
+this org tracks (kubernetes, datadog, github, google, aws, azure) now
+has a real, published `ubx-schema-<provider>` snapshot and a real,
+live-verified pin, so nothing depends on the fallback the dual meaning
+existed to cover during the rollout. `[providers.<name>]` is now always
+the pinned shape, `source` + `version` both required:
+
+```toml
+[providers.aws]
+source  = "ubiquex/aws"
+version = "1.0.0"
+
+[thirdparty_providers]
+"hashicorp/aws" = "6.60.0"
+```
+
+Live-fetch config (`schema_source`/`schema_url`/...) belongs under
+`sdk/providers/.ubx/config`'s own `[dynamic_providers.<name>]` table
+now, exclusively — that table's own real live-fetch-by-default (pinned-
+if-declared) dual shape is untouched, since `ubx sdk gen`'s own real
+regeneration-from-live-spec purpose still needs it. A `[providers.<name>]`
+entry written in the old live-fetch shape (missing `version`, or
+carrying `schema_source`/`schema_url` instead of `source`/`version`)
+now fails loud, immediately, with a real, named error pointing at
+`[dynamic_providers.<name>]` as the correct table — `pinnedDynamicProviderEnv`
+(`cli/dynamicprovider.go`), reached from both real `[providers.<name>]`
+consumers (`newDynamicProviderLaunchFunc`'s own `providerPool.Get` path,
+and `loadDynamicProviderSchema`'s own `ubx resolve`/`ubx plan` path) —
+never `dynamicProviderEnv`'s own dual-shape logic, which stays exactly
+as it was, still serving `[dynamic_providers.<name>]` alone.
+
 Companion real work, a separate repo (`ubx-provider-dynamic`, branch
 `onboarding-pipeline-kubernetes-checkpoint`, PR #5, still open/draft):
 `schema_source = "cloudformation"`, AWS's real, published CloudFormation
