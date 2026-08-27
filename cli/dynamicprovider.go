@@ -26,12 +26,34 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/ubiquex/ubiquex/core/executor"
 	"github.com/ubiquex/ubiquex/provider"
 )
+
+// dynamicProviderHandshakeTimeout overrides provider.Launch's own 10s
+// default specifically for ubx-provider-dynamic -- that default is
+// calibrated for ordinary, hand-written Terraform provider binaries
+// (which handshake almost instantly), not for a group container that
+// loads, parses, and translates every real member's own schema from
+// disk before its first RPC response. Confirmed live, not guessed:
+// Azure's own real, published 604-member group (the largest real group
+// any provider in this org has) took ~54-56s wall time to reach its
+// handshake line, both on a cold cache (download + extract + merge) AND
+// on a cache hit with network poisoned (merge alone) -- the real cost
+// here is dominated by parsing and translating 604 real, individually
+// bundled (UBI-193's own external-$ref work necessarily made each one
+// larger) OpenAPI documents, not network I/O, confirmed by the cache-hit
+// case costing almost exactly the same wall time as the cold-cache one.
+// 120s leaves real, honest margin over the measured worst case, not a
+// number picked to just barely clear it -- a real, separate, not-yet-
+// investigated performance question (85MB/604 members taking almost a
+// minute to merge even from local disk) is named here, not silently
+// hidden behind a timeout bump.
+const dynamicProviderHandshakeTimeout = 120 * time.Second
 
 // sortedDynamicProviderNames mirrors sortedProviderSources (providerpool.go)
 // for Config.DynamicProviders -- the same determinism discipline every
@@ -214,6 +236,7 @@ func dynamicProviderSchema(ctx context.Context, binPath, name string, params map
 	client, err := provider.Launch(ctx, binPath,
 		provider.WithDir(workDir),
 		provider.WithEnv(env...),
+		provider.WithHandshakeTimeout(dynamicProviderHandshakeTimeout),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("launch ubx-provider-dynamic for %q: %w", name, err)
@@ -423,6 +446,7 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		client, err := provider.Launch(ctx, binPath,
 			provider.WithDir(workDir),
 			provider.WithEnv(env...),
+			provider.WithHandshakeTimeout(dynamicProviderHandshakeTimeout),
 		)
 		os.RemoveAll(workDir) // the launched process has already read the config by the time Launch returns
 		if err != nil {
