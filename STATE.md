@@ -61,8 +61,13 @@ was originally scoped:
    pre-regeneration commit after a "successful" run). Sidestepped this
    pass via an explicit MINOR version bump per repo (matching each
    repo's own stated new-files-added policy) rather than leaving it to
-   the buggy branch. **Real fix to `publish.yml` itself not made** —
-   named, not blocking, real follow-up work for a future session.
+   the buggy branch. **Real fix now landed as a PR on all six** (adds a
+   `git diff --quiet` check against the tagged commit's own `sdk/`
+   trees — the backfill branch only fires when content genuinely
+   hasn't changed, otherwise falls through to the existing routine bump
+   logic), tested directly against a constructed git repo for both
+   cases, none merged, none self-merged: kubernetes#17, github#16,
+   datadog#15, azure#19, google#22, aws#20.
 
 AWS's own hash-watch.yml gap (never referenced `aws_data_all`, only
 `--only aws`) was fixed and merged first (`ubx-sdk-aws#18`) — confirmed
@@ -84,22 +89,53 @@ the correlation holds, confirmed, not regeneration lag:**
 
 Essentially unchanged before vs. after a real, full regeneration —
 regenerating the SDK packages doesn't touch the docs corpus's own
-data-source page titles at all, so "regeneration lag" is now ruled out.
-The real cause is a naming-derivation mismatch specific to the openapi
-path: sampled directly (azure), the docs corpus's own page titles use a
-different derivation than the real generator's actual response-schema
-component names — e.g. docs page `azure_analysisservices_analysis_services_server`
-vs. the real wire type `azure_analysisservices_analysis_services_servers`;
-docs page `azure_advisor_config_data` vs. real
-`azure_advisor_configuration_list_result`. GCP/AWS (discoverydoc/CFN+Smithy)
-don't show this pattern — their docs-generation and real-codegen naming
-already agree. This is the docs generator's OWN separate wire-type-naming
-logic for openapi sources diverging from `ubx-provider-dynamic`'s real
-naming synthesis, not a `ubx-provider-dynamic` bug (which the high
-gcp/aws match rates rule out) and not staleness (which real regeneration
-just ruled out). Needs its own investigation into
-`ubiquex-docs/scripts/resource-reference-gen`'s own openapi-path naming
-logic — not started, not filed as a ticket yet.
+data-source page titles at all, so "regeneration lag" is ruled out.
+
+**Root cause confirmed and posted to UBI-197 (comment, not the
+description — preserves the original investigation)**: the docs corpus
+was built from a dirty, uncommitted, never-merged local checkout of
+`ubx-provider-dynamic`. That checkout was sitting on branch
+`typename/dlp-triple-repeat-fix` with real WIP (an untracked
+`internal/dsfilter/` package, modified `resourcemap/datasource.go` and
+`discoverydoc/datasource.go`) at the exact moment the docs corpus's
+data-source pages were generated (2026-08-26 00:07-00:49) — confirmed
+via `git log -S` on the WIP's own key function returning zero commits
+anywhere, and via file mtimes bracketing the docs-generation timestamp.
+The WIP includes real collection-envelope unwrapping wired into the
+openapi path only (`ConfigurationListResult` -> `ConfigData`,
+`AnalysisServicesServers` -> `AnalysisServicesServer`) — gcp/aws don't
+go through that code path, which is exactly why they're unaffected.
+`ubx sdk gen` builds `ubx-provider-dynamic` from whatever's in the
+sibling checkout, dirty or not, no pinning, no provenance record
+(`cli/dynamicprovider.go`'s own doc comment already admits this gap).
+Every regeneration since (including this session's) ran against a
+clean checkout, so the corpus and fresh reality diverged the moment the
+WIP was written, not gradually. Quantitative confirmation (azure): 1,310
+of 1,551 real-wires-not-in-docs (84.5%) match the wrapper/list-result/
+operation-status shape the unwrap logic would have renamed.
+
+Two-implementations framing: confirmed for GCP/Azure **resource**-side
+naming (`typename.Combine` in `ubx-provider-dynamic` has two more
+independent, mutually-inconsistent reimplementations on the docs side —
+`build_regen_schema.py`'s `gcp_corrected_key`/`azure_corrected_wire` and
+a second, differently-behaving copy of `gcp_corrected_key` in
+`gap_fill_apply.py` — now almost entirely dead code against fresh
+dumps, 0/1095 azure wires altered, 1/1542 gcp). Refuted for openapi
+**data sources** specifically — `gen_all_data_source_pages.py` reads the
+real `WireType` straight from freshly generated Go source plus a real
+`--dump-ir` dump, no independent derivation at all; one implementation,
+built from an inconsistent revision.
+
+Fix direction reported, not built (explicitly asked for): pin/validate
+`ubx-provider-dynamic` build provenance in `ubx sdk gen` (refuse or warn
+on a dirty sibling checkout, stamp the resolved commit into `--dump-ir`
+output) — the real fix for this specific divergence. Separately,
+`--dump-ir`'s own `schema.json` could carry per-language identifiers
+directly so the docs generator stops needing a full SDK generation just
+to recover them. Separately again (resource-side, different bug): retire
+the three redundant docs-side doubling correctors, paired with a
+redirect pass for the already-published corpus's mix of corrected/
+uncorrected paths. None of this built yet — awaiting a scoping decision.
 
 ---
 
