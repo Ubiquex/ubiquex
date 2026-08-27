@@ -44,6 +44,38 @@ var pinnedDatadogParams = map[string]any{
 	"version": "1.0.0",
 }
 
+// wantDatadogResourceTypes/wantDatadogDataSourceTypes are real,
+// hand-picked, stable type names -- core Datadog concepts unlikely to
+// disappear between this checkpoint and whenever this test next runs.
+// Retrofitting the SAME real gap Kubernetes' own sibling test just
+// closed: this test's own earlier version checked counts only (176
+// resources, 528 data sources), which would not have caught a real
+// wire-identity leak (v2's own resources/data sources wrongly carrying
+// a "datadog_v2_" prefix instead of the intended, shared "datadog_"
+// one) any more than Kubernetes' own count-only check caught its real
+// wrong-prefix bug.
+var wantDatadogResourceTypes = []string{
+	"datadog_monitor",
+	"datadog_dashboard",
+	"datadog_dashboard_list",
+}
+
+var wantDatadogDataSourceTypes = []string{
+	"datadog_monitor",
+	"datadog_user_response",
+	"datadog_users_response",
+}
+
+// datadogV2PrefixException is the one real, already-known, legitimate
+// name that carries the "datadog_v2_" prefix on purpose: v2's own Phase
+// 2 same-provider tie-break bumps a genuinely different v2 endpoint
+// that shares event_response's own response schema to this
+// self-disambiguated name (see datadog_v2's own doc comment in
+// sdk/providers/.ubx/config) -- real, neither excluded nor a bug,
+// unlike every other real "datadog_v2_"-prefixed name, which would mean
+// wire_name's own identity-sharing mechanism silently stopped working.
+const datadogV2PrefixException = "datadog_v2_event_response"
+
 // TestConformance_DynamicProvider_Datadog_Pinned_PopulatesCache is phase 1
 // of the real, two-process proof: deletes any existing cache entry so
 // this run proves a REAL first-time fetch from the real, live GitHub
@@ -69,6 +101,8 @@ func TestConformance_DynamicProvider_Datadog_Pinned_PopulatesCache(t *testing.T)
 		t.Fatal("pinned resolution returned zero data source types -- the merge should have included datadog_ds/datadog_v2_ds too, from the SAME single pin")
 	}
 	t.Logf("real, pinned resolution from ONE entry returned %d resource types AND %d data source types together", len(schemas.Resources), len(schemas.DataSources))
+	requireDynamicProviderTypeNames(t, "resource", schemas.Resources, wantDatadogResourceTypes, "datadog_v2_", datadogV2PrefixException)
+	requireDynamicProviderTypeNames(t, "data source", schemas.DataSources, wantDatadogDataSourceTypes, "datadog_v2_", datadogV2PrefixException)
 
 	if _, ok := schemas.Resources["datadog_application_key_response"]; ok {
 		attrs := schemas.Resources["datadog_application_key_response"].Block.Attributes
@@ -115,4 +149,6 @@ func TestConformance_DynamicProvider_Datadog_Pinned_ZeroNetworkOnCacheHit(t *tes
 		t.Fatal("pinned resolution with network poisoned returned zero data source types")
 	}
 	t.Logf("real, pinned resolution from ONE entry succeeded with ALL network poisoned: %d resource types AND %d data source types together, served entirely from the real, verified local cache", len(schemas.Resources), len(schemas.DataSources))
+	requireDynamicProviderTypeNames(t, "resource", schemas.Resources, wantDatadogResourceTypes, "datadog_v2_", datadogV2PrefixException)
+	requireDynamicProviderTypeNames(t, "data source", schemas.DataSources, wantDatadogDataSourceTypes, "datadog_v2_", datadogV2PrefixException)
 }

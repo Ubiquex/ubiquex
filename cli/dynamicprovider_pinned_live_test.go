@@ -12,13 +12,27 @@
 // matching every other real-network-touching test in this codebase
 // (conformance.RequireLive) -- go test ./... stays hermetic and
 // credential-free everywhere else.
+//
+// Checks actual type names, not just counts -- the real, live gap this
+// test's own earlier version had: v2.0.0's published release served
+// 116 data sources, the CORRECT count, every one of them wrong-prefixed
+// (kubernetes_ds_ instead of kubernetes_). A count-only check passed
+// against that release for real, live, undetected -- requireDynamicProviderTypeNames
+// (below) checks a real, hand-picked set of stable type names are
+// actually present under their correct names, AND that no returned name
+// anywhere carries the wrong prefix, so this exact bug shape cannot
+// slip through silently again.
 package cli
 
 import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
+
+	"github.com/ubiquex/ubiquex/provider"
 )
 
 // requireDynamicProviderPinLive is requireAttributionLive's own real
@@ -69,6 +83,73 @@ var pinnedKubernetesParams = map[string]any{
 	"version": "3.0.0",
 }
 
+// wantKubernetesResourceTypes/wantKubernetesDataSourceTypes are real,
+// hand-picked, stable type names -- core Kubernetes concepts that have
+// existed for years and are in no real danger of disappearing between
+// this checkpoint and whenever this test next runs. The real, live bug
+// this check exists to catch (v2.0.0's own published release silently
+// serving kubernetes_ds_-prefixed data source names instead of the
+// intended, shared kubernetes_ prefix) would NOT have been caught by
+// counting alone -- the wrong-prefixed release still returned the
+// correct COUNT, 116, every time. requireDynamicProviderTypeNames below
+// checks both that these specific real names are present AND that no
+// returned name anywhere carries the wrong prefix -- the actual,
+// structural shape of the bug, not just its cardinality.
+var wantKubernetesResourceTypes = []string{
+	"kubernetes_core_pod",
+	"kubernetes_core_service",
+	"kubernetes_core_namespace",
+	"kubernetes_core_config_map",
+	"kubernetes_apps_deployment",
+}
+
+var wantKubernetesDataSourceTypes = []string{
+	"kubernetes_core_pod",
+	"kubernetes_core_pod_list",
+	"kubernetes_core_namespace",
+	"kubernetes_core_namespace_list",
+}
+
+// requireDynamicProviderTypeNames is the real, shared check both
+// Kubernetes' and Datadog's own pinned live tests use: every name in
+// want must actually be a key of got, and (when forbiddenPrefix is
+// non-empty) no key of got may carry that prefix at all, except any
+// real, already-known, legitimate name listed in allowedExceptions
+// (Datadog's own real self-disambiguated datadog_v2_event_response,
+// for instance -- a real name that legitimately carries what would
+// otherwise be treated as a wrong-identity-leak prefix). kind is used
+// only for the failure message.
+func requireDynamicProviderTypeNames(t *testing.T, kind string, got map[string]*provider.Schema, want []string, forbiddenPrefix string, allowedExceptions ...string) {
+	t.Helper()
+	var missing []string
+	for _, name := range want {
+		if _, ok := got[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("expected %s type(s) not found in the real, pinned resolution: %v", kind, missing)
+	}
+	if forbiddenPrefix == "" {
+		return
+	}
+	allowed := make(map[string]bool, len(allowedExceptions))
+	for _, n := range allowedExceptions {
+		allowed[n] = true
+	}
+	var wrong []string
+	for name := range got {
+		if strings.HasPrefix(name, forbiddenPrefix) && !allowed[name] {
+			wrong = append(wrong, name)
+		}
+	}
+	if len(wrong) > 0 {
+		sort.Strings(wrong)
+		t.Errorf("%d %s type name(s) carry the wrong %q prefix -- exactly the real, live class of bug this check exists to catch (v2.0.0's own release served this shape silently): %v", len(wrong), kind, forbiddenPrefix, wrong)
+	}
+}
+
 // TestConformance_DynamicProvider_Kubernetes_Pinned_PopulatesCache is
 // phase 1 of the real, two-process proof (see phase 2's own doc comment
 // for why this can't be one test function): deletes any existing cache
@@ -96,6 +177,8 @@ func TestConformance_DynamicProvider_Kubernetes_Pinned_PopulatesCache(t *testing
 		t.Fatal("pinned resolution returned zero data source types -- the merge should have included kubernetes_ds too, from the SAME single pin")
 	}
 	t.Logf("real, pinned resolution from ONE entry returned %d resource types AND %d data source types together", len(schemas.Resources), len(schemas.DataSources))
+	requireDynamicProviderTypeNames(t, "resource", schemas.Resources, wantKubernetesResourceTypes, "kubernetes_ds_")
+	requireDynamicProviderTypeNames(t, "data source", schemas.DataSources, wantKubernetesDataSourceTypes, "kubernetes_ds_")
 
 	manifestPath := filepath.Join(cacheDir, "manifest.json")
 	if _, err := os.Stat(manifestPath); err != nil {
@@ -141,4 +224,6 @@ func TestConformance_DynamicProvider_Kubernetes_Pinned_ZeroNetworkOnCacheHit(t *
 		t.Fatal("pinned resolution with network poisoned returned zero data source types")
 	}
 	t.Logf("real, pinned resolution from ONE entry succeeded with ALL network poisoned: %d resource types AND %d data source types together, served entirely from the real, verified local cache", len(schemas.Resources), len(schemas.DataSources))
+	requireDynamicProviderTypeNames(t, "resource", schemas.Resources, wantKubernetesResourceTypes, "kubernetes_ds_")
+	requireDynamicProviderTypeNames(t, "data source", schemas.DataSources, wantKubernetesDataSourceTypes, "kubernetes_ds_")
 }
