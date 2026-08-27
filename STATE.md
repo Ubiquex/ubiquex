@@ -8,9 +8,8 @@
 ## In flight
 
 **UBI-196: docs corpus bindings_status recompute, done for resources and the
-structural half of data sources; per-resource data-source accuracy and full
-regeneration+republish of the six SDK repos are real, separate, unstarted
-work.** See the ticket for the full report — summary:
+structural half of data sources.** See the ticket for the full report —
+summary:
 
 - 4,098 resource pages flipped `local_only -> published` (verified: real `go
   build` against real local checkouts, `ast.parse`, a real-struct-field
@@ -22,9 +21,8 @@ work.** See the ticket for the full report — summary:
   published ground truth — no code change needed or made.
 - 7,310 data-source pages flipped `published -> local_only` (structural fix:
   `DataSourceBinding` doesn't exist in any of the six published packages yet,
-  confirmed live). Does NOT fix per-page wire/binding accuracy against a
-  fresh local generation — spot-checked at 52% (kubernetes) / 85% (github) /
-  4% (datadog) match rates, real and unresolved.
+  confirmed live). Does NOT fix per-page wire/binding accuracy — filed
+  separately as UBI-197 (see below).
 - 5 GitHub resources held back (`github_repository_ruleset`,
   `github_network_configuration`, `github_get_budget`,
   `github_actions_hosted_runner`, `github_custom_property`) — a real "Org"
@@ -32,21 +30,48 @@ work.** See the ticket for the full report — summary:
   struct. Genuine content drift, not a naming issue this pass could safely
   correct.
 
-All three landed as direct commits to `ubiquex-docs` `main` (that repo's own
+The real group-shaped regeneration mechanism is now known (found in each SDK
+repo's own `hash-watch.yml`, not reinvented) — see Cross-repo state below.
+Full regeneration+republish of the six SDK repos remains real, separate,
+unstarted work.
+
+**UBI-197 (new): the docs corpus's data-source pages disagree with the real,
+current schema, and the size varies enormously by provider** — real match
+rates against a fresh `ubx sdk gen` dump, verified live for all six: gcp
+99.8%, aws 99.1%, github 85%, kubernetes 52%, datadog 43%, azure 36%. In
+every provider the corpus is more INCOMPLETE (real data sources with no docs
+page) than WRONG (docs pages matching nothing real) — for Kubernetes
+specifically, 34 of its 36 "wrong" pages are actually renamed (a real
+`_list`-suffixed entry exists), not removed. Report only, no fix proposed —
+see the ticket.
+
+Corrected a real measurement error from this session's own earlier report:
+Datadog's data-source match rate was first reported as 4%, measured against
+`--only datadog` (the bare name), which silently covers only one of
+`datadog_all`'s real declared entries. The real rate against the full group
+is 43%.
+
+All three UBI-196 landed as direct commits to `ubiquex-docs` `main` (that repo's own
 confirmed direct-push convention), each independently verified via `gh api`
 after pushing, not trusted from local git alone.
 
 **Not done, real and separate**: full regeneration and republish of the six
 `ubx-sdk-<provider>` repos so their real packages carry `DataSourceBinding`
-and every data-source page can go `local_only -> published` for real. See the
-ticket for the scope report. Kubernetes/GitHub/Datadog are single-entry and
-fast to regenerate (`ubx sdk gen --only <name> --lang <lang>`, seconds each,
-confirmed live). Azure/Google/AWS are GROUP-shaped — a bare `--only
-<provider>` only covers ONE of their many declared entries (confirmed live:
-`--only azure` produced 63 resources against a real 604-member group) — full
-regeneration needs either enumerating every group member in `--only` or
-whatever mechanism originally built these six repos' own initial publish,
-which this session did not need to identify and has not verified.
+and every data-source page can go `local_only -> published` for real. The
+real mechanism is now known — found in each SDK repo's own `hash-watch.yml`,
+not reinvented: `--only <name>` for single-entry providers (kubernetes,
+github), `--only <group>_all` for group-shaped ones (`azure_all`/
+`google_all`/`datadog_all`) — a bare `--only azure` only covers one of many
+declared entries (confirmed live: 63 resources against the real 604-member
+group), `--only azure_all` correctly produces all 3,224 real types (~5 min).
+AWS is a real, separate, deeper gap: its own `hash-watch.yml` regenerates
+only `--only aws` (the CFN resource half) and never references
+`aws_data_all` (429 real Smithy data-source members) at all — the published
+`ubx-sdk-aws` has never had its data-source half in any automated
+regeneration cycle, confirmed by direct reading of the workflow file, not
+just "hasn't run since DataSourceBinding landed." `--only aws_data_all`
+works fine when run by hand (confirmed live, 6,599 types, ~4 min) — the gap
+is that CI never does. See UBI-196 for the full report.
 
 ## Blocked
 
