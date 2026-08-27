@@ -60,15 +60,21 @@ func kubernetesSchemaCacheDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(home, ".ubx", "schemas", "ubiquex", "kubernetes", "3.0.0")
+	return filepath.Join(home, ".ubx", "schemas", "ubiquex", "kubernetes", "3.0.1")
 }
 
 // pinnedKubernetesParams is the real, ONLY [providers.kubernetes] entry
 // a real stack needs -- source = "ubiquex/kubernetes" resolves to
 // github.com/Ubiquex/ubx-schema-kubernetes (provider/schemasource.go's
-// own schemaRepoPrefix). version 3.0.0 is UBI-182's own real
-// resource/data-source collapse landing here twice over: the driving
-// config that generates this group collapses from two
+// own schemaRepoPrefix). version 3.0.1 is UBI-194's own real
+// MinBinaryVersion-only regeneration (3.0.0 -> 3.0.1, no member content
+// changed -- see internal/snapshot.AssembleGroup's own forced
+// Patch-bump-on-MinBinaryVersion-transition doc comment,
+// ubx-provider-dynamic), the first real Kubernetes release to carry a
+// real min_binary_version so the bootstrap fallback (schema_format 3 ->
+// "1.0.0") no longer fires for it. Before that: version 3.0.0 was UBI-182's
+// own real resource/data-source collapse landing here twice over: the
+// driving config that generates this group collapses from two
 // [dynamic_providers.*] tables to one (ubx-schema-kubernetes#5's own
 // doc comment has the full account), AND it's the first real release to
 // actually carry the wire_name fix that corrected kubernetes_ds's own
@@ -80,7 +86,7 @@ func kubernetesSchemaCacheDir(t *testing.T) string {
 // resolves and merges BOTH real members from this one pin.
 var pinnedKubernetesParams = map[string]any{
 	"source":  "ubiquex/kubernetes",
-	"version": "3.0.0",
+	"version": "3.0.1",
 }
 
 // wantKubernetesResourceTypes/wantKubernetesDataSourceTypes are real,
