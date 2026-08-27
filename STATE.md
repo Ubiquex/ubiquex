@@ -161,16 +161,45 @@ freshly cloned, unmodified checkout, not the dirty WIP branch that
 produced the original corpus), but there is no real record confirming
 it, only the absence of a known reason to doubt it.
 
-Not yet built, named as explicit follow-up: `PROVENANCE.json` landing in
-each of the six published `ubx-sdk-<provider>` repos requires their own
-`hash-watch.yml` rsync steps to pick it up (currently only the three
-language subdirectories are copied). Separately, `--dump-ir`'s own
+**Propagation into the six SDK repos: done.** Each repo's `hash-watch.yml`
+now passes `--require-clean-provenance` on every `sdk gen` call and
+commits the real `PROVENANCE.json` at repo root, sibling to `VERSION` —
+CI has no development loop to protect, so refusing outright (not
+warning) is the right posture there, matching the same reasoning
+`--require-clean-provenance` itself was built for. Six real PRs open,
+none merged, never self-merged: kubernetes#18, github#17, datadog#16,
+azure#20, google#23, aws#21.
+
+**Docs pipeline: done.** `regen_pages.py` (resources) and
+`gen_all_data_source_pages.py` (data sources) both now read the real
+`PROVENANCE.json` `ubx sdk gen` already writes into the exact
+directories they already consume — no new interchange format. Both draw
+from TWO separate real `ubx sdk gen` invocations each (`--dump-ir` for
+`schema.json`, `--lang go --out` for per-language identifiers) — a new
+shared `provenance_check.py` refuses unless every real record found is
+present, clean, pushed, AND the whole batch agrees on one commit, since
+two individually-clean halves from different commits are not one
+coherent corpus — the same real failure shape (two artifacts of one
+corpus quietly drifting apart) this whole investigation started from.
+Refuses by default (a real, published artifact, not interactive local
+iteration); `--allow-dirty-provenance` is the named escape hatch for a
+deliberate local experiment. On success, writes a real, committed
+`resource-reference/<provider>/PROVENANCE.json`. Real, hermetic
+verification (`verify_provenance_check.py`, constructed fixtures, every
+branch) plus path-construction verified against a real, freshly
+generated kubernetes dump. Landed directly on `ubiquex-docs` main
+(`f4b72716d`, that repo's own confirmed direct-push convention),
+verified via `gh api`.
+
+Not yet built, named as explicit follow-up: `--dump-ir`'s own
 `schema.json` could carry per-language identifiers directly so the docs
-generator stops needing a full SDK generation just to recover them.
-Separately again (resource-side, different bug, not provenance-related):
-retire the three redundant docs-side doubling correctors, paired with a
-redirect pass for the already-published corpus's mix of corrected/
-uncorrected paths.
+generator stops needing a full separate SDK generation just to recover
+them (would reduce each batch to one real invocation instead of two,
+closing the disagreeing-commit failure mode at the root instead of just
+detecting it). Separately again (resource-side, different bug, not
+provenance-related): retire the three redundant docs-side doubling
+correctors, paired with a redirect pass for the already-published
+corpus's mix of corrected/uncorrected paths.
 
 ---
 
