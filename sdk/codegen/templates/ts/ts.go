@@ -130,11 +130,16 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 }
 
 // packageJSON renders the repo-shaped tree's own manifest stub -- a real,
-// consumer-ready `npm install`able shape (were it ever published; it
-// isn't, matching @ubx/sdk's own "not yet published" posture, docs/sdk.md),
-// not consulted by anything this codebase's own hermetic evaluator or
-// `deno check` verification actually reads (Deno resolves "@ubx/sdk" via
-// its own import map, never package.json/node_modules resolution).
+// consumer-ready `npm install`able shape. UBI-196: @ubx/sdk is real,
+// published content on npm as of this fix (`1.0.1` -- the workflow
+// comments across all six ubx-sdk-<provider> repos calling it an
+// unpublished placeholder were stale and are what made a real registry
+// check necessary before trusting them). Still not consulted by anything
+// this codebase's own hermetic evaluator or `deno check` verification
+// actually reads (Deno resolves "@ubx/sdk" via deno.json's own import
+// map, a file this template never touches -- never package.json/
+// node_modules resolution) -- this pin exists for a real `npm install`
+// consumer, not for this repo's own checks.
 func packageJSON(shortName, source, version string) string {
 	return fmt.Sprintf(`{
   "name": "@ubx/sdk-%s",
@@ -142,7 +147,7 @@ func packageJSON(shortName, source, version string) string {
   "description": "Generated TypeScript bindings for %s@%s (ubx sdk gen). DO NOT EDIT.",
   "type": "module",
   "dependencies": {
-    "@ubx/sdk": "0.0.0"
+    "@ubx/sdk": "^1.0.0"
   }
 }
 `, shortName, source, version)

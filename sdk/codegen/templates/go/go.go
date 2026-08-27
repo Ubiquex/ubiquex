@@ -116,7 +116,7 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 	})
 
 	files := map[string]string{
-		"sdk/go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/sdk/go\n\ngo %s\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", shortName, goDirective),
+		"sdk/go/go.mod": fmt.Sprintf("module github.com/ubiquex/ubx-sdk-%s/sdk/go\n\ngo %s\n\nrequire github.com/ubiquex/ubx-sdk-go v0.2.0\n", shortName, goDirective),
 	}
 	// UBI-106: every service package nests under shortName/ (e.g.
 	// aws/iam/, never iam/ directly under sdk/go/) -- a real repo-browsing

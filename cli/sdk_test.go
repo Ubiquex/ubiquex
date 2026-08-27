@@ -297,7 +297,7 @@ func TestSDKGen_GeneratesGoBindingsFromRealSchema_ViaMirror(t *testing.T) {
 		t.Fatalf("reading go.mod: %v", err)
 	}
 	mustContainSDK(t, string(goMod), "module github.com/ubiquex/ubx-sdk-widget/sdk/go")
-	mustContainSDK(t, string(goMod), "require github.com/ubiquex/ubx-sdk-go v0.0.0")
+	mustContainSDK(t, string(goMod), "require github.com/ubiquex/ubx-sdk-go v0.2.0")
 
 	docContent, err := os.ReadFile(filepath.Join(repoDir, "widget", "widget", "doc.go"))
 	if err != nil {

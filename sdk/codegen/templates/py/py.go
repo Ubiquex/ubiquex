@@ -272,7 +272,13 @@ func pyModuleIdent(name string) string {
 // cli/sdk_test.go's own assertPyFileImports already uses). `ubx_sdk`
 // pins to the real published PyPI package (UBI-107,
 // https://pypi.org/project/ubx-sdk/) -- caret-equivalent range, matching
-// @ubx/sdk's own `^0.1.0` JSR pin. The [build-system]/
+// @ubx/sdk's own `^1.0.0` npm pin (UBI-196: bumped from a `0.1.0` range
+// alongside ubx-sdk-go/@ubx/sdk's own DataSourceBinding release; a
+// stale upper bound here silently excludes any future runtime release
+// the same way the pre-fix `<0.2.0` bound excluded 0.2.0 itself,
+// confirmed live when this exact bound blocked ubx-sdk-kubernetes's own
+// regeneration from resolving DataSourceBinding at all). The
+// [build-system]/
 // [tool.setuptools.packages.find] tables are what make "ubx" resolve as
 // a real PEP 420 implicit namespace package rather than an ordinary one
 // on a real `pip install` -- `namespaces = true` is the load-bearing
@@ -283,7 +289,7 @@ func pyprojectTOML(shortName, source, version string) string {
 name = "ubx-sdk-%s"
 version = "0.0.0"
 description = "Generated Python bindings for %s@%s (ubx sdk gen). DO NOT EDIT."
-dependencies = ["ubx_sdk>=0.1.0,<0.2.0"]
+dependencies = ["ubx_sdk>=0.2.0,<0.3.0"]
 
 [build-system]
 requires = ["setuptools>=61"]

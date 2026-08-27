@@ -359,7 +359,7 @@ func TestGeneratedRepo_GroupsByServicePackage(t *testing.T) {
 	}
 
 	mustContain(t, files["sdk/go/go.mod"], "module github.com/ubiquex/ubx-sdk-aws/sdk/go")
-	mustContain(t, files["sdk/go/go.mod"], "require github.com/ubiquex/ubx-sdk-go v0.0.0")
+	mustContain(t, files["sdk/go/go.mod"], "require github.com/ubiquex/ubx-sdk-go v0.2.0")
 
 	mustContain(t, files["sdk/go/aws/ecr/doc.go"], "package ecr")
 	mustContain(t, files["sdk/go/aws/ecr/doc.go"], `Source: "hashicorp/aws", Version: "6.54.0"`)
