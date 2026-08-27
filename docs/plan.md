@@ -2,6 +2,38 @@
 
 ## Changelog
 
+- 2026-08-27 -- UBI-194 built: publish and acquire the
+  `ubx-provider-dynamic` binary itself. Every real `[providers.<name>]`
+  pin published so far resolved a real schema snapshot but had nothing
+  real to serve it with outside this project -- the only way to run
+  `ubx-provider-dynamic` at all was a local checkout
+  (`UBX_PROVIDER_DYNAMIC_REPO`). Version-resolution design reported and
+  confirmed twice before building: an explicit table keyed by
+  `schema_format` was proposed first and correctly rejected (AWS's own
+  pre-#24 and post-#24 snapshots both declare the identical
+  `schema_format`, so a table can't distinguish them either, and
+  bumping it leaves already-published snapshots stuck). Real design:
+  `Snapshot.MinBinaryVersion`, stamped by `AssembleGroup` at generation
+  time from the generating binary's own real, embedded version -- exact
+  by construction, no table to maintain, self-heals on every real
+  regeneration. `provider.AcquireDynamicProviderBinary` (`ubiquex`)
+  reuses `Acquire`/`AcquireSchema`'s own real mirror-then-cache-then-
+  verify discipline and shared helpers, as a real, separate function
+  (no OpenTofu registry entry, no per-provider namespace).
+  `provider.ResolveDynamicProviderBinaryVersion` reads the real,
+  stamped field, falling back to an explicit, LOGGED bootstrap table
+  keyed by `schema_format` only for the six real snapshots published
+  before the field existed -- every fallback logs the real provider and
+  version so it stays visible, never a silent, permanent second
+  resolution mode. `UBX_PROVIDER_DYNAMIC_REPO` removed from the normal
+  `[providers.<name>]` resolution path, kept as an explicit development
+  override. `[dynamic_providers.<name>]`'s own live-fetch path (`ubx
+  sdk gen`) untouched -- confirmed zero real, live usage of its own
+  pinned sub-case exists today. PR `ubx-provider-dynamic#27` open (never
+  self-merge); real, live end-to-end verification (a real published
+  release, zero local checkout) waits on that merge. Full detail in
+  STATE.md.
+
 - 2026-08-27 -- UBI-182 Stage E built: `[providers.<name>]`'s dual
   meaning (pinned vs. live-fetch) collapses to pinned-only, now that
   every real provider has a real published pin (Stage F, same day).
