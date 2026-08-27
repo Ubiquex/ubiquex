@@ -55,23 +55,66 @@ All three UBI-196 landed as direct commits to `ubiquex-docs` `main` (that repo's
 confirmed direct-push convention), each independently verified via `gh api`
 after pushing, not trusted from local git alone.
 
-**Not done, real and separate**: full regeneration and republish of the six
-`ubx-sdk-<provider>` repos so their real packages carry `DataSourceBinding`
-and every data-source page can go `local_only -> published` for real. The
-real mechanism is now known — found in each SDK repo's own `hash-watch.yml`,
-not reinvented: `--only <name>` for single-entry providers (kubernetes,
-github), `--only <group>_all` for group-shaped ones (`azure_all`/
-`google_all`/`datadog_all`) — a bare `--only azure` only covers one of many
-declared entries (confirmed live: 63 resources against the real 604-member
-group), `--only azure_all` correctly produces all 3,224 real types (~5 min).
-AWS is a real, separate, deeper gap: its own `hash-watch.yml` regenerates
-only `--only aws` (the CFN resource half) and never references
-`aws_data_all` (429 real Smithy data-source members) at all — the published
-`ubx-sdk-aws` has never had its data-source half in any automated
-regeneration cycle, confirmed by direct reading of the workflow file, not
-just "hasn't run since DataSourceBinding landed." `--only aws_data_all`
-works fine when run by hand (confirmed live, 6,599 types, ~4 min) — the gap
-is that CI never does. See UBI-196 for the full report.
+**Regeneration/republish of the six `ubx-sdk-<provider>` repos: in flight,
+blocked on founder PR review.** The real mechanism is `--only <name>` for
+single-entry providers (kubernetes, github), `--only <group>_all` for
+group-shaped ones (`azure_all`/`google_all`/`datadog_all`/`aws_data_all`) —
+found in each SDK repo's own `hash-watch.yml`, not reinvented. AWS's own
+`hash-watch.yml` had a real, separate gap (regenerated only `--only aws`,
+the CFN half, never referencing `aws_data_all` at all — its data-source half
+had never been in any automated regeneration cycle) — fixed, PR open:
+`ubx-sdk-aws#18` adds a `smithy-merged-spec-sha256` drift check for the 429
+Smithy members alongside the existing CFN-zip hash, and switches
+regeneration to `--only aws_data_all` alone (confirmed live: `"aws"` is
+itself a declared member of that group, so one invocation produces both the
+CFN resource half — 1,715 real `ResourceBinding` files — and the full
+Smithy data-source half — 4,884 real `DataSourceBinding` files — together).
+Checked the other five for the same gap: kubernetes_all/github_all are
+single-member groups already matching their bare-name usage; azure_all/
+datadog_all/google_all were already correctly used. AWS was the sole gap.
+
+**A second, deeper blocker found live while dispatching real regeneration**:
+none of the six could actually regenerate successfully, even after the
+AWS fix, because `ubx-sdk-go`'s own latest published tag (`v0.1.2`, cut
+2026-08-10) predates `DataSourceBinding` — it only existed on that repo's
+`main` (merged via its own PR #3, UBI-178) and had never been tagged or
+released. Confirmed live: dispatching `hash-watch.yml` on `ubx-sdk-github`
+and `ubx-sdk-datadog` both correctly detected drift and regenerated real
+`DataSourceBinding`-carrying code, then failed their own `go build` sanity
+check with `undefined: ubx.DataSourceBinding` (420 occurrences in datadog
+alone) — every one of the six repos' `go.mod` pinned `ubx-sdk-go v0.0.0`,
+older still. Founder decision (asked live, confirmed): cut a real release.
+**`ubx-sdk-go` v0.2.0 tagged and pushed from main** (10 commits ahead of
+v0.1.2 — DataSourceBinding + CrossStack/UBI-134 + three state-file
+commits), verified against the real Go module proxy (`proxy.golang.org`),
+not just GitHub's own tag listing — resolvable, and its `runtime.go`
+carries `DataSourceBinding` at that tag. `ubx-sdk-go` has no CI/publish
+workflow of its own; this was a direct, manual tag push under Roozbeh's own
+git identity, matching how v0.1.1/v0.1.2 were themselves cut.
+
+Six PRs open now, all real, verified via `gh api`, none merged, never
+self-merged:
+
+| Repo | PR | Content |
+|---|---|---|
+| ubx-sdk-kubernetes | #14 | go.mod bump to ubx-sdk-go v0.2.0 |
+| ubx-sdk-github | #14 | go.mod bump to ubx-sdk-go v0.2.0 |
+| ubx-sdk-datadog | #13 | go.mod bump to ubx-sdk-go v0.2.0 |
+| ubx-sdk-azure | #17 | go.mod bump to ubx-sdk-go v0.2.0 |
+| ubx-sdk-google | #20 | go.mod bump to ubx-sdk-go v0.2.0 (also added a missing `sdk/go/go.sum` — none was committed before) |
+| ubx-sdk-aws | #18 | hash-watch.yml Smithy coverage + go.mod bump (also added a missing `sdk/go/go.sum`) |
+
+`go build ./...` verified clean locally for all six against the v0.2.0 bump
+before pushing. Next, once the founder merges these: re-dispatch each
+repo's `hash-watch.yml` (`workflow_dispatch`, already proven live this
+session to correctly detect drift and regenerate for github/datadog/azure/
+google; kubernetes found no live spec drift on its own first dispatch —
+its regeneration will need a forced/manual run once the go.mod bump is in,
+since the drift gate is content-based and won't itself notice a
+dependency-only change), verify the sanity checks pass for real this time,
+confirm each repo's `publish.yml` (manual `workflow_dispatch`) actually
+publishes to npm/PyPI/the Go proxy, then re-measure UBI-197's wire match
+rates against what's genuinely published. See UBI-196 for the full report.
 
 ## Blocked
 
@@ -115,8 +158,14 @@ naturally rather than forcing a metadata-only republish.
 with checksums, acquired via `provider.AcquireDynamicProviderBinary` — no
 `UBX_PROVIDER_DYNAMIC_REPO` checkout required on the normal path.
 
+**`ubx-sdk-go`** (shared runtime, not itself provider-specific): latest real
+tag `v0.2.0` (2026-08-27, this session — carries `DataSourceBinding`/
+UBI-178 and `CrossStack`/UBI-134), verified against the real Go module
+proxy. No CI/publish workflow of its own — tags are cut manually.
+
 **SDK repos** (`ubx-sdk-<provider>`, three languages per repo): latest Go
-module tag per repo —
+module tag per repo — **none of these six have picked up `ubx-sdk-go`
+v0.2.0 yet**, all still pinned at `v0.0.0` pending the six open PRs above —
 
 | Repo | Latest Go tag |
 |---|---|
