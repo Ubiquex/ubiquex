@@ -76,6 +76,15 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
    pushed back on the status claim and a real `git log` was run against the
    actual separate repo, not the monorepo.)
 
+   Same discipline before pushing to any branch that already has a PR: confirm
+   the PR is still open (`gh pr list --state open` or `gh pr view <n>`), not
+   just that the branch looks diverged or ahead — a merged PR's branch looks
+   identical to any other from `git status`/`git log` alone, and a push after
+   merge lands nowhere near `main`, silently. (Hit three times in one session;
+   caught only by accident each time, never by a rule — once via a real
+   `git compare` showing diverged rather than ahead, once via `gh pr list`
+   returning empty where an open PR was expected.)
+
 ## Git rules (strict)
 
 - Commit and push directly is ALLOWED — always under Roozbeh's own git identity
