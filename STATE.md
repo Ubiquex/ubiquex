@@ -7,19 +7,38 @@
 
 ## In flight
 
-**UBI-183 (this session): splitting session-handoff files, per repo.** `ubiquex`'s
-own `STATE.md` had grown to 1.87MB as one append-only narrative log — moved
-wholesale to `HISTORY.md` (zero content lost, just relocated) and replaced with
-this file. `CLAUDE.md` amended (rule 3) to require rewrite-not-append going
-forward. The same `CLAUDE.md` + `STATE.md` + `HISTORY.md` triple is being created
-in `ubx-provider-dynamic`, the six `ubx-schema-*` repos, and the six `ubx-sdk-*`
-repos, each as a real PR (never self-merged). Check each repo's own `STATE.md`
-for whether that repo's own files have landed yet if this line is still here.
+**UBI-183: session-handoff files split, real PRs open, none merged yet.**
+`ubiquex`'s own `STATE.md` had grown to 1.87MB as one append-only narrative
+log — moved wholesale to `HISTORY.md` (zero content lost) and replaced with
+this file; `CLAUDE.md` amended (rule 3) to require rewrite-not-append going
+forward. A full org audit (`gh repo list --json isArchived`, not the
+unfiltered list) found 22 real, non-archived repos, only `ubiquex` itself
+already carrying a `CLAUDE.md` — 8 more repos than the ticket's own original
+13-repo scope: the three real shared-runtime repos (`ubx-sdk-go`,
+`ubx-sdk-typescript`, `ubx-sdk-python` — separate from the ARCHIVED
+per-language bindings repos of similar name, e.g. `ubx-sdk-azure-go`) plus
+`ubiquex-docs`, `ubiquex-web`, `ubiquex.io`, `ubx-providers-check-demo`,
+`ubx-sdk-blueprints`.
+
+Real PRs open in every one of those repos (19 total), none merged yet:
+`ubx-provider-dynamic#29`, `ubx-schema-kubernetes#9`, `ubx-schema-datadog#5`,
+`ubx-schema-azure#3`, `ubx-schema-google#3`, `ubx-schema-github#3`,
+`ubx-schema-aws#3`, `ubx-sdk-kubernetes#11`, `ubx-sdk-datadog#10`,
+`ubx-sdk-azure#14`, `ubx-sdk-google#17`, `ubx-sdk-github#11`,
+`ubx-sdk-aws#15`, `ubx-sdk-go#4`, `ubx-sdk-typescript#6`,
+`ubx-sdk-python#4`, `ubiquex-web#1`, `ubiquex.io#1`,
+`ubx-providers-check-demo#4`, `ubx-sdk-blueprints#1`. `ubiquex-docs` got its
+`CLAUDE.md` via a direct push to `main`, matching that repo's own confirmed
+direct-push convention (no PR needed there). The three shared-runtime repos
+got the full `CLAUDE.md`+`STATE.md`+`HISTORY.md` triple, matching the six
+SDK/schema repos; the other 5 (docs/web/site/demo/blueprints) got a
+right-sized `CLAUDE.md` only — no invented git-workflow rule for repos where
+none has been confirmed by any session yet.
 
 ## Blocked
 
-Nothing currently blocked. Zero open PRs anywhere across the org as of
-2026-08-27 (`gh pr list` checked directly per repo, not assumed).
+Nothing currently blocked. UBI-183's own 19 PRs above are open, awaiting
+founder review — not blocking anything else in the meantime.
 
 ## Known, deliberately not acted on
 
