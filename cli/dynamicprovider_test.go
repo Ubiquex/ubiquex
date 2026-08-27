@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -264,22 +265,67 @@ func TestDynamicProviderNamespaces_PinnedMode_NoLongerRefused(t *testing.T) {
 	}
 }
 
-// TestPinnedDynamicProviderEnv_PinnedMode_Succeeds is
-// TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig's own
-// real sibling for pinnedDynamicProviderEnv -- [providers.<name>]'s own,
-// now-sole real shape, post-collapse (UBI-182 Stage E). Proves a real
-// pinned entry still resolves correctly through the new, narrower
-// function, against the identical real provider.AcquireSchema
-// UBX_SCHEMA_MIRROR short-circuit, no network needed.
-func TestPinnedDynamicProviderEnv_PinnedMode_Succeeds(t *testing.T) {
-	setUpPinnedSchemaMirror(t)
+// setUpPinnedBinaryMirror puts a real, minimal group snapshot (WITH a
+// real min_binary_version this time, unlike setUpPinnedSchemaMirror) at
+// <schemaRoot>/ubiquex/widget/1.0.0/, points UBX_SCHEMA_MIRROR at it,
+// puts a real, fake ubx-provider-dynamic "binary" at
+// <binRoot>/9.9.9/<goos>_<goarch>/, and points UBX_DYNAMIC_PROVIDER_MIRROR
+// at it -- the real, full, hermetic fixture acquirePinnedSchemaAndBinary
+// needs end to end (UBI-194), no network, no real subprocess build.
+func setUpPinnedBinaryMirror(t *testing.T) {
+	t.Helper()
+	schemaRoot := t.TempDir()
+	snapDir := filepath.Join(schemaRoot, "ubiquex", "widget", "1.0.0")
+	if err := os.MkdirAll(filepath.Join(snapDir, "members"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`{"schema_format":3,"provider":"widget","version":"1.0.0","members":["widget"],"min_binary_version":"9.9.9"}`)
+	member := []byte(`{"schema_source":"openapi","mode":"resource","raw_spec":{}}`)
+	if err := os.WriteFile(filepath.Join(snapDir, "manifest.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, "members", "widget.json"), member, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UBX_SCHEMA_MIRROR", schemaRoot)
 
-	env, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+	binRoot := t.TempDir()
+	binPlatformDir := filepath.Join(binRoot, "9.9.9", runtime.GOOS+"_"+runtime.GOARCH)
+	if err := os.MkdirAll(binPlatformDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binPlatformDir, "ubx-provider-dynamic"), []byte("fake binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UBX_DYNAMIC_PROVIDER_MIRROR", binRoot)
+}
+
+// TestAcquirePinnedSchemaAndBinary_PinnedMode_Succeeds is
+// TestDynamicProviderEnv_PinnedMode_UsesSchemaMirrorAndSkipsConfig's own
+// real sibling for acquirePinnedSchemaAndBinary -- [providers.<name>]'s
+// own, now-sole real shape, post-collapse (UBI-182 Stage E), now also
+// resolving the real binary the snapshot itself requires (UBI-194).
+// Proves both resolve correctly against real mirror short-circuits, no
+// network, no real subprocess build.
+func TestAcquirePinnedSchemaAndBinary_PinnedMode_Succeeds(t *testing.T) {
+	setUpPinnedBinaryMirror(t)
+
+	binPath, env, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"source":  "ubiquex/widget",
 		"version": "1.0.0",
 	})
 	if err != nil {
-		t.Fatalf("pinnedDynamicProviderEnv: %v", err)
+		t.Fatalf("acquirePinnedSchemaAndBinary: %v", err)
+	}
+	if binPath == "" {
+		t.Fatal("binPath not resolved")
+	}
+	got, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read resolved binary: %v", err)
+	}
+	if string(got) != "fake binary" {
+		t.Fatalf("resolved binary content = %q, want the real mirrored fake binary", got)
 	}
 	var gotName, gotSnapshotPath string
 	for _, kv := range env {
@@ -298,16 +344,38 @@ func TestPinnedDynamicProviderEnv_PinnedMode_Succeeds(t *testing.T) {
 	}
 }
 
-// TestPinnedDynamicProviderEnv_LiveShapedParams_FailsLoud is UBI-182
+// TestAcquirePinnedSchemaAndBinary_RepoOverride_BypassesRealAcquisition
+// is UBI-194's own real proof that UBX_PROVIDER_DYNAMIC_REPO still
+// works as an explicit, real development override on the pinned path --
+// checked BEFORE the real acquire-by-manifest-version mechanism, not
+// instead of it structurally removed.
+func TestAcquirePinnedSchemaAndBinary_RepoOverride_BypassesRealAcquisition(t *testing.T) {
+	setUpPinnedSchemaMirror(t)
+	t.Setenv("UBX_PROVIDER_DYNAMIC_REPO", "/this/checkout/does/not/exist")
+
+	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
+		"source":  "ubiquex/widget",
+		"version": "1.0.0",
+	})
+	if err == nil {
+		t.Fatal("expected a real error -- the override checkout path doesn't exist")
+	}
+	if !strings.Contains(err.Error(), "checkout") {
+		t.Fatalf("error %v doesn't look like it came from the real UBX_PROVIDER_DYNAMIC_REPO override path (expected a real 'no checkout found' error, proving the override was actually taken, not the real acquire-by-manifest-version path)", err)
+	}
+}
+
+// TestAcquirePinnedSchemaAndBinary_LiveShapedParams_FailsLoud is UBI-182
 // Stage E's own real, direct proof: a [providers.<name>] entry shaped
 // like a live-fetch [dynamic_providers.<name>] one (schema_source/
 // schema_url, no source/version) used to silently fall through to a
 // real live fetch under the OLD dual-meaning dynamicProviderEnv. It must
 // now fail loud, immediately, with a real, named error pointing at
 // [dynamic_providers.<name>] as the correct table -- never attempt
-// writeDynamicProviderConfig or any live fetch at all.
-func TestPinnedDynamicProviderEnv_LiveShapedParams_FailsLoud(t *testing.T) {
-	_, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+// writeDynamicProviderConfig, any live fetch, or any real acquisition
+// at all.
+func TestAcquirePinnedSchemaAndBinary_LiveShapedParams_FailsLoud(t *testing.T) {
+	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"schema_source": "openapi",
 		"schema_url":    "https://example.invalid/spec.json",
 	})
@@ -319,11 +387,11 @@ func TestPinnedDynamicProviderEnv_LiveShapedParams_FailsLoud(t *testing.T) {
 	}
 }
 
-// TestPinnedDynamicProviderEnv_MissingVersion_Errors proves
+// TestAcquirePinnedSchemaAndBinary_MissingVersion_Errors proves
 // pinnedSchemaFields' own existing "source without version" error still
-// propagates correctly through the new, narrower function.
-func TestPinnedDynamicProviderEnv_MissingVersion_Errors(t *testing.T) {
-	_, err := pinnedDynamicProviderEnv(context.Background(), "widget", map[string]any{
+// propagates correctly through the new, fuller function.
+func TestAcquirePinnedSchemaAndBinary_MissingVersion_Errors(t *testing.T) {
+	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"source": "ubiquex/widget",
 	})
 	if err == nil {

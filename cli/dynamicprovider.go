@@ -182,11 +182,23 @@ func pinnedSchemaFields(params map[string]any) (source, version string, ok bool,
 // with zero involvement from a launch workDir at all, since the
 // launched process reads UBX_SNAPSHOT_PATH directly (main.go's own
 // snapshotPathEnvVar branch, checked before .ubx/config would even be
-// loaded). Shared by dynamicProviderEnv's own pinned branch (still real,
-// still optional, for [dynamic_providers.<name>]) and
-// pinnedDynamicProviderEnv (the only real shape [providers.<name>] is
-// allowed at all, post-collapse -- see that function's own doc comment).
+// loaded). Used by dynamicProviderEnv's own pinned branch
+// ([dynamic_providers.<name>], real but with zero real, live usage
+// today -- confirmed directly against sdk/providers/.ubx/config, not
+// assumed -- so it keeps resolving its own binary the old way, an
+// explicit, named, low-risk scope boundary, not a silent gap). See
+// acquirePinnedSchemaAndBinary for [providers.<name>]'s own real path,
+// which additionally resolves and acquires the real binary the
+// snapshot itself requires (UBI-194).
 func acquirePinnedSchemaEnv(ctx context.Context, name, src, version string) ([]string, error) {
+	result, err := acquireSchemaResult(ctx, name, src, version)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name, "UBX_SNAPSHOT_PATH=" + result.Path}, nil
+}
+
+func acquireSchemaResult(ctx context.Context, name, src, version string) (*provider.AcquireSchemaResult, error) {
 	schemaSrc, err := provider.ParseSchemaSource(src)
 	if err != nil {
 		return nil, fmt.Errorf("%q.source: %w", name, err)
@@ -195,13 +207,70 @@ func acquirePinnedSchemaEnv(ctx context.Context, name, src, version string) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("acquire schema for %q: %w", name, err)
 	}
-	return []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name, "UBX_SNAPSHOT_PATH=" + result.Path}, nil
+	return result, nil
+}
+
+// acquirePinnedSchemaAndBinary is [providers.<name>]'s own real, full
+// resolution (UBI-194): acquires the real, verified schema snapshot
+// (acquireSchemaResult, the same real work acquirePinnedSchemaEnv
+// does), then resolves the real ubx-provider-dynamic binary path. UBI-194:
+// this is what removes the UBX_PROVIDER_DYNAMIC_REPO/local-checkout
+// dependency from the real, normal [providers.<name>] path -- the
+// NORMAL case resolves and acquires the exact real binary the
+// snapshot itself requires (provider.ResolveDynamicProviderBinaryVersion
+// reads the snapshot's own real, generation-time-stamped
+// min_binary_version; provider.AcquireDynamicProviderBinary fetches it,
+// mirror-then-cache-then-verify, the identical real discipline
+// AcquireSchema/Acquire already use). UBX_PROVIDER_DYNAMIC_REPO stays
+// real and useful for local development, exactly as the ticket asks --
+// checked FIRST, as a real, explicit override: if set, this builds
+// from that checkout instead (resolveAmbientDynamicProviderBinary,
+// unchanged), the same real escape hatch every other real dynamic-
+// provider call site already has, letting a real, unreleased
+// ubx-provider-dynamic change be tested against an already-published
+// snapshot before it's ever cut into a real release. Both real
+// [providers.<name>] consumers (newDynamicProviderLaunchFunc's own
+// providerPool.Get path, and loadDynamicProviderSchema's own ubx
+// resolve/ubx plan path) share this one function so binary resolution
+// can never drift between them.
+func acquirePinnedSchemaAndBinary(ctx context.Context, name string, params map[string]any) (binPath string, env []string, err error) {
+	src, version, pinned, err := pinnedSchemaFields(params)
+	if err != nil {
+		return "", nil, fmt.Errorf("[providers.%s]: %w", name, err)
+	}
+	if !pinned {
+		return "", nil, fmt.Errorf("[providers.%s] must be pinned (\"source\" and \"version\" both required) -- live-fetch config (schema_source/schema_url/...) belongs under [dynamic_providers.%s] instead, never [providers.%s]", name, name, name)
+	}
+
+	schemaResult, err := acquireSchemaResult(ctx, name, src, version)
+	if err != nil {
+		return "", nil, err
+	}
+	env = []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name, "UBX_SNAPSHOT_PATH=" + schemaResult.Path}
+
+	if os.Getenv("UBX_PROVIDER_DYNAMIC_REPO") != "" {
+		binPath, err = resolveAmbientDynamicProviderBinary()
+		if err != nil {
+			return "", nil, err
+		}
+		return binPath, env, nil
+	}
+
+	binVersion, err := provider.ResolveDynamicProviderBinaryVersion(schemaResult.Path)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve ubx-provider-dynamic version for %q: %w", name, err)
+	}
+	binResult, err := provider.AcquireDynamicProviderBinary(ctx, binVersion)
+	if err != nil {
+		return "", nil, fmt.Errorf("acquire ubx-provider-dynamic@%s for %q: %w", binVersion, name, err)
+	}
+	return binResult.Path, env, nil
 }
 
 // dynamicProviderEnv resolves the real env vars a launched
 // ubx-provider-dynamic process needs to serve name (a real
-// [dynamic_providers.<name>] entry -- see pinnedDynamicProviderEnv for
-// [providers.<name>]'s own, now-pinned-only, separate real path), and
+// [dynamic_providers.<name>] entry -- see acquirePinnedSchemaAndBinary
+// for [providers.<name>]'s own, now-pinned-only, separate real path), and
 // prepares workDir to match. Two real, mutually exclusive shapes, chosen
 // by pinnedSchemaFields -- both still genuinely real here: a
 // [dynamic_providers.<name>] entry drives hash-watch.yml-style live
@@ -229,34 +298,6 @@ func dynamicProviderEnv(ctx context.Context, workDir, name string, params map[st
 	return []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name}, nil
 }
 
-// pinnedDynamicProviderEnv is [providers.<name>]'s own, sole real shape,
-// post-collapse (UBI-182 Stage E): a bare [providers.<name>] table is
-// ALWAYS a real, published pin now -- source+version, resolved via
-// provider.AcquireSchema, zero network at resolution time on a cache
-// hit. The dual meaning this function used to share with
-// dynamicProviderEnv (falling through to a real, temporary
-// [dynamic_providers.<name>]-shaped live fetch when source/version
-// were absent) is gone: every real provider this org tracks now has a
-// real, published, live-verified snapshot (kubernetes, datadog, github,
-// google, aws, azure -- STATE.md's own full account), so nothing left
-// depends on that fallback, and a config author who forgets version (or
-// writes schema_source/schema_url under [providers.<name>] by habit,
-// copying a [dynamic_providers.<name>] entry) gets a real, immediate,
-// named error instead of a silent, surprising live fetch.
-// [dynamic_providers.<name>] itself is completely untouched by this --
-// it keeps its own real live-fetch-by-default, pinned-if-declared dual
-// shape via dynamicProviderEnv, unchanged.
-func pinnedDynamicProviderEnv(ctx context.Context, name string, params map[string]any) ([]string, error) {
-	src, version, pinned, err := pinnedSchemaFields(params)
-	if err != nil {
-		return nil, fmt.Errorf("[providers.%s]: %w", name, err)
-	}
-	if !pinned {
-		return nil, fmt.Errorf("[providers.%s] must be pinned (\"source\" and \"version\" both required) -- live-fetch config (schema_source/schema_url/...) belongs under [dynamic_providers.%s] instead, never [providers.%s]", name, name, name)
-	}
-	return acquirePinnedSchemaEnv(ctx, name, src, version)
-}
-
 // dynamicProviderSchema launches ubx-provider-dynamic once against name's
 // own real [dynamic_providers.<name>] config entry (params -- live-
 // shaped or pinned-shaped, dynamicProviderEnv decides which), and
@@ -265,7 +306,7 @@ func pinnedDynamicProviderEnv(ctx context.Context, name string, params map[strin
 // only" scope. See loadDynamicProviderSchema for [providers.<name>]'s
 // own, separate, pinned-only real entry point -- the two tables keep
 // their own real env-resolution (dynamicProviderEnv vs
-// pinnedDynamicProviderEnv) but share launchAndFetchSchema's own real
+// acquirePinnedSchemaAndBinary) but share launchAndFetchSchema's own real
 // launch/fetch/observability-note mechanics, so that part can never
 // silently diverge between them.
 func dynamicProviderSchema(ctx context.Context, binPath, name string, params map[string]any) (*provider.Schemas, error) {
@@ -357,21 +398,17 @@ func resolveAmbientDynamicProviderBinary() (string, error) {
 
 // loadDynamicProviderSchema is `ubx resolve`'s own real entry point for
 // fetching a [providers.<name>] entry's real schema (cli/resolve.go's
-// own loadResolveProviders) -- resolves the real binary via the same
-// ambient convention every other real dynamic-provider call site uses,
-// then resolves env via pinnedDynamicProviderEnv (UBI-182 Stage E: a
-// bare [providers.<name>] table is always a real, published pin now,
-// never a live-fetch fallback) and shares launchAndFetchSchema's own
+// own loadResolveProviders) -- resolves BOTH the real snapshot and the
+// real ubx-provider-dynamic binary that snapshot itself requires via
+// acquirePinnedSchemaAndBinary (UBI-194: no UBX_PROVIDER_DYNAMIC_REPO/
+// local-checkout dependency at all on this, the real, normal
+// [providers.<name>] path), then shares launchAndFetchSchema's own
 // real launch/fetch/observability-note mechanics with
 // dynamicProviderSchema (schema-fetch-then-close, the identical real
 // shape resolve's own thirdparty branch already has for a real
 // Terraform-registry provider).
 func loadDynamicProviderSchema(ctx context.Context, name string, params map[string]any) (*provider.Schemas, error) {
-	binPath, err := resolveAmbientDynamicProviderBinary()
-	if err != nil {
-		return nil, err
-	}
-	env, err := pinnedDynamicProviderEnv(ctx, name, params)
+	binPath, env, err := acquirePinnedSchemaAndBinary(ctx, name, params)
 	if err != nil {
 		return nil, err
 	}
@@ -499,27 +536,22 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		if !ok {
 			return nil, nil, fmt.Errorf("provider %q is not declared in this stack's [providers] config", key)
 		}
-		binPath, err := resolveAmbientDynamicProviderBinary()
-		if err != nil {
-			return nil, nil, err
-		}
 
-		workDir, err := os.MkdirTemp("", "ubx-dynamic-provider-"+key)
+		// UBI-194: both the real snapshot and the real
+		// ubx-provider-dynamic binary that snapshot itself requires
+		// are resolved here -- no UBX_PROVIDER_DYNAMIC_REPO/local-
+		// checkout dependency, and no workDir at all (a pinned launch
+		// is fully self-sufficient via UBX_SNAPSHOT_PATH, per
+		// acquirePinnedSchemaAndBinary's own doc comment).
+		binPath, env, err := acquirePinnedSchemaAndBinary(ctx, key, params)
 		if err != nil {
-			return nil, nil, err
-		}
-		env, err := pinnedDynamicProviderEnv(ctx, key, params)
-		if err != nil {
-			os.RemoveAll(workDir)
 			return nil, nil, err
 		}
 
 		client, err := provider.Launch(ctx, binPath,
-			provider.WithDir(workDir),
 			provider.WithEnv(env...),
 			provider.WithHandshakeTimeout(dynamicProviderHandshakeTimeout),
 		)
-		os.RemoveAll(workDir) // the launched process has already read the config by the time Launch returns
 		if err != nil {
 			return nil, nil, fmt.Errorf("launch ubx-provider-dynamic for %q: %w", key, err)
 		}
