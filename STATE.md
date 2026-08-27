@@ -126,16 +126,51 @@ real `WireType` straight from freshly generated Go source plus a real
 `--dump-ir` dump, no independent derivation at all; one implementation,
 built from an inconsistent revision.
 
-Fix direction reported, not built (explicitly asked for): pin/validate
-`ubx-provider-dynamic` build provenance in `ubx sdk gen` (refuse or warn
-on a dirty sibling checkout, stamp the resolved commit into `--dump-ir`
-output) — the real fix for this specific divergence. Separately,
-`--dump-ir`'s own `schema.json` could carry per-language identifiers
-directly so the docs generator stops needing a full SDK generation just
-to recover them. Separately again (resource-side, different bug): retire
-the three redundant docs-side doubling correctors, paired with a
+**Provenance fix built and landed** (`26610b9`), after reporting the
+design and getting explicit confirmation first: `ubx sdk gen` now
+resolves and stamps a real provenance record (source: local-checkout or
+explicit-binary, commit, dirty, unpushed) into `--dump-ir`'s own output
+directory and a new `PROVENANCE.json` in `--out`, for every
+`[dynamic_providers.<name>]`/group generation — unconditionally, printed
+to stderr too. Dirty or unpushed warns loudly by default and generation
+proceeds (the local-checkout-build path exists specifically for
+iterating on `ubx-provider-dynamic` itself, which needs a dirty tree by
+construction — refusing unconditionally would block that real,
+intended workflow); a new `--require-clean-provenance` flag turns the
+same condition into a hard refusal, for any generation meant to be
+committed or published (CI, a batch regeneration). Real, hermetic tests
+against constructed git repos for every condition (clean+pushed, dirty
+via a modified file, dirty via an untracked file, no upstream
+configured, real commits ahead of upstream, explicit-binary); verified
+live against both a clean and a deliberately dirtied real checkout, in
+both warn and refuse mode.
+
+Same discipline UBI-194 already established for the real, pinned-release
+path (a resolvable version + checksum) applied one layer up, to the
+local-checkout-build path that's what every real generation this
+session (and, by file mtimes, the docs corpus's own past batch runs)
+actually used.
+
+**Separate finding, posted to UBI-197**: this means every real artifact
+produced before today has unknown provenance and cannot be
+retroactively verified — the current published docs corpus, and the six
+`ubx-sdk-<provider>` packages this session regenerated and published,
+were all built through the same unpinned, unstamped path this fix
+closes. This session's own six regenerations are very likely clean (a
+freshly cloned, unmodified checkout, not the dirty WIP branch that
+produced the original corpus), but there is no real record confirming
+it, only the absence of a known reason to doubt it.
+
+Not yet built, named as explicit follow-up: `PROVENANCE.json` landing in
+each of the six published `ubx-sdk-<provider>` repos requires their own
+`hash-watch.yml` rsync steps to pick it up (currently only the three
+language subdirectories are copied). Separately, `--dump-ir`'s own
+`schema.json` could carry per-language identifiers directly so the docs
+generator stops needing a full SDK generation just to recover them.
+Separately again (resource-side, different bug, not provenance-related):
+retire the three redundant docs-side doubling correctors, paired with a
 redirect pass for the already-published corpus's mix of corrected/
-uncorrected paths. None of this built yet — awaiting a scoping decision.
+uncorrected paths.
 
 ---
 
