@@ -138,6 +138,152 @@ func resolveDynamicProviderBinary(explicitPath, repoPath string) (string, error)
 // beside it, not inside it.
 const defaultDynamicProviderRepo = "../ubx-provider-dynamic"
 
+// dynamicProviderProvenance is UBI-197's own real fix: resolveDynamicProviderBinary's
+// own doc comment already named the gap ("there is no real, pinned-version
+// resolution here yet... building from whatever the local checkout's own
+// current HEAD is is the honest, current state of the world") but never
+// recorded what that HEAD actually was anywhere a later session could
+// check. Confirmed live this session: a real, unmerged WIP branch
+// (collection-envelope unwrapping, openapi data sources only) was live in
+// the local checkout for less than an hour, produced the entire docs
+// corpus's own data-source naming during that window, and left no trace
+// once its own commits were superseded -- every subsequent regeneration
+// (including this session's) silently disagreed with the published corpus
+// and there was no record anywhere explaining why. Same discipline UBI-194
+// already established for the real, pinned-release path (a resolvable
+// version + checksum) applied one layer up, to the local-checkout-build
+// path this session's own investigation showed is what every real
+// generation this session (and, going by file mtimes, the docs corpus's
+// own past batch runs) actually used.
+type dynamicProviderProvenance struct {
+	// Source is "local-checkout" (built on demand from a real git checkout,
+	// RepoPath/Commit/Dirty/Unpushed all meaningful) or "explicit-binary"
+	// (--dynamic-provider-bin given directly -- no checkout to inspect, so
+	// provenance is honestly unknown beyond the path itself).
+	Source   string `json:"source"`
+	RepoPath string `json:"repo_path,omitempty"`
+	Commit   string `json:"commit,omitempty"`
+	Dirty    bool   `json:"dirty"`
+	Unpushed bool   `json:"unpushed"`
+}
+
+// clean reports whether this provenance record positively confirms the
+// binary was built from a real, immutable, fetchable commit -- the one
+// condition --require-clean-provenance is willing to accept.
+func (p dynamicProviderProvenance) clean() bool {
+	return p.Source == "local-checkout" && !p.Dirty && !p.Unpushed
+}
+
+var (
+	dynamicProviderProvenanceOnce   sync.Once
+	dynamicProviderProvenanceResult dynamicProviderProvenance
+	dynamicProviderProvenanceErr    error
+)
+
+// resolveDynamicProviderProvenance mirrors resolveDynamicProviderBinary's
+// own sync.Once caching (one binary, one provenance record, shared by
+// every declared entry in a single `ubx sdk gen` invocation) -- explicitPath
+// and repoPath are the identical two inputs that decide what binary got
+// built, so the same two inputs decide what provenance record describes
+// it.
+func resolveDynamicProviderProvenance(explicitPath, repoPath string) (dynamicProviderProvenance, error) {
+	dynamicProviderProvenanceOnce.Do(func() {
+		dynamicProviderProvenanceResult, dynamicProviderProvenanceErr = computeDynamicProviderProvenance(explicitPath, repoPath)
+	})
+	return dynamicProviderProvenanceResult, dynamicProviderProvenanceErr
+}
+
+// computeDynamicProviderProvenance is resolveDynamicProviderProvenance's
+// own real logic, factored out uncached so tests can exercise it directly
+// against a real, hermetic git repo fixture without fighting the
+// package-level sync.Once every real invocation shares (one binary, one
+// provenance record, per `ubx sdk gen` process -- see
+// resolveDynamicProviderProvenance's own doc comment).
+func computeDynamicProviderProvenance(explicitPath, repoPath string) (dynamicProviderProvenance, error) {
+	if explicitPath != "" {
+		return dynamicProviderProvenance{Source: "explicit-binary"}, nil
+	}
+	commit, err := runDynamicProviderGit(repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		return dynamicProviderProvenance{}, fmt.Errorf("resolving ubx-provider-dynamic commit at %q: %w", repoPath, err)
+	}
+	status, err := runDynamicProviderGit(repoPath, "status", "--porcelain")
+	if err != nil {
+		return dynamicProviderProvenance{}, fmt.Errorf("checking ubx-provider-dynamic working tree at %q: %w", repoPath, err)
+	}
+	// Unpushed: no upstream configured at all is treated the same as real
+	// commits ahead of one -- a commit nobody else can fetch is exactly
+	// the same real risk this record exists to catch, whether or not a
+	// tracking branch happens to be set (a detached HEAD, or a local-only
+	// branch, both hit this branch).
+	unpushed := true
+	if _, uerr := runDynamicProviderGit(repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); uerr == nil {
+		ahead, aerr := runDynamicProviderGit(repoPath, "rev-list", "@{u}..HEAD", "--count")
+		if aerr != nil {
+			return dynamicProviderProvenance{}, fmt.Errorf("checking ubx-provider-dynamic ahead-count at %q: %w", repoPath, aerr)
+		}
+		unpushed = strings.TrimSpace(ahead) != "0"
+	}
+	return dynamicProviderProvenance{
+		Source:   "local-checkout",
+		RepoPath: repoPath,
+		Commit:   commit,
+		Dirty:    status != "",
+		Unpushed: unpushed,
+	}, nil
+}
+
+func runDynamicProviderGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// checkDynamicProviderProvenance prints this invocation's real provenance
+// once, unconditionally, to stderr -- a clean run's own confirmation is
+// worth seeing too, not just a dirty run's warning. When prov is not
+// clean(), prints a loud, distinct warning block by default (generation
+// proceeds -- the local-checkout-build path exists specifically so someone
+// can iterate on ubx-provider-dynamic itself and see the effect
+// immediately, which requires a dirty tree by construction; refusing here
+// unconditionally would block that real, intended workflow). requireClean
+// turns that same condition into a hard refusal instead -- the guarantee a
+// real regeneration meant to be committed or published should ask for
+// explicitly (CI, a batch docs-corpus regeneration), not the default for
+// every interactive invocation.
+func checkDynamicProviderProvenance(w io.Writer, prov dynamicProviderProvenance, requireClean bool) error {
+	if prov.clean() {
+		fmt.Fprintf(w, "sdk gen: ubx-provider-dynamic provenance: local-checkout commit=%s (clean, pushed) repo=%s\n", prov.Commit, prov.RepoPath)
+		return nil
+	}
+
+	var detail string
+	switch {
+	case prov.Source == "explicit-binary":
+		detail = "an explicit --dynamic-provider-bin path was given -- no checkout to inspect, provenance is honestly unknown beyond that path"
+	case prov.Dirty && prov.Unpushed:
+		detail = fmt.Sprintf("commit=%s at %s has uncommitted changes AND is not pushed to any upstream", prov.Commit, prov.RepoPath)
+	case prov.Dirty:
+		detail = fmt.Sprintf("commit=%s at %s has uncommitted changes", prov.Commit, prov.RepoPath)
+	default:
+		detail = fmt.Sprintf("commit=%s at %s is not pushed to any upstream", prov.Commit, prov.RepoPath)
+	}
+
+	if requireClean {
+		return fmt.Errorf("ubx-provider-dynamic provenance is not clean: %s -- refusing (--require-clean-provenance); commit and push first, or drop the flag to generate anyway with a loud warning", detail)
+	}
+
+	fmt.Fprintf(w, "sdk gen: WARNING -- ubx-provider-dynamic provenance is not clean: %s\n", detail)
+	fmt.Fprintf(w, "sdk gen: WARNING -- generated output cannot be traced back to real, fetchable code. Fine for local iteration; do not publish this output as-is.\n")
+	return nil
+}
+
 // pinnedSchemaFields extracts "source"/"version" from a
 // [providers.<name>]/[dynamic_providers.<name>] entry's own params --
 // real, mechanical presence-based detection of which of the two real

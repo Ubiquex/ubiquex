@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -79,16 +80,17 @@ func newSDKCmd() *cobra.Command {
 // at all -- versus what's shared).
 func newSDKGenCmd() *cobra.Command {
 	var (
-		out                string
-		lang               string
-		timeout            time.Duration
-		dynamicProviderBin string
-		describeEnabled    bool
-		describeModel      string
-		descriptionsDir    string
-		gapsDir            string
-		dumpIRDir          string
-		only               string
+		out                    string
+		lang                   string
+		timeout                time.Duration
+		dynamicProviderBin     string
+		requireCleanProvenance bool
+		describeEnabled        bool
+		describeModel          string
+		descriptionsDir        string
+		gapsDir                string
+		dumpIRDir              string
+		only                   string
 	)
 
 	cmd := &cobra.Command{
@@ -201,7 +203,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 				}
 				params := cfg.DynamicProviders[name]
 
-				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
+				path, count, coverage, err := generateOneDynamicProvider(cmd.Context(), timeout, name, params, out, lang, dynamicProviderBin, requireCleanProvenance, describeGen, descriptionsDir, gapsDir, dumpIRDir, cmd.ErrOrStderr())
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "sdk gen: dynamic provider %q: %v\n", name, err)
 					dynamicFailures = append(dynamicFailures, name)
@@ -237,7 +239,7 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: dynamic provider group %q: %w", groupName, err)}
 				}
 
-				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, repoName, members, exclude, cfg.DynamicProviders, out, lang, dynamicProviderBin, describeGen, descriptionsDir, gapsDir, dumpIRDir)
+				path, count, coverage, err := generateDynamicProviderGroup(cmd.Context(), timeout, groupName, repoName, members, exclude, cfg.DynamicProviders, out, lang, dynamicProviderBin, requireCleanProvenance, describeGen, descriptionsDir, gapsDir, dumpIRDir, cmd.ErrOrStderr())
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("sdk gen: %w", err)}
 				}
@@ -256,15 +258,16 @@ generated code (docs/sdk.md); re-run this command after bumping a provider's pin
 		},
 	}
 
-	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<source-sanitized>/sdk/<lang>/`)
+	cmd.Flags().StringVar(&out, "out", "sdk/generated", `directory to write generated bindings into -- a repo-shaped tree (own manifest, one directory per AWS-service boundary) per declared provider source, under <out>/<source-sanitized>/sdk/<lang>/. For a [dynamic_providers.<name>]/group source, also writes <out>/<source-sanitized>/PROVENANCE.json (source/repo_path/commit/dirty/unpushed) -- see --require-clean-provenance`)
 	cmd.Flags().StringVar(&lang, "lang", "ts", `target language for generated bindings: "ts", "go", or "py"`)
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for launching each provider and fetching its schema (measured per provider, not once for the whole command)")
 	cmd.Flags().StringVar(&dynamicProviderBin, "dynamic-provider-bin", "", `path to an already-built ubx-provider-dynamic binary, for [dynamic_providers.<name>] entries -- if unset, built on demand from a local checkout (UBX_PROVIDER_DYNAMIC_REPO, default "../ubx-provider-dynamic")`)
+	cmd.Flags().BoolVar(&requireCleanProvenance, "require-clean-provenance", false, `refuse to generate [dynamic_providers.<name>]/group output unless ubx-provider-dynamic's own local checkout is a clean, pushed commit (or --dynamic-provider-bin, always unknown provenance, also refused) -- unset (default) generates anyway with a loud stderr warning, since local iteration on ubx-provider-dynamic itself needs a dirty tree by construction. Pass this for any generation meant to be committed or published (CI, a batch regeneration) -- the real commit (or "explicit-binary"/"dirty"/"unpushed") is always stamped into --dump-ir output and a new PROVENANCE.json in --out, with or without this flag`)
 	cmd.Flags().BoolVar(&describeEnabled, "describe", false, `ALSO fill any field still undescribed after --descriptions-dir via a real, live Claude API call (sdk/codegen/describe) -- opt-in: slow, billed, needs a resolvable Anthropic credential (ANTHROPIC_API_KEY or an `+"`ant auth login`"+` profile). The interim, cost-free default is --descriptions-dir; see that flag's own doc.`)
 	cmd.Flags().StringVar(&describeModel, "describe-model", "", `model for --describe (default: `+describe.DefaultModel+`)`)
 	cmd.Flags().StringVar(&descriptionsDir, "descriptions-dir", defaultDescriptionsDir, `directory of real, checked-in <provider>.json description files (resource -> dotted field path -> description text) this command reads at zero cost and applies to any field a source model left undescribed, labeled "AI-inferred" in generated doc comments -- the real default enrichment path; pass "" to disable entirely`)
 	cmd.Flags().StringVar(&gapsDir, "list-undescribed", "", `directory to write one real <provider>.json gap file per declared source, listing every field STILL undescribed after --descriptions-dir/--describe (type, required/optional/computed, parent context, and any real enum/constraint signal found) -- the structured "what's missing" list a description-authoring pass (this session or a future one) reads; unset (default) writes nothing`)
-	cmd.Flags().StringVar(&dumpIRDir, "dump-ir", "", `directory to write real, post-enrichment IR JSON instead of running codegen -- one <dump-ir>/<source-or-dynamic-name>/<wire_type>.json file per resource type, the marshaled []ir.Field (WireName, Type, Description, Required/Optional/Computed/Sensitive, DescriptionSource -- "source"/"ai-inferred"/""), identical shape to ubiquex-docs' own dump_schema.go tool but with real checked-in/--describe enrichment already applied (that tool never enriches at all). --lang is accepted but unused when this is set. The real replacement for that tool's own tfplugin-only reimplementation now that every declared provider (thirdparty and dynamic alike) can be dumped through this one shared, already-tested path`)
+	cmd.Flags().StringVar(&dumpIRDir, "dump-ir", "", `directory to write real, post-enrichment IR JSON instead of running codegen -- one <dump-ir>/<source-or-dynamic-name>/<wire_type>.json file per resource type, the marshaled []ir.Field (WireName, Type, Description, Required/Optional/Computed/Sensitive, DescriptionSource -- "source"/"ai-inferred"/""), identical shape to ubiquex-docs' own dump_schema.go tool but with real checked-in/--describe enrichment already applied (that tool never enriches at all). --lang is accepted but unused when this is set. The real replacement for that tool's own tfplugin-only reimplementation now that every declared provider (thirdparty and dynamic alike) can be dumped through this one shared, already-tested path. For a [dynamic_providers.<name>]/group source, also writes a sibling PROVENANCE.json (source/repo_path/commit/dirty/unpushed) -- see --require-clean-provenance`)
 	cmd.Flags().StringVar(&only, "only", "", `comma-separated list of provider names to restrict generation to (a [thirdparty_providers] source string or a [dynamic_providers.<name>] name) -- unset (default) generates every declared provider, matching prior behavior exactly`)
 
 	return cmd
@@ -475,7 +478,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 	// UBI-98's own fix never touches a thirdparty-registry-sourced
 	// provider at all: nil namespacesByType means ServiceAndLocalNameForType
 	// falls straight through to the original mechanical split, unchanged.
-	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, nil, nil, describeExcludeFromParams(providerConfig))
+	return writeGeneratedSDK(ctx, schemas, providerShortName(source), source, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, nil, nil, describeExcludeFromParams(providerConfig), nil)
 }
 
 // generateOneDynamicProvider is generateOneProvider's own real sibling for
@@ -487,7 +490,7 @@ func generateOneProvider(ctx context.Context, timeout time.Duration, source, ver
 // provider.Schemas into generated files. version is the real, honest
 // placeholder "dynamic" -- see resolveDynamicProviderBinary's own doc
 // comment for why no real per-target version pin exists yet.
-func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name string, params map[string]any, out, lang, dynamicProviderBin string, requireCleanProvenance bool, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, stderr io.Writer) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -497,6 +500,13 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 	}
 	binPath, err := resolveDynamicProviderBinary(dynamicProviderBin, repoPath)
 	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+	prov, err := resolveDynamicProviderProvenance(dynamicProviderBin, repoPath)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+	if err := checkDynamicProviderProvenance(stderr, prov, requireCleanProvenance); err != nil {
 		return "", 0, descriptionCoverage{}, err
 	}
 
@@ -529,7 +539,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 	}
 
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, namespacesByType, describeExcludeFromParams(params))
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, namespacesByType, describeExcludeFromParams(params), &prov)
 }
 
 // generateDynamicProviderGroup is generateOneDynamicProvider's own real
@@ -575,7 +585,7 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 // identical wire type name, a real, worth-surfacing anomaly, not routine
 // overlap this function should paper over by letting the second member
 // silently clobber the first's entry in the merged map.
-func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName, repoName string, memberNames []string, exclude map[string]map[string]bool, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, groupName, repoName string, memberNames []string, exclude map[string]map[string]bool, dynamicProviders map[string]map[string]any, out, lang, dynamicProviderBin string, requireCleanProvenance bool, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, stderr io.Writer) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	if len(memberNames) == 0 {
 		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: no members declared", groupName)
 	}
@@ -586,6 +596,13 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 	}
 	binPath, err := resolveDynamicProviderBinary(dynamicProviderBin, repoPath)
 	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+	prov, err := resolveDynamicProviderProvenance(dynamicProviderBin, repoPath)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+	if err := checkDynamicProviderProvenance(stderr, prov, requireCleanProvenance); err != nil {
 		return "", 0, descriptionCoverage{}, err
 	}
 
@@ -644,7 +661,7 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 	}
 
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, merged, repoName, repoName, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedNamespaces, mergedDescribeExclude)
+	return writeGeneratedSDK(ctx, merged, repoName, repoName, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, mergedSignals, mergedNamespaces, mergedDescribeExclude, &prov)
 }
 
 // dynamicProviderGroupMember is one already-fetched [dynamic_providers.<name>]
@@ -794,7 +811,7 @@ type irFieldsWrapper struct {
 	Fields []ir.Field `json:"Fields"`
 }
 
-func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, signalsByType map[string]map[string]*fieldSignal, namespacesByType map[string]string, describeExclude map[string]bool) (path string, resourceCount int, coverage descriptionCoverage, err error) {
+func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName, source, version, out, lang string, describeGen *describe.Generator, descriptionsDir, gapsDir, dumpIRDir string, signalsByType map[string]map[string]*fieldSignal, namespacesByType map[string]string, describeExclude map[string]bool, prov *dynamicProviderProvenance) (path string, resourceCount int, coverage descriptionCoverage, err error) {
 	resourceTypeNames := make([]string, 0, len(schemas.Resources))
 	for typeName := range schemas.Resources {
 		resourceTypeNames = append(resourceTypeNames, typeName)
@@ -1000,6 +1017,22 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 		if err != nil {
 			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal schema.json: %w", source, version, err)
 		}
+		if prov != nil {
+			// Sibling file, not a new key inside schema.json itself --
+			// schema.json's own {wire: {service, localName, ir}} shape is
+			// an established external contract (this file's own doc
+			// comment above), and gen_all_data_source_pages.py's real
+			// consumers iterate every value expecting that exact shape
+			// (coverage_check.py's schema_entries_from_corrected among
+			// them) -- a non-conforming key would silently break them.
+			provData, provErr := json.MarshalIndent(prov, "", "  ")
+			if provErr != nil {
+				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal PROVENANCE.json: %w", source, version, provErr)
+			}
+			if err := os.WriteFile(filepath.Join(dumpDir, "PROVENANCE.json"), provData, 0o644); err != nil {
+				return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: write PROVENANCE.json: %w", source, version, err)
+			}
+		}
 		if err := os.WriteFile(filepath.Join(dumpDir, "schema.json"), schemaData, 0o644); err != nil {
 			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: write schema.json: %w", source, version, err)
 		}
@@ -1073,6 +1106,25 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 			return "", 0, coverage, err
 		}
 	}
+
+	if prov != nil {
+		// repoDir root, sibling to sdk/ -- the same directory level each
+		// ubx-sdk-<provider> repo's own committed VERSION file already
+		// lives at, so a future session folding this into that file (or
+		// having each repo's own hash-watch.yml rsync it in directly) is
+		// a small, obvious next step, not a new convention.
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			return "", 0, coverage, err
+		}
+		provData, provErr := json.MarshalIndent(prov, "", "  ")
+		if provErr != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: marshal PROVENANCE.json: %w", source, version, provErr)
+		}
+		if err := os.WriteFile(filepath.Join(repoDir, "PROVENANCE.json"), provData, 0o644); err != nil {
+			return "", 0, coverage, fmt.Errorf("%s@%s: write PROVENANCE.json: %w", source, version, err)
+		}
+	}
+
 	return repoDir, len(types), coverage, nil
 }
 

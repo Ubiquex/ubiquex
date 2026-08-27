@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -243,7 +244,7 @@ func TestMergeDynamicProviderGroupMembers_NoSignalsOrExcludes_ReturnsNilNotEmpty
 }
 
 func TestGenerateDynamicProviderGroup_NoMembers_Errors(t *testing.T) {
-	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", "empty-group", nil, nil, nil, "", "", "", nil, "", "", "")
+	_, _, _, err := generateDynamicProviderGroup(t.Context(), 0, "empty-group", "empty-group", nil, nil, nil, "", "", "", false, nil, "", "", "", io.Discard)
 	if err == nil {
 		t.Fatal("expected an error for a group with zero declared members, got nil")
 	}
