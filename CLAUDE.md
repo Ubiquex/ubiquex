@@ -18,8 +18,24 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 1. Read `STATE.md` first — it holds current slice, open decisions, and next steps.
 2. Design decisions live in `docs/`. Never contradict them silently; if implementation
    reveals a doc is wrong, stop, record the finding in `STATE.md`, and flag it.
-3. Update `STATE.md` as the LAST act of every session (what was done, what's next,
-   any surprises).
+3. `STATE.md` is rewritten, not appended, as the LAST act of every session — it holds
+   only current state: what's in flight, what's blocked, what a fresh session needs
+   before touching anything. Target a size a session can read without thinking about
+   it. Anything that becomes history (a resolved investigation, a closed arc, a
+   checkpoint no longer load-bearing for present work) moves to `HISTORY.md` instead
+   of staying in `STATE.md` — `HISTORY.md` is the narrative archive, consulted only
+   when a session needs to know why a decision was made, never read on every open.
+   `STATE.md` carries its own `## Cross-repo state` section for state that genuinely
+   spans the other repos this one coordinates (which SDK/schema repos are published
+   at which version, which PRs are open where, which corpus counts are current) —
+   keeping that section current is `ubiquex`'s own responsibility, since it is the
+   coordinating repo; it does not belong mixed into any other repo's own STATE.md.
+   (UBI-183: `STATE.md` grew to 1.87MB as one append-only narrative log, exceeded the
+   GitHub Contents API's size limit, and cost real context on every session open
+   while sessions repeatedly worked from claims that were stale by the time they
+   were read. Every other repo this one coordinates — `ubx-provider-dynamic`, the
+   six `ubx-sdk-*` repos, the six `ubx-schema-*` repos — carries the identical
+   `STATE.md`/`HISTORY.md` pair and this identical rule in its own `CLAUDE.md`.)
 4. A plan change is not real until it lands in `docs/plan.md` (with changelog entry).
 5. User-visible changes (new commands, flags, behaviors) update ubiquex-docs
    in the SAME session: pages verified against the actual built binary
