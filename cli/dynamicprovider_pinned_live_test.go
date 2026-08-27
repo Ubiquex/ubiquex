@@ -46,20 +46,27 @@ func kubernetesSchemaCacheDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(home, ".ubx", "schemas", "ubiquex", "kubernetes", "2.0.0")
+	return filepath.Join(home, ".ubx", "schemas", "ubiquex", "kubernetes", "3.0.0")
 }
 
 // pinnedKubernetesParams is the real, ONLY [providers.kubernetes] entry
 // a real stack needs -- source = "ubiquex/kubernetes" resolves to
 // github.com/Ubiquex/ubx-schema-kubernetes (provider/schemasource.go's
-// own schemaRepoPrefix), version 2.0.0 is the real, live GitHub Release
-// cut by that repo's own publish.yml (the group-container format --
-// v1.0.0's own flat, single-member shape is superseded, not compatible).
-// No separate "kubernetes_ds" entry exists or is needed -- the launched
-// process resolves and merges BOTH real members from this one pin.
+// own schemaRepoPrefix). version 3.0.0 is UBI-182's own real
+// resource/data-source collapse landing here twice over: the driving
+// config that generates this group collapses from two
+// [dynamic_providers.*] tables to one (ubx-schema-kubernetes#5's own
+// doc comment has the full account), AND it's the first real release to
+// actually carry the wire_name fix that corrected kubernetes_ds's own
+// type-name prefixes -- v2.0.0's real, published release asset kept
+// serving the wrong ones the whole time (#4 fixed the repo's own
+// committed content but was never followed by a real republish, caught
+// while regenerating for this collapse, not before). No separate
+// "kubernetes_ds" entry exists or is needed -- the launched process
+// resolves and merges BOTH real members from this one pin.
 var pinnedKubernetesParams = map[string]any{
 	"source":  "ubiquex/kubernetes",
-	"version": "2.0.0",
+	"version": "3.0.0",
 }
 
 // TestConformance_DynamicProvider_Kubernetes_Pinned_PopulatesCache is
