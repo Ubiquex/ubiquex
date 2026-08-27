@@ -7,59 +7,50 @@
 
 ## In flight
 
-**UBI-183: session-handoff files split, real PRs open, none merged yet.**
-`ubiquex`'s own `STATE.md` had grown to 1.87MB as one append-only narrative
-log — moved wholesale to `HISTORY.md` (zero content lost) and replaced with
-this file; `CLAUDE.md` amended (rule 3) to require rewrite-not-append going
-forward. A full org audit (`gh repo list --json isArchived`, not the
-unfiltered list) found 22 real, non-archived repos, only `ubiquex` itself
-already carrying a `CLAUDE.md` — 8 more repos than the ticket's own original
-13-repo scope: the three real shared-runtime repos (`ubx-sdk-go`,
-`ubx-sdk-typescript`, `ubx-sdk-python` — separate from the ARCHIVED
-per-language bindings repos of similar name, e.g. `ubx-sdk-azure-go`) plus
-`ubiquex-docs`, `ubiquex-web`, `ubiquex.io`, `ubx-providers-check-demo`,
-`ubx-sdk-blueprints`.
+**UBI-196: docs corpus bindings_status recompute, done for resources and the
+structural half of data sources; per-resource data-source accuracy and full
+regeneration+republish of the six SDK repos are real, separate, unstarted
+work.** See the ticket for the full report — summary:
 
-Real PRs open in every one of those repos (19 total), none merged yet:
-`ubx-provider-dynamic#29`, `ubx-schema-kubernetes#9`, `ubx-schema-datadog#5`,
-`ubx-schema-azure#3`, `ubx-schema-google#3`, `ubx-schema-github#3`,
-`ubx-schema-aws#3`, `ubx-sdk-kubernetes#11`, `ubx-sdk-datadog#10`,
-`ubx-sdk-azure#14`, `ubx-sdk-google#17`, `ubx-sdk-github#11`,
-`ubx-sdk-aws#15`, `ubx-sdk-go#4`, `ubx-sdk-typescript#6`,
-`ubx-sdk-python#4`, `ubiquex-web#1`, `ubiquex.io#1`,
-`ubx-providers-check-demo#4`, `ubx-sdk-blueprints#1`. `ubiquex-docs` got its
-`CLAUDE.md` via a direct push to `main`, matching that repo's own confirmed
-direct-push convention (no PR needed there). The three shared-runtime repos
-got the full `CLAUDE.md`+`STATE.md`+`HISTORY.md` triple, matching the six
-SDK/schema repos; the other 5 (docs/web/site/demo/blueprints) got a
-right-sized `CLAUDE.md` only — no invented git-workflow rule for repos where
-none has been confirmed by any session yet.
+- 4,098 resource pages flipped `local_only -> published` (verified: real `go
+  build` against real local checkouts, `ast.parse`, a real-struct-field
+  cross-check, `mint validate` — all clean).
+- 449 more (GCP version-qualified families, previously thought to need a
+  `ubx-provider-dynamic` naming fix) flipped too, once a real, live
+  regeneration proved the naming-synthesis bug was already fixed upstream
+  (UBI-185) and the stale pages just needed reprocessing against real
+  published ground truth — no code change needed or made.
+- 7,310 data-source pages flipped `published -> local_only` (structural fix:
+  `DataSourceBinding` doesn't exist in any of the six published packages yet,
+  confirmed live). Does NOT fix per-page wire/binding accuracy against a
+  fresh local generation — spot-checked at 52% (kubernetes) / 85% (github) /
+  4% (datadog) match rates, real and unresolved.
+- 5 GitHub resources held back (`github_repository_ruleset`,
+  `github_network_configuration`, `github_get_budget`,
+  `github_actions_hosted_runner`, `github_custom_property`) — a real "Org"
+  field shown in their example doesn't exist in the real published Config
+  struct. Genuine content drift, not a naming issue this pass could safely
+  correct.
+
+All three landed as direct commits to `ubiquex-docs` `main` (that repo's own
+confirmed direct-push convention), each independently verified via `gh api`
+after pushing, not trusted from local git alone.
+
+**Not done, real and separate**: full regeneration and republish of the six
+`ubx-sdk-<provider>` repos so their real packages carry `DataSourceBinding`
+and every data-source page can go `local_only -> published` for real. See the
+ticket for the scope report. Kubernetes/GitHub/Datadog are single-entry and
+fast to regenerate (`ubx sdk gen --only <name> --lang <lang>`, seconds each,
+confirmed live). Azure/Google/AWS are GROUP-shaped — a bare `--only
+<provider>` only covers ONE of their many declared entries (confirmed live:
+`--only azure` produced 63 resources against a real 604-member group) — full
+regeneration needs either enumerating every group member in `--only` or
+whatever mechanism originally built these six repos' own initial publish,
+which this session did not need to identify and has not verified.
 
 ## Blocked
 
-Nothing currently blocked. UBI-183's own 19 PRs above are open, awaiting
-founder review — not blocking anything else in the meantime.
-
-## Known, deliberately not acted on
-
-**UBI-194's own remaining five providers.** `datadog`/`azure`/`google`/`github`/`aws`
-schema repos all resolve their `ubx-provider-dynamic` binary version via the
-bootstrap fallback (`schema_format 3 -> 1.0.0`), not a real `min_binary_version` —
-confirmed working correctly, logs visibly on every use, no functional harm. The
-recorded recommendation (UBI-194 ticket, 2026-08-27) is to let each regenerate
-naturally via its own weekly `hash-watch.yml` cron rather than forcing a
-metadata-only republish now — Azure/Google/AWS track fast-moving upstream APIs
-and are near-certain to bump for real content reasons within a cycle or two
-anyway, picking up `min_binary_version` for free. Only Kubernetes has actually
-been regenerated past the fallback (`v3.0.1`, carries `min_binary_version: 1.0.1`).
-
-**UBI-195: Azure's own real RPC-layer load-time cost, filed not fixed.** A pinned
-`[providers.azure]` resolution takes ~54-56s wall time before its first RPC
-response, zero network, root-caused to the `GetProviderSchema` gRPC call itself
-(~41s of the total) via three separate live instruments — NOT parsing/
-translation/merging (~11s), which was the original, now-corrected hypothesis.
-Filed as its own Linear ticket with the full root-cause breakdown. Nobody has
-picked this up yet.
+Nothing currently blocked.
 
 ## Before touching anything
 
@@ -68,15 +59,9 @@ picked this up yet.
   separate repo/registry directly: a real `git log`/`diff` against the actual
   separate repo, or a real registry query (the Go module proxy, `jsr.io`,
   `pypi.org`), never infer "published" from a commit to the monorepo's own
-  copy alone (CLAUDE.md rule 8). This bit the project twice: UBI-131's own Go
-  fix was reported "committed and pushed" across multiple session summaries
-  when only the monorepo's own copy had changed — the separate, real
-  `ubx-sdk-go` repo was never touched, still showing its original scaffold
-  commit a full day later, caught only when the founder pushed back and a
-  real `git log` was run against the actual separate repo.
-- Every `ubx-schema-*`/`ubx-sdk-*`/`ubx-provider-dynamic` PR is opened, never
-  self-merged — the founder merges. Direct commits to `ubiquex`'s own `main` are
-  the one allowed exception (CLAUDE.md's git rules).
+  copy alone (CLAUDE.md rule 8). Same discipline for a branch with an open
+  PR: confirm it's still open before pushing more commits to it — hit three
+  times in one session, caught only by accident each time.
 - `docs/plan.md` and `docs/architecture.md` are the design-decision record for
   `ubiquex` itself; this file is not a substitute for either.
 
@@ -98,13 +83,15 @@ group snapshots consumed via `provider.AcquireSchema`):
 | github | v1.0.0 | no — bootstrap fallback |
 | aws | v1.0.0 | no — bootstrap fallback |
 
-**`ubx-provider-dynamic`**: latest release `v1.0.1`, published per platform
-(linux/darwin × amd64/arm64) with checksums, acquired via
-`provider.AcquireDynamicProviderBinary` — no `UBX_PROVIDER_DYNAMIC_REPO`
-checkout required on the normal path (kept only as an explicit dev override).
+Recommendation on record (UBI-194): wait for these five to regenerate
+naturally rather than forcing a metadata-only republish.
 
-**SDK repos** (`ubx-sdk-<provider>`, three languages per repo): latest Go module
-tag per repo, directly verified via the GitHub API —
+**`ubx-provider-dynamic`**: latest release `v1.0.1`, published per platform
+with checksums, acquired via `provider.AcquireDynamicProviderBinary` — no
+`UBX_PROVIDER_DYNAMIC_REPO` checkout required on the normal path.
+
+**SDK repos** (`ubx-sdk-<provider>`, three languages per repo): latest Go
+module tag per repo —
 
 | Repo | Latest Go tag |
 |---|---|
@@ -113,11 +100,13 @@ tag per repo, directly verified via the GitHub API —
 | azure | sdk/go/v1.0.0 |
 | google | sdk/go/v1.1.0 |
 | github | sdk/go/v1.1.0 |
-| aws | sdk/go/v2.0.0 |
+| aws | sdk/go/v2.0.0 (module path itself ends `/v2`, real semantic-import-versioning requirement — the one provider where this matters) |
+
+None of these six carry `DataSourceBinding` yet (confirmed live via GitHub
+code search across all six, zero hits, 2026-08-27) — this is what UBI-196's
+still-open regeneration work closes.
 
 PyPI (`pypi.org`) and JSR (`jsr.io`) versions are NOT verified here — check
-directly before trusting parity with the Go tag above (CLAUDE.md rule 8; a
-mismatch across the three languages would not be visible from this table alone).
+directly before trusting parity with the Go tag above.
 
-**Open PRs across the org**: none, as of the last check this session (excluding
-whatever UBI-183 itself opens while landing the files described above).
+**Open PRs across the org**: none as of the last check this session.
