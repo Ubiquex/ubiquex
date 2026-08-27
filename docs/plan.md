@@ -2,6 +2,47 @@
 
 ## Changelog
 
+- 2026-08-27 -- UBI-182 Stage F CLOSED, all six real providers
+  (kubernetes, datadog, github, google, aws, azure) published and
+  live-verified. Azure -- the last one, and the last real blocker named
+  in this arc -- needed UBI-193 Part 1's own external-$ref bundling fix
+  before it could even be generated: Azure's own real Swagger 2.0 specs
+  split themselves across shared `common-types/*.json` files by real
+  relative path, and the fetched-then-remarshaled snapshot lost the
+  resolved content on reload. Reported and confirmed before building
+  (100% relative paths sampled across 16 diverse real specs; Azure's own
+  real ref graph is genuinely cyclic, confirmed live via a direct
+  pointer-identity walk of `network/virtualNetwork.json`, ruling out
+  naive value-inlining as an approach): built `internal/openapi.Bundle`
+  in `ubx-provider-dynamic`, real REFERENCE bundling (one local
+  `components` entry per distinct external target, every reference
+  rewritten to a local pointer) rather than value inlining, so a cycle
+  stays a cheap pointer instead of expanding forever. Generated all 604
+  real Azure members (302 resource-providers x resource+data-source
+  modes), published, pinned, and live-proven -- including a real,
+  hand-picked check that the previously-blocked `network/virtualnetwork`
+  family specifically resolves correctly, the real worst case for both
+  external refs and cycles.
+
+  A real, separate bug surfaced by Azure's own real scale, not a flaw in
+  the bundling fix: Azure's 604-member group takes ~54-56s to load,
+  parse, and translate before its first RPC response (confirmed CPU-
+  bound, not network-bound -- a cache-hit run with the network poisoned
+  costs the same real wall time as a cold one), breaching
+  `provider.Launch`'s own 10s default handshake timeout. Fixed with a
+  scoped 120s override at the two real dynamic-provider launch call
+  sites in `ubiquex`, not a change to the global default (which remains
+  correct for ordinary, hand-written Terraform provider binaries). The
+  real performance question itself (85MB/604 members, almost a minute,
+  zero network) is named, not silently hidden behind the timeout bump --
+  real, separate, not-yet-investigated follow-up work.
+
+  Stage E (`[providers.<name>]`'s dual-meaning collapse) is now
+  confirmed UNBLOCKED -- its own real safety condition (every provider
+  having a real published pin, so nothing depends on the live-fetch
+  fallback it would remove) is met for all six. Not built this session,
+  reported as a real, live decision point. Full detail in STATE.md.
+
 - 2026-08-27 -- UBI-182 Stage F closed for five of six real providers
   (kubernetes, datadog, github, google, aws); azure remains blocked
   behind UBI-193's own external-$ref bundling gap (Part 1, substantial,
