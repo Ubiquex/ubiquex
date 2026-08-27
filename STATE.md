@@ -2,7 +2,7 @@
 
 > Updated as the last act of every working session. This file is the handoff.
 
-## UBI-182: five of six real providers published and live-verified (kubernetes, datadog, github, google, azure-blocked-as-UBI-193); AWS -- the last and largest, the only real mixed-source group -- generated (430 members, 203MB, zero errors) and PR'd to a real new repo, two PRs open awaiting merge before publish, 2026-08-27
+## UBI-182: Stage F closed for five of six real providers (kubernetes, datadog, github, google, aws all published and live-verified); azure remains blocked behind UBI-193 Part 1 (external $ref bundling, unstarted); Stage E stays blocked transitively on azure, 2026-08-27
 
 **Scope**: four pieces -- (1) snapshot generation for cloudformation/smithy/discoverydoc, one shared implementation since all four sources converge post-translation; confirm whether Kubernetes (openapi via Swagger 2.0 conversion) already works; (2) real `ubx-schema-<provider>` repos, snapshot committed not release-only; (3) `dynamicProviderSignals`/`dynamicProviderNamespaces` stop refusing pinned entries; (4) collapse `[providers.<name>]`'s dual meaning once all four sources support snapshots. Founder's own instruction: build one provider end to end (Kubernetes or Datadog, whichever smaller) before the other five, same staging discipline that caught real bugs in the data source work.
 
@@ -376,6 +376,25 @@ Verification built from a fresh, disposable clone of `ubx-provider-dynamic` at r
 **A real, explicit, reported dependency, not silently assumed away**: `ubx-schema-aws`'s own `publish.yml` calls `--dump-group-summary`, which needs `#25` merged into `ubx-provider-dynamic` first (`publish.yml` builds from real origin/main) -- `#1` can merge independently, but `publish.yml` must not be dispatched until `#25` also merges, or it will fail on this real mixed group the same way it did locally before the fix. Noted explicitly in `ubx-schema-aws#1`'s own PR body.
 
 **What's next**: founder review/merge of `ubx-provider-dynamic#25` and `ubx-schema-aws#1` (either order; `publish.yml` needs both). Once both are real (merged, confirmed via `gh api`, not assumed): dispatch `publish.yml` for AWS's real `v1.0.0` release, pin `[providers.aws]`, confirm one pin serves both real sources, and run the same two-process, negative-control-verified, type-name-checked live proof every other provider this arc has gotten -- the last of the six real providers.
+
+---
+
+**Both PRs merged, verified via `gh api` (`ubx-provider-dynamic#25` and `ubx-schema-aws#1`, both `merged: true`). `publish.yml` dispatched for real, `v1.0.0` cut and independently confirmed**: `gh api .../releases/tags/v1.0.0` -- exactly two assets (`SHA256SUMS` 82 bytes, `snapshot.tar.gz` 18,752,054 bytes / ~17.88MB), not draft/prerelease, notes read "1715 real resource types, 4884 real data source types" with a single `[providers.aws]` pin, zero member names -- the release note counts came from `--dump-group-summary`'s own real mixed-source fix (`#25`), the first real release this org has cut where that flag exercises the mixed-source path at all.
+
+**Real, live, two-process pinned-resolution proof run against the real, live `v1.0.0` release -- the first real live test of `internal/mixedserver`'s own dispatch layer against real data, not just the hermetic routing tests from `#24`.** Both phases built `ubx-provider-dynamic` from a clean, disposable clone of the real, merged `origin/main` (`/tmp/ubx-provider-dynamic-verify-aws`, via `UBX_PROVIDER_DYNAMIC_REPO`), matching this arc's own established discipline.
+
+- Phase 1 (`_PopulatesCache`): 8.49s real, first-time acquisition (download + extract + merge of all 430 real members) -- **1,715 resource types, 4,884 data source types, 431 files extracted, 212.1MB total** (vs. Google's own 8.18s / 206.8MB at 524 members -- comparable time despite AWS being the larger raw payload, and despite this being the first real mixed-source resolution). The real log line confirms the mixed path was genuinely exercised, not silently falling back to single-source: `serving "aws" (mixed: [cloudformation smithy])`.
+- Phase 2 (`_ZeroNetworkOnCacheHit`): 5.69s real cache-hit resolution with the proxy poisoned for the whole process -- identical exact counts, zero network.
+- Negative control (ad hoc, deleted after use): empty cache, poisoned proxy, real `proxyconnect... connection refused` against a real GitHub API call, confirming the poisoning was genuinely effective.
+- Cache restored afterward via a real, `-count=1`-forced re-run (matching the lesson already learned once this arc about Go's own test-result caching serving a stale PASS).
+
+**Both live-proof tests assert EXACT per-source counts (1,715 / 4,884), not just nonzero** -- a deliberate strengthening beyond every other provider's own live proof, specific to AWS being the first real mixed-source group: a routing bug that silently dropped one real source's own contribution, or double-counted a collision, would still pass a nonzero check but fail this one. Both counts matched exactly on both phases, confirming a single `[providers.aws]` pin genuinely serves CloudFormation-sourced resources and Smithy-sourced data sources together, not one silently winning.
+
+**Regression-checked Kubernetes (the real single-source/openapi path) against its own real, live release** -- unaffected, 92/116 real counts unchanged, confirming `Summarize`'s refactor (`#25`) didn't disturb the pre-existing single-source path.
+
+**Committed and pushed directly to `ubiquex` main**: `cli/dynamicprovider_pinned_live_aws_test.go`, `docs/plan.md`'s own changelog entry (CLAUDE.md rule 4), this checkpoint.
+
+**Stage F closed for five of the six real providers** (kubernetes, datadog, github, google, aws) -- azure remains blocked behind UBI-193's own Part 1 (external-$ref bundling, substantial, unstarted). **What remains in UBI-182 overall**: (1) azure itself, blocked on UBI-193 Part 1, a real, separate, unstarted feature, not a quick fix; (2) Stage E (`[providers.<name>]`'s dual-meaning collapse), which was always contingent on every real provider having a real published pin first -- still blocked, transitively, on azure. No other real gap named or found this arc remains open against the original six-stage plan.
 
 ---
 

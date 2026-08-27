@@ -2,6 +2,35 @@
 
 ## Changelog
 
+- 2026-08-27 -- UBI-182 Stage F closed for five of six real providers
+  (kubernetes, datadog, github, google, aws); azure remains blocked
+  behind UBI-193's own external-$ref bundling gap (Part 1, substantial,
+  unstarted). Each of the five: real `ubx-schema-<provider>` repo
+  created, real snapshot generated and published (`v1.0.0`/`v2.0.0`/
+  `v3.0.0` depending on correction history), `[providers.<name>]`
+  pinned and proven with a real, live, two-process zero-network proof
+  (negative-control-verified, type names checked rather than counts).
+  AWS -- the last and largest, 430 real members -- surfaced a real,
+  new architectural gap along the way: it is the ONLY real group among
+  the six whose own members span more than one real schema source (1
+  CloudFormation resource member, 429 Smithy data-source members).
+  UBI-193 (originally filed for Azure's own two real blockers) grew a
+  third and fourth real finding because of this: exec config resolution
+  moved from group-wide/schema-serve-time to per-resource-type/
+  execution-time (fixing Google's own real 163-base_url block too, not
+  just Azure's), and a real mixed-source dispatch layer
+  (`internal/mixedserver` in `ubx-provider-dynamic`) was built so a
+  single `[providers.aws]` pin serves CloudFormation and Smithy
+  together, routing each RPC by real type ownership rather than merging
+  the two into one representation. AWS's own live proof additionally
+  asserted exact per-source counts (1,715 CloudFormation resources,
+  4,884 Smithy data sources), not just nonzero, specifically to prove
+  both real sources served together rather than one silently winning.
+  Stage E (`[providers.<name>]`'s dual-meaning collapse) stays blocked
+  -- it was always contingent on every real provider having a real
+  published pin first, and azure still doesn't. Full detail in
+  STATE.md.
+
 - 2026-08-26 -- UBI-182 provider schema snapshots, design decided and
   build sequence recorded (full plan:
   `/Users/roozbeh/.claude/plans/cryptic-questing-sphinx.md`). Snapshot
