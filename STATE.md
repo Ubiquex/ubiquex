@@ -201,6 +201,46 @@ Verification built from a fresh, disposable clone of `ubx-provider-dynamic` at r
 
 ---
 
+**Founder ordered the collapse built now, before Stage F reaches azure/google, on the explicit reasoning that the refactor cost is lowest before those two publish** ("collapsing after they publish means rewriting their hash-watch and republishing both"). Built in full across three repos.
+
+**`ubx-provider-dynamic`** (`config.Provider.DataSources`, `run()`'s live dispatch, new `snapshot.ExpandMemberModes`): see the earlier checkpoint's own full design account -- unchanged from what was reported, now actually built. `true` keeps its exact prior meaning (AWS's real 429 Smithy data-source-only entries need zero migration); CloudFormation gets a real, config-load-time refusal for `data_sources = true` instead of silent ignoring. New hermetic tests (`TestExpandMemberModes_*`, `TestLoadNamed_CloudFormation_DataSourcesTrue_RealFailLoud`) all pass; whole-repo `go build`/`go vet`/`go test ./...` clean, gofmt clean (one pre-existing, unrelated gofmt finding in `internal/schema/translate.go`, confirmed via `git stash` to predate this work, left untouched).
+
+**A real, live bug found while verifying the collapse, not caused by it**: regenerated Kubernetes under a single collapsed entry against the real, published `v2.0.0` as `--prev-snapshot` -- the resource half came back byte-identical (change level none) but the data-source half came back MAJOR. Traced directly: `ubx-schema-kubernetes#4`'s own wire_name fix was merged into the repo's `main` branch (`members/kubernetes_ds.json` on `main` already carries `wire_name: "kubernetes"`) but `publish.yml` was never re-dispatched after that merge -- confirmed by extracting the real, live `v2.0.0` release asset directly and finding its own `kubernetes_ds.json` has NO `wire_name` field at all. The real, live, currently-published release has been serving `kubernetes_ds_`-prefixed data-source type names this whole time; the earlier "Kubernetes is now genuinely, completely closed" verification never caught this because it checked resource/data-source COUNTS only (92/116), never actual type-name content -- the identical class of gap the original wire_name bug itself was found through.
+
+**Real counts, before -> after, per provider (dynamic_providers entries), confirmed via a real, parsed TOML read of the committed file, not estimated**:
+
+| Provider | Before | After | Real change |
+|---|---|---|---|
+| kubernetes | 2 | 1 | `kubernetes_ds` deleted, folded into `kubernetes` |
+| github | 2 | 1 | `github_ds` deleted, folded into `github` |
+| datadog | 4 | 2 | `datadog_ds`/`datadog_v2_ds` deleted, folded into `datadog`/`datadog_v2` |
+| google | 524 | 262 | 262 real `_ds` siblings deleted |
+| azure | 604 | 302 | 302 real `_ds` siblings deleted |
+| aws | 430 | 430 | unchanged -- real data-source-only Smithy entries, no resource sibling, `data_sources = true` keeps its exact prior meaning |
+| **Total `[dynamic_providers.*]`** | **1566** | **998** | **568 real entries removed** |
+
+**Verified mechanically before deleting anything, not assumed**: every one of the 568 real `_ds`/base pairs shares an identical `schema_url`/`base_url`/auth block with its resource sibling (checked programmatically across the whole file), zero `data_source_namespace`/`version_qualifier` overrides would be lost, and every `_ds` sibling's own `wire_name` exactly equals its resource sibling's own name (the redundant case the collapse is built to eliminate) -- confirmed for all 567 real cases with a `wire_name` override, not just the four hand-checked ones. `google_all`/`azure_all` had zero `.exclude` tables to migrate; `datadog_all`'s own exclude table folded from two keys (`datadog_v2`, `datadog_v2_ds`) into one (`datadog_v2`, three entries) -- correct because `ubx-provider-dynamic`'s own `--group-exclude` (keyed by the snapshot's internal, still-synthesized member names) and ubiquex's own `[dynamic_provider_groups.*.exclude]` (keyed by the live config entry directly) are two different, unrelated mechanisms that collapse differently -- caught before shipping a first draft that conflated them.
+
+**`cli/sdk.go` needed zero code changes**: `mergeDynamicProviderGroupMembers` already reads both `m.schemas.Resources` and `m.schemas.DataSources` from every member uniformly, regardless of what "mode" that member used to be -- confirmed by direct reading before assuming.
+
+**The whole file re-parsed as real TOML and re-loaded through `ubx-provider-dynamic`'s own `config.Load`** (not just checked as generic TOML) -- 998 entries, all pass `validate()`, zero remaining `_ds`-suffixed entries, zero CloudFormation entries with `data_sources = true`.
+
+**Representative live verification against real, still-unpublished specs** (not all 564 -- a real, explicit, named scope boundary): `google_agentidentity_v1alpha` (discovery_docs) and `azure_advisor` (openapi), both real, live-fetched through the collapsed binary's own `run()` dispatch -- both correctly built resources AND data sources from one entry each (`discovered 3 data source(s)`, `discovered 9 data source(s)`).
+
+**Kubernetes and Datadog regenerated and republished as part of this, not deferred**:
+- **Kubernetes**: regenerated under the collapsed config against the real `v2.0.0` release -- resource content unchanged, data-source content is a real, breaking correction (the wire_name bug above, now actually fixed in a real release for the first time). `manifest.json` bumped to `v3.0.0` (mechanically derived: max change level across both real members). `hash-watch.yml`/README updated. PR `ubx-schema-kubernetes#5`, open, not merged.
+- **Datadog**: regenerated under the collapsed config (2 entries instead of 4) against the real `v1.0.0` release -- all four real internal members came back byte-identical (change level none across the board). No version bump, no new release -- only `hash-watch.yml` needed updating to match the new driving config. PR `ubx-schema-datadog#2`, open, not merged.
+
+**`cli/dynamicprovider_pinned_live_test.go` updated** to point at Kubernetes' real, future `v3.0.0` (cache dir, `pinnedKubernetesParams`) -- the real, live-gated proof against the actual release can't run until `ubx-schema-kubernetes#5` merges and `publish.yml` is re-dispatched. `cli/dynamicprovider_pinned_live_datadog_test.go` needs no changes -- Datadog's own pin stays `v1.0.0`.
+
+**Four real PRs open across two repos, none merged (never self-merge)**: `ubx-provider-dynamic#21` (the collapse mechanism itself -- must merge first, same dependency shape as `#20`/`#1` before it), `ubx-schema-kubernetes#5` (depends on `#21`), `ubx-schema-datadog#2` (depends on `#21`). Plus the still-open, unrelated `ubx-provider-dynamic#17` from earlier in this arc.
+
+**Committed and pushed directly to `ubiquex` main**: `sdk/providers/.ubx/config` (the 1566 -> 998 collapse), `cli/dynamicprovider_pinned_live_test.go`.
+
+**What's next**: founder review/merge of `#21` first, then `#5`/`#2` (either order, both depend only on `#21`). Once `#21` merges: re-verify the two representative google/azure live samples above against real `origin/main` (not just this session's local build) for full parity with this project's own established discipline. Once `#5` merges: dispatch `publish.yml` for Kubernetes' real `v3.0.0`, re-pin, and re-run the two-process zero-network proof against the corrected release. Stage F resumes with azure next (smaller config now, real content unaffected) once these land.
+
+---
+
 **Superseded pre-correction account, kept for the real record of what happened, not deleted**: Stage D started -- new repo created, real pilot snapshot generated and PR'd, blocked on founder review before it can go further: created `github.com/Ubiquex/ubx-schema-kubernetes` (public, matching `ubx-sdk-kubernetes`'s own visibility). Generated a real, fresh snapshot from Kubernetes' live `release-1.37` OpenAPI/Swagger description using the Stage A/B worktree binary (Kubernetes needs nothing from Stage A/B specifically -- confirmed earlier this arc it was already openapi-only and worked pre-UBI-182 too -- the worktree binary was just what was already built): `v0.1.0`, `schema_format 2`, reconstructs exactly 92 resources on load (matching this org's own established count), verified via a real throwaway `_test.go` (`Load` + `LoadOpenAPI`, written and deleted, this project's own established one-off-live-check discipline).
 
 Repo layout matches the plan's own Stage D design: `snapshot.json` committed at the root (not release-only), `README.md`, `.github/workflows/hash-watch.yml` (weekly + manual dispatch; regenerates from the live spec and opens a PR only when the snapshot's own mechanically-derived version actually moves -- delegates the "did anything real change" question to `internal/snapshot`'s own `DiffLevel`/`NextVersion` rather than a separate raw-content hash, so a change that doesn't affect the translated schema produces no PR), `.github/workflows/publish.yml` (manual-dispatch-only, cuts a real GitHub Release tagged `v<version>` with exactly the two assets `provider.AcquireSchema` expects -- `snapshot.json`/`SHA256SUMS`, confirmed against that function's own real parser before writing the workflow, not assumed). Both workflow YAML files validated with a real `yaml.safe_load` before committing.
