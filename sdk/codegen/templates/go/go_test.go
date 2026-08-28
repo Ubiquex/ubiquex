@@ -527,6 +527,97 @@ func TestGeneratedRepo_LocalNameEndsInTest_FilenameEscaped(t *testing.T) {
 	}
 }
 
+// TestGeneratedRepo_LocalNameEndsInGOOS_FilenameEscaped is UBI-201's own
+// real, live-verified fix, the identical class as UBI-151's own _test
+// fix above, a different reserved suffix set. aws_data_sync_location_
+// fsx_windows (AWS DataSync's own real "location for FSx for Windows
+// File Server" resource) is real and confirmed live -- already
+// published in ubx-sdk-aws@2.1.0 as location_fsx_windows.go, silently
+// excluded from every non-Windows build by Go's own toolchain
+// (confirmed live before this fix: `go list -f '{{.GoFiles}}'` drops
+// the file on a real macOS build).
+func TestGeneratedRepo_LocalNameEndsInGOOS_FilenameEscaped(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_data_sync_location_fsx_windows", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+	if _, ok := files["sdk/go/aws/data/sync_location_fsx_windows_.go"]; !ok {
+		t.Fatalf("GeneratedRepo: expected aws/data/sync_location_fsx_windows_.go (escaped GOOS-suffix filename), got paths: %v", keys(files))
+	}
+	for path := range files {
+		if strings.HasSuffix(path, "_windows.go") {
+			t.Fatalf("GeneratedRepo: a real generated file still ends in _windows.go, Go's own toolchain will silently exclude it from every non-Windows build: %s", path)
+		}
+	}
+	mustContain(t, files["sdk/go/aws/data/sync_location_fsx_windows_.go"], "var SyncLocationFsxWindows = ubx.ResourceBinding{")
+	if err := CheckRepoNoDuplicateDeclarations(files); err != nil {
+		t.Fatalf("GeneratedRepo output has real package-level collisions: %v", err)
+	}
+}
+
+// TestGeneratedRepo_LocalNameEndsInGOARCH_FilenameEscaped is the same
+// real UBI-201 fix, exercised against the GOARCH half of Go's own
+// build-constraint filename rule (go/build's own real syslist.KnownArch,
+// never checked before this ticket -- a real, separate risk the ticket
+// itself named as unconfirmed).
+func TestGeneratedRepo_LocalNameEndsInGOARCH_FilenameEscaped(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_lambda_layer_version_arm64", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+	for path := range files {
+		if strings.HasSuffix(path, "_arm64.go") {
+			t.Fatalf("GeneratedRepo: a real generated file still ends in _arm64.go, Go's own toolchain will silently exclude it from every non-arm64 build: %s", path)
+		}
+	}
+}
+
+// TestGeneratedRepo_LocalNameEndsInGOOSGOARCH_FilenameEscaped covers
+// Go's own third real matching form, "name_$(GOOS)_$(GOARCH).go" --
+// both tokens present, in that order, at the very end.
+func TestGeneratedRepo_LocalNameEndsInGOOSGOARCH_FilenameEscaped(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_build_target_linux_amd64", scalarField("id", ir.ScalarString, false, false, true, false)),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+	for path := range files {
+		if strings.HasSuffix(path, "_linux_amd64.go") {
+			t.Fatalf("GeneratedRepo: a real generated file still ends in _linux_amd64.go, Go's own toolchain will silently exclude it from every non-matching build: %s", path)
+		}
+	}
+}
+
+func TestHasReservedOSArchSuffix(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"location_fsx_windows", true},
+		{"layer_version_arm64", true},
+		{"build_target_linux_amd64", true},
+		{"maintenance_windows", true},                       // real, confirmed instance (ssm maintenance_windows.go)
+		{"service_level_objective_exclusion_windows", true}, // real, confirmed instance
+		{"bucket", false},
+		{"windows", false}, // no underscore at all -- Go's own real rule never constrains this
+		{"my_service", false},
+		{"windows_bucket", false}, // "windows" is not the LAST token -- position matters, not mere presence
+	}
+	for _, c := range cases {
+		if got := hasReservedOSArchSuffix(c.name); got != c.want {
+			t.Errorf("hasReservedOSArchSuffix(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestGeneratedRepo_BareTwoTokenType(t *testing.T) {
 	types := []*ir.ResourceType{
 		rt("aws_vpc", scalarField("id", ir.ScalarString, false, false, true, false)),

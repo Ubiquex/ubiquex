@@ -77,6 +77,62 @@ import (
 // return value, then sorted by WireType within each service (defensively,
 // even if the caller already passed a sorted slice -- codegen output must
 // never depend on caller-supplied ordering, determinism is a feature).
+// knownGOOS and knownGOARCH are Go's own real, complete recognized sets
+// for filename-based build-constraint matching (go/build.Context's own
+// goodOSArchFile) -- copied from the installed Go toolchain's own
+// internal/syslist/syslist.go (unexported, not importable), not
+// hand-derived or guessed. Deliberately the FULL past/present/future
+// set that package's own doc comment says filename matching must never
+// shrink from ("Do not remove from this list, as it is used for
+// filename matching"), not just `go tool dist list`'s own currently-
+// buildable subset -- confirmed live: dist list omits hurd/nacl/zos
+// (GOOS) and every GOARCH value entirely, all of which still trigger a
+// real build-constraint exclusion by filename regardless of whether
+// that OS/ARCH combination is buildable today.
+var knownGOOS = map[string]bool{
+	"aix": true, "android": true, "darwin": true, "dragonfly": true,
+	"freebsd": true, "hurd": true, "illumos": true, "ios": true, "js": true,
+	"linux": true, "nacl": true, "netbsd": true, "openbsd": true,
+	"plan9": true, "solaris": true, "wasip1": true, "windows": true, "zos": true,
+}
+
+var knownGOARCH = map[string]bool{
+	"386": true, "amd64": true, "amd64p32": true, "arm": true, "armbe": true,
+	"arm64": true, "arm64be": true, "loong64": true, "mips": true,
+	"mipsle": true, "mips64": true, "mips64le": true, "mips64p32": true,
+	"mips64p32le": true, "ppc": true, "ppc64": true, "ppc64le": true,
+	"riscv": true, "riscv64": true, "s390": true, "s390x": true,
+	"sparc": true, "sparc64": true, "wasm": true,
+}
+
+// hasReservedOSArchSuffix reports whether name's own last one or two
+// underscore-separated components form a real Go build-constraint
+// suffix -- "_$(GOOS)", "_$(GOARCH)", or "_$(GOOS)_$(GOARCH)" -- mirroring
+// go/build.Context.goodOSArchFile's own real matching rule (extension
+// already stripped here, unlike that function, since name never carries
+// one at this point in the pipeline). Does not special-case a leading
+// bare "windows"/"linux"/... with no underscore at all -- neither does
+// Go's own real check (a file literally named "windows.go", no prefix,
+// is never build-constrained; only "foo_windows.go" is), so a resource
+// whose ENTIRE local name is exactly one reserved token, with no other
+// segment, is not something this needs to guard -- confirmed no such
+// wire name exists in any real provider's own corpus.
+func hasReservedOSArchSuffix(name string) bool {
+	i := strings.Index(name, "_")
+	if i < 0 {
+		return false
+	}
+	parts := strings.Split(name[i+1:], "_")
+	n := len(parts)
+	if n >= 2 && knownGOOS[parts[n-2]] && knownGOARCH[parts[n-1]] {
+		return true
+	}
+	if n >= 1 && (knownGOOS[parts[n-1]] || knownGOARCH[parts[n-1]]) {
+		return true
+	}
+	return false
+}
+
 func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, goDirective string) (map[string]string, error) {
 	sorted := make([]*ir.ResourceType, len(types))
 	copy(sorted, types)
@@ -196,6 +252,28 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 			// the *Config collision above already uses.
 			fileLocal := ir.FileStem(e.local)
 			if strings.HasSuffix(fileLocal, "_test") {
+				fileLocal += "_"
+			}
+			// UBI-201: the identical real Go-toolchain quirk class as the
+			// _test case above, a different reserved suffix set. Go's own
+			// build system (go/build.Context.goodOSArchFile) treats
+			// "name_$(GOOS).go", "name_$(GOARCH).go", and
+			// "name_$(GOOS)_$(GOARCH).go" as implicit, OS/ARCH-specific
+			// build constraints -- a file matching one is silently
+			// excluded from the build everywhere except that one
+			// GOOS/GOARCH. Confirmed live: aws_data_sync_location_fsx_
+			// windows generated location_fsx_windows.go, silently dropped
+			// from every non-Windows build, already published in
+			// ubx-sdk-aws@2.1.0. hasReservedOSArchSuffix mirrors that real
+			// function's own suffix-matching rule (checked against the
+			// installed Go toolchain's own internal/syslist/syslist.go,
+			// not just the ticket's own list -- syslist's real GOOS set
+			// also includes hurd/nacl/zos the ticket didn't name, and its
+			// GOARCH set was never checked before this fix at all).
+			// Scoped to the FILENAME only, same as the _test fix -- the
+			// exported Go identifier is correct today and unaffected,
+			// only the map key a real `go build` never sees changes.
+			if hasReservedOSArchSuffix(fileLocal) {
 				fileLocal += "_"
 			}
 			path := "sdk/go/" + dir + "/" + fileLocal + ".go"
