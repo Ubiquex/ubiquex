@@ -7,37 +7,47 @@
 
 ## In flight
 
-**UBI-181 investigated, not built -- awaiting a founder scope decision.** The
-1,278 figure in the ticket is stale (real corpus growth since filing, mostly
-Kubernetes' own UBI-176 alpha/beta-sibling recovery landing after). Fresh
-measurement against all six current `ubx-schema-*` pinned snapshots (zero
-network, real `raw_spec` reload): current total "no matching create"
-population is 3,693. The recovered, never-committed `dsfilter` five-rule
-filter (`ubiquex/scratchpad/ubx-provider-dynamic-dsfilter-wip-untracked/`,
-builds/tests clean against current `ubx-provider-dynamic` main, zero
-conflicts) excludes 1,874 as genuine non-resources, leaving 1,819. Of those,
-1,165 have no alternate write verb at all (correctly, permanently read-only).
-The real candidate pool the ticket's own theory targets is 554 (survivors
-with a genuine, non-read alternate verb present). Two random samples (55
-total) hand-classified: ~25-35% plausibly genuine, the rest action-on-an-
-already-modeled-resource noise -- plus a distinct, real misattribution risk
-(naive path-prefix verb matching can attribute a genuinely separate nested
-sub-resource's create op to the wrong candidate; confirmed live, azure
-`sql_pool_column` <- `SqlPoolSensitivityLabels_CreateOrUpdate`, datadog
-`ownership_inference_response` <- `CreateOwnershipFeedback`). Realistic
-remaining count once verb semantics are accounted for: ~140-190, not 1,278
-and not even 554. **The narrower proposal ("only when the resource already
-has a get") is not sufficient and adds zero discriminating power** -- every
-candidate in this population already has a get by construction (that's the
-read-candidate test that put it in the skip-note population in the first
-place); demonstrated live via GCP's own `project`/`group`/`change_request`,
-all already have a get, whose alternate verbs are unambiguous actions
-(`moveDisk`, `setIamPolicy`, `approve`/`reject`), not creation. Recommendation
-given, not yet built: a verb allowlist (restore/undelete/import/
-initiate*backup/create-or-update/provision, not any non-standard verb) +
-the five-rule filter + same-path-only attribution. Full findings in UBI-181's
-own Linear comment. Next session: wait for the founder's own scope decision
-before building anything.
+**UBI-181 built, two PRs open in `ubx-provider-dynamic`, neither merged --
+awaiting founder review.** PR #34 (`feat/ubi181-dsfilter`) lands the
+recovered, previously-never-committed `dsfilter` five-rule filter
+(watch/operation-status/execution/computed/reference-duplication) plus its
+real wiring into all three `DiscoverDataSources` call sites. PR #35
+(`feat/ubi181-narrow-verb-rule`, stacked on #34) is the narrow rule itself:
+a curated create-verb allowlist (restore/undelete/import/provision/initiate/
+create/addorupdate, split into action-verb and create-family tokens),
+`SamePathAction` (exact path or one real REST action suffix, never a path
+prefix -- closes the azure `SqlPoolSensitivityLabels_CreateOrUpdate`
+misattribution found investigating this ticket), gated through the
+five-rule filter on the candidate's own noun. Both PRs: `go build`/
+`go test`/`go vet` clean, full suite, real regression + positive tests
+added (including one mirroring the ticket's own Google Backup and DR
+example).
+
+Two real bugs caught by the PR's own tests before running against the full
+corpus: (1) the five-rule check must gate on the candidate's own `get`
+response shape, not the matched alt-verb operation's own response (`restore`/
+`initiateBackup` routinely return an LRO `Operation`, which would have
+false-excluded every one); (2) `deploy`, in the ticket's own original verb
+list, had to come out of the allowlist entirely -- 494 real Azure
+operationIds contain "deploy" as a substring of the noun `Deployment`/
+`DeploymentScripts`/`DeploymentStacks`, not the verb, and it produced two
+confirmed false positives (github `review-pending-deployments-for-run`,
+datadog `CancelFleetDeploymentV2`) before being caught and removed.
+
+**Real count, from running the landed code against the current live-pinned
+schema in all five relevant `ubx-schema-*` repos, not a sample: 48**
+(azure 16, github 19, google 12, datadog 1, kubernetes 0), deduplicated
+across each provider's resource/data-source member pairs. Hand-spot-checked
+all 48; one low-confidence entry flagged, not fixed (GCP
+`networkMonitoringProviders.monitoringPoints` via `downloadRecreateInstallScript`,
+reads more like a download action than a create). Full admitted list saved
+at `ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
+UBI-181's own Linear comment.
+
+Next session: once the founder reviews and merges #34/#35, generate the
+real SDK bindings/docs/artifacts for these 48 admitted resources -- that
+generation step was explicitly gated on this real count landing first, not
+attempted yet.
 
 **UBI-195 closed: the real 41s cost was never the RPC, it was
 `ubiquex`'s own client-side schema conversion.** All three of the

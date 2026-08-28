@@ -1,0 +1,59 @@
+{
+ "kubernetes": {},
+ "azure": {
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Sql/servers/{serverName}/databases/{databaseName}/vulnerabilityAssessments/{vulnerabilityAssessmentName}/scans/{scanId}": "matched via UBI-181's narrow create-verb allowlist (DatabaseVulnerabilityAssessmentScans_InitiateScan), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{groupName}/providers/microsoft.Compute/cloudServices/{resourceName}/providers/Microsoft.Network/cloudServiceSlots/{singletonResource}": "matched via UBI-181's narrow create-verb allowlist (VipSwap_Create), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Synapse/workspaces/{workspaceName}/sqlPools/{sqlPoolName}/vulnerabilityAssessments/{vulnerabilityAssessmentName}/scans/{scanId}": "matched via UBI-181's narrow create-verb allowlist (SqlPoolVulnerabilityAssessmentScans_InitiateScan), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Automation/automationAccounts/{automationAccountName}/sourceControls/{sourceControlName}/sourceControlSyncJobs/{sourceControlSyncJobId}": "matched via UBI-181's narrow create-verb allowlist (SourceControlSyncJob_Create), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Sql/managedInstances/{managedInstanceName}/databases/{databaseName}/vulnerabilityAssessments/{vulnerabilityAssessmentName}/scans/{scanId}": "matched via UBI-181's narrow create-verb allowlist (ManagedDatabaseVulnerabilityAssessmentScans_InitiateScan), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.RecoveryServices/vaults/{vaultName}/backupFabrics/{fabricName}/protectionContainers/{containerName}/protectedItems/{protectedItemName}/recoveryPoints/{recoveryPointId}": "matched via UBI-181's narrow create-verb allowlist (Restores_Trigger), not a standard create/insert operation",
+  "/providers/Microsoft.Marketplace/privateStores/{privateStoreId}": "matched via UBI-181's narrow create-verb allowlist (PrivateStore_CreateOrUpdate), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DataProtection/backupVaults/{vaultName}/deletedBackupInstances/{backupInstanceName}": "matched via UBI-181's narrow create-verb allowlist (DeletedBackupInstances_Undelete), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/serverfarms/{name}/virtualNetworkConnections/{vnetName}/routes/{routeName}": "matched via UBI-181's narrow create-verb allowlist (AppServicePlans_CreateOrUpdateVnetRoute), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}": "matched via UBI-181's narrow create-verb allowlist (Servers_CreateOrUpdate), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/administrators/{objectId}": "matched via UBI-181's narrow create-verb allowlist (AdministratorsMicrosoftEntra_CreateOrUpdate), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/advancedThreatProtectionSettings/{threatProtectionName}": "matched via UBI-181's narrow create-verb allowlist (ServerThreatProtectionSettings_CreateOrUpdate), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/backups/{backupName}": "matched via UBI-181's narrow create-verb allowlist (BackupsAutomaticAndOnDemand_Create), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/databases/{databaseName}": "matched via UBI-181's narrow create-verb allowlist (Databases_Create), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/firewallRules/{firewallRuleName}": "matched via UBI-181's narrow create-verb allowlist (FirewallRules_CreateOrUpdate), not a standard create/insert operation",
+  "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/flexibleServers/{serverName}/virtualendpoints/{virtualEndpointName}": "matched via UBI-181's narrow create-verb allowlist (VirtualEndpoints_Create), not a standard create/insert operation"
+ },
+ "github": {
+  "/orgs/{org}/actions/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (actions/create-or-update-org-secret), not a standard create/insert operation",
+  "/orgs/{org}/agents/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (agents/create-or-update-org-secret), not a standard create/insert operation",
+  "/orgs/{org}/codespaces/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (codespaces/create-or-update-org-secret), not a standard create/insert operation",
+  "/orgs/{org}/dependabot/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (dependabot/create-or-update-org-secret), not a standard create/insert operation",
+  "/orgs/{org}/packages/{package_type}/{package_name}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-for-org), not a standard create/insert operation",
+  "/orgs/{org}/packages/{package_type}/{package_name}/versions/{package_version_id}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-version-for-org), not a standard create/insert operation",
+  "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}": "matched via UBI-181's narrow create-verb allowlist (teams/add-or-update-repo-permissions-in-org), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/actions/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (actions/create-or-update-repo-secret), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/agents/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (agents/create-or-update-repo-secret), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/codespaces/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (codespaces/create-or-update-repo-secret), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/contents/{path}": "matched via UBI-181's narrow create-verb allowlist (repos/create-or-update-file-contents), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/dependabot/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (dependabot/create-or-update-repo-secret), not a standard create/insert operation",
+  "/repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (actions/create-or-update-environment-secret), not a standard create/insert operation",
+  "/teams/{team_id}/repos/{owner}/{repo}": "matched via UBI-181's narrow create-verb allowlist (teams/add-or-update-repo-permissions-legacy), not a standard create/insert operation",
+  "/user/codespaces/secrets/{secret_name}": "matched via UBI-181's narrow create-verb allowlist (codespaces/create-or-update-secret-for-authenticated-user), not a standard create/insert operation",
+  "/user/packages/{package_type}/{package_name}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-for-authenticated-user), not a standard create/insert operation",
+  "/user/packages/{package_type}/{package_name}/versions/{package_version_id}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-version-for-authenticated-user), not a standard create/insert operation",
+  "/users/{username}/packages/{package_type}/{package_name}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-for-user), not a standard create/insert operation",
+  "/users/{username}/packages/{package_type}/{package_name}/versions/{package_version_id}": "matched via UBI-181's narrow create-verb allowlist (packages/restore-package-version-for-user), not a standard create/insert operation"
+ },
+ "datadog": {
+  "/api/v2/widgets/{experience_type}": "matched via UBI-181's narrow create-verb allowlist (CreateWidget), not a standard create/insert operation"
+ },
+ "google": {
+  "projects.locations.backupVaults.dataSources": "matched via UBI-181's narrow create-verb allowlist (\"initiateBackup\"), not a standard create/insert method",
+  "projects.locations.backupVaults.dataSources.backups": "matched via UBI-181's narrow create-verb allowlist (\"restore\"), not a standard create/insert method",
+  "projects.locations.processors.processorVersions": "matched via UBI-181's narrow create-verb allowlist (\"importProcessorVersion\"), not a standard create/insert method",
+  "projects": "matched via UBI-181's narrow create-verb allowlist (\"provision\"), not a standard create/insert method",
+  "projects.locations.notebooks.sources": "matched via UBI-181's narrow create-verb allowlist (\"batchCreate\"), not a standard create/insert method",
+  "projects.locations.networkMonitoringProviders.monitoringPoints": "matched via UBI-181's narrow create-verb allowlist (\"downloadRecreateInstallScript\"), not a standard create/insert method",
+  "projects.locations.models.evaluations": "matched via UBI-181's narrow create-verb allowlist (\"import\"), not a standard create/insert method",
+  "projects.locations.models.evaluations.slices": "matched via UBI-181's narrow create-verb allowlist (\"batchImport\"), not a standard create/insert method",
+  "projects.locations.ragCorpora.ragFiles": "matched via UBI-181's narrow create-verb allowlist (\"import\"), not a standard create/insert method",
+  "projects.locations.extensions": "matched via UBI-181's narrow create-verb allowlist (\"import\"), not a standard create/insert method",
+  "customers": "matched via UBI-181's narrow create-verb allowlist (\"provisionDeployment\"), not a standard create/insert method",
+  "organizations.resourceValueConfigs": "matched via UBI-181's narrow create-verb allowlist (\"batchCreate\"), not a standard create/insert method"
+ }
+}
