@@ -35,6 +35,36 @@ real types (resources + data sources) across all six providers, post-switch.
 This also collapsed `sdk/providers/.ubx/config` from 998 `[dynamic_providers.*]`
 entries (302 for Azure alone) down to 6 -- one pinned entry per provider.
 
+**UBI-197's naming-divergence half (category 3) verified fixed and closed
+out**: regenerated all 98 confirmed renamed data-source pages (72 azure,
+17 datadog, 7 github, 2 kubernetes) under their real current wire names,
+reusing `gen_all_data_source_pages.py`'s own real template/nav logic
+directly against the pinned regeneration (`ubiquex-docs` `e5581fb5f`,
+pushed to main, verified via `gh api`). Verified 98/98 real `go build`,
+98/98 real `deno check`, 98/98 real `python ast.parse`, all against the
+actual published packages. One held-back page,
+`azure_consumption_openapi_marketplace`, matched a target during the
+earlier field-content classification but resolves under neither name and
+the two domains don't correspond -- left `local_only` as a confirmed
+matcher false positive, not a real rename.
+
+**UBI-197's own category 2 (908 miscategorized-resource pages) does NOT
+close via pinning or regeneration** -- confirmed directly: these wires are
+real `ResourceBinding` types under both the old AND the pinned, internally
+-consistent classification (e.g. `azure_kusto_cluster` -- pinning fixed
+agreement between the two invocations, not what the wire actually is).
+Split out as its own ticket, **UBI-199**: filed with git-archaeology
+confirming `gen_all_data_source_pages.py`'s `ubx.DataSourceBinding` check
+has been present since its first commit (these pages were correctly
+written against a since-drifted live schema fetch, not a looser historical
+check), and with the removal-vs-relocation question confirmed rather than
+assumed -- 859/908 (94.6%) already have a real, published resource page
+elsewhere (removal is correct); 49/908 (39 aws, 10 azure network/
+virtualnetwork family) have no existing resource page at all (aws' gap is
+part of a much larger one -- only 213 of 1,715 real aws resource types
+have any published page), so removal would leave them with zero coverage
+-- these need a resource page created first. Not built, not touched.
+
 **UBI-198 filed, not built**: a real, separate, smaller-scale bug found
 while diagnosing the above -- candidate discovery (`resourcemap.
 DiscoverDataSources`, openapi source) treats any unclaimed GET as a
