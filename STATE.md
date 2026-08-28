@@ -7,18 +7,50 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-191 (developer documentation site)
-closed this session, all eleven named sections built across five slices
--- see `HISTORY.md`'s own "UBI-191: DONE -- developer documentation
-site built end to end" entry. Short version: new repo
-`github.com/Ubiquex/ubiquex-internals` (private, Mintlify), a real
-multi-repo sync-drift mechanism (`sync-state.json` + `check_drift.py` +
-weekly `sync-drift-watch.yml`) tracking 11 real source files across
-`ubiquex` and `ubx-provider-dynamic`, verified with real dry runs and a
-real negative test at every slice. Two of the ticket's six named
-diagrams not built (end-to-end change flow, staleness) -- both
-prose-covered already, named as real, small, optional follow-up, not
-silently claimed done.
+**New standing rule, 16 real PRs open, none merged**: CLAUDE.md rule 10
+(`ubiquex`) -- an architectural change (a new schema source, a
+naming-derivation change, a new mechanism, a change to what the ledger
+records) gets its `ubiquex-internals` page written or updated in the
+SAME body of work, never a follow-up; a bug fix inside an
+already-documented mechanism doesn't qualify. Landed directly in the
+three direct-push repos (`ubiquex` `a9f7583`, also added to
+`docs/prompts.md`; `ubiquex-docs` `77d06ffa8`; `ubiquex-internals`
+`5c66ccb`, phrased as this repo's own real target). Opened as real PRs
+against all 16 PR-only repos (`ubx-provider-dynamic` #32; six
+`ubx-sdk-<provider>` #22/#21/#24/#19/#17/#18 aws/azure/google/
+kubernetes/datadog/github; three shared runtimes `ubx-sdk-go` #7/
+`ubx-sdk-typescript` #10/`ubx-sdk-python` #8; six `ubx-schema-<provider>`
+#5/#5/#5/#11/#7/#5 aws/azure/google/kubernetes/datadog/github),
+confirmed open via `gh pr list` across all 16, never self-merged.
+Founder review needed on all 16 before this rule is real everywhere,
+not just in the three monorepo-adjacent repos.
+
+**Checked whether the sync mechanism should enforce rule 10, real
+finding, not assumed**: it can't, mechanically -- telling an
+architectural change apart from a bug fix inside an already-documented
+mechanism needs judgment a diff alone doesn't encode, the identical
+reason CLAUDE.md rule 5's own "same session" ask has no CI check
+either. `sync-drift-watch.yml` (`ubiquex-internals` `b3a0fe4`) stays
+what it always was -- a backstop for an already-TRACKED source file
+drifting without its page following, nothing about a mechanism whose
+file was never registered in the first place. The one real,
+low-risk improvement made: cadence tightened from weekly to daily,
+since rule 10's own "same body of work" intent is undercut more by a
+week-long detection lag than a check with no same-work expectation
+behind it would be. The workflow's own header comment now states this
+relationship explicitly so it doesn't get silently oversold later.
+
+UBI-191 (developer documentation site) closed this session, all eleven
+named sections built across five slices -- see `HISTORY.md`'s own
+"UBI-191: DONE -- developer documentation site built end to end" entry.
+Short version: new repo `github.com/Ubiquex/ubiquex-internals` (private,
+Mintlify), a real multi-repo sync-drift mechanism (`sync-state.json` +
+`check_drift.py` + `sync-drift-watch.yml`, now daily) tracking 11 real
+source files across `ubiquex` and `ubx-provider-dynamic`, verified with
+real dry runs and a real negative test at every slice. Two of the
+ticket's six named diagrams not built (end-to-end change flow,
+staleness) -- both prose-covered already, named as real, small, optional
+follow-up, not silently claimed done.
 
 UBI-196/197/198/199/202 fully closed this
 session; UBI-200/201 filed, not built -- see `HISTORY.md`'s own
