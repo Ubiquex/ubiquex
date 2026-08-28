@@ -7,6 +7,43 @@
 
 ## In flight
 
+**UBI-200 closed: schema staleness detection built and verified in real
+CI.** Design question (which of three named options) reported and
+confirmed before building: option 1, `ubiquex-docs` queries each real
+`ubx-schema-<name>` repo's own current GitHub Release directly, never
+`ubiquex`'s own `sdk/providers/.ubx/config` -- that config can itself
+lag a schema repo's real latest release, which would make it report
+false-clean on exactly the case this exists to catch, and would only
+relocate the staleness problem one repo up rather than closing it.
+Before building, confirmed directly (not assumed) which of the
+ticket's own two possible causes explained zero `PROVENANCE.json`
+files being committed anywhere: the write path (`write_provenance_record`)
+is real and reachable, both real drivers call it unconditionally
+whenever a batch writes at least one page; the last real commit to
+either driver is the UBI-199 provenance fix itself, and the two most
+recent `resource-reference/aws` commits are relocations, not
+regenerations -- no full batch has run through either driver's `main()`
+since the fix landed, the mechanism was never broken.
+
+`provenance_check.py` gained `check_staleness` (`fetch_latest`
+injectable, so its own classification logic is hermetically testable
+without mocking the real network boundary, matching this file's own
+"no mocks" convention just moved to a plain function parameter) and
+`real_latest_schema_release`. New `staleness_check.py` reads real,
+committed `resource-reference/<provider>/PROVENANCE.json` files with
+four distinct exit codes, never collapsed into a pass/fail binary: `0`
+genuinely clean, `1` real staleness found, `2` only inconclusive
+(every live query failed), `3` zero real records found -- explicitly
+NOT the same as clean, the exact failure class ("reports clean because
+it found nothing") this session already hit more than once. New
+`schema-staleness-watch.yml` (weekly, warns via one real tracking
+issue, never fails the job, this check is inherently non-hermetic and
+a permanently-red build the moment it lands helps nobody) confirmed in
+real dispatched CI (`33206151029`): hit the real, current exit-3 state,
+opened a real GitHub issue (`ubiquex-docs#49`) with the explicit
+"NOTHING WAS CHECKED, this is not the same as clean" message, job
+stayed green. `ubiquex-docs` `29a028e91`.
+
 **`docs-structure-gate.yml` built and verified in real CI** (`ubiquex-docs`
 `0c04d9131`): wires `mint validate` and `mint broken-links` into CI on
 every push to `main`, the identical gap the golden-page CI gate closed
