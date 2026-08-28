@@ -7,80 +7,19 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196 and UBI-197 both closed this session --
-see `HISTORY.md` for the full arc (docs corpus bindings_status reconciled
-against real published packages for resources and data sources both, all six
-`ubx-sdk-<provider>` packages regenerated/republished carrying real
-`DataSourceBinding`, real generation provenance built into `ubx sdk gen` and
-propagated into all six repos' CI and the docs pipeline).
-
-**UBI-197's own root cause, found in a later pass and fixed**: the 908 of
-1,400 held-back data-source pages classified as "miscategorized resource"
-(a real `ResourceBinding` wire sitting under the docs corpus's `/data/`
-directory) were never a docs-pipeline bug -- `gen_all_data_source_pages.py`
-structurally cannot write a `ResourceBinding` wire under `/data/` (gates on
-the real Go source's own `ubx.DataSourceBinding` marker). The real cause:
-`ubiquex-docs`' generation needs two separate `ubx sdk gen` invocations per
-provider (`--dump-ir` for schema.json, `--lang go --out` for the real Go
-source), and both used to independently live-fetch each provider's
-`schema_url` on every launch -- unpinned. If the real upstream spec changed
-between the two fetches (confirmed live for Azure, whose spec sits on a
-moving branch tip), the two invocations could disagree on which wires are
-resources vs. data sources. **Fixed**: `sdk/providers/.ubx/config` switched
-all six providers from live `schema_source`/`schema_url` entries to pinned
-`source`/`version` entries against each provider's real, already-published
-`ubx-schema-<name>` snapshot (`b40beb2`, pushed to `ubiquex` main). Verified
-live: zero disagreement between the two invocations for any of the 13,458
-real types (resources + data sources) across all six providers, post-switch.
-This also collapsed `sdk/providers/.ubx/config` from 998 `[dynamic_providers.*]`
-entries (302 for Azure alone) down to 6 -- one pinned entry per provider.
-
-**UBI-197's naming-divergence half (category 3) verified fixed and closed
-out**: regenerated all 98 confirmed renamed data-source pages (72 azure,
-17 datadog, 7 github, 2 kubernetes) under their real current wire names,
-reusing `gen_all_data_source_pages.py`'s own real template/nav logic
-directly against the pinned regeneration (`ubiquex-docs` `e5581fb5f`,
-pushed to main, verified via `gh api`). Verified 98/98 real `go build`,
-98/98 real `deno check`, 98/98 real `python ast.parse`, all against the
-actual published packages. One held-back page,
-`azure_consumption_openapi_marketplace`, matched a target during the
-earlier field-content classification but resolves under neither name and
-the two domains don't correspond -- left `local_only` as a confirmed
-matcher false positive, not a real rename.
-
-**UBI-197's own category 2 (908 miscategorized-resource pages) does NOT
-close via pinning or regeneration** -- confirmed directly: these wires are
-real `ResourceBinding` types under both the old AND the pinned, internally
--consistent classification (e.g. `azure_kusto_cluster` -- pinning fixed
-agreement between the two invocations, not what the wire actually is).
-Split out as its own ticket, **UBI-199**: filed with git-archaeology
-confirming `gen_all_data_source_pages.py`'s `ubx.DataSourceBinding` check
-has been present since its first commit (these pages were correctly
-written against a since-drifted live schema fetch, not a looser historical
-check), and with the removal-vs-relocation question confirmed rather than
-assumed -- 859/908 (94.6%) already have a real, published resource page
-elsewhere (removal is correct); 49/908 (39 aws, 10 azure network/
-virtualnetwork family) have no existing resource page at all (aws' gap is
-part of a much larger one -- only 213 of 1,715 real aws resource types
-have any published page), so removal would leave them with zero coverage
--- these need a resource page created first. Not built, not touched.
-
-**UBI-198 filed, not built**: a real, separate, smaller-scale bug found
-while diagnosing the above -- candidate discovery (`resourcemap.
-DiscoverDataSources`, openapi source) treats any unclaimed GET as a
-data-source candidate with no check for whether the response schema is a
-genuine top-level operation response vs. a reusable, nested-only schema
-component. Confirmed via direct $ref-reachability analysis against real
-provider specs: 228/229 (99.6%) of Datadog's remaining held-back wires and
-17/20 (85%) of GitHub's match a real component that's never a real
-operation's own top-level response anywhere in the spec -- these pages
-should not exist at all, not be regenerated. Azure's own check was
-inconclusive (its wire-type derivation goes through an extra namespace-
-splitting transform a plain snake-case match doesn't replicate) -- named as
-follow-up in the ticket, not resolved. Two individual exceptions found
-(`datadog_security_monitoring_rule_response`, `github_repository`/
-`github_minimal_repository`/`github_visual_studio_subscription_assignment`)
-need their own look before any bulk deletion.
+Nothing currently in flight. UBI-196/197 both closed this session; UBI-198,
+UBI-199, UBI-200 filed as real, separate follow-up (198/200 not built, 199's
+own recurrence-gap half built and verified) -- see `HISTORY.md`'s own
+"UBI-196/197/198/199/200: docs corpus bindings_status arc, full close" entry
+for the complete arc (root cause, all four verification passes, every
+commit). Short version: all six providers' schema generation is now pinned
+to a real, published snapshot (`ubiquex` `b40beb2`) instead of live-fetching,
+closing UBI-197's own naming-divergence category for good (98 pages
+regenerated and verified, `ubiquex-docs` `e5581fb5f`); the pinning fix's own
+two recurrence gaps (hardcoded scratch paths, provenance silent on whether a
+schema fetch was pinned) are closed too (`ubiquex` `2371b4d`, `ubiquex-docs`
+`336285fd9`). UBI-197's own remaining 908-page placement problem (UBI-199)
+and UBI-198's own candidate-discovery fix are real, scoped, NOT built.
 
 Real, named follow-up work, not yet started:
 
@@ -109,6 +48,17 @@ Real, named follow-up work, not yet started:
 - UBI-194: publish and acquire `ubx-provider-dynamic` for the other five
   providers (kubernetes already done) — recommendation on record is to wait
   for natural regeneration rather than forcing a metadata-only republish.
+- UBI-198: candidate discovery (`resourcemap.DiscoverDataSources`) mints a
+  data-source candidate for any unclaimed GET with no check for whether the
+  response schema is a real top-level operation response — fix scoped, not
+  built. See `HISTORY.md`'s own arc entry for the full real breakdown.
+- UBI-199: 908 real resources sitting under `/data/` as stale data-source
+  pages — 859 need removal (a real resource page already exists elsewhere),
+  49 need a resource page created first (no existing page to fall back on).
+  Neither built yet.
+- UBI-200: a directory pinned at generation time has no way to detect a
+  newer real snapshot published since — three real design options named,
+  none decided.
 
 ## Blocked
 
@@ -128,7 +78,12 @@ Nothing currently blocked.
   local checkout is dirty or unpushed, and stamps real provenance into
   `--dump-ir` output and `--out`/`PROVENANCE.json` — do not assume a real
   generation's output is trustworthy without checking that stamp first,
-  especially for anything meant to be committed or published.
+  especially for anything meant to be committed or published. That record
+  now ALSO carries `schema_pinned`/`schema_source`/`schema_version` (or
+  `schema_url` when live) per provider (UBI-199) — `ubiquex-docs`' own
+  `check_provenance` refuses on unpinned or missing the same way it already
+  refused on dirty; a record without `schema_pinned` at all (anything
+  generated before this fix) reads as unknown, never as implicitly pinned.
 - `docs/plan.md` and `docs/architecture.md` are the design-decision record for
   `ubiquex` itself; this file is not a substitute for either.
 - `sdk/providers/.ubx/config` now pins all six providers (`source`/`version`
