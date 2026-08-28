@@ -510,6 +510,19 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 		return "", 0, descriptionCoverage{}, err
 	}
 
+	// UBI-199: this provider's own real schema-source provenance, set on
+	// this LOCAL copy of the process-wide tool provenance (never on the
+	// cached singleton resolveDynamicProviderProvenance returned it from
+	// -- see dynamicProviderProvenance's own doc comment).
+	schemaPinned, schemaSource, schemaVersion, schemaURL, schemaErr := schemaProvenanceFields(params)
+	if schemaErr != nil {
+		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider %q: schema provenance: %w", name, schemaErr)
+	}
+	prov.SchemaPinned = schemaPinned
+	prov.SchemaSource = schemaSource
+	prov.SchemaVersion = schemaVersion
+	prov.SchemaURL = schemaURL
+
 	schemas, err := dynamicProviderSchema(ctx, binPath, name, params)
 	if err != nil {
 		return "", 0, descriptionCoverage{}, err
@@ -605,6 +618,18 @@ func generateDynamicProviderGroup(ctx context.Context, timeout time.Duration, gr
 	if err := checkDynamicProviderProvenance(stderr, prov, requireCleanProvenance); err != nil {
 		return "", 0, descriptionCoverage{}, err
 	}
+
+	// UBI-199: this group's own real, aggregated schema-source provenance
+	// -- see groupSchemaProvenanceFields' own doc comment for why "every
+	// member pinned and agreeing" is the only shape that reads as pinned.
+	schemaPinned, schemaSource, schemaVersion, schemaNote, schemaErr := groupSchemaProvenanceFields(memberNames, dynamicProviders)
+	if schemaErr != nil {
+		return "", 0, descriptionCoverage{}, fmt.Errorf("dynamic provider group %q: schema provenance: %w", groupName, schemaErr)
+	}
+	prov.SchemaPinned = schemaPinned
+	prov.SchemaSource = schemaSource
+	prov.SchemaVersion = schemaVersion
+	prov.SchemaNote = schemaNote
 
 	members := make([]dynamicProviderGroupMember, 0, len(memberNames))
 	for _, name := range memberNames {

@@ -63,6 +63,120 @@ func TestPinnedSchemaFields_NonStringVersion_Errors(t *testing.T) {
 	}
 }
 
+// UBI-199: schemaProvenanceFields is what makes an unpinned fetch
+// visible in PROVENANCE.json rather than merely disallowed by a
+// separate flag -- these mirror TestPinnedSchemaFields_* above exactly,
+// since it's a thin wrapper, but assert the RECORD shape a downstream
+// consumer (ubiquex-docs' own provenance_check.py) actually reads.
+func TestSchemaProvenanceFields_Live_RecordsURL(t *testing.T) {
+	pinned, source, version, url, err := schemaProvenanceFields(map[string]any{
+		"schema_source": "openapi",
+		"schema_url":    "https://example.invalid/spec.json",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pinned {
+		t.Fatal("expected pinned=false for a live-shaped entry")
+	}
+	if source != "" || version != "" {
+		t.Fatalf("expected empty source/version for a live entry, got source=%q version=%q", source, version)
+	}
+	if url != "https://example.invalid/spec.json" {
+		t.Fatalf("url=%q, want the real schema_url recorded so a live fetch is visible", url)
+	}
+}
+
+func TestSchemaProvenanceFields_Pinned_RecordsSourceAndVersion(t *testing.T) {
+	pinned, source, version, url, err := schemaProvenanceFields(map[string]any{
+		"source":  "ubiquex/azure",
+		"version": "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pinned {
+		t.Fatal("expected pinned=true")
+	}
+	if source != "ubiquex/azure" || version != "1.0.0" {
+		t.Fatalf("source=%q version=%q, want ubiquex/azure / 1.0.0", source, version)
+	}
+	if url != "" {
+		t.Fatalf("expected empty url for a pinned entry, got %q", url)
+	}
+}
+
+func TestSchemaProvenanceFields_PropagatesPinnedSchemaFieldsError(t *testing.T) {
+	_, _, _, _, err := schemaProvenanceFields(map[string]any{"source": "ubiquex/azure"})
+	if err == nil {
+		t.Fatal("expected the underlying pinnedSchemaFields error (source without version) to propagate")
+	}
+}
+
+func TestGroupSchemaProvenanceFields_AllMembersPinnedAndAgree_Pinned(t *testing.T) {
+	dp := map[string]map[string]any{
+		"azure":         {"source": "ubiquex/azure", "version": "1.0.0"},
+		"azure_advisor": {"source": "ubiquex/azure", "version": "1.0.0"},
+	}
+	pinned, source, version, note, err := groupSchemaProvenanceFields([]string{"azure", "azure_advisor"}, dp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pinned {
+		t.Fatalf("expected pinned=true when every member agrees, note=%q", note)
+	}
+	if source != "ubiquex/azure" || version != "1.0.0" {
+		t.Fatalf("source=%q version=%q, want the real, shared pin", source, version)
+	}
+	if note != "" {
+		t.Fatalf("expected no note for a genuinely coherent group, got %q", note)
+	}
+}
+
+func TestGroupSchemaProvenanceFields_OneMemberLive_NotPinned(t *testing.T) {
+	dp := map[string]map[string]any{
+		"aws":             {"source": "ubiquex/aws", "version": "1.0.0"},
+		"aws_data_zzznew": {"schema_source": "smithy", "schema_url": "https://example.invalid/new-service.json"},
+	}
+	pinned, _, _, note, err := groupSchemaProvenanceFields([]string{"aws", "aws_data_zzznew"}, dp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pinned {
+		t.Fatal("expected pinned=false when even one real member is still live -- a group is only as pinned as its least-pinned member")
+	}
+	if note == "" {
+		t.Fatal("expected a real note explaining why the group doesn't read as pinned")
+	}
+}
+
+func TestGroupSchemaProvenanceFields_MembersDisagreeOnVersion_NotPinned(t *testing.T) {
+	dp := map[string]map[string]any{
+		"azure":         {"source": "ubiquex/azure", "version": "1.0.0"},
+		"azure_advisor": {"source": "ubiquex/azure", "version": "0.9.0"},
+	}
+	pinned, _, _, note, err := groupSchemaProvenanceFields([]string{"azure", "azure_advisor"}, dp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pinned {
+		t.Fatal("expected pinned=false when members disagree on version -- not one coherent, reproducible fetch")
+	}
+	if note == "" {
+		t.Fatal("expected a real note explaining the disagreement")
+	}
+}
+
+func TestGroupSchemaProvenanceFields_PropagatesMemberError(t *testing.T) {
+	dp := map[string]map[string]any{
+		"azure": {"source": "ubiquex/azure"},
+	}
+	_, _, _, _, err := groupSchemaProvenanceFields([]string{"azure"}, dp)
+	if err == nil {
+		t.Fatal("expected the underlying member error (source without version) to propagate")
+	}
+}
+
 // TestDynamicProviderEnv_LiveMode_WritesConfig confirms the existing,
 // pre-pinning behavior is completely unchanged: a schema_url-shaped entry
 // still gets a real, temporary [dynamic_providers.<name>] config file and

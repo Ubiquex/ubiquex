@@ -165,6 +165,92 @@ type dynamicProviderProvenance struct {
 	Commit   string `json:"commit,omitempty"`
 	Dirty    bool   `json:"dirty"`
 	Unpushed bool   `json:"unpushed"`
+
+	// UBI-199: schema-source provenance, genuinely per-provider within a
+	// single `ubx sdk gen` invocation (unlike Source/RepoPath/Commit/
+	// Dirty/Unpushed above, which describe the shared ubx-provider-dynamic
+	// TOOL checkout, resolved once and cached for the whole process). A
+	// caller with a specific provider's own real params in scope
+	// (generateOneDynamicProvider, generateDynamicProviderGroup) sets
+	// these on ITS OWN local copy of the process-wide value before
+	// marshaling -- never on the cached singleton itself, which stays
+	// tool-only. SchemaPinned=false with SchemaURL set means a real,
+	// unpinned schema_url fetch (a legitimate mode -- see
+	// sdk/providers/.ubx/config's own top-of-file comment on onboarding a
+	// new provider); SchemaPinned=true means source/version, resolved via
+	// provider.AcquireSchema against a real published ubx-schema-<name>
+	// snapshot, zero network on a cache hit. A record with neither set at
+	// all (the shape every PROVENANCE.json written before this fix has)
+	// must read as unknown, not as implicitly pinned -- see
+	// ubiquex-docs' own provenance_check.py, which now refuses on that
+	// basis exactly like it already refuses on a missing file.
+	SchemaPinned  bool   `json:"schema_pinned"`
+	SchemaSource  string `json:"schema_source,omitempty"`
+	SchemaVersion string `json:"schema_version,omitempty"`
+	SchemaURL     string `json:"schema_url,omitempty"`
+	// SchemaNote carries a real, human-readable explanation when
+	// SchemaPinned's own single bool can't tell the whole story -- today
+	// that's exactly one real case: a [dynamic_provider_groups.<name>]
+	// group whose members don't uniformly agree on one pinned
+	// source/version (or mix pinned and live members), which must not
+	// read as cleanly pinned just because SOME members are.
+	SchemaNote string `json:"schema_note,omitempty"`
+}
+
+// schemaProvenanceFields computes ONE provider entry's own real schema-
+// source provenance from its real params -- pinned (source+version,
+// the identical presence check pinnedSchemaFields already makes, reused
+// rather than duplicated) or live (schema_url, honestly recorded so an
+// onboarding provider's real, intentional live-fetch state is visible,
+// not hidden).
+func schemaProvenanceFields(params map[string]any) (pinned bool, source, version, url string, err error) {
+	src, ver, ok, err := pinnedSchemaFields(params)
+	if err != nil {
+		return false, "", "", "", err
+	}
+	if ok {
+		return true, src, ver, "", nil
+	}
+	rawURL, _ := params["schema_url"].(string)
+	return false, "", "", rawURL, nil
+}
+
+// groupSchemaProvenanceFields is schemaProvenanceFields' own real group
+// aggregate: a [dynamic_provider_groups.<name>] group's schema
+// provenance is only genuinely "pinned" when EVERY real member is
+// pinned AND every pinned member names the identical (source, version)
+// -- the shape all six real providers converged on this session
+// (UBI-182 Stage F's own single-pin collapse). A member disagreeing, or
+// any member still live, means the group as a whole is not one coherent,
+// reproducible fetch -- recorded as unpinned with SchemaNote explaining
+// why, never silently reporting whichever member happened to be checked
+// first.
+func groupSchemaProvenanceFields(memberNames []string, dynamicProviders map[string]map[string]any) (pinned bool, source, version, note string, err error) {
+	allPinned := true
+	agree := true
+	var firstSource, firstVersion string
+	for i, name := range memberNames {
+		p, src, ver, _, ferr := schemaProvenanceFields(dynamicProviders[name])
+		if ferr != nil {
+			return false, "", "", "", fmt.Errorf("member %q: %w", name, ferr)
+		}
+		if !p {
+			allPinned = false
+			continue
+		}
+		if i == 0 {
+			firstSource, firstVersion = src, ver
+		} else if src != firstSource || ver != firstVersion {
+			agree = false
+		}
+	}
+	if allPinned && agree {
+		return true, firstSource, firstVersion, "", nil
+	}
+	return false, "", "", fmt.Sprintf(
+		"group has %d member(s), not uniformly pinned to one real source/version (allPinned=%v agree=%v)",
+		len(memberNames), allPinned, agree,
+	), nil
 }
 
 // clean reports whether this provenance record positively confirms the
