@@ -7,6 +7,53 @@
 
 ## In flight
 
+**Stale/dirty `ubx-provider-dynamic` local checkout resolved.** Found
+33 commits behind `origin/main`, dirty, with uncommitted changes to
+`internal/discoverydoc/datasource.go`, `internal/resourcemap/datasource.go`,
+`internal/smithy/builddatasource.go`, `internal/smithy/datasource.go`,
+`internal/smithy/datasource_test.go`, plus untracked
+`internal/discoverydoc/datasource_test.go`,
+`internal/resourcemap/datasource_test.go`, `internal/dsfilter/`. Checked
+before touching anything, not assumed abandoned: real, substantial,
+tested work implementing UBI-181's own "five-rule" data-source
+candidate filter (watch paths, operation-status shapes, execution/event
+records, computed values, high-volume location/region/zone
+duplication) -- UBI-186 (Done) already cites real filtered counts for
+it (259/1/73/64/472) but the actual enforcement code was never
+committed anywhere real, confirmed by grepping `ubiquex`, `ubiquex-docs`,
+and a fresh clone of `ubx-provider-dynamic`, zero hits. NOT UBI-198 WIP
+(that's confirmed dead/superseded, unrelated). Preserved rather than
+discarded, per founder's own choice: the diff and untracked files are
+saved at `scratchpad/ubx-provider-dynamic-dsfilter-wip.diff` and
+`scratchpad/ubx-provider-dynamic-dsfilter-wip-untracked/` (with its own
+README explaining provenance and status) in this repo, before the
+checkout was reset clean to `origin/main` (`25a754f`). Needs a real
+rebase before it can land, not a straight commit -- not attempted this
+session.
+
+**UBI-173 (Blueprints docs) closed, real scope much narrower than
+filed.** The ticket's own premise ("zero blueprint pages exist") was
+checked against real git history and was already false when filed --
+1,112 lines of real, committed, nav-wired blueprint documentation
+existed in `ubiquex-docs` (`931f12e0f`, 2026-08-11) days before the
+ticket's own 2026-08-15 search date. Real gap, confirmed by grep: UBI-129
+(list params/`for_each`/iteration) and UBI-86 (the override mechanism)
+both landed after the ticket was filed and were genuinely undocumented
+anywhere, in either `ubiquex-docs` or `ubiquex-internals`. Two new
+concept pages built (`concepts/blueprint-list-params.mdx`,
+`concepts/blueprint-overrides.mdx`), cross-reference touch-ups across 7
+existing pages, `docs.json` nav updated -- `ubiquex-docs` `372e0fc75`.
+A real accuracy bug found and fixed along the way: `concepts/blueprints.mdx`
+showed a fabricated `ubx why` dual-signature example that doesn't match
+real tool output -- fixed to show the actual output and state honestly
+that only the calling stack's acceptance is signed. `ubiquex-internals`'
+own `concepts/blueprints.mdx` carried the identical UBI-129/UBI-86 gap,
+also closed (`c43ad111b`). Both pushes verified via the GitHub API
+against the real repos. `mint validate`/`broken-links` clean in both,
+zero em dashes. UBI-173 closed in Linear, its own description rewritten
+to record why the original premise was wrong rather than silently
+reduced in scope.
+
 **Three tickets checked against real, current state, two closed, one left
 open with an itemized remainder that then shrank to one real item**:
 UBI-193 (Azure schema pinning) and UBI-176 (stale SDK bindings) both
