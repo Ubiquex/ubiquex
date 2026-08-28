@@ -7,47 +7,33 @@
 
 ## In flight
 
-**UBI-181 built, two PRs open in `ubx-provider-dynamic`, neither merged --
-awaiting founder review.** PR #34 (`feat/ubi181-dsfilter`) lands the
-recovered, previously-never-committed `dsfilter` five-rule filter
-(watch/operation-status/execution/computed/reference-duplication) plus its
-real wiring into all three `DiscoverDataSources` call sites. PR #35
-(`feat/ubi181-narrow-verb-rule`, stacked on #34) is the narrow rule itself:
-a curated create-verb allowlist (restore/undelete/import/provision/initiate/
-create/addorupdate, split into action-verb and create-family tokens),
-`SamePathAction` (exact path or one real REST action suffix, never a path
-prefix -- closes the azure `SqlPoolSensitivityLabels_CreateOrUpdate`
-misattribution found investigating this ticket), gated through the
-five-rule filter on the candidate's own noun. Both PRs: `go build`/
-`go test`/`go vet` clean, full suite, real regression + positive tests
-added (including one mirroring the ticket's own Google Backup and DR
-example).
+**UBI-181: #34/#35 both show "Merged" but #35's content never reached
+`ubx-provider-dynamic`'s own `main` -- blocked on a real merge, not a
+review.** #35 was stacked on #34 (correctly, it depends on #34's own
+dsfilter package); #34 merged into `main` first, #35 then merged into its
+own base branch, and nothing merged that branch into `main` afterward.
+Confirmed directly (`git merge-base --is-ancestor` fails, `main`'s own
+`dsfilter.go` has no `actionVerbTokens`) before trusting the "Merged" label
+-- caught before generating anything, not after. PR #36
+(`fix/ubi181-narrow-rule-into-main` -> `main`) carries #35's own already-
+reviewed content, retargeted so it actually lands.
 
-Two real bugs caught by the PR's own tests before running against the full
-corpus: (1) the five-rule check must gate on the candidate's own `get`
-response shape, not the matched alt-verb operation's own response (`restore`/
-`initiateBackup` routinely return an LRO `Operation`, which would have
-false-excluded every one); (2) `deploy`, in the ticket's own original verb
-list, had to come out of the allowlist entirely -- 494 real Azure
-operationIds contain "deploy" as a substring of the noun `Deployment`/
-`DeploymentScripts`/`DeploymentStacks`, not the verb, and it produced two
-confirmed false positives (github `review-pending-deployments-for-run`,
-datadog `CancelFleetDeploymentV2`) before being caught and removed.
+Checking UBI-181's own flagged low-confidence GCP entry individually (per
+the founder's own instruction, before generating anything) found a second
+real bug: `networkMonitoringProviders.monitoringPoints` has no create
+operation at all (`download*`/`get`/`list` only) -- it only matched because
+"create" is a substring of "recreate" (`downloadRecreateInstallScript`). The
+identical false friend exists on Compute's `instanceGroupManagers`
+(`recreateInstances`), not currently live there (already has its own real
+`insert`) but the same root cause. PR #37 (stacked on #36) strips "recreate"
+before matching "create" -- drops the real count from 48 to **47**.
 
-**Real count, from running the landed code against the current live-pinned
-schema in all five relevant `ubx-schema-*` repos, not a sample: 48**
-(azure 16, github 19, google 12, datadog 1, kubernetes 0), deduplicated
-across each provider's resource/data-source member pairs. Hand-spot-checked
-all 48; one low-confidence entry flagged, not fixed (GCP
-`networkMonitoringProviders.monitoringPoints` via `downloadRecreateInstallScript`,
-reads more like a download action than a create). Full admitted list saved
-at `ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
-UBI-181's own Linear comment.
-
-Next session: once the founder reviews and merges #34/#35, generate the
-real SDK bindings/docs/artifacts for these 48 admitted resources -- that
-generation step was explicitly gated on this real count landing first, not
-attempted yet.
+**Next session: verify `main` actually contains both #36 and #37 (ancestor
+check, not PR status) before doing anything else, then generate SDK
+bindings/docs/artifacts for the real 47.** Full admitted list (pre-recreate-
+fix, needs the monitoringPoints entry dropped) at
+`ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
+UBI-181's own Linear comments.
 
 **UBI-195 closed: the real 41s cost was never the RPC, it was
 `ubiquex`'s own client-side schema conversion.** All three of the
