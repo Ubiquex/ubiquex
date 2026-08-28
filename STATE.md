@@ -7,25 +7,53 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196 and UBI-197 both closed this session —
+Nothing currently in flight. UBI-196 and UBI-197 both closed this session --
 see `HISTORY.md` for the full arc (docs corpus bindings_status reconciled
 against real published packages for resources and data sources both, all six
 `ubx-sdk-<provider>` packages regenerated/republished carrying real
 `DataSourceBinding`, real generation provenance built into `ubx sdk gen` and
-propagated into all six repos' CI and the docs pipeline, UBI-197's own root
-cause found and fixed).
+propagated into all six repos' CI and the docs pipeline).
+
+**UBI-197's own root cause, found in a later pass and fixed**: the 908 of
+1,400 held-back data-source pages classified as "miscategorized resource"
+(a real `ResourceBinding` wire sitting under the docs corpus's `/data/`
+directory) were never a docs-pipeline bug -- `gen_all_data_source_pages.py`
+structurally cannot write a `ResourceBinding` wire under `/data/` (gates on
+the real Go source's own `ubx.DataSourceBinding` marker). The real cause:
+`ubiquex-docs`' generation needs two separate `ubx sdk gen` invocations per
+provider (`--dump-ir` for schema.json, `--lang go --out` for the real Go
+source), and both used to independently live-fetch each provider's
+`schema_url` on every launch -- unpinned. If the real upstream spec changed
+between the two fetches (confirmed live for Azure, whose spec sits on a
+moving branch tip), the two invocations could disagree on which wires are
+resources vs. data sources. **Fixed**: `sdk/providers/.ubx/config` switched
+all six providers from live `schema_source`/`schema_url` entries to pinned
+`source`/`version` entries against each provider's real, already-published
+`ubx-schema-<name>` snapshot (`b40beb2`, pushed to `ubiquex` main). Verified
+live: zero disagreement between the two invocations for any of the 13,458
+real types (resources + data sources) across all six providers, post-switch.
+This also collapsed `sdk/providers/.ubx/config` from 998 `[dynamic_providers.*]`
+entries (302 for Azure alone) down to 6 -- one pinned entry per provider.
+
+**UBI-198 filed, not built**: a real, separate, smaller-scale bug found
+while diagnosing the above -- candidate discovery (`resourcemap.
+DiscoverDataSources`, openapi source) treats any unclaimed GET as a
+data-source candidate with no check for whether the response schema is a
+genuine top-level operation response vs. a reusable, nested-only schema
+component. Confirmed via direct $ref-reachability analysis against real
+provider specs: 228/229 (99.6%) of Datadog's remaining held-back wires and
+17/20 (85%) of GitHub's match a real component that's never a real
+operation's own top-level response anywhere in the spec -- these pages
+should not exist at all, not be regenerated. Azure's own check was
+inconclusive (its wire-type derivation goes through an extra namespace-
+splitting transform a plain snake-case match doesn't replicate) -- named as
+follow-up in the ticket, not resolved. Two individual exceptions found
+(`datadog_security_monitoring_rule_response`, `github_repository`/
+`github_minimal_repository`/`github_visual_studio_subscription_assignment`)
+need their own look before any bulk deletion.
 
 Real, named follow-up work, not yet started:
 
-- **UBI-197's own naming-divergence fix**: the docs corpus's openapi-sourced
-  providers (azure/datadog/github/kubernetes) still disagree with real,
-  current wire types because `ubiquex-docs`' own generation scripts were last
-  run against a since-superseded revision of `ubx-provider-dynamic`. The
-  provenance-check work this session makes this detectable (refuses a dirty/
-  disagreeing batch) but does not itself re-run the generators — that's a
-  real, separate regeneration pass once someone wants to spend the real
-  `ubx-provider-dynamic` build + fetch time (azure/google took minutes each
-  earlier this session).
 - **Field-level content staleness**, found live this session, distinct from
   wire-naming divergence: even a data-source page whose wire type genuinely
   resolves can have example field values that no longer match the real
@@ -73,6 +101,15 @@ Nothing currently blocked.
   especially for anything meant to be committed or published.
 - `docs/plan.md` and `docs/architecture.md` are the design-decision record for
   `ubiquex` itself; this file is not a substitute for either.
+- `sdk/providers/.ubx/config` now pins all six providers (`source`/`version`
+  against each real, published `ubx-schema-<name>` snapshot) instead of
+  live-fetching `schema_url` -- a `--dynamic-provider-bin`/
+  `UBX_PROVIDER_DYNAMIC_REPO`-built binary is still required (the pinned
+  branch under `[dynamic_providers.<name>]`, unlike `[providers.<name>]`'s
+  own `ubx resolve` path, does not yet resolve its own binary via
+  `provider.AcquireDynamicProviderBinary`). A provider without a real
+  published snapshot yet goes back to the live `schema_source`/`schema_url`
+  shape -- see the config file's own top-of-file comment before adding one.
 
 ## Cross-repo state
 
