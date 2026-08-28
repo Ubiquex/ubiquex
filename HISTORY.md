@@ -26431,8 +26431,51 @@ each `ubx-schema-<name>` repo's own latest release directly; read
 ever pinned" as the bar and catch staleness via a separate, periodic
 job) -- none decided, real design work for whoever picks it up.
 
+**UBI-198 closed, the code-fix half turned out to have no real target**:
+before writing the reachability check, tested empirically whether
+`DiscoverDataSources` can structurally produce a candidate with an
+unreachable underlying component at all. It cannot -- a candidate's own
+`refName` comes directly from `ResponseSchema(operation)`, that same
+operation's own response ref, so the moment a wire becomes a candidate
+its own minting operation is itself one real occurrence of that
+component being a direct top-level response. Confirmed live with real,
+throwaway Go tests (written, run, deleted, never committed) against the
+actual specs: 536 real datadog candidates, 263 github, 2,177 azure
+(all 604 real snapshot members, 302 data-source-mode) -- zero with an
+unreachable component across all three, and (this is what actually
+matters) the 380 total historical held-back wires essentially don't
+exist in today's real candidate set at all (1/229 datadog, 0/20 github,
+0/131 azure overlap). This also resolves Azure, previously inconclusive
+in the ticket because the earlier Python check reverse-engineered the
+wrong transform (`ir.ServiceAndLocalNameForType`, guessed) instead of
+the real one (`typename.Combine`'s own per-member `wire_name` prefix
+with overlap-collapse, entirely within `ubx-provider-dynamic` -- ran
+the real derivation code directly instead of guessing in Python once
+this was found). The four named exceptions are also confirmed absent
+from today's candidates, but for a different, legitimate reason:
+`github_repository`'s real read path is already claimed by the real
+`github_full_repository` resource, confirming the "legitimate
+already-claimed-path exclusion" guess in the original ticket. Same
+disposition as the other 376 either way. Filed the correction as a
+Linear comment on UBI-198 rather than silently building dead code.
+
+Removed all 380 pages (`ubiquex-docs` `df5d9b424`): 229 datadog, 20
+github, 131 azure. Confirmed first, the same check UBI-199 needed: zero
+of the 380 have a real resource page elsewhere that removal would
+orphan (scanned all 4,645 non-`/data/` page titles), and zero are
+cross-referenced from any other page's own body content. Also collapsed
+20 now-empty "Data sources" nav groups the removal left behind (11 back
+to their own Resources-only flat shape, 9 standalone orphan-only groups
+removed entirely) -- verified against the pre-deletion `docs.json` that
+none of these were already empty before this change. `mint validate`:
+identical 17 pre-existing warnings before and after (confirmed via a
+real `git stash` A/B check) -- stale nav references left over from this
+same session's earlier 98-page rename work, unrelated to and not
+introduced by this deletion, named as a separate real gap, not fixed.
+
 **What's left, real and named**: field-level content staleness (423
-pages, distinct from wire-naming, no systematic fix built), UBI-198's
-own fix once someone wants to build it, UBI-199's own 908-page placement
-fix (delete 859, create-then-redirect 49) once someone wants to build
-it, UBI-200's own design question. Nothing currently blocked.
+pages, distinct from wire-naming, no systematic fix built), the 17
+pre-existing stale nav references `mint validate` reports, UBI-199's
+own 908-page placement fix (delete 859, create-then-redirect 49) once
+someone wants to build it, UBI-200's own design question. Nothing
+currently blocked.

@@ -7,19 +7,25 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196/197 both closed this session; UBI-198,
-UBI-199, UBI-200 filed as real, separate follow-up (198/200 not built, 199's
-own recurrence-gap half built and verified) -- see `HISTORY.md`'s own
+Nothing currently in flight. UBI-196/197/198 all closed this session; UBI-199,
+UBI-200 filed as real, separate follow-up, not built -- see `HISTORY.md`'s own
 "UBI-196/197/198/199/200: docs corpus bindings_status arc, full close" entry
-for the complete arc (root cause, all four verification passes, every
-commit). Short version: all six providers' schema generation is now pinned
-to a real, published snapshot (`ubiquex` `b40beb2`) instead of live-fetching,
-closing UBI-197's own naming-divergence category for good (98 pages
-regenerated and verified, `ubiquex-docs` `e5581fb5f`); the pinning fix's own
-two recurrence gaps (hardcoded scratch paths, provenance silent on whether a
-schema fetch was pinned) are closed too (`ubiquex` `2371b4d`, `ubiquex-docs`
-`336285fd9`). UBI-197's own remaining 908-page placement problem (UBI-199)
-and UBI-198's own candidate-discovery fix are real, scoped, NOT built.
+for the complete arc. Short version: all six providers' schema generation is
+now pinned to a real, published snapshot (`ubiquex` `b40beb2`) instead of
+live-fetching, closing UBI-197's own naming-divergence category for good (98
+pages regenerated and verified, `ubiquex-docs` `e5581fb5f`); the pinning
+fix's own two recurrence gaps are closed too (`ubiquex` `2371b4d`,
+`ubiquex-docs` `336285fd9`). UBI-198's own candidate-discovery "fix" turned
+out to have no real target once tested empirically -- verified live (real,
+throwaway Go tests against the actual specs) that `DiscoverDataSources`
+cannot structurally produce an unreachable candidate at all, so the 380
+held-back wires it named (229 datadog, 20 github, 131 azure, resolving
+Azure's own earlier inconclusive result) were never a live bug, just stale
+content from the same dirty, since-reverted WIP checkout the GitHub pilot
+finding already identified. Removed all 380 pages (`ubiquex-docs`
+`df5d9b424`), confirmed first that none had a real resource page elsewhere
+that removal would orphan, the same check UBI-199 needed. UBI-197's own
+remaining 908-page placement problem (UBI-199) is real, scoped, NOT built.
 
 Real, named follow-up work, not yet started:
 
@@ -48,10 +54,13 @@ Real, named follow-up work, not yet started:
 - UBI-194: publish and acquire `ubx-provider-dynamic` for the other five
   providers (kubernetes already done) — recommendation on record is to wait
   for natural regeneration rather than forcing a metadata-only republish.
-- UBI-198: candidate discovery (`resourcemap.DiscoverDataSources`) mints a
-  data-source candidate for any unclaimed GET with no check for whether the
-  response schema is a real top-level operation response — fix scoped, not
-  built. See `HISTORY.md`'s own arc entry for the full real breakdown.
+- `mint validate` in `ubiquex-docs` reports 17 pre-existing warnings (dead
+  nav references, file doesn't exist) -- confirmed real and pre-existing
+  (identical count before/after this session's own UBI-198 deletion, via a
+  real `git stash` A/B check), left over from this session's own earlier
+  98-page rename work (UBI-197 naming-divergence fix) not fully cleaning up
+  every stale nav reference it left behind. Not investigated further or
+  fixed — a real, named, separate cleanup item.
 - UBI-199: 908 real resources sitting under `/data/` as stale data-source
   pages — 859 need removal (a real resource page already exists elsewhere),
   49 need a resource page created first (no existing page to fall back on).
