@@ -7,6 +7,38 @@
 
 ## In flight
 
+**UBI-181 investigated, not built -- awaiting a founder scope decision.** The
+1,278 figure in the ticket is stale (real corpus growth since filing, mostly
+Kubernetes' own UBI-176 alpha/beta-sibling recovery landing after). Fresh
+measurement against all six current `ubx-schema-*` pinned snapshots (zero
+network, real `raw_spec` reload): current total "no matching create"
+population is 3,693. The recovered, never-committed `dsfilter` five-rule
+filter (`ubiquex/scratchpad/ubx-provider-dynamic-dsfilter-wip-untracked/`,
+builds/tests clean against current `ubx-provider-dynamic` main, zero
+conflicts) excludes 1,874 as genuine non-resources, leaving 1,819. Of those,
+1,165 have no alternate write verb at all (correctly, permanently read-only).
+The real candidate pool the ticket's own theory targets is 554 (survivors
+with a genuine, non-read alternate verb present). Two random samples (55
+total) hand-classified: ~25-35% plausibly genuine, the rest action-on-an-
+already-modeled-resource noise -- plus a distinct, real misattribution risk
+(naive path-prefix verb matching can attribute a genuinely separate nested
+sub-resource's create op to the wrong candidate; confirmed live, azure
+`sql_pool_column` <- `SqlPoolSensitivityLabels_CreateOrUpdate`, datadog
+`ownership_inference_response` <- `CreateOwnershipFeedback`). Realistic
+remaining count once verb semantics are accounted for: ~140-190, not 1,278
+and not even 554. **The narrower proposal ("only when the resource already
+has a get") is not sufficient and adds zero discriminating power** -- every
+candidate in this population already has a get by construction (that's the
+read-candidate test that put it in the skip-note population in the first
+place); demonstrated live via GCP's own `project`/`group`/`change_request`,
+all already have a get, whose alternate verbs are unambiguous actions
+(`moveDisk`, `setIamPolicy`, `approve`/`reject`), not creation. Recommendation
+given, not yet built: a verb allowlist (restore/undelete/import/
+initiate*backup/create-or-update/provision, not any non-standard verb) +
+the five-rule filter + same-path-only attribution. Full findings in UBI-181's
+own Linear comment. Next session: wait for the founder's own scope decision
+before building anything.
+
 **UBI-195 closed: the real 41s cost was never the RPC, it was
 `ubiquex`'s own client-side schema conversion.** All three of the
 ticket's own named candidates (gRPC/protobuf wire-encoding, TLS/
