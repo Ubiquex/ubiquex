@@ -7,59 +7,54 @@
 
 ## In flight
 
-UBI-191 (developer documentation site): three slices built and pushed --
+UBI-191 (developer documentation site): four slices built and pushed --
 new repo `github.com/Ubiquex/ubiquex-internals` (private, Mintlify),
 scaffolded on `ubiquex-docs`'s own real shape. Confirmed founder
-decision: `docs/architecture.md`, `docs/schema.md`, `docs/plan.md` stay
-in `ubiquex`, the site links out rather than becoming a second copy.
-Sync mechanism decided and built, not just designed: `sync-state.json`
-records the `ubiquex` commit each mirrored file was last reviewed
-against; `.github/workflows/sync-drift-watch.yml` (modeled on
-`ubiquex-docs`'s own `coverage-watch.yml`) runs weekly and opens/updates
-one standing issue if a mirrored source moves on -- verified with a real
-dry run each slice.
+decision: source docs stay in the repo that owns them (`ubiquex`'s
+`docs/*.md`, and now real `.go` source files in both `ubiquex` and
+`ubx-provider-dynamic`), the site links out rather than becoming a
+second copy.
 
-Five sections live so far: Overview (slice 1); Concepts (nine pages --
+Seven sections live: Overview (slice 1); Concepts (nine pages --
 proposal, ledger, IR, resolver, executor, drift, cross-stack references,
-staleness, blueprints) and Architecture (trust chain Mermaid diagram,
-the four invariants, why the execution layer speaks tfplugin directly,
+staleness, blueprints -- deliberately different register from
+`ubiquex-docs`'s own user-facing `concepts/` pages) and Architecture
+(trust chain Mermaid diagram, the four invariants, tfplugin rationale,
 failure semantics) (slice 2); Schema Constitution (the real, ratified
-canonical hashing rules -- hash function, domain-separation prefix, the
-three excluded fields, canonical JSON, the float-rejecting number
-encoding, lexicographic array ordering -- presented close to verbatim
-since precision is the point, with an explicit "last reviewed against
-commit `<sha>`" footer) and Repository Map (one Mermaid dependency
-diagram across five real tiers -- `ubx-provider-dynamic` at the root,
-the six schema-snapshot repos, `ubiquex` as coordinator, three shared
-runtimes, six per-provider bindings repos, the two doc sites relating to
-`ubiquex` differently on purpose) (slice 3). Repository Map's own repo
-count confirmed live via `gh repo list`, not assumed: 22 real,
-non-archived repos as of this slice (23 with this one), everything else
-either the archived v1 XCL project or four real-but-peripheral repos
-(marketing site, two demo repos) that don't appear in the graph.
+hashing rules, presented close to verbatim, with a "last reviewed
+against commit `<sha>`" footer) and Repository Map (one Mermaid
+dependency diagram across five real tiers; repo count -- 22 real,
+non-archived, confirmed live via `gh repo list` -- matched the founder's
+own figure exactly) (slice 3); Provider System (the four real schema
+sources converging on one shared translator before snapshotting, why
+that convergence point was chosen, per-member clients, the mixed-source
+dispatch layer AWS's own CFN+Smithy split required) and SDK and Codegen
+(the real naming-derivation source code, not paraphrased --
+`ServiceAndLocalName`'s base split, `RealNamespace`'s real fix, the data
+namespace, collision handling -- then the three real bugs that lineage
+produced in order: UBI-98's own ~15% imprecision, the GCP/Azure doubling
+correctors, and this session's own AWS namespace fallback at 54% scale)
+(slice 4).
 
-Concepts pulled from two source docs not previously mirrored --
-`docs/resolver.md` and `docs/executor.md` -- plus `docs/blueprint.md`
-for the blueprints page; all three registered into `sync-state.json` as
-their content was drawn from, not retrofitted after. Schema Constitution
-and Repository Map needed no new `sync-state.json` entries -- the former
-draws only from the already-tracked `docs/schema.md`, the latter from
-live GitHub API state, not new `ubiquex` doc content. Concepts pages are
-deliberately different register from `ubiquex-docs`'s own existing
-`concepts/` pages (user-facing, second-person "how do I use this") --
-these are third-person, system-design pages for someone trying to
-understand the build. `mint validate` and `mint broken-links` both clean
-every slice. Pushed, verified via `gh api
-repos/Ubiquex/ubiquex-internals/commits/main` -- `55b49fb` current.
+**Sync mechanism went multi-repo this slice, a real architecture change,
+not a workaround**: Provider System and SDK/Codegen both draw from
+`ubx-provider-dynamic` source (`internal/snapshot/mergegroup.go`,
+`generate.go`) for the first time, so `sync-state.json` restructured
+from a flat `{path: sha}` to `{"<repo>": {"<path>": "<sha>"}}`, and
+`check_drift.py` now clones every repo named in it itself (no more
+external checkout step in the workflow). Verified with a real dry run
+against fresh clones of both repos (10 tracked files, zero drift) and a
+real negative test (a deliberately stale SHA correctly reported 6 real
+missed commits). `sync-drift-watch.yml` and `CLAUDE.md`'s own mirroring
+section both updated to describe the multi-repo shape. `mint validate`
+and `mint broken-links` clean every slice. Pushed, verified via `gh api
+repos/Ubiquex/ubiquex-internals/commits/main` -- `c6662e0` current.
 
-Confirmed NOT done this pass, named so a fresh session doesn't assume
-otherwise: Provider system, SDK and codegen, Docs pipeline, Workflows,
-Decisions -- five sections remain, plus the provider-sources-converging
-diagram named for the Provider system section specifically. Whether the
-Decisions section is authored fresh or extracted from Linear history is
-still an open question in the ticket itself, unresolved. UBI-191 left
-**In Progress** in Linear, not closed -- three slices of what the ticket
-names as ten sections total.
+Confirmed NOT done this pass: Docs pipeline, Workflows, Decisions --
+three sections remain. Whether the Decisions section is authored fresh
+or extracted from Linear history is still an open question in the
+ticket itself, unresolved. UBI-191 left **In Progress** in Linear, not
+closed -- four slices of what the ticket names as ten sections total.
 
 UBI-196/197/198/199/202 fully closed this
 session; UBI-200/201 filed, not built -- see `HISTORY.md`'s own
