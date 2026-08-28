@@ -7,7 +7,33 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196/197/198/199/202 fully closed this
+UBI-191 (developer documentation site): first slice built and pushed --
+new repo `github.com/Ubiquex/ubiquex-internals` (private, Mintlify),
+scaffolded on `ubiquex-docs`'s own real shape (`docs.json`, `index.mdx`,
+`CLAUDE.md`, shared favicon/logo). One fully-realized section, Overview,
+distilled narrative prose from `docs/architecture.md`'s thesis and this
+repo's own `CLAUDE.md`, linking out to the real source docs rather than
+duplicating them (confirmed founder decision: `docs/architecture.md`,
+`docs/schema.md`, `docs/plan.md` stay in `ubiquex`, the site never becomes
+the only place they live). Sync mechanism decided and built, not just
+designed: `sync-state.json` records the `ubiquex` commit each mirrored
+file was last reviewed against; `.github/workflows/sync-drift-watch.yml`
+(modeled directly on `ubiquex-docs`'s own `coverage-watch.yml`) runs
+weekly and opens/updates one standing issue if a mirrored source moves on
+-- verified with a real dry run locally (zero drift at the current SHAs,
+correctly reports real commits against a deliberately stale SHA). Pushed,
+verified via `gh api repos/Ubiquex/ubiquex-internals/commits/main` --
+`0d2d265`. `mint validate` clean.
+
+Confirmed NOT done this pass, named so a fresh session doesn't assume
+otherwise: the other nine sections UBI-191 names (Concepts, Architecture,
+Schema constitution, Repository map, Provider system, SDK and codegen,
+Docs pipeline, Workflows, Decisions) and all diagrams. Whether the
+Decisions section is authored fresh or extracted from Linear history is
+still an open question in the ticket itself, unresolved. UBI-191 left
+**In Progress** in Linear, not closed -- this is one slice of ten.
+
+UBI-196/197/198/199/202 fully closed this
 session; UBI-200/201 filed, not built -- see `HISTORY.md`'s own
 "UBI-196/197/198/199/200: docs corpus bindings_status arc, full close" entry
 for the complete arc through UBI-199's merge. Short version: all six
