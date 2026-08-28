@@ -213,6 +213,12 @@ func blockFromV6(b *tfplugin6.Schema_Block) (Block, error) {
 // here, at the translation boundary, so every downstream consumer (IR,
 // codegen, ctyvalue's own config-encoding) keeps working against a single
 // cty.Type shape and never needs to know NestedType existed.
+//
+// UBI-195: this is the one real place a cty.Type genuinely needs to become
+// json.RawMessage (Attribute.Type's own wire shape), marshals exactly
+// once, here, at this public boundary. attributeCtyTypeFromV6/
+// nestedObjectCtyTypeFromV6 below do the actual recursive walk entirely in
+// cty.Type, never touching JSON at intermediate levels.
 func attributeTypeJSONFromV6(a *tfplugin6.Schema_Attribute) (json.RawMessage, error) {
 	if a.NestedType == nil {
 		return json.RawMessage(a.Type), nil
@@ -228,6 +234,40 @@ func attributeTypeJSONFromV6(a *tfplugin6.Schema_Attribute) (json.RawMessage, er
 	return json.RawMessage(marshaled), nil
 }
 
+// attributeCtyTypeFromV6 is attributeTypeJSONFromV6's own real, live-found
+// UBI-195 fix: the recursive path used to go through attributeTypeJSONFromV6
+// itself, which meant every NESTED (non-leaf) attribute got marshaled to
+// JSON by its own call here, then immediately unmarshaled right back into a
+// cty.Type by nestedObjectCtyTypeFromV6's own caller loop below -- a real,
+// pure-waste round trip repeated at every one of a real schema's own
+// nesting levels (confirmed live: Azure's own real, pinned 604-member group
+// response has 39,714 total recursive attribute nodes, max depth 15 -- the
+// deepest attribute's own data got reflection-based JSON-marshaled and
+// unmarshaled again at every level as it propagated to the root). Measured
+// directly, not assumed, before writing this fix: a real, throwaway
+// instrument isolated the raw gRPC GetProviderSchema call at 652ms and this
+// exact conversion step (the old attributeTypeJSONFromV6/
+// nestedObjectCtyTypeFromV6 pair) at 40.9s alone -- confirming the RPC was
+// never the real cost UBI-195's own prior session blamed it for.
+//
+// A genuine leaf attribute (a.NestedType == nil) still needs exactly one
+// real ctyjson.UnmarshalType call -- the wire only ever carries its type as
+// JSON, so this is the one real, unavoidable wire-to-cty.Type conversion,
+// unchanged in cost from before this fix (nestedObjectCtyTypeFromV6's own
+// prior loop already paid this same real cost for a leaf child; nothing new
+// here, just moved to where it's actually needed instead of being
+// duplicated for every nested child too).
+func attributeCtyTypeFromV6(a *tfplugin6.Schema_Attribute) (cty.Type, error) {
+	if a.NestedType == nil {
+		ty, err := ctyjson.UnmarshalType(json.RawMessage(a.Type))
+		if err != nil {
+			return cty.NilType, fmt.Errorf("parse type: %w", err)
+		}
+		return ty, nil
+	}
+	return nestedObjectCtyTypeFromV6(a.NestedType)
+}
+
 // nestedObjectCtyTypeFromV6 converts one Schema_Object (itself recursive —
 // a nested attribute's own NestedType may nest further, exactly the
 // PodSpec-containing-containers-containing-volumeMounts shape UBI-112 named
@@ -237,16 +277,16 @@ func attributeTypeJSONFromV6(a *tfplugin6.Schema_Attribute) (json.RawMessage, er
 // equivalent cty.Type. Nesting mirrors NestedBlock's own SINGLE/LIST/SET/MAP
 // handling: SINGLE is a bare object, the others wrap it in the matching cty
 // collection type.
+//
+// UBI-195: calls attributeCtyTypeFromV6 directly, never
+// attributeTypeJSONFromV6 -- see that function's own doc comment for the
+// real, measured reason (the old JSON round trip this replaced).
 func nestedObjectCtyTypeFromV6(o *tfplugin6.Schema_Object) (cty.Type, error) {
 	attrTypes := make(map[string]cty.Type, len(o.Attributes))
 	for _, a := range o.Attributes {
-		typeJSON, err := attributeTypeJSONFromV6(a)
+		ty, err := attributeCtyTypeFromV6(a)
 		if err != nil {
 			return cty.NilType, fmt.Errorf("nested attribute %q: %w", a.Name, err)
-		}
-		ty, err := ctyjson.UnmarshalType(typeJSON)
-		if err != nil {
-			return cty.NilType, fmt.Errorf("nested attribute %q: parse type: %w", a.Name, err)
 		}
 		attrTypes[a.Name] = ty
 	}
