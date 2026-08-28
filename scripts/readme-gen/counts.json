@@ -1,0 +1,26 @@
+{
+  "aws": {
+    "data_sources": 4884,
+    "resources": 1715
+  },
+  "azure": {
+    "data_sources": 2177,
+    "resources": 1090
+  },
+  "datadog": {
+    "data_sources": 528,
+    "resources": 176
+  },
+  "github": {
+    "data_sources": 262,
+    "resources": 80
+  },
+  "google": {
+    "data_sources": 792,
+    "resources": 1546
+  },
+  "kubernetes": {
+    "data_sources": 116,
+    "resources": 92
+  }
+}
