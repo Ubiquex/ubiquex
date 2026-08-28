@@ -7,30 +7,28 @@
 
 ## In flight
 
-**UBI-181: the stacked-PR-merge gap has now hit twice in the identical
-shape -- blocked a second time on a real merge, not a review.** #34/#35:
-#35 stacked on #34, #34 merged into `main` first, #35 merged into its own
-now-detached base branch, never reached `main`. Fixed via PR #36
-(`fix/ubi181-narrow-rule-into-main` -> `main`), confirmed genuinely landed
-(`main`'s own `dsfilter.go` has `actionVerbTokens`/`createFamilyTokens`).
+**UBI-181: #36 and #38 are both genuinely in `main` now (verified the real
+code, not PR status). #38's own fix was itself a real regression, caught
+running the corpus before generating anything -- PR #39 open, not yet
+merged.** #38's whole-string "recreate" strip deleted a genuine create:
+Azure's own real `PrivateStore_CreateOrUpdate` concatenates to
+`...storeCREATEorupdate` once its underscore is stripped, and "re" (off
+"Store") plus "Create" spells "recreate" by accident. Fixed by segmenting
+on real structural separators (`_`, `/`, `:`, `.`) before matching, never on
+hyphens (an intermediate version did, and broke GitHub's own real
+kebab-case `add-or-update-...` the identical way -- caught before pushing).
 
-Checking UBI-181's own flagged low-confidence GCP entry individually (per
-the founder's own instruction) found a second real bug first:
-`networkMonitoringProviders.monitoringPoints` has no create operation at
-all -- it only matched because "create" is a substring of "recreate"
-(`downloadRecreateInstallScript`). Real count drops from 48 to **47** once
-excluded. The fix (PR #37) was opened stacked on #36's own branch --
-and hit the IDENTICAL merge gap: #36 merged into `main` first, #37 merged
-into #36's now-detached branch, never reached `main`. Confirmed directly
-(`main`'s `dsfilter.go` has no `recreateFalseFriend`) before trusting the
-"Merged" label, a second time. PR #38 (`fix/ubi181-recreate-into-main` ->
-`main` directly, not stacked on anything) carries the fix for real this
-time.
+**Verified against the real corpus, not just unit tests**: ran all five
+providers' current schemas through PR #39's fix, diffed the admitted set
+against the pre-recreate-fix 48. Exactly one entry changes (the real
+`monitoringPoints` false positive), nothing else -- confirmed **48 becomes
+47**, stable across repeated runs.
 
-**Next session: verify `main` actually contains #38's content (the code
-itself, not PR status) before doing anything else, then generate SDK
-bindings/docs/artifacts for the real 47.** Full admitted list (pre-recreate
-fix, needs the monitoringPoints entry dropped) at
+**Next session: verify `main`'s real code has `verbSegments` (PR #39)
+before doing anything else -- three of this arc's own PRs have now hit the
+stacked-branch merge gap, so check the code, never the label. Then generate
+SDK bindings/docs/artifacts for the real 47.** Current-best admitted list
+(the real 47, `monitoringPoints` already dropped) at
 `ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
 UBI-181's own Linear comments.
 
