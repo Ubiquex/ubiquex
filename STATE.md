@@ -7,6 +7,41 @@
 
 ## In flight
 
+**UBI-201's real fix regenerated and published, on the founder's own
+explicit override of never-self-merge.** Real, full regeneration
+against all three affected providers found real, unrelated upstream
+drift beyond the fix itself (a new `lambda_microvms` AWS service, real
+service-directory renames, field-level changes) -- checked directly
+before trusting a "small diff," and it wasn't one. Applied the fix
+surgically instead: content confirmed byte-identical between the old
+and newly-escaped filename (diff, zero output) for all 5 known files
+before touching anything, so each PR is a pure `git mv`, git itself
+reporting 0 insertions/0 deletions. `ubx-sdk-aws#24` (3 files),
+`ubx-sdk-azure#23` (1 file), `ubx-sdk-datadog#19` (1 file) -- real
+upstream drift named, not silently folded in or silently discarded.
+
+Verified locally before opening each PR, not assumed: `go build ./...`
+and `go vet ./...` both clean, `go list -f '{{.GoFiles}}'` confirms
+each renamed file is now included in its package (silently excluded
+before), and every previously-undefined symbol
+(`LocationFsxWindows`, `MaintenanceWindows`,
+`ApplicationSignalsServiceLevelObjectiveExclusionWindows`,
+`SqlpoolMaintenanceWindows`, `SitterWasm`) confirmed real and
+resolvable via `go doc` on this real, non-Windows machine.
+
+All three PRs merged (confirmed via `gh pr view` showing `MERGED` with
+real merge commits) and each repo's own `publish.yml` dispatched for
+real -- npm + PyPI + a real Go module tag, each workflow's own
+built-in registry-agreement check passing. **Real, live, independently
+re-verified versions, not just trusted from the workflow's own exit
+status**: `ubx-sdk-aws` v2.1.1, `ubx-sdk-azure` v1.1.1,
+`ubx-sdk-datadog` v1.2.1, all three PATCH bumps (real rename, zero new
+files, matching the version-bump logic's own real rule). A first
+direct PyPI query showed the prior version for all three; a real,
+known propagation lag `publish.yml`'s own comments already document,
+resolved on a second query 15 seconds later, all three registries
+agreeing with npm and the Go tags.
+
 **UBI-201 closed: generated Go filenames escaped against GOOS/GOARCH
 build-constraint collisions.** `hasReservedOSArchSuffix`
 (`sdk/codegen/templates/go/go.go`) mirrors `go/build.Context.
