@@ -7,54 +7,18 @@
 
 ## In flight
 
-UBI-191 (developer documentation site): four slices built and pushed --
-new repo `github.com/Ubiquex/ubiquex-internals` (private, Mintlify),
-scaffolded on `ubiquex-docs`'s own real shape. Confirmed founder
-decision: source docs stay in the repo that owns them (`ubiquex`'s
-`docs/*.md`, and now real `.go` source files in both `ubiquex` and
-`ubx-provider-dynamic`), the site links out rather than becoming a
-second copy.
-
-Seven sections live: Overview (slice 1); Concepts (nine pages --
-proposal, ledger, IR, resolver, executor, drift, cross-stack references,
-staleness, blueprints -- deliberately different register from
-`ubiquex-docs`'s own user-facing `concepts/` pages) and Architecture
-(trust chain Mermaid diagram, the four invariants, tfplugin rationale,
-failure semantics) (slice 2); Schema Constitution (the real, ratified
-hashing rules, presented close to verbatim, with a "last reviewed
-against commit `<sha>`" footer) and Repository Map (one Mermaid
-dependency diagram across five real tiers; repo count -- 22 real,
-non-archived, confirmed live via `gh repo list` -- matched the founder's
-own figure exactly) (slice 3); Provider System (the four real schema
-sources converging on one shared translator before snapshotting, why
-that convergence point was chosen, per-member clients, the mixed-source
-dispatch layer AWS's own CFN+Smithy split required) and SDK and Codegen
-(the real naming-derivation source code, not paraphrased --
-`ServiceAndLocalName`'s base split, `RealNamespace`'s real fix, the data
-namespace, collision handling -- then the three real bugs that lineage
-produced in order: UBI-98's own ~15% imprecision, the GCP/Azure doubling
-correctors, and this session's own AWS namespace fallback at 54% scale)
-(slice 4).
-
-**Sync mechanism went multi-repo this slice, a real architecture change,
-not a workaround**: Provider System and SDK/Codegen both draw from
-`ubx-provider-dynamic` source (`internal/snapshot/mergegroup.go`,
-`generate.go`) for the first time, so `sync-state.json` restructured
-from a flat `{path: sha}` to `{"<repo>": {"<path>": "<sha>"}}`, and
-`check_drift.py` now clones every repo named in it itself (no more
-external checkout step in the workflow). Verified with a real dry run
-against fresh clones of both repos (10 tracked files, zero drift) and a
-real negative test (a deliberately stale SHA correctly reported 6 real
-missed commits). `sync-drift-watch.yml` and `CLAUDE.md`'s own mirroring
-section both updated to describe the multi-repo shape. `mint validate`
-and `mint broken-links` clean every slice. Pushed, verified via `gh api
-repos/Ubiquex/ubiquex-internals/commits/main` -- `c6662e0` current.
-
-Confirmed NOT done this pass: Docs pipeline, Workflows, Decisions --
-three sections remain. Whether the Decisions section is authored fresh
-or extracted from Linear history is still an open question in the
-ticket itself, unresolved. UBI-191 left **In Progress** in Linear, not
-closed -- four slices of what the ticket names as ten sections total.
+Nothing currently in flight. UBI-191 (developer documentation site)
+closed this session, all eleven named sections built across five slices
+-- see `HISTORY.md`'s own "UBI-191: DONE -- developer documentation
+site built end to end" entry. Short version: new repo
+`github.com/Ubiquex/ubiquex-internals` (private, Mintlify), a real
+multi-repo sync-drift mechanism (`sync-state.json` + `check_drift.py` +
+weekly `sync-drift-watch.yml`) tracking 11 real source files across
+`ubiquex` and `ubx-provider-dynamic`, verified with real dry runs and a
+real negative test at every slice. Two of the ticket's six named
+diagrams not built (end-to-end change flow, staleness) -- both
+prose-covered already, named as real, small, optional follow-up, not
+silently claimed done.
 
 UBI-196/197/198/199/202 fully closed this
 session; UBI-200/201 filed, not built -- see `HISTORY.md`'s own
