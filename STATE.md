@@ -53,12 +53,23 @@ The other 15 repos already had good, substantial content -- edited
 additively, never rewritten, matching the founder's own explicit
 instruction: a generated block plus the specific missing structural
 piece each one was actually missing (an Install section, a
-depends-on/depended-by section, a directory layout), real PRs opened
-against every one, none merged. `ubx-sdk-{aws,azure,google,kubernetes,
-github,datadog}#{23,22,25,20,19,18}`, `ubx-schema-{aws,azure,google,
-kubernetes,github,datadog}#{6,6,6,12,6,8}`, `ubx-provider-dynamic#33`,
-`ubx-sdk-typescript#11`, `ubx-sdk-python#9` -- 16 real PRs total,
-confirmed open via `gh pr list` before reporting done, none self-merged.
+depends-on/depended-by section, a directory layout). `ubx-sdk-{aws,
+azure,google,kubernetes,github,datadog}#{23,22,25,20,19,18}`,
+`ubx-schema-{aws,azure,google,kubernetes,github,datadog}#{6,6,6,12,6,8}`,
+`ubx-provider-dynamic#33`, `ubx-sdk-typescript#11`,
+`ubx-sdk-python#9` -- 16 real PRs total (`ubx-sdk-go#8` plus these 15).
+
+**All 16 merged**, on the founder's own explicit confirmation (the
+bare "merge all PRs" instruction conflicts with this project's own
+standing never-self-merge rule -- confirmed via `AskUserQuestion`
+before acting, matching the identical CLAUDE.md rule 10 rollout
+precedent earlier this session, not assumed authorized). Every merge
+verified two ways, not trusted from the merge command's own exit
+status alone: `gh pr view` showing `MERGED` with a real merge commit
+SHA for all 16, and real file content read back from `main` after,
+spot-checked on `ubx-sdk-go`, `ubx-schema-kubernetes`, and
+`ubx-provider-dynamic`. UBI-192 closed in Linear with all 16 PR links
+attached.
 
 **UBI-175 fully closed.** Its last two open items both resolved without
 building anything speculative. Provider tier labels: checked
