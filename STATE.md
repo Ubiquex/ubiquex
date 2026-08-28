@@ -32,28 +32,97 @@ workflow) and intro-quality judgment (not mechanically checkable at
 all, same class of problem as CLAUDE.md rule 10's own
 architectural-vs-bugfix distinction).
 
-That left two real items; built the first. **Golden-page CI gate**:
-`.github/workflows/golden-page-gate.yml` (`ubiquex-docs` `09e0dd53b`)
-wires the already-existing `verify_against_golden.py` (real since
-2026-08-22/23, never run by anything) into a real build gate -- builds
-`ubx` from source, dumps schema, generates fresh local bindings per
-golden candidate, fails the job on any diff or static-check failure.
-Verified twice before trusting it: a real local dry run, then a real
-dispatched run in actual CI. The first real run found three things --
-`aws_launch_template`'s golden page is stale relative to this
-session's OWN AWS namespace fix (UBI-199/202: service now correctly
-resolves to "ec2," changing the correct slug), `github_full_repository`
-gained a real new field since its golden page was committed, both
-real-but-benign, needing a human `--accept`, not a fix; and
-`datadog_monitor` is a genuine, previously-unknown bug -- its data
-source shares its resource's own exact `WireType`, and
-`extract_idents.py`'s `scan_go` has no defense against that collision,
-silently producing a broken generated page. Filed separately as
-UBI-203, not fixed. The gate currently shows red in CI -- correct,
-not a defect; three real things need human review before it's green.
-Azure/GCP/Kubernetes matched their golden pages byte for byte, proving
-the mechanism holds where nothing changed. One real item remains open
-on UBI-175: provider tier labels, not started.
+That left two real items; built the first, now fully verified end to
+end across four real dispatched CI runs, not just a local dry run.
+**Golden-page CI gate**: `.github/workflows/golden-page-gate.yml`
+(`ubiquex-docs`, final `b2b9cbfeb`) wires the already-existing
+`verify_against_golden.py` (real since 2026-08-22/23, never run by
+anything) into a real build gate -- builds `ubx` from source, dumps
+schema, generates fresh local bindings per golden candidate, fails the
+job on any diff or static-check failure. Real infra problems hit and
+fixed along the way, each confirmed via a real dispatched run, not
+assumed fixed from reading the YAML: a single bulk `--dump-ir` across
+all six providers died (split into one `--only <name>` call per
+provider); that still died specifically on Azure -- measured locally
+at 12.5GB peak memory (`/usr/bin/time -l`) for Azure alone, filed as
+UBI-204, Azure excluded from both this workflow's and
+`coverage-watch.yml`'s per-provider loops with a named, visible
+comment, not silently dropped; the runner then hit `deno: command not
+found` (`gen_provider_docs.py`'s own TypeScript block shells out to a
+bare `deno`, only present on this session's own dev machine, not a
+standard runner) -- fixed with `denoland/setup-deno@v2`.
+`coverage-watch.yml` hit the identical multi-provider and Azure-specific
+OOM (confirmed via `gh run list` it had literally never completed a
+real run before, despite being treated as "wired into CI" since
+UBI-187) and separately a missing `docs-coverage-drift` GitHub label
+(the workflow had never reached that step before to create it) --
+both fixed the same way, both confirmed via real dispatched runs.
+
+Final confirmed real state of both, run 2026-08-28: **golden-page-gate**
+(run `33190488249`) shows the correct, fully-understood five-candidate
+picture -- `github_full_repository`'s real new field
+(`secret_scanning_validity_checks`, added upstream since the golden
+page was committed) reviewed and accepted (`ubiquex-docs` `e03eccc70`,
+now IDENTICAL); `gcp` IDENTICAL, unchanged; `aws_launch_template` still
+has NO GOLDEN FILE (stale relative to this session's own AWS namespace
+fix changing its slug from `template` to `launch-template` -- a new
+golden page needs authoring at the new path, not a diff to accept, not
+done); `datadog_monitor` and `kubernetes_apps_replica_set` both DIFFER
+-- both real, both UBI-203 (see below), not accepted, correctly still
+red. **coverage-watch** (run `33189696382`) ran the real coverage
+check across the five non-Azure providers, found real, large,
+pre-existing content gaps (7,625 total -- missing intros, category
+overrides, depth-0 field descriptions, schema/page mismatches, none of
+it new content debt introduced this session, just never surfaced
+before because the workflow never ran), opened
+https://github.com/Ubiquex/ubiquex-docs/issues/47 with the
+`docs-coverage-drift` label, and correctly failed the job (exit 1 by
+design) -- this is the mechanism working as built, not a bug; the
+7,625 gaps are real, un-actioned follow-up work, not touched this
+session.
+
+**UBI-203 broadened**, not just Datadog: the same golden-page run
+that flagged `datadog_monitor` also flagged `kubernetes_apps_replica_set`
+as DIFFERS, with the identical `None`/`None` broken-identifier
+signature. Checked directly against a fresh, clean, pushed
+`ubx-provider-dynamic` checkout (not the stale local one, see below):
+confirmed `ubx-sdk-kubernetes` really does carry two files declaring
+the identical `WireType: "kubernetes_apps_replica_set"` --
+`kubernetes/apps/replica_set.go` (`ResourceBinding`) and
+`kubernetes/data/apps/replica_set.go` (`DataSourceBinding`) -- the
+same collision class as `datadog_monitor`, confirmed live, not
+inferred. Also explains a real discrepancy: an earlier local (macOS)
+dry run of this exact pipeline reported `kubernetes_apps_replica_set`
+as IDENTICAL, while real CI (Linux) reported it DIFFERS. Root cause:
+Python's `glob.glob()` (used by `extract_idents.py`'s `scan_go`/
+`scan_py`/`scan_ts`) has no defined return order -- confirmed directly
+from its own docs ("The order of the returned list is undefined") --
+so which of two wire-colliding files wins is a function of
+filesystem/OS directory-listing order, not the input. Same underlying
+bug, different winner on different machines. Ticket retitled and its
+description patched to record both confirmed instances and the real
+root cause; still not fixed, two real fix locations named (prefix
+Datadog/Kubernetes-style data-source wire types at the generator, and/or
+key `extract_idents.py`'s own dict by `(wire, is_data_source)` instead
+of `wire` alone so a future collision fails loud instead of silently
+producing `None`).
+
+**Loose end found, not touched**: the local `~/Ubiquex/ubx-provider-dynamic`
+checkout is 33 commits behind `origin/main` (`105a5ba4a`) and dirty --
+uncommitted changes to `internal/discoverydoc/datasource.go`,
+`internal/resourcemap/datasource.go`, `internal/smithy/builddatasource.go`,
+`internal/smithy/datasource.go`, `internal/smithy/datasource_test.go`,
+plus untracked `internal/discoverydoc/datasource_test.go`,
+`internal/resourcemap/datasource_test.go`, and a new `internal/dsfilter/`
+directory. All of it touches data-source identification/type-naming
+logic, the same area as the UBI-203 collision above -- worth checking
+whether this is abandoned WIP toward a real fix before assuming it's
+safe to discard. Not investigated further or acted on this session;
+a fresh clone was used instead for all real verification work above so
+this stale/dirty state never touched anything committed or published.
+
+One real item remains open on UBI-175: provider tier labels, not
+started.
 
 **New standing rule, live in all 19 repos**: CLAUDE.md rule 10
 (`ubiquex`) -- an architectural change (a new schema source, a
