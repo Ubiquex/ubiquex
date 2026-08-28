@@ -7,6 +7,26 @@
 
 ## In flight
 
+**UBI-175 fully closed.** Its last two open items both resolved without
+building anything speculative. Provider tier labels: checked
+`sdk/providers/.ubx/config` directly before deciding -- exactly six
+`[dynamic_providers.<name>]` entries, all six official, zero
+verified/community entries, the one historical verified-tier candidate
+(the HashiCorp-sourced AWS corpus) was built then deliberately removed.
+Building the label now would mean real schema/generator/template work
+for a value that reads identically on every page in the corpus, zero
+discriminating power. Split off to UBI-205 (no priority, revisit once a
+real second-tier provider exists) rather than held open on an Urgent
+ticket for something with no current subject. Audit-vs-coverage-check
+question re-confirmed with fresh checks, same finding as before:
+substantively superseded, two real exceptions still open and un-closed
+by anything built this session -- page-load/structural checking
+(`mint validate`/`mint broken-links` both exist, both wired into zero
+CI workflows, confirmed directly against `coverage-watch.yml`/
+`golden-page-gate.yml`, the only two that exist) and intro-quality
+judgment (not mechanically checkable, `check_intro`/`coverage_check.py`
+both only check structure/existence, never prose quality).
+
 **Stale/dirty `ubx-provider-dynamic` local checkout resolved.** Found
 33 commits behind `origin/main`, dirty, with uncommitted changes to
 `internal/discoverydoc/datasource.go`, `internal/resourcemap/datasource.go`,
