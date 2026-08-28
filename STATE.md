@@ -7,30 +7,29 @@
 
 ## In flight
 
-**UBI-181: #34/#35 both show "Merged" but #35's content never reached
-`ubx-provider-dynamic`'s own `main` -- blocked on a real merge, not a
-review.** #35 was stacked on #34 (correctly, it depends on #34's own
-dsfilter package); #34 merged into `main` first, #35 then merged into its
-own base branch, and nothing merged that branch into `main` afterward.
-Confirmed directly (`git merge-base --is-ancestor` fails, `main`'s own
-`dsfilter.go` has no `actionVerbTokens`) before trusting the "Merged" label
--- caught before generating anything, not after. PR #36
-(`fix/ubi181-narrow-rule-into-main` -> `main`) carries #35's own already-
-reviewed content, retargeted so it actually lands.
+**UBI-181: the stacked-PR-merge gap has now hit twice in the identical
+shape -- blocked a second time on a real merge, not a review.** #34/#35:
+#35 stacked on #34, #34 merged into `main` first, #35 merged into its own
+now-detached base branch, never reached `main`. Fixed via PR #36
+(`fix/ubi181-narrow-rule-into-main` -> `main`), confirmed genuinely landed
+(`main`'s own `dsfilter.go` has `actionVerbTokens`/`createFamilyTokens`).
 
 Checking UBI-181's own flagged low-confidence GCP entry individually (per
-the founder's own instruction, before generating anything) found a second
-real bug: `networkMonitoringProviders.monitoringPoints` has no create
-operation at all (`download*`/`get`/`list` only) -- it only matched because
-"create" is a substring of "recreate" (`downloadRecreateInstallScript`). The
-identical false friend exists on Compute's `instanceGroupManagers`
-(`recreateInstances`), not currently live there (already has its own real
-`insert`) but the same root cause. PR #37 (stacked on #36) strips "recreate"
-before matching "create" -- drops the real count from 48 to **47**.
+the founder's own instruction) found a second real bug first:
+`networkMonitoringProviders.monitoringPoints` has no create operation at
+all -- it only matched because "create" is a substring of "recreate"
+(`downloadRecreateInstallScript`). Real count drops from 48 to **47** once
+excluded. The fix (PR #37) was opened stacked on #36's own branch --
+and hit the IDENTICAL merge gap: #36 merged into `main` first, #37 merged
+into #36's now-detached branch, never reached `main`. Confirmed directly
+(`main`'s `dsfilter.go` has no `recreateFalseFriend`) before trusting the
+"Merged" label, a second time. PR #38 (`fix/ubi181-recreate-into-main` ->
+`main` directly, not stacked on anything) carries the fix for real this
+time.
 
-**Next session: verify `main` actually contains both #36 and #37 (ancestor
-check, not PR status) before doing anything else, then generate SDK
-bindings/docs/artifacts for the real 47.** Full admitted list (pre-recreate-
+**Next session: verify `main` actually contains #38's content (the code
+itself, not PR status) before doing anything else, then generate SDK
+bindings/docs/artifacts for the real 47.** Full admitted list (pre-recreate
 fix, needs the monitoringPoints entry dropped) at
 `ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
 UBI-181's own Linear comments.
