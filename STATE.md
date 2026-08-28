@@ -7,6 +7,32 @@
 
 ## In flight
 
+**Three tickets checked against real, current state, two closed, one left
+open with an itemized remainder**: UBI-193 (Azure schema pinning) and
+UBI-176 (stale SDK bindings) both fully verified done and closed --
+UBI-193 via three confirmed-merged PRs (`ubx-provider-dynamic` #23/#24/
+#26), a real `ubx-schema-azure` v1.0.0 release, and a real
+`[dynamic_providers.azure]` pin in the current `sdk/providers/.ubx/config`;
+UBI-176 via every specifically-named missing resource (AWS's
+`bedrock_agent_core_runtime`/`bedrock_knowledge_base`/`s3_vectors_index`,
+Kubernetes's `replica_set` and five more, GCP's `machine_image`/
+`region_backend_bucket`) confirmed present in the real, currently
+published packages, downloaded and inspected directly, plus a real
+scale check (AWS now 1,715 files vs. the ticket's own 1,705-live
+figure). UBI-175 (docs pipeline spec) stayed open -- real, substantial
+parts are built (artifact model complete across all six providers,
+resumable-onboarding manifest, golden pages committed for all six
+providers, coverage check wired into weekly CI, mechanical/fragment
+paths confirmed deleted, the "(AI-inferred)" marker matching spec) but
+four specific spec items are confirmed NOT built: golden-page CI
+enforcement (the script exists, nothing wires it into a build gate),
+the AWS dual-corpus split (`resource-reference/aws-hashicorp/` doesn't
+exist), provider tier labels (`[official]`/`[verified]`/`[community]`,
+absent from every page checked), and the pre-rebuild audit sweep (no
+current, relevant artifact -- the one "audit" file in this workspace is
+an unrelated, 2026-07-08 legacy-project document). Full itemization on
+the ticket's own Linear comment, not just in STATE.md.
+
 **New standing rule, live in all 19 repos**: CLAUDE.md rule 10
 (`ubiquex`) -- an architectural change (a new schema source, a
 naming-derivation change, a new mechanism, a change to what the ledger
