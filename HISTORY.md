@@ -26473,9 +26473,94 @@ real `git stash` A/B check) -- stale nav references left over from this
 same session's earlier 98-page rename work, unrelated to and not
 introduced by this deletion, named as a separate real gap, not fixed.
 
+**UBI-199 closed, except one real fix awaiting founder merge**: removed
+the 859 pages with a real resource page elsewhere (`ubiquex-docs`
+`230b08771`, re-ran the same orphan/cross-reference check rather than
+trusting the earlier pass -- zero orphans, zero cross-references, both
+confirmed fresh). The same commit fixed the 17 stale nav references
+`mint validate` had been reporting (leftover from this session's own
+earlier 98-page rename, confirmed dead both before and after via a
+real `git stash` A/B check).
+
+Azure's remaining 10 (`network/virtualnetwork` family) created
+directly: confirmed first that `service` resolves correctly to
+`"network"` in the pinned schema (no naming issue, unlike AWS), then
+built by calling `gen_provider_docs.py`'s own real
+`build_resource_page_complete` directly against a fresh `--dump-ir`/
+`--lang go,ts,py --out` run for azure, scoped to just these 10 wires,
+placed under the real, existing "Azure Virtual Network" nav group
+(matched via `best_matching_group`, not guessed). Verified 10/10 real
+`go build`, `deno check`, `python ast.parse`. `ubiquex-docs`
+`fe59fe82d`.
+
+AWS's 39 needed a real root-cause fix, not a script workaround, per
+explicit instruction: a scoped script would have fixed 39 pages and
+left the same bug live for every future CFN type whose real service
+name starts with a token that looks like a generic word. Traced
+directly: `--dump-namespaces`' own snapshot-driven path
+(`runDumpNamespacesFromSnapshot`) called `GroupSchemaSource()` and
+failed outright against AWS's real mixed CloudFormation+Smithy group
+-- never given the `SubsetBySource`-based dispatch fix `Summarize`/
+`buildMixedSourceServer` already got in `ubx-provider-dynamic` `#24`/
+`#25`. AWS is the only real mixed-source group in this org, and it was
+only pinned this session (UBI-197/199) -- before that, namespace
+lookup used the live-fetch branches, which process one single-source
+member at a time and never call `GroupSchemaSource` at all, so this
+exact path had never actually been exercised against a real mixed
+group before this session's own pinning work exposed it.
+
+Real, confirmed consequence, not assumed: the failure silently
+degraded `namespacesByType` to nil for the WHOLE provider (`cli/
+sdk.go`'s own skip-don't-fail discipline), and
+`ir.ServiceAndLocalNameForType` fell back to a plain first-token
+mechanical split for every real AWS resource. Measured directly by
+diffing a broken run against the fixed one: **921 of 1,715 real AWS
+resource types (54%) get a different, wrong service under the
+mechanical split** -- far beyond the 39 originally visible (which were
+only noticeable because they happened to collide with the `/data/`
+directory name); every real CFN service whose own name is a
+multi-word compound is affected the same way, confirming this is the
+same class of problem `ir.ServiceAndLocalNameForType`'s own doc
+comment already named for UBI-98 (60/408, ~15%), just triggered at
+full scale by namespaces being entirely absent rather than
+selectively wrong.
+
+Fixed at the root: moved the real computation out of `cmd/
+ubx-provider-dynamic` (a package with no other tests) into
+`internal/snapshot.Namespaces`, mirroring `Summarize`'s exact dispatch
+shape, so it's hermetically testable against a real, constructed mixed
+group the same way `Summarize`'s own mixed-source path already is. A
+genuine cross-source namespace-format collision (4 of 6,599 real
+types, e.g. `aws_vpc_lattice_auth_policy`: CloudFormation's own
+"vpclattice" vs Smithy's own word-split "vpc_lattice", the same real
+service under two differently-formatted real conventions) keeps the
+first value under `DistinctSources`' own fixed, sorted order --
+deterministic, not map-iteration luck -- rather than failing the whole
+dump over 4 of 6,599 real types. New hermetic tests
+(`TestNamespaces_SingleSource_UsesFastPath`,
+`TestNamespaces_RealMixedGroup_ComputesBothSources`), whole-repo `go
+build`/`go vet`/`go test ./...` clean, `gofmt` clean (one pre-existing,
+unrelated finding in `internal/schema/translate.go`, confirmed via
+`git stash` to predate this change).
+
+Verified live, both directions: the real, published AWS pinned
+snapshot now returns a real namespace for all four originally-
+investigated wires (`aws_data_zone_user_profile` -> `datazone`, etc),
+and a full `ubx sdk gen --dump-ir` run against the fixed binary
+confirms the corrected service flows through to the real, generated
+`schema.json`. Also confirmed the already-published `ubx-sdk-
+aws@2.1.0` package is unaffected -- its own real regeneration/republish
+commit (`30d7e8f`, 2026-08-27 21:31) predates AWS's own pinning commit
+(`b40beb2`, 2026-08-28 10:31), so it was generated via the live-fetch
+path this bug never touches.
+
+`ubx-provider-dynamic` PR `#31`, open, verified via `gh pr view`, not
+merged. The 39 AWS resource pages themselves still need generating
+once the fix lands -- real, separate, named follow-up, not done in
+this pass.
+
 **What's left, real and named**: field-level content staleness (423
-pages, distinct from wire-naming, no systematic fix built), the 17
-pre-existing stale nav references `mint validate` reports, UBI-199's
-own 908-page placement fix (delete 859, create-then-redirect 49) once
-someone wants to build it, UBI-200's own design question. Nothing
-currently blocked.
+pages, distinct from wire-naming, no systematic fix built), UBI-199's
+own AWS half waiting on `ubx-provider-dynamic#31`'s merge plus a real
+regeneration for the 39 pages it unblocks, UBI-200's own design
+question. Nothing currently blocked.

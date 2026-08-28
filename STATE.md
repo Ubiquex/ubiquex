@@ -7,8 +7,9 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196/197/198 all closed this session; UBI-199,
-UBI-200 filed as real, separate follow-up, not built -- see `HISTORY.md`'s own
+Nothing currently in flight. UBI-196/197/198 fully closed this session;
+UBI-199 closed except one real fix awaiting founder merge (`ubx-provider-
+dynamic#31`); UBI-200 filed, not built -- see `HISTORY.md`'s own
 "UBI-196/197/198/199/200: docs corpus bindings_status arc, full close" entry
 for the complete arc. Short version: all six providers' schema generation is
 now pinned to a real, published snapshot (`ubiquex` `b40beb2`) instead of
@@ -19,13 +20,26 @@ fix's own two recurrence gaps are closed too (`ubiquex` `2371b4d`,
 out to have no real target once tested empirically -- verified live (real,
 throwaway Go tests against the actual specs) that `DiscoverDataSources`
 cannot structurally produce an unreachable candidate at all, so the 380
-held-back wires it named (229 datadog, 20 github, 131 azure, resolving
-Azure's own earlier inconclusive result) were never a live bug, just stale
-content from the same dirty, since-reverted WIP checkout the GitHub pilot
-finding already identified. Removed all 380 pages (`ubiquex-docs`
-`df5d9b424`), confirmed first that none had a real resource page elsewhere
-that removal would orphan, the same check UBI-199 needed. UBI-197's own
-remaining 908-page placement problem (UBI-199) is real, scoped, NOT built.
+held-back wires it named were never a live bug, just stale content from the
+same dirty, since-reverted WIP checkout the GitHub pilot finding already
+identified. Removed all 380 pages (`ubiquex-docs` `df5d9b424`).
+
+UBI-199's own 908-page placement problem: removed 859 with a real resource
+page elsewhere (`ubiquex-docs` `230b08771`, same commit fixed the 17 stale
+nav references); created Azure's 10 `network/virtualnetwork` resource pages,
+blocked only on this session's own earlier UBI-193 bundling fix, no code
+change needed (`ubiquex-docs` `fe59fe82d`). AWS's own 39 needed a real root-
+cause fix, not a workaround: `--dump-namespaces`' snapshot path never got the
+mixed-source dispatch fix `Summarize`/`buildMixedSourceServer` already had,
+so it failed outright against AWS's real CloudFormation+Smithy group (the
+only mixed-source group in this org, only pinned this session -- this exact
+path had never run against a real mixed group before). Consequence measured,
+not assumed: 921 of 1,715 real AWS resource types (54%) get a wrong service
+under the resulting mechanical-split fallback, not just the 39 originally
+visible. Fixed in `internal/snapshot.Namespaces`, hermetically tested,
+verified live against the real pinned snapshot -- PR `ubx-provider-
+dynamic#31`, open, not merged. The 39 pages themselves still need generating
+once that fix lands.
 
 Real, named follow-up work, not yet started:
 
@@ -54,17 +68,9 @@ Real, named follow-up work, not yet started:
 - UBI-194: publish and acquire `ubx-provider-dynamic` for the other five
   providers (kubernetes already done) — recommendation on record is to wait
   for natural regeneration rather than forcing a metadata-only republish.
-- `mint validate` in `ubiquex-docs` reports 17 pre-existing warnings (dead
-  nav references, file doesn't exist) -- confirmed real and pre-existing
-  (identical count before/after this session's own UBI-198 deletion, via a
-  real `git stash` A/B check), left over from this session's own earlier
-  98-page rename work (UBI-197 naming-divergence fix) not fully cleaning up
-  every stale nav reference it left behind. Not investigated further or
-  fixed — a real, named, separate cleanup item.
-- UBI-199: 908 real resources sitting under `/data/` as stale data-source
-  pages — 859 need removal (a real resource page already exists elsewhere),
-  49 need a resource page created first (no existing page to fall back on).
-  Neither built yet.
+- UBI-199 (AWS half): `ubx-provider-dynamic#31` (the real `--dump-namespaces`
+  mixed-source fix) needs founder review/merge, then a real regeneration for
+  the 39 AWS resource wires it unblocks — not built yet, waiting on the PR.
 - UBI-200: a directory pinned at generation time has no way to detect a
   newer real snapshot published since — three real design options named,
   none decided.
@@ -159,5 +165,6 @@ alone). Every one migrated `deno.json`/`package.json` from `jsr:@ubx/sdk` to
 `npm:@ubx/sdk`, and `hash-watch.yml` now passes `--require-clean-provenance`
 and commits a real `PROVENANCE.json`.
 
-**Open PRs across the org**: none as of the last check this session — every
-PR opened this session (`ubx-sdk-typescript#9` included) has been merged.
+**Open PRs across the org**: `ubx-provider-dynamic#31` (the real UBI-199 AWS
+namespace mixed-source fix), open, not merged, verified via `gh pr view` as
+of 2026-08-28. Every other PR opened this session has been merged.
