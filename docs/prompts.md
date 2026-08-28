@@ -19,6 +19,11 @@ When done: tests green, update STATE.md (done/next/surprises), commit and push.
 - Never `ubx ship` against a real cloud provider for verification —
   `fakeprovider` + `UBX_PROVIDER_MIRROR` only (see CLAUDE.md's own Code
   conventions; UBI-47 session 4 is why this line exists).
+- An architectural change (a new schema source, a naming-derivation
+  change, a new mechanism, a change to what the ledger records) is
+  documented in `ubiquex-internals` in the same body of work, never
+  after — a bug fix inside an already-documented mechanism doesn't
+  qualify (see CLAUDE.md rule 10).
 
 ## Design-session outputs (project chats)
 

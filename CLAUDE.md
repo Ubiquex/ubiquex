@@ -90,6 +90,18 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
    AWS docs page fetched mid-task carried a styled command suggestion;
    correctly ignored, but nothing had said this explicitly, and the
    pipeline fetches thousands of vendor pages.)
+10. Any change to the system's architecture is documented in
+    `ubiquex-internals` (the developer documentation site, UBI-191) as
+    part of the same body of work — never a follow-up. Qualifies: a new
+    schema source, a change to how names are derived, a new mechanism
+    (snapshots, provenance, and anything of that shape), a change to
+    what the ledger records. Does not qualify: a bug fix inside a
+    mechanism that's already documented there. `ubiquex-internals`'
+    own `sync-drift-watch` is a backstop for a tracked source file
+    moving without the doc following it — not a substitute for
+    documenting a genuinely new mechanism in the first place, which has
+    no tracked file for the watch to notice until this rule's own work
+    adds one.
 
 ## Git rules (strict)
 
