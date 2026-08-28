@@ -7,39 +7,86 @@
 
 ## In flight
 
-Nothing currently in flight. UBI-196/197/198 fully closed this session;
-UBI-199 closed except one real fix awaiting founder merge (`ubx-provider-
-dynamic#31`); UBI-200 filed, not built -- see `HISTORY.md`'s own
+Nothing currently in flight. UBI-196/197/198/199/202 fully closed this
+session; UBI-200/201 filed, not built -- see `HISTORY.md`'s own
 "UBI-196/197/198/199/200: docs corpus bindings_status arc, full close" entry
-for the complete arc. Short version: all six providers' schema generation is
-now pinned to a real, published snapshot (`ubiquex` `b40beb2`) instead of
-live-fetching, closing UBI-197's own naming-divergence category for good (98
-pages regenerated and verified, `ubiquex-docs` `e5581fb5f`); the pinning
-fix's own two recurrence gaps are closed too (`ubiquex` `2371b4d`,
-`ubiquex-docs` `336285fd9`). UBI-198's own candidate-discovery "fix" turned
-out to have no real target once tested empirically -- verified live (real,
-throwaway Go tests against the actual specs) that `DiscoverDataSources`
-cannot structurally produce an unreachable candidate at all, so the 380
-held-back wires it named were never a live bug, just stale content from the
-same dirty, since-reverted WIP checkout the GitHub pilot finding already
-identified. Removed all 380 pages (`ubiquex-docs` `df5d9b424`).
+for the complete arc through UBI-199's merge. Short version: all six
+providers' schema generation is now pinned to a real, published snapshot
+(`ubiquex` `b40beb2`) instead of live-fetching, closing UBI-197's own
+naming-divergence category for good (98 pages regenerated and verified,
+`ubiquex-docs` `e5581fb5f`); the pinning fix's own two recurrence gaps are
+closed too (`ubiquex` `2371b4d`, `ubiquex-docs` `336285fd9`). UBI-198's own
+candidate-discovery "fix" turned out to have no real target once tested
+empirically -- verified live (real, throwaway Go tests against the actual
+specs) that `DiscoverDataSources` cannot structurally produce an unreachable
+candidate at all, so the 380 held-back wires it named were never a live bug,
+just stale content from the same dirty, since-reverted WIP checkout the
+GitHub pilot finding already identified. Removed all 380 pages
+(`ubiquex-docs` `df5d9b424`).
 
-UBI-199's own 908-page placement problem: removed 859 with a real resource
-page elsewhere (`ubiquex-docs` `230b08771`, same commit fixed the 17 stale
-nav references); created Azure's 10 `network/virtualnetwork` resource pages,
-blocked only on this session's own earlier UBI-193 bundling fix, no code
-change needed (`ubiquex-docs` `fe59fe82d`). AWS's own 39 needed a real root-
-cause fix, not a workaround: `--dump-namespaces`' snapshot path never got the
-mixed-source dispatch fix `Summarize`/`buildMixedSourceServer` already had,
-so it failed outright against AWS's real CloudFormation+Smithy group (the
-only mixed-source group in this org, only pinned this session -- this exact
-path had never run against a real mixed group before). Consequence measured,
-not assumed: 921 of 1,715 real AWS resource types (54%) get a wrong service
-under the resulting mechanical-split fallback, not just the 39 originally
-visible. Fixed in `internal/snapshot.Namespaces`, hermetically tested,
-verified live against the real pinned snapshot -- PR `ubx-provider-
-dynamic#31`, open, not merged. The 39 pages themselves still need generating
-once that fix lands.
+UBI-199's own 908-page placement problem, now fully closed: removed 859 with
+a real resource page elsewhere (`ubiquex-docs` `230b08771`, same commit
+fixed the 17 stale nav references); created Azure's 10
+`network/virtualnetwork` resource pages, blocked only on this session's own
+earlier UBI-193 bundling fix, no code change needed (`ubiquex-docs`
+`fe59fe82d`). AWS's own 39 needed a real root-cause fix, not a workaround:
+`--dump-namespaces`' snapshot path never got the mixed-source dispatch fix
+`Summarize`/`buildMixedSourceServer` already had, so it failed outright
+against AWS's real CloudFormation+Smithy group (the only mixed-source group
+in this org, only pinned this session -- this exact path had never run
+against a real mixed group before). Fixed in `internal/snapshot.Namespaces`,
+hermetically tested, verified live against the real pinned snapshot -- PR
+`ubx-provider-dynamic#31`, merged (`105a5ba4a`). The 39 pages generated
+against the fix and verified live: `--dump-ir` confirms DataZone/
+DataPipeline/DataSync/GlueDataBrew/DataExchange all resolve correctly and
+land under the right directories, not `/data/`. 33 published
+(`ubiquex-docs` `d891e93a4`), 6 held back -- 1 for a newly-found, separate
+bug (Go's own `_windows.go` implicit build-constraint suffix silently
+excludes a real file from non-Windows builds, already live in published
+`ubx-sdk-aws@2.1.0`, filed as UBI-201, not fixed), 5 for the already-known
+"Computed-branded field-shape mismatch" `deno check` failure category.
+
+**Consequence measured, not assumed, and larger than UBI-199's own scope**:
+921 of 1,715 real AWS resource types (54%) got a wrong service under the old
+mechanical-split fallback, not just the 39 originally visible. UBI-202
+(closed) covered the other 882, with real, full verification this time, not
+a sample: extracted and checked every one of the 880 misfiled pages'
+existing Go/TS/Python code against the real, currently-published SDK
+(`go build` against the real v2.1.0 module, `deno check` against the real
+npm package, `python ast.parse`) -- **732 of 880 clean across all three
+languages, relocated** (`ubiquex-docs` `a8d737d3b`); **148 held back**, not
+regenerated this pass -- 4 for real missing Go SDK bindings (undefined
+symbols against the published package, real content gaps, not a namespace
+artifact), 144 for the pre-existing "Computed-branded field-shape mismatch"
+class already tracked below. The earlier 20-item sample (100% match)
+undercounted the real failure rate; full verification was the right call.
+Real finding that narrowed the fix: the pre-existing nav already had all
+732 under their correct display group via `artifacts/aws/categories.json`'s
+own per-wire labels, independent of the broken path derivation -- only the
+file path and its one nav string were wrong, so this was a path rename, not
+group restructuring (299 top-level AWS nav groups before and after,
+unchanged). 732 redirects added for the old published URLs. Of the 2
+originally-missing wires, `aws_identity_store_user` generated and
+published (verified clean in all three languages);
+`aws_support_auth_z_support_permit` generated but held back, same TS
+mismatch class as the 144.
+
+Also caught and fixed during this pass: `gen_provider_docs.py`'s Go
+import-path template never included a package's real major-version path
+segment -- confirmed live against the Go module proxy that AWS's SDK is
+genuinely at `v2` (every other provider still pre-v2), so every AWS Go
+example generated this session (UBI-199's 33 plus the new
+`identitystore/user` page) named a package the real, published module
+can't resolve. Patched the generator (`REAL_SDK_GO_MODULE_MAJOR`) and
+retroactively fixed the import line in all 33 already-published UBI-199
+pages, re-verified `go build` clean against the real v2.1.0 module for all
+34.
+
+Remaining, not done: 148 pages still misfiled at their old paths (4 need
+real Go SDK binding generation, 144 need the same TS-example fix as the
+existing 316-page "Field-level content staleness" follow-up below -- these
+144 have not yet been folded into that item or given their own ticket),
+plus `aws_support_auth_z_support_permit`.
 
 Real, named follow-up work, not yet started:
 
@@ -50,7 +97,18 @@ Real, named follow-up work, not yet started:
   `Config` struct is now empty, but old pages still show list-style
   pagination fields). Affected 423 pages this session, held back from the
   publish flip. No systematic fix built — would need real field data from a
-  fresh `--dump-ir` per affected page, not just import-path patching.
+  fresh `--dump-ir` per affected page, not just import-path patching. The
+  144 AWS pages UBI-202 held back for the same "Computed-branded
+  field-shape mismatch" `deno check` failure belong in this same bucket --
+  not yet folded in or separately ticketed.
+- AWS: 4 resource types confirmed to have zero real Go SDK bindings in the
+  published `ubx-sdk-aws@2.1.0` package despite being real, valid
+  `ResourceBinding` types (`aws_network_firewall_logging_configuration`,
+  `aws_resource_groups_tag_sync_task`, `aws_vpc_lattice_auth_policy`,
+  `aws_vpc_lattice_resource_policy`), plus `aws_support_auth_z_support_
+  permit`'s own generated page failing the Computed-branded `deno check`
+  class above -- found via UBI-202's full verification pass, not yet
+  ticketed.
 - `--dump-ir`'s own `schema.json` could carry per-language identifiers
   directly, so `ubiquex-docs`' generators stop needing a full separate
   `--lang go --out` run just to recover them — would collapse each real
@@ -68,9 +126,10 @@ Real, named follow-up work, not yet started:
 - UBI-194: publish and acquire `ubx-provider-dynamic` for the other five
   providers (kubernetes already done) — recommendation on record is to wait
   for natural regeneration rather than forcing a metadata-only republish.
-- UBI-199 (AWS half): `ubx-provider-dynamic#31` (the real `--dump-namespaces`
-  mixed-source fix) needs founder review/merge, then a real regeneration for
-  the 39 AWS resource wires it unblocks — not built yet, waiting on the PR.
+- UBI-201: Go's own `_windows.go` implicit build-constraint suffix silently
+  excludes a generated file from non-Windows builds — confirmed live in
+  published `ubx-sdk-aws@2.1.0` (3 real bindings affected), fix likely
+  belongs in `sdk/codegen/templates/go`'s file-naming logic, not built.
 - UBI-200: a directory pinned at generation time has no way to detect a
   newer real snapshot published since — three real design options named,
   none decided.
@@ -165,6 +224,7 @@ alone). Every one migrated `deno.json`/`package.json` from `jsr:@ubx/sdk` to
 `npm:@ubx/sdk`, and `hash-watch.yml` now passes `--require-clean-provenance`
 and commits a real `PROVENANCE.json`.
 
-**Open PRs across the org**: `ubx-provider-dynamic#31` (the real UBI-199 AWS
-namespace mixed-source fix), open, not merged, verified via `gh pr view` as
-of 2026-08-28. Every other PR opened this session has been merged.
+**Open PRs across the org**: none. `ubx-provider-dynamic#31` (the real
+UBI-199 AWS namespace mixed-source fix) merged this session (`105a5ba4a`),
+verified via `gh pr view` as of 2026-08-28. Every PR opened this session has
+been merged.
