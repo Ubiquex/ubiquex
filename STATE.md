@@ -8,30 +8,52 @@
 ## In flight
 
 **Three tickets checked against real, current state, two closed, one left
-open with an itemized remainder**: UBI-193 (Azure schema pinning) and
-UBI-176 (stale SDK bindings) both fully verified done and closed --
-UBI-193 via three confirmed-merged PRs (`ubx-provider-dynamic` #23/#24/
-#26), a real `ubx-schema-azure` v1.0.0 release, and a real
-`[dynamic_providers.azure]` pin in the current `sdk/providers/.ubx/config`;
-UBI-176 via every specifically-named missing resource (AWS's
-`bedrock_agent_core_runtime`/`bedrock_knowledge_base`/`s3_vectors_index`,
-Kubernetes's `replica_set` and five more, GCP's `machine_image`/
-`region_backend_bucket`) confirmed present in the real, currently
-published packages, downloaded and inspected directly, plus a real
-scale check (AWS now 1,715 files vs. the ticket's own 1,705-live
-figure). UBI-175 (docs pipeline spec) stayed open -- real, substantial
-parts are built (artifact model complete across all six providers,
-resumable-onboarding manifest, golden pages committed for all six
-providers, coverage check wired into weekly CI, mechanical/fragment
-paths confirmed deleted, the "(AI-inferred)" marker matching spec) but
-four specific spec items are confirmed NOT built: golden-page CI
-enforcement (the script exists, nothing wires it into a build gate),
-the AWS dual-corpus split (`resource-reference/aws-hashicorp/` doesn't
-exist), provider tier labels (`[official]`/`[verified]`/`[community]`,
-absent from every page checked), and the pre-rebuild audit sweep (no
-current, relevant artifact -- the one "audit" file in this workspace is
-an unrelated, 2026-07-08 legacy-project document). Full itemization on
-the ticket's own Linear comment, not just in STATE.md.
+open with an itemized remainder that then shrank to one real item**:
+UBI-193 (Azure schema pinning) and UBI-176 (stale SDK bindings) both
+fully verified done and closed -- UBI-193 via three confirmed-merged
+PRs (`ubx-provider-dynamic` #23/#24/#26), a real `ubx-schema-azure`
+v1.0.0 release, and a real `[dynamic_providers.azure]` pin in the
+current `sdk/providers/.ubx/config`; UBI-176 via every specifically-named
+missing resource confirmed present in the real, currently published
+packages, downloaded and inspected directly, plus a real scale check
+(AWS now 1,715 files vs. the ticket's own 1,705-live figure).
+
+UBI-175 (docs pipeline spec) stayed open. Two corrections to the
+original four-item remainder, checked against real history rather than
+left standing: the AWS dual-corpus split is confirmed DEAD, not
+pending -- built (`ubiquex-docs` `6096016c7`), then deliberately
+removed nine days later (`ed9a04133`, "documented resources with no
+SDK bindings behind them"), not something to re-build. The pre-rebuild
+audit is confirmed substantively superseded by the coverage check --
+missing-artifact detection is now continuous, not a one-time sweep;
+what genuinely remains outside it is page-load/structural checking
+(cheap fix, `mint validate` already exists, just isn't wired into any
+workflow) and intro-quality judgment (not mechanically checkable at
+all, same class of problem as CLAUDE.md rule 10's own
+architectural-vs-bugfix distinction).
+
+That left two real items; built the first. **Golden-page CI gate**:
+`.github/workflows/golden-page-gate.yml` (`ubiquex-docs` `09e0dd53b`)
+wires the already-existing `verify_against_golden.py` (real since
+2026-08-22/23, never run by anything) into a real build gate -- builds
+`ubx` from source, dumps schema, generates fresh local bindings per
+golden candidate, fails the job on any diff or static-check failure.
+Verified twice before trusting it: a real local dry run, then a real
+dispatched run in actual CI. The first real run found three things --
+`aws_launch_template`'s golden page is stale relative to this
+session's OWN AWS namespace fix (UBI-199/202: service now correctly
+resolves to "ec2," changing the correct slug), `github_full_repository`
+gained a real new field since its golden page was committed, both
+real-but-benign, needing a human `--accept`, not a fix; and
+`datadog_monitor` is a genuine, previously-unknown bug -- its data
+source shares its resource's own exact `WireType`, and
+`extract_idents.py`'s `scan_go` has no defense against that collision,
+silently producing a broken generated page. Filed separately as
+UBI-203, not fixed. The gate currently shows red in CI -- correct,
+not a defect; three real things need human review before it's green.
+Azure/GCP/Kubernetes matched their golden pages byte for byte, proving
+the mechanism holds where nothing changed. One real item remains open
+on UBI-175: provider tier labels, not started.
 
 **New standing rule, live in all 19 repos**: CLAUDE.md rule 10
 (`ubiquex`) -- an architectural change (a new schema source, a
