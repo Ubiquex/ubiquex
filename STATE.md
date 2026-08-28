@@ -7,6 +7,49 @@
 
 ## In flight
 
+**UBI-195 closed: the real 41s cost was never the RPC, it was
+`ubiquex`'s own client-side schema conversion.** All three of the
+ticket's own named candidates (gRPC/protobuf wire-encoding, TLS/
+AutoMTLS overhead, tfprotov6/tf6server library inefficiency) were
+wrong -- confirmed directly: this client dials with
+`insecure.NewCredentials()` unconditionally (`provider/client.go`),
+never `hashicorp/go-plugin`'s own client wrapper at all, so TLS/
+AutoMTLS overhead was never structurally possible. A real, live,
+throwaway instrument (deleted after use) isolated the raw gRPC
+`GetProviderSchema` call at 652ms against Azure's real, pinned
+604-member group -- the `schemaFromV6`/`schemaMapFromV6` conversion
+that follows it took 40.9s alone. The prior session's own "`Schema()`
+RPC call itself took ~41.3s" measurement wrapped both together as one
+black box and blamed the RPC for a cost it never paid.
+
+Root cause, found by direct code reading: for every NESTED (non-leaf)
+attribute, the recursive walk built a real `cty.Type`, immediately
+marshaled it to JSON (`attributeTypeJSONFromV6`), and the caller
+(`nestedObjectCtyTypeFromV6`) immediately unmarshaled it right back
+into a `cty.Type` -- one full, wasted round trip at every one of a
+schema's own nesting levels (39,714 total recursive attribute nodes,
+max depth 15, in Azure's real response alone).
+
+Fixed (`ubiquex` `f0af587`, direct push): new `attributeCtyTypeFromV6`
+returns `cty.Type` directly and is what the recursive path now calls,
+no JSON at intermediate levels; `attributeTypeJSONFromV6` stays the
+one real public boundary that marshals to `json.RawMessage`, exactly
+once, where `Attribute.Type` genuinely needs it.
+
+**Verified by measuring, not assumed**, real before/after against the
+real, live-cached Azure pinned snapshot: `Schema()` 40.7s -> 15.6s
+(61.6% reduction), `Launch`+`Schema()` total 51.9s -> 27.2s (47.6%
+reduction). Output confirmed byte-for-byte identical -- MD5 match
+across the full ~10M-line JSON-encoded schema (1,090 resources, 2,177
+data sources) -- a pure performance change, zero behavior change.
+
+**The 120s handshake timeout override stays.** It bounds `Launch`, not
+`Schema()` -- `Launch` alone measured 11.1s before this fix and 11.6s
+after (unaffected by it, real, separate server-side schema-building
+cost, `ubx-provider-dynamic`'s own `LoadSplit`+`openapi.Parse`+
+`Build`/`MergeOpenAPIGroup`), already over the original 10s default on
+its own, either way.
+
 **UBI-201's real fix regenerated and published, on the founder's own
 explicit override of never-self-merge.** Real, full regeneration
 against all three affected providers found real, unrelated upstream
