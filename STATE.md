@@ -7,6 +7,51 @@
 
 ## In flight
 
+**UBI-201 closed: generated Go filenames escaped against GOOS/GOARCH
+build-constraint collisions.** `hasReservedOSArchSuffix`
+(`sdk/codegen/templates/go/go.go`) mirrors `go/build.Context.
+goodOSArchFile`'s own real matching rule (a generated filename ending
+in `_<GOOS>`, `_<GOARCH>`, or `_<GOOS>_<GOARCH>` is silently excluded
+by Go's own toolchain everywhere except that platform), checked against
+the installed Go toolchain's own `internal/syslist/syslist.go` rather
+than a hand-derived list -- confirmed that source's real GOOS set
+includes `hurd`/`nacl`/`zos` the ticket's own list missed, and its
+GOARCH set (never checked before this ticket) is real and complete.
+Scoped to the filename only, the identical trailing-underscore escape
+UBI-151's own `_test.go` fix already established -- the exported Go
+identifier is unaffected. `ubiquex` `9a2bdd0`.
+
+**Real scope, verified rigorously, not trusted from a first pass.** An
+initial synthetic scan (calling `ir.ServiceAndLocalNameForType` against
+a bare `ResourceType{WireType: ...}` with no other context) found
+6 hits across 4 providers and was reported in that commit's own
+message -- checked further before trusting it, and it was wrong. It
+doesn't reliably reproduce the real pipeline's own service/local split
+for every provider (confirmed live: the real, already-published
+`ubx-sdk-google` package generates a bare `chromemanagement/android.go`,
+no underscore prefix at all, which Go's own real rule explicitly
+exempts -- "a file called linux.go... is not tagged", Go 1.4's own
+documented exception -- the synthetic scan's isolated call had
+computed a different, wrong local name that looked constrained but
+wasn't real). Re-verified against the real, full pipeline instead: a
+pre-fix worktree built (`dd93fa0`, before this fix), a real
+`ubx sdk gen --lang go --out` run for all six providers, the real
+generated tree walked directly for actually-constrained filenames,
+then the identical run repeated post-fix and diffed file-for-file.
+**Real, ground-truth result: exactly 5 files rename, across 3
+providers, aws 3, azure 1, datadog 1, github 0, google 0, kubernetes 0
+-- zero constrained files remain anywhere in the full six-provider
+corpus after the fix, and the diff shows those 5 renames are the ONLY
+files that changed anywhere in the run.** The commit message for
+`9a2bdd0` itself still states the earlier, wrong 6/4 figure (not
+rewritten -- this project never force-pushes a published commit); this
+entry is the corrected, real number. Not yet regenerated/republished
+against any of the three affected SDK repos (`ubx-sdk-aws@2.1.0` is the
+one already confirmed live-broken; `ubx-sdk-azure@1.1.0`/
+`ubx-sdk-datadog@1.2.0` confirmed via the GitHub API to already carry
+the same real, live bug too) -- codegen is fixed, the publish rollout
+is a separate, real follow-up not done this pass.
+
 **UBI-200 closed: schema staleness detection built and verified in real
 CI.** Design question (which of three named options) reported and
 confirmed before building: option 1, `ubiquex-docs` queries each real
