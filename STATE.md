@@ -7,7 +7,7 @@
 
 ## In flight
 
-**New standing rule, 16 real PRs open, none merged**: CLAUDE.md rule 10
+**New standing rule, live in all 19 repos**: CLAUDE.md rule 10
 (`ubiquex`) -- an architectural change (a new schema source, a
 naming-derivation change, a new mechanism, a change to what the ledger
 records) gets its `ubiquex-internals` page written or updated in the
@@ -16,14 +16,21 @@ already-documented mechanism doesn't qualify. Landed directly in the
 three direct-push repos (`ubiquex` `a9f7583`, also added to
 `docs/prompts.md`; `ubiquex-docs` `77d06ffa8`; `ubiquex-internals`
 `5c66ccb`, phrased as this repo's own real target). Opened as real PRs
-against all 16 PR-only repos (`ubx-provider-dynamic` #32; six
+against the other 16 -- `ubx-provider-dynamic` #32; six
 `ubx-sdk-<provider>` #22/#21/#24/#19/#17/#18 aws/azure/google/
 kubernetes/datadog/github; three shared runtimes `ubx-sdk-go` #7/
 `ubx-sdk-typescript` #10/`ubx-sdk-python` #8; six `ubx-schema-<provider>`
-#5/#5/#5/#11/#7/#5 aws/azure/google/kubernetes/datadog/github),
-confirmed open via `gh pr list` across all 16, never self-merged.
-Founder review needed on all 16 before this rule is real everywhere,
-not just in the three monorepo-adjacent repos.
+#5/#5/#5/#11/#7/#5 aws/azure/google/kubernetes/datadog/github -- then,
+on the founder's own explicit override of this session's own
+never-self-merge default (confirmed via `AskUserQuestion` before acting,
+not assumed), merged all 16. Every merge verified two ways: `gh pr view`
+showing `MERGED` with a real `mergeCommit`, and the real file content
+read back from `main` after (`gh api .../contents/CLAUDE.md`, not
+inferred from the merged flag alone) -- spot-checked on
+`ubx-provider-dynamic`, `ubx-sdk-aws`, `ubx-sdk-go`,
+`ubx-schema-kubernetes`, all four showing the real, correct per-category
+rule text live. Rule 10 is now real and enforceable everywhere, not
+just the three monorepo-adjacent repos.
 
 **Checked whether the sync mechanism should enforce rule 10, real
 finding, not assumed**: it can't, mechanically -- telling an
