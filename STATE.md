@@ -7,35 +7,28 @@
 
 ## In flight
 
-**UBI-213 reported, blocked on a founder decision: no license on any of the
-22 repos, checked but nothing applied.** Real, confirmed finding: `ubiquex`
-contains 6 genuinely-MPL-2.0 files (`provider/tfplugin5/tfplugin5.proto`,
-`tfplugin5.pb.go`, `tfplugin5_grpc.pb.go`, and the tfplugin6 equivalents) --
-vendored verbatim from `github.com/hashicorp/terraform-plugin-go`, already
-correctly SPDX-labeled at the file level per that file's own explicit
-"copy this into your own codebase" instruction. `provider/handshake.go`
-cites the same source for verification but reimplements only
-protocol-required constants (magic cookie, version numbers) -- not
-copyrightable expression, no MPL obligation. No other copied/adapted MPL
-source found in either `ubiquex` or `ubx-provider-dynamic`. go.mod check
-(real `LICENSE` files read from the local Go module cache, not assumed):
-`ubiquex` links 3 MPL 2.0 packages (`hcl/v2`, `go-cleanhttp`,
-`go-retryablehttp`), no `terraform-plugin-go`/`sdk` anywhere;
-`ubx-provider-dynamic` directly imports `terraform-plugin-go` plus 6 more
-MPL 2.0 HashiCorp packages transitively -- all genuine linking (implements
-`tfprotov6.ProviderServer`, calls the library's own `tf6server.Serve`),
-not copying. SDK/schema/runtime repos checked clean, Apache 2.0 clear.
-Researched Pulumi's own real practice (LICENSE files + a sample generated
-file's header across 5 repos, not just docs): generated bindings carry no
-separate license from the containing repo across aws-native/google-native/
-aws/kubernetes; `pulumi-azure-native` is the one exception and the closest
-precedent -- Apache 2.0 root LICENSE + a NOTICE file naming 4 specific
-MPL-2.0 files + a LICENSES/MPL-2.0.txt, the same shape recommended for
-`ubiquex`'s own 6 vendored files regardless of which top-level license it
-picks. Full report on Linear UBI-213. Adoption-vs-hosted-competitor
-(Apache 2.0 vs BSL) for `ubiquex`/`ubx-provider-dynamic` is a real business
-call left to the founder, not resolved here -- nothing applied, no LICENSE
-files added, no repo touched.
+**UBI-213 closed: Apache 2.0 applied to all 22 active repos, direct push
+to main, verified against the real GitHub API per repo.** MPL check found
+`ubiquex` genuinely contains 6 vendored MPL 2.0 files
+(`provider/tfplugin{5,6}/*.proto`/`.pb.go`/`_grpc.pb.go`, verbatim from
+`terraform-plugin-go`, already SPDX-labeled) and links (not copies) MPL
+2.0 packages in both `ubiquex` and `ubx-provider-dynamic` -- no blocker
+either way, decision was adoption (Apache 2.0) over BSL, since the
+hosted-competitor risk BSL guards against doesn't exist yet and adoption
+does even less. `ubiquex` kept its own Apache 2.0 LICENSE, gained a
+`NOTICE` (naming the 6 MPL files) and `LICENSES/MPL-2.0.txt`, mirroring
+`pulumi-azure-native`'s own real precedent. `ubx-provider-dynamic` got a
+plain LICENSE, no NOTICE (confirmed linking only). The other 20 repos
+(6 schema, 10 sdk/runtime, docs/internals/web, the check-demo repo) each
+got a plain Apache 2.0 LICENSE. `ubiquex.io` (the org's 23rd active repo)
+was deliberately excluded and left alone -- it turned out to be an
+unmodified third-party template (`astro-starter-pro`, package name/README/
+MIT copyright all still the template author's, never replaced with
+Ubiquex's own), not a licensing gap; overwriting a real third party's own
+copyright would have been a new problem, not a fix. Filed as its own
+ticket, UBI-215 (worth deciding whether `ubiquex.io` is meant to become
+the real site given `ubiquex-web` already exists and is real, or should
+be archived/repurposed). Full detail on Linear UBI-213.
 
 **UBI-209 in progress: 274 of 315 corpus-drift pages moved to their real
 current wire, verified, redirected, 0 deleted, 41 unresolved (left in
