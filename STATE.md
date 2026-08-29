@@ -7,6 +7,155 @@
 
 ## In flight
 
+**UBI-213 reported, blocked on a founder decision: no license on any of the
+22 repos, checked but nothing applied.** Real, confirmed finding: `ubiquex`
+contains 6 genuinely-MPL-2.0 files (`provider/tfplugin5/tfplugin5.proto`,
+`tfplugin5.pb.go`, `tfplugin5_grpc.pb.go`, and the tfplugin6 equivalents) --
+vendored verbatim from `github.com/hashicorp/terraform-plugin-go`, already
+correctly SPDX-labeled at the file level per that file's own explicit
+"copy this into your own codebase" instruction. `provider/handshake.go`
+cites the same source for verification but reimplements only
+protocol-required constants (magic cookie, version numbers) -- not
+copyrightable expression, no MPL obligation. No other copied/adapted MPL
+source found in either `ubiquex` or `ubx-provider-dynamic`. go.mod check
+(real `LICENSE` files read from the local Go module cache, not assumed):
+`ubiquex` links 3 MPL 2.0 packages (`hcl/v2`, `go-cleanhttp`,
+`go-retryablehttp`), no `terraform-plugin-go`/`sdk` anywhere;
+`ubx-provider-dynamic` directly imports `terraform-plugin-go` plus 6 more
+MPL 2.0 HashiCorp packages transitively -- all genuine linking (implements
+`tfprotov6.ProviderServer`, calls the library's own `tf6server.Serve`),
+not copying. SDK/schema/runtime repos checked clean, Apache 2.0 clear.
+Researched Pulumi's own real practice (LICENSE files + a sample generated
+file's header across 5 repos, not just docs): generated bindings carry no
+separate license from the containing repo across aws-native/google-native/
+aws/kubernetes; `pulumi-azure-native` is the one exception and the closest
+precedent -- Apache 2.0 root LICENSE + a NOTICE file naming 4 specific
+MPL-2.0 files + a LICENSES/MPL-2.0.txt, the same shape recommended for
+`ubiquex`'s own 6 vendored files regardless of which top-level license it
+picks. Full report on Linear UBI-213. Adoption-vs-hosted-competitor
+(Apache 2.0 vs BSL) for `ubiquex`/`ubx-provider-dynamic` is a real business
+call left to the founder, not resolved here -- nothing applied, no LICENSE
+files added, no repo touched.
+
+**UBI-209 in progress: 274 of 315 corpus-drift pages moved to their real
+current wire, verified, redirected, 0 deleted, 41 unresolved (left in
+place) per a fresh direct recompute against the current corpus (not a
+sum of narrative per-batch counts, which stopped reconciling cleanly
+partway through this pass -- see the note on the ~20-page gap below for
+why).** Root cause
+confirmed as ONE systemic upstream pattern, not 315 independent
+drifts: a generic placeholder local name (ARM's own pre-Contract
+naming, `microsoft_<namespace>` echoes, raw
+`_list_result`/`_response`/`_collection` wrapper names) replaced by the
+real, specific resource-type name in the current schema. Azure's own
+apimanagement cluster (292 pages, 113 unique wires) is 100% confirmed
+rename, zero removals.
+
+Verified per rename by reading the old page's own description (or,
+where boilerplate, its specific non-generic argument names) against
+the new wire's real field content -- never name-pattern guessing or
+shared-shape overlap. Two real false-positive classes found and
+avoided live: pure description-word-overlap scoring (ranks unrelated
+same-vocabulary resources above the true match -- azure sql's
+vulnerability-assessment family did this to an encryption-protector
+resource); and matching on ARM's generic `next_link`/`value` pagination
+wrapper alone, shared by ~300 wires system-wide with zero distinguishing
+signal. 5 candidates that passed content verification still turned out
+wrong, caught only by a final path-collision check against the real
+file tree (automanage, cognitiveservices account, dataprotection backup
+vault, reservations, resources generic_resource -- each candidate wire
+already had its own unrelated live page).
+
+**Final split (315 total, per the fresh recompute): 274 moved and
+redirected, 0 deleted, 41 unresolved and left in place** (azure
+apimanagement 2 -- genuinely ambiguous `apimworkspaces_api_link`, cited
+by two real candidates with no way to disambiguate; azure other 33,
+of which ~20 were individually investigated this pass with a
+documented reason each: no candidate found, decomposed into multiple
+typed successors, only a partial match, tied candidates, zero fields
+to verify against, a collision with an already-existing page, or
+(a real ~13-page subset) RESOURCE-type pages this ticket's own
+data-source-scoped matching tooling never reached at all -- see the gap
+note below; datadog 3, one of which (`datadog_widget_list_response`) is
+part of that same never-reached gap; github 4, one of which --
+`clone_traffic` -- has a confirmed successor (`data_github_traffic`)
+blocked by a stale published-SDK gap, same class as kubernetes's own 1,
+and one (`github_content`) is also part of the gap). No wire was confirmed to certainty
+as genuinely removed upstream in this pass -- every "no candidate"
+case fell short of "provably gone" (the stated bar), so nothing was
+deleted despite several individually investigated all the way to "zero
+trace under any spelling checked."
+
+Every moved page regenerated fresh from the real published SDK package,
+verified via real Python execution, real `go build`, and real
+`deno check` before write. Nav references and redirects updated for
+every move. `mint validate` clean after every batch.
+
+Fixed live along the way: `pick_richer_example_fields` returning
+nothing for a resource whose only top-level field is Optional+Computed
+(blocked 92% of the apimanagement batch); a real cross-language import
+bug where `idents_for()` reused Go's own reserved-word-escaped service
+directory (`case_`, since Go reserves `case`) for Python and TypeScript
+too, though both real published directories are plain `case` --
+confirmed via a real `deno check` failure, fixed in
+`gen_all_data_source_pages.py`.
+
+Commits, all direct to `ubiquex-docs` main: `119fb7d6a`/`abb540c4c`/
+`9bb02a43b`/`56423f912` (the original 190-page batch), `04c9aa7a0`/
+`7158bb2d4`/`2acf3f7a0` (66 more azure, cross-language field fix),
+`e20b7c9b9`/`348319f07` (11 more datadog, the `case`/`case_` fix),
+`59bafd41c` (22 more azure, semantic-content verification).
+
+**UBI-212 closed: both real example-renderer bugs fixed in
+`gen_provider_docs.py`, 17 pages regenerated corpus-wide (not the 4
+originally known).** `pick_richer_example_fields` capped the COMBINED
+`(required + name + optional)` list at `MAX_RICH_FIELDS`, silently
+truncating real Required fields whenever a resource had more than 8 --
+fixed so the cap only bounds the optional extras, never the required
+set. The map-literal renderer special-cased every map field to a flat
+`{"managed-by": "ubx"}` placeholder regardless of the map's own element
+type -- wrong, and a real bug in Python too (not just a `deno check`
+failure): `_serialize_config` requires `dataclasses.is_dataclass` on a
+map value exactly like it does for a plain object field, so the flat
+dict raised a real `TypeError` at execution. Fixed by routing an
+object-element map through the same nested-class machinery a list/set's
+own object element already uses, all three languages.
+
+Corpus-wide scan (all six providers) found 17 real affected pages, not
+4 -- 5 hit the first bug (all AWS resources), 12 the second (7 AWS data
+sources, 2 azure, 2 gcp, 1 github). Two real false-positive classes
+caught by a real A/B harness (old renderer logic vs new, identical
+idents, isolating only the fix's own effect) before trusting the static
+scan: a data source pre-filters to settable lookup args before calling
+`pick_richer_example_fields`, so a pure-Computed field never reaches
+the renderer at all (3 false hits); and GCP keys a data source and a
+same-named resource as two distinct wires, and the scan flagged the
+wrong one. All 17 verified with real `go build`, real `deno check`
+(except one pre-existing local-only page, verified `go build` only,
+matching its own already-shipped bar), and real python execution.
+Confirmed inert: the same A/B harness against 79 randomly sampled
+unaffected pages across all six providers produced byte-identical
+output for every one. Committed and pushed: `4edd110b2`.
+
+**Real gap found, not yet investigated:** a fresh stale-wire recompute
+against the full current corpus at the end of this pass found roughly
+20 pages this ticket's own tracking never covered --
+`datadog_widget_list_response`, `github_content`, and a cluster of
+azure RESOURCE-type pages (not data sources -- this ticket's matching
+tooling was scoped to data sources for most of its life) including
+several `apimprivatelink`/`vi`/`redisenterprise`/`mysql`/`botservice`/
+`synapse` private-link and private-endpoint-connection resources, plus
+3 `sql` resources. Some were already-known rejected candidates from
+earlier root-causing; most are genuinely new. Likely explanation: real
+mid-session schema drift (a republish) for at least the datadog/github
+ones, plus a real scope gap in the data-source-only tooling for the
+azure resource-type ones (now folded into the 41-unresolved figure
+above, not tracked separately). Full comment on Linear UBI-209. Left
+open, real follow-up work not attempted this session: the 41
+unresolved pages above (a human call on whether any merit a second
+look, especially the ~13 azure resource-type ones never individually
+matched at all).
+
 **UBI-208 closed: `gen_provider_docs.py`'s example-literal renderer emits
 real nested constructions, not plain literals, per language.** Four
 bundled bugs in `pick_inner_example_field` (singular): picked a nested
@@ -195,9 +344,59 @@ applied correctly to the other three repos from the start. Publishing
 itself (`publish.yml`, manual `workflow_dispatch`-only) and merging
 both need the founder -- not attempted.
 
-**UBI-211 not started**: filed, real scope described, no fix
-attempted this session -- reproducing shape-based dedup is real,
-separate engineering work.
+**UBI-211 closed.** Design confirmed before building (per explicit
+instruction): rather than reproduce the codegen's shape-dedup algorithm
+a second time (the UBI-197 two-implementations divergence risk), the
+renderer now reads the real class name directly out of the generated
+`.py` source's own `fields=_XxxFields` cross-references
+(`extract_idents.py`'s new `parse_nested_fields`/`scan_py`/
+`scan_py_data`) -- ground truth, not a guess. Confirmed live (not
+assumed) that data-source `.py` files carry the identical `FieldSpec`
+tree structure as resources, including cross-KIND shape dedup (a
+data-source "object"-kind field and a "list"-kind field sharing one
+real class), so the same fix mechanism applies to both without a
+separate case.
+
+Three more real, separate bugs surfaced live while regenerating the
+775-page target set and were fixed in the same pass, since all three
+block the identical page set: the Python nested-class import line for
+data sources pulled from the service package instead of the real file
+submodule (package only re-exports each binding's own top-level
+Config) -- real `ImportError` for every data-source page with any
+nested object field at all, independent of naming; the data-source
+Config class name was guessed as `binding + "Config"` rather than read
+from the real source -- wrong for the rare real collision-suffix case
+(`aws_kendra_query_suggestions`'s own real `QuerySuggestionsConfig_`,
+colliding with the separate `aws_kendra_query_suggestions_config` data
+source's own unsuffixed `QuerySuggestionsConfig` at package level); a
+missing `import json` for a data-source lookup preamble that needs one.
+
+**Full verification, not a sample, per explicit instruction.**
+Re-ran real-execution classification against all 815 currently-blocked
+pages across all six providers (not just the 775 UBI-211 subset) using
+the new renderer against a fresh local regen: aws 742/743 now pass (the
+736-dominant case), all five other providers already clean at
+still_broken=0. Then wrote and verified every page against the real
+*published* package (never just a fresh local regen) via real Python
+execution per page: 778 pages written. A real `go build` + `deno check`
+sample (25 files, weighted toward the pages with substantive, non-
+wording Go/TS content changes -- confirmed via diff classification that
+89/782 files had real content changes beyond the intent-string
+freshness refresh every full regen naturally produces) came back clean,
+0/25 failures, confirming the Go/TS side (untouched by this fix) wasn't
+regressed.
+
+Re-checked the 4 pages already known to carry a separate,
+pre-existing TS field-selection bug (found during UBI-210's own
+verification, reverted then, not shipped): all 4 were touched by this
+batch (their Python was part of the 775), and their TS block is still
+broken -- confirmed identically broken in the PRE-batch committed
+content too, so this batch introduces no regression there, only
+improves their Python. That TS bug remains open, still not filed as
+its own ticket.
+
+Committed and pushed directly to `ubiquex-docs` main, verified via the
+real GitHub API: `e66750333` (script fix), `b94a56026` (778 pages).
 
 **UBI-210 closed for real: all four PRs merged, all four published,
 verified against the actual registries, blocked pages re-run.** All
@@ -228,11 +427,24 @@ ticket yet.
 17/17, deno check 17/17, real Python execution 17/17). Committed and
 pushed: `ubiquex-docs@d26a6bc77`.
 
-**Final real count of the original 815 UBI-208 blocked pages: 798
-still blocked.** 775 = UBI-211 (unchanged, aws 736 of it). 19 =
-pre-existing "other" causes bundled in the original 815 (local_only
-pages, wires no longer in schema, regen exceptions). 4 = the newly-
-found separate TS issue above. 17 fixed net. Never self-merged
+**Final real count after UBI-211 (superseding the 798 figure below,
+which predates that fix): 20 still blocked**, down from 815 originally
+blocked, then 798 after UBI-210's 17-page batch. 19 = the same
+pre-existing "other" causes (local_only pages not yet republished,
+tracked separately, not this session's fix). 1 = `github_content`,
+needs its own package republish (a stale-publish case like UBI-210's,
+not a UBI-211 naming case). 778 fixed net by UBI-211. The 4-page
+separate TS field-selection bug (unchanged, still open, still not its
+own ticket) is a REAL bug on 4 of those now-fixed 778 pages -- their
+Python is correct, their TS is not, tracked as a known gap rather than
+counted in the 20 still-blocked (their Python-side blocking cause is
+resolved; the TS bug is pre-existing and separate).
+
+Original count, kept for history: **798 still blocked** (out of 815).
+775 = UBI-211 (unchanged, aws 736 of it). 19 = pre-existing "other"
+causes bundled in the original 815 (local_only pages, wires no longer
+in schema, regen exceptions). 4 = the newly-found separate TS issue
+above. 17 fixed net (UBI-210's own batch). Never self-merged
 throughout -- all four PRs real-reviewed and merged by the founder,
 not by this session.
 
