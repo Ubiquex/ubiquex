@@ -7,6 +7,28 @@
 
 ## In flight
 
+**UBI-207: design reported to Linear, deliberately NOT built yet --
+waiting on direction.** `rebuild_provider_index` (gen_provider_docs.py)
+does two genuinely separate things and they don't share a verdict:
+(1) writes per-service `<service>/index.mdx` -- the landing pages a
+prior commit deliberately removed ("click to expand not navigate");
+recommendation is delete this branch outright, not repair it with a
+CardGroup/Example structural check, since keeping ANY version of it
+still resurrects the removed pages for every service that doesn't
+happen to collide with an index-named resource. (2) writes the
+top-level `<provider>/index.mdx` -- still real, needed (both real
+callers, `regen_pages.py`/`gen_new_provider_pages.py`, depend on it),
+and structurally immune to the index-collision problem since no real
+resource can ever live at that exact path. Checked all six named
+index resources (`aws_kendra_index`, `aws_qbusiness_index`,
+`google_aiplatform_index`, `google_datastore_index`,
+`google_firestore_index`, `datadog_logs_index`) directly against
+current `main`: **none currently clobbered**, all genuine resource
+pages. `verify_scope_guard.py` (the one real test covering this
+function) only asserts top-level index content, nothing about the
+per-service branch, so deleting it won't break that suite. Full
+report on UBI-207's own Linear comments.
+
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
 six `[dynamic_providers.<name>]` entries, zero `[thirdparty_providers]`,
