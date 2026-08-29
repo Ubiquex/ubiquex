@@ -7,47 +7,45 @@
 
 ## In flight
 
-**UBI-181: generated and compile-verified, not just discovered. The real
-final count is 42, not 47 -- a real correction to my own counting method,
-caught by generating for real, not a code regression.** `main` confirmed to
-genuinely carry PR #39 (`verbSegments`) before generating anything. My
-prior 48/47 counts deduped admitted candidates by path string ALONE across
-every member of a provider -- wrong for any provider with real, separate
-API-version channels sharing a relative path (Google's own
-`google_aiplatform` vs `google_aiplatform_v1beta1` are two genuinely
-different real resources my own dedup silently collapsed into one).
-Rebuilt per-member, with a real check against the "already claimed ...
-skipped rather than disambiguated" collision Note every candidate goes
-through downstream (a check I hadn't done before).
+**UBI-181: closed, all the way through docs.** Final count held at **42**
+(azure 16, github 11, google 14, datadog 1) from generation through
+publish through docs. All four schema-snapshot repos published at real
+`v1.0.1` releases (`ubx-schema-azure`/`-github`/`-google`/`-datadog`, PRs
+#7/#7/#7/#9 all merged), `sdk/providers/.ubx/config` pins bumped to
+`1.0.1` and resolving cleanly against the real releases (zero-network on
+cache hit, no mirror). SDK bindings regenerated and republished for all
+four providers x three languages (`bindings_status=local_only` -- no
+`ubx-sdk-<provider>` repo exists for any of these families yet, confirmed
+via `gh repo view`, not assumed).
 
-**Real numbers**: azure 16/16 (admitted/final), github 19/11 (8 collide
-with an already-claimed resource at a second real path -- real, correct,
-this repo's own established policy, not a bug), google 14/14, datadog 1/1,
-kubernetes 0/0. **Total: 50 admitted, 42 final.**
+42 real `resource-reference` pages generated in `ubiquex-docs`
+(committed and pushed directly to main, `2d07166e2`, verified via the
+real GitHub API), depth-zero descriptions/intros/categories.json written
+for all 42, docs.json nav updated, `mint validate` clean. Full write-up
+in UBI-181's own Linear comments, including two process gaps found and
+worked around, not fixed: (1) a GROUP dynamic provider's `Discover()`
+"member" attribution is not a real `--only` target, only the bare
+`[dynamic_providers.<name>]` key is; (2) `ubiquex-docs`'
+`rebuild_provider_index` still resurrects the per-service landing pages
+commit `e667fd502` deliberately removed, and clobbers real resources
+whose own local name is `index` (hit `google_firestore_index`,
+`datadog_logs_index`, `google_aiplatform_index` again) -- every side
+effect reverted before committing, but the tool itself still needs a fix.
 
-Ran real `ubx sdk gen --lang go` for all four providers against the
-regenerated schema (via `UBX_SCHEMA_MIRROR`, local, matching the real
-production path). `go build ./...` clean for azure (2,718 types), google
-(1,975), datadog (622) -- all 31 new resources there compile. Found one
-real, separate bug generating github: `ensurePathParamsPresent` duplicates
-a synthetic `OwnerPath` field when Create and Read share the identical
-path with a colliding param name -- `github_team_repository` is the first
-resource ever shaped that way. Filed as **UBI-206**, excluded from this
-batch; the other ~90 github packages build clean (41 of 42 total compile).
+**UBI-206 (real path-param PascalCase collision, found generating this
+batch): fixed, tested, pushed -- PR #40 on `ubx-provider-dynamic`, still
+open, not merged.**
 
-**Also done**: `ubx-provider-dynamic` v1.0.2 released (real, tagged,
-verified assets). All four schema-snapshot repos regenerated + republished
-(version bump `1.0.0` -> `1.0.1`, real `MinBinaryVersion`, corrected README
-counts): PRs open in `ubx-schema-azure` #7, `ubx-schema-github` #7,
-`ubx-schema-google` #7, `ubx-schema-datadog` #9 -- none merged.
-
-**Next session: once the four schema PRs merge, generate docs pages +
-artifacts (descriptions/intros/categories) for the 42** -- deliberately not
-attempted against local-only content this pass, since that generation step
-depends on the real published pin (matching this project's own established
-`bindings_status` convention: verify against the real registry, never
-before). Fix UBI-206 first or explicitly exclude `github_team_repository`
-again. Full report in UBI-181's own Linear comments.
+Go build (real, page-level, against the regenerated local SDK) clean
+42/42. Python `ast.parse` clean 42/42. TypeScript has no established
+type-check bar in this pipeline; a full `deno check` run anyway found
+37/42 clean, the other 5 (plus the Python runtime-execution check) hit a
+pre-existing, corpus-wide gap in nested-object-typed example field
+rendering -- confirmed via an unrelated, already-shipped page
+(`gcp/aiplatform/deployment-resource-pool.mdx`) hitting the identical
+error, not a regression from this batch. Worth its own ticket against
+`gen_provider_docs.py`'s field-literal renderer; not attempted this
+session.
 
 **UBI-195 closed: the real 41s cost was never the RPC, it was
 `ubiquex`'s own client-side schema conversion.** All three of the
@@ -676,7 +674,7 @@ Nothing currently blocked.
 
 `ubiquex` is the coordinating repo — this section is its responsibility to keep
 current, not any other repo's own `STATE.md`. Verified directly (`gh api`), not
-carried forward from memory, as of 2026-08-27/28.
+carried forward from memory, as of 2026-08-29.
 
 **Schema repos** (`ubx-schema-<provider>`, real `manifest.json` + `members/`
 group snapshots consumed via `provider.AcquireSchema`):
@@ -684,15 +682,20 @@ group snapshots consumed via `provider.AcquireSchema`):
 | Repo | Latest release | Carries real `min_binary_version`? |
 |---|---|---|
 | kubernetes | v3.0.1 | yes (`1.0.1`) |
-| datadog | v1.0.0 | no — bootstrap fallback |
-| azure | v1.0.0 | no — bootstrap fallback |
-| google | v1.0.0 | no — bootstrap fallback |
-| github | v1.0.0 | no — bootstrap fallback |
+| datadog | v1.0.1 | yes (`1.0.2`, UBI-181) |
+| azure | v1.0.1 | yes (`1.0.2`, UBI-181) |
+| google | v1.0.1 | yes (`1.0.2`, UBI-181) |
+| github | v1.0.1 | yes (`1.0.2`, UBI-181) |
 | aws | v1.0.0 | no — bootstrap fallback |
 
-**`ubx-provider-dynamic`**: latest release `v1.0.1`, published per platform
+`sdk/providers/.ubx/config` pins azure/github/google/datadog at `1.0.1`
+(aws stays `1.0.0`, kubernetes stays `3.0.1`), resolving cleanly against
+the real releases above.
+
+**`ubx-provider-dynamic`**: latest release `v1.0.2`, published per platform
 with checksums, acquired via `provider.AcquireDynamicProviderBinary` — no
-`UBX_PROVIDER_DYNAMIC_REPO` checkout required on the normal path.
+`UBX_PROVIDER_DYNAMIC_REPO` checkout required on the normal path. One open
+PR against it: #40 (UBI-206, not merged — see "In flight").
 
 **Shared runtimes** (not provider-specific — every one of the six providers
 depends on all three):
@@ -726,7 +729,8 @@ alone). Every one migrated `deno.json`/`package.json` from `jsr:@ubx/sdk` to
 `npm:@ubx/sdk`, and `hash-watch.yml` now passes `--require-clean-provenance`
 and commits a real `PROVENANCE.json`.
 
-**Open PRs across the org**: none. `ubx-provider-dynamic#31` (the real
-UBI-199 AWS namespace mixed-source fix) merged this session (`105a5ba4a`),
-verified via `gh pr view` as of 2026-08-28. Every PR opened this session has
-been merged.
+**Open PRs across the org**: one — `ubx-provider-dynamic#40` (UBI-206, real
+path-param PascalCase collision fix, tested and pushed, deliberately not
+merged per "never self-merge"). The four `ubx-schema-<provider>` PRs from
+this same UBI-181 batch (`#7`/`#7`/`#7`/`#9` in azure/github/google/datadog)
+all merged, verified via `gh pr list --state all` as of 2026-08-29.
