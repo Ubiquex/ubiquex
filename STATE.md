@@ -7,6 +7,31 @@
 
 ## In flight
 
+**UBI-204: root-caused, design reported to Linear, deliberately NOT built
+yet -- waiting on direction.** `ubx sdk gen --only azure --dump-ir`'s real
+12.5GB peak is NOT translation, NOT merging (Azure's single
+`[dynamic_providers.azure]` entry never goes through
+`generateDynamicProviderGroup` at all -- the 302-member fetch/bundle
+happens inside the separate `ubx-provider-dynamic` subprocess, the CLI
+gets one already-merged gRPC response), and NOT the 2718 individual
+per-type file writes (all of those stay under 2.2GB). A real, throwaway
+`runtime.ReadMemStats` instrument (deleted after use, nothing landed)
+pinned it to one line: the final `json.MarshalIndent(combined, ...)`
+that serializes the whole combined `schema.json` in one shot takes
+HeapSys from 2.2GB to 12.7GB by itself. Isolated further: swapping that
+one call to compact `json.Marshal` (same data, nothing else changed)
+dropped real peak RSS from 10.17GB to 2.34GB (77% reduction) -- Azure's
+deep nesting makes indentation whitespace the majority of the byte
+count, and Go's `MarshalIndent` does a full second-buffer reindent pass
+over an already-fully-marshaled compact buffer. Proposed, not built:
+(1) minimal -- switch that one combined-schema.json write to compact
+`json.Marshal` (it's a scratch/CI artifact, never committed, never
+hand-read, unlike the per-type files which stay indented); (2) real
+follow-up -- stream schema.json directly to the output file reusing the
+already-marshaled per-type bytes, avoiding the second full-corpus
+marshal entirely. Full numbers and per-stage breakdown in UBI-204's own
+Linear comments. Not merged/committed anywhere, this was report-only.
+
 **UBI-203 closed: resource/data-source WireType collision in `ubiquex-docs`'
 `extract_idents.py` fixed and audited, real scope much larger than the
 ticket's own "confirmed: Datadog, Kubernetes" framing.** `scan_go`/
