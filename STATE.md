@@ -7,35 +7,33 @@
 
 ## In flight
 
-**UBI-214 reported (not applied): a real full AWS regen (1715 resources,
-`regen_pages.py` against a fresh Aug 29 schema dump) found the two named
-"losable fixes" mostly survive, but surfaced a bigger, previously
-untracked problem class instead.** The 55 AWS pages both the sub-15-char
-and AI-inferred-marker fixes touched: 0/55 showed their patched
-description text reverting -- but traced why for one field and confirmed
-this is incidental (the fresh schema dump itself now carries the rich
-text natively, `DescriptionSource: "ai-inferred"` already baked in
-upstream, not `inject_description` becoming safe -- that function still
-only fills truly-empty fields exactly as designed, confirmed by finding
-one sibling field on the same page where the original problem still
-applies). Do not treat this as "fixed" -- it depends on upstream schema
-richness this repo doesn't control. Real, bigger finding: 137 of 146 new
-pages this regen wrote (94%, 8% of AWS's own 1715-resource total) are
-STALE DUPLICATES -- a wire whose service-directory derivation improved
-since its page was first generated (e.g. `app/flow-flow.mdx` ->
-`appflow/flow.mdx`) gets a fresh page at the new path, but `regen_pages.py`
-never deletes the old one, and the old path is still live in `docs.json`
-nav (confirmed, not assumed) -- a real, currently-reachable stale page,
-not dead content. UBI-202 (`a8d737d3b`) already manually fixed one batch
-of exactly this pattern; nothing catches new ones as they happen. Also
-found: `regen_pages.py` always writes `local_only` bindings_status by
-design (its own docstring says so) -- 1129/1558 modified pages in this
-run were ONLY that flip, meaning a naive full regen would silently
-downgrade every already-published page's bindings_status with nothing
-to stop it. Full findings + recommended fixes (stale-duplicate cleanup
-in `regen_pages.py`/`rebuild_provider_index`, a bindings_status-downgrade
-guard) on Linear UBI-214 -- report only, nothing applied, working tree
-discarded after diffing.
+**UBI-214 closed: both recommended fixes built, verified live against a
+real AWS regen, and shipped to `ubiquex-docs` main (`88d67fd94`).**
+`ubiquex-docs/scripts/resource-reference-gen/regen_pages.py` no longer
+hardcodes `bindings_status="local_only"` for every page it writes -- it
+now looks up each wire's existing status from a real index of the
+currently-committed corpus (new `corpus_index.py`) before writing, and
+only defaults to `local_only` for a wire with no existing page. Verified:
+1,700 already-published AWS wires correctly preserved as published on a
+real regen, where the old code would have silently downgraded all of
+them. Stale duplicates (a wire whose service-directory path improved
+gets a fresh page at the new path, but the old one was never deleted and
+stayed live in `docs.json` nav -- 148 found on this same AWS regen, 137
+of which UBI-202 (`a8d737d3b`) had already fixed once by hand) are now
+detected and, with the new `--reconcile-stale-paths` flag, deleted with
+nav references updated and a redirect added (new `reconcile_stale_paths.py`,
+reusing UBI-209's own wire-identity move mechanism). Verified: 148 AWS
+duplicates found and reconciled cleanly, `mint validate` clean after,
+zero duplicates remaining on re-check. New standalone CI-gate-style
+detector `check_duplicate_wires.py` always reports a real per-provider
+wire/duplicate count including zero (never silent on a clean run); a run
+across all six providers surfaced 2 real, pre-existing Azure duplicates
+(`azure_botservice_bot`, `azure_help_diagnostic_resource`) not caused by
+this session and not yet fixed -- Azure's regen path needs per-family
+dump-ir directories `regen_pages.py` doesn't yet support cleanly, so no
+live Azure regen was attempted; flagged on the Linear ticket as a small
+follow-up, not filed as its own ticket yet. Test AWS regen output itself
+was discarded after verification; only the fix code was committed.
 
 **UBI-213 closed: Apache 2.0 applied to all 22 active repos, direct push
 to main, verified against the real GitHub API per repo.** MPL check found
