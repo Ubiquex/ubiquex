@@ -97,9 +97,60 @@ against that fresh tree instead of a published checkout, matching each
 golden page's own generation comment. Both clean: `golden/azure/
 host.mdx` and `golden/kubernetes/replica-set.mdx` real `go build` OK.
 
-Still not done: the actual corpus regeneration itself -- a separate,
-real decision given the size, flagged for explicit follow-up, not
-attempted here.
+**Corpus regeneration done, same session, in six provider batches
+(smallest to largest, real toolchain verification after every batch,
+committed and pushed as each went clean).** 1,669 of the 2,484 real-
+diff pages regenerated (67%): github 33/37, kubernetes 50/60, gcp
+40/71, datadog 118/128, azure 238/255, aws 1,190/1,933. Surgical for
+every one -- stripped the `## Example` span from pre- and post-regen
+content and diffed the remainder, byte-identical across all 2,484
+pages checked, not a sample.
+
+815 pages (33%) blocked, every one on a real, confirmed, separate
+cause, none of them this fix -- kept their original pre-fix content,
+never silently shipped:
+- ~790 construct a nested Python class the currently-published
+  `ubx-sdk-<provider>` repo genuinely does not contain under that
+  name (an earlier codegen commit than current) -- confirmed against
+  fresh, up-to-date checkouts. Far worse in aws (723/1,933) than any
+  other provider.
+- ~33 reference a top-level Go binding missing from the published
+  repo entirely, including two of the ticket's own originally-cited
+  resources (`datadog_widget_list_response`,
+  `azure_postgresql_openapi_firewall_rule`).
+- 1 (`aws/data/sts/federation-token`) hit a real, separate, pre-
+  existing bug: `gen_data_source_pages.py`'s Go block never detects/
+  imports `encoding/json` for a trust-policy preamble the way
+  `build_resource_page_complete`'s own Go block does. Not fixed here,
+  flagged for its own follow-up.
+- ~18 failed real deno check against the published TS repo, same
+  class-not-published cause, plus one (`gcp/bigtableadmin/instance`)
+  on a pre-existing, unrelated Computed-vs-settable map-field
+  mismatch never caught before since deno check never ran against it.
+
+Also fixed along the way, before the batches ran, so it never
+recurred in any of them: `gen_data_source_pages.py`'s own Python
+block never seeded the nested-class-import mechanism the resource
+generator's own block got in the original fix -- a data source with
+a nested-object lookup field would have constructed a class it never
+imported. Committed separately: `9482a3e3f`.
+
+Batch commits, all direct to `ubiquex-docs` main, verified pushed:
+`8c9f21267` (github), `c3f29f9ff` (kubernetes), `2c974076b` (gcp),
+`af70d9f0b` (datadog), `5ca34e20a` (azure), `9c8823e44` (aws).
+
+UBI-209 filed for the 315 stale-wire pages (2.9% of the corpus,
+concentrated 292/315 in azure's `apimanagement` service) -- corpus
+drift, not a rendering problem, per explicit instruction to file
+separately.
+
+**Not filed, flagged as an open decision**: the SDK-republish gap
+behind the ~790+ blocked pages is real, large, and outside a docs-
+repo fix -- the published `ubx-sdk-<provider>` repos (worst: aws)
+need a real regenerate+republish pass against current codegen before
+those pages can be regenerated safely. No ticket filed for this since
+it wasn't asked for; recorded here so it's a visible, explicit gap
+rather than a silent one.
 
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
