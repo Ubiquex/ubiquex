@@ -50,16 +50,56 @@ reproduce identically pre-fix, unrelated to this change. Committed and
 pushed directly to `ubiquex-docs` main, verified via the real GitHub
 API: `1d9a8b6fc`.
 
-**Explicitly NOT done, flagged not silently skipped**: the ~3,600+
-already-shipped pages were not regenerated/republished against this
-fix -- the ticket's own description calls the bug "corpus-wide,
+**Explicitly NOT done, flagged not silently skipped**: the corpus of
+already-shipped pages was not regenerated/republished against this fix
+-- the ticket's own description calls the bug "corpus-wide,
 pre-existing," and a full corpus regen is a separate, larger-blast-
-radius decision. Also not run: real `go build` for the `local_only`
-azure/kubernetes golden candidates (their own generated comment points
-at a fresh `ubx sdk gen --out ./local-sdk` run, not a published-repo
-checkout -- time-boxed out of this pass; confidence there comes from
-the identical code path already proven correct for AWS plus the Python
-execution proof).
+radius decision.
+
+**Follow-up done same session: real blast-radius count + the two
+skipped verifications, both closed out.** Real corpus size corrected
+first: **10,780** currently-published pages (aws 6,225, azure 1,769,
+gcp 1,963, datadog 384, github 306, kubernetes 133), not the ~3,600
+earlier guessed. Counted directly via `find`, not estimated. Built a
+fresh, current six-provider `--dump-ir` (the cached dump from earlier
+in this session was confirmed stale -- its mtime predates the
+2026-08-29 08:31 pin bump to `1.0.1` for azure/github/google/datadog),
+then for every real published page read its own `title:` frontmatter
+(the literal wire it was generated from) and diffed the exact pre-fix
+renderer (recovered verbatim from `ubiquex-docs@95ed8a6a8`) against the
+current one, per language, per field -- covering data-source pages too
+(`gen_data_source_pages.py` imports `pick_richer_example_fields`
+straight from `gen_provider_docs.py`, same fix applies).
+
+**Real result: 2,484 of 10,780 pages (23%) change** -- go 599, ts 586,
+py 2,478 (Python dominates: the dict->dataclass change is unconditional
+on any nested-object example field, not gated on whether the field-
+selection bug itself fired). 315 pages (2.9%) reference a wire no
+longer in the current schema at all (spot-checked, concentrated in
+azure's own `apimanagement` service -- real, separate schema drift, not
+a matching artifact) -- excluded from the count, flagged not chased.
+Full per-provider table in UBI-208's own Linear comment.
+
+**Regeneration would be surgical, confirmed by reading the template**:
+`build_resource_page_complete` already computes `example_section` (the
+full `## Example` block) as an independently-built string, entirely
+separate from `intro_text`/`fm_description`/`properties_section`, and
+already returns it as a SEPARATE value (`return page, example_section`)
+-- the exact same section-splice shape UBI-177 already used for its own
+258-page regen. A real regen would replace only `## Example` through
+the next `## ` heading per page; intros/descriptions/Properties
+untouched by construction.
+
+**The two skipped `local_only` verifications, now done**: real, fresh
+`ubx sdk gen --only azure/kubernetes --lang go --out ./local-sdk`
+(2,718 and 167 resource types respectively), then `verify_go_blocks.py`
+against that fresh tree instead of a published checkout, matching each
+golden page's own generation comment. Both clean: `golden/azure/
+host.mdx` and `golden/kubernetes/replica-set.mdx` real `go build` OK.
+
+Still not done: the actual corpus regeneration itself -- a separate,
+real decision given the size, flagged for explicit follow-up, not
+attempted here.
 
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
