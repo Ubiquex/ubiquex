@@ -199,6 +199,43 @@ both need the founder -- not attempted.
 attempted this session -- reproducing shape-based dedup is real,
 separate engineering work.
 
+**UBI-210 closed for real: all four PRs merged, all four published,
+verified against the actual registries, blocked pages re-run.** All
+four merges confirmed via the real GitHub API. `publish.yml`
+dispatched on all four -- workflow exit status alone was NOT trusted:
+direct registry queries immediately after showed npm updated but PyPI
+and the Go proxy still on the old version; re-queried minutes later,
+PyPI had caught up on all four (real propagation delay, confirmed via
+the workflow's own log showing `twine upload` genuinely accepted).
+The Go proxy's own `@latest` endpoint still lagged for three of four
+even after that -- a known lazy-fetch quirk of that specific
+endpoint, not a publish failure: querying the exact new tag directly
+(`.info` for the real `vX.Y.Z`) resolved correctly on all four, tags
+real and pushed. Final live versions: datadog 1.3.0, google 1.3.0,
+azure 1.2.0, aws 2.2.0.
+
+Re-ran the ~30 UBI-210 pages against the newly published packages:
+21 passed real go build + real Python execution. 4 of those failed
+real deno check on a separate, newly-found, pre-existing issue (2 aws
+pages missing OTHER required top-level fields the real TS Config type
+demands, nothing to do with nested objects; 2 more the same
+Computed-map-field type mismatch already flagged in the gcp batch) --
+reverted, not shipped, flagged for its own look, not filed as a
+ticket yet.
+
+**17 pages regenerated and shipped**: gcp 7, datadog 4, azure 2, aws
+4. Surgical, verified against the now-published packages (go build
+17/17, deno check 17/17, real Python execution 17/17). Committed and
+pushed: `ubiquex-docs@d26a6bc77`.
+
+**Final real count of the original 815 UBI-208 blocked pages: 798
+still blocked.** 775 = UBI-211 (unchanged, aws 736 of it). 19 =
+pre-existing "other" causes bundled in the original 815 (local_only
+pages, wires no longer in schema, regen exceptions). 4 = the newly-
+found separate TS issue above. 17 fixed net. Never self-merged
+throughout -- all four PRs real-reviewed and merged by the founder,
+not by this session.
+
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
 six `[dynamic_providers.<name>]` entries, zero `[thirdparty_providers]`,
