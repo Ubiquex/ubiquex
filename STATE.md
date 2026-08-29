@@ -7,39 +7,59 @@
 
 ## In flight
 
-**UBI-207 closed: `rebuild_provider_index` no longer resurrects removed
-landing pages or clobbers index-named resources, verified for real.**
-Deleted the per-service `<service>/index.mdx` write branch entirely
-(the landing pages a prior commit deliberately removed -- "click to
-expand not navigate" -- were UX-removed, not buggy, so any version that
-still writes one for every OTHER service keeps doing the wrong thing).
-Kept the top-level `<provider>/index.mdx` rebuild (real callers still
-need it, structurally immune to index-collision since no real resource
-lives at that bare path). Replaced the filename-based `resource_paths`
-exclusion with the real structural test (`<CardGroup>` + no
-`## Example` = landing page) so the top-level count no longer
-undercounts a service with an index-named resource. Committed and
+**UBI-208 closed: `gen_provider_docs.py`'s example-literal renderer emits
+real nested constructions, not plain literals, per language.** Four
+bundled bugs in `pick_inner_example_field` (singular): picked a nested
+field by string-matching `"name"` even when Computed-only (GitHub's
+`author`/`committer`); always returned exactly one field, silently
+dropping any other real Required sibling (Azure firewall-rule shape);
+list/set scalar elements always rendered as a string literal regardless
+of real element type (a `number[]`/`bool[]` field got `["example"]`);
+Python nested objects rendered as plain dicts, but the real runtime
+(`sdk/py/ubx_sdk`'s `_serialize_config`) requires
+`dataclasses.is_dataclass(value)` for every object-kind field, so a
+dict raised `TypeError` at real execution (this ticket's own measured
+`google_aiplatform_deployment_resource_pool` failure).
+
+Fixed: renamed to `pick_inner_example_fields` (plural) -- excludes
+Computed-only fields, returns every Required field, falls back to
+`"name"` or the alphabetically-first field only when nothing is
+required. Go/TypeScript render every returned field, joined per
+language. List/set scalars branch on real scalar kind. Python
+constructs the real generated dataclass (class name reproduces
+`sdk/codegen/templates/py/py.go`'s own `pathPrefix + "_" +
+PascalCase(wireName)` naming, imported from the field's own real
+submodule -- the package `__init__.py` only re-exports each resource's
+own top-level Binding/Config, confirmed against the real
+`ubx-sdk-google-py` checkout, not the nested classes). Added
+`verify_ts_blocks.py`: real `deno check` via a symlinked Deno workspace
+of the real runtime + provider bindings, closing the TS-type-checking
+gap the ticket named.
+
+Verified, not just generated: real `_serialize_config` execution
+against the actual published `ubx-sdk-google-py` classes (previously
+`TypeError`, now clean, every required field present); real `go build`
++ real `deno check` against the actual published `ubx-sdk-aws`
+bindings for the regenerated `aws_launch_template` golden page; full
+`verify_against_golden.py` regression across all six golden candidates
+(aws/azure/kubernetes diffs are exactly the intended fix, reviewed and
+accepted; github/gcp byte-identical, unaffected). `datadog_monitor` not
+evaluated -- this environment's own cached datadog idents are stale
+(pre-UBI-203, `binding`/`config` literally `None`), confirmed to
+reproduce identically pre-fix, unrelated to this change. Committed and
 pushed directly to `ubiquex-docs` main, verified via the real GitHub
-API: `95ed8a6a8`.
+API: `1d9a8b6fc`.
 
-Verified against a real, isolated copy of the actual `gcp/firestore`
-directory (9 files, the exact shape that caused this session's own
-confirmed clobber): every file byte-identical after the call, no
-per-service index.mdx written, top-level count correctly includes the
-index-named resource. `verify_scope_guard.py` still passes unchanged.
-
-**Real, separate, flagged-not-fixed finding**: the top-level provider
-index pages currently shipped (confirmed live: `datadog/index.mdx` has
-four separate cards for the "logs" service alone -- "Logs Archives"/
-"Logs Indexes"/"Logs Pipelines"/"Metrics") are maintained by a newer,
-categories.json-driven grouping this function's own top-level rebuild
-doesn't know about and would overwrite with an inferior, one-card-per-
-directory mechanical grouping if ever run for real against the live
-repo (this session's own UBI-181 work hit and manually worked around
-this exact staleness already). Deliberately did NOT run the fixed
-function against the real repo for this reason -- verified against an
-isolated real-content copy instead. Worth its own look eventually, not
-attempted here.
+**Explicitly NOT done, flagged not silently skipped**: the ~3,600+
+already-shipped pages were not regenerated/republished against this
+fix -- the ticket's own description calls the bug "corpus-wide,
+pre-existing," and a full corpus regen is a separate, larger-blast-
+radius decision. Also not run: real `go build` for the `local_only`
+azure/kubernetes golden candidates (their own generated comment points
+at a fresh `ubx sdk gen --out ./local-sdk` run, not a published-repo
+checkout -- time-boxed out of this pass; confidence there comes from
+the identical code path already proven correct for AWS plus the Python
+execution proof).
 
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
