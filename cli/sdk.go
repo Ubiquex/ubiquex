@@ -1038,7 +1038,19 @@ func writeGeneratedSDK(ctx context.Context, schemas *provider.Schemas, shortName
 				IR:        irFieldsWrapper{Fields: rt.Fields},
 			}
 		}
-		schemaData, err := json.MarshalIndent(combined, "", "  ")
+		// UBI-204: compact, not MarshalIndent -- real, measured effect for
+		// Azure's own 2718-type, 1.6M-field combined schema.json, the
+		// single largest real cost in this whole command: peak RSS
+		// 10.17GB -> 2.34GB (77% reduction), output size 3824MB -> 293MB
+		// (13x smaller). This file is a scratch/CI artifact consumed only
+		// by json.Unmarshal (ubiquex-docs' own Python tooling), never
+		// hand-read and never committed to a repo -- indentation bought
+		// nothing here but a full second-buffer reindent pass over an
+		// already-fully-marshaled compact buffer, which is where the real
+		// memory went. The per-type <wire>.json files just above (likely
+		// spot-checked by a person) keep MarshalIndent, unchanged --
+		// they never showed a memory problem in the first place.
+		schemaData, err := json.Marshal(combined)
 		if err != nil {
 			return "", 0, coverage, fmt.Errorf("%s@%s: dump-ir: marshal schema.json: %w", source, version, err)
 		}
