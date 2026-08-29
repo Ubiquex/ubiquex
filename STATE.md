@@ -7,6 +7,35 @@
 
 ## In flight
 
+**UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
+the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
+six `[dynamic_providers.<name>]` entries, zero `[thirdparty_providers]`,
+no second (HashiCorp-sourced) AWS corpus exists anywhere in
+`ubiquex-docs`. Every page would still get the identical `[official]`
+label -- zero discriminating value. Staying in Backlog.
+
+**`golden-page-gate.yml` is genuinely clean, verified by a real final CI
+run (33245023468, conclusion: success), not assumed.** Two real,
+separate, pre-existing bugs found and fixed (neither a live generator
+bug):
+- `datadog_monitor`: commit `370af9bba` patched the example field value
+  directly in the already-wrapped golden file instead of re-running the
+  real generator, leaving a stale wrap point. `wrap_markdown` itself is
+  unchanged and fully deterministic -- confirmed by feeding it both the
+  old and new field values directly. Fixed via a real, reviewed
+  `--accept` regeneration (`ubiquex-docs@41596022f`).
+- `aws_launch_template`: the committed golden file lived at the WRONG
+  path (`golden/aws/template.mdx`, a stale slug from before AWS's own
+  service/local split changed), so `verify_against_golden.py` silently
+  reported "NO GOLDEN FILE YET" on every run regardless of datadog. Also
+  carried a stale `bindings_status=local_only`; `ubx-sdk-aws` now
+  genuinely contains this resource (regenerated/republished in this same
+  session's UBI-196/197 work), confirmed directly against the real repo.
+  Corrected `manifest.json` and regenerated the golden page at the right
+  path (`ubiquex-docs@0edfbc83c` + `d79298d9` -- the first commit forgot
+  to actually stage the manifest.json edit; a real CI re-dispatch is
+  what caught it, not a local diff).
+
 **UBI-204 closed: dump-ir memory fix landed, all six providers measured
 for real post-fix.** Root cause (found via a real, throwaway
 `runtime.ReadMemStats` instrument, deleted after use): NOT translation,
