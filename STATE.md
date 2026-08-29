@@ -7,30 +7,47 @@
 
 ## In flight
 
-**UBI-181: #36 and #38 are both genuinely in `main` now (verified the real
-code, not PR status). #38's own fix was itself a real regression, caught
-running the corpus before generating anything -- PR #39 open, not yet
-merged.** #38's whole-string "recreate" strip deleted a genuine create:
-Azure's own real `PrivateStore_CreateOrUpdate` concatenates to
-`...storeCREATEorupdate` once its underscore is stripped, and "re" (off
-"Store") plus "Create" spells "recreate" by accident. Fixed by segmenting
-on real structural separators (`_`, `/`, `:`, `.`) before matching, never on
-hyphens (an intermediate version did, and broke GitHub's own real
-kebab-case `add-or-update-...` the identical way -- caught before pushing).
+**UBI-181: generated and compile-verified, not just discovered. The real
+final count is 42, not 47 -- a real correction to my own counting method,
+caught by generating for real, not a code regression.** `main` confirmed to
+genuinely carry PR #39 (`verbSegments`) before generating anything. My
+prior 48/47 counts deduped admitted candidates by path string ALONE across
+every member of a provider -- wrong for any provider with real, separate
+API-version channels sharing a relative path (Google's own
+`google_aiplatform` vs `google_aiplatform_v1beta1` are two genuinely
+different real resources my own dedup silently collapsed into one).
+Rebuilt per-member, with a real check against the "already claimed ...
+skipped rather than disambiguated" collision Note every candidate goes
+through downstream (a check I hadn't done before).
 
-**Verified against the real corpus, not just unit tests**: ran all five
-providers' current schemas through PR #39's fix, diffed the admitted set
-against the pre-recreate-fix 48. Exactly one entry changes (the real
-`monitoringPoints` false positive), nothing else -- confirmed **48 becomes
-47**, stable across repeated runs.
+**Real numbers**: azure 16/16 (admitted/final), github 19/11 (8 collide
+with an already-claimed resource at a second real path -- real, correct,
+this repo's own established policy, not a bug), google 14/14, datadog 1/1,
+kubernetes 0/0. **Total: 50 admitted, 42 final.**
 
-**Next session: verify `main`'s real code has `verbSegments` (PR #39)
-before doing anything else -- three of this arc's own PRs have now hit the
-stacked-branch merge gap, so check the code, never the label. Then generate
-SDK bindings/docs/artifacts for the real 47.** Current-best admitted list
-(the real 47, `monitoringPoints` already dropped) at
-`ubiquex/scratchpad/ubi181-narrow-rule-admitted.json`. Full report in
-UBI-181's own Linear comments.
+Ran real `ubx sdk gen --lang go` for all four providers against the
+regenerated schema (via `UBX_SCHEMA_MIRROR`, local, matching the real
+production path). `go build ./...` clean for azure (2,718 types), google
+(1,975), datadog (622) -- all 31 new resources there compile. Found one
+real, separate bug generating github: `ensurePathParamsPresent` duplicates
+a synthetic `OwnerPath` field when Create and Read share the identical
+path with a colliding param name -- `github_team_repository` is the first
+resource ever shaped that way. Filed as **UBI-206**, excluded from this
+batch; the other ~90 github packages build clean (41 of 42 total compile).
+
+**Also done**: `ubx-provider-dynamic` v1.0.2 released (real, tagged,
+verified assets). All four schema-snapshot repos regenerated + republished
+(version bump `1.0.0` -> `1.0.1`, real `MinBinaryVersion`, corrected README
+counts): PRs open in `ubx-schema-azure` #7, `ubx-schema-github` #7,
+`ubx-schema-google` #7, `ubx-schema-datadog` #9 -- none merged.
+
+**Next session: once the four schema PRs merge, generate docs pages +
+artifacts (descriptions/intros/categories) for the 42** -- deliberately not
+attempted against local-only content this pass, since that generation step
+depends on the real published pin (matching this project's own established
+`bindings_status` convention: verify against the real registry, never
+before). Fix UBI-206 first or explicitly exclude `github_team_repository`
+again. Full report in UBI-181's own Linear comments.
 
 **UBI-195 closed: the real 41s cost was never the RPC, it was
 `ubiquex`'s own client-side schema conversion.** All three of the
