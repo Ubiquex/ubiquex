@@ -144,13 +144,60 @@ concentrated 292/315 in azure's `apimanagement` service) -- corpus
 drift, not a rendering problem, per explicit instruction to file
 separately.
 
-**Not filed, flagged as an open decision**: the SDK-republish gap
-behind the ~790+ blocked pages is real, large, and outside a docs-
-repo fix -- the published `ubx-sdk-<provider>` repos (worst: aws)
-need a real regenerate+republish pass against current codegen before
-those pages can be regenerated safely. No ticket filed for this since
-it wasn't asked for; recorded here so it's a visible, explicit gap
-rather than a silent one.
+**UBI-210/UBI-211 filed and UBI-210 acted on -- the "~790+ blocked
+pages" figure above was WRONG, corrected by a real classification.**
+Regenerating fresh (current codegen, current schema) and running the
+real toolchain against BOTH the published repo and that fresh local
+tree, per blocked page, split the 815 into three real, distinct
+buckets:
+
+- **9 pages**: fixed by a real, separate bug this same investigation
+  found -- a wire field literally named `lambda`
+  (`aws_app_flow_connector`) produced a Python `SyntaxError` (bare
+  `lambda=` as a keyword argument), not an ImportError. Fixed in
+  `ubiquex-docs@081032cc5` (mirrors the real codegen's own
+  `pythonIdentifier` keyword-escaping). Nothing to do with publish
+  status.
+- **~30 pages (UBI-210)**: genuinely a stale-publish problem -- the
+  class/binding exists in a fresh generation, absent from the
+  published repo. gcp 7, datadog 1 (`datadog_widget_list_response`),
+  azure ~8 (`azure_postgresql_openapi_firewall_rule` among them), aws
+  ~5. github/kubernetes: zero.
+- **~775 pages (UBI-211), dominated by aws (736)**: NOT a publish
+  problem at all -- genuinely absent even from a fresh generation,
+  because the real codegen (`pyFieldMeta`) deduplicates nested Python
+  dataclasses by structural SHAPE, not by path, and UBI-208's own
+  renderer reproduction only ever computes a name from the field's
+  PATH. Confirmed directly (`github_attestation`'s top-level `bundle`
+  and its nested `attestations[].bundle` are the identical shape; the
+  real file has exactly one class, `Attestation_Attestations_Bundle`,
+  never `Attestation_Bundle`). AWS's own pervasive `{Key, Value}` tag
+  shape repeating at multiple nesting levels is why it dominates. This
+  was a known, explicitly accepted limitation when UBI-208 shipped --
+  real classification now shows it's the dominant cause, not a narrow
+  edge case. Needs a real fix (a shape-signature cache mirroring the
+  real codegen's own dedup) before those ~775 pages can ever be
+  regenerated correctly, regardless of publish freshness.
+
+**UBI-210 acted on**: real regen PRs opened against all four affected
+repos (full-provider regen, founder's own explicit scoping choice
+after being asked full-vs-surgical), verified via the real GitHub
+API, never self-merged (all four are PR-only by their own explicit
+CLAUDE.md rule) -- `ubx-sdk-datadog` #20, `ubx-sdk-google` #26,
+`ubx-sdk-azure` #24 (10,286 files -- real, confirmed `apimanagement`
+API-version restructuring, not noise), `ubx-sdk-aws` #25. A real
+mistake caught and fixed before it compounded: the first sync
+(`rsync --delete`) deleted `go.sum`/`deno.json`/`deno.lock` outright,
+since `ubx sdk gen` never writes them -- caught on datadog before
+pushing further, fixed (files restored, `deno.json`'s own derived
+`exports` map regenerated fresh, verified zero dangling entries), and
+applied correctly to the other three repos from the start. Publishing
+itself (`publish.yml`, manual `workflow_dispatch`-only) and merging
+both need the founder -- not attempted.
+
+**UBI-211 not started**: filed, real scope described, no fix
+attempted this session -- reproducing shape-based dedup is real,
+separate engineering work.
 
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
