@@ -7,27 +7,39 @@
 
 ## In flight
 
-**UBI-207: design reported to Linear, deliberately NOT built yet --
-waiting on direction.** `rebuild_provider_index` (gen_provider_docs.py)
-does two genuinely separate things and they don't share a verdict:
-(1) writes per-service `<service>/index.mdx` -- the landing pages a
-prior commit deliberately removed ("click to expand not navigate");
-recommendation is delete this branch outright, not repair it with a
-CardGroup/Example structural check, since keeping ANY version of it
-still resurrects the removed pages for every service that doesn't
-happen to collide with an index-named resource. (2) writes the
-top-level `<provider>/index.mdx` -- still real, needed (both real
-callers, `regen_pages.py`/`gen_new_provider_pages.py`, depend on it),
-and structurally immune to the index-collision problem since no real
-resource can ever live at that exact path. Checked all six named
-index resources (`aws_kendra_index`, `aws_qbusiness_index`,
-`google_aiplatform_index`, `google_datastore_index`,
-`google_firestore_index`, `datadog_logs_index`) directly against
-current `main`: **none currently clobbered**, all genuine resource
-pages. `verify_scope_guard.py` (the one real test covering this
-function) only asserts top-level index content, nothing about the
-per-service branch, so deleting it won't break that suite. Full
-report on UBI-207's own Linear comments.
+**UBI-207 closed: `rebuild_provider_index` no longer resurrects removed
+landing pages or clobbers index-named resources, verified for real.**
+Deleted the per-service `<service>/index.mdx` write branch entirely
+(the landing pages a prior commit deliberately removed -- "click to
+expand not navigate" -- were UX-removed, not buggy, so any version that
+still writes one for every OTHER service keeps doing the wrong thing).
+Kept the top-level `<provider>/index.mdx` rebuild (real callers still
+need it, structurally immune to index-collision since no real resource
+lives at that bare path). Replaced the filename-based `resource_paths`
+exclusion with the real structural test (`<CardGroup>` + no
+`## Example` = landing page) so the top-level count no longer
+undercounts a service with an index-named resource. Committed and
+pushed directly to `ubiquex-docs` main, verified via the real GitHub
+API: `95ed8a6a8`.
+
+Verified against a real, isolated copy of the actual `gcp/firestore`
+directory (9 files, the exact shape that caused this session's own
+confirmed clobber): every file byte-identical after the call, no
+per-service index.mdx written, top-level count correctly includes the
+index-named resource. `verify_scope_guard.py` still passes unchanged.
+
+**Real, separate, flagged-not-fixed finding**: the top-level provider
+index pages currently shipped (confirmed live: `datadog/index.mdx` has
+four separate cards for the "logs" service alone -- "Logs Archives"/
+"Logs Indexes"/"Logs Pipelines"/"Metrics") are maintained by a newer,
+categories.json-driven grouping this function's own top-level rebuild
+doesn't know about and would overwrite with an inferior, one-card-per-
+directory mechanical grouping if ever run for real against the live
+repo (this session's own UBI-181 work hit and manually worked around
+this exact staleness already). Deliberately did NOT run the fixed
+function against the real repo for this reason -- verified against an
+isolated real-content copy instead. Worth its own look eventually, not
+attempted here.
 
 **UBI-205: confirmed still deferred, re-checked, not built.** Re-verified
 the reasoning still holds: `sdk/providers/.ubx/config` still has exactly
