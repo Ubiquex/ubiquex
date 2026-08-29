@@ -82,11 +82,11 @@ version = "3.0.1"
 
 [dynamic_providers.github]
 source = "ubiquex/github"
-version = "1.0.0"
+version = "1.0.1"
 
 [dynamic_providers.datadog]
 source = "ubiquex/datadog"
-version = "1.0.0"
+version = "1.0.1"
 
 [dynamic_providers.aws]
 source = "ubiquex/aws"
@@ -94,8 +94,8 @@ version = "1.0.0"
 
 [dynamic_providers.azure]
 source = "ubiquex/azure"
-version = "1.0.0"
+version = "1.0.1"
 
 [dynamic_providers.google]
 source = "ubiquex/google"
-version = "1.0.0"
+version = "1.0.1"
