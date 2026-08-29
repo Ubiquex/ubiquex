@@ -7,6 +7,35 @@
 
 ## In flight
 
+**UBI-203 closed: resource/data-source WireType collision in `ubiquex-docs`'
+`extract_idents.py` fixed and audited, real scope much larger than the
+ticket's own "confirmed: Datadog, Kubernetes" framing.** `scan_go`/
+`scan_py`/`scan_ts` keyed their output dict by wire alone, no
+resource-vs-data-source disambiguation, and `glob.glob()`'s undefined
+order meant whichever file won was a function of filesystem/OS
+directory-listing order, not the input -- exactly why the ticket's own
+local-vs-CI runs disagreed. Fixed: a file is now skipped outright
+unless its binding-kind regex actually matches (a `DataSourceBinding`
+file can no longer register a null binding/config under a resource's
+wire), `glob.glob()` output sorted for determinism, and a genuine
+same-kind collision now refuses loudly instead of picking one silently.
+Same defense ported to `scan_go_data` in `gen_all_data_source_pages.py`.
+
+**Real audit, all six providers, real freshly-pulled `ubx-sdk-<provider>`
+repos**: 270 real collisions (azure 138, aws 49, kubernetes 36, github
+34, google 8, datadog 5), not 2. **Currently-wrong pages: zero** --
+checked all 270 against the live committed `.mdx` page, every one
+(including `kubernetes_apps_replica_set`/`datadog_monitor`) currently
+resolves to correct content; whatever built what's committed today
+happened to land on the resource file every time. That was luck, the
+fix removes the luck requirement. Two azure resources
+(`azure_network_virtualnetwork_network_interface`/`..._public_ipaddress`)
+are missing a page entirely, same plausible root cause, different
+symptom class, not fixed here (needs the same descriptions/intros/
+categories/nav rigor as a real onboarding batch). Committed and pushed
+directly to `ubiquex-docs` main, verified via the real GitHub API:
+`a91654045`. Full writeup in UBI-203's own Linear comments.
+
 **UBI-181: closed, all the way through docs.** Final count held at **42**
 (azure 16, github 11, google 14, datadog 1) from generation through
 publish through docs. All four schema-snapshot repos published at real
