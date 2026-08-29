@@ -31,11 +31,40 @@ rewrite follow-up ticket filed; 3.09GB isn't "still too high" per the
 founder's own explicit conditional. Full per-stage breakdown and both
 runs' numbers in UBI-204's own Linear comments.
 
-**Real, ready follow-up, not done this pass (touches `ubiquex-docs`,
-not this repo, wasn't asked for)**: `golden-page-gate.yml` and
-`coverage-watch.yml` both still explicitly exclude azure from their own
-per-provider loops, comments naming this exact ticket and the old
-12.5GB number -- that exclusion can now be safely lifted.
+**Azure exclusion lifted from both `ubiquex-docs` CI workflows and
+verified by real dispatch, not assumed.** `golden-page-gate.yml`/
+`coverage-watch.yml` both re-include azure in their per-provider loops,
+committed and pushed directly to `ubiquex-docs` main, verified via the
+real GitHub API: `c444718`. Real dispatched runs (not just "should
+work"): `coverage-watch.yml` run 33242929140 -- azure's dump-ir and
+coverage-check steps both completed for real, azure's own real content
+came through (1106 resources, 1612 data sources, 2054 real coverage
+gaps found and reported to the standing tracking issue, the mechanism
+working as intended now that it can see azure). `golden-page-gate.yml`
+run 33242899981 -- azure's dump-ir, fresh go/py/ts binding generation,
+AND golden-page comparison all completed for real:
+`azure/azure_dedicated_host: IDENTICAL to committed golden, static
+checks: clean`. Both jobs still show overall "failure," for reasons
+unrelated to azure and pre-existing before this change: coverage-watch
+by design (real gaps found -> exit 1 -> tracking issue), golden-page-
+gate on a real, separate `datadog/datadog_monitor` golden-page
+text-wrap drift (13 diff lines, confirmed already present in the last
+push-triggered run before azure was touched at all) -- flagged, not
+fixed, out of this ticket's scope.
+
+**UBI-198 closed, re-verified independently against current `main`, not
+just re-reading the prior comment.** The code-fix half was already
+confirmed unnecessary in this ticket's own prior comment (rigorous,
+empirical proof: a candidate's own component is by construction always
+a real top-level response at the moment `DiscoverDataSources` mints it,
+so a reachability check could never fire -- checked against real,
+current Datadog/GitHub/Azure specs, 0 overlap with any of the 380
+historical held-back wires in any of the three). The cleanup half
+(`df5d9b424`, "remove 380 data-source pages with no reproducible
+binding") is confirmed on current `main` (`git merge-base
+--is-ancestor`), three of the deleted files spot-checked genuinely gone
+from disk, `mint validate` clean. 229 datadog + 20 github + 131 azure,
+380 total, matching the ticket's own confirmed count.
 
 **UBI-203 closed: resource/data-source WireType collision in `ubiquex-docs`'
 `extract_idents.py` fixed and audited, real scope much larger than the
