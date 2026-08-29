@@ -1,0 +1,18 @@
+This product includes software developed by HashiCorp, Inc. (https://www.hashicorp.com/).
+
+The following files are licensed under the Mozilla Public License, v. 2.0:
+ - provider/tfplugin5/tfplugin5.proto
+ - provider/tfplugin5/tfplugin5.pb.go
+ - provider/tfplugin5/tfplugin5_grpc.pb.go
+ - provider/tfplugin6/tfplugin6.proto
+ - provider/tfplugin6/tfplugin6.pb.go
+ - provider/tfplugin6/tfplugin6_grpc.pb.go
+
+These are vendored verbatim from github.com/hashicorp/terraform-plugin-go
+(tfprotov5/tfprotov6 internal .proto definitions, v0.31.0), per that
+project's own explicit instruction to copy the protocol definition into
+a consuming codebase. Each file already carries its own
+SPDX-License-Identifier: MPL-2.0 header.
+
+A copy of the Mozilla Public License, v. 2.0 is available at
+/LICENSES/MPL-2.0.txt.
