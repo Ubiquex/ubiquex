@@ -7,49 +7,91 @@
 
 ## In flight
 
-**UBI-222 (DigitalOcean via the runbook): fully resolved, all the way
-through `/regen-docs`.** `ubx-provider-dynamic` fixes merged and
+**UBI-222 (DigitalOcean via the runbook): every hop done except the
+actual first publish, blocked on missing registry credentials only the
+founder can provision.** `ubx-provider-dynamic` fixes merged and
 released as v1.0.5, `ubx-schema-digitalocean` regenerated and released
 as v1.0.1, `ubiquex` re-pinned and verified end-to-end. write-artifacts
-complete (`ubiquex-docs` PR #59, merged by explicit founder exception).
-The strip_qualifier corpus bug found along the way (see below) is fully
-resolved too: `ubiquex-docs` PR #60 merged, three description-corpus
-releases cut (kubernetes/github/google, all `v1.0.1`), `ubiquex`
-re-pinned, restorations verified at the render level. `/regen-docs`
-itself then closed all 195 remaining `schema_entries_with_no_page`
-gaps -- 59 resource pages, 136 data source pages, `coverage_check.py`
-now reports 0 gaps for digitalocean. `ubiquex-docs` PR #61 open, never
-self-merged (no exception granted for this one), waiting on founder
-review. DigitalOcean's own onboarding manifest
-(`sdk/providers/.onboarding/digitalocean.json`) now shows every hop
-`done` except `sdk-repo`, still blocked on `ubx-sdk-digitalocean#1`
-(version bump, not merged).
+complete (`ubiquex-docs` PR #59). The strip_qualifier corpus bug found
+along the way is fully resolved: `ubiquex-docs` PR #60, three
+description-corpus releases cut (kubernetes/github/google, all
+`v1.0.1`), `ubiquex` re-pinned, restorations verified at the render
+level. `/regen-docs` closed all 195 remaining
+`schema_entries_with_no_page` gaps (59 resource pages, 136 data source
+pages, `coverage_check.py` now reports 0 gaps for digitalocean) --
+`ubiquex-docs` PR #61, merged by explicit founder exception.
 
-**Follow-up: the six real hardcoded-allowlist/nav-bootstrap gaps found
-onboarding DigitalOcean are runbook defects, not just fixed bugs --
-documented so the next genuinely new provider does not rediscover
-them.** `ubx-provider-runbook` PR #6, open, never self-merged: a new
+**Follow-up, also merged by explicit founder exception: the six real
+hardcoded-allowlist/nav-bootstrap gaps found onboarding DigitalOcean
+are runbook defects, documented so the next genuinely new provider
+does not rediscover them.** `ubx-provider-runbook` PR #6: a new
 `TRAPS.md` entry naming the pattern (`coverage_check.py`'s `DUMP_DIR`
 plus the five `regen-docs`-scope dicts plus the `docs.json` nav-group
-bootstrap gap), and pre-flight checklists added to `regen-docs.md` and
-`write-artifacts.md` pointing at it. Confirmed none of this is
-DigitalOcean-specific -- UBI-222's own real target, Cloudflare, would
-hit the identical six gaps the same way; noted directly on UBI-222
-(already `Done`, comment added for the record).
+bootstrap gap), and pre-flight checklists in `regen-docs.md` and
+`write-artifacts.md` pointing at it. Blocked on a genuinely separate,
+newly-found issue first: `stale-base-check` is a required status check
+on this repo's branch protection whose own producing workflow
+(`ubx-provider-runbook` PR #4) had never actually been merged to
+main -- every PR here was permanently BLOCKED with zero check runs,
+even under `--admin`, since GitHub refuses to bypass a required check
+that has never run at all (different from bypassing one that ran and
+failed). Founder authorized merging #4 too once this was found; #6
+then merged clean once main carried the real workflow. Confirmed none
+of this is DigitalOcean-specific -- UBI-222's own real target,
+Cloudflare, would hit the identical six gaps the same way; noted
+directly on UBI-222 (already `Done`, comment added for the record).
 
-**`ubx-sdk-digitalocean#1` (the version-bump PR, last remaining hop):
-re-verified correct and complete, still not merged.** Diff confirmed:
-`sdk/python/pyproject.toml`, `sdk/typescript/deno.json`,
-`sdk/typescript/package.json` all `0.0.0 -> 1.0.0`, matching the schema
-pin's own real v1.0.0 -- no Go file needed (`publish.yml`'s own design:
-the Go module publishes via a pushed tag, not a committed version
-file). `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`. Ready for the
-founder to merge; after merge, `publish.yml` still needs a manual
-`workflow_dispatch` (real npm/PyPI/Go-proxy publish, deliberately not
-triggered by anything automatic) to actually cut the first live
-release -- not run this session, a real external-registry action
-outside "never self-merge"'s own scope but the same class of
-founder-only action.
+**`ubx-sdk-digitalocean`: PR #1 (version bump) and PR #2 (a second,
+newly-found scaffold gap) both merged by explicit founder exception --
+the actual first publish is still blocked, on real npm/PyPI
+credentials, not on anything this session can fix.** First
+`publish.yml` dispatch failed outright: `.github/scripts/build-npm.mjs`,
+which the workflow's own npm build step requires, was never committed
+to this repo at all -- `ubx sdk gen` doesn't produce it, every other
+provider repo had it hand-copied in at onboarding time, and this one
+was missed. Confirmed byte-identical across kubernetes/datadog before
+copying it in (PR #2). Re-dispatched: the npm build itself now
+succeeds, but the actual `npm publish` step fails with a real
+`ENEEDAUTH` -- this repo's own `NPM_TOKEN` (and, untested since the job
+fails before reaching that step, likely `PYPI_TOKEN` too) was never
+provisioned as a repo secret. `publish.yml`'s own doc comment already
+says these are dedicated tokens scoped to this one repo/package, not
+shared or inherited -- a brand new provider genuinely needs its own,
+which only the real npm/PyPI account owner can create. Verified
+directly against npm, PyPI, the Go module proxy, and git tags on the
+repo itself that nothing partially published from either attempt --
+clean failure both times, nothing to roll back. Blocked on the founder
+provisioning `NPM_TOKEN`/`PYPI_TOKEN` as repo secrets
+(Settings -> Secrets and variables -> Actions on
+`ubx-sdk-digitalocean`), then a manual `workflow_dispatch` of
+`publish.yml` to actually cut the first live release.
+
+**Full account of what the runbook still gets wrong, confirmed this
+run, none of it fixed yet (the point of running it end to end):**
+onboard-provider.md's own hop 6 undersells what a new SDK repo scaffold
+actually needs -- CLAUDE.md/README.md/STATE.md/HISTORY.md/LICENSE, both
+CI workflows, `deno.json`, a real `go mod tidy` (no `go.sum` exists yet
+otherwise), a real first version chosen deliberately (never `0.0.0` as
+published), and now also confirmed: `.github/scripts/build-npm.mjs` and
+provisioning `NPM_TOKEN`/`PYPI_TOKEN` as repo secrets -- none of this is
+in the runbook. `regen-docs.md` and `write-artifacts.md` were fixed
+this session (`ubx-provider-runbook` PR #6); `onboard-provider.md`
+itself was not touched. No command in any runbook sets
+`UBX_PROVIDER_DYNAMIC_REPO`, needed locally for every real `ubx sdk gen`
+call against a dynamic provider. TRAPS.md's own documented
+stdout/JSON-parseability pitfall (`regen_all.py`'s stdout mixes log
+lines with its own final JSON report) reproduced live again, still
+unfixed -- affects all six providers' CI summary step, not
+digitalocean-specific, out of scope for the manual runbook path.
+`coverage_check.py`'s `DUMP_DIR`-style hardcoded allowlist, confirmed
+this run also present (not just "likely," now checked directly) in two
+more standalone scripts neither `regen_all.py` nor any CI workflow
+calls -- `build_categories.py` and `check_duplicate_wires.py` -- so
+they never broke this run, but would break the next manual invocation
+of either against digitalocean. No runbook step verifies real
+service/namespace grouping quality before artifact-authoring begins,
+the gap that produced DigitalOcean's own near-single-resource
+fragmentation before `namespace_from_tags` fixed it.
 
 **`ubx-provider-dynamic` PRs #44, #46, #47, #48, #49 all merged**,
 self-merged under an explicit, scoped founder exception -- granted per
