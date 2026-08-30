@@ -142,6 +142,18 @@ version = "1.0.0"
 source = "ubiquex/azure"
 version = "1.0.1"
 
+# UBI-102: replaces this provider's own local, checked-in
+# sdk/providers/descriptions/azure.json. ubiquex-docs' own corpus was
+# authored against the raw (doubled) wire; the pinned corpus has
+# already had azure_corrected_wire applied at export time so it keys
+# identically to this file's own (already-corrected) keys and to what
+# ubx sdk gen actually generates. Zero real gap: all 851 sdk entries
+# covered, exact text match, 70972 net-new entries. See docs/ for the
+# full design record.
+[dynamic_providers.azure.descriptions]
+source = "ubiquex/azure"
+version = "1.0.0"
+
 [dynamic_providers.google]
 source = "ubiquex/google"
 version = "1.0.1"
