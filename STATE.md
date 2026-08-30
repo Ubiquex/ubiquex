@@ -297,23 +297,49 @@ mechanism, so the same small-but-nonzero false-positive rate likely
 exists in the other five, not investigated per-provider yet -- the
 other five golden pages simply didn't happen to hit an affected field.
 
-**Not fixed this session -- investigation only, per explicit
-instruction.** Recommended real fix, for whoever picks this up:
-`strip_qualifier`'s blind trailing-string match is structurally unsound
-regardless of tuning; the correct fix is upstream, in
-`migrate_descriptions.py`'s own `parse_docs_page` -- it should
-explicitly separate a scraped MDX field's own real prose from the
-render-time-appended qualifier sentence at scrape time (matching it
-against the SAME field's own real, schema-derived qualifier, not a
-generic string set), so `descriptions.json` is qualifier-free by
-construction and `export_raw_descriptions.py`'s own guess-and-strip
-step becomes unnecessary rather than merely better-tuned. A narrower,
-faster interim fix: re-run `export_raw_descriptions.py` for all six
-providers with `strip_qualifier` changed to require the stripped
-qualifier to MATCH the field's own real, schema-derived qualifier
-(exactly the check this investigation's own script just did) before
-removing it -- would have caught all 6 real kubernetes cases without
-touching any of the 4,709 genuine duplicates.
+**Fixed, this session, in a follow-up turn -- `ubiquex-docs` PR #60,
+open, not merged.** Real cross-provider recount done first, before any
+fix, as asked: all six providers, each against a fresh `--dump-ir`.
+10,588 real candidates total. Confirmed false positives: kubernetes 6,
+github 2, gcp 1 -- 9 total, a handful, not something larger. datadog 0.
+aws/azure 0, and structurally so, not a coincidence: their own corpora
+came from a different source (not MDX-page-scraping) that never baked
+a render-time qualifier into the stored text to begin with, confirmed
+by tracing where each corpus actually came from. A separate finding
+while chasing github's own "not found" entries: 6 more github fields,
+for a resource renamed `github_enterprise_team` ->
+`github_enterprise_team_with_member_count`, were ALSO being stripped
+blindly by the old code despite the resource no longer existing under
+that name.
+
+Fix: `export_raw_descriptions.py` now requires `--dump-root` (a real,
+fresh `ubx sdk gen --dump-ir` directory for the target provider) and
+only strips a candidate suffix when it matches that SAME field's own
+real, current, schema-derived qualifier -- computed via
+`gen_provider_docs.py`'s own `qualifier_for` (pulled out of
+`field_desc` into its own function so the two can never drift apart
+again), the exact function the render path itself already calls. A
+field not found in the fresh dump (renamed/removed) is left completely
+untouched, closing the `github_enterprise_team` case the same way.
+
+Restoration: regenerated the three real, affected
+`descriptions-raw/*.json` files (kubernetes, github, gcp) with the
+fixed script and diffed against what was already committed -- exactly
+the 15 real restorations (9 confirmed false positives + 6
+`github_enterprise_team` entries) landed, nothing else changed.
+Regenerated datadog/aws/azure too and confirmed byte-identical to
+what's already committed, matching the structural-zero-risk finding.
+New regression test (`test_export_raw_descriptions.py`, no pytest
+dependency -- none exists anywhere in this repo) proves all three real
+cases: coincidental real content preserved, a genuine duplicate
+stripped, an orphaned field left untouched.
+
+**Blocked on the founder merging PR #60, same as PR #59:** publishing
+new `descriptions-kubernetes`/`descriptions-github`/`descriptions-gcp`
+releases and re-pinning `ubiquex`'s own `sdk/providers/.ubx/config`
+both need this fix on real `main` first -- `publish-descriptions.yml`
+always checks out `ref: main`, never a branch. Not done yet -- report
+it as blocked, not done, if asked.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
