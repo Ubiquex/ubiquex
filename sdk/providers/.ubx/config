@@ -172,41 +172,20 @@ version = "1.0.1"
 source = "ubiquex/google"
 version = "1.0.0"
 
-# UBI-216: seventh provider, DigitalOcean -- proving case for the
-# ubx-provider-runbook onboarding runbook. schema_url is DigitalOcean's
-# own real, public, multi-file OpenAPI 3.0 spec (github.com/digitalocean/
-# openapi), confirmed reachable and confirmed openapi (not swagger 2.0)
-# by direct fetch. base_url is the spec's own declared "servers" entry.
-#
-# UBI-217 (real gap, now closed): as published, this document does NOT
-# load through ubx-provider-dynamic's own plain openapi.Load. DigitalOcean's
-# spec uses two Redocly-only, non-standard $ref conventions real OpenAPI
-# 3.0 does not define: a Tag Object's own "description" field as a $ref
-# (kin-openapi fails the whole document on this, Tag.description must be
-# a plain string), and every single Path Item's own HTTP-method field
-# ("get:", "post:", ...) as a $ref to a separate per-operation file
-# (OpenAPI 3.0 does not allow $ref there at all -- kin-openapi silently
-# loads every operation as empty rather than erroring). redocly_bundle =
-# true (config.Provider's own doc comment has the full real reason)
-# shells out to the real, already-correct `npx @redocly/cli bundle`
-# before Load ever sees the bytes -- 59 resources + 137 data sources
-# (196 wire types), 10,609 real fields (1,627 already provider-sourced,
-# 8,982 genuinely undescribed), verified byte-identical to the manually
-# bundled copy ubx-schema-digitalocean's own v1.0.0 was originally
-# generated from. Needs Node.js (npx) wherever this entry's own live
-# generation runs -- the one real cost of this flag, scoped to exactly
-# this provider, reported before building it.
-#
-# Still live, not yet switched to a pinned ubx-schema-digitalocean
-# release: the real v1.0.0 snapshot exists and is verified reproducible
-# via this exact mechanism, but the schema repo's own push is still
-# blocked on a GitHub secret-scanning false positive (Slack webhook URL
-# placeholder text copied verbatim from DigitalOcean's own real API
-# documentation examples, not a live credential) -- switch this entry to
-# source/version once that push lands and a real release is cut, the
-# same way the other six real providers above already are.
+# UBI-216/UBI-222: seventh provider, DigitalOcean -- proving case for
+# the ubx-provider-runbook onboarding runbook, driven end to end through
+# /onboard-provider. 59 resources + 137 data sources (196 wire types),
+# 10,609 real fields (1,627 already provider-sourced, 8,982 genuinely
+# undescribed). Generation needs a real, one-time Redocly bundling step
+# (config.Provider.RedoclyBundle's own doc comment in
+# ubx-provider-dynamic has the full reason: two Redocly-only $ref
+# conventions real OpenAPI 3.0 does not define) -- already baked into
+# this pin's own committed RawSpec, not needed again at resolution time.
+# ubx-schema-digitalocean's own real push was blocked by GitHub's
+# secret-scanning push protection on a Slack webhook URL PATTERN that is
+# DigitalOcean's own real, verbatim documentation placeholder text
+# (verified against the exact committed bytes, not assumed) -- allowed
+# by the founder, real v1.0.0 release cut and verified after.
 [dynamic_providers.digitalocean]
-schema_source = "openapi"
-schema_url = "https://raw.githubusercontent.com/digitalocean/openapi/main/specification/DigitalOcean-public.v2.yaml"
-base_url = "https://api.digitalocean.com"
-redocly_bundle = true
+source = "ubiquex/digitalocean"
+version = "1.0.0"
