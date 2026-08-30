@@ -7,68 +7,90 @@
 
 ## In flight
 
-**UBI-222 precursor (DigitalOcean via the runbook): two findings recorded
-separately, per explicit instruction, real root cause on both, neither
-fixed yet.**
+**UBI-222 precursor (DigitalOcean via the runbook): PR #44 merged, the
+stale-base-check mechanical guard is built and live on all 17
+branch-protected repos, and both the singularization port and the
+tag-based namespace fix are implemented, verified, and open as PRs --
+never self-merged, per standing instruction. DigitalOcean's own
+onboarding is still paused at hop 7 (write-artifacts) until these two
+land and a corrected schema is regenerated and re-pinned.**
 
-**Why the stacked-PR trap keeps recurring despite being documented in
-`TRAPS.md`.** Confirmed directly, not assumed: at the exact moment
-`ubx-provider-dynamic` PR #42 merged, `git merge-base --is-ancestor` against
-its own real base branch tip and `main`'s own real tip at that moment
-returns true -- the base was already an ancestor of `main`, merged there
-by PR #41 earlier the same day. The real reason documentation alone
-doesn't hold: the git mechanics of merging into an already-consumed
-branch succeed cleanly, with zero conflicts and zero warning anywhere in
-GitHub's own UI -- there is no external signal at the one moment (clicking
-merge) the trap actually fires, and a rule that depends on someone
-recalling and re-verifying a fact with no prompt to do so, under
-operating conditions that give no sign anything is wrong, will keep
-failing regardless of how many times it's already been written down.
+**`ubx-provider-dynamic` PR #44 merged** (merge commit `33a5b29`,
+verified via API: `RedoclyBundle` now present in real `config.go` on
+main). Local checkouts fast-forwarded to it before any further branch
+work, so nothing below was built stacked on stale main.
 
-**A real, concrete, already-verified mechanical guard is available, now
-that branch protection exists.** Proposed, not yet built: a required
-status check (`pull_request` trigger) that runs
-`git merge-base --is-ancestor <PR's own base branch tip> <default branch
-tip>` and fails loudly, naming the exact retarget command, whenever a
-PR's own base is neither the default branch itself nor still unmerged
-into it. Confirmed this exact check, run against the real historical
-SHAs, would have failed PR #42 before merge (`git merge-base --is-ancestor
-d52b699... 3ae94ee...` returns true) -- not a hypothetical, the identical
-real commits. Branch protection's own `required_status_checks` is
-currently `null` (no required checks at all) on every one of the 16
-repos protected so far; wiring this in is a second step (a check has to
-run at least once before it can be selected as required) on top of
-adding the workflow itself. Not built yet -- proposing before building,
-matching this project's own convention, and because rolling it out
-raises the identical "how many repos, right now" question branch
-protection itself already went through once.
+**The stacked-PR trap's mechanical guard is built and rolled out, not
+just proposed.** Root cause (confirmed directly against PR #42's own
+real SHAs): the git mechanics of merging into an already-consumed base
+branch succeed cleanly, zero conflicts, zero warning anywhere in
+GitHub's own UI -- no external signal at the one moment (clicking merge)
+the trap fires, so documentation alone can't hold. Built
+`.github/workflows/stale-base-check.yml` (a `pull_request`-triggered
+job running `git merge-base --is-ancestor <PR's own base tip> <default
+branch tip>`, failing loudly with the exact retarget command when true
+and the base isn't the default branch itself), validated clean via
+`actionlint`, and opened it as a real PR against all 17 branch-protected
+repos (`ubx-provider-dynamic`#45, the 6 `ubx-schema-*`, the 6
+`ubx-sdk-<provider>`, `ubx-sdk-{go,python,typescript}`,
+`ubx-provider-runbook`#4). All 17 checks ran and reported `SUCCESS`;
+all 17 repos' branch protection updated via API to require
+`stale-base-check` (rest of config unchanged: `enforce_admins: true`,
+`required_approving_review_count: 0`, force-push/deletion disabled),
+confirmed by re-fetching each. Positive case (a real, un-stacked PR
+passes) proven live across all 17. Negative case proven by direct logic
+simulation against the real historical PR #42 SHAs (confirmed
+`git merge-base --is-ancestor` returns true and the script would exit 1)
+after a first attempt at a live failing-PR test turned out to be a
+test-setup mistake (branches based on a commit predating the workflow
+file's own existence) -- honest open item: a true GitHub-side failing
+run still needs an actual merge to occur on one of these 17 repos first,
+which hasn't happened yet.
 
 **The DigitalOcean singularization bug (`byoip_prefixe`, `registrie`) is
-a second, separate instance of UBI-102's own GCP bug, not something the
-existing fix already covers.** Confirmed by reading the code directly:
-`internal/discoverydoc/discoverydoc.go`'s own `singularize` (GCP-only)
-was fixed for exactly this class of error, and its own doc comment says
-so explicitly -- "the identical, deliberately approximate heuristic
-`internal/resourcemap.deriveNoun`'s own fallback path already uses for
-the same real reason" -- naming the twin directly, at the time of the
-fix, and the twin (`internal/resourcemap/resourcemap.go:582`,
-`strings.TrimSuffix(last, "s")`, used for every openapi-sourced provider's
-own fallback naming) was never actually updated. Verified the already-
-written fix logic correctly produces `prefix`/`registry` from
-DigitalOcean's own real `prefixes`/`registries`, run directly against
-both real strings, not assumed from reading the code alone. Not
-ported yet -- queued behind `ubx-provider-dynamic` PR #44 (below), to
-avoid building on top of not-yet-real main and risking the identical
-trap this same investigation is about.
+fixed, verified against the real pinned snapshot, and shipped as
+`ubx-provider-dynamic` PR #46 (open, not merged).** Confirmed a second,
+separate instance of UBI-102's own GCP bug (not covered by the existing
+fix): `internal/resourcemap.deriveNoun`'s own fallback used
+`strings.TrimSuffix(last, "s")` directly; ported the same `-es`-aware
+heuristic `internal/discoverydoc.singularize` already uses. Verified via
+`go test ./...` (clean, full suite) and, live, against DigitalOcean's
+real pinned snapshot (`ubx sdk gen --only digitalocean --dump-ir`, local
+patched checkout via `UBX_PROVIDER_DYNAMIC_REPO`, zero new schema
+regeneration needed since `Load<Source>Member` re-derives from the
+frozen `RawSpec` fresh on every run): `digitalocean_byoip_prefix` and
+`digitalocean_registry` now correct, were `_prefixe`/`_registrie`.
+Scanned the full 195-wire output for other `-es`-derived breakage --
+none found.
 
-**UBI-222 precursor: `ubx-provider-dynamic` PR #44 open, blocks
-everything else in this chain.** Lands UBI-217's own redocly_bundle fix
-on the real main for the first time (see the prior STATE.md entry for
-the full account of why it was never there before). The founder's own
-explicit merge order: #44 first, then the tag-based namespace fix
-(service-derivation bug, see below) built on top of it, then the
-singularization port above, then DigitalOcean's own onboarding resumes
-from hop 7 (write-artifacts). Never self-merged -- waiting.
+**The tag-based namespace fix is built, verified byte-identical for the
+four already-published openapi providers, and shipped as
+`ubx-provider-dynamic` PR #47 (open, not merged).** Adds
+`namespace_from_tags`, an opt-in per-provider `config.Provider` flag
+(TOML `namespace_from_tags`) mirroring `redocly_bundle`'s exact
+precedent, persisted into `MemberSnapshot` so a pinned resolution can
+read it with no live config table. `namespacesForSource`'s openapi case
+now reads each flagged member's own operations' first real OpenAPI Tag
+(`ReadOperation.Tags` for a resource, `Operation.Tags` for a data
+source), normalized via a new `tagToNamespace` (lowercase,
+separator-free) to the same bare-slug shape every other real source's
+namespace already is. Kubernetes/GitHub/Datadog/Azure never set the
+flag, so their own output is unchanged by construction (an unflagged
+member's own loop just continues) -- verified, not just reasoned about:
+`--dump-namespaces` against all four real, published pinned snapshots
+is byte-identical, pre-fix binary vs post-fix binary, and a full
+`ubx sdk gen --dump-ir` + generated-SDK-output diff for kubernetes is
+byte-identical in content (the only diff was the expected provenance
+`dirty` flag from this fix's own uncommitted working tree at
+verification time). New tests:
+`TestNamespacesForSource_OpenAPI_TagsOptIn`, `TestTagToNamespace`,
+plus `TestNamespaces_SingleSource_UsesFastPath` strengthened to assert
+the real empty-map case explicitly. DigitalOcean itself is not yet
+regenerated with this flag set -- that's the next real step once #47
+merges: regenerate DigitalOcean's snapshot with `namespace_from_tags =
+true`, re-pin `ubiquex`'s config to the new version, verify the real
+service grouping now matches DigitalOcean's real product taxonomy, then
+resume DigitalOcean's onboarding from hop 7 (write-artifacts).
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
