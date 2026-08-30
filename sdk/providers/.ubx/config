@@ -173,42 +173,40 @@ source = "ubiquex/google"
 version = "1.0.0"
 
 # UBI-216: seventh provider, DigitalOcean -- proving case for the
-# ubx-provider-runbook onboarding runbook. No ubx-schema-digitalocean
-# snapshot exists yet (see this file's own "ADDING A SEVENTH PROVIDER"
-# note above), so this starts live: schema_url is DigitalOcean's own
-# real, public, multi-file OpenAPI 3.0 spec (github.com/digitalocean/
+# ubx-provider-runbook onboarding runbook. schema_url is DigitalOcean's
+# own real, public, multi-file OpenAPI 3.0 spec (github.com/digitalocean/
 # openapi), confirmed reachable and confirmed openapi (not swagger 2.0)
 # by direct fetch. base_url is the spec's own declared "servers" entry.
 #
-# Real, named gap, not yet closed (mirrors this file's own existing
-# Azure precedent above -- a provider entry can be real and declared
-# before its own resourcemap gap is fixed): as published, this document
-# does NOT load through ubx-provider-dynamic's own openapi.Load today.
-# DigitalOcean's spec uses two Redocly-only, non-standard $ref
-# conventions real OpenAPI 3.0 does not define: a Tag Object's own
-# "description" field as a $ref (kin-openapi fails the whole document
-# on this, Tag.description must be a plain string), and, far more
-# consequentially, every single Path Item's own HTTP-method field
+# UBI-217 (real gap, now closed): as published, this document does NOT
+# load through ubx-provider-dynamic's own plain openapi.Load. DigitalOcean's
+# spec uses two Redocly-only, non-standard $ref conventions real OpenAPI
+# 3.0 does not define: a Tag Object's own "description" field as a $ref
+# (kin-openapi fails the whole document on this, Tag.description must be
+# a plain string), and every single Path Item's own HTTP-method field
 # ("get:", "post:", ...) as a $ref to a separate per-operation file
-# (kin-openapi has no notion of this -- the OpenAPI 3.0 spec does not
-# allow $ref there at all -- so it silently loads every operation as
-# empty, and resourcemap then correctly, honestly discovers zero CRUD
-# candidates, the same failure mode Azure's own comment above already
-# names for a different real reason). Confirmed live: running this
-# document through Redocly's own bundler (`npx @redocly/cli bundle`,
-# the standard tool for exactly this convention) resolves both, and the
-# bundled document loads cleanly -- 59 resources + 137 data sources
+# (OpenAPI 3.0 does not allow $ref there at all -- kin-openapi silently
+# loads every operation as empty rather than erroring). redocly_bundle =
+# true (config.Provider's own doc comment has the full real reason)
+# shells out to the real, already-correct `npx @redocly/cli bundle`
+# before Load ever sees the bytes -- 59 resources + 137 data sources
 # (196 wire types), 10,609 real fields (1,627 already provider-sourced,
-# 8,982 genuinely undescribed). ubx-provider-dynamic's own openapi.Load
-# has no bundling step today -- until it does (or this pipeline adopts
-# a real "bundle once, publish the bundled artifact" step the way a
-# genuine ubx-schema-digitalocean snapshot eventually would), a live
-# `ubx sdk gen` run against this entry, schema_url unmodified, fails
-# exactly the way it did before bundling. Left pointed at the real
-# upstream URL rather than a bundled copy since a bundled copy checked
-# in here would just be an unofficial, un-pinned snapshot by another
-# name -- see UBI-216 for the real fix decision.
+# 8,982 genuinely undescribed), verified byte-identical to the manually
+# bundled copy ubx-schema-digitalocean's own v1.0.0 was originally
+# generated from. Needs Node.js (npx) wherever this entry's own live
+# generation runs -- the one real cost of this flag, scoped to exactly
+# this provider, reported before building it.
+#
+# Still live, not yet switched to a pinned ubx-schema-digitalocean
+# release: the real v1.0.0 snapshot exists and is verified reproducible
+# via this exact mechanism, but the schema repo's own push is still
+# blocked on a GitHub secret-scanning false positive (Slack webhook URL
+# placeholder text copied verbatim from DigitalOcean's own real API
+# documentation examples, not a live credential) -- switch this entry to
+# source/version once that push lands and a real release is cut, the
+# same way the other six real providers above already are.
 [dynamic_providers.digitalocean]
 schema_source = "openapi"
 schema_url = "https://raw.githubusercontent.com/digitalocean/openapi/main/specification/DigitalOcean-public.v2.yaml"
 base_url = "https://api.digitalocean.com"
+redocly_bundle = true
