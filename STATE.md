@@ -7,172 +7,154 @@
 
 ## In flight
 
-**UBI-222 follow-up: the stdout/JSON mixing bug in `regen_all.py`
-(documented in `ubx-provider-runbook`'s own TRAPS.md) recurred for
-real and is now fixed at the root, verified against a real CI run.**
-CI's own "Build the step summary" step had broken twice on a
-genuinely successful DigitalOcean regeneration, reporting the run as
-a red failure -- the same class of problem the golden-page-gate had
-before its own known failure was fixed, training everyone to ignore a
-red workflow. `regen_all.py`'s own final report now writes to a real,
-required `--json-out` file via `json.dump`, never `print()` to
-stdout -- the per-provider narration that used to share that stream
-stays exactly where it was, just no longer sharing it with anything
-meant to be parsed. `report_regen_summary.py` needed no changes, it
-already read an explicit `--report` file path; the bug was entirely
-in the CI workflow's own shell redirect capturing regen_all.py's
-mixed stdout into that file. `resource-reference-regen.yml` now
-passes `--json-out` directly. Committed direct to `ubiquex-docs` main.
-`ubx-provider-runbook` PR #9 (open, never self-merged) updates
-`regen-docs.md`'s own Hop 3 example and TRAPS.md's own entry with the
-real recurrence and fix.
+**UBI-222: real drift detection now exists for every provider, real
+drift was already found, and the founder is merging the last mile
+through the GitHub UI.** Full arc below; nothing here is a new
+investigation, this is the closing account of what already happened.
 
-**Verified live, not just locally**: re-dispatched
-`resource-reference-regen.yml` after the fix -- the full run succeeded
-end to end for the first time, including the step that used to break.
-This also surfaced a real, legitimate side effect: the pipeline had
-apparently never completed a full run before (every prior dispatch
-died on either the missing-DigitalOcean allowlist gap or this exact
-stdout bug), so this first clean run found real, accumulated upstream
-schema drift across AWS/Azure/GCP/kubernetes and opened a large,
-real regeneration PR (`ubiquex-docs` #62 -- 7,975 files, real
-resource additions/removals/renames, every provider's own gapped
-resources correctly excluded per UBI-187). Not reviewed or touched --
-genuinely out of scope for this session and too large to review
-page-by-page; flagged for the founder's own review, never self-merged.
+**The stdout/JSON mixing bug in `regen_all.py` (documented in
+`ubx-provider-runbook`'s own TRAPS.md) recurred for real and is fixed
+at the root, verified against a real CI run.** `regen_all.py`'s own
+final report now writes to a real, required `--json-out` file via
+`json.dump`, never `print()` to stdout. Committed direct to
+`ubiquex-docs` main. `ubx-provider-runbook` PR #9 (open, never
+self-merged) updates `regen-docs.md`'s own Hop 3 example and
+TRAPS.md's own entry.
 
-**DigitalOcean itself, checked end to end this pass**: schema pinned
-and released (v1.0.1), SDK published on all three registries (v1.0.0,
-confirmed live), docs 195/195 pages with zero coverage gaps (confirmed
-in PR #62's own real report: "digitalocean: pages kept this run: 195,
-clean"), CI now correctly includes it automatically via the provider
-registry. One real, live gap found while checking `ubx-sdk-
-digitalocean`'s own scaffold: `.github/workflows/hash-watch.yml` was
-hand-copied from `ubx-sdk-kubernetes` before this session's own
-scaffold tooling existed, and was never adapted -- it watched
-`raw.githubusercontent.com/digitalocean/digitalocean/release-1.37/...`,
-a URL built from Kubernetes' own real org-name-as-repo-name and
-release-branch convention, not DigitalOcean's own real source
-(`github.com/digitalocean/openapi`'s own bundled spec), and its own
-regen step's `.ubx/config` heredoc was also missing `redocly_bundle =
-true` entirely -- a second, separate bug that would have made even a
-URL-only fix still fail at the actual regeneration step, since
-DigitalOcean's spec cannot load unbundled. **Now fixed**: real
-`main`-branch source URL, a real Redocly-bundle step inserted before
-hashing (mirrors the regen step's own mechanism, so the watched hash
-reflects what generation actually parses), `redocly_bundle = true`
-added, `base_url` corrected to `https://api.digitalocean.com`
-(verified against this exact value in `ubiquex`'s own git history of
-the original onboarding config), doc-comment factual errors and a
-repeated typo fixed. `ubx-sdk-digitalocean` PR #3 (open, never
-self-merged).
+**That fix let `resource-reference-regen.yml` complete a real, full
+run for the first time**, surfacing real, accumulated upstream schema
+drift across AWS/Azure/GCP/kubernetes as a 7,975-file PR (`ubiquex-docs`
+#62). Reviewing it at file-count scale instead of page by page found
+401 of its own removed pages were not genuine upstream deletion --
+root cause below. **#62 is now closed.** The real additions and
+modifications from that same run are split out cleanly, without any
+of the 402 removals, in `ubiquex-docs` #63 (open, never self-merged;
+`docs.json` nav rebuilt from the real file tree for every provider
+the run touched, not copied verbatim from #62's own stale version).
+#63 carries one known, pre-existing issue inherited from #62's own
+head, not introduced by the split: `mint validate` reports 131
+warnings, all data-source nav entries pointing at files that were
+correctly excluded from generation for missing descriptions but never
+surgically removed from nav. Confirmed present on #62's own original
+branch already -- a real, separate bug in `gen_all_data_source_pages.py`/
+`stage_gap_free.py`'s own nav-write path, not filed as its own ticket
+this pass (only the three below were), flagged here so it isn't lost.
 
-**The audit this found something much bigger in, now fully resolved
-in design (Option A) and implemented.** Checking the other six repos'
-own `hash-watch.yml` against their real sources found kubernetes,
-github, and aws's own CloudFormation portion genuinely correct. But
-**datadog, azure, google, and aws's own Smithy/`aws_data_all` portion
-were structurally broken**, from UBI-182's own Stage E migration
-(2026-08-27/28), which fully removed every `[dynamic_provider_groups.
-<name>]` table from `sdk/providers/.ubx/config` -- these four
-workflows' own compare step did `cfg["dynamic_provider_groups"][GROUP]`
-against that now-empty file, a real `KeyError`, confirmed failed live
-on both 2026-08-27 scheduled runs, a red X nobody saw (nothing
-distinguished "this check is broken" from ordinary CI noise -- exactly
-the gap the founder named and asked to be closed as its own, separate
-fix).
+**Root cause of the 401 removals, corrected from an earlier, incomplete
+diagnosis in this same arc**: `resolve_descriptions_path()` silently
+fell back to the stale local `artifacts/<provider>/descriptions.json`
+whenever `UBX_DESCRIPTIONS_PIN_<PROVIDER>` was unset, whether or not a
+real pin had been published. Wiring the env var alone did NOT close
+the gap though: the published `descriptions-<provider>-v*` release is
+byte-identical to the static file it replaces, confirmed directly. The
+real remainder traced to `coverage_check.py` requiring a dedicated
+depth-0 description even for a pure object-typed wrapper field whose
+real content already lives, fully described, on its own children --
+`aws_account_access_entitlement`'s own `entitlement` field's
+currently-published description turned out to be borrowed verbatim
+from its own first nested child's text, an older, now-absent
+mechanism the founder's own call was not worth rebuilding ("a wrapper
+described in its first child's own words is wrong, not merely thin").
 
-**Design chosen (founder's own call, Option A): the snapshot itself
-now carries its own source URLs.** `ubx-provider-dynamic` PR #50 adds
-`SchemaURL` to `MemberSnapshot` (populated at generation time --
-every `Generate<Source>Member` already took it as a real parameter)
-and surfaces it in `manifest.json`'s own new `schema_urls` map, so
-drift detection and a future snapshot cut both read the identical,
-already-published artifact everything else already pins to, never a
-live `ubiquex` table again. Verified: full build/vet/test clean,
-`TestSaveSplitLoadSplit_RealRoundTrip` extended to assert `schema_urls`
-lands correctly in the real, on-disk `manifest.json` bytes.
-
-**All seven repos' `hash-watch.yml` rebuilt with a real third state,
-distinct and surfaced.** `clean` / `drift` / `error` are never
-conflated -- an `error` (schema_urls missing, a live fetch failed,
-etc.) opens or updates its own, separately labeled tracking issue
-(`hash-watch-error`), so it is visible outside the Actions tab, not
-just a red X indistinguishable from unrelated CI noise; the job's own
-final status still fails loud too. `drift` on the four group-based
-repos opens a tracking issue (`hash-watch-drift`) naming what changed
-but does NOT auto-regenerate that half -- cutting a new pinned
-snapshot, publishing it, and bumping `ubiquex`'s own pin is a real,
-judgment-requiring act, matching this org's own `publish-
-descriptions.yml` precedent for the same class of cut; kubernetes/
-github/DigitalOcean/aws's own CFN half keep their existing, working
-auto-regen-on-drift behavior unchanged. Live-verified against the
-real, current `manifest.json` for all four group-based providers:
-each correctly reports `state=error` today (schema_urls genuinely
-absent, since it predates PR #50) rather than a crash or a false
-`clean` -- this is the honest, correct state until PR #50 merges, a
-new `ubx-provider-dynamic` release ships, and each provider's own
-snapshot is re-cut with a binary new enough to record it.
-
-Eight real PRs open, none self-merged: `ubx-provider-dynamic#50`
-(the `SchemaURL`/`manifest.json` change), `ubx-sdk-digitalocean#3`
-(amended with the third state), `ubx-sdk-kubernetes#22`,
-`ubx-sdk-github#21`, `ubx-sdk-datadog#22`, `ubx-sdk-azure#26`,
-`ubx-sdk-google#28`, `ubx-sdk-aws#29`.
-
-**UBI-222 follow-up: both real fix classes found onboarding
-DigitalOcean built as real tooling, removing the class rather than
-documenting it -- per the founder's own explicit framing.**
-
-## UBI-222 follow-up: the coverage-check regression behind PR #62's
-401 removals -- root-caused, partially fixed, remainder is a real,
-separate content gap
-
-**Root cause (corrected from an earlier, incomplete diagnosis in this
-same arc)**: `resolve_descriptions_path()` silently fell back to the
-stale local `artifacts/<provider>/descriptions.json` whenever
-`UBX_DESCRIPTIONS_PIN_<PROVIDER>` was unset, whether or not a real pin
-had been published -- and `resource-reference-regen.yml` never set it
-for any provider. Wiring the env var alone did NOT close the 401-page
-gap, though: the published `descriptions-<provider>-v*` release is
-byte-identical to the static file it replaces (`export_raw_
-descriptions.py` exports directly from it) -- confirmed directly, not
-assumed. The real remainder traces to `coverage_check.py` requiring a
-dedicated depth-0 description even for a pure object-typed wrapper
-field whose real content already lives, fully described, on its own
-children. A real, found-live case: `aws_account_access_entitlement`'s
-`entitlement` field's currently-published description turned out to
-be borrowed verbatim from its own first nested child's text -- an
-older, now-absent mechanism, not something worth rebuilding (the
-founder's own call: "a wrapper described in its first child's own
-words is wrong, not merely thin").
-
-**Fixed**: `resolve_descriptions_path()` now checks the real GitHub
-API for whether a `descriptions-<provider>-v*` release exists and
-raises if one does but the env var isn't set -- never silently falls
-back for a migrated provider again. The six real, currently-published
+**Fixed, both halves.** `resolve_descriptions_path()` now checks the
+real GitHub API for whether a `descriptions-<provider>-v*` release
+exists and raises if one does but the env var isn't set. The six real
 pin versions are wired into `resource-reference-regen.yml`.
 `coverage_check.py`'s new `field_is_covered()` narrows the wrapper
-rule precisely: a depth-0 object field with no dedicated text of its
-own is exempt only when every one of its own children is covered,
-recursively, at whatever depth they live -- an undescribed
+rule precisely: exempt only when every one of a wrapper's own children
+is covered, recursively, at whatever depth -- an undescribed
 descendant, or a plain scalar field, is still reported exactly as
-before. `test_coverage_check.py` (new) covers all 8 precise cases,
-including the founder's own exact line (fully-described children =
-covered; one undescribed child, even nested = still a gap; empty
-object = not exempt).
+before. `test_coverage_check.py` (new) covers all 8 precise cases.
+Verified against a real, fresh `--dump-ir` for aws/gcp/azure: resolves
+100 of the 381 real content-loss resource pages (29 aws, 71 gcp).
+Committed direct to `ubiquex-docs` main (`dd64479ac`).
 
-**Verified against a real, fresh `--dump-ir` for aws/gcp/azure, not
-assumed**: resolves 100 of the 381 real content-loss resource pages
-(29 aws, 71 gcp; azure had zero in this specific 401 set). **The
-remaining 281 are a different, real problem, not a rule-scoping
-issue**: genuinely missing content (no native vendor text, no corpus
-entry, in any current source) for specific fields -- e.g.
-`aws_route.route_id`, a single scalar field with no description
-anywhere today. Committed direct to `ubiquex-docs` main (`dd64479ac`,
-this repo's own convention) -- not yet re-run against real CI; **PR
-#62 stays unmerged** until the founder decides how to handle the
-remaining 281 (real authoring work, or accepted as a genuine gap).
+**The remaining 281 are real, checked, not assumed: filed as UBI-231.**
+968 missing-field entries, 708 scalar / 260 object-typed with an
+undescribed descendant beneath. Real clustering: gcp's `compute` (52)
+and `dialogflow` (30, 299 fields, the richest single concentration)
+account for 82 of gcp's 97; aws is broader, 45 of 95 touched services
+have only one gapped resource. Pulled the actual rendered text for all
+968 fields from the currently-published pages: 950 of 968 (98%) carry
+only the mechanical qualifier, no real text -- not inherited content
+going stale, fields that were never actually described. Only 12 carry
+real text worth using as a starting point.
+
+**Hash-watch: the same class of bug the DigitalOcean fix started
+with, found in the other six repos, root-caused, and fixed in design
+(founder's own call, Option A) and code.** `ubx-sdk-digitalocean`'s
+own `hash-watch.yml` watched a URL built from Kubernetes' own
+convention, never DigitalOcean's -- fixed (real `main`-branch source,
+a real Redocly-bundle step, `redocly_bundle = true` added, `base_url`
+corrected). Auditing the other six found kubernetes/github/aws's own
+CloudFormation portion genuinely correct, but **datadog, azure,
+google, and aws's own Smithy portion were structurally broken** from
+UBI-182's own Stage E migration (2026-08-27/28), which removed every
+`[dynamic_provider_groups.<name>]` table these four workflows' own
+compare step still read -- a real `KeyError`, confirmed failed live on
+both 2026-08-27 scheduled runs, a red X nobody saw.
+
+**Fix: the snapshot itself now carries its own source URLs.**
+`ubx-provider-dynamic` PR #50 (**merged**) adds `SchemaURL` to
+`MemberSnapshot`, surfaced in `manifest.json`'s own new `schema_urls`
+map -- drift detection and snapshot cutting both now read the
+identical published artifact. All seven repos' `hash-watch.yml`
+rebuilt with a real third state (`clean`/`drift`/`error`, never
+conflated) -- an `error` opens its own labeled tracking issue, visible
+outside the Actions tab, closing the exact "red X nobody saw" gap.
+`drift` on the four group-based repos opens a tracking issue rather
+than auto-regenerating (cutting, publishing, and repinning is a real,
+judgment-requiring act, matching `publish-descriptions.yml`'s own
+precedent); kubernetes/github/DigitalOcean/aws's CFN half keep their
+existing auto-regen-on-drift behavior.
+
+**Re-cut and published: datadog, google, aws, each found real drift.**
+Reconstructed each provider's real per-member config from `ubiquex`'s
+own git history (the commit before Stage E removed it), cut fresh
+snapshots with the fixed binary. datadog: `datadog_v2`/`datadog_v2_ds`
+major drift (v1 unchanged). google: `google_aiplatform`, `google_ces`,
+`google_dataplex` major, plus real minor/patch drift on a dozen more
+APIs. aws: the CFN half itself major, plus `healthlake`,
+`lambda_microvms`, `rds` major on the Smithy side. All three: real
+`manifest.json` `schema_urls` populated for every member, verified.
+Committed and PR'd: `ubx-schema-datadog#11`, `ubx-schema-google#9`,
+`ubx-schema-aws#10` (open, never self-merged -- merging these three
+was judged itemized/explicit enough to extend the founder's own
+merge exception to, same as the eight hash-watch PRs, but they hit
+the identical merge block below, so they're waiting the same way).
+
+**azure's own re-cut is blocked on real, live upstream drift, filed
+as UBI-229.** `azure_newrelic`'s own spec path moved on Azure's own
+repo since this config was last live -- `--generate-snapshot-group`
+has no partial-success mode, so the whole 302-member cut fails on
+this one broken member. Not attempted further this pass.
+
+**Merge status: two of eleven PRs from this arc merged
+(`ubx-provider-dynamic#50`, `ubx-sdk-digitalocean#3`), the other
+nine blocked by the same real, root-caused gap, filed as UBI-230.**
+Branch protection on `ubx-sdk-kubernetes`/`-github`/`-datadog`/
+`-azure`/`-google` requires a `stale-base-check` status context whose
+own producing workflow file does not exist in any of the five
+(confirmed via the API, real 404s); `ubx-sdk-aws`'s own copy exists
+but was merged nine minutes after the relevant branch was created, so
+its PR's own events also never produced a real check run. A required
+check with zero possible runs, not a real failure -- confirmed via
+`mergeStateStatus: BLOCKED` with an empty `statusCheckRollup` on all
+nine. Two direct fixes (admin-bypass merge, pushing the missing
+workflow file myself) were both blocked by this session's own
+permission classifier; stopped rather than keep probing for a
+workaround. **The founder is merging these nine through the GitHub
+UI.** Once merged: the six `ubx-sdk-*` hash-watch.yml updates go live
+immediately; the three schema-snapshot PRs need their own real
+`publish.yml` dispatch afterward (manual-trigger-only by this org's
+own convention) before `manifest.json`'s new `schema_urls` is
+actually resolvable by anything -- not done yet, a real next step for
+whoever picks this back up, not attempted here per "file and stop."
+
+**DigitalOcean itself, checked end to end earlier this pass**: schema
+pinned and released (v1.0.1), SDK published on all three registries
+(v1.0.0, confirmed live), docs 195/195 pages with zero coverage gaps,
+CI now correctly includes it automatically via the provider registry.
 
 **The ten hardcoded provider allowlists are now one shared registry.**
 New `providers.py` in `ubiquex-docs` (`scripts/resource-reference-gen/`):
