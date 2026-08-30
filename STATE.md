@@ -7,6 +7,66 @@
 
 ## In flight
 
+**UBI-222 follow-up: both real fix classes found onboarding
+DigitalOcean built as real tooling, removing the class rather than
+documenting it -- per the founder's own explicit framing.**
+
+**The ten hardcoded provider allowlists are now one shared registry.**
+New `providers.py` in `ubiquex-docs` (`scripts/resource-reference-gen/`):
+Tier 1 (`real_provider_schema_names`/`all_docs_keys`) reads a
+provider's real existence live from `ubiquex`'s own
+`sdk/providers/.ubx/config`, raising loudly, by name, if a real
+provider has no Tier 2 entry; Tier 2 (`REGISTRY`) holds the
+docs-specific metadata the config itself doesn't carry (display name,
+resource-page-regen membership, the gcp/google docs-key alias). All
+seven Python scripts (`coverage_check.py`, `gen_all_data_source_pages.py`,
+`regen_all.py`, `regen_pages.py`, `corpus_index.py`, `build_categories.py`,
+`check_duplicate_wires.py`) now import from it instead of each
+maintaining its own copy. Also found and fixed: three CI workflow YAML
+files (`resource-reference-regen.yml`, `coverage-watch.yml`,
+`golden-page-gate.yml` -- the last one twice) carried the identical
+hardcoded loop; two of the three were confirmed missing digitalocean
+specifically (the real, live reason `resource-reference-regen.yml`
+never actually regenerated DigitalOcean on PR #59's own merge, despite
+every Python-level fix already being in place); `golden-page-gate.yml`'s
+own list was never wrong (it tracks a separate, deliberately curated
+golden-candidate set, not every real provider) but was still
+independently duplicated three times within one file -- now reads
+`golden/manifest.json`'s own real candidates instead. Verified
+byte-identical output against every existing dict before and after,
+plus a full `regen_all.py` smoke test and `mint validate`, both clean.
+Committed direct to `ubiquex-docs` main (this repo's own convention).
+
+**The SDK repo scaffold gap is now real tooling, not a checklist.**
+`sdk/codegen/templates/ts`'s own `GeneratedRepo` now writes
+`deno.json` directly -- its own real "exports" map, derived from the
+exact same file tree it already builds for `package.json`, never a
+second hand-copied enumeration (this closes the first of the two real
+gaps DigitalOcean's own onboarding hit). A new `ubx sdk init-repo`
+subcommand (`sdk/codegen/templates/repo`, `cli/sdkinitrepo.go`) writes
+everything else a brand new repo needs -- `LICENSE`, `.github/scripts/
+build-npm.mjs` (embedded verbatim, confirmed byte-identical across
+every existing repo), `.github/workflows/publish.yml` (the real,
+current file with every repo/package-name occurrence substituted via
+plain string replacement, never Go's own `{{ }}` syntax, which would
+collide with the file's own real GitHub Actions `${{ }}` expressions),
+`CLAUDE.md`/`README.md`/`STATE.md`/`HISTORY.md` (genuinely new
+templates, not copies of an established repo's own accumulated
+narrative), and a real `sdk/go/go.sum` via an actual `go mod tidy`
+subprocess -- never overwriting a file that already exists.
+`.github/workflows/hash-watch.yml` deliberately stays a by-hand file;
+it needs real, provider-specific content this command can't
+mechanically produce. Verified end to end against DigitalOcean's own
+real schema: `deno.json` resolves correctly under `deno check` (fails
+only on a separate, expected missing-`node_modules` step), `ubx sdk
+init-repo` writes all 8 remaining files, a real `go build`/`go vet`
+pass against the generated `go.sum`, and a re-run correctly skips
+every already-written file. Committed direct to `ubiquex` main.
+
+`ubx-provider-runbook` PR #8 (open, never self-merged) rewrites hop 6
+of `onboard-provider.md` to actually use `ubx sdk init-repo` instead
+of naming a hand-copy checklist.
+
 **UBI-222 (DigitalOcean via the runbook): fully done, published on all
 three registries, verified directly.** `ubx-provider-dynamic` fixes
 merged and released as v1.0.5, `ubx-schema-digitalocean` regenerated
