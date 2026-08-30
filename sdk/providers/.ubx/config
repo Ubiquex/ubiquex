@@ -90,7 +90,7 @@ version = "3.0.1"
 # record.
 [dynamic_providers.kubernetes.descriptions]
 source = "ubiquex/kubernetes"
-version = "1.0.0"
+version = "1.0.1"
 
 [dynamic_providers.github]
 source = "ubiquex/github"
@@ -102,7 +102,7 @@ version = "1.0.1"
 # the local file this replaces -- genuine content, not new authoring.
 [dynamic_providers.github.descriptions]
 source = "ubiquex/github"
-version = "1.0.0"
+version = "1.0.1"
 
 [dynamic_providers.datadog]
 source = "ubiquex/datadog"
@@ -170,7 +170,7 @@ version = "1.0.1"
 # the broken names. See docs/ for the full design record.
 [dynamic_providers.google.descriptions]
 source = "ubiquex/google"
-version = "1.0.0"
+version = "1.0.1"
 
 # UBI-216/UBI-222: seventh provider, DigitalOcean -- proving case for
 # the ubx-provider-runbook onboarding runbook, driven end to end through
