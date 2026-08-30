@@ -67,45 +67,112 @@ the original onboarding config), doc-comment factual errors and a
 repeated typo fixed. `ubx-sdk-digitalocean` PR #3 (open, never
 self-merged).
 
-**The audit this found something much bigger in.** Checking the other
-six repos' own `hash-watch.yml` against their real sources (as asked,
-since DigitalOcean's was wrong from a hand-copy and others might be
-too) found kubernetes, github, and aws's own CloudFormation portion
-are all genuinely correct -- verified each hardcoded URL/base_url
-against `ubiquex`'s own git history of the original onboarding config
-and each repo's own committed `VERSION` file, byte for byte. But
+**The audit this found something much bigger in, now fully resolved
+in design (Option A) and implemented.** Checking the other six repos'
+own `hash-watch.yml` against their real sources found kubernetes,
+github, and aws's own CloudFormation portion genuinely correct. But
 **datadog, azure, google, and aws's own Smithy/`aws_data_all` portion
-are structurally broken**, and not from a hand-copy -- from UBI-182's
-own real, deliberate, already-verified Stage E migration ("HISTORY.md:
-`[providers.<name>]` collapsed to pinned-only", 2026-08-27/28), which
-fully removed every `[dynamic_provider_groups.<name>]` table from
-`sdk/providers/.ubx/config` -- confirmed directly, zero such tables
-exist in the file today. These four workflows' own compare step does
-`cfg["dynamic_provider_groups"][GROUP]` against a freshly checked-out
-copy of that exact file -- a real `KeyError` on the very first line
-that touches it, not a silent no-op. Their own regen step is equally
-broken a second way: it runs `ubx sdk gen --only "$GROUP" --lang
-$lang --out ...` from inside a checkout of `ubiquex`'s own
-`sdk/providers/` -- `--only datadog_all` (etc.) has nothing left to
-resolve to, since the group entries these four still depend on no
-longer exist anywhere in the live config, and the per-member
-`schema_url` values they used to carry are not preserved anywhere
-else either (checked each provider's own `ubx-schema-<name>`
-manifest.json -- member names only, no URLs). Whoever did Stage E
-apparently never updated the four hash-watch.yml files that assumed
-the old, now-removed shape. This is a live, real gap of the same
-class as the DigitalOcean bug (a mechanism that looks configured and
-doesn't work), affecting four of seven providers, unaddressed as of
-this state -- reported to the founder, **not fixed this pass**: the
-right fix needs a real design decision (where does the live per-
-member URL list now come from, now that pinning owns the only copy)
-rather than a mechanical correction, so it wasn't attempted
-unilaterally. Kubernetes, github, DigitalOcean, and aws's own CFN
-portion need no further work.
+were structurally broken**, from UBI-182's own Stage E migration
+(2026-08-27/28), which fully removed every `[dynamic_provider_groups.
+<name>]` table from `sdk/providers/.ubx/config` -- these four
+workflows' own compare step did `cfg["dynamic_provider_groups"][GROUP]`
+against that now-empty file, a real `KeyError`, confirmed failed live
+on both 2026-08-27 scheduled runs, a red X nobody saw (nothing
+distinguished "this check is broken" from ordinary CI noise -- exactly
+the gap the founder named and asked to be closed as its own, separate
+fix).
+
+**Design chosen (founder's own call, Option A): the snapshot itself
+now carries its own source URLs.** `ubx-provider-dynamic` PR #50 adds
+`SchemaURL` to `MemberSnapshot` (populated at generation time --
+every `Generate<Source>Member` already took it as a real parameter)
+and surfaces it in `manifest.json`'s own new `schema_urls` map, so
+drift detection and a future snapshot cut both read the identical,
+already-published artifact everything else already pins to, never a
+live `ubiquex` table again. Verified: full build/vet/test clean,
+`TestSaveSplitLoadSplit_RealRoundTrip` extended to assert `schema_urls`
+lands correctly in the real, on-disk `manifest.json` bytes.
+
+**All seven repos' `hash-watch.yml` rebuilt with a real third state,
+distinct and surfaced.** `clean` / `drift` / `error` are never
+conflated -- an `error` (schema_urls missing, a live fetch failed,
+etc.) opens or updates its own, separately labeled tracking issue
+(`hash-watch-error`), so it is visible outside the Actions tab, not
+just a red X indistinguishable from unrelated CI noise; the job's own
+final status still fails loud too. `drift` on the four group-based
+repos opens a tracking issue (`hash-watch-drift`) naming what changed
+but does NOT auto-regenerate that half -- cutting a new pinned
+snapshot, publishing it, and bumping `ubiquex`'s own pin is a real,
+judgment-requiring act, matching this org's own `publish-
+descriptions.yml` precedent for the same class of cut; kubernetes/
+github/DigitalOcean/aws's own CFN half keep their existing, working
+auto-regen-on-drift behavior unchanged. Live-verified against the
+real, current `manifest.json` for all four group-based providers:
+each correctly reports `state=error` today (schema_urls genuinely
+absent, since it predates PR #50) rather than a crash or a false
+`clean` -- this is the honest, correct state until PR #50 merges, a
+new `ubx-provider-dynamic` release ships, and each provider's own
+snapshot is re-cut with a binary new enough to record it.
+
+Eight real PRs open, none self-merged: `ubx-provider-dynamic#50`
+(the `SchemaURL`/`manifest.json` change), `ubx-sdk-digitalocean#3`
+(amended with the third state), `ubx-sdk-kubernetes#22`,
+`ubx-sdk-github#21`, `ubx-sdk-datadog#22`, `ubx-sdk-azure#26`,
+`ubx-sdk-google#28`, `ubx-sdk-aws#29`.
 
 **UBI-222 follow-up: both real fix classes found onboarding
 DigitalOcean built as real tooling, removing the class rather than
 documenting it -- per the founder's own explicit framing.**
+
+## UBI-222 follow-up: the coverage-check regression behind PR #62's
+401 removals -- root-caused, partially fixed, remainder is a real,
+separate content gap
+
+**Root cause (corrected from an earlier, incomplete diagnosis in this
+same arc)**: `resolve_descriptions_path()` silently fell back to the
+stale local `artifacts/<provider>/descriptions.json` whenever
+`UBX_DESCRIPTIONS_PIN_<PROVIDER>` was unset, whether or not a real pin
+had been published -- and `resource-reference-regen.yml` never set it
+for any provider. Wiring the env var alone did NOT close the 401-page
+gap, though: the published `descriptions-<provider>-v*` release is
+byte-identical to the static file it replaces (`export_raw_
+descriptions.py` exports directly from it) -- confirmed directly, not
+assumed. The real remainder traces to `coverage_check.py` requiring a
+dedicated depth-0 description even for a pure object-typed wrapper
+field whose real content already lives, fully described, on its own
+children. A real, found-live case: `aws_account_access_entitlement`'s
+`entitlement` field's currently-published description turned out to
+be borrowed verbatim from its own first nested child's text -- an
+older, now-absent mechanism, not something worth rebuilding (the
+founder's own call: "a wrapper described in its first child's own
+words is wrong, not merely thin").
+
+**Fixed**: `resolve_descriptions_path()` now checks the real GitHub
+API for whether a `descriptions-<provider>-v*` release exists and
+raises if one does but the env var isn't set -- never silently falls
+back for a migrated provider again. The six real, currently-published
+pin versions are wired into `resource-reference-regen.yml`.
+`coverage_check.py`'s new `field_is_covered()` narrows the wrapper
+rule precisely: a depth-0 object field with no dedicated text of its
+own is exempt only when every one of its own children is covered,
+recursively, at whatever depth they live -- an undescribed
+descendant, or a plain scalar field, is still reported exactly as
+before. `test_coverage_check.py` (new) covers all 8 precise cases,
+including the founder's own exact line (fully-described children =
+covered; one undescribed child, even nested = still a gap; empty
+object = not exempt).
+
+**Verified against a real, fresh `--dump-ir` for aws/gcp/azure, not
+assumed**: resolves 100 of the 381 real content-loss resource pages
+(29 aws, 71 gcp; azure had zero in this specific 401 set). **The
+remaining 281 are a different, real problem, not a rule-scoping
+issue**: genuinely missing content (no native vendor text, no corpus
+entry, in any current source) for specific fields -- e.g.
+`aws_route.route_id`, a single scalar field with no description
+anywhere today. Committed direct to `ubiquex-docs` main (`dd64479ac`,
+this repo's own convention) -- not yet re-run against real CI; **PR
+#62 stays unmerged** until the founder decides how to handle the
+remaining 281 (real authoring work, or accepted as a genuine gap).
 
 **The ten hardcoded provider allowlists are now one shared registry.**
 New `providers.py` in `ubiquex-docs` (`scripts/resource-reference-gen/`):
