@@ -551,8 +551,18 @@ func generateOneDynamicProvider(ctx context.Context, timeout time.Duration, name
 		namespacesByType = nil
 	}
 
+	// UBI-102: a real [dynamic_providers.<name>.descriptions] pin
+	// overrides the plain, checked-in --descriptions-dir for this one
+	// provider -- see resolveDescriptionsDir's own doc comment. Absent,
+	// this is a no-op (returns descriptionsDir unchanged), the honest
+	// state for every provider not yet migrated off its own local file.
+	effectiveDescriptionsDir, err := resolveDescriptionsDir(ctx, params, name, descriptionsDir)
+	if err != nil {
+		return "", 0, descriptionCoverage{}, err
+	}
+
 	const version = "dynamic"
-	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, descriptionsDir, gapsDir, dumpIRDir, signalsByType, namespacesByType, describeExcludeFromParams(params), &prov)
+	return writeGeneratedSDK(ctx, schemas, name, name, version, out, lang, describeGen, effectiveDescriptionsDir, gapsDir, dumpIRDir, signalsByType, namespacesByType, describeExcludeFromParams(params), &prov)
 }
 
 // generateDynamicProviderGroup is generateOneDynamicProvider's own real

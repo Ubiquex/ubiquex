@@ -88,6 +88,16 @@ version = "1.0.1"
 source = "ubiquex/datadog"
 version = "1.0.1"
 
+# UBI-102: pilot -- the replacement for this provider's own local,
+# checked-in sdk/providers/descriptions/datadog.json. Resolved via
+# provider.AcquireDescriptions (real, tagged release, ubiquex-docs'
+# own repo, verified byte-identical against the file it replaces
+# before landing). See docs/ (moved from sdk/providers/docs) for the
+# full real design record once the migration finishes.
+[dynamic_providers.datadog.descriptions]
+source = "ubiquex/datadog"
+version = "1.0.0"
+
 [dynamic_providers.aws]
 source = "ubiquex/aws"
 version = "1.0.0"
