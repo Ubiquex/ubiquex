@@ -122,6 +122,22 @@ version = "1.0.0"
 source = "ubiquex/aws"
 version = "1.0.0"
 
+# UBI-102: replaces this provider's own local, checked-in
+# sdk/providers/descriptions/aws.json. Includes vendor-spec entries
+# (the one real exception among the six providers) -- a direct
+# --dump-ir check with --descriptions-dir disabled confirmed
+# ubx-provider-dynamic's own cloudformation/smithy translation does
+# not natively carry this text for 11,954 fields the way docs' own
+# separate schema dump does, so excluding it would have silently
+# regressed generated code comments the moment the old file was
+# retired. Zero real gap once included (all 29942 sdk entries
+# covered), 202 genuinely net-new entries, 4 known conflicts where
+# docs' own hand-refined text wins by construction. See docs/ for the
+# full design record.
+[dynamic_providers.aws.descriptions]
+source = "ubiquex/aws"
+version = "1.0.0"
+
 [dynamic_providers.azure]
 source = "ubiquex/azure"
 version = "1.0.1"
