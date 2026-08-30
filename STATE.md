@@ -7,6 +7,51 @@
 
 ## In flight
 
+**UBI-137 in progress: automated Resource Reference regeneration built and
+verified end to end, PR open against `ubiquex-docs`, not yet merged.**
+`https://github.com/Ubiquex/ubiquex-docs/pull/57`. Built exactly per the
+design already reported to the ticket, per UBI-216's own decided chain
+(schema publishes -> SDK regenerates/publishes -> coverage check reports
+gaps -> Claude writes missing artifacts -> only then docs regen runs):
+new `regen_all.py` orchestrates `regen_pages.py`/`gen_all_data_source_pages.py`/
+`stage_gap_free.py` per provider; `.github/workflows/resource-reference-regen.yml`
+runs it on push to main touching `artifacts/**`, a Tuesday 08:00 UTC
+schedule (offset from `hash-watch`'s Monday 06:00 and `coverage-watch`'s
+Monday 08:00), and `workflow_dispatch`. `UBX_DOCS_ALLOW_COVERAGE_GAPS` is
+never set anywhere in the automation, held to exactly as instructed --
+a coverage gap excludes that resource/data source from the batch
+(`stage_gap_free.py`) rather than shipping it or bypassing the gate. Every
+run's own per-provider outcome is always written to the step summary,
+whether or not anything was eligible, also held to exactly as instructed.
+
+Four providers (aws, azure, gcp, kubernetes) get real resource-page
+regeneration. **github and datadog do not** -- their own regen uses a
+different, less mature mechanism with no coverage-gap staging path built
+for it yet, reported every run via `regen_all.py`'s own `not_covered`
+field rather than silently scoped out. Data-source pages ARE covered for
+all six.
+
+Two real bugs found and fixed only by testing this end to end against a
+real `kubernetes` regeneration (real `ubx` build, real dump-ir + local-sdk
+generation), not caught by the unit-level work merged earlier on this
+branch: (1) `regen_all.py`'s own path construction double-nested
+`regen_pages.py`'s `dump_dir`/`sdk_dir` args (which expect the PARENT of
+a `<family>/schema.json` structure, not the already-joined per-provider
+directory `gen_all_data_source_pages.py`'s own args want) -- silently
+skipped the family; (2) `stage_gap_free.py`'s own doc comment promises
+pure JSON on stdout, but `rebuild_provider_index`/`rebuild_provider_nav`
+print real progress lines to that same stdout ahead of the JSON -- looked
+fine to a human, broke the moment `regen_all.py`'s own subprocess call
+fed it through `json.loads`. Fixed by redirecting everything but the
+final print to stderr. Verified after both fixes: a real
+`regen_all.py --only kubernetes` run completed clean (0 gaps, 167 pages
+kept), `mint validate` passed, test artifacts reverted before committing.
+Commits on `roozbeh/ubi-137-resource-reference-regen-automation`:
+`e2c344434`/`8cae6c0a2`/`490b0dd52` (gap-free staging + real bugs found in
+that build), `65cb0f56a`/`5cf27bd46` (orchestrator + summary script, the
+two bugs above), `e7e96ba60` (the workflow YAML itself). Never
+self-merged -- PR open, needs founder review.
+
 **UBI-214 closed: both recommended fixes built, verified live against a
 real AWS regen, and shipped to `ubiquex-docs` main (`88d67fd94`).**
 `ubiquex-docs/scripts/resource-reference-gen/regen_pages.py` no longer
