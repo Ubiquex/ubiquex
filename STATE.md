@@ -200,10 +200,29 @@ golden-page drift, see below -- confirmed the failure predates and is
 unrelated to this PR's own one-line diff before merging past it). Ran
 `coverage_check.py --dump-root <fresh --dump-ir> --only digitalocean`
 for real: 846 total gaps (196 missing intro, 59 missing category, 397
-missing depth-0 field description, 195 pages not yet generated). This
-is real, substantial batch content-authoring work, not attempted this
-session -- `sdk/providers/.onboarding/digitalocean.json`'s own
-`write-intros` hop updated to `unblocked` with the full real account.
+missing depth-0 field description, 195 pages not yet generated).
+
+**All three write-artifacts batches done this same session -- real
+runbook resume proof, not just the hop unblocked.** Batch 1: intro +
+category override for all 59 real resources (categories derived from
+the real, tag-based namespace grouping the namespace_from_tags fix
+above now provides, converted to a human label matching DigitalOcean's
+own real product naming). Batch 2: intro for all 136 real data
+sources. Batch 3: depth-0 description for all 397 real flagged fields
+(a small set of genuinely reused text where the real meaning is
+identical everywhere -- pagination, scoping IDs, timestamps -- the
+remaining ~280 individually written). Real, live `coverage_check.py`
+recompute after each batch: 846 -> 728 -> 592 -> 195. `missing_intro`,
+`missing_category`, `missing_field_description` are all real 0 --
+write-artifacts.md's own three real checks are done. Shipped as
+`ubiquex-docs` PR #59 (three commits, one PR, never self-merged), with
+a real, batch-by-batch manifest at
+`scripts/resource-reference-gen/artifact-manifests/digitalocean.json`
+in `ubiquex-docs` (`write-intros` hop marked `done`).
+`sdk/providers/.onboarding/digitalocean.json`'s own `write-intros` hop
+updated with the full real account. Remaining 195 gaps are
+`schema_entries_with_no_page` -- `/regen-docs`' own scope, not run for
+DigitalOcean yet, and not attempted this session.
 
 **The `kubernetes_apps_replica_set` golden-page drift is investigated
 and root-caused: a real, confirmed content-loss bug in
