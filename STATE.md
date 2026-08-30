@@ -7,18 +7,52 @@
 
 ## In flight
 
-**UBI-222 precursor (DigitalOcean via the runbook): PR #44 merged, the
-stale-base-check mechanical guard is built and live on all 17
-branch-protected repos, and both the singularization port and the
-tag-based namespace fix are implemented, verified, and open as PRs --
-never self-merged, per standing instruction. DigitalOcean's own
-onboarding is still paused at hop 7 (write-artifacts) until these two
-land and a corrected schema is regenerated and re-pinned.**
+**UBI-222 precursor (DigitalOcean via the runbook): all four
+`ubx-provider-dynamic` fixes merged and released as v1.0.4, the real
+DigitalOcean snapshot is regenerated and locally verified correct, but
+landing it requires two open `ubx-schema-digitalocean` PRs the founder
+still needs to merge -- that repo is PR-only and was NOT covered by
+this turn's self-merge exception (which named `ubx-provider-dynamic`
+PRs specifically). Re-pinning `ubiquex` and resuming onboarding at hop 7
+(write-artifacts) are both blocked on those two merges plus a schema
+release cut.**
 
-**`ubx-provider-dynamic` PR #44 merged** (merge commit `33a5b29`,
-verified via API: `RedoclyBundle` now present in real `config.go` on
-main). Local checkouts fast-forwarded to it before any further branch
-work, so nothing below was built stacked on stale main.
+**`ubx-provider-dynamic` PRs #44, #46, #47, #48 all merged**, self-merged
+under an explicit, scoped founder exception (confirmed via API on each:
+`RedoclyBundle` present in `config.go`, the singularization fix, the
+`namespace_from_tags` flag, and its own determinism fix all present on
+real main). Released as v1.0.4 (verified via
+`repos/.../releases/tags/v1.0.4`, `target_commitish: main`).
+
+**#46/#47 were blocked by a real, one-time bootstrap gap in
+`stale-base-check` itself, not a false positive.** Both branches were
+opened before PR #45 (which added the workflow to `main`) merged, so
+GitHub's own `pull_request` trigger -- which reads the workflow file
+from the PR's base branch -- had nothing to run at `opened` time, and no
+`synchronize` event happened since. `statusCheckRollup` was empty on
+both (zero runs, not a failing run), which is why `mergeStateStatus`
+read `BLOCKED` even with `mergeable: MERGEABLE`. Fixed by merging
+current `main` into each branch (a real `synchronize` event once the
+workflow already existed there); both then reported `stale-base-check:
+pass` and merged cleanly.
+
+**A real, live bug was found and fixed in PR #47's own logic while
+verifying it against DigitalOcean's real spec, not in review.**
+`namespacesFromTags`'s two loops assigned contributions via unsorted Go
+map iteration -- a real violation of this project's own determinism
+rule. DigitalOcean has a genuine bare-name collision (`digitalocean_droplet`
+is both a real Droplet resource, tagged "Droplets", and a real,
+unrelated Droplet Autoscale Pools data source; both derive the identical
+bare type name via `deriveNoun` since they share one response `$ref`),
+so which tag won varied run to run. Fixed in PR #48 (both loops now walk
+sorted type names, first-wins on collision, mirroring `Namespaces`' own
+existing cross-source precedent for the identical class of real, rare
+collision) -- founder approved self-merging this one too, since it
+directly blocked the verification already in flight. New regression
+test (`TestNamespacesForSource_OpenAPI_BareNameCollision_ResourceWinsDeterministically`)
+runs the fix 20 times to prove stability. v1.0.3 (the release cut before
+this fix) carries the non-deterministic bug -- v1.0.4 is the first real,
+correct release and is what everything downstream now depends on.
 
 **The stacked-PR trap's mechanical guard is built and rolled out, not
 just proposed.** Root cause (confirmed directly against PR #42's own
@@ -48,8 +82,8 @@ run still needs an actual merge to occur on one of these 17 repos first,
 which hasn't happened yet.
 
 **The DigitalOcean singularization bug (`byoip_prefixe`, `registrie`) is
-fixed, verified against the real pinned snapshot, and shipped as
-`ubx-provider-dynamic` PR #46 (open, not merged).** Confirmed a second,
+fixed, verified against the real pinned snapshot, and merged as
+`ubx-provider-dynamic` PR #46.** Confirmed a second,
 separate instance of UBI-102's own GCP bug (not covered by the existing
 fix): `internal/resourcemap.deriveNoun`'s own fallback used
 `strings.TrimSuffix(last, "s")` directly; ported the same `-es`-aware
@@ -64,8 +98,9 @@ Scanned the full 195-wire output for other `-es`-derived breakage --
 none found.
 
 **The tag-based namespace fix is built, verified byte-identical for the
-four already-published openapi providers, and shipped as
-`ubx-provider-dynamic` PR #47 (open, not merged).** Adds
+four already-published openapi providers, and merged as
+`ubx-provider-dynamic` PR #47 (its own determinism bug fixed separately
+in PR #48, above).** Adds
 `namespace_from_tags`, an opt-in per-provider `config.Provider` flag
 (TOML `namespace_from_tags`) mirroring `redocly_bundle`'s exact
 precedent, persisted into `MemberSnapshot` so a pinned resolution can
@@ -85,12 +120,43 @@ byte-identical in content (the only diff was the expected provenance
 verification time). New tests:
 `TestNamespacesForSource_OpenAPI_TagsOptIn`, `TestTagToNamespace`,
 plus `TestNamespaces_SingleSource_UsesFastPath` strengthened to assert
-the real empty-map case explicitly. DigitalOcean itself is not yet
-regenerated with this flag set -- that's the next real step once #47
-merges: regenerate DigitalOcean's snapshot with `namespace_from_tags =
-true`, re-pin `ubiquex`'s config to the new version, verify the real
-service grouping now matches DigitalOcean's real product taxonomy, then
-resume DigitalOcean's onboarding from hop 7 (write-artifacts).
+the real empty-map case explicitly.
+
+**DigitalOcean's real snapshot is regenerated with the flag set and
+locally verified correct, but not yet landed in the real
+`ubx-schema-digitalocean` repo -- two real PRs open there, neither
+merged.** Downloaded the real, published v1.0.4 binary and verified its
+checksum against the release's own `SHA256SUMS` before running it (never
+trusted a locally-rebuilt binary for this step). Ran the exact same
+generation `hash-watch.yml` itself runs, by hand, against DigitalOcean's
+real, live upstream spec: real diff is exactly `namespace_from_tags:
+unset -> true` on both members plus the expected `min_binary_version`
+bump, `raw_spec` unchanged on both (no real upstream drift).
+`--dump-namespaces` against the regenerated snapshot: 172 of 195 real
+types resolve to 43 real, taxonomy-matching namespaces (`databases`,
+`blockstorage`, `apps`, `kubernetes`, `droplets`, `byoipprefixes`,
+`containerregistries`, ...) -- down from roughly 55 fragmented
+near-single-resource services before this fix -- stable across repeated
+`--dump-namespaces` runs (identical output).
+
+Opened as two real, separate PRs against `ubx-schema-digitalocean`
+(PR-only, NOT covered by this turn's self-merge exception -- neither
+self-merged):
+- **#1**: sets `namespace_from_tags = true` in `hash-watch.yml`'s own
+  generation config, and updates its doc comments to require
+  `ubx-provider-dynamic` v1.0.4+ specifically (v1.0.3 has the
+  determinism bug above).
+- **#2**: the actual regenerated `manifest.json`/`members/*.json`
+  content (branch `snapshot-regen/digitalocean-1.0.1`) -- the one-time
+  manual catch-up for the snapshot already committed there, matching
+  `regen-schema.md`'s own documented manual-regeneration path.
+
+**Blocked, waiting on the founder:** merge #1 and #2 on
+`ubx-schema-digitalocean`, cut a real GitHub Release for the new
+version, THEN `ubiquex`'s own `sdk/providers/.ubx/config` pin can be
+bumped and verified with zero network, and DigitalOcean's onboarding can
+resume from hop 7 (write-artifacts). None of that has happened yet --
+report it as blocked, not done, if asked.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
