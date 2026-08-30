@@ -49,16 +49,59 @@ clean"), CI now correctly includes it automatically via the provider
 registry. One real, live gap found while checking `ubx-sdk-
 digitalocean`'s own scaffold: `.github/workflows/hash-watch.yml` was
 hand-copied from `ubx-sdk-kubernetes` before this session's own
-scaffold tooling existed, and was never adapted -- it still watches
+scaffold tooling existed, and was never adapted -- it watched
 `raw.githubusercontent.com/digitalocean/digitalocean/release-1.37/...`,
 a URL built from Kubernetes' own real org-name-as-repo-name and
 release-branch convention, not DigitalOcean's own real source
-(`github.com/digitalocean/openapi`'s own bundled spec). If this
-workflow ever runs on its own schedule, it will not detect DigitalOcean's
-real schema drift at all. Not fixed this pass -- found while verifying
-DigitalOcean's own end-to-end status, real per-provider judgment
-`ubx sdk init-repo` deliberately leaves to a human, worth a real,
-scoped follow-up.
+(`github.com/digitalocean/openapi`'s own bundled spec), and its own
+regen step's `.ubx/config` heredoc was also missing `redocly_bundle =
+true` entirely -- a second, separate bug that would have made even a
+URL-only fix still fail at the actual regeneration step, since
+DigitalOcean's spec cannot load unbundled. **Now fixed**: real
+`main`-branch source URL, a real Redocly-bundle step inserted before
+hashing (mirrors the regen step's own mechanism, so the watched hash
+reflects what generation actually parses), `redocly_bundle = true`
+added, `base_url` corrected to `https://api.digitalocean.com`
+(verified against this exact value in `ubiquex`'s own git history of
+the original onboarding config), doc-comment factual errors and a
+repeated typo fixed. `ubx-sdk-digitalocean` PR #3 (open, never
+self-merged).
+
+**The audit this found something much bigger in.** Checking the other
+six repos' own `hash-watch.yml` against their real sources (as asked,
+since DigitalOcean's was wrong from a hand-copy and others might be
+too) found kubernetes, github, and aws's own CloudFormation portion
+are all genuinely correct -- verified each hardcoded URL/base_url
+against `ubiquex`'s own git history of the original onboarding config
+and each repo's own committed `VERSION` file, byte for byte. But
+**datadog, azure, google, and aws's own Smithy/`aws_data_all` portion
+are structurally broken**, and not from a hand-copy -- from UBI-182's
+own real, deliberate, already-verified Stage E migration ("HISTORY.md:
+`[providers.<name>]` collapsed to pinned-only", 2026-08-27/28), which
+fully removed every `[dynamic_provider_groups.<name>]` table from
+`sdk/providers/.ubx/config` -- confirmed directly, zero such tables
+exist in the file today. These four workflows' own compare step does
+`cfg["dynamic_provider_groups"][GROUP]` against a freshly checked-out
+copy of that exact file -- a real `KeyError` on the very first line
+that touches it, not a silent no-op. Their own regen step is equally
+broken a second way: it runs `ubx sdk gen --only "$GROUP" --lang
+$lang --out ...` from inside a checkout of `ubiquex`'s own
+`sdk/providers/` -- `--only datadog_all` (etc.) has nothing left to
+resolve to, since the group entries these four still depend on no
+longer exist anywhere in the live config, and the per-member
+`schema_url` values they used to carry are not preserved anywhere
+else either (checked each provider's own `ubx-schema-<name>`
+manifest.json -- member names only, no URLs). Whoever did Stage E
+apparently never updated the four hash-watch.yml files that assumed
+the old, now-removed shape. This is a live, real gap of the same
+class as the DigitalOcean bug (a mechanism that looks configured and
+doesn't work), affecting four of seven providers, unaddressed as of
+this state -- reported to the founder, **not fixed this pass**: the
+right fix needs a real design decision (where does the live per-
+member URL list now come from, now that pinning owns the only copy)
+rather than a mechanical correction, so it wasn't attempted
+unilaterally. Kubernetes, github, DigitalOcean, and aws's own CFN
+portion need no further work.
 
 **UBI-222 follow-up: both real fix classes found onboarding
 DigitalOcean built as real tooling, removing the class rather than
