@@ -146,6 +146,20 @@ version = "1.0.1"
 source = "ubiquex/google"
 version = "1.0.1"
 
+# UBI-102: replaces this provider's own local, checked-in
+# sdk/providers/descriptions/google.json. That file's 541 sdk-only keys
+# were a stale artifact of an over-simplified plural-to-singular
+# stripping bug in ubx-provider-dynamic's own discoverydoc.singularize
+# ("policies" -> "policie", "prefixes" -> "prefixe" for 14 real
+# resource types), already fixed there (commit be0fd82, unrelated
+# prior work) -- every one resolves to content already present in
+# ubiquex-docs' own corpus under the correct name. Confirmed zero
+# impact on already-published ubx-sdk-google (go/ts/py): none contain
+# the broken names. See docs/ for the full design record.
+[dynamic_providers.google.descriptions]
+source = "ubiquex/google"
+version = "1.0.0"
+
 # UBI-216: seventh provider, DigitalOcean -- proving case for the
 # ubx-provider-runbook onboarding runbook. No ubx-schema-digitalocean
 # snapshot exists yet (see this file's own "ADDING A SEVENTH PROVIDER"
