@@ -7,10 +7,55 @@
 
 ## In flight
 
-**UBI-137 in progress: automated Resource Reference regeneration built and
-verified end to end, PR open against `ubiquex-docs`, not yet merged.**
-`https://github.com/Ubiquex/ubiquex-docs/pull/57`. Built exactly per the
-design already reported to the ticket, per UBI-216's own decided chain
+**UBI-216 closed for real: `ubx-provider-runbook` (public) built, four
+executable runbooks, PR-only from its second commit.** Wrote down the
+real intervention points from DigitalOcean's own manual onboarding
+before writing anything else, per the ticket's own explicit order: the
+spec needed a new `redocly_bundle` config flag and a Node dependency
+before it would load at all, the first push to `ubx-schema-digitalocean`
+was blocked by a GitHub secret-scan false positive on vendor placeholder
+content needing a founder's own click on a specific unblock URL, and
+that repo's own first `HISTORY.md` entry claimed "v1.0.0 published"
+before the push had actually landed (still hasn't, as of this entry --
+confirmed live via `gh repo view` showing an empty default branch).
+
+Four runbooks in `.claude/commands/`: `/onboard-provider`,
+`/regen-schema`, `/write-artifacts`, `/regen-docs`. Each links into a
+shared `TRAPS.md` (the ticket's own six traps plus the three DigitalOcean
+ones above, plus one found live in this same session: a stale local
+`ubiquex` checkout, clean-looking by every local signal, got a real
+commit pushed onto a branch whose own PR had merged hours earlier in a
+different session -- caught only after the fact, kept as `TRAPS.md`'s own
+worked example rather than smoothed into a general warning) and a shared
+`MANIFEST.md` (every runbook writes which hop it reached to a small,
+committed JSON file, resuming a session that ran out of context instead
+of restarting -- explicit that the manifest records history, never the
+resume point, grounded in UBI-209's own real "narrative batch count went
+wrong" precedent).
+
+Explanation half in `ubiquex-internals`: new `provider-runbooks.mdx`
+(why a repo instead of a longer page, why traps are carried explicitly,
+why the manifest never gets trusted for what remains), a new
+`decisions.mdx` entry for the artifact-mandate decision that had never
+actually been written down there despite driving real work this session,
+and `workflows.mdx`/`docs-pipeline.mdx` both corrected where they'd gone
+stale (the latter still claimed `ubiquex-docs` was private and
+untrackable by `sync-drift-watch`, confirmed it's been public since
+UBI-213 and was never fixed here). All committed and pushed directly to
+`ubiquex-internals` main, verified via the real GitHub API: `b548562`.
+
+`ubx-provider-runbook`'s own repo: `https://github.com/Ubiquex/ubx-provider-runbook`,
+initial scaffold direct to main (`8a66a4d`, matching every other repo's
+own first-commit convention), one direct fix-up commit for three em
+dashes missed on the first pass (`e73669e` -- should have been a PR under
+this repo's own just-declared PR-only rule; a trivial, pre-review,
+whitespace-only fix, but a real inconsistency with the rule stated in
+the very same initial commit, flagged here rather than silently let go).
+
+**UBI-137 closed for real: PR #57 merged.** Verified via `gh pr view`
+showing `MERGED`, not inferred from having opened it (`https://github.com/Ubiquex/ubiquex-docs/pull/57`).
+Automated Resource Reference regeneration built and verified end to end.
+Built exactly per the design already reported to the ticket, per UBI-216's own decided chain
 (schema publishes -> SDK regenerates/publishes -> coverage check reports
 gaps -> Claude writes missing artifacts -> only then docs regen runs):
 new `regen_all.py` orchestrates `regen_pages.py`/`gen_all_data_source_pages.py`/
