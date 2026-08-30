@@ -80,6 +80,18 @@
 source = "ubiquex/kubernetes"
 version = "3.0.1"
 
+# UBI-102: replaces this provider's own local, checked-in
+# sdk/providers/descriptions/kubernetes.json. Resolved via
+# provider.AcquireDescriptions, ubiquex-docs' own repo, verified against
+# an isolated with/without-pin diff on the identical current schema
+# before landing. 68 keys existed in both corpora with differing text;
+# docs' text wins in every case (the reviewed, rendered corpus, not the
+# migrated one). 1065 entries are net new. See docs/ for the full design
+# record.
+[dynamic_providers.kubernetes.descriptions]
+source = "ubiquex/kubernetes"
+version = "1.0.0"
+
 [dynamic_providers.github]
 source = "ubiquex/github"
 version = "1.0.1"
