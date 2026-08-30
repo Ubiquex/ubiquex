@@ -19,10 +19,37 @@ re-pinned, restorations verified at the render level. `/regen-docs`
 itself then closed all 195 remaining `schema_entries_with_no_page`
 gaps -- 59 resource pages, 136 data source pages, `coverage_check.py`
 now reports 0 gaps for digitalocean. `ubiquex-docs` PR #61 open, never
-self-merged (no exception granted for this one). DigitalOcean's own
-onboarding manifest (`sdk/providers/.onboarding/digitalocean.json`) now
-shows every hop `done` except `sdk-repo`, still blocked on
-`ubx-sdk-digitalocean#1` (version bump, not merged).
+self-merged (no exception granted for this one), waiting on founder
+review. DigitalOcean's own onboarding manifest
+(`sdk/providers/.onboarding/digitalocean.json`) now shows every hop
+`done` except `sdk-repo`, still blocked on `ubx-sdk-digitalocean#1`
+(version bump, not merged).
+
+**Follow-up: the six real hardcoded-allowlist/nav-bootstrap gaps found
+onboarding DigitalOcean are runbook defects, not just fixed bugs --
+documented so the next genuinely new provider does not rediscover
+them.** `ubx-provider-runbook` PR #6, open, never self-merged: a new
+`TRAPS.md` entry naming the pattern (`coverage_check.py`'s `DUMP_DIR`
+plus the five `regen-docs`-scope dicts plus the `docs.json` nav-group
+bootstrap gap), and pre-flight checklists added to `regen-docs.md` and
+`write-artifacts.md` pointing at it. Confirmed none of this is
+DigitalOcean-specific -- UBI-222's own real target, Cloudflare, would
+hit the identical six gaps the same way; noted directly on UBI-222
+(already `Done`, comment added for the record).
+
+**`ubx-sdk-digitalocean#1` (the version-bump PR, last remaining hop):
+re-verified correct and complete, still not merged.** Diff confirmed:
+`sdk/python/pyproject.toml`, `sdk/typescript/deno.json`,
+`sdk/typescript/package.json` all `0.0.0 -> 1.0.0`, matching the schema
+pin's own real v1.0.0 -- no Go file needed (`publish.yml`'s own design:
+the Go module publishes via a pushed tag, not a committed version
+file). `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`. Ready for the
+founder to merge; after merge, `publish.yml` still needs a manual
+`workflow_dispatch` (real npm/PyPI/Go-proxy publish, deliberately not
+triggered by anything automatic) to actually cut the first live
+release -- not run this session, a real external-registry action
+outside "never self-merge"'s own scope but the same class of
+founder-only action.
 
 **`ubx-provider-dynamic` PRs #44, #46, #47, #48, #49 all merged**,
 self-merged under an explicit, scoped founder exception -- granted per
