@@ -1,0 +1,36 @@
+{
+  "runbook": "onboard-provider",
+  "target": "digitalocean",
+  "started": "2026-08-29",
+  "updated": "2026-08-30",
+  "hops": [
+    {
+      "id": "spec-discovery",
+      "status": "done",
+      "note": "real, public OpenAPI 3.0 spec confirmed at github.com/digitalocean/openapi, reachable by direct fetch. Real counts from the bundled document (see loader-check): 59 resources + 137 data sources = 196 wire types, 10,609 real fields, 1,627 already provider-sourced (15%), 8,982 genuinely undescribed (85%). Reconstructed from the real, existing PR body rather than re-run, since the manifest mechanism did not exist when this hop actually happened."
+    },
+    {
+      "id": "live-entry",
+      "status": "done",
+      "commit": "https://github.com/Ubiquex/ubiquex/pull/30",
+      "note": "sdk/providers/.ubx/config carries [dynamic_providers.digitalocean], live, confirmed still present and correct (schema_source=openapi, schema_url, base_url, redocly_bundle=true)."
+    },
+    {
+      "id": "loader-check",
+      "status": "done",
+      "note": "as published, the spec failed outright through plain Load -- two Redocly-only $ref conventions real OpenAPI 3.0 does not define (a Tag Object's own description expressed as $ref; every Path Item's own HTTP-method field expressed as $ref to a separate per-operation file). Fixed via a new redocly_bundle config flag shelling out to npx @redocly/cli bundle, gated per-provider so only a provider that needs it pays the Node.js dependency cost.",
+      "resolved_by": "https://github.com/Ubiquex/ubx-provider-dynamic/pull/39"
+    },
+    {
+      "id": "schema-repo-create",
+      "status": "done",
+      "note": "ubx-schema-digitalocean created, public, real v1.0.0 snapshot committed locally (commits 710bb52/eaf39ce/262d824) -- generated from the bundled document, manifest.json + members/*.json matching every other real ubx-schema-<provider> repo's own shape."
+    },
+    {
+      "id": "schema-repo-push",
+      "status": "blocked",
+      "note": "GitHub push protection rejects the push -- a Slack Incoming Webhook URL PATTERN flagged at two locations each in members/digitalocean.json and members/digitalocean_ds.json, confirmed by reading the flagged bytes directly to be DigitalOcean's own real, verbatim documentation placeholder text (https://hooks.slack.com/services/T1234567/AAAAAAAA/ZZZZZZ and a second, similarly-shaped placeholder), not a live credential. Re-verified live via a real push attempt on 2026-08-30: identical alert, same locations, same commit 710bb52. Only a repo admin can act on this.",
+      "unblock_url": "https://github.com/Ubiquex/ubx-schema-digitalocean/security/secret-scanning/unblock-secret/3IbqfGmwd4raUCFoDmr4SYn3ywY"
+    }
+  ]
+}
