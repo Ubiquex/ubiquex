@@ -7,6 +7,67 @@
 
 ## In flight
 
+**UBI-216 follow-up: branch protection enabled on `ubx-provider-runbook`,
+verified working; every other "PR-only" repo in the org has none.** A
+real survey (`gh api repos/Ubiquex/<repo>/branches/main/protection`)
+across all 18 repos whose own `CLAUDE.md` claims PR-only found every
+single one unprotected -- the rule exists only as text a session is
+trusted to follow, never enforced by GitHub itself. Confirmed the exact
+gap the founder named: the first commit after `ubx-provider-runbook`'s
+own initial scaffold bypassed its own just-stated PR-only rule, direct
+to `main`, because nothing prevented it.
+
+Enabled on `ubx-provider-runbook` only, per explicit instruction (not
+extended to the other 17 without asking first). Real, live-tested
+config, not assumed correct from the API accepting it:
+`required_pull_request_reviews.required_approving_review_count: 0`,
+`enforce_admins: true`, force-push and branch deletion both disabled.
+The first attempt used `required_approving_review_count: 1` -- caught
+before reporting success, via a real throwaway PR, that GitHub refuses
+to let a PR's own author approve it, and every PR in this org is
+authored under the same one founder identity Claude Code also acts as,
+which would have made every future PR permanently unmergeable. Verified
+the fixed config both ways with real, disposable PRs (opened and
+deleted): a direct `git push origin main` is genuinely rejected
+(`GH006: Protected branch update failed`), and a real PR reports
+`mergeStateStatus: CLEAN` with zero required approvals.
+
+**UBI-216 follow-up: the runbooks were actually run, not just read --
+found and fixed two more real bugs.** `/regen-schema` dispatched for
+real against `ubx-schema-kubernetes` (`hash-watch.yml` run 33310102700),
+kubernetes' own upstream unchanged for days. Found: (1) the
+check-for-an-existing-PR instruction told a session to filter by a
+label `hash-watch`'s own real `gh pr create` call never sets at all --
+would have found nothing and dispatched a redundant run every time,
+fixed to the real signal (branch name `snapshot-regen/<provider>-<version>`);
+(2) the dispatch still opened a real PR, kubernetes 3.0.1 -> 3.0.2, both
+members individually reporting `own change level: none` -- the only
+real diff was `manifest.json`'s own `min_binary_version`, stamped from
+`ubx-provider-dynamic`'s own current build version (itself republished,
+1.0.1 -> 1.0.2, between runs), confirmed against that release's own real
+notes as intentional, documented behavior, not a bug. Neither gap was
+visible from reading the file -- both needed a real dispatch against a
+real, unchanged provider to surface. Fixed and shipped as
+`ubx-provider-runbook` PR #3 (open, not merged).
+
+`/write-artifacts`'s own core command (`coverage_check.py --dump-root
+... --only kubernetes`) run for real against kubernetes' own currently
+committed corpus: found 36 real gaps, all disk-reconciliation (35 data
+sources this session's own earlier UBI-137 testing generated and
+verified, then deliberately reverted rather than shipped, plus one
+stale page), zero missing-intro/category/field-description gaps. This
+confirmed the real division of labor between the two runbooks holds:
+what `/write-artifacts` is actually scoped to (the three real gap
+types `coverage_check.py` enforces) was genuinely clean; what it found
+instead is `/regen-docs`'s own job, not miscategorized. `/regen-docs`
+itself was already tested end to end in this same session's own prior
+UBI-137 work, two real bugs found there too (see that entry below).
+`/onboard-provider` is grounded directly in the real DigitalOcean
+onboarding already run manually before any runbook text existed -- not
+independently re-run this pass, since hop 4 is still genuinely blocked
+on the founder's own secret-scan click, the same real block already
+recorded.
+
 **UBI-216 closed for real: `ubx-provider-runbook` (public) built, four
 executable runbooks, PR-only from its second commit.** Wrote down the
 real intervention points from DigitalOcean's own manual onboarding
