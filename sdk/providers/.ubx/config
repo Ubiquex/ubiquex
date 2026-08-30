@@ -188,4 +188,4 @@ version = "1.0.0"
 # by the founder, real v1.0.0 release cut and verified after.
 [dynamic_providers.digitalocean]
 source = "ubiquex/digitalocean"
-version = "1.0.0"
+version = "1.0.1"
