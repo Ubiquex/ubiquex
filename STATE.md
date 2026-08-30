@@ -7,6 +7,69 @@
 
 ## In flight
 
+**UBI-222 precursor (DigitalOcean via the runbook): two findings recorded
+separately, per explicit instruction, real root cause on both, neither
+fixed yet.**
+
+**Why the stacked-PR trap keeps recurring despite being documented in
+`TRAPS.md`.** Confirmed directly, not assumed: at the exact moment
+`ubx-provider-dynamic` PR #42 merged, `git merge-base --is-ancestor` against
+its own real base branch tip and `main`'s own real tip at that moment
+returns true -- the base was already an ancestor of `main`, merged there
+by PR #41 earlier the same day. The real reason documentation alone
+doesn't hold: the git mechanics of merging into an already-consumed
+branch succeed cleanly, with zero conflicts and zero warning anywhere in
+GitHub's own UI -- there is no external signal at the one moment (clicking
+merge) the trap actually fires, and a rule that depends on someone
+recalling and re-verifying a fact with no prompt to do so, under
+operating conditions that give no sign anything is wrong, will keep
+failing regardless of how many times it's already been written down.
+
+**A real, concrete, already-verified mechanical guard is available, now
+that branch protection exists.** Proposed, not yet built: a required
+status check (`pull_request` trigger) that runs
+`git merge-base --is-ancestor <PR's own base branch tip> <default branch
+tip>` and fails loudly, naming the exact retarget command, whenever a
+PR's own base is neither the default branch itself nor still unmerged
+into it. Confirmed this exact check, run against the real historical
+SHAs, would have failed PR #42 before merge (`git merge-base --is-ancestor
+d52b699... 3ae94ee...` returns true) -- not a hypothetical, the identical
+real commits. Branch protection's own `required_status_checks` is
+currently `null` (no required checks at all) on every one of the 16
+repos protected so far; wiring this in is a second step (a check has to
+run at least once before it can be selected as required) on top of
+adding the workflow itself. Not built yet -- proposing before building,
+matching this project's own convention, and because rolling it out
+raises the identical "how many repos, right now" question branch
+protection itself already went through once.
+
+**The DigitalOcean singularization bug (`byoip_prefixe`, `registrie`) is
+a second, separate instance of UBI-102's own GCP bug, not something the
+existing fix already covers.** Confirmed by reading the code directly:
+`internal/discoverydoc/discoverydoc.go`'s own `singularize` (GCP-only)
+was fixed for exactly this class of error, and its own doc comment says
+so explicitly -- "the identical, deliberately approximate heuristic
+`internal/resourcemap.deriveNoun`'s own fallback path already uses for
+the same real reason" -- naming the twin directly, at the time of the
+fix, and the twin (`internal/resourcemap/resourcemap.go:582`,
+`strings.TrimSuffix(last, "s")`, used for every openapi-sourced provider's
+own fallback naming) was never actually updated. Verified the already-
+written fix logic correctly produces `prefix`/`registry` from
+DigitalOcean's own real `prefixes`/`registries`, run directly against
+both real strings, not assumed from reading the code alone. Not
+ported yet -- queued behind `ubx-provider-dynamic` PR #44 (below), to
+avoid building on top of not-yet-real main and risking the identical
+trap this same investigation is about.
+
+**UBI-222 precursor: `ubx-provider-dynamic` PR #44 open, blocks
+everything else in this chain.** Lands UBI-217's own redocly_bundle fix
+on the real main for the first time (see the prior STATE.md entry for
+the full account of why it was never there before). The founder's own
+explicit merge order: #44 first, then the tag-based namespace fix
+(service-derivation bug, see below) built on top of it, then the
+singularization port above, then DigitalOcean's own onboarding resumes
+from hop 7 (write-artifacts). Never self-merged -- waiting.
+
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
 in the org.** Re-checked each repo's own `CLAUDE.md` directly (not the
