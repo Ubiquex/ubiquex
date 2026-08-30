@@ -7,6 +7,59 @@
 
 ## In flight
 
+**UBI-222 follow-up: the stdout/JSON mixing bug in `regen_all.py`
+(documented in `ubx-provider-runbook`'s own TRAPS.md) recurred for
+real and is now fixed at the root, verified against a real CI run.**
+CI's own "Build the step summary" step had broken twice on a
+genuinely successful DigitalOcean regeneration, reporting the run as
+a red failure -- the same class of problem the golden-page-gate had
+before its own known failure was fixed, training everyone to ignore a
+red workflow. `regen_all.py`'s own final report now writes to a real,
+required `--json-out` file via `json.dump`, never `print()` to
+stdout -- the per-provider narration that used to share that stream
+stays exactly where it was, just no longer sharing it with anything
+meant to be parsed. `report_regen_summary.py` needed no changes, it
+already read an explicit `--report` file path; the bug was entirely
+in the CI workflow's own shell redirect capturing regen_all.py's
+mixed stdout into that file. `resource-reference-regen.yml` now
+passes `--json-out` directly. Committed direct to `ubiquex-docs` main.
+`ubx-provider-runbook` PR #9 (open, never self-merged) updates
+`regen-docs.md`'s own Hop 3 example and TRAPS.md's own entry with the
+real recurrence and fix.
+
+**Verified live, not just locally**: re-dispatched
+`resource-reference-regen.yml` after the fix -- the full run succeeded
+end to end for the first time, including the step that used to break.
+This also surfaced a real, legitimate side effect: the pipeline had
+apparently never completed a full run before (every prior dispatch
+died on either the missing-DigitalOcean allowlist gap or this exact
+stdout bug), so this first clean run found real, accumulated upstream
+schema drift across AWS/Azure/GCP/kubernetes and opened a large,
+real regeneration PR (`ubiquex-docs` #62 -- 7,975 files, real
+resource additions/removals/renames, every provider's own gapped
+resources correctly excluded per UBI-187). Not reviewed or touched --
+genuinely out of scope for this session and too large to review
+page-by-page; flagged for the founder's own review, never self-merged.
+
+**DigitalOcean itself, checked end to end this pass**: schema pinned
+and released (v1.0.1), SDK published on all three registries (v1.0.0,
+confirmed live), docs 195/195 pages with zero coverage gaps (confirmed
+in PR #62's own real report: "digitalocean: pages kept this run: 195,
+clean"), CI now correctly includes it automatically via the provider
+registry. One real, live gap found while checking `ubx-sdk-
+digitalocean`'s own scaffold: `.github/workflows/hash-watch.yml` was
+hand-copied from `ubx-sdk-kubernetes` before this session's own
+scaffold tooling existed, and was never adapted -- it still watches
+`raw.githubusercontent.com/digitalocean/digitalocean/release-1.37/...`,
+a URL built from Kubernetes' own real org-name-as-repo-name and
+release-branch convention, not DigitalOcean's own real source
+(`github.com/digitalocean/openapi`'s own bundled spec). If this
+workflow ever runs on its own schedule, it will not detect DigitalOcean's
+real schema drift at all. Not fixed this pass -- found while verifying
+DigitalOcean's own end-to-end status, real per-provider judgment
+`ubx sdk init-repo` deliberately leaves to a human, worth a real,
+scoped follow-up.
+
 **UBI-222 follow-up: both real fix classes found onboarding
 DigitalOcean built as real tooling, removing the class rather than
 documenting it -- per the founder's own explicit framing.**
