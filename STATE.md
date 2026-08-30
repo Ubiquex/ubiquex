@@ -334,12 +334,55 @@ dependency -- none exists anywhere in this repo) proves all three real
 cases: coincidental real content preserved, a genuine duplicate
 stripped, an orphaned field left untouched.
 
-**Blocked on the founder merging PR #60, same as PR #59:** publishing
-new `descriptions-kubernetes`/`descriptions-github`/`descriptions-gcp`
-releases and re-pinning `ubiquex`'s own `sdk/providers/.ubx/config`
-both need this fix on real `main` first -- `publish-descriptions.yml`
-always checks out `ref: main`, never a branch. Not done yet -- report
-it as blocked, not done, if asked.
+**Fully resolved -- `ubiquex-docs` PRs #59/#60 merged (explicit founder
+exception), real releases cut, `ubiquex` re-pinned, restorations
+verified at the render level, not just the raw corpus.**
+
+**A second real, previously-undetected bug was found and fixed while
+cutting the first release: `publish-descriptions.yml`'s own
+`sha256sum` recorded the FULL runner.temp path instead of the bare
+`snapshot.tar.gz` filename `provider.AcquireDescriptions` (ubiquex)
+matches exactly against.** Confirmed live: the first real dispatch of
+kubernetes v1.0.1 produced a release whose real download failed with
+"provider archive not listed in SHA256SUMS: snapshot.tar.gz". Checking
+further: ALL SIX original description-corpus releases (kubernetes,
+github, datadog, aws, azure, google) target their own feature branches,
+not `main` -- meaning every one of them was published by hand, never
+through this workflow, so this bug was never actually exercised before
+today's real dispatch. Fixed by `cd`-ing into `runner.temp` before
+running `sha256sum`, matching the schema repos' own already-working
+`publish.yml` pattern exactly -- committed direct to `ubiquex-docs`
+main (this repo's own convention, a small mechanical CI fix, not a
+judgment call). Deleted and re-cut the two broken v1.0.1 releases
+(kubernetes, github) with the fixed workflow; both verified correct
+(`SHA256SUMS` now shows the bare filename) before re-pinning anything.
+
+**Real releases, all three confirmed via API:**
+`descriptions-kubernetes-v1.0.1`, `descriptions-github-v1.0.1` (both
+via the now-fixed `workflow_dispatch`), `descriptions-google-v1.0.1`
+(published manually, matching v1.0.0's own real precedent -- gcp's
+docs key and google's release name differ, so the workflow's single
+`provider` input cannot satisfy both the local file-exists check and
+the real release tag at once; not fixed this session, a real, separate,
+smaller gap worth a follow-up).
+
+**`ubiquex` re-pinned** (`sdk/providers/.ubx/config`,
+`[dynamic_providers.{kubernetes,github,google}.descriptions]` all
+`1.0.0 -> 1.0.1`), verified with a real, cold acquisition for all three
+(local `~/.ubx/descriptions` cache cleared first, not a stale hit).
+
+**Verified the restorations reach the actual generated output, per
+explicit instruction -- not just the raw corpus.** For all 15
+restorations (kubernetes 6, github 8 including the
+`github_enterprise_team` entries, gcp 1): the real, freshly-acquired
+schema field's own `Description` now carries the restored text. For
+kubernetes specifically, ran the real `verify_against_golden.py`
+mechanism end to end (fresh `--dump-ir`, fresh go/py/ts local SDK, real
+`extract_idents.py` output) -- `kubernetes_apps_replica_set` now
+reports `diff: IDENTICAL to committed golden`, resolving the exact
+drift that started this whole investigation. `github`/`gcp`'s own
+restored fields aren't on either provider's own golden candidate page,
+so the schema-field-level check is the real, direct proof there.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
