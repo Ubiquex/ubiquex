@@ -7,6 +7,42 @@
 
 ## In flight
 
+**UBI-216 follow-up: branch protection extended to all 16 genuinely
+PR-only repos, real config, spot-verified across all four repo shapes
+in the org.** Re-checked each repo's own `CLAUDE.md` directly (not the
+earlier grep) before touching anything, per explicit instruction: 16 of
+the 17 candidates state PR-only as a settled convention verbatim
+(`ubx-provider-dynamic`, all 6 `ubx-schema-*`, all 6 `ubx-sdk-<provider>`,
+`ubx-sdk-{go,python,typescript}`). The 17th, `ubx-sdk-blueprints`, does
+not -- its own `CLAUDE.md` says no git workflow has been recorded yet and
+treats PR-only as a placeholder pending founder confirmation, not a
+decided rule. Asked before touching it rather than assuming either way;
+founder said leave it out. `ubx-schema-digitalocean` also excluded, not
+by choice but by real state: its own repo is still genuinely empty
+(`git api .../commits/main` returns "Git Repository is empty," confirmed
+live), so there is no `main` branch yet to protect.
+
+Same config as `ubx-provider-runbook`: `enforce_admins: true`,
+`required_pull_request_reviews.required_approving_review_count: 0`
+(never 1 -- the self-approval deadlock applies identically everywhere,
+since every PR across all 16 is authored under the same one founder
+identity), force-push and branch deletion both disabled. Applied via
+the API, confirmed by re-fetching every one of the 16 immediately after.
+
+Verified, not assumed correct from the API accepting the config:
+direct-write rejection confirmed on all 16 (a real Contents-API commit
+attempt against each repo's own `main`, cheaper than 16 local clones,
+same real branch-protection barrier a `git push` hits), and full-merge
+mergeability spot-checked with a real, disposable PR (opened, confirmed
+`mergeStateStatus: CLEAN`, closed and deleted without merging, working
+tree confirmed clean after) across one of each real repo shape in the
+org: `ubx-provider-dynamic`, `ubx-schema-aws`, `ubx-sdk-aws`,
+`ubx-sdk-go`. First reading of three of the four spot-checks came back
+`mergeStateStatus: UNKNOWN` -- GitHub computes mergeability
+asynchronously and the first read was too fast, not a real problem --
+caught and redone with a short poll rather than reported as confirmed
+on an unconfirmed read.
+
 **UBI-216 follow-up: branch protection enabled on `ubx-provider-runbook`,
 verified working; every other "PR-only" repo in the org has none.** A
 real survey (`gh api repos/Ubiquex/<repo>/branches/main/protection`)
