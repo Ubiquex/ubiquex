@@ -7,14 +7,22 @@
 
 ## In flight
 
-**UBI-222 precursor (DigitalOcean via the runbook): fully resolved this
-session. All `ubx-provider-dynamic` fixes merged and released as v1.0.5,
-`ubx-schema-digitalocean` regenerated and released as v1.0.1, `ubiquex`
-re-pinned and verified end-to-end against the real, checksum-verified
-release binary, and DigitalOcean's onboarding is unblocked at hop 7
-(write-artifacts) -- the hop's own core command now runs clean, real
-gap count reported. Actual artifact authoring (846 real gaps) is
-separate, substantial batch content work, not attempted this session.**
+**UBI-222 (DigitalOcean via the runbook): fully resolved, all the way
+through `/regen-docs`.** `ubx-provider-dynamic` fixes merged and
+released as v1.0.5, `ubx-schema-digitalocean` regenerated and released
+as v1.0.1, `ubiquex` re-pinned and verified end-to-end. write-artifacts
+complete (`ubiquex-docs` PR #59, merged by explicit founder exception).
+The strip_qualifier corpus bug found along the way (see below) is fully
+resolved too: `ubiquex-docs` PR #60 merged, three description-corpus
+releases cut (kubernetes/github/google, all `v1.0.1`), `ubiquex`
+re-pinned, restorations verified at the render level. `/regen-docs`
+itself then closed all 195 remaining `schema_entries_with_no_page`
+gaps -- 59 resource pages, 136 data source pages, `coverage_check.py`
+now reports 0 gaps for digitalocean. `ubiquex-docs` PR #61 open, never
+self-merged (no exception granted for this one). DigitalOcean's own
+onboarding manifest (`sdk/providers/.onboarding/digitalocean.json`) now
+shows every hop `done` except `sdk-repo`, still blocked on
+`ubx-sdk-digitalocean#1` (version bump, not merged).
 
 **`ubx-provider-dynamic` PRs #44, #46, #47, #48, #49 all merged**,
 self-merged under an explicit, scoped founder exception -- granted per
@@ -383,6 +391,47 @@ reports `diff: IDENTICAL to committed golden`, resolving the exact
 drift that started this whole investigation. `github`/`gcp`'s own
 restored fields aren't on either provider's own golden candidate page,
 so the schema-field-level check is the real, direct proof there.
+
+**`/regen-docs` for DigitalOcean: closed all 195 remaining
+`schema_entries_with_no_page` gaps -- `ubiquex-docs` PR #61, open,
+never self-merged.** Ran the real orchestrator (`regen_all.py --only
+digitalocean`) via the manual runbook path (`regen-docs.md`) -- this is
+that runbook's own first genuine end-to-end run against a brand new
+(seventh) provider, every prior run having been a re-run against an
+already-onboarded one. Two real classes of first-time-onboarding gap
+surfaced, neither named in the runbook:
+
+Five hardcoded provider allowlists, each a real crash or a real silent
+skip: `gen_all_data_source_pages.py`'s `PROVIDERS` (`KeyError`),
+`regen_all.py`'s `RESOURCE_REGEN_PROVIDERS`/`ALL_PROVIDERS` (would have
+silently produced data-source pages only, never real resource pages --
+the gate deciding whether `regen_pages.py` even runs), `regen_pages.py`'s
+`PROVIDER_DISPLAY`/`SDK_REPO_ID`/`SKIP_INJECTION_SOURCE` plus a second,
+local `sdk_repo_id` dict duplicating the module-level one, and
+`corpus_index.py`'s `PROVIDER_TAB_NAMES` (`KeyError` in `provider_group`).
+This confirms the write-artifacts hop's own predicted `real_gaps_found`
+entry from the prior turn -- the same allowlist pattern, one hop later.
+
+A genuine bootstrap gap: `docs.json` carried no "DigitalOcean" nav
+group yet, and `provider_group`/`rebuild_provider_nav` have no
+create-if-missing path by design (they reconcile an already-existing
+group against the real file tree, never invent one) -- every provider
+this mechanism had ever run against before already had its own group
+from an earlier, separate bootstrap. Fixed by adding a minimal
+`{"group": "DigitalOcean", "root": "resource-reference/digitalocean/index",
+"pages": []}` entry before the real run.
+
+Result: 59 resource pages across 37 services, 136 data source pages
+across 29 groups, UBI-187 coverage check clean for both batches,
+`coverage_check.py --only digitalocean` now reports 0 gaps (807
+depth-0 fields, 195 pages on disk), `mint validate` clean. All five
+allowlist fixes and the nav bootstrap landed in the same PR as the
+generated pages. TRAPS.md's own documented stdout/JSON pitfall
+(`regen_all.py`'s stdout mixes its two child scripts' log lines with
+its own final JSON report) reproduced live again when redirecting to
+a file and parsing directly -- confirmed, not fixed, same as before:
+out of scope, six-provider-wide, CI's own summary step is the real
+affected caller, not this manual path.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
