@@ -84,6 +84,14 @@ version = "3.0.1"
 source = "ubiquex/github"
 version = "1.0.1"
 
+# UBI-102 -- see the datadog entry's own doc comment for the full real
+# design record. Migration closes a real, pre-existing gap here: 95
+# real entries in ubiquex-docs' own comprehensive corpus were never in
+# the local file this replaces -- genuine content, not new authoring.
+[dynamic_providers.github.descriptions]
+source = "ubiquex/github"
+version = "1.0.0"
+
 [dynamic_providers.datadog]
 source = "ubiquex/datadog"
 version = "1.0.1"
