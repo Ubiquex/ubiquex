@@ -205,14 +205,96 @@ is real, substantial batch content-authoring work, not attempted this
 session -- `sdk/providers/.onboarding/digitalocean.json`'s own
 `write-intros` hop updated to `unblocked` with the full real account.
 
-**Found in passing, real and separate from all of the above, not yet
-investigated:** `ubiquex-docs`'s own `golden-page-gate` is currently
-failing on `kubernetes/kubernetes_apps_replica_set` -- a real 11-line
-drift from the committed golden page (an `iqn` field's own description
-lost the sentence "Required." somewhere upstream). Confirmed unrelated
-to any DigitalOcean work this session; not investigated further. Worth
-a real look next session -- either a genuine upstream Kubernetes spec
-change or a regression in the descriptions pipeline.
+**The `kubernetes_apps_replica_set` golden-page drift is investigated
+and root-caused: a real, confirmed content-loss bug in
+`ubiquex-docs`'s own `export_raw_descriptions.py`, live in the
+published, pinned corpus for all six providers, not just kubernetes --
+narrow in current confirmed scope (6 real fields for kubernetes), not
+fixed yet.**
+
+The founder's own hypothesis was directionally right: UBI-102's real
+design is a qualifier-free raw corpus (`export_raw_descriptions.py`)
+with `field_desc()` (`gen_provider_docs.py`) re-appending the correct
+qualifier ("Required."/"Optional; if omitted, computed by X."/etc.) at
+render time, from the schema's own real `Required`/`Optional`/`Computed`
+flags -- separate from the stored text entirely. Confirmed the
+re-application itself works correctly: `field_desc()` computed the
+identical qualifier ("Optional; if omitted, computed by Kubernetes.")
+for the `iqn` field in both the committed golden page and the fresh
+regeneration -- the schema-derived logic never changed.
+
+**The real bug is one step earlier, in how the raw corpus was made
+qualifier-free.** `export_raw_descriptions.py`'s own `strip_qualifier`
+(line ~101) does a blind trailing-string match: if a field's stored
+text ends in " Required." (or one of the other three exact qualifier
+phrases), it strips it, assuming that suffix is always a captured
+duplicate of what `field_desc()` would separately re-add. That
+assumption is only true when the text was captured by
+`migrate_descriptions.py` scraping an ALREADY-RENDERED `.mdx` page
+(description + render-time qualifier concatenated) -- it is false
+whenever a field's own genuine AI-authored or vendor prose simply
+happens to end in one of those four exact strings as real content, with
+no relation to the schema's own real required-ness.
+
+Confirmed exactly this for `iqn`: `artifacts/kubernetes/descriptions.json`
+(commit `06efc2824`) stores "IQN (iSCSI Qualified Name) of the iSCSI
+target. Required." as the AI's own real, complete sentence -- but the
+field is genuinely Optional+Computed per the current schema (confirmed:
+`field_desc()`'s own qualifier for this exact field is "Optional; if
+omitted, computed by Kubernetes.", not "Required."). Since the stored
+text happens to end in the string "Required." anyway,
+`export_raw_descriptions.py` stripped it when producing the published
+`descriptions-kubernetes-v1.0.0` release, downloaded and verified
+directly from `~/.ubx/descriptions/ubiquex/kubernetes/1.0.0/kubernetes.json`
+(real, cached, checksum-verified corpus, not assumed): text there reads
+"IQN (iSCSI Qualified Name) of the iSCSI target." -- "Required." is
+gone, permanently, from the one real, pinned corpus everything now
+reads (`ubx sdk gen`'s own `provider.AcquireDescriptions`, which is
+what golden-page-gate's fresh regeneration actually uses -- confirmed
+this is the real, live path: no `UBX_DESCRIPTIONS_PIN_KUBERNETES`
+override is set anywhere, so it resolves the real pin in
+`sdk/providers/.ubx/config`, not the local, now-stale
+`artifacts/kubernetes/descriptions.json` in `ubiquex-docs`, which
+still has "Required." and is what the currently-committed golden page
+was generated against). This is why the golden page (built against the
+older, unstripped local file) and the fresh regeneration (built against
+the newer, stripped, published pin) disagree.
+
+**Quantified the real blast radius, not just the one field.**
+Cross-referenced every entry in kubernetes' own local corpus whose
+text `strip_qualifier` would truncate (4,715 of 12,733 real non-vendor-spec
+entries) against a fresh `--dump-ir`'s own real, schema-derived
+`Required`/`Optional`/`Computed` flags per field: 4,709 of those
+4,715 have a stripped suffix that exactly matches what `field_desc()`
+would independently compute for that same field -- strong evidence
+those are genuine captured render-time duplicates, correctly removed.
+Exactly 6 do not match (the qualifier stripped differs from the
+field's own real, current schema-derived qualifier) -- confirmed real
+content loss, `iqn` among them. All six pinned description corpora
+(`kubernetes`, `github`, `datadog`, `aws`, `azure`, `google` --
+`sdk/providers/.ubx/config`'s own `[dynamic_providers.<name>.descriptions]`
+tables) went through this identical `export_raw_descriptions.py`
+mechanism, so the same small-but-nonzero false-positive rate likely
+exists in the other five, not investigated per-provider yet -- the
+other five golden pages simply didn't happen to hit an affected field.
+
+**Not fixed this session -- investigation only, per explicit
+instruction.** Recommended real fix, for whoever picks this up:
+`strip_qualifier`'s blind trailing-string match is structurally unsound
+regardless of tuning; the correct fix is upstream, in
+`migrate_descriptions.py`'s own `parse_docs_page` -- it should
+explicitly separate a scraped MDX field's own real prose from the
+render-time-appended qualifier sentence at scrape time (matching it
+against the SAME field's own real, schema-derived qualifier, not a
+generic string set), so `descriptions.json` is qualifier-free by
+construction and `export_raw_descriptions.py`'s own guess-and-strip
+step becomes unnecessary rather than merely better-tuned. A narrower,
+faster interim fix: re-run `export_raw_descriptions.py` for all six
+providers with `strip_qualifier` changed to require the stripped
+qualifier to MATCH the field's own real, schema-derived qualifier
+(exactly the check this investigation's own script just did) before
+removing it -- would have caught all 6 real kubernetes cases without
+touching any of the 4,709 genuine duplicates.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
