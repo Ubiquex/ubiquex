@@ -192,7 +192,7 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"sdk/typescript/package.json",
+		"sdk/typescript/package.json", "sdk/typescript/deno.json",
 		"sdk/typescript/aws/ecr/doc.ts", "sdk/typescript/aws/ecr/repository.ts",
 		"sdk/typescript/aws/iam/doc.ts", "sdk/typescript/aws/iam/role.ts", "sdk/typescript/aws/iam/role_policy_attachment.ts",
 	}
@@ -206,6 +206,13 @@ func TestGeneratedRepo_GroupsByServiceDirectory(t *testing.T) {
 	}
 
 	mustContain(t, files["sdk/typescript/package.json"], `"name": "@ubx/sdk-aws"`)
+
+	// UBI-222: deno.json's own real import map, generated from the
+	// exact same file tree above, not hand-copied.
+	mustContain(t, files["sdk/typescript/deno.json"], `"name": "@ubx/sdk-aws"`)
+	mustContain(t, files["sdk/typescript/deno.json"], `"./aws/ecr/repository": "./aws/ecr/repository.ts"`)
+	mustContain(t, files["sdk/typescript/deno.json"], `"./aws/iam/doc": "./aws/iam/doc.ts"`)
+	mustContain(t, files["sdk/typescript/deno.json"], `"@ubx/sdk": "npm:@ubx/sdk@^1.0.0"`)
 
 	mustContain(t, files["sdk/typescript/aws/ecr/doc.ts"], `__ubxSourceProvenance = { source: "hashicorp/aws", version: "6.54.0" }`)
 	mustContain(t, files["sdk/typescript/aws/ecr/repository.ts"], "export const Repository:")
@@ -244,7 +251,7 @@ func TestGeneratedRepo_DataSourceNamespace(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"sdk/typescript/package.json",
+		"sdk/typescript/package.json", "sdk/typescript/deno.json",
 		"sdk/typescript/aws/ec2/doc.ts", "sdk/typescript/aws/ec2/instance.ts",
 		"sdk/typescript/aws/data/ec2/doc.ts", "sdk/typescript/aws/data/ec2/instance.ts",
 	}

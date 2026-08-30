@@ -25,6 +25,7 @@
 package ts
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -89,6 +90,12 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	files := map[string]string{
 		"sdk/typescript/package.json": packageJSON(shortName, source, version),
 	}
+	// UBI-222: deno.json's own "exports" map, collected alongside files
+	// below rather than derived from it afterward -- subpath -> the
+	// real generated .ts path, exactly what a brand new provider's
+	// deno.json needs and, until now, never got from this template at
+	// all (see denoJSON's own doc comment for the real incident).
+	exports := map[string]string{}
 	// UBI-106: every service directory nests under shortName/ (e.g.
 	// aws/iam/, never iam/ directly under sdk/typescript/) -- fixes a real
 	// repo-browsing problem (200+ service directories at hashicorp/aws's
@@ -107,7 +114,9 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 			dir += "/" + key.namespace
 		}
 		dir += "/" + key.service
-		files["sdk/typescript/"+dir+"/doc.ts"] = PackageDoc(source, version)
+		docPath := "sdk/typescript/" + dir + "/doc.ts"
+		files[docPath] = PackageDoc(source, version)
+		exports[tsExportSubpath(docPath)] = tsExportPath(docPath)
 		for _, e := range byService[key] {
 			content, err := ResourceFile(e.local, e.rt)
 			if err != nil {
@@ -124,9 +133,29 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 				return nil, fmt.Errorf("sdk/codegen/templates/ts: %s: generated path %q collides with an earlier resource type in this service", e.rt.WireType, path)
 			}
 			files[path] = content
+			exports[tsExportSubpath(path)] = tsExportPath(path)
 		}
 	}
+	deno, err := denoJSON(shortName, exports)
+	if err != nil {
+		return nil, err
+	}
+	files["sdk/typescript/deno.json"] = deno
 	return files, nil
+}
+
+// tsExportSubpath/tsExportPath turn a real generated file path
+// ("sdk/typescript/kubernetes/rbac/cluster_role.ts") into deno.json's
+// own "exports" key/value shape ("./kubernetes/rbac/cluster_role" ->
+// "./kubernetes/rbac/cluster_role.ts") -- the exact real convention
+// every existing provider repo's own hand-authored deno.json already
+// uses, confirmed by reading one directly before writing this.
+func tsExportSubpath(path string) string {
+	return "./" + strings.TrimSuffix(strings.TrimPrefix(path, "sdk/typescript/"), ".ts")
+}
+
+func tsExportPath(path string) string {
+	return "./" + strings.TrimPrefix(path, "sdk/typescript/")
 }
 
 // packageJSON renders the repo-shaped tree's own manifest stub -- a real,
@@ -151,6 +180,49 @@ func packageJSON(shortName, source, version string) string {
   }
 }
 `, shortName, source, version)
+}
+
+type denoJSONManifest struct {
+	Name    string            `json:"name"`
+	Version string            `json:"version"`
+	License string            `json:"license"`
+	Exports map[string]string `json:"exports"`
+	Imports map[string]string `json:"imports"`
+}
+
+// denoJSON renders the repo-shaped tree's own real Deno import map.
+// UBI-222: unlike package.json (a stub -- confirmed live, Deno
+// tooling never reads it, resolution goes through deno.json's own
+// import map instead), this file is what `deno check`/`deno test`/a
+// real consumer actually resolves "@ubx/sdk-<shortName>" and every
+// internal "@ubx/sdk" import through -- and, until this fix, this
+// template never emitted it at all. Hand-copied into every existing
+// provider repo once, at onboarding time, out of band, with nothing
+// generating it -- DigitalOcean's own onboarding (the first genuinely
+// new provider since these six existing repos were hand-set-up) was
+// the first session to actually forget the copy, confirmed live via a
+// real `deno check` failure. Every export here is derived from the
+// exact same file tree GeneratedRepo already built above, in the
+// same call -- never a second, independently-maintained enumeration
+// that could drift the way a hand-authored copy already could.
+// "version" is hardcoded "0.0.0" like packageJSON's own real
+// "version" field (never the version param, used only in doc-comment
+// text) -- a real, deliberate first-publish version is chosen once,
+// by hand, before the first publish.yml dispatch, matching packageJSON's
+// own precedent exactly.
+func denoJSON(shortName string, exports map[string]string) (string, error) {
+	m := denoJSONManifest{
+		Name:    fmt.Sprintf("@ubx/sdk-%s", shortName),
+		Version: "0.0.0",
+		License: "Apache-2.0",
+		Exports: exports,
+		Imports: map[string]string{"@ubx/sdk": "npm:@ubx/sdk@^1.0.0"},
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("sdk/codegen/templates/ts: denoJSON: %w", err)
+	}
+	return string(b) + "\n", nil
 }
 
 // PackageDoc renders one service directory's shared doc.ts: the

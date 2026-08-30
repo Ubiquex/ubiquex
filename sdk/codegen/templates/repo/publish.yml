@@ -1,0 +1,297 @@
+name: publish
+
+# Manual-trigger only (UBI-135, scoped down): after a regen PR merges,
+# someone clicks "Run workflow" here to actually publish. The workflow
+# still computes the correct version bump automatically -- diffing
+# sdk/{go,typescript,python}/ between the last published state and
+# current main -- so the human step is a confirmation click, not a
+# manual version decision.
+#
+# UBI-138: this repo publishes ONE unified version number across all
+# three registries + the Go module tag, not three independently-bumped
+# versions. Version truth is the REAL live registries (PyPI's JSON API,
+# npm's registry API), not git tags alone.
+#
+# UBI-143: the TypeScript leg publishes to npm, not JSR. JSR enforces a
+# real, hard 20MB package-size cap and a 95-character path-component
+# cap, both real policy limits (not something inherent to publishing
+# TypeScript) -- Google's real package is 25.3MB, Azure's is 28.9MB and
+# also hits the path cap, and AWS at 15.8MB would cross the same line as
+# coverage keeps growing the way it has all session. npm has neither
+# limit (confirmed live: this exact package publishes clean at ~3.6MB
+# packed / 26MB unpacked). npm does not accept raw TypeScript, so a real
+# build step now compiles sdk/typescript/ (isolatedDeclarations, no
+# bundling -- one .js + one .d.ts per source file, matching this
+# package's own one-export-per-file shape) via
+# .github/scripts/build-npm.mjs before publish; the checked-in
+# sdk/typescript/package.json stays exactly what `ubx sdk gen` writes
+# (a stub, "DO NOT EDIT") -- the REAL, publishable manifest is written
+# fresh into dist/ by that script, derived from deno.json's own
+# name/version/exports (already the single source of truth). This
+# package depends on the real, separately-published @ubx/sdk npm
+# package (github.com/Ubiquex/ubx-sdk-typescript) -- never vendored;
+# the generated code's only external reference is one type-only import
+# (Computed/FieldMap/ResourceBinding), and six vendored copies would
+# just drift.
+#
+# Go modules need no registry publish action beyond a pushed, correctly
+# path-prefixed semver tag (sdk/go/vX.Y.Z -- the module proxy resolves
+# it directly from GitHub); the tag itself IS the Go "publish" step.
+#
+# Requires PYPI_TOKEN and NPM_TOKEN repo secrets (Settings -> Secrets
+# and variables -> Actions) -- dedicated CI tokens, scoped to this
+# repo/package.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ubx-sdk-kubernetes
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Determine version to publish
+        id: bump
+        run: |
+          set -euo pipefail
+          committed_ts="$(python3 -c "import json; print(json.load(open('sdk/typescript/package.json'))['version'])")"
+          committed_py="$(python3 -c "import tomllib; print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")"
+          if [ "$committed_ts" != "$committed_py" ]; then
+            echo "sdk/typescript/package.json ($committed_ts) and sdk/python/pyproject.toml ($committed_py) disagree -- this repo publishes ONE unified version across all registries, fix the drift by hand before running this workflow again" >&2
+            exit 1
+          fi
+          committed="$committed_ts"
+
+          # Real, live registry state -- never trust git tags alone.
+          live_pypi="$(curl -sf https://pypi.org/pypi/ubx-sdk-kubernetes/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])" || echo "")"
+          live_npm="$(curl -sf https://registry.npmjs.org/@ubx%2fsdk-kubernetes | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('dist-tags',{}).get('latest') or '')" || echo "")"
+          echo "committed=$committed, live PyPI=${live_pypi:-<none>}, live npm=${live_npm:-<none>}"
+
+          # Highest of the two live registries -- tolerates real, one-off
+          # manual drift between them rather than failing outright on a
+          # mismatch.
+          live="$live_pypi"
+          if [ -n "$live_npm" ] && { [ -z "$live" ] || [ "$(printf '%s\n%s\n' "$live" "$live_npm" | sort -V | tail -1)" = "$live_npm" ]; }; then
+            live="$live_npm"
+          fi
+
+          if [ -z "$live" ]; then
+            # No live registry entry at all -- a real first publish, not
+            # a bump off some prior version. Publish the committed
+            # version as-is; the routine MINOR/PATCH bump logic below is
+            # for bumping off an EXISTING live version, and would
+            # otherwise silently turn a fresh first release into an
+            # off-by-one PATCH bump with nothing real to bump from
+            # (caught before ubx-sdk-datadog/ubx-sdk-github's own first
+            # publish: 1.0.0 would have become 1.0.1, disagreeing with
+            # what the repo itself says its version is).
+            new_version="$committed"
+            echo "no live registry entry yet -- publishing committed version ($committed) as-is"
+          elif git rev-parse --verify --quiet "refs/tags/sdk/go/v$committed" >/dev/null 2>&1 && \
+               git diff --quiet "refs/tags/sdk/go/v$committed" HEAD -- sdk/go/ sdk/typescript/ sdk/python/; then
+            # The committed version was already tagged/published
+            # before, AND real content hasn't changed since that tag --
+            # a prior run got PyPI/the Go tag live but not npm, or some
+            # other partial-registry gap -- backfill whichever registry
+            # is missing at the SAME already-real version rather than
+            # bumping past a version that already exists. Confirmed live
+            # (UBI-185): datadog/github/kubernetes each had this exact
+            # shape.
+            #
+            # UBI-196 fix: the content-diff check is real, not
+            # decorative -- the original version of this branch matched
+            # on the version STRING alone, which also matches the
+            # ordinary post-regeneration shape (codegen deliberately
+            # leaves the version number unbumped, publish.yml's own job
+            # to bump it) and silently no-opped a real regeneration
+            # while still reporting success. Confirmed live on this
+            # repo's own first publish attempt after a real
+            # DataSourceBinding regeneration: sdk/go/v1.0.0 was already
+            # tagged, this branch fired, and the tag kept pointing at
+            # the pre-regeneration commit even after the run "succeeded"
+            # -- caught only by querying the real registries directly
+            # afterward, not from this workflow's own exit status.
+            new_version="$committed"
+            echo "sdk/go/v$committed already tagged and content unchanged -- backfilling any missing registry, not bumping"
+          elif [ "$committed" != "$live" ] && [ "$(printf '%s\n%s\n' "$committed" "$live" | sort -V | tail -1)" = "$committed" ]; then
+            # Committed version is already ahead of both live registries
+            # -- a real, deliberate in-repo decision -- publish it AS-IS,
+            # no further auto-bump on top.
+            new_version="$committed"
+            echo "committed version ($committed) already ahead of live ($live) -- publishing as-is"
+          else
+            # Routine regen-triggered publish, no explicit version
+            # decision made yet. MINOR if sdk/{go,typescript,python}
+            # gained new files since the last published tag -- PATCH if
+            # only existing files changed (an existing resource's schema
+            # changed).
+            base="${live:-$committed}"
+            latest_tag="$(git tag -l 'sdk/go/v*' --sort=-v:refname | head -1)"
+            added_count=0
+            if [ -n "$latest_tag" ]; then
+              added_count="$(git diff --name-status "$latest_tag" HEAD -- sdk/go/ sdk/typescript/ sdk/python/ | awk '$1=="A"' | wc -l | tr -d ' ')"
+            fi
+            IFS='.' read -r major minor patch <<< "$base"
+            if [ "$added_count" -gt 0 ]; then
+              new_version="${major}.$((minor + 1)).0"
+            else
+              new_version="${major}.${minor}.$((patch + 1))"
+            fi
+            echo "base=$base, latest_tag=${latest_tag:-<none>}, new files since then: $added_count -> $new_version"
+          fi
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version in package.json / deno.json / pyproject.toml
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          python3 -c "
+          import json
+          for f in ('sdk/typescript/package.json', 'sdk/typescript/deno.json'):
+              d = json.load(open(f))
+              d['version'] = '$v'
+              json.dump(d, open(f, 'w'), indent=2)
+              open(f, 'a').write('\n')
+          "
+          python3 -c "
+          import re
+          f = 'sdk/python/pyproject.toml'
+          content = open(f).read()
+          content = re.sub(r'version = \"[^\"]+\"', 'version = \"$v\"', content, count=1)
+          open(f, 'w').write(content)
+          "
+
+      - name: Build for npm
+        run: node .github/scripts/build-npm.mjs
+        env:
+          UBX_SDK_RUNTIME_VERSION: "^1.0.0"
+
+      - name: Publish to npm
+        working-directory: sdk/typescript/dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          if curl -sf "https://registry.npmjs.org/@ubx%2fsdk-kubernetes/$v" > /dev/null 2>&1; then
+            echo "npm already has $v -- skipping (backfilling a different registry)"
+          else
+            npm publish --access public --provenance
+          fi
+
+      - name: Build Python distribution
+        working-directory: sdk/python
+        run: |
+          set -euo pipefail
+          pip install build
+          python3 -m build
+
+      - name: Publish to PyPI
+        working-directory: sdk/python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          if curl -sf "https://pypi.org/pypi/ubx-sdk-kubernetes/$v/json" > /dev/null 2>&1; then
+            echo "PyPI already has $v -- skipping (backfilling a different registry)"
+          else
+            pip install twine
+            twine upload "dist/ubx_sdk_kubernetes-${v}"*
+          fi
+
+      - name: Tag the source commit (Go module, sdk/go/ subdirectory)
+        run: |
+          set -euo pipefail
+          # Tag prefix must exactly match the module's own subdirectory
+          # path (Go's subdirectory-module tagging rule) -- the module
+          # lives at sdk/go/go.mod, so the tag is sdk/go/vX.Y.Z, never a
+          # bare vX.Y.Z or kubernetes-go/vX.Y.Z.
+          v="sdk/go/v${{ steps.bump.outputs.new_version }}"
+          if git rev-parse --verify --quiet "refs/tags/$v" > /dev/null; then
+            echo "$v already tagged -- skipping (backfilling a different registry)"
+          else
+            git config user.name "ubx-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git tag -a "$v" -m "$v"
+            git push origin "$v"
+          fi
+
+      - name: Commit version bump
+        # Deliberately runs LAST, after npm + PyPI + the Go tag have all
+        # already succeeded -- moved here from right after the in-place
+        # file bump (UBI-143). Previously this committed and pushed the
+        # new version to main BEFORE any registry publish was attempted,
+        # so a downstream failure left main claiming a version that
+        # existed on no registry at all -- this is exactly how all six
+        # repos drifted earlier this session. Committing only after
+        # every publish step above has already succeeded means a
+        # partial failure leaves nothing committed, so main can never
+        # claim a release that does not exist.
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- sdk/typescript/package.json sdk/typescript/deno.json sdk/python/pyproject.toml; then
+            echo "already at ${{ steps.bump.outputs.new_version }} -- nothing to commit"
+          else
+            git config user.name "ubx-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add sdk/typescript/package.json sdk/typescript/deno.json sdk/python/pyproject.toml
+            git commit -m "sdk: bump to v${{ steps.bump.outputs.new_version }}"
+            git push origin main
+          fi
+
+      - name: Verify registries agree
+        # UBI-143: a partial success must be visible, not silent.
+        # Re-query all three registries for real, live state -- never
+        # trust the previous steps' own exit status -- and fail the job
+        # if any of the three disagree with the version just published,
+        # or with each other. Queries the SPECIFIC version on each
+        # registry (never npm's dist-tags.latest, never the Go proxy's
+        # @latest) -- both lag on a first-ever publish (confirmed live
+        # this session: PyPI took longer than 25s to propagate on
+        # Datadog/GitHub's first publish, and the Go proxy's @latest
+        # returned a stale pseudo-version while @v/<version>.info
+        # resolved correctly from the first query) -- and a wider
+        # 10x10s retry window than the 5x5s that produced those two
+        # false negatives.
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          live_pypi=""
+          live_npm=""
+          live_go=""
+          for attempt in $(seq 1 10); do
+            live_pypi="$(curl -sf https://pypi.org/pypi/ubx-sdk-kubernetes/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])" || echo "")"
+            live_npm="$(curl -sf "https://registry.npmjs.org/@ubx%2fsdk-kubernetes/$v" | python3 -c "import json,sys; print(json.load(sys.stdin).get('version') or '')" || echo "")"
+            live_go="$(curl -sf "https://proxy.golang.org/github.com/ubiquex/ubx-sdk-kubernetes/sdk/go/@v/v$v.info" | python3 -c "import json,sys; print(json.load(sys.stdin).get('Version','').lstrip('v'))" || echo "")"
+            if [ "$live_pypi" = "$v" ] && [ "$live_npm" = "$v" ] && [ "$live_go" = "$v" ]; then
+              break
+            fi
+            echo "attempt $attempt: PyPI=${live_pypi:-<none>} npm=${live_npm:-<none>} Go=${live_go:-<none>}, expected $v -- retrying in 10s"
+            sleep 10
+          done
+          echo "final: PyPI=${live_pypi:-<none>} npm=${live_npm:-<none>} Go=${live_go:-<none>}, expected $v"
+          if [ "$live_pypi" != "$v" ] || [ "$live_npm" != "$v" ] || [ "$live_go" != "$v" ]; then
+            echo "registries disagree after publish -- PyPI=${live_pypi:-<none>} npm=${live_npm:-<none>} Go=${live_go:-<none>}, expected $v -- this is a partial success, investigate directly rather than re-running blindly" >&2
+            exit 1
+          fi
+          echo "all three registries agree at $v"

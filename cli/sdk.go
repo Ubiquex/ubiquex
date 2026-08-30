@@ -34,6 +34,7 @@ func newSDKCmd() *cobra.Command {
 		Short: "SDK program commands: local codegen today, TypeScript evaluation later",
 	}
 	cmd.AddCommand(newSDKGenCmd())
+	cmd.AddCommand(newSDKInitRepoCmd())
 	return cmd
 }
 
