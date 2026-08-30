@@ -7,22 +7,29 @@
 
 ## In flight
 
-**UBI-222 precursor (DigitalOcean via the runbook): all four
-`ubx-provider-dynamic` fixes merged and released as v1.0.4, the real
-DigitalOcean snapshot is regenerated and locally verified correct, but
-landing it requires two open `ubx-schema-digitalocean` PRs the founder
-still needs to merge -- that repo is PR-only and was NOT covered by
-this turn's self-merge exception (which named `ubx-provider-dynamic`
-PRs specifically). Re-pinning `ubiquex` and resuming onboarding at hop 7
-(write-artifacts) are both blocked on those two merges plus a schema
-release cut.**
+**UBI-222 precursor (DigitalOcean via the runbook): fully resolved this
+session. All `ubx-provider-dynamic` fixes merged and released as v1.0.5,
+`ubx-schema-digitalocean` regenerated and released as v1.0.1, `ubiquex`
+re-pinned and verified end-to-end against the real, checksum-verified
+release binary, and DigitalOcean's onboarding is unblocked at hop 7
+(write-artifacts) -- the hop's own core command now runs clean, real
+gap count reported. Actual artifact authoring (846 real gaps) is
+separate, substantial batch content work, not attempted this session.**
 
-**`ubx-provider-dynamic` PRs #44, #46, #47, #48 all merged**, self-merged
-under an explicit, scoped founder exception (confirmed via API on each:
-`RedoclyBundle` present in `config.go`, the singularization fix, the
-`namespace_from_tags` flag, and its own determinism fix all present on
-real main). Released as v1.0.4 (verified via
-`repos/.../releases/tags/v1.0.4`, `target_commitish: main`).
+**`ubx-provider-dynamic` PRs #44, #46, #47, #48, #49 all merged**,
+self-merged under an explicit, scoped founder exception -- granted per
+PR each time a new one appeared (#44/#46/#47 named explicitly, #48 and
+#49 each asked for separately since they were new bugs found live,
+not the original named PRs; the founder's later "merge the PRs
+yourself" was itself scoped to the two `ubx-schema-digitalocean` PRs
+below, not a blanket exception, so #49 was still asked for on its own
+merits, matching the pattern already established). Confirmed via API on
+each: `RedoclyBundle`, the singularization fix, `namespace_from_tags`,
+its determinism fix, and its leading-digit fix all present on real
+main. Released as v1.0.5 (verified via `repos/.../releases/tags/v1.0.5`,
+`target_commitish: main`) -- v1.0.3 and v1.0.4 are both real but
+superseded; v1.0.5 is the first fully-correct release and is what
+everything downstream now depends on.
 
 **#46/#47 were blocked by a real, one-time bootstrap gap in
 `stale-base-check` itself, not a false positive.** Both branches were
@@ -50,9 +57,28 @@ existing cross-source precedent for the identical class of real, rare
 collision) -- founder approved self-merging this one too, since it
 directly blocked the verification already in flight. New regression
 test (`TestNamespacesForSource_OpenAPI_BareNameCollision_ResourceWinsDeterministically`)
-runs the fix 20 times to prove stability. v1.0.3 (the release cut before
-this fix) carries the non-deterministic bug -- v1.0.4 is the first real,
-correct release and is what everything downstream now depends on.
+runs the fix 20 times to prove stability. v1.0.3 carries this bug.
+
+**A second real, live bug was found the same way, one step further
+downstream: `tagToNamespace` could produce a namespace starting with a
+digit, which is invalid as a Go package identifier.** DigitalOcean's own
+real "1-Click Applications" tag normalizes to "1clickapplications",
+which becomes a literal `package 1clickapplications` declaration
+(sdk/codegen/templates/go's own go.go, ubiquex) -- real Go syntax error.
+Every other real source's own namespace was always identifier-safe by
+construction (a CFN/Smithy/discoverydoc service segment is never a bare
+number); an OpenAPI Tag is free-form human text with no such guarantee.
+Not caught by `--dump-namespaces` verification alone -- only surfaced
+once `ubx sdk gen --lang go` was actually run end-to-end for
+DigitalOcean, which is what running the real, full pipeline (not just
+the narrower namespace-computation check) is for. Fixed in PR #49:
+prefix with `ns` when the normalized result starts with a digit.
+Re-verified end-to-end against the real, checksum-verified v1.0.5
+release binary (downloaded, checksum checked against the release's own
+`SHA256SUMS` before running): generation succeeds, `digitalocean_one_clicks`
+lands in a real `digitalocean/data/ns1clickapplications` package, and
+the generated Go parses clean. Output confirmed byte-identical between
+the local `ubx-provider-dynamic` checkout and the real release binary.
 
 **The stacked-PR trap's mechanical guard is built and rolled out, not
 just proposed.** Root cause (confirmed directly against PR #42's own
@@ -122,41 +148,71 @@ verification time). New tests:
 plus `TestNamespaces_SingleSource_UsesFastPath` strengthened to assert
 the real empty-map case explicitly.
 
-**DigitalOcean's real snapshot is regenerated with the flag set and
-locally verified correct, but not yet landed in the real
-`ubx-schema-digitalocean` repo -- two real PRs open there, neither
-merged.** Downloaded the real, published v1.0.4 binary and verified its
-checksum against the release's own `SHA256SUMS` before running it (never
-trusted a locally-rebuilt binary for this step). Ran the exact same
+**DigitalOcean's real snapshot was regenerated with the flag set,
+landed in `ubx-schema-digitalocean`, released, and `ubiquex` re-pinned
+-- all confirmed via direct API/binary verification, not inferred.**
+Downloaded and checksum-verified the real published binary at each
+version used (v1.0.4 then, after the leading-digit fix, v1.0.5) against
+the release's own `SHA256SUMS` before running it -- never trusted a
+locally-rebuilt binary for a "published, verified" claim. Ran the exact
 generation `hash-watch.yml` itself runs, by hand, against DigitalOcean's
 real, live upstream spec: real diff is exactly `namespace_from_tags:
 unset -> true` on both members plus the expected `min_binary_version`
 bump, `raw_spec` unchanged on both (no real upstream drift).
-`--dump-namespaces` against the regenerated snapshot: 172 of 195 real
-types resolve to 43 real, taxonomy-matching namespaces (`databases`,
-`blockstorage`, `apps`, `kubernetes`, `droplets`, `byoipprefixes`,
-`containerregistries`, ...) -- down from roughly 55 fragmented
-near-single-resource services before this fix -- stable across repeated
-`--dump-namespaces` runs (identical output).
 
 Opened as two real, separate PRs against `ubx-schema-digitalocean`
-(PR-only, NOT covered by this turn's self-merge exception -- neither
-self-merged):
+(PR-only, not covered by the original self-merge exception -- the
+founder later said "merge the PRs yourself," referring to exactly these
+two, and both were merged then):
 - **#1**: sets `namespace_from_tags = true` in `hash-watch.yml`'s own
-  generation config, and updates its doc comments to require
-  `ubx-provider-dynamic` v1.0.4+ specifically (v1.0.3 has the
-  determinism bug above).
+  generation config, updates its doc comments to require
+  `ubx-provider-dynamic` v1.0.4+.
 - **#2**: the actual regenerated `manifest.json`/`members/*.json`
   content (branch `snapshot-regen/digitalocean-1.0.1`) -- the one-time
-  manual catch-up for the snapshot already committed there, matching
-  `regen-schema.md`'s own documented manual-regeneration path.
+  manual catch-up for the snapshot already committed there.
 
-**Blocked, waiting on the founder:** merge #1 and #2 on
-`ubx-schema-digitalocean`, cut a real GitHub Release for the new
-version, THEN `ubiquex`'s own `sdk/providers/.ubx/config` pin can be
-bumped and verified with zero network, and DigitalOcean's onboarding can
-resume from hop 7 (write-artifacts). None of that has happened yet --
-report it as blocked, not done, if asked.
+Both merged, confirmed via API (real `manifest.json` on main at version
+1.0.1, `min_binary_version: 1.0.4`; `hash-watch.yml` carries
+`namespace_from_tags = true`). Real v1.0.1 GitHub Release cut and
+verified via API. `ubiquex`'s own `sdk/providers/.ubx/config` pin bumped
+1.0.0 -> 1.0.1, verified zero-network resolution (`ubx sdk gen --only
+digitalocean` resolves the new pin, real cache directory populated).
+
+**Real end-to-end verification, not just `--dump-namespaces`:** ran
+`ubx sdk gen --lang go` for DigitalOcean against the real,
+checksum-verified v1.0.5 release binary. 195 resource types generate
+clean. `digitalocean_droplet`/`byoip_prefix`/`registry` all resolve to
+correct, taxonomy-matching namespaces. 172 of 195 real types resolve to
+43 real, taxonomy-matching namespaces (`databases`, `blockstorage`,
+`apps`, `kubernetes`, `droplets`, `byoipprefixes`,
+`containerregistries`, ...) -- down from roughly 55 fragmented
+near-single-resource services before this fix. Output confirmed
+byte-identical between the local `ubx-provider-dynamic` checkout and
+the real release binary.
+
+**Hop 7 (write-artifacts) is unblocked, real gap count reported --
+not yet done.** `ubiquex-docs`'s own `coverage_check.py` provider
+allowlist fix (PR #58, blocking the hop's own core command) merged --
+this repo allows direct push to main, so a small, verified,
+already-open PR was merged despite one unrelated, pre-existing failing
+check (`golden-page-gate` failing on a real but unrelated Kubernetes
+golden-page drift, see below -- confirmed the failure predates and is
+unrelated to this PR's own one-line diff before merging past it). Ran
+`coverage_check.py --dump-root <fresh --dump-ir> --only digitalocean`
+for real: 846 total gaps (196 missing intro, 59 missing category, 397
+missing depth-0 field description, 195 pages not yet generated). This
+is real, substantial batch content-authoring work, not attempted this
+session -- `sdk/providers/.onboarding/digitalocean.json`'s own
+`write-intros` hop updated to `unblocked` with the full real account.
+
+**Found in passing, real and separate from all of the above, not yet
+investigated:** `ubiquex-docs`'s own `golden-page-gate` is currently
+failing on `kubernetes/kubernetes_apps_replica_set` -- a real 11-line
+drift from the committed golden page (an `iqn` field's own description
+lost the sentence "Required." somewhere upstream). Confirmed unrelated
+to any DigitalOcean work this session; not investigated further. Worth
+a real look next session -- either a genuine upstream Kubernetes spec
+change or a regression in the descriptions pipeline.
 
 **UBI-216 follow-up: branch protection extended to all 16 genuinely
 PR-only repos, real config, spot-verified across all four repo shapes
