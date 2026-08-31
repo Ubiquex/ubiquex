@@ -42,6 +42,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install bubblewrap and wasmtime
+        # goeval's own real Linux sandbox is bubblewrap (docs/sdk.md's
+        # own "Linux: namespaces (bwrap)" section); pyeval's own real
+        # sandbox is wasmtime (docs/sdk.md's own "The Python evaluator:
+        # decided empirically" section, WASI via wasmtime). Neither
+        # ships on the runner by default -- caught live, not assumed,
+        # by this workflow's own first real PR run failing blueprint's
+        # own real evaluator tests with "executable file not found in
+        # $PATH" for exactly these two.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+
       - name: go build
         run: go build ./...
 
