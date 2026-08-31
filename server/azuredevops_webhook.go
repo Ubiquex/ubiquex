@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // ErrAmbiguousProposalFileAzureDevOps is webhook.go's own

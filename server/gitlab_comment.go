@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 	glapi "gitlab.com/gitlab-org/api/client-go/v2"
 )
 

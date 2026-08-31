@@ -1,15 +1,23 @@
-// Package github is UBI-11 stage 1's PR-merge acceptance derivation: git
-// history verification (shelling out to the local `git` binary — no pure-Go
-// git reimplementation needed for the handful of read-only plumbing
-// commands this requires) plus a GitHub API client (github.com/google/
-// go-github) for the pull request a merge commit belongs to and its
-// reviews.
+// Package github is a real GitHub API client (github.com/google/go-github)
+// plus git history verification (shelling out to the local `git` binary,
+// no pure-Go git reimplementation needed for the handful of read-only
+// plumbing commands this requires), and its real surface is broader than
+// just UBI-11 stage 1's own original PR-merge acceptance derivation
+// (finding the pull request a merge commit belongs to, its reviews, and
+// its own proposal trailer): opening a draft pull request, creating an
+// issue, checking whether a commit exists, and reading a file at a commit
+// are all real, general-purpose GitHub operations this package's own
+// Client exposes, used directly by cli/verify.go for its own commit/file
+// checks and by every other package in vcs/ (azuredevops, bitbucketcloud,
+// bitbucketserver, gitlab), since ubx's own proposal ledger PRs live on
+// GitHub regardless of which VCS host is being acceptance-derived from.
 //
 // core stays entirely dependency-free of this package (see
-// core/accept.go's AcceptFromMerge doc comment) — everything here produces
-// plain data that core.AcceptFromMerge takes as already-verified input, the
-// same dependency-inversion discipline as core.StateReader/EventLookup for
-// the tfplugin provider client and CloudTrail.
+// core/accept.go's AcceptFromMerge doc comment) -- everything here
+// produces plain data that core.AcceptFromMerge takes as already-verified
+// input, the same dependency-inversion discipline as
+// core.StateReader/EventLookup for the tfplugin provider client and
+// CloudTrail.
 package github
 
 import (

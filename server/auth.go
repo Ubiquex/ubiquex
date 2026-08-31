@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/hmarr/codeowners"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // isAuthorizedToReplan implements UBI-28's own re-plan authorization

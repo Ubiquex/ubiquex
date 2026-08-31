@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ubiquex/ubiquex/github"
+	"github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // DerivedAcceptance is everything core.AcceptFromMerge needs, gathered

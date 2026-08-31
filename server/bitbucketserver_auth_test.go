@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	bitbucketv1 "github.com/gfleury/go-bitbucket-v1"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 )
 
 // fakeBitbucketServerAuthServer serves exactly the real endpoints

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // UBI-171's own real regression surface: before it, this package

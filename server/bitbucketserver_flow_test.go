@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // fakeBitbucketServerPRServer serves exactly the real endpoints

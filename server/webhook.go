@@ -10,7 +10,7 @@ import (
 
 	ghapi "github.com/google/go-github/v78/github"
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // ErrAmbiguousProposalFile means a PR's changed files contain zero, or

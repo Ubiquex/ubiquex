@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 )
 
 // newBitbucketCloudClient builds the one, real, static Bitbucket Cloud

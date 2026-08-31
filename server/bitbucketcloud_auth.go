@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/hmarr/codeowners"
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 )
 
 // ErrCodeownersUnresolvable means a real CODEOWNERS rule matched a

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 )
 
 // bitbucketCloudFixture stands up a real httptest server carrying a

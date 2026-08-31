@@ -7,7 +7,7 @@ import (
 
 	bitbucketv1 "github.com/gfleury/go-bitbucket-v1"
 	"github.com/hmarr/codeowners"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 )
 
 // isAuthorizedToReplanBitbucketServer mirrors isAuthorizedToReplan/

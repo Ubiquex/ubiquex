@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 )
 
 // postOrEditCommentBitbucketCloud is postOrEditComment's own real

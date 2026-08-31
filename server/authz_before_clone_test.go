@@ -21,10 +21,10 @@ import (
 	ghapi "github.com/google/go-github/v78/github"
 	glapi "gitlab.com/gitlab-org/api/client-go/v2"
 
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
-	ghub "github.com/ubiquex/ubiquex/github"
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 )
 
 // UBI-168: in every comment-triggered handler, the real, live

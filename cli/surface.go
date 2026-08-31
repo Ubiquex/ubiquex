@@ -8,12 +8,12 @@ import (
 	"os"
 	"strings"
 
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 	"github.com/ubiquex/ubiquex/writeback"
 )
 

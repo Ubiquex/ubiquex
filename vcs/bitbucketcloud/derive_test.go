@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ubiquex/ubiquex/github"
+	"github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // testRepo creates a real, throwaway git repository with one commit

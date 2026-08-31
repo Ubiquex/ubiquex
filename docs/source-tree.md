@@ -50,7 +50,7 @@ fixed this session.
 | `diagram/` | UBI-47's topology parser + emitter for the D2 diagram-authoring medium. | Keep — named in the ticket as a good precedent. |
 | `diagram/conformance/runner` | Diagram medium's own golden-fixture conformance runner. | Keep — consistent nested pattern. |
 | `discovery/` | UBI-45's cloud-side discovery: ARN → provider lookup shape, tag-scoped enumeration. | Keep. |
-| `github/` | UBI-11 stage 1's PR-merge acceptance derivation (git + GitHub API). | Keep. |
+| `vcs/github` | UBI-11 stage 1's PR-merge acceptance derivation (git + GitHub API), plus the real, general-purpose GitHub client the other four `vcs/` packages and `cli/verify.go` use directly. UBI-220 moved this from a bare `github/` at the repo root into `vcs/` alongside its four VCS-host siblings (`vcs/gitlab`, `vcs/bitbucketcloud`, `vcs/bitbucketserver`, `vcs/azuredevops`), none of which were audited as their own row here before this move, a real, separate gap this entry does not close. | Keep, now under `vcs/`. |
 | `goeval/` | The Go SDK program evaluator (compile once, sandbox-run twice). | Keep — see "The `sdkeval`/`goeval`/`pyeval` family," below. |
 | `intentprovider/` | UBI-41's boundary for LLM-authored intent drafts (the md-authoring medium). | Keep — named in the ticket as a good precedent. |
 | `intentprovider/claude` | intentprovider's first real `Adapter` (the Claude API). | Keep. |

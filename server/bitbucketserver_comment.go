@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 )
 
 // postOrEditCommentBitbucketServer mirrors postOrEditComment/

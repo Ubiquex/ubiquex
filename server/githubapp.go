@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // installationEntry pairs one installation's *ghub.Client with its own

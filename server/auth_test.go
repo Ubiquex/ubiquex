@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // fakeGitHubAuthServer serves exactly the real endpoints auth.go's own

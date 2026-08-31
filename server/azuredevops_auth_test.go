@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 )
 
 // fakeAzureDevOpsAuthServer serves exactly the real endpoints

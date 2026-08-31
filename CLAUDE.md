@@ -117,9 +117,14 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 
 - Language: Go (module: `github.com/ubiquex/ubiquex`).
 - Layout: `core/` (IR, ledger, hashing), `provider/` (tfplugin client),
-  `cli/` (cobra commands), `writeback/` (surgical .tf edits), `github/`
-  (acceptance derivation), `audit/` (per-cloud drift/genesis attribution
-  backends), `conformance/` (per-type registry + harness, test-only),
+  `cli/` (cobra commands), `writeback/` (surgical .tf edits), `vcs/`
+  (per-host VCS clients and PR/MR-merge acceptance derivation, one
+  subdirectory per host: `vcs/github`, `vcs/gitlab`, `vcs/bitbucketcloud`,
+  `vcs/bitbucketserver`, `vcs/azuredevops` -- UBI-220 grouped these under
+  one directory; `vcs/github`'s own real surface is broader than
+  acceptance derivation alone, see its own doc comment), `audit/`
+  (per-cloud drift/genesis attribution backends), `conformance/`
+  (per-type registry + harness, test-only),
   `sdk/` (the multi-language SDK monorepo — TS/Go/Python runtimes,
   codegen, evaluators), `docs/`.
 - **Package naming (UBI-52)**: name a package for ubx's own role, in

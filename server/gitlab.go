@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 )
 
 // newGitLabClient builds the one, real, static GitLab API client this
