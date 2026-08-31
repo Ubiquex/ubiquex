@@ -57,6 +57,17 @@ jobs:
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
+      - name: Allow unprivileged user namespaces for bwrap
+        # The exact caveat docs/sdk.md's own "Linux: namespaces" section
+        # already documents: bwrap needs to create a new user + net
+        # namespace, and current Ubuntu runner images restrict that by
+        # default via AppArmor (bwrap: loopback: Failed RTM_NEWADDR:
+        # Operation not permitted, caught live on this workflow's own
+        # third real PR run). This is the standard, documented relaxation
+        # for exactly this restriction, scoped to this job's own runner,
+        # never a container-level privilege escalation.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: go build
         run: go build ./...
 
