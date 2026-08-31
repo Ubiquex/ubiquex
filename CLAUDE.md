@@ -105,8 +105,15 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 
 ## Git rules (strict)
 
-- Commit and push directly is ALLOWED — always under Roozbeh's own git identity
-  and signing key. Never alter `user.name` / `user.email` / signing config.
+- Every change lands via a pull request, never a direct push to `main`.
+  Branch protection now matches the other 17 PR-only repos this project
+  coordinates (`enforce_admins: true`, `required_approving_review_count: 0`,
+  force-push and deletion disabled, `ci` required to pass) -- a direct
+  push to `main` is rejected even for the repo owner. Always commit
+  under Roozbeh's own git identity and signing key. Never alter
+  `user.name` / `user.email` / signing config. Never self-merge a PR
+  with content to judge, matching the same convention already
+  established for `ubiquex-docs` and every PR-only repo.
 - NO AI attribution anywhere: no Co-Authored-By trailers, no "Generated with"
   lines, not in commit messages, not in PR bodies. (`includeCoAuthoredBy` is
   disabled in settings; do not re-add manually.)

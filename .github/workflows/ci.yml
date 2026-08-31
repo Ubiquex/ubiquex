@@ -1,0 +1,42 @@
+name: ci
+
+# The one real gate this repo did not have: go build ./... and go test
+# ./... on every push to main and every pull request. Found missing
+# while UBI-220's own layout move accidentally surfaced a real,
+# already-broken go build ./... on main (a tracked, pre-existing WIP
+# snapshot in scratchpad/ mixed two package declarations in one
+# directory, removed separately) -- nothing here had ever run a real,
+# unscoped build or test on a push or a PR to notice.
+#
+# release.yml is this repo's only other workflow, and it triggers on a
+# v* tag push only, never on push or pull_request, so it would not
+# have caught this regardless of how often it ran. Its own build step
+# also targets ./cmd/ubx specifically (the real binary entrypoint),
+# never ./..., so it would not have traversed into a broken package
+# like scratchpad's own that nothing real imports.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
