@@ -29,6 +29,13 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          # sdk/go, sdk/py, sdk/ts are real git submodules (.gitmodules).
+          # A plain checkout leaves them empty, which go build ./... then
+          # reports as "no required module provides package ..." for
+          # pyeval/tseval's own real imports -- caught live on this
+          # workflow's own first real PR run, not assumed.
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
