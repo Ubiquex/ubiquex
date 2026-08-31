@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	bitbucketv1 "github.com/gfleury/go-bitbucket-v1"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // ErrAmbiguousProposalFileBitbucketServer is webhook.go's own

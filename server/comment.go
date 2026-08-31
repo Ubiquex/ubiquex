@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	ghapi "github.com/google/go-github/v78/github"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // commentMarker is a hidden HTML-comment prefix distinguishing one kind

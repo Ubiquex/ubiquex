@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // ErrAmbiguousProposalFileBitbucketCloud is webhook.go's own

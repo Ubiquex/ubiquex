@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 )
 
 // bbcFlowFixture is a real httptest server covering every endpoint a

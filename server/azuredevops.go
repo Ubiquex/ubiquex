@@ -4,7 +4,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 )
 
 // newAzureDevOpsClient builds the one, real, static Azure DevOps API

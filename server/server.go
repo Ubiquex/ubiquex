@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
-	bbcloud "github.com/ubiquex/ubiquex/bitbucketcloud"
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
-	ghub "github.com/ubiquex/ubiquex/github"
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
+	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 	glapi "gitlab.com/gitlab-org/api/client-go/v2"
 )
 

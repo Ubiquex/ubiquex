@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
 
 // reviewAcceptFlowRepo builds a real, local git repository carrying one

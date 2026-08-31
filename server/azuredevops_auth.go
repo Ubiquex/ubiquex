@@ -7,7 +7,7 @@ import (
 
 	"github.com/hmarr/codeowners"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
-	adevops "github.com/ubiquex/ubiquex/azuredevops"
+	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 )
 
 // isAuthorizedToReplanAzureDevOps mirrors isAuthorizedToReplan/

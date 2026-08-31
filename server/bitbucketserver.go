@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	bbserver "github.com/ubiquex/ubiquex/bitbucketserver"
+	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 )
 
 // newBitbucketServerClient builds the one, real, static Bitbucket

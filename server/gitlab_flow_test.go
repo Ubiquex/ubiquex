@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/github"
-	glab "github.com/ubiquex/ubiquex/gitlab"
+	ghub "github.com/ubiquex/ubiquex/vcs/github"
+	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 	glapi "gitlab.com/gitlab-org/api/client-go/v2"
 )
 
