@@ -135,6 +135,12 @@ func TestGenerateGo_CiPlatform(t *testing.T) {
 	if !strings.Contains(bindings, `WireType: "aws_ecr_repository"`) {
 		t.Fatalf("bindings.go missing ecr binding:\n%s", bindings)
 	}
+	// UBI-225: every generated binding carries the blueprint's own bare
+	// name, so a resource built directly from it (bypassing the wrapper
+	// function) still gets real provenance.
+	if !strings.Contains(bindings, `BlueprintName: "ci-platform"`) {
+		t.Fatalf("bindings.go missing BlueprintName (UBI-225):\n%s", bindings)
+	}
 }
 
 func keysOf(m map[string]string) []string {
