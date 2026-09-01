@@ -3661,6 +3661,48 @@ build ticket, separate from this design.
 Full wire shape and detail: docs/schema.md's "Amendment: human-readable
 aliases for ledger heads" (2026-09-01, UBI-228).
 
+### Invariant: lookup keys must be derivable from immutable attributes (documented 2026-09-01, UBI-238)
+
+A resource's own recorded `Lookup` (`resolution.inputs[].lookup`, an apply
+record's `ra.Lookup`, `core.Ledger.LastLookup`) is captured once, at
+create time, and never re-derived at need-time -- deliberately, the same
+"persist a lookup key, don't re-derive it" discipline `core/executor`'s
+own create path states directly in its own comment. This only stays
+correct if every attribute the lookup depends on is one a modify can
+never change. For real infrastructure this holds by construction: a
+provider's own `id`/ARN is genuinely immutable, and it is what
+`core.DeriveLookupFromResult` prefers whenever a schema's own Required
+attributes don't already cover disambiguation on their own.
+
+**This was never a checked property, only an assumption that happened to
+hold.** UBI-238 found the gap live: `LastLookup`'s own newest-first walk
+had a real, structural hole (never consulting a shipped modify's own
+apply record for a refreshed lookup, only a shipped create's -- fixed
+alongside this note), but even with that fixed, a resource type whose
+*required* lookup key genuinely includes a mutable attribute would still
+accumulate a stale lookup the moment that attribute's value changes,
+since nothing re-derives one after a modify unless the modify's own
+result is captured (`core/executor`'s `shipModifyNode`, fixed to mirror
+create's own capture exactly). Both halves are now real: a modify's own
+successful apply refreshes the recorded lookup, and `LastLookup` prefers
+a shipped modify's fresh one over a stale resolve-time
+`resolution.inputs` entry.
+
+**`fake_widget`'s own schema is a deliberate, narrow exception, not
+representative.** Its `id` is a documented constant (`"computed-id"`,
+identical for every instance -- `provider/internal/fakeprovider/main.go`'s
+own `persistedStatePath` doc comment), unable to disambiguate on its own,
+which forces its `name` -- Required, but mutable -- into the lookup's
+disambiguating role. This is what made the gap observable at all (UBI-238's
+own real repro: a second real modify of the same address failed with a
+stale-observation error, because the recorded lookup still carried the
+PRE-first-modify name). No real cloud resource type in this codebase's
+own conformance registry has an equivalent degenerate id; this invariant
+is written down here specifically so a FUTURE resource type with a
+genuinely mutable required lookup component (addressed by a mutable name
+or path rather than an opaque id -- rare, but not impossible) is
+recognized as a real risk rather than rediscovered from scratch.
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

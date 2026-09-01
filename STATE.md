@@ -70,8 +70,8 @@ from-main commits and no open PR, or discipline: retarget a stacked PR's
 base to `main` (not leave it pointed at the now-merged branch) the
 moment the branch it was stacked on merges.
 
-**UBI-238/UBI-239: DONE (build), PR open, never self-merged.** Both
-fakeprovider findings UBI-227 surfaced, root-caused (as the founder
+**UBI-238/UBI-239: DONE, merged (`ubiquex#50`), explicit exception.**
+Both fakeprovider findings UBI-227 surfaced, root-caused (as the founder
 explicitly asked, before any fix) and fixed for real. UBI-238 (real,
 general executor gap, narrower than "nobody can modify a resource
 twice"): `core/executor/ship.go`'s `shipModifyNode` discarded a fresh
@@ -81,15 +81,17 @@ plus a `core/fleet.go` reorder so a shipped modify's fresh lookup is
 preferred over a stale resolve-time one. Real infrastructure never hits
 this (id/ARN is immutable); `fake_widget`'s own degenerate constant
 `"id"` is what exposed it. Invariant recorded: docs/architecture.md's
-new "Lookup keys must be derivable from immutable attributes" section.
+"Lookup keys must be derivable from immutable attributes" section.
 UBI-239 (confirmed fixture-only, corrected the ticket's own wrong
 cty-msgpack guess): `tags` is Optional, never enters the derived lookup
 key, so fakeprovider's echo-only `ReadResource` defaulted it away. Fixed
 by making `FAKEPROVIDER_STATE_DIR`'s own pre-existing, previously opt-in
 persistence the default for every hermetic test. Both share one root
-cause, named directly in fakeprovider's own source. PR `ubiquex#50` open
-(never self-merged), branched from `main`, not stacked on anything. Full
-repo `go build ./...`/`go test ./...` clean.
+cause, named directly in fakeprovider's own source. #50 was blocked on a
+real merge conflict (docs/STATE.md/architecture.md/plan.md, all touched
+independently by #51's own UBI-228 landing) once #51 merged onto main --
+not a stale base, not CI; resolved by hand, same as #51's own
+reconciliation. Full repo `go build ./...`/`go test ./...` clean.
 
 **UBI-225: DONE.** Blueprint/hand-written composition reported, one real
 provenance gap fixed and released across three runtimes, a broader

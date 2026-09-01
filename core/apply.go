@@ -284,15 +284,26 @@ func (l *Ledger) shippedDestroyFold(proposalID string, addr Address) (outcome st
 // own repro: a modify accepted into the ledger while the real resource
 // never actually changed, every reader of ledger truth (`ubx why`, `ubx
 // status --drift`, a future `ubx plan`/`resolve` against this stack)
-// lied about it. Only found is returned -- unlike shippedCreateFold, a
-// modify's own resulting state is reconstructed by FoldState's existing
-// dotSet(mod.After) walk, not substituted wholesale from ProviderResult
-// (the minimal, surgical fix: gate the existing mechanism, don't replace
-// it).
-func (l *Ledger) shippedModifyFold(proposalID string, addr Address) (found bool, err error) {
+// lied about it. A modify's own resulting STATE is still reconstructed by
+// FoldState's existing dotSet(mod.After) walk, never substituted wholesale
+// from ProviderResult here (the minimal, surgical UBI-89 fix: gate the
+// existing mechanism, don't replace it).
+//
+// lookup is UBI-238's own addition: the most recent successful attempt's
+// own ra.Lookup, the fresh key core/executor's shipModifyNode now records
+// on every successful modify apply (mirroring shippedCreateFold's own
+// lookup return exactly). Without this, LastLookup (core/fleet.go) had no
+// way to ever see a modify's own refreshed lookup -- it stopped at
+// whatever a proposal's own resolution.inputs carried (frozen at resolve
+// time, before this modify even shipped) and never consulted an apply
+// record for anything but a create. Empty, not an error, if this
+// proposal's own modify never shipped (found is false) or shipped before
+// UBI-238 (an apply record that predates the Lookup-on-modify fix) --
+// LastLookup's own caller already falls back correctly either way.
+func (l *Ledger) shippedModifyFold(proposalID string, addr Address) (lookup json.RawMessage, found bool, err error) {
 	attempts, err := l.ApplyAttempts(proposalID)
 	if err != nil {
-		return false, fmt.Errorf("shipped modify fold: %w", err)
+		return nil, false, fmt.Errorf("shipped modify fold: %w", err)
 	}
 	target := addr.String()
 	var lastState ResourceState
@@ -306,9 +317,15 @@ func (l *Ledger) shippedModifyFold(proposalID string, addr Address) (found bool,
 				lastState = st
 				hasState = true
 			}
+			if len(ra.Lookup) > 0 {
+				lookup = ra.Lookup
+			}
 		}
 	}
-	return hasState && lastState == ResourceApplied, nil
+	if !hasState || lastState != ResourceApplied {
+		return nil, false, nil
+	}
+	return lookup, true, nil
 }
 
 // ApplySummary is ApplyRecord.Summary -- populated only once an attempt is

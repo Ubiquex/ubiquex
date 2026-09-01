@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -85,8 +86,67 @@ func runUbx(t *testing.T, env []string, args ...string) (stdout string, err erro
 			t.Setenv(parts[0], parts[1])
 		}
 	}
+	ensureFakeProviderStateDir(t)
+
 	err = root.Execute()
 	return out.String(), err
+}
+
+// ensureFakeProviderStateDir is UBI-239's own real fix, applied once here
+// rather than per test: fakeprovider's ReadResource (ok-v5/ok-v6 modes) is
+// otherwise a pure echo of whatever lookup key it's handed -- never a
+// genuine independent read, see provider/internal/fakeprovider/main.go's
+// own doc comment on FAKEPROVIDER_STATE_DIR -- so any attribute absent
+// from that lookup key (tags, most commonly: it's Optional, so it never
+// enters core.DeriveLookupFromResult's own derived key) silently reads
+// back as gone on an entirely ordinary first modify, a spurious
+// stale-observation refusal with nothing to do with the resource's own
+// real changes. Defaulting FAKEPROVIDER_STATE_DIR here, for every test,
+// makes fakeprovider's own independent-persistence mode (which already
+// existed, opt-in, unused by anything until now) the one every hermetic
+// ok-v5/ok-v6 test gets automatically -- correct, full round-tripping by
+// default, not something each test author has to remember to opt into.
+// A test that explicitly sets FAKEPROVIDER_STATE_DIR itself (its own env
+// slice, checked via os.Getenv after runUbx's own t.Setenv loop above) is
+// left alone, never overridden.
+func ensureFakeProviderStateDir(t *testing.T) {
+	t.Helper()
+	mode := os.Getenv("FAKEPROVIDER_MODE")
+	if mode != "ok-v5" && mode != "ok-v6" {
+		return
+	}
+	if os.Getenv("FAKEPROVIDER_STATE_DIR") != "" {
+		return
+	}
+	t.Setenv("FAKEPROVIDER_STATE_DIR", fakeProviderStateDirFor(t))
+}
+
+// fakeProviderStateDirFor returns the same real directory for every call
+// within one test -- t.TempDir() itself returns a NEW directory on every
+// individual call, so the result is cached here, keyed by the test's own
+// name (t.Name() is stable for that whole test's lifetime, subtests
+// included), rather than threading a directory through every individual
+// runUbx call by hand.
+var (
+	fakeProviderStateDirsMu sync.Mutex
+	fakeProviderStateDirs   = map[string]string{}
+)
+
+func fakeProviderStateDirFor(t *testing.T) string {
+	t.Helper()
+	fakeProviderStateDirsMu.Lock()
+	defer fakeProviderStateDirsMu.Unlock()
+	if dir, ok := fakeProviderStateDirs[t.Name()]; ok {
+		return dir
+	}
+	dir := t.TempDir()
+	fakeProviderStateDirs[t.Name()] = dir
+	t.Cleanup(func() {
+		fakeProviderStateDirsMu.Lock()
+		defer fakeProviderStateDirsMu.Unlock()
+		delete(fakeProviderStateDirs, t.Name())
+	})
+	return dir
 }
 
 // exitCode extracts the process exit code err represents under the UBI-20

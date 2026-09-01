@@ -1,7 +1,7 @@
 // Command fakeprovider is a test fixture only: it speaks (or deliberately
 // misspeaks) just enough of the tfplugin handshake to exercise
-// provider.Launch's success and adversarial paths — including both wire
-// protocols ubx supports — without depending on a real Terraform provider
+// provider.Launch's success and adversarial paths -- including both wire
+// protocols ubx supports -- without depending on a real Terraform provider
 // binary.
 //
 // Mode is selected by the FAKEPROVIDER_MODE environment variable (not argv:
@@ -23,23 +23,43 @@
 //	crash                exits immediately with no output
 //
 // FAKEPROVIDER_EXTRA_TAG ("key=value"), if set, merges an extra tag into
-// ok-v5/ok-v6's ReadResource response regardless of current_state — see
+// ok-v5/ok-v6's ReadResource response regardless of current_state -- see
 // echoWidgetState.
 //
 // FAKEPROVIDER_STATE_DIR (UBI-85 live finale, ok-v5/ok-v6 only), if set,
 // makes ApplyResourceChange persist each fake_widget's full applied state
-// to "<dir>/<id>.json" and ReadResource load it back by the id in its own
-// current_state — opt-in cross-process persistence, since a bare create in
-// one `ubx` invocation and a later modify/drift-check's freshness read in a
-// SEPARATE invocation each launch a fresh fakeprovider process, and this
-// fixture is otherwise fully stateless (see echoWidgetState): without this,
-// ReadResource can only echo back whatever current_state it was actually
-// given, and ship-time freshness verification deliberately passes just the
-// resource's own minimal lookup key (real-provider semantics — a real
+// to "<dir>/<name>.msgpack" (persistedStatePath, below -- keyed by "name",
+// not "id"; see that function's own doc comment for why) and ReadResource
+// load it back by that same name from its own current_state -- real
+// cross-process persistence, since a bare create in one `ubx` invocation
+// and a later modify/drift-check's freshness read in a SEPARATE
+// invocation each launch a fresh fakeprovider process, and without this
+// the fixture is otherwise fully stateless (see echoWidgetState): a pure
+// echo can only report back whatever current_state it was actually
+// handed, and ship-time freshness verification deliberately passes just
+// the resource's own minimal lookup key (real-provider semantics -- a real
 // Read only needs an id to fetch full state from the cloud's own
-// database), so any attribute absent from that lookup key (e.g. tags)
-// reads back as spuriously gone. Unset by every existing test, so every
-// existing test keeps today's pure-echo behavior unchanged.
+// database), never the full picture. This is the ONE shared root cause
+// behind two, otherwise unrelated-looking, real findings (UBI-238,
+// UBI-239 -- read both before re-diagnosing a third symptom of the same
+// thing): a pure echo trusts the CALLER-SUPPLIED lookup as if it were the
+// resource's own full current state, which no real provider ever does --
+// (1) any attribute absent from the lookup key entirely (tags, most
+// commonly: it's Optional, so core.DeriveLookupFromResult never includes
+// it) reads back as spuriously gone, even on an entirely ordinary FIRST
+// modify (UBI-239); (2) a lookup value that's since gone stale (an
+// attribute the lookup itself depends on, changed by an earlier modify)
+// reads back as its OLD value, not its current one, on every SUBSEQUENT
+// read (UBI-238). cli/scan_test.go's ensureFakeProviderStateDir (UBI-239)
+// now defaults this on for every hermetic ok-v5/ok-v6 CLI test that goes
+// through runUbx/runUbxTTY -- real, independent persistence is the default
+// a caller gets without asking, not something each test author has to
+// remember to opt into. A deliberately forced mismatch (e.g.
+// ship_modify_staleness_test.go's own FAKEPROVIDER_EXTRA_TAG injection,
+// below) still works correctly with persistence active: the injection
+// happens AFTER persisted/echoed state is resolved, so it still produces
+// a real, deliberate divergence from what was recorded, on top of
+// whichever base state persistence would otherwise report correctly.
 //
 // FAKEPROVIDER_FAIL_CREATE_TARGET / FAKEPROVIDER_FAIL_CREATE_COUNT (UBI-92,
 // ok-v5/ok-v6 only, paired with FAKEPROVIDER_APPLY_MODE=fail-create-not-found
@@ -101,25 +121,25 @@
 // conformance-v5/conformance-v6 are driven by:
 //
 //	FAKEPROVIDER_RESOURCE_TYPE   the resource type name to advertise (e.g. "aws_instance")
-//	FAKEPROVIDER_ATTRS           comma-separated attribute names to model — a subset of
+//	FAKEPROVIDER_ATTRS           comma-separated attribute names to model -- a subset of
 //	                             that type's REAL schema (see cmd/schemadump), so the
 //	                             identity/mutable fields a conformance test exercises are
 //	                             schema-verified, not invented. "tags"/"tags_all" are
 //	                             modeled as string maps; everything else as strings.
 //	FAKEPROVIDER_MUTATE_ATTR     which attribute name (from FAKEPROVIDER_ATTRS) to change
-//	                             on the next ReadResource call — the fake stand-in for a
+//	                             on the next ReadResource call -- the fake stand-in for a
 //	                             real out-of-band mutation.
 //	FAKEPROVIDER_MUTATE_VALUE    the value to set it to. If the target attribute is a map
 //	                             ("tags"/"tags_all"), this is "key=value" merged into the
 //	                             map, same convention as FAKEPROVIDER_EXTRA_TAG; otherwise
 //	                             it replaces the attribute's scalar value directly.
 //	FAKEPROVIDER_SENSITIVE_ATTRS comma-separated subset of FAKEPROVIDER_ATTRS to advertise
-//	                             with Sensitive: true (UBI-23) — lets a test exercise
+//	                             with Sensitive: true (UBI-23) -- lets a test exercise
 //	                             provider.Redact/core's $redacted handling end to end
 //	                             without a real Sensitive-bearing provider schema.
 //	FAKEPROVIDER_ATTR_TYPES      (UBI-63 session 3; "number" added UBI-123) comma-separated
 //	                             "name:kind" overrides for FAKEPROVIDER_ATTRS entries whose
-//	                             real shape isn't a plain string — kind one of "bool",
+//	                             real shape isn't a plain string -- kind one of "bool",
 //	                             "number" (cty.Number, a real numeric-typed attribute —
 //	                             UBI-123's own encode-path repro needs this: a plain
 //	                             string-typed attribute never exercises encodePrimitiveValue's
@@ -131,7 +151,7 @@
 //	                             just strings/maps.
 //	FAKEPROVIDER_COMPUTED_ATTRS  (UBI-63 session 3) comma-separated FAKEPROVIDER_ATTRS
 //	                             names (beyond "id", always Computed) to advertise as
-//	                             Computed rather than plain Optional — models a real
+//	                             Computed rather than plain Optional -- models a real
 //	                             attribute the provider fills in itself (e.g. AWS's own
 //	                             per-resource "region"), whose null baseline resolving to
 //	                             a real value on a later read is expected materialization,
@@ -608,8 +628,8 @@ func (s *fakeProviderServerV5) PlanResourceChange(ctx context.Context, req *tfpl
 
 // fakeWidgetType mirrors the fake_widget schema advertised above (id/name
 // string, tags map of string) as a cty type, so this fixture can do real
-// cty-msgpack decode/encode — same wire encoding ubx's provider package
-// uses against real binaries — rather than just echoing opaque bytes.
+// cty-msgpack decode/encode -- same wire encoding ubx's provider package
+// uses against real binaries -- rather than just echoing opaque bytes.
 var fakeWidgetType = cty.Object(map[string]cty.Type{
 	"id":   cty.String,
 	"name": cty.String,
@@ -618,7 +638,7 @@ var fakeWidgetType = cty.Object(map[string]cty.Type{
 
 // echoWidgetState stands in for a real provider's ReadResource logic: it
 // decodes the requested current_state, fills in "id" if the caller left it
-// null (as a real provider would compute it), and re-encodes — proving a
+// null (as a real provider would compute it), and re-encodes -- proving a
 // real cty-msgpack round trip happened rather than trusting a canned
 // response.
 //
@@ -694,7 +714,7 @@ func fakeProviderStateDir() string {
 // "computed-id" for every instance (see decodeWidgetState), so it can never
 // disambiguate between two different fake_widget resources; "name" is the
 // one attribute this fixture's own callers always supply distinctly per
-// resource (its own address name), and — for this exact reason — is
+// resource (its own address name), and -- for this exact reason -- is
 // already what a real ship's own Lookup carries alongside "id" for this
 // type (fake_widget's schema marks "name" Required, so
 // cli/stateadapter.go's own required-attr computation already includes it;
@@ -703,7 +723,7 @@ func persistedStatePath(dir, name string) string {
 	return filepath.Join(dir, url.PathEscape(name)+".msgpack")
 }
 
-// persistWidgetState is echoAppliedState's own write side — a no-op
+// persistWidgetState is echoAppliedState's own write side -- a no-op
 // whenever FAKEPROVIDER_STATE_DIR isn't set, preserving every existing
 // test's pure-echo behavior exactly.
 func persistWidgetState(name string, msgpackBytes []byte) error {
@@ -720,7 +740,7 @@ func persistWidgetState(name string, msgpackBytes []byte) error {
 	return nil
 }
 
-// loadPersistedWidgetState is echoWidgetState's own read side — found is
+// loadPersistedWidgetState is echoWidgetState's own read side -- found is
 // false whenever FAKEPROVIDER_STATE_DIR isn't set or name was never
 // persisted, in which case the caller falls back to its original
 // echo-the-request behavior.
@@ -736,7 +756,7 @@ func loadPersistedWidgetState(name string) (msgpackBytes []byte, found bool) {
 	return b, true
 }
 
-// removePersistedState is a destroy's own cleanup — a no-op whenever
+// removePersistedState is a destroy's own cleanup -- a no-op whenever
 // FAKEPROVIDER_STATE_DIR isn't set or priorMsgpackBytes carries no "name"
 // (best-effort, mirroring markDestroyed's own id-based tracking, which
 // this is independent of).
@@ -885,7 +905,7 @@ func destroyRequestID(priorMsgpackBytes, plannedMsgpackBytes []byte) (id string,
 // fake-only type. See the package doc comment for the env var contract.
 
 // conformanceAttrs reads FAKEPROVIDER_ATTRS. "id" is always included even if
-// the caller forgot it — every real AWS resource schema has one, and
+// the caller forgot it -- every real AWS resource schema has one, and
 // RunAdoptMutateScanDiff's lookup always keys off it.
 func conformanceAttrs() []string {
 	raw := os.Getenv("FAKEPROVIDER_ATTRS")
@@ -902,7 +922,7 @@ func conformanceAttrs() []string {
 }
 
 // conformanceAttrTypes reads FAKEPROVIDER_ATTR_TYPES ("name:kind,..."): an
-// attribute name's non-default cty shape (UBI-63 session 3) — see the
+// attribute name's non-default cty shape (UBI-63 session 3) -- see the
 // package doc comment. Attributes not listed here keep conformanceCtyType's
 // original default (string, or map for "tags"/"tags_all").
 func conformanceAttrTypes() map[string]string {
@@ -922,7 +942,7 @@ func conformanceAttrTypes() map[string]string {
 
 // conformanceComputedAttrs reads FAKEPROVIDER_COMPUTED_ATTRS (UBI-63
 // session 3): additional attribute names (beyond "id", always Computed) to
-// advertise as Computed rather than Optional — see the package doc comment.
+// advertise as Computed rather than Optional -- see the package doc comment.
 func conformanceComputedAttrs() map[string]bool {
 	raw := os.Getenv("FAKEPROVIDER_COMPUTED_ATTRS")
 	if raw == "" {
@@ -938,7 +958,7 @@ func conformanceComputedAttrs() map[string]bool {
 // conformanceCtyType builds the cty object type for conformanceAttrs():
 // "tags"/"tags_all" as string maps (matching every AWS resource that has
 // them), FAKEPROVIDER_ATTR_TYPES overrides as declared, everything else as
-// plain strings — see the package doc comment for why scalar type-fidelity
+// plain strings -- see the package doc comment for why scalar type-fidelity
 // to AWS's real attribute types doesn't matter beyond what a given test
 // actually needs to model (ubx's own core layer treats Observed state as
 // opaque JSON, never type-checked against the schema).

@@ -393,7 +393,7 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			// mirroring the create case's own "Not yet shipped... leave
 			// found as it was -- exactly like 'not yet adopted.'"
 			if p.Kind == KindChange {
-				shipped, ferr := l.shippedModifyFold(p.ID, addr)
+				_, shipped, ferr := l.shippedModifyFold(p.ID, addr)
 				if ferr != nil {
 					return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
 				}
