@@ -3618,6 +3618,49 @@ accepted and shipped.
 Full wire shape and hashing detail: docs/schema.md's "Amendment: restore"
 (2026-09-01, UBI-227).
 
+### Human-readable aliases for ledger heads (decided 2026-09-01, design room -- UBI-228)
+
+A proposal is identified by a content hash. Referring to one means typing
+or pasting a hash, which is fine for a machine and poor for a human --
+particularly for restore above, where naming an earlier head is the
+whole interaction.
+
+**An alias is a lookup, never an identity.** The hash is what gets
+signed and what the ledger chains on. An alias points at a hash, stored
+entirely outside the ledger and outside the hashed proposal shape --
+adding one, changing one, or removing one never invalidates a signature,
+and never touches the proposal it names. This is the same discipline
+promotion and restore already apply to their own provenance links, taken
+one step further: those are additive facts recorded IN a proposal, an
+alias is a pointer recorded entirely OUTSIDE one.
+
+**Aliases are workspace-local, not ledger content.** `core.LedgerStore`
+gains no alias methods. A remote-store-backed ledger has no local
+directory of its own at all (only the git-directory store does), so an
+alias addressed through `LedgerStore` would mean new interface methods
+across every store backend, for what is fundamentally a human-managed,
+git-shared artifact. The workspace directory that already holds
+`.ubx/config.hcl` holds `.ubx/aliases.json` too, regardless of which
+store backs the ledger's own proposals.
+
+**Sharing an alias with a team means committing this file, and that's
+enough.** Two people adding conflicting aliases on separate branches
+produce an ordinary git merge conflict, the same experience
+`.ubx/config.hcl` already has -- not a new problem this feature invents
+its own resolution mechanism for.
+
+**Repointing an alias is explicit, never incidental.** Assigning a name
+that's already taken refuses by default; moving it takes `--force`. The
+failure this guards against is real and named directly in the ticket:
+silently repointing something a human relies on as a stable name.
+
+CLI surface (`ubx alias set|resolve|list|remove`, and `ubx why`/`ubx
+restore` both accepting an alias anywhere they accept a hash) is a small
+build ticket, separate from this design.
+
+Full wire shape and detail: docs/schema.md's "Amendment: human-readable
+aliases for ledger heads" (2026-09-01, UBI-228).
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)

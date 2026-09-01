@@ -2,6 +2,28 @@
 
 ## Changelog
 
+- 2026-09-01 -- UBI-228 built: human-readable aliases for ledger heads.
+  `docs/schema.md` had already anticipated this ("id is a content
+  hash... human-friendly aliases allowed as labels") but it was never
+  built until restore (UBI-227, same day) made naming a head the whole
+  interaction. New `.ubx/aliases.json`, workspace-local and NOT a
+  `core.LedgerStore` concern -- confirmed live that a remote-store-backed
+  `core.Ledger` carries no local directory at all, so an alias addressed
+  through `LedgerStore` would need new interface methods across every
+  store backend for what is fundamentally a human-managed, git-shared
+  artifact. `ubx alias set|resolve|list|remove`; `set` refuses to
+  repoint a name that already points elsewhere without `--force`,
+  answering the ticket's own "silently repointing something a human uses
+  as a name" fear directly. Aliases are namespaced per stack (a ledger
+  dir can hold an interleaved multi-stack chain) and shared via git
+  exactly like `.ubx/config.hcl` already is -- a conflicting alias on two
+  branches is an ordinary merge conflict, not a new mechanism this
+  ticket needed to build. `resolveHeadOrAlias` (`cli/alias.go`) wired
+  into `ubx why` and `ubx restore`, both keeping a raw hash accepted
+  exactly as before. Full detail: docs/schema.md's "Amendment:
+  human-readable aliases," docs/architecture.md's own section. PR
+  against `ubiquex` open (never self-merge).
+
 - 2026-09-01 -- UBI-227 built: restore a stack to an earlier ledger head.
   Design reported and confirmed before building: a restore is a normal
   proposal (reuses `KindChange`, never `KindRevert` -- that enum slot
