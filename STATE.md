@@ -66,10 +66,27 @@ merged), documentation not yet written.**
   on that basis), and via a real manual end-to-end repro (a real
   `ubx blueprint build`-produced package, real `fakeprovider` ship)
   confirming the gap actually closes, not just that tests pass.
-- **Documentation not yet written** -- next: `ubiquex-docs` (how to
-  write a mixed stack, the reverse-direction asymmetry named plainly)
-  and `ubiquex-internals` (the composition contract, why provenance
-  works the way it does).
+- **Documentation done, two more PRs open, none merged.**
+  `ubiquex-docs#79` adds `tutorial/blueprints/mixing.mdx` (4th in the
+  Blueprints track: the same real worked example the report itself
+  used -- forward direction consuming a real output, the reverse
+  direction's real compiler error, `ubx why`/`ubx render` on the mixed
+  stack) and fixes two now-confirmed-stale `ubx why` output examples in
+  `concepts/blueprints.mdx`/`tutorial/blueprints/call-sdk.mdx` (the
+  real current format is single-line, not the two-line one they
+  showed) plus `concepts/outputs.mdx`'s own leftover diagram-medium
+  example from before UBI-224. `ubiquex-internals#2` adds
+  `concepts/blueprint-composition.mdx` -- the reverse direction is
+  structurally excluded, not merely unimplemented (a blueprint call is
+  an eager function call at describe time, not a deferred graph node,
+  so its own params need real values right then; `cross_ref` avoids
+  this because it names an already-shipped resource in a separately
+  signed ledger, a real, immediately-available marker, not a same-stack
+  forward reference to something that doesn't exist yet) --
+  `sync-state.json`'s `docs/blueprint.md` entry bumped to the real
+  commit reviewed. Six PRs total across this ticket, all open, none
+  merged: `ubx-sdk-go#14`, `ubx-sdk-typescript#15`, `ubx-sdk-python#13`,
+  `ubiquex#46`, `ubiquex-docs#79`, `ubiquex-internals#2`.
 
 **UBI-224: markdown/diagram/chat dropped as authoring mediums, the SDK is
 the only one left. Stage 1 (code) and the orphaned-config follow-up are
