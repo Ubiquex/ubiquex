@@ -2,6 +2,52 @@
 
 ## Changelog
 
+- 2026-09-01 -- UBI-226 built: `.ubx.hcl`, a thin HCL wrapper for calling
+  blueprints in a stack. Not a fourth authoring medium, the SDK stays
+  the only one -- deterministic, comparable to Terragrunt, composition
+  only. The ticket left one question open, answered before building:
+  the file declares its own stack (a required top-level `stack = "..."`
+  attribute), matching every other authored artifact's own convention
+  (an SDK program's `sdk.Stack(...)`, a hand-written intent/v1 file's
+  own `"stack"` field), never inherited from `.ubx/config`'s own
+  narrower per-directory default. The ticket's own worked example
+  turned out not to compile: passing one blueprint call's output into
+  another call's own param (`database_url = blueprint.postgres.primary.
+  connection_string`) hits the exact wall UBI-225 already found in the
+  SDK -- a blueprint call reads its params as real values, right then,
+  and a sibling call in the same document hasn't shipped anything yet,
+  there is nothing to look up. The grammar recognizes the traversal and
+  refuses it with a named error pointing at the SDK, real syntax the
+  parser rejects, not a feature quietly left out -- recorded on the
+  ticket itself so a later reader doesn't conclude it was dropped by
+  choice. Two smaller grammar corrections made the same pass: cross-stack
+  references use the real, already-built four-part `"@<stack>.<type>.
+  <name>.<attr-path>"` form, not the ticket's own two-part shorthand
+  (no separate "named stack output" registry exists for one to resolve
+  against); `source`/`version` map directly onto `resolver.BlueprintCall`'s
+  real `Blueprint`/`Ref` fields (plus an additional `path` attribute,
+  not in the ticket, for parity with `BlueprintCall`'s own third field),
+  never the ticket's own bare-shorthand-plus-separate-version framing,
+  since no default-registry concept exists anywhere in this codebase.
+  Drive-by fixes: `resolver.BlueprintCall.Blueprint`'s own doc comment
+  said OCI wasn't supported yet -- stale since Slice 7 shipped, the
+  field already pipes straight into `blueprint.Pull`, which has
+  supported `oci://` for a while; and `tfconvert.Result`'s own doc
+  comment repeated the SAME stale UBI-224 claim `cli/blueprint_convert.go`'s
+  own comment already got corrected for in the UBI-223 pass, a second,
+  separate copy of the identical staleness, caught only because this
+  session happened to re-read the file next to it. New package
+  `hclstack`, wired into `ubx resolve --from-code` as a new `.ubx.hcl`
+  case (matched by suffix, compound extension), handed to the exact
+  same unmodified `blueprint.ExpandCalls`/`Resolve` pipeline every other
+  `blueprint_calls` producer already feeds. A real end-to-end test
+  proves the wiring, not just the parser: a `.ubx.hcl` file calling a
+  real, locally-built Go blueprint package resolves through the real
+  cobra command tree into a 2-create proposal, the param value threaded
+  through correctly. Full repo `go build`/`go vet`/`go test` clean.
+  docs/architecture.md's new "HCL wrapper for calling blueprints" section
+  has the full design and every finding.
+
 - 2026-09-01 -- UBI-223 built: 5 MCP blueprint-authoring tools
   (`draft_ubxfile`, `validate_ubxfile`, `build_blueprint`,
   `list_blueprints`, `describe_blueprint`). Two decisions the ticket
@@ -7318,6 +7364,65 @@ error, since a converted blueprint's `resources:` is documentation-only
 summary text, never valid `intent/v1` JSON. See
 docs/architecture.md's "Blueprint-authoring tools" section for the full
 design.
+
+### HCL wrapper for calling blueprints (UBI-226)
+
+`.ubx.hcl`: one block type, `blueprint "<type>" "<name>" { ... }`,
+holding literals and cross-stack references, plus a required top-level
+`stack = "<name>"` attribute -- not a fourth authoring medium (the SDK
+stays the only one), a deterministic parser, comparable to Terragrunt.
+The ticket's own single open question, "does the file declare its stack
+or does the directory," was answered before building: the file declares
+it, matching every other authored artifact's own convention (an SDK
+program's `sdk.Stack(...)`, a hand-written intent/v1 file's own
+`"stack"` field) rather than `.ubx/config`'s own narrower per-directory
+default, and consistent with the reason HCL was chosen at all --
+inheriting from ambient directory state would have reintroduced a real
+nondeterminism, the same shape UBI-224 removed markdown/chat for.
+
+The ticket's own worked example does not compile: passing one blueprint
+call's own output into another call's own param
+(`database_url = blueprint.postgres.primary.connection_string`) hits
+UBI-225's own finding directly -- a blueprint call reads its declared
+params as real values, right then (arithmetic, `for_each` counts,
+interpolation depend on them), and the only param type built for a
+deferred reference (`ParamCrossRef`) works specifically because it
+names an ALREADY-SHIPPED resource in a SEPARATELY SIGNED ledger, never
+a sibling call in the same, not-yet-shipped document. The existing
+`$blueprint_output:` marker (UBI-128) isn't an escape hatch either -- it
+only ever lands in an ordinary hand-written resource's config, and this
+grammar produces no hand-written resources at all (the ticket's own
+scope note). The parser recognizes the exact traversal shape and
+refuses it with a named error pointing at the SDK -- real syntax the
+parser rejects, not a feature quietly left out, recorded directly on
+the ticket so a later reader doesn't conclude it was dropped by choice.
+
+Two smaller corrections against the ticket's own illustrative example:
+cross-stack references use the real, already-built four-part
+`"@<stack>.<type>.<name>.<attr-path>"` form (`ParamCrossRef`'s own
+grammar), not a two-part shorthand nothing else in the system resolves
+against; `source`/`version` map directly onto `resolver.BlueprintCall`'s
+real `Blueprint`/`Ref` fields (plus an additional `path` attribute for
+parity with `BlueprintCall`'s own third field, `Path`), never a
+registry-shorthand-plus-separate-version convention that doesn't exist
+anywhere else in this codebase.
+
+New package `hclstack` parses a `.ubx.hcl` file directly into an
+intent/v1 document with only `BlueprintCalls` populated, wired into
+`ubx resolve --from-code` as a new suffix-matched case, handed to the
+exact same unmodified `blueprint.ExpandCalls`/`Resolve` pipeline every
+other `blueprint_calls` producer already feeds -- no code ever runs,
+unlike the `.ts`/`.go`/`.py` branches of the same flag. Drive-by fixes:
+`resolver.BlueprintCall.Blueprint`'s own doc comment corrected (said
+OCI wasn't supported, stale since Slice 7 shipped); `tfconvert.Result`'s
+own doc comment corrected too, a second, independent copy of the exact
+UBI-224 staleness `cli/blueprint_convert.go` was already fixed for
+during UBI-223, caught only by re-reading a neighboring file. A real
+end-to-end test proves the wiring, not just the parser -- a `.ubx.hcl`
+file calling a real, locally-built Go blueprint package resolves
+through the real cobra command tree into a 2-create proposal. See
+docs/architecture.md's "HCL wrapper for calling blueprints" section for
+the full design and every finding.
 
 ## Deferred (explicitly not now)
 

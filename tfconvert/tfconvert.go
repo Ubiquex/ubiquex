@@ -72,19 +72,19 @@ type RequiredProvider struct {
 // intent-provider adapter would re-derive. `ubx blueprint convert` writes
 // an Ubxfile whose resources: field holds Summary below -- a short,
 // deterministic, human-readable description of what was converted, for a
-// human reading the directory -- but that text is documentation ONLY. If
-// a later `ubx blueprint build` is run against a converted directory, it
-// re-drafts resources: through the intent-provider pipeline (AI) exactly
-// like any other Ubxfile, and there is no guarantee that re-draft
-// reproduces this package's own deterministic translation byte-for-byte
-// -- the whole point of `convert` is to skip that step, so ITS OWN output
+// human reading the directory -- but that text is documentation ONLY, not
+// valid intent/v1 JSON. UBI-224 removed blueprint build's own
+// intent-provider draft step entirely -- build only ever parses
+// resources: now, never drafts it -- so a later `ubx blueprint build` run
+// against a converted directory fails outright with a JSON parse error,
+// rather than silently re-drafting something that might not match this
+// package's own deterministic translation. This package's OWN output
 // (the go/ts/py packages `ubx blueprint convert` writes directly,
 // alongside the Ubxfile) is the source of truth for a converted
-// blueprint, not a seed for a later AI rebuild. Named here explicitly,
-// per this project's own "never contradict a doc silently" discipline
-// (CLAUDE.md), because it's a genuine, load-bearing tension between two
-// features (`build`'s "resources: is always re-drafted" contract and
-// `convert`'s own "no AI, ever" contract) rather than a corner cut.
+// blueprint, never a seed for a later rebuild of any kind. Named here
+// explicitly, per this project's own "never contradict a doc silently"
+// discipline (CLAUDE.md) -- this comment itself went stale once before,
+// caught only when UBI-226 touched a neighboring file and re-read it.
 type Result struct {
 	Params            []blueprint.Param
 	Outputs           []blueprint.Output

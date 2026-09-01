@@ -333,10 +333,16 @@ type BlueprintCall struct {
 	// intent.summary, never part of any resource's own address.
 	Name string `json:"name"`
 	// Blueprint names the blueprint to call -- an absolute or relative
-	// local filesystem path, or a git repository URL (Ref/Path below
-	// name which ref/location within it, mirroring blueprint.Pull's own
-	// parameter shape exactly, UBI-74 Slice 3). No OCI/Strata reference
-	// syntax yet (Slice 7).
+	// local filesystem path, a git repository URL (Ref/Path below name
+	// which ref/location within it), or a real "oci://registry/repo:tag"
+	// artifact reference (the tag already embedded, Ref/Path meaningless
+	// and refused for this form) -- mirroring blueprint.Pull's own
+	// parameter shape exactly (UBI-74 Slice 3 for local/git, Slice 7 for
+	// oci://), since this field is handed to Pull verbatim (blueprint/
+	// invoke.go's own invokeCall). An earlier version of this comment
+	// said OCI wasn't supported yet -- stale the moment Slice 7 shipped;
+	// Pull has taken all real source forms since, this field along with
+	// it, unchanged.
 	Blueprint string `json:"blueprint"`
 	// Ref is the git ref (branch/tag/commit) to check out -- ignored
 	// for a local Blueprint path, optional for a git one (empty means

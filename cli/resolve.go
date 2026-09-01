@@ -15,6 +15,7 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
+	"github.com/ubiquex/ubiquex/hclstack"
 	"github.com/ubiquex/ubiquex/provider"
 	"github.com/ubiquex/ubiquex/tseval"
 )
@@ -52,7 +53,7 @@ func newResolveCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "resolve <intent-file>",
-		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript/Go/Python SDK program, --from-code) into a draft change proposal",
+		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript/Go/Python SDK program or a .ubx.hcl blueprint-calling file, --from-code) into a draft change proposal",
 		Long: `Resolves a hand-written, machine-shaped intent file (ubx:intent/v1) into a draft
 kind:"change" proposal -- creates, modifies, and destroys (docs/resolver.md).
 Intra-stack references are checked against the ledger's own dependency graph (with real cycle
@@ -60,19 +61,22 @@ detection) and emitted in dependency order; cross-stack references are pinned ag
 ledger's current head, activating neighbor-advance staleness for real once the proposal is accepted
 (see "ubx accept"'s own pin re-verification).
 
---from-code <entry>.ts|.go|.py, mutually exclusive with the positional intent-file argument,
-evaluates an SDK program instead of reading a file from disk -- dispatched by the entry file's own
-extension: .ts through the hermetic Deno evaluator (tseval, @ubx/sdk), .go by compiling the program
-to a real binary and running it under this platform's own OS-level sandbox (goeval,
-github.com/ubiquex/ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py under WASI
-(pyeval, ubx_sdk; wasmtime running a real CPython-WASI build -- see docs/sdk.md's own "The Go
-evaluator" and "The Python evaluator: decided empirically" sections for the full account of each).
-Either way, the resulting intent/v1 document, provenance-stamped with the entry file's own content
-hash (intent.sources: {"kind":"document", "ref", "content_hash"}), is handed to the exact same,
-completely unmodified pipeline below: an SDK program is just another intent/v1 producer, never a
-special case, regardless of language. A typed SDK program has no ambiguity to review before
-resolving -- it says what it says -- so --from-code resolves directly, one command, no separate
-draft step.
+--from-code <entry>.ts|.go|.py|.ubx.hcl, mutually exclusive with the positional intent-file
+argument, dispatched by the entry file's own extension. .ts/.go/.py evaluate a real SDK program:
+.ts through the hermetic Deno evaluator (tseval, @ubx/sdk), .go by compiling the program to a real
+binary and running it under this platform's own OS-level sandbox (goeval, github.com/ubiquex/
+ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py under WASI (pyeval, ubx_sdk; wasmtime
+running a real CPython-WASI build -- see docs/sdk.md's own "The Go evaluator" and "The Python
+evaluator: decided empirically" sections for the full account of each). .ubx.hcl is parsed, not
+evaluated -- a thin, deterministic wrapper for calling blueprints in a stack (UBI-226, hclstack),
+never a fourth authoring medium and never able to hold a hand-written resource: the same bytes
+always compile to the same intent/v1 document, no code ever runs. Either way, the resulting
+intent/v1 document, provenance-stamped with the entry file's own content hash (intent.sources:
+{"kind":"document", "ref", "content_hash"}) for an SDK program, is handed to the exact same,
+completely unmodified pipeline below: an SDK program or a .ubx.hcl file is just another intent/v1
+producer, never a special case, regardless of which. A typed SDK program or a .ubx.hcl file has no
+ambiguity to review before resolving -- it says what it says -- so --from-code resolves directly,
+one command, no separate draft step.
 
 A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
 never inferred from a resource's absence) and resolve-time orphan-protected: a destroy target
@@ -102,14 +106,30 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: --from-code and a positional intent-file argument are mutually exclusive")}
 			}
 			if fromCode == "" && len(args) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts|.go|.py")}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts|.go|.py|.ubx.hcl")}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
 			var intent resolver.IntentFile
-			if fromCode != "" {
+			switch {
+			case strings.HasSuffix(strings.ToLower(fromCode), ".ubx.hcl"):
+				// UBI-226: hclstack.Parse never evaluates anything -- a
+				// .ubx.hcl file is parsed, not run, so there is no
+				// evaluateSDKProgram-style receipts/blueprintRefs output
+				// and no StampDirectCallProvenance switch below (that
+				// switch exists for a DIRECT SDK import call, Slice 2's
+				// own calling convention; a .ubx.hcl file only ever
+				// produces BlueprintCalls entries, expanded the same way
+				// a hand-written intent/v1 file's own blueprint_calls
+				// already are, a few lines down).
+				parsed, err := hclstack.Parse(fromCode)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+				}
+				intent = *parsed
+			case fromCode != "":
 				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
@@ -160,7 +180,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 					}
 				}
-			} else {
+			default:
 				data, err := os.ReadFile(args[0])
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
@@ -170,13 +190,15 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				}
 			}
 
-			// UBI-74 Slice 5: a hand-written file may carry blueprint_calls
-			// directly -- --from-code never does (the call already happened
-			// in-process by the time an SDK program's own intent/v1 is
-			// emitted). Expanded HERE, once,
-			// regardless of which medium produced them, before Resolve ever
-			// sees the document -- see resolver.IntentFile.BlueprintCalls's
-			// own doc comment for why this is the one shared splice point.
+			// UBI-74 Slice 5, extended by UBI-226: a hand-written file may
+			// carry blueprint_calls directly, and so, now, does a .ubx.hcl
+			// file (case above) -- an SDK program's own --from-code path
+			// never does, since a direct SDK-import call already happened
+			// in-process by the time that program's own intent/v1 is
+			// emitted. Expanded HERE, once, regardless of which medium
+			// produced them, before Resolve ever sees the document -- see
+			// resolver.IntentFile.BlueprintCalls's own doc comment for why
+			// this is the one shared splice point.
 			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
@@ -237,7 +259,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and (--from-code) evaluating the SDK program -- one shared budget for the whole command, not per sub-operation")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
-	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
+	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, or parse a .ubx.hcl blueprint-calling file, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
 
 	return cmd
 }

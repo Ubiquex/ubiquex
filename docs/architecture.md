@@ -2303,6 +2303,107 @@ already-packaged blueprint) and `blueprint.Validate` independently, and
 reports whichever succeeded -- read-only, the scratch directory is
 always removed after.
 
+## HCL wrapper for calling blueprints (UBI-226)
+
+`.ubx.hcl`: a thin, closed HCL grammar for composing blueprint calls in
+a stack -- not a fourth authoring medium (the SDK stays the only one,
+this document's own Thesis and UBI-224's own reasoning both still
+hold), a deterministic parser sitting on top of it, comparable to
+Terragrunt: the real complexity lives in a blueprint's own SDK-authored
+definition, where a real programming language earns its keep; this is
+composition only. One block type, `blueprint "<type>" "<name>" { ... }`,
+holding literals and cross-stack references, plus a required top-level
+`stack = "<name>"` attribute. No locals, loops, conditionals, functions,
+or interpolation exist in the grammar at all -- not gated at runtime,
+simply nothing in the parser recognizes them, the same "omission, not a
+guard" shape "Boundary by omission" (above) already established for a
+different reason.
+
+### The file declares its own stack, not the directory
+
+Every other authored artifact already works this way: an SDK program
+declares its stack in source (`sdk.Stack("name", func() {...})`,
+`sdk/go/runtime/runtime.go`), and a hand-written intent/v1 JSON file
+carries its own top-level `"stack"` field -- `ubx resolve`/`ship`/
+`accept` all read `intent.Stack` straight off the document, never from
+`.ubx/config`. `.ubx/config`'s own `stack` field is a narrower thing: a
+per-directory default `ubx init` seeds once from the directory name
+(`cli/init.go`'s `deriveStackFromDir`), consulted only by a command that
+needs a stack name and has no document to read one from (`ubx why`,
+`ubx status --stack`) -- never the source of truth for what stack an
+authored artifact belongs to. Inheriting from the directory here would
+also cut against the reason HCL was chosen at all: a `.ubx.hcl` file
+that got its stack from ambient `.ubx/config` state would resolve
+differently depending on where it's checked out, the same shape of
+nondeterminism UBI-224 removed markdown and chat for, even if not the
+same mechanism. Self-declaring means the same bytes always mean the
+same stack.
+
+### A sibling blueprint call's output is parsed, then refused
+
+The ticket that proposed this grammar included a worked example passing
+one call's output straight into another call's own param
+(`database_url = blueprint.postgres.primary.connection_string`). Traced
+through `blueprint.ExpandCalls` (`blueprint/invoke.go`): every call is
+invoked by literally running the target blueprint's own compiled
+function, and every declared param is coerced to a real, concrete
+literal and baked into the synthesized calling program's source BEFORE
+that program runs -- there is no marker type in that coercion for "a
+value that doesn't exist yet." The only param type built for a deferred
+reference is `ParamCrossRef` (`sdk.CrossStack(...)`), and it works
+specifically because it names an ALREADY-SHIPPED resource in a
+SEPARATELY SIGNED ledger, a real value already sitting somewhere to
+look up. A sibling call in the SAME document hasn't shipped anything,
+there is nothing to look up -- this is "Blueprint composition"'s own
+finding (`ubiquex-internals`) restated, confirmed live there as a real
+Go compiler error for the identical shape in the SDK.
+
+The existing `$blueprint_output:<CallName>:<outputKey>` marker
+(`resolver.BlueprintOutputRefPrefix`, UBI-128) is not an escape hatch
+here either: it only ever gets embedded in an ORDINARY HAND-WRITTEN
+RESOURCE's config, and this grammar produces ONLY blueprint calls, no
+hand-written resource -- the ticket's own scope note ("someone who
+needs one goes to the SDK, where blueprint calls and resources already
+mix," UBI-225). There is no valid landing spot for that marker in a
+document this grammar can produce, even in the best case.
+
+So the parser recognizes the traversal and refuses it with a named
+error pointing at the SDK, rather than silently treating it as a
+literal string (which would resolve to nonsense) or silently dropping
+it -- real syntax the parser recognizes and rejects, not a feature
+quietly left out. Recorded explicitly, on the ticket itself, so a
+reader who only sees the shipped grammar later doesn't conclude it was
+simply never considered.
+
+### Grammar corrections against the ticket's own illustrative example
+
+Two smaller corrections, made before building rather than silently:
+cross-stack references use the real, already-built four-part form,
+`"@<stack>.<type>.<name>.<attr-path>"` (`ParamCrossRef`'s own
+`parseCrossRefArg`, `blueprint/invoke.go`), not the ticket's own
+two-part shorthand -- there is no separate "named stack output"
+registry anywhere in the system for a two-part form to resolve against,
+and this is what "same pinned semantics as the SDK" already commits to.
+`source`/`version` map directly onto `resolver.BlueprintCall`'s real
+fields, `Blueprint` and `Ref` (an additional `path` attribute, not in
+the ticket, added for parity with `BlueprintCall`'s own third field,
+`Path` -- a git-hosted blueprint nested in a subdirectory would
+otherwise be uncallable from this grammar at all) -- there is no
+default-registry shorthand anywhere in this codebase, an `oci://`
+reference is always a full, explicit `oci://registry/repo:tag` URI.
+
+### Wiring
+
+New package `hclstack`. `ubx resolve --from-code <entry>.ubx.hcl`
+(matched by suffix, not `filepath.Ext`, since the extension is
+compound) parses the file directly into an intent/v1 document with only
+`BlueprintCalls` populated, `Resources` always empty, handed to the
+exact same unmodified `blueprint.ExpandCalls`/`Resolve` pipeline every
+other `blueprint_calls` producer already feeds -- no code ever runs,
+unlike the `.ts`/`.go`/`.py` branches of the same flag, which do.
+`ubx blueprint build` and blueprint authoring itself are untouched --
+this is calling-side only.
+
 ## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A; LedgerStore interface + git reference impl + s3 store + addressing (including `$cross` by stack name + `[ledger.external]`) built UBI-32 Arc B, live-verified against real S3 including a real two-stack cross-stack pin and neighbor-advance staleness catch; the full primary CLI surface -- resolve/accept (local and --from-merge)/ship/why/status/scan/revert-plan/writeback/the MCP surface -- all wired onto `.ubx/config`'s own `[ledger]` table; PR-acceptance ceremony built and live-verified against a real GitHub PR + real S3 -- gs/azblob still designed, not wired, its own follow-up; see STATE.md for the full session-by-session history)
 
 Two storage questions, decided separately:
