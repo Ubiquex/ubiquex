@@ -26,6 +26,7 @@ func runUbxTTY(t *testing.T, stdin string, env []string, args ...string) (string
 		parts := strings.SplitN(kv, "=", 2)
 		t.Setenv(parts[0], parts[1])
 	}
+	ensureFakeProviderStateDir(t)
 	err := root.Execute()
 	return out.String(), err
 }

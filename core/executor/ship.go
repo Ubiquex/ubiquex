@@ -2115,13 +2115,39 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		time.Sleep(debugDelayAfterInFlight)
 	}
 
-	result, _, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
+	result, freshLookup, applyErr := app.ApplyResourceChange(ctx, resourceSchemas[m.Target.Type], m.Target.Type, observed, planned, nil)
 
 	if applyErr == nil {
 		if debugDelayAfterApplySuccess > 0 {
 			time.Sleep(debugDelayAfterApplySuccess)
 		}
-		rcd.mutate(ra, func(ra *core.ResourceApply) { ra.ProviderResult = result })
+		rcd.mutate(ra, func(ra *core.ResourceApply) {
+			ra.ProviderResult = result
+			// UBI-238: mirrors the create path's own identical discipline
+			// above (result, lookup, applyErr := ...; ra.Lookup = lookup
+			// ...) -- a modify's own fresh ApplyResourceChange call already
+			// computes a lookup from the real schema's Required attributes
+			// (cli/stateadapter.go's own ApplyResourceChange), the same
+			// mechanism create already relies on, but this call site
+			// discarded it (result, _, applyErr := ...) instead of
+			// recording it. Without this, LastLookup (core/fleet.go) keeps
+			// returning whatever lookup create originally recorded,
+			// forever -- correct only for a resource type whose provider-
+			// required lookup is (or reduces to) a genuinely immutable id.
+			// A type whose lookup includes an attribute a modify can
+			// change (docs/architecture.md's own "Lookup keys must be
+			// derivable from immutable attributes" invariant, added
+			// alongside this fix) accumulates a stale lookup after its
+			// first successful modify, and every later freshness check
+			// compares against it. Confirmed live, UBI-238: fake_widget's
+			// own degenerate constant "id" forces its mutable "name" into
+			// that role, and a second real modify failed with a spurious
+			// stale-observation refusal until this fix.
+			ra.Lookup = freshLookup
+			if len(ra.Lookup) == 0 {
+				ra.Lookup = core.DeriveLookupFromResult(result, nil)
+			}
+		})
 		rcd.transition(ctx, ra, core.ResourceApplied, "")
 		rcd.tally(core.ResourceApplied)
 		return rcd.persist()

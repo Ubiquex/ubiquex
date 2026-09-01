@@ -2,6 +2,36 @@
 
 ## Changelog
 
+- 2026-09-01 -- UBI-238/UBI-239 fixed: both real, root-caused before any
+  fix, per the founder's own explicit "report the cause before fixing"
+  instruction. UBI-238 (real, general, narrower than "nobody can modify
+  a resource twice"): `core/executor/ship.go`'s modify-success path
+  discarded `ApplyResourceChange`'s own fresh lookup return, unlike
+  create's own explicit capture; `core.Ledger.LastLookup` (core/fleet.go)
+  never consulted a shipped modify's own apply record for a refreshed
+  one either. A resource type whose required lookup key includes a
+  mutable attribute accumulated a lookup frozen at create time forever
+  -- real infrastructure never hits this (id/ARN is genuinely immutable),
+  `fake_widget`'s own degenerate constant "id" is what forced its
+  mutable "name" into that role. Fixed by mirroring create's own
+  lookup-capture discipline exactly, and reordering LastLookup to prefer
+  a fresh shipped lookup over a stale resolve-time one. Invariant
+  recorded, not left implicit: docs/architecture.md's new "Lookup keys
+  must be derivable from immutable attributes" section. UBI-239
+  (confirmed fixture-only, corrected the ticket's own wrong cty-msgpack
+  guess): `tags` is Optional in `fake_widget`'s schema, so
+  `core.DeriveLookupFromResult` never includes it in the lookup key
+  regardless of value -- fakeprovider's echo-only ReadResource defaulted
+  it to empty, spurious staleness on an ordinary first modify whenever
+  tags is non-empty at create. Fixed by making `FAKEPROVIDER_STATE_DIR`'s
+  own pre-existing, previously opt-in persistence the default for every
+  hermetic ok-v5/ok-v6 CLI test (`cli/scan_test.go`'s
+  `ensureFakeProviderStateDir`). Both findings share one root cause,
+  named directly in fakeprovider's own source so a third symptom is
+  recognized immediately: echo-only ReadResource trusted the
+  caller-supplied lookup as full current state, which no real provider
+  does. Two new regression tests, full repo `go build`/`go test` clean.
+
 - 2026-09-01 -- UBI-228 built: human-readable aliases for ledger heads.
   `docs/schema.md` had already anticipated this ("id is a content
   hash... human-friendly aliases allowed as labels") but it was never

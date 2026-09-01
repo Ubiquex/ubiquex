@@ -203,12 +203,12 @@ func nodeProviderForAddress(p *Proposal, addr Address) *ProviderRef {
 	return nil
 }
 
-// LastLookup returns the most recently recorded lookup key for addr — the
-// same "latest resolution.inputs entry, falling back to a shipped create's
-// own recorded lookup" precedence Fleet already establishes across every
-// address at once, scoped here to one address (the same per-address-walk
-// convention LastObservedHash/LastObservationTime already use rather than
-// filtering a full Fleet() call). Added for core/resolver (UBI-30,
+// LastLookup returns the most recently recorded lookup key for addr — a
+// shipped create's or shipped modify's own fresh, post-apply lookup takes
+// precedence over a proposal's own resolution.inputs entry (frozen at
+// resolve time, before that same proposal ever shipped), which is only
+// ever a fallback for a not-yet-shipped proposal or a legacy apply record
+// that predates lookup capture entirely. Added for core/resolver (UBI-30,
 // docs/schema.md's "Amendment: destroys"): a delta.destroys entry's own
 // resolution.inputs["destroy_target"] requires a Lookup, and a destroy
 // target is, by construction, already-ledgered (docs/resolver.md's own
@@ -219,6 +219,18 @@ func nodeProviderForAddress(p *Proposal, addr Address) *ProviderRef {
 // predating UBI-29, with no derivable "id" either) — distinct from "addr
 // was never recorded," which is a FoldState/resolver concern, not this
 // function's.
+//
+// UBI-238: the modify half of this precedence is new. Before this, a
+// modify's own resolution.inputs entry was checked and returned FIRST,
+// unconditionally, for every proposal -- never reaching shippedModifyFold
+// at all, so a modify's own fresh post-apply lookup (core/executor's
+// shipModifyNode, since UBI-238) could never actually surface here. A
+// resource type whose provider-required lookup key includes an attribute
+// a modify can change (see docs/architecture.md's own "Lookup keys must
+// be derivable from immutable attributes" invariant) would accumulate a
+// lookup frozen at create time forever, and every later freshness check
+// would compare against it -- confirmed live, fake_widget's own
+// degenerate constant "id" forcing its mutable "name" into that role.
 func (l *Ledger) LastLookup(addr Address) (lookup json.RawMessage, found bool, err error) {
 	chain, err := l.Chain()
 	if err != nil {
@@ -227,25 +239,36 @@ func (l *Ledger) LastLookup(addr Address) (lookup json.RawMessage, found bool, e
 	target := addr.String()
 	for i := len(chain) - 1; i >= 0; i-- {
 		p := chain[i]
+		if p.Kind == KindChange {
+			for _, raw := range p.Delta.Creates {
+				a, ok := createNodeAddress(raw)
+				if !ok || a != addr || !isChangeCreateNode(raw) {
+					continue
+				}
+				_, shippedLookup, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
+				if ferr != nil {
+					return nil, false, fmt.Errorf("last lookup: %w", ferr)
+				}
+				if shipped && len(shippedLookup) > 0 {
+					return shippedLookup, true, nil
+				}
+			}
+			for _, mod := range p.Delta.Modifies {
+				if mod.Target != addr {
+					continue
+				}
+				shippedLookup, shipped, ferr := l.shippedModifyFold(p.ID, addr)
+				if ferr != nil {
+					return nil, false, fmt.Errorf("last lookup: %w", ferr)
+				}
+				if shipped && len(shippedLookup) > 0 {
+					return shippedLookup, true, nil
+				}
+			}
+		}
 		for _, in := range p.Resolution.Inputs {
 			if in.Resource == target && len(in.Lookup) > 0 {
 				return in.Lookup, true, nil
-			}
-		}
-		if p.Kind != KindChange {
-			continue
-		}
-		for _, raw := range p.Delta.Creates {
-			a, ok := createNodeAddress(raw)
-			if !ok || a != addr || !isChangeCreateNode(raw) {
-				continue
-			}
-			_, lookup, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
-			if ferr != nil {
-				return nil, false, fmt.Errorf("last lookup: %w", ferr)
-			}
-			if shipped && len(lookup) > 0 {
-				return lookup, true, nil
 			}
 		}
 	}
