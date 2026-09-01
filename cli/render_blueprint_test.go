@@ -9,7 +9,6 @@ import (
 
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/diagram"
 )
 
 // renderBlueprintGoOnlyUbxfile is blueprintCallUbxfile's own param shape
@@ -78,9 +77,8 @@ func writeRenderBlueprintPackage(t *testing.T) string {
 
 // TestRender_BlueprintCall_GroupsInDashedContainer_RealFakeProvider is
 // UBI-74 Slice 6's own required hermetic proof for `ubx render`'s new
-// grouping behavior (item 3): a real diagram-medium blueprint call (Slice
-// 5's own BlueprintCalls mechanism -- diagram.Parse's own "class:
-// ubx_blueprint" recognition, real ExpandCalls invocation, no synthetic
+// grouping behavior (item 3): a real blueprint call (Slice 5's own
+// BlueprintCalls mechanism, real ExpandCalls invocation, no synthetic
 // shortcuts) against a real, locally built blueprint package resolves,
 // accepts, and ships two real resources (primary + mirror) through the
 // real fakeprovider pipeline -- then `ubx render --stack platform` must
@@ -88,29 +86,34 @@ func writeRenderBlueprintPackage(t *testing.T) string {
 // the blueprint's own ref, with their real depends_on edge (mirror's own
 // $ref to primary) drawn between the nested (container-qualified) node
 // paths, never bare top-level ones.
+//
+// UBI-224 removed diagram/md, the two mediums that used to reach
+// intent.blueprint_calls -- a hand-written intent/v1 file's
+// blueprint_calls entry, always a supported input independent of any
+// authoring medium, is what still reaches it.
 func TestRender_BlueprintCall_GroupsInDashedContainer_RealFakeProvider(t *testing.T) {
 	requireHermeticSandbox(t)
 	pkgDir := writeRenderBlueprintPackage(t)
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 
-	d2Src := `
-platform: "platform call" {
-  class: ubx_blueprint
-  blueprint: ` + jsonQuote(pkgDir) + `
-  primary_name: "widget1"
-}
-`
-	diagramIntent, err := diagram.Parse("render-blueprint.d2", strings.NewReader(d2Src), "platform", nil, diagram.Options{})
+	args, err := json.Marshal(map[string]string{"primary_name": "widget1"})
 	if err != nil {
-		t.Fatalf("diagram.Parse: %v", err)
+		t.Fatal(err)
 	}
-	if len(diagramIntent.BlueprintCalls) != 1 {
-		t.Fatalf("expected exactly 1 blueprint call from the diagram, got %d", len(diagramIntent.BlueprintCalls))
+	intentJSON := `{
+	  "schema_version": 1,
+	  "kind": "ubx:intent/v1",
+	  "stack": "platform",
+	  "intent": {"summary": "platform, via a blueprint call"},
+	  "resources": [],
+	  "destroys": [],
+	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + string(args) + `}]
+	}`
+	intentPath := filepath.Join(t.TempDir(), "intent.json")
+	if err := os.WriteFile(intentPath, []byte(intentJSON), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	diagramIntent.Intent.Summary = "platform, via a diagram blueprint call"
-	intentPath := filepath.Join(t.TempDir(), "diagram-draft.json")
-	writeResolverIntentFile(t, intentPath, diagramIntent)
 
 	resolvedPath := filepath.Join(ledgerDir, "resolved.json")
 	resolveOut, err := runUbx(t, env, "resolve", intentPath,

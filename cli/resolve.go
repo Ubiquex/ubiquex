@@ -68,12 +68,10 @@ github.com/ubiquex/ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py 
 (pyeval, ubx_sdk; wasmtime running a real CPython-WASI build -- see docs/sdk.md's own "The Go
 evaluator" and "The Python evaluator: decided empirically" sections for the full account of each).
 Either way, the resulting intent/v1 document, provenance-stamped with the entry file's own content
-hash (intent.sources: {"kind":"document", "ref", "content_hash"}, the same "document" kind the md
-medium already uses), is handed to the exact same, completely unmodified pipeline below: an SDK
-program is just another intent/v1 producer, never a special case, regardless of language. Unlike
-the md medium, which needs a human-review gate between an LLM's own ambiguous draft and resolution
-(ubx propose --from-doc, then a separate ubx resolve), a typed SDK program has no ambiguity to
-review first -- it says what it says -- so --from-code resolves directly, one command, no separate
+hash (intent.sources: {"kind":"document", "ref", "content_hash"}), is handed to the exact same,
+completely unmodified pipeline below: an SDK program is just another intent/v1 producer, never a
+special case, regardless of language. A typed SDK program has no ambiguity to review before
+resolving -- it says what it says -- so --from-code resolves directly, one command, no separate
 draft step.
 
 A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
@@ -172,11 +170,10 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				}
 			}
 
-			// UBI-74 Slice 5: a hand-written file, a diagram-produced draft
-			// (ubx propose --from-diagram), or an md-drafted document (ubx
-			// propose --from-doc) may all carry blueprint_calls -- --from-code
-			// never does (the call already happened in-process by the time an
-			// SDK program's own intent/v1 is emitted). Expanded HERE, once,
+			// UBI-74 Slice 5: a hand-written file may carry blueprint_calls
+			// directly -- --from-code never does (the call already happened
+			// in-process by the time an SDK program's own intent/v1 is
+			// emitted). Expanded HERE, once,
 			// regardless of which medium produced them, before Resolve ever
 			// sees the document -- see resolver.IntentFile.BlueprintCalls's
 			// own doc comment for why this is the one shared splice point.

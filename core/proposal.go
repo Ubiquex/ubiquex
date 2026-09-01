@@ -196,6 +196,21 @@ type IntentSource struct {
 	Backend string `json:"backend,omitempty"`
 }
 
+// UBI-224: the two intent.sources kinds a historical proposal may carry
+// from an authoring medium this project no longer supports drafting new
+// intent from. Explaining an existing proposal is not authoring, so
+// these stay real, exported constants rather than being deleted with
+// the drafting machinery that used to produce them -- ubx why/blame
+// still read a proposal accepted before this change and must still be
+// able to name what kind of source it came from. SourceKindIntentProvider
+// named the LLM's own tamper-evident audit entry that always accompanied
+// a document/dialogue source; it stays for the same reason.
+const (
+	SourceKindDocument       = "document"
+	SourceKindDialogue       = "dialogue"
+	SourceKindIntentProvider = "intent_provider"
+)
+
 // Address identifies one resource within a stack: (stack, type, name).
 // This is the pinned shape for Delta.Destroys elements and
 // Modification.Target (docs/schema.md, pinned 2026-07-10).

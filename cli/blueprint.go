@@ -1,20 +1,17 @@
 package cli
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/intentprovider"
-	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
 // newBlueprintCmd is UBI-74's own CLI entry point -- a parent command,
@@ -34,11 +31,11 @@ func newBlueprintCmd() *cobra.Command {
 }
 
 // blueprintGenerators maps a --lang value to its own codegen entry
-// point -- Slice 4's own multi-language build model: the AI draft
-// (draftBlueprint, below) runs EXACTLY ONCE regardless of how many
-// languages are requested, and each requested language's own generator
-// compiles that SAME already-drafted intent independently. "all" isn't
-// a key here -- parseLangFlag expands it into every key below.
+// point -- Slice 4's own multi-language build model: resources: is
+// parsed EXACTLY ONCE regardless of how many languages are requested,
+// and each requested language's own generator compiles that SAME
+// already-parsed intent independently. "all" isn't a key here --
+// parseLangFlag expands it into every key below.
 var blueprintGenerators = map[string]func(string, *blueprint.Ubxfile, *resolver.IntentFile) (map[string]string, error){
 	"go": blueprint.GenerateGo,
 	"ts": blueprint.GenerateTS,
@@ -67,26 +64,33 @@ func parseLangFlag(lang string) ([]string, error) {
 // newBlueprintBuildCmd is `ubx blueprint build` (docs/blueprint.md):
 // finds an Ubxfile in the given directory (default ".", the same
 // `docker build .` convention the Ubxfile format itself borrows),
-// resolves its resources: prose through the intent-provider pipeline
-// exactly once, and compiles the resulting draft into real, compilable
-// SDK packages -- one sibling directory per requested language ("go/",
+// parses its resources: -- a pre-resolved intent/v1 JSON document, the
+// SAME wire shape "ubx resolve --from-code --out <file>" already
+// produces -- exactly once, and compiles it into real, compilable SDK
+// packages -- one sibling directory per requested language ("go/",
 // "ts/", "py/") written into that same directory.
+//
+// UBI-224 removed this command's own intent-provider draft step: a
+// pre-validated Ubxfile has nothing left to interpret, only to parse,
+// which makes build fully deterministic. A blueprint author now
+// produces resources:'s own JSON themselves -- via the SDK ("ubx
+// resolve --from-code --out resources.json"), or via "ubx blueprint
+// convert" -- before it's ever checked in.
 func newBlueprintBuildCmd() *cobra.Command {
-	var timeout time.Duration
 	var lang string
 
 	cmd := &cobra.Command{
 		Use:   "build [dir]",
 		Short: "Build the Ubxfile in dir (default \".\") into real, compilable SDK package(s)",
 		Long: `Reads the Ubxfile in dir (default the current directory, matching "docker build ."'s own convention
-of finding a Dockerfile), resolves its resources: prose (inline, or an included .md file) through the same
-intent-provider pipeline "ubx propose --from-doc"/"ubx plan --from-doc" already use -- EXACTLY ONCE, regardless
-of how many languages --lang requests -- and compiles the resulting draft into real SDK package(s): one typed
-function per blueprint per language, parameters matching the Ubxfile's own params: block, real resource() calls
-with real Computed refs between them, written into sibling "go/"/"ts/"/"py/" subdirectories of dir.
+of finding a Dockerfile), parses its resources: (inline JSON, or an included .json file) -- a pre-resolved
+intent/v1 document, the SAME wire shape "ubx resolve --from-code --out <file>" already produces -- EXACTLY ONCE,
+regardless of how many languages --lang requests, and compiles it into real SDK package(s): one typed function
+per blueprint per language, parameters matching the Ubxfile's own params: block, real resource() calls with real
+Computed refs between them, written into sibling "go/"/"ts/"/"py/" subdirectories of dir.
 
 --lang selects which language(s): "go", "ts", "py", or "all" (every language -- the default when --lang is
-omitted entirely, since the AI draft's own cost is paid once regardless of how many languages compile from it).`,
+omitted entirely, since resources: is only ever parsed once regardless of how many languages compile from it).`,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -112,24 +116,16 @@ omitted entirely, since the AI draft's own cost is paid once regardless of how m
 
 			blueprintName := filepath.Base(absDir)
 
-			cfg, err := loadConfigFromDir(absDir, cmd.ErrOrStderr())
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
+			var draft resolver.IntentFile
+			if err := json.Unmarshal([]byte(ubxfile.Resources), &draft); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: resources: is not a valid pre-resolved intent/v1 document (%s): %w", ubxfile.ResourcesSource, err)}
 			}
 
 			outWriter := cmd.OutOrStdout()
-			adapterName, model := blueprintAdapterLabel(cfg)
-			fmt.Fprintf(outWriter, "drafting via %s:%s… ", adapterName, model)
-			draft, err := draftBlueprint(cmd, cfg, ubxfile, blueprintName, timeout)
-			if err != nil {
-				fmt.Fprintln(outWriter)
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
-			}
-			fmt.Fprintln(outWriter, "✓")
 
 			allFiles := map[string]string{}
 			for _, l := range langs {
-				files, err := blueprintGenerators[l](blueprintName, ubxfile, draft)
+				files, err := blueprintGenerators[l](blueprintName, ubxfile, &draft)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build (%s): %w", l, err)}
 				}
@@ -158,7 +154,6 @@ omitted entirely, since the AI draft's own cost is paid once regardless of how m
 		},
 	}
 
-	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for the intent-provider drafting call")
 	cmd.Flags().StringVar(&lang, "lang", "", "target language(s): go, ts, py, or all (default: all)")
 
 	return cmd
@@ -315,122 +310,11 @@ func newBlueprintVerifyCmd() *cobra.Command {
 	return cmd
 }
 
-// blueprintAdapterLabel mirrors plan.go's own zero-config progress-line
-// label (UBI-87's own sonnet-5 default) -- named separately here rather
-// than reused directly since plan.go's own version isn't exported and
-// this command's own progress line has no other reason to depend on
-// plan.go.
-func blueprintAdapterLabel(cfg *Config) (adapter, model string) {
-	adapter = cfg.Intent.Adapter
-	if adapter == "" {
-		adapter = "claude"
-	}
-	model = cfg.Intent.Model
-	if model == "" {
-		model = claude.DefaultModel
-	}
-	return adapter, model
-}
-
-// draftBlueprint resolves an Ubxfile's own resources: prose through
-// UBI-41's intent-provider pipeline exactly once (docs/blueprint.md) --
-// the same buildIntentAdapter/Redact/DraftWithRetry/PopulateSources
-// sequence draftFromDoc (propose.go) already runs, with two real
-// differences: the content comes from the already-parsed Ubxfile (never
-// a second file read) and is wrapped with a short preamble instructing
-// the model to preserve every {param_name} token literally rather than
-// resolving it to a concrete example value -- what makes the built
-// function's own parameters genuinely parameterized rather than freezing
-// whatever sample value this one build-time draft happened to pick.
-func draftBlueprint(cmd *cobra.Command, cfg *Config, ubxfile *blueprint.Ubxfile, blueprintName string, timeout time.Duration) (*resolver.IntentFile, error) {
-	adapter, err := buildIntentAdapter(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	content := []byte(blueprintDraftPrompt(ubxfile))
-	redacted, findings := intentprovider.Redact(content)
-	errOut := cmd.ErrOrStderr()
-	for _, f := range findings {
-		fmt.Fprintf(errOut, "warning: redacted possible secret material (%s) before sending the blueprint's own resources: prose to the %s adapter\n", f, adapter.Name())
-	}
-
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
-
-	draft, rawOutput, err := intentprovider.DraftWithRetry(ctx, adapter, blueprintName, redacted, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	source := ubxfile.ResourcesSource
-	if source == "inline" {
-		source = filepath.Join(ubxfile.Dir, blueprint.UbxfileName)
-	}
-	intentprovider.PopulateSources(draft, intentprovider.SourceKindDocument, source, intentprovider.HashDocument(content), adapter.Name(), adapter.Model(), rawOutput)
-	return draft, nil
-}
-
-// blueprintDraftPrompt wraps an Ubxfile's own resolved resources: prose
-// with the parameter-preservation preamble docs/blueprint.md's "The
-// build pipeline" section describes. A blueprint with zero declared
-// params needs no preamble at all -- the prose is passed straight
-// through unchanged, identical to any other intent-provider document.
-func blueprintDraftPrompt(ubxfile *blueprint.Ubxfile) string {
-	if len(ubxfile.Params) == 0 {
-		return ubxfile.Resources
-	}
-
-	var b strings.Builder
-	b.WriteString("This document describes a PARAMETERIZED BLUEPRINT TEMPLATE, not a concrete stack. ")
-	b.WriteString("The following parameters are declared and will be supplied by the caller later, not now:\n")
-	for _, p := range ubxfile.Params {
-		fmt.Fprintf(&b, "- %s (%s)\n", p.Name, p.Type)
-	}
-	b.WriteString("Wherever the prose below writes a token like \"{param_name}\" naming one of these parameters, ")
-	b.WriteString("preserve that EXACT token literally, unresolved, in the corresponding resolved config value -- ")
-	b.WriteString("do NOT invent or guess a concrete example value for it. If a real attribute's own unit or scale ")
-	b.WriteString("differs from a parameter's own natural unit (e.g. a real AWS attribute wants seconds but the ")
-	b.WriteString("parameter is naturally expressed in days, or a real attribute is a count doubled/halved from the ")
-	b.WriteString("parameter), preserve the SAME token but with the conversion written INSIDE the braces, exactly ")
-	b.WriteString("one arithmetic operator and one literal number, e.g. \"{retention_days * 86400}\" -- never resolve ")
-	b.WriteString("it to a concrete computed number, never combine two parameters, never write a more complex ")
-	b.WriteString("expression than one operator against one literal constant. Every other attribute not tied to a ")
-	b.WriteString("declared parameter should be resolved normally, as usual.\n\n")
-
-	if hasListParam(ubxfile.Params) {
-		b.WriteString("One or more of the parameters above is list-typed (list(string)/list(number)). A list-typed ")
-		b.WriteString("parameter is NEVER referenced directly as an ordinary {param_name} token -- only via a resource ")
-		b.WriteString("that iterates over it. If (and only if) the prose below describes a real iteration pattern for ")
-		b.WriteString("a resource -- \"For each value in {list_param}, create...\", or an equivalent phrasing -- set that ")
-		b.WriteString("resource's own for_each field to the list param's bare name (never wrapped in braces). At most one ")
-		b.WriteString("resource in this document may do this. Within THAT SAME resource's own name/config fields (never ")
-		b.WriteString("any other resource's), refer to the current loop element's own value with the ordinary bare ")
-		b.WriteString("{list_param} token (the SAME name you set for_each to), and to its own zero-based position in the ")
-		b.WriteString("list with {list_param_index} (that same name with \"_index\" appended) -- both substituted ")
-		b.WriteString("literally, exactly like any other {param_name} token, never resolved to a concrete example value. ")
-		b.WriteString("This resource's own name must genuinely vary per iteration using one of these two tokens (e.g. ")
-		b.WriteString("\"subnet-{availability_zones}\") -- never a fixed literal, and never a Terraform-style numeric ")
-		b.WriteString("index scheme of your own invention. A resource with for_each set cannot be referenced by any ")
-		b.WriteString("sibling resource, and this document cannot declare outputs: at all if it declares a for_each ")
-		b.WriteString("resource. If the prose doesn't actually describe an iteration pattern, leave every resource's own ")
-		b.WriteString("for_each as \"\" as usual, even though a list param is declared.\n\n")
-	}
-
-	b.WriteString(ubxfile.Resources)
-	return b.String()
-}
-
-// hasListParam reports whether any of params is list-typed (UBI-129) --
-// blueprintDraftPrompt only pays the extra preamble cost (and the model
-// only needs the for_each recognition instructions at all) when a
-// blueprint actually declares one; every blueprint before this ticket
-// declares none and is completely unaffected.
-func hasListParam(params []blueprint.Param) bool {
-	for _, p := range params {
-		if p.Type.IsList() {
-			return true
-		}
-	}
-	return false
-}
+// UBI-224: a blueprint author now writes resources:'s own {param_name}
+// tokens (and the {param * N} arithmetic form, and the for_each list-
+// param {list_param}/{list_param_index} pair) directly into the
+// intent/v1 JSON they produce -- the same wire convention tfconvert
+// (blueprint/decode.go, blueprint/cidrsubnet.go) already follows
+// deterministically, with no AI drafting step involved. See
+// docs/blueprint.md's own "The build pipeline" section for the full
+// token grammar.

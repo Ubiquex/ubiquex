@@ -14,7 +14,6 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/diagram"
 	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
@@ -60,12 +59,10 @@ func crossRefBlueprintUbxfile() *blueprint.Ubxfile {
 
 const crossRefBlueprintUbxfileContent = "lang: all\n\nparams:\n  vpc_id: cross_ref, required\n\nresources: |\n  placeholder -- never re-drafted by a blueprint CALL, only by\n  `ubx blueprint build`, which this test never runs.\n"
 
-// writeCrossRefBlueprintPackage builds crossRefBlueprintIntent via BOTH
-// GenerateGo (the direct-import SDK leg) and GenerateTS (the diagram/md
-// legs -- ExpandCalls prefers ts/ when present), writing a real Ubxfile
-// alongside both into one real on-disk blueprint package -- the SAME
-// dual-build shape writeBlueprintCrossMediumPackage (blueprint_cross_
-// medium_test.go) already established for UBI-74 Slice 5.
+// writeCrossRefBlueprintPackage builds crossRefBlueprintIntent via
+// GenerateGo (the direct-import SDK leg -- the only medium UBI-224 left
+// standing), writing a real Ubxfile alongside it into one real on-disk
+// blueprint package.
 func writeCrossRefBlueprintPackage(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "platform")
@@ -91,20 +88,6 @@ func writeCrossRefBlueprintPackage(t *testing.T) string {
 		if name == "go/go.mod" {
 			content += "\nreplace github.com/ubiquex/ubx-sdk-go => " + sdkGoRoot + "\n"
 		}
-		full := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	tsFiles, err := blueprint.GenerateTS("platform", ubxfile, &intent)
-	if err != nil {
-		t.Fatalf("GenerateTS: %v", err)
-	}
-	for name, content := range tsFiles {
 		full := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
@@ -245,104 +228,6 @@ func crossRefResolvedTagsVpcID(t *testing.T, resolvedPath string) string {
 	return node.Config.Tags["vpc_id"]
 }
 
-// TestBlueprintCall_CrossRefParam_Diagram_ResolvesRealCrossStackValue is
-// UBI-134's own diagram-medium proof: a real .d2 ubx_blueprint node's
-// own "vpc_id" attribute, "@networking.aws_vpc.main.id" -- captured
-// verbatim by diagram/parse.go's own generic Args capture (never diagram/
-// crossref.go's own separate reference-node "@" grammar, which is for a
-// DIFFERENT node class entirely) -- rendered by renderArgLiteral into a
-// real crossStack(...) construction in the synthesized TS caller, then
-// resolved through the identical, unmodified core/resolver.Resolve every
-// other entry point uses. The resolved config must carry the real
-// "vpc-123" id, not the raw "@..." string.
-func TestBlueprintCall_CrossRefParam_Diagram_ResolvesRealCrossStackValue(t *testing.T) {
-	requireHermeticSandbox(t)
-	requireDeno(t)
-	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
-
-	storeName, shared := crossRefStoreFixture(t)
-	remoteConfigDir(t, storeName)
-	seedCrossRefNeighborNetworkingStack(t, shared)
-
-	pkgDir := writeCrossRefBlueprintPackage(t)
-
-	d2Src := `
-platform: "platform call" {
-  class: ubx_blueprint
-  blueprint: ` + jsonQuote(pkgDir) + `
-  vpc_id: "@networking.aws_vpc.main.id"
-}
-`
-	diagramIntent, err := diagram.Parse("crossref.d2", strings.NewReader(d2Src), "payments", nil, diagram.Options{})
-	if err != nil {
-		t.Fatalf("diagram.Parse: %v", err)
-	}
-	if len(diagramIntent.BlueprintCalls) != 1 {
-		t.Fatalf("expected exactly 1 blueprint call from the diagram, got %d", len(diagramIntent.BlueprintCalls))
-	}
-	diagramIntent.Intent.Summary = "payments, via a diagram cross_ref blueprint call"
-	diagramPath := filepath.Join(t.TempDir(), "diagram-draft.json")
-	writeResolverIntentFile(t, diagramPath, diagramIntent)
-
-	ledgerDir := t.TempDir()
-	resolvedPath := filepath.Join(t.TempDir(), "resolved.json")
-	out, err := runUbx(t, env, "plan", diagramPath, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--out", resolvedPath, "--timeout", "60s")
-	if err != nil {
-		t.Fatalf("ubx plan (diagram leg): %v\noutput: %s", err, out)
-	}
-
-	if got := crossRefResolvedTagsVpcID(t, resolvedPath); got != "vpc-123" {
-		t.Fatalf("resolved tags.vpc_id = %q, want the real neighbor value \"vpc-123\"", got)
-	}
-}
-
-// TestBlueprintCall_CrossRefParam_MD_ResolvesRealCrossStackValue is
-// UBI-134's own md-medium proof: a real blueprint_calls args entry
-// (JSON-decoded string->string, intentprovider/validate.go, no special
-// handling for an "@..." value -- confirmed directly, not assumed)
-// carrying the identical raw "@networking.aws_vpc.main.id" value,
-// resolving to the same real concrete value through `ubx plan --from-doc`.
-func TestBlueprintCall_CrossRefParam_MD_ResolvesRealCrossStackValue(t *testing.T) {
-	requireHermeticSandbox(t)
-	requireDeno(t)
-	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
-
-	storeName, shared := crossRefStoreFixture(t)
-	remoteConfigDir(t, storeName)
-	seedCrossRefNeighborNetworkingStack(t, shared)
-
-	pkgDir := writeCrossRefBlueprintPackage(t)
-
-	mdArgs, err := json.Marshal(map[string]string{"vpc_id": "@networking.aws_vpc.main.id"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mdDraftJSON := `{
-	  "schema_version": 1,
-	  "kind": "ubx:intent/v1",
-	  "stack": "payments",
-	  "intent": {"summary": "payments, via an md cross_ref blueprint call", "assumptions": [], "defaults": [], "questions": []},
-	  "resources": [],
-	  "destroys": [],
-	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + jsonQuote(string(mdArgs)) + `}]
-	}`
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: mdDraftJSON})
-
-	docPath := filepath.Join(t.TempDir(), "platform.md")
-	writeFile(t, docPath, "Use blueprint platform with: vpc_id = @networking.aws_vpc.main.id")
-
-	ledgerDir := t.TempDir()
-	resolvedPath := filepath.Join(t.TempDir(), "resolved.json")
-	out, err := runUbx(t, env, "plan", "--from-doc", docPath, "--stack", "payments", "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--out", resolvedPath, "--timeout", "60s")
-	if err != nil {
-		t.Fatalf("ubx plan --from-doc (md leg): %v\noutput: %s", err, out)
-	}
-
-	if got := crossRefResolvedTagsVpcID(t, resolvedPath); got != "vpc-123" {
-		t.Fatalf("resolved tags.vpc_id = %q, want the real neighbor value \"vpc-123\"", got)
-	}
-}
-
 // TestBlueprintCall_CrossRefParam_SDKGo_ResolvesRealCrossStackValue is
 // UBI-134's own direct-import SDK-medium proof: a hand-written Go
 // program imports the built blueprint's OWN package directly (never
@@ -382,9 +267,16 @@ func TestBlueprintCall_CrossRefParam_SDKGo_ResolvesRealCrossStackValue(t *testin
 // blueprint/invoke.go) -- never silently accepted as an ordinary string
 // literal, matching this project's "never a silent pass-through"
 // standard (docs/resolver-adversarial.md).
+//
+// UBI-224 removed diagram/md, the two mediums that used to reach
+// intent.blueprint_calls' own raw-string args (a direct-import SDK
+// program's own ParamCrossRef argument is already a typed sdk.CrossMarker
+// value -- the Go compiler itself refuses a malformed one, so that leg
+// can't reach parseCrossRefArg's own runtime check at all). A hand-
+// written intent/v1 file's blueprint_calls entry -- always a supported
+// input, independent of any authoring medium -- is what still reaches it.
 func TestBlueprintCall_CrossRefParam_MalformedRef_Refused(t *testing.T) {
 	requireHermeticSandbox(t)
-	requireDeno(t)
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 
 	storeName, shared := crossRefStoreFixture(t)
@@ -393,23 +285,26 @@ func TestBlueprintCall_CrossRefParam_MalformedRef_Refused(t *testing.T) {
 
 	pkgDir := writeCrossRefBlueprintPackage(t)
 
-	d2Src := `
-platform: "platform call" {
-  class: ubx_blueprint
-  blueprint: ` + jsonQuote(pkgDir) + `
-  vpc_id: "not-a-valid-reference"
-}
-`
-	diagramIntent, err := diagram.Parse("crossref-malformed.d2", strings.NewReader(d2Src), "payments", nil, diagram.Options{})
+	args, err := json.Marshal(map[string]string{"vpc_id": "not-a-valid-reference"})
 	if err != nil {
-		t.Fatalf("diagram.Parse: %v", err)
+		t.Fatal(err)
 	}
-	diagramIntent.Intent.Summary = "payments, via a malformed cross_ref blueprint call"
-	diagramPath := filepath.Join(t.TempDir(), "diagram-draft.json")
-	writeResolverIntentFile(t, diagramPath, diagramIntent)
+	intentJSON := `{
+	  "schema_version": 1,
+	  "kind": "ubx:intent/v1",
+	  "stack": "payments",
+	  "intent": {"summary": "payments, via a malformed cross_ref blueprint call"},
+	  "resources": [],
+	  "destroys": [],
+	  "blueprint_calls": [{"name": "platform call", "blueprint": ` + jsonQuote(pkgDir) + `, "ref": "", "path": "", "args": ` + string(args) + `}]
+	}`
+	intentPath := filepath.Join(t.TempDir(), "intent.json")
+	if err := os.WriteFile(intentPath, []byte(intentJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	ledgerDir := t.TempDir()
-	out, err := runUbx(t, env, "plan", diagramPath, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	out, err := runUbx(t, env, "plan", intentPath, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
 	if err == nil {
 		t.Fatalf("expected ubx plan to refuse a malformed cross_ref argument, got success:\n%s", out)
 	}

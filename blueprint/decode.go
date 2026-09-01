@@ -335,11 +335,10 @@ func refTarget(v any) (string, bool) {
 // build-time-only, blueprint-codegen-only concept with no meaning to the
 // resolver at all) produced exclusively by tfconvert (UBI-125) for a
 // Terraform built-in function it recognized and ported (cidrsubnet(),
-// currently the only one -- see blueprint/cidrsubnet.go). An ordinary
-// AI-drafted blueprint never produces this shape (nothing in
-// blueprintDraftPrompt, cli/blueprint.go, ever tells the model about
-// it), so recognizing it in renderAny is purely additive -- zero
-// behavior change for every blueprint built before UBI-125.
+// currently the only one -- see blueprint/cidrsubnet.go). An ordinary,
+// directly-authored blueprint never produces this shape, so recognizing
+// it in renderAny is purely additive -- zero behavior change for every
+// blueprint built before UBI-125.
 func fnCallMarker(v any) (name string, args []any, ok bool) {
 	m, ok := v.(map[string]any)
 	if !ok || len(m) != 1 {

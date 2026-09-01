@@ -17,20 +17,20 @@ import (
 	"github.com/ubiquex/ubiquex/mdrender"
 )
 
-// newRenderCmd is UBI-47 slice 4's own render half of the diagram medium
-// (docs/diagram-medium.md's own "render direction"), extended by UBI-86
-// with a second output format: walk a stack's own live resources and
-// emit either the canonical D2 rendering of their current, resolved
-// shape (the default, unchanged since UBI-47), or, with --md, a
-// readable markdown "current state" document (docs/render-md.md) --
-// both share the identical ledger read (diagram.Walk), so the two
-// formats can never disagree about WHICH resources exist or how they're
-// grouped, only how that same real data is presented. The literal
-// converse of `ubx propose --from-diagram`, and a projection surface
-// this project's own "every medium is a projection, never a second
-// source of truth" thesis promised (docs/architecture.md). Never writes
-// to the ledger, never resolves anything -- a pure read, same posture
-// `ubx status`'s own fleet walk already holds.
+// newRenderCmd is UBI-47 slice 4's own read-only projection of ledger
+// state, extended by UBI-86 with a second output format: walk a stack's
+// own live resources and emit either the canonical D2 rendering of
+// their current, resolved shape (the default, unchanged since UBI-47),
+// or, with --md, a readable markdown "current state" document
+// (docs/render-md.md) -- both share the identical ledger read
+// (diagram.Walk), so the two formats can never disagree about WHICH
+// resources exist or how they're grouped, only how that same real data
+// is presented. A projection surface this project's own "every medium
+// is a projection, never a second source of truth" thesis promised
+// (docs/architecture.md) -- UBI-224 removed the diagram/md AUTHORING
+// mediums this once also converse'd with, never this command's own
+// output side. Never writes to the ledger, never resolves anything -- a
+// pure read, same posture `ubx status`'s own fleet walk already holds.
 //
 // --check reuses `ubx sdk gen`'s own "regenerate, meant to be committed
 // and diffed by CI" discipline, but makes the diff-and-fail step a real,
@@ -51,7 +51,6 @@ func newRenderCmd() *cobra.Command {
 		md              bool
 		fromDrift       string
 		syncOverrides   bool
-		write           bool
 		providerPath    string
 		source          string
 		providerVersion string
@@ -71,9 +70,6 @@ func newRenderCmd() *cobra.Command {
 			}
 			if fromDrift != "" && syncOverrides {
 				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift and --sync-overrides are mutually exclusive")}
-			}
-			if write && !syncOverrides {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --write requires --sync-overrides")}
 			}
 			if (fromDrift != "" || syncOverrides) && !md {
 				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift/--sync-overrides require --md (UBI-86 Part 2)")}
@@ -121,7 +117,7 @@ func newRenderCmd() *cobra.Command {
 			// authored in (autodetectMedium, plan.go's own established
 			// auto-detection, reused unchanged).
 			if fromDrift != "" || syncOverrides {
-				return runRenderOverrideGeneration(cmd, outWriter, ledger, cfg, ledgerDir, stack, fromDrift, write,
+				return runRenderOverrideGeneration(cmd, outWriter, ledger, cfg, ledgerDir, stack, fromDrift,
 					providerPath, source, providerVersion, providerConfig, timeout)
 			}
 
@@ -172,9 +168,8 @@ func newRenderCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "write the rendered file here instead of stdout")
 	cmd.Flags().BoolVar(&check, "check", false, "don't write -- byte-compare the freshly emitted render against --out's own current content, exiting 1 on any difference (requires --out)")
 	cmd.Flags().BoolVar(&md, "md", false, "emit a readable markdown current-state document instead of the default D2 diagram (UBI-86, docs/render-md.md)")
-	cmd.Flags().StringVar(&fromDrift, "from-drift", "", "generate a single override statement for one drifted resource's own address, in the calling stack's own authoring medium (requires --md; mutually exclusive with --sync-overrides)")
-	cmd.Flags().BoolVar(&syncOverrides, "sync-overrides", false, "walk the whole stack's drift and generate an override statement for every drifted resource, in the calling stack's own authoring medium (requires --md; mechanical, zero AI)")
-	cmd.Flags().BoolVar(&write, "write", false, "with --sync-overrides, append the generated override statement(s) directly into the calling stack's own source file instead of printing them (diagram/md authoring only -- refused for a Go/TS/Python-authored stack)")
+	cmd.Flags().StringVar(&fromDrift, "from-drift", "", "generate a single override statement for one drifted resource's own address, in the calling stack's own SDK language (requires --md; mutually exclusive with --sync-overrides)")
+	cmd.Flags().BoolVar(&syncOverrides, "sync-overrides", false, "walk the whole stack's drift and generate an override statement for every drifted resource, in the calling stack's own SDK language (requires --md; mechanical, zero AI)")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source; only used with --from-drift/--sync-overrides)")
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version; only used with --from-drift/--sync-overrides)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source; only used with --from-drift/--sync-overrides)")
@@ -193,7 +188,6 @@ func runRenderOverrideGeneration(
 	ledger *core.Ledger,
 	cfg *Config,
 	ledgerDir, stack, fromDrift string,
-	write bool,
 	providerPath, source, providerVersion, providerConfig string,
 	timeout time.Duration,
 ) error {
@@ -258,22 +252,6 @@ func runRenderOverrideGeneration(
 		}
 		buf.WriteString(stmt)
 		buf.WriteString("\n")
-	}
-
-	if write {
-		if medium == "go" || medium == "ts" || medium == "py" {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("render --sync-overrides --write: not supported for an SDK-authored stack (%s) -- the override statement must be placed inside the stack's own describe function body, which this command can't safely splice into; copy the printed statement in by hand instead (run without --write)", candidates[0].path)}
-		}
-		f, err := os.OpenFile(candidates[0].path, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("render --sync-overrides --write: %w", err)}
-		}
-		defer f.Close()
-		if _, err := f.WriteString("\n" + buf.String()); err != nil {
-			return &ExitCodeError{Code: 2, Err: fmt.Errorf("render --sync-overrides --write: %w", err)}
-		}
-		fmt.Fprintf(outWriter, "wrote %d override statement(s) into %s\n", len(drifted), candidates[0].path)
-		return nil
 	}
 
 	outWriter.Write(buf.Bytes())

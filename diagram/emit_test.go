@@ -8,7 +8,6 @@ import (
 	"oss.terrastruct.com/d2/d2parser"
 
 	"github.com/ubiquex/ubiquex/core"
-	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // These tests exercise emitD2/attrTooltip/d2Quote directly -- the text-
@@ -244,49 +243,6 @@ func TestEmitD2_Deterministic_AcrossRepeatedCalls(t *testing.T) {
 		if got := mustEmitD2(t, resources); got != first {
 			t.Fatalf("emitD2 output changed across repeated calls with identical input:\nfirst:\n%s\ngot:\n%s", first, got)
 		}
-	}
-}
-
-func TestEmitD2_RoundTripsThroughParse(t *testing.T) {
-	// Emit's own output, fed back through the real, unmodified Parse, is
-	// real proof of "render/parse share one convention, not two" --
-	// docs/diagram-medium.md's own design center for this medium being
-	// bidirectional by construction, not just each direction tested in
-	// isolation.
-	resources := []emitResource{
-		{
-			addr:      core.Address{Stack: "payments", Type: "aws_db_instance", Name: "db"},
-			attrs:     map[string]interface{}{"engine": "postgres"},
-			dependsOn: []string{"payments.aws_vpc.vpc"},
-			crossPins: []core.ResolutionInput{{Kind: "cross_stack_pin", Resource: "networking.aws_vpc.main", PinnedHead: "abc"}},
-		},
-		{addr: core.Address{Stack: "payments", Type: "aws_vpc", Name: "vpc"}},
-	}
-	out := mustEmitD2(t, resources)
-
-	neighborDir := t.TempDir()
-	intent := mustParse(t, out, "payments", []resolver.DeclaredProvider{awsProvider()},
-		Options{NeighborLedgers: map[string]string{"networking": neighborDir}})
-
-	if len(intent.Resources) != 2 {
-		t.Fatalf("resources = %+v, want 2 (the reference node must not become a resource)", intent.Resources)
-	}
-	db := resourceByName(t, intent, "db")
-	if db.Type != "aws_db_instance" {
-		t.Fatalf("db.Type = %q, want aws_db_instance -- class: round-tripped incorrectly", db.Type)
-	}
-	if len(db.DependsOn) != 1 || db.DependsOn[0] != "payments.aws_vpc.vpc" {
-		t.Fatalf("db.DependsOn = %v, want [payments.aws_vpc.vpc] -- the r0 -> r1 edge must round-trip into depends_on", db.DependsOn)
-	}
-	vpc := resourceByName(t, intent, "vpc")
-	if vpc.Type != "aws_vpc" {
-		t.Fatalf("vpc.Type = %q, want aws_vpc", vpc.Type)
-	}
-	if len(intent.Intent.Defaults) != 1 {
-		t.Fatalf("defaults = %+v, want exactly 1 -- the emitted reference-node edge must round-trip into the $cross structural-limitation note", intent.Intent.Defaults)
-	}
-	if !strings.Contains(intent.Intent.Defaults[0].Text, "networking.aws_vpc.main") {
-		t.Fatalf("defaults[0].Text = %q, want it to name the round-tripped reference address", intent.Intent.Defaults[0].Text)
 	}
 }
 
