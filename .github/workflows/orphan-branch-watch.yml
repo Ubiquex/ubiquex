@@ -27,6 +27,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: read
 
 env:
   TRACKING_ISSUE_LABEL: orphan-branch
