@@ -199,8 +199,12 @@ params:
   queue_name: string, required
   retention_days: number, default 1
 
-resources: ./platform.md
+resources: ./resources.json
 ```
+
+(UBI-224, 2026-09-01: `resources:` used to name a `.md` file or inline
+prose. It now names a `.json` file or inline JSON -- see this section's
+own `resources:` entry, below, for the current format.)
 
 **`lang:`** — a single scalar value, one of `go`/`ts`/`py`/`all`; any
 other value is a hard error (never a silent no-op). Validated here, but
@@ -230,18 +234,47 @@ parameter). `bool` isn't in any example in the design record either but
 costs nothing to support now (`true`/`false` default). Anything else
 (`list`, `map`, a typo) is a hard parse error, never a best-effort guess.
 
-**`resources:`** — either a path to an existing `.md` file (resolved
-relative to the Ubxfile's own directory) or inline prose written directly
-in the Ubxfile. Disambiguated the same way a human would read it, not by
-a sigil: a single-line value ending in `.md` that actually resolves to a
-real file on disk is treated as a path and that file's content is read
-in its place; anything else (multi-line, or a `.md`-looking path that
-doesn't exist, or prose with no `.md` suffix at all) is treated as
-literal inline prose, verbatim. A YAML block scalar (`resources: |`)
-works for multi-line inline prose the same way it would for any other
-YAML value.
+**`resources:`** (UBI-224, 2026-09-01: redefined; was prose, see below)
+-- either a path to an existing `.json` file (resolved relative to the
+Ubxfile's own directory) or inline JSON written directly in the Ubxfile.
+Disambiguated the same way a human would read it, not by a sigil: a
+single-line value ending in `.json` that actually resolves to a real
+file on disk is treated as a path and that file's content is read in its
+place; anything else (multi-line, or a `.json`-looking path that doesn't
+exist, or JSON with no `.json` suffix at all) is treated as literal
+inline JSON, verbatim. A YAML block scalar (`resources: |`) works for
+multi-line inline JSON the same way it would for any other YAML value.
+The JSON itself must be a pre-resolved intent/v1 document -- the SAME
+wire shape `ubx resolve --from-code --out <file>`/`ubx resolve
+<file>.json` already produce/consume -- parsed directly into
+`resolver.IntentFile` by `blueprint build`, never interpreted: a
+blueprint author produces it themselves, via the SDK or `ubx blueprint
+convert`, before checking the Ubxfile in. `{param_name}` tokens (and the
+`{param * N}` arithmetic form, and the for_each `{list_param}`/
+`{list_param_index}` pair -- see "List-typed parameters + iteration,"
+below) go directly into that JSON's own config values; nothing drafts
+them anymore.
+
+**Before UBI-224**, `resources:` named an existing `.md` file or inline
+prose, resolved into this same intent/v1 shape by `ubx blueprint build`
+itself calling through UBI-41's intent-provider pipeline exactly once
+(the next section, "The build pipeline," describes that machinery as
+closed history -- it no longer runs). A blueprint author now does that
+resolving step themselves, ahead of time, by whatever means produces a
+correct intent/v1 document (writing an SDK program and running `ubx
+resolve --from-code`, or hand-authoring the JSON directly for a simple
+case) -- `ubx blueprint build` only ever parses the result.
 
 ## The build pipeline: UBI-41's own machinery, exactly once
+
+> **Removed (UBI-224, 2026-09-01).** `ubx blueprint build` no longer
+> calls the intent provider at all -- `resources:` is now a pre-resolved
+> intent/v1 document (see "The Ubxfile format," above), and build only
+> parses it. The section below is the closed historical record of the
+> draft step that used to run here; it does not describe current
+> behavior. "Codegen design," the next section, is unaffected -- it
+> already started from a resolved `*resolver.IntentFile` regardless of
+> how that file was produced, and still does.
 
 `ubx blueprint build .` resolves `resources:` through the identical
 `intentprovider.DraftWithRetry` call `cli/propose.go`'s `draftFromDoc`
@@ -388,46 +421,41 @@ second one.
 - `lang:` naming an unsupported language — hard error, not a silent no-op.
 - A `params:` entry with neither `required` nor `default <value>`, or
   with both, or naming an unrecognized type — hard parse error.
-- `resources:` naming a `.md` path that doesn't exist — treated as inline
-  prose (per the disambiguation rule above), which will read strangely to
-  the intent provider but is never a silent file-not-found; if this proves
-  confusing in practice, a stricter opt-in path marker is future work, not
-  designed here.
+- `resources:` naming a `.json` path that doesn't exist -- treated as
+  inline JSON (per the disambiguation rule above), which will fail to
+  parse but is never a silent file-not-found; if this proves confusing
+  in practice, a stricter opt-in path marker is future work, not
+  designed here. (UBI-224, 2026-09-01: was `.md`, fell back to inline
+  prose read by the intent provider -- see this section's own historical
+  note below.)
 - Two resources whose intent `Name` normalizes to the same Go identifier
   — hard build error, never a silent overwrite.
 - A dependency cycle between resources (via `$ref` or `DependsOn`) — hard
   build error during topological sort, never a silently-arbitrary order.
-- A `{param_name}` token in prose naming a parameter NOT declared in
-  `params:` — the intent provider has no way to know this is meant as a
-  placeholder at all (nothing in the wrapped instruction names an
-  undeclared token), so it is very likely resolved to a literal
-  concrete-looking string instead of preserved — codegen has no way to
-  distinguish that from a real literal after the fact. Not solved this
-  slice; a future slice could scan the RAW prose for `{...}` tokens before
-  drafting and hard-fail if one doesn't match a declared param, catching
-  the mismatch before spending an AI call on it — named here as a real
-  gap, not silently assumed safe.
 - A resource `Config` value that is a JSON-embedded STRING containing its
   own escaped JSON with a `$ref` inside (`core/resolver/refs.go`'s own
   "JSON-embedded refs" amendment, relevant to IAM policy documents
-  specifically) — checked directly, not left speculative: `intentprovider/
-  validate.go`'s own `wireResourceIntent.Config` is `string` at the wire
-  level (what an adapter must literally emit — `"config":
-  "{\"instance_class\":\"db.t3.small\"}"`, one level of JSON-string
-  escaping around the whole config object), but `parseAndValidate`
-  unwraps that string into a real `json.RawMessage` object BEFORE
-  `DraftWithRetry` ever returns — confirmed by reading `parseAndValidate`
-  and by a real hermetic test failure caught live (`cli/blueprint_test.go`
-  originally handed its fake adapter a raw JSON object for `config`
-  instead of a JSON-encoded string, and validation correctly rejected it:
-  "cannot unmarshal object into Go struct field wireResourceIntent.
-  resources.config of type string" — fixed by matching
-  `propose_from_doc_test.go`'s own fixture convention). So by the time
-  `GenerateGo` ever sees a `resolver.IntentFile`, every resource's own
-  `Config` is already a genuine JSON object one level deep — Slice 1's
+  specifically) -- checked directly, not left speculative. `resources:`'s
+  own JSON must already carry a genuine object for a resource's own
+  `config` (UBI-224, 2026-09-01: checked by `json.Unmarshal` directly
+  against `resolver.IntentFile`; before this, `intentprovider/
+  validate.go`'s own wire validation required a JSON-encoded STRING and
+  unwrapped it into a real object before this codegen step ever ran --
+  that unwrapping is gone along with the package that did it). So by the
+  time `GenerateGo` ever sees a `resolver.IntentFile`, every resource's
+  own `Config` is already a genuine JSON object one level deep -- Slice 1's
   value-translation walk (recursing through real JSON structure, never
   into a string value's own embedded-JSON content) is exactly the right
   depth for this pipeline's own real shape, not a lucky guess.
+
+  (UBI-224, 2026-09-01: this section used to also name a `{param_name}`-
+  token-not-declared-in-`params:` adversarial case here, tied to the
+  intent provider silently resolving an unrecognized placeholder to a
+  literal. It no longer applies -- nothing drafts prose anymore, so
+  there's no drafting step left to silently mis-resolve a token; an
+  author who mistypes a `{param_name}` in their own hand-produced JSON
+  just gets that literal text in the resolved config, the same as any
+  other typo in hand-written input.)
 
   A DIFFERENT case genuinely does reach `GenerateGo` as a plain string
   with a `$ref` embedded inside its own escaping: an attribute whose OWN
@@ -953,13 +981,22 @@ live draft/compile/import leg above.
 
 ## Cross-medium calling (Slice 5)
 
+> **Two of three producers removed (UBI-224, 2026-09-01).** The diagram
+> and md calling conventions below (their own subsections) are closed
+> historical record -- neither medium exists anymore. The shared
+> `BlueprintCalls` wire field and its expansion mechanism ("Invocation,"
+> below) are NOT superseded: a hand-written intent/v1 file's
+> `blueprint_calls` entry is still real, still expanded by `blueprint.
+> ExpandCalls` exactly as described, independent of any authoring
+> medium. The direct-import SDK path (Slice 2, UBI-74) never used this
+> field at all and is entirely unaffected.
+
 **One shared wire field, two structural producers, one expansion
 mechanism.** `resolver.IntentFile` gains `BlueprintCalls
 []BlueprintCall` (`core/resolver/resolver.go`) — purely additive and
 optional, matching `DependsOn`'s own precedent exactly: every other
-intent/v1 producer (a hand-written file, `ubx blueprint build`'s own
-draft, an SDK program's own evaluated output) leaves it nil and is
-completely unaffected. A `BlueprintCall` names a blueprint reference
+intent/v1 producer (a hand-written file, an SDK program's own evaluated
+output) leaves it nil and is completely unaffected. A `BlueprintCall` names a blueprint reference
 (`Blueprint`/`Ref`/`Path`, mirroring `blueprint.Pull`'s own three
 parameters exactly, UBI-74 Slice 3) plus `Args map[string]string` —
 ALWAYS string-valued regardless of a param's own real declared type,
@@ -975,11 +1012,9 @@ design** — `resolveOnce` hard-refuses (`ErrUnexpandedBlueprintCalls`) if
 silently ignoring an un-expanded entry. Expansion is `blueprint.
 ExpandCalls`'s own job, spliced into `cli/resolve.go`'s `RunE` right
 before `resolver.Resolve` is called — the ONE shared point every
-intent/v1 document passes through regardless of which medium produced
-it (a hand-written file, a diagram-produced draft via `ubx propose
---from-diagram`, or an md-drafted document via `ubx propose --from-doc`
-— all three are read as a plain positional argument to `ubx resolve`
-eventually). `--from-code` never needs expansion at all: an SDK
+intent/v1 document passes through regardless of how it was produced (a
+hand-written file, read as a plain positional argument to `ubx
+resolve`). `--from-code` never needs expansion at all: an SDK
 program's own direct function call to a blueprint package already
 happened in-process by the time its own intent/v1 is emitted (UBI-74
 Slice 2's own mechanism, unchanged) — there is nothing left to expand.
@@ -1758,6 +1793,16 @@ survives redistribution to a real, independent second location, exactly
 the property this slice's own success bar required.
 
 ## Provenance parity across all three calling mediums: UBI-126
+
+> **Two of three mediums removed, the fix itself is not (UBI-224,
+> 2026-09-01).** Diagram and md are gone as `blueprint.ExpandCalls`
+> producers; the direct-SDK-import provenance mechanism this section
+> describes (`PushBlueprintSource`/`PopBlueprintSource`) is unaffected
+> and still runs on every direct-import blueprint call. `ExpandCalls`
+> itself still stamps provenance identically for a hand-written
+> `blueprint_calls` entry -- the "byte-identical across producers" claim
+> below now has one fewer producer to be identical across, not a
+> different mechanism.
 
 UBI-126 (filed at the close of UBI-74's own 8-slice retrospective,
 2026-08-05, the #1 gap named there) — a real correctness/consistency

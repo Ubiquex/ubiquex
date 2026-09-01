@@ -1,5 +1,16 @@
 # Diagram medium — D2 only (UBI-47)
 
+> **Partly superseded (UBI-224, 2026-09-01): the diagram AUTHORING half
+> this document specifies (parse, `ubx propose --from-diagram`, `diagram/
+> parse.go`/`crossref.go`/`topology.go`) is removed.** The SDK is now the
+> only authoring medium (docs/architecture.md's own Thesis). The RENDER
+> half ("The render direction" section, below) is not superseded --
+> `diagram.Walk`/`Emit` and `ubx render` are unaffected, still real, still
+> load-bearing; docs/render-md.md's own markdown-output sibling references
+> that section directly. Left in place, unedited below, as the real
+> historical design record for the parse side, and the still-current
+> design record for the render side.
+
 > Session 1, design only, no code. The fourth authoring medium, and the
 > first that is bidirectional by construction: **parse** (a `.d2` file →
 > an `intent/v1` draft, via `ubx propose --from-diagram`) and **render**

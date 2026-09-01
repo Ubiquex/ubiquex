@@ -47,14 +47,10 @@ fixed this session.
 | `core/executor` | The `ship` failure-state machine (docs/executor.md). | Keep. |
 | `core/lookuphints` | Generated, shipped table of per-type "how to identify this resource" teaching-error hints. | Keep — already a good precedent. |
 | `core/resolver` | Resolves a hand-written/generated intent file into a draft change proposal (docs/resolver.md). | Keep. |
-| `diagram/` | UBI-47's topology parser + emitter for the D2 diagram-authoring medium. | Keep — named in the ticket as a good precedent. |
-| `diagram/conformance/runner` | Diagram medium's own golden-fixture conformance runner. | Keep — consistent nested pattern. |
+| `diagram/` | `ubx render`'s topology emitter, walking ledger state into a canonical D2 diagram (UBI-47; the topology PARSER this package once also held, and the `diagram/conformance/runner` golden-fixture runner that tested it, were removed UBI-224 along with diagram as an authoring medium -- `walk.go`/`emit.go` are unaffected and remain this package's whole reason to exist now). | Keep. |
 | `discovery/` | UBI-45's cloud-side discovery: ARN → provider lookup shape, tag-scoped enumeration. | Keep. |
 | `vcs/github` | UBI-11 stage 1's PR-merge acceptance derivation (git + GitHub API), plus the real, general-purpose GitHub client the other four `vcs/` packages and `cli/verify.go` use directly. UBI-220 moved this from a bare `github/` at the repo root into `vcs/` alongside its four VCS-host siblings (`vcs/gitlab`, `vcs/bitbucketcloud`, `vcs/bitbucketserver`, `vcs/azuredevops`), none of which were audited as their own row here before this move, a real, separate gap this entry does not close. | Keep, now under `vcs/`. |
 | `goeval/` | The Go SDK program evaluator (compile once, sandbox-run twice). | Keep — see "The `sdkeval`/`goeval`/`pyeval` family," below. |
-| `intentprovider/` | UBI-41's boundary for LLM-authored intent drafts (the md-authoring medium). | Keep — named in the ticket as a good precedent. |
-| `intentprovider/claude` | intentprovider's first real `Adapter` (the Claude API). | Keep. |
-| `intentprovider/conformance` | intentprovider's own fixture-runner. | Keep. |
 | `ledgerstore/` | `core.LedgerStore` implementations (git-native, S3, ...). | Keep. |
 | `ledgerstore/internal/lockprobe` | A real subprocess (not a goroutine) used only by ledgerstore's own live conformance tests to exercise distributed lock/CAS races as genuinely separate OS processes. | Keep — precisely named, correctly `internal/`. |
 | `provider/` | Launches real Terraform/OpenTofu provider binaries and speaks their real gRPC wire protocol. | Keep — see "Not every foreign name is a problem," below. |
@@ -147,11 +143,13 @@ as `tfstate`.
 ## The `conformance/` naming tension — audited, accepted, not renamed
 
 The original, top-level `conformance/` package (UBI-9) predates every
-later `<subsystem>/conformance/` package (`diagram/conformance`,
-`intentprovider/conformance`, `sdk/conformance`) and is the one
-inconsistent case in an otherwise-clean pattern: everywhere else,
-"conformance" is a nested suffix naming which subsystem it's testing;
-here it's a bare top-level name. Real, but not urgent enough to force a
+later `<subsystem>/conformance/` package (`sdk/conformance`; UBI-224,
+2026-09-01: `diagram/conformance` and `intentprovider/conformance` were
+two more such examples, removed along with diagram/markdown as authoring
+mediums) and is the one inconsistent case in an otherwise-clean pattern:
+everywhere else, "conformance" is a nested suffix naming which subsystem
+it's testing; here it's a bare top-level name. Real, but not urgent
+enough to force a
 rename this session for cosmetic gain alone — `conformance/` still
 passes the one-sentence-purpose bar on its own (per-resource-type
 provider conformance, the original and still-largest of the four), and
@@ -280,8 +278,8 @@ touch — unless the package's entire reason to exist IS being a client
 for that exact external thing (a generated protocol binding, a named
 cloud product's own API client), in which case the external name IS the
 correct, precise one.** Keep names short and lowercase, matching
-`audit/`, `diagram/`, `sdkeval` → `tseval`/`goeval`/`pyeval`,
-`intentprovider/` — every one states its role in roughly two words.
+`audit/`, `diagram/`, `sdkeval` → `tseval`/`goeval`/`pyeval` -- every one
+states its role in roughly two words.
 When a package implements an existing CLI verb one-to-one, prefer
 naming it after that verb (`tfwrite` → `writeback`, matching `ubx
 writeback`) — the reader already knows that vocabulary. Test the name

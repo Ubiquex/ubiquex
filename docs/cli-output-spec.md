@@ -19,8 +19,8 @@
    what the human signs — a titled block ("AI defaults — you are signing
    these:"), never a trailing list.
 5. **The honesty machinery narrates**: long operations (provider calls,
-   read-back reconciliation, intent-provider drafting, fleet walks) show live
-   progress with elapsed time. The read-back verification line is mandatory —
+   read-back reconciliation, fleet walks) show live progress with elapsed
+   time. The read-back verification line is mandatory —
    "provider reported success — verifying via read-back (attempt N/M)" is a
    product differentiator currently working in silence.
 6. **Teaching errors enumerate all modes** and name config alternatives with
@@ -155,7 +155,6 @@ well).
 
 ## Progress narration (cross-verb)
 
-- plan --from-doc: "drafting via claude:claude-sonnet-5… ✓ validated · resolving…"
 - sdk gen / fleet scans: per-item counters ("aws 1,682 types · 214/1,682")
 - Any reconcile/backoff loop: attempt counter + elapsed, always.
 
@@ -195,25 +194,23 @@ unverified docs URL alongside it.
 
 ## plan — medium auto-detection
 
-- `ubx plan` bare (no positional argument, no `--from-*` flag): if
-  exactly ONE medium file exists in `--ledger-dir` (default `.`), plan
+(UBI-224, 2026-09-01: markdown and diagram were also auto-detectable
+authoring mediums, through 2026-08. The SDK is now the only one, so
+"medium" below means "SDK program" -- there is no longer a real choice
+of medium to detect between, only how many SDK-program candidates
+`--ledger-dir` contains.)
+
+- `ubx plan` bare (no positional argument, no `--from-code` flag): if
+  exactly ONE SDK program exists in `--ledger-dir` (default `.`), plan
   it automatically — no flag needed.
 - Multiple candidates: never guess — a teaching error lists every
-  candidate with its own correct flag ("plan: multiple mediums found:
-  platform.md, topology.d2 — pick one: ubx plan --from-doc platform.md
-  | ubx plan --from-diagram topology.d2").
+  candidate with its own correct invocation ("plan: multiple SDK
+  programs found: create_widget.ts, create_queue.ts -- pick one: ubx
+  plan --from-code create_widget.ts | ubx plan --from-code
+  create_queue.ts").
 - Zero candidates: the ordinary "requires exactly one of ..." error,
   unchanged.
 - **Detection rules, as built** (`autodetectMedium`, cli/plan.go):
-  - `.md` → `--from-doc` candidate, **except** a fixed, case-insensitive
-    denylist of well-known project-meta markdown basenames (with or
-    without the `.md` extension): `readme`, `changelog`, `license`,
-    `contributing`, `code_of_conduct`, `security`, `authors`, `notice`.
-    This is the "README.md-class files must never false-positive" rule
-    — a project's own README (or CHANGELOG/LICENSE/etc.) sitting next
-    to a real authoring doc is never itself mistaken for one.
-  - `.d2` → `--from-diagram` candidate, unconditionally (no ambiguous
-    non-authoring `.d2` convention exists to guard against).
   - `.ts`/`.go`/`.py` → `--from-code` candidate, **only** if the file's
     own content contains the real SDK import marker for that language
     (`"@ubx/sdk"` for TS, `"github.com/ubiquex/ubx-sdk-go/runtime"` for
@@ -231,23 +228,9 @@ unverified docs URL alongside it.
     concept achieves the identical real-world behavior (bare `ubx plan`
     run from a project directory sees that directory's own files)
     without reintroducing that exact class of gap.
-  - `--from-*` flags remain for explicit selection, unconditionally —
-    auto-detection only ever fires when none of them (and no positional
-    argument) was given.
-
-## plan — progress
-
-Before the receipt, a progress line renders for the `--from-doc` case
-specifically (the intent-provider call is a real, seconds-long network
-round trip; parsing a `.d2` diagram or evaluating an SDK program is
-effectively instant, so neither gets one):
-```
-drafting via claude:claude-sonnet-5… ✓ · resolving…
-```
-Printed by `ubx plan` itself (not inside the shared `draftFromDoc`,
-which `ubx propose --from-doc` also calls) — `ubx propose --from-doc`
-never resolves, so "· resolving…" would be a lie there; this keeps
-`propose`'s own output completely untouched.
+  - `--from-code` remains for explicit selection, unconditionally --
+    auto-detection only ever fires when it (and no positional argument)
+    was given.
 
 ## plan — receipt format (exact, from the founder's markup, resolved)
 
