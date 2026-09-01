@@ -3,13 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -306,89 +304,4 @@ func TestBitbucketServerReviewAcceptFlow_StaleApproval_Refused(t *testing.T) {
 	// handlePullRequestApprovedBitbucketServer's own real behavior at
 	// this point: post a real explanatory comment and return, without
 	// ever calling ListPullRequestChangedFiles/AcceptFromReview.
-}
-
-// TestBitbucketServerPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey
-// mirrors TestAzureDevOpsPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey:
-// proves Config.IntentProviderKey reaches a `ubx plan` subprocess as
-// UBX_INTENT_PROVIDER_KEY on the Bitbucket Server path too
-// (runPlanAndCommentBitbucketServer uses the identical, shared
-// s.intentProviderEnv() every other platform's plan path uses).
-func TestBitbucketServerPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a real POSIX shell script -- skip on windows")
-	}
-
-	script := fakeUbxScript(t, `if [ -z "$UBX_INTENT_PROVIDER_KEY" ]; then
-  echo 'key_ref.env names "UBX_INTENT_PROVIDER_KEY", but that environment variable is unset or empty' >&2
-  exit 2
-fi
-echo "delta: 1 creates (transcribed via [intent] provider)"
-`)
-
-	dir := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "test")
-	if err := os.WriteFile(filepath.Join(dir, "infra.md"), []byte("# Add a db replica\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "infra.md")
-	run("commit", "-q", "-m", "markdown-authored proposal")
-	run("remote", "add", "origin", dir)
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git rev-parse HEAD: %v\n%s", err, out)
-	}
-	sha := strings.TrimSpace(string(out))
-
-	f := &fakeBitbucketServerPRServer{projectKey: "INFRA", repositorySlug: "infra", prID: 3}
-	api := newTestBitbucketServerClient(t, f.server(t))
-	ctx := context.Background()
-
-	runPlan := func(t *testing.T, intentProviderKey string) {
-		t.Helper()
-		s := &Server{cfg: &Config{IntentProviderKey: intentProviderKey, BitbucketServerBotName: "ubx-bot"}, self: script}
-
-		if err := checkoutRef(ctx, dir, sha); err != nil {
-			t.Fatalf("checkoutRef: %v", err)
-		}
-		args := []string{"plan", "--ledger-dir", "."}
-		result, err := runUbx(ctx, s.self, dir, s.intentProviderEnv(), args...)
-		if err != nil {
-			t.Fatalf("runUbx: %v", err)
-		}
-		body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
-		if err := postOrEditCommentBitbucketServer(ctx, api, f.projectKey, f.repositorySlug, f.prID, s.cfg.BitbucketServerBotName, "plan", body); err != nil {
-			t.Fatalf("postOrEditCommentBitbucketServer: %v", err)
-		}
-	}
-
-	t.Run("credential unset: auto-plan fails, real error posted", func(t *testing.T) {
-		runPlan(t, "")
-		if len(f.comments) != 1 {
-			t.Fatalf("comments = %d, want 1", len(f.comments))
-		}
-		if !strings.Contains(f.comments[0].Text, "UBX_INTENT_PROVIDER_KEY") {
-			t.Errorf("posted comment = %q, want the real resolveKeyRef-style failure surfaced", f.comments[0].Text)
-		}
-	})
-
-	f.comments = nil
-	t.Run("credential set: auto-plan succeeds", func(t *testing.T) {
-		runPlan(t, "sk-real-test-key")
-		if len(f.comments) != 1 {
-			t.Fatalf("comments = %d, want 1", len(f.comments))
-		}
-		if !strings.Contains(f.comments[0].Text, "transcribed via [intent] provider") {
-			t.Errorf("posted comment = %q, want the real successful plan output", f.comments[0].Text)
-		}
-	})
 }

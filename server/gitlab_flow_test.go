@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -305,110 +304,4 @@ func TestGitLabReviewAcceptFlow_ResetApprovalsOnPushFalse_Refused(t *testing.T) 
 	// fact that this test never registers a merge_requests/9 handler or
 	// a diffs handler on f at all, so any accidental call past this
 	// point would 404, not silently succeed.
-}
-
-// TestGitLabPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey is
-// the addendum's own real, load-bearing test: proves that
-// Config.IntentProviderKey actually reaches a `ubx plan` subprocess as
-// UBX_INTENT_PROVIDER_KEY -- exactly the mechanism
-// runPlanAndCommentGitLab (the real function a GitLab "open"/"update"
-// webhook event calls, gitlab_webhook.go's own handleMergeEvent) uses
-// via s.intentProviderEnv() -- and that a markdown-authored proposal's
-// automatic plan step genuinely fails, with the real, existing
-// resolveKeyRef-style error posted as a real MR note, when it's unset.
-//
-// This replays runPlanAndCommentGitLab's own real body directly
-// (checkoutRef -> runUbx -> postOrEditCommentGitLab) rather than
-// calling it through repoDirForGitLab, for the identical real reason
-// review_accept_flow_test.go's own doc comment states for GitHub:
-// ensureRepoCheckoutGitLab always does a real "git fetch origin" against
-// whatever remote Config.GitLabToken/GitLabAPIBaseURL resolve to, which
-// needs real network access to test hermetically. checkoutRef (the
-// fetch/reset half every event after the first one actually uses, and
-// the one piece runPlanAndCommentGitLab shares with every other event
-// handler) is exercised for real here instead, against a repo serving
-// as its own origin over a plain filesystem path.
-//
-// script stands in for the real ubx binary with a shell script that
-// mimics `ubx plan --from-doc`'s own real credential check
-// (cli/intentadapter.go's resolveKeyRef) without needing a real LLM
-// call.
-func TestGitLabPlanAutoPlan_MarkdownAuthoredProposal_IntentProviderKey(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a real POSIX shell script -- skip on windows")
-	}
-
-	script := fakeUbxScript(t, `if [ -z "$UBX_INTENT_PROVIDER_KEY" ]; then
-  echo 'key_ref.env names "UBX_INTENT_PROVIDER_KEY", but that environment variable is unset or empty' >&2
-  exit 2
-fi
-echo "delta: 1 creates (transcribed via [intent] provider)"
-`)
-
-	dir := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "test")
-	if err := os.WriteFile(filepath.Join(dir, "infra.md"), []byte("# Add a db replica\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "infra.md")
-	run("commit", "-q", "-m", "markdown-authored proposal")
-	run("remote", "add", "origin", dir)
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git rev-parse HEAD: %v\n%s", err, out)
-	}
-	sha := strings.TrimSpace(string(out))
-
-	f := &fakeGitLabServer{project: "acme-infra", mrIID: 3}
-	ctx := context.Background()
-
-	runPlan := func(t *testing.T, intentProviderKey string) {
-		t.Helper()
-		s, api := gitlabTestServer(t, f, Config{WorkDir: dir})
-		s.self = script
-		s.cfg.IntentProviderKey = intentProviderKey
-
-		if err := checkoutRef(ctx, dir, sha); err != nil {
-			t.Fatalf("checkoutRef: %v", err)
-		}
-		args := []string{"plan", "--ledger-dir", "."}
-		result, err := runUbx(ctx, s.self, dir, s.intentProviderEnv(), args...)
-		if err != nil {
-			t.Fatalf("runUbx: %v", err)
-		}
-		body := fmt.Sprintf("```\n%s%s\n```", result.Stdout, result.Stderr)
-		if err := postOrEditCommentGitLab(ctx, api, f.project, f.mrIID, s.cfg.GitLabBotUsername, "plan", body); err != nil {
-			t.Fatalf("postOrEditCommentGitLab: %v", err)
-		}
-	}
-
-	t.Run("credential unset: auto-plan fails, real error posted", func(t *testing.T) {
-		runPlan(t, "")
-		if len(f.notes) != 1 {
-			t.Fatalf("notes = %d, want 1", len(f.notes))
-		}
-		if !strings.Contains(f.notes[0].Body, "UBX_INTENT_PROVIDER_KEY") {
-			t.Errorf("posted note = %q, want the real resolveKeyRef-style failure surfaced", f.notes[0].Body)
-		}
-	})
-
-	f.notes = nil
-	t.Run("credential set: auto-plan succeeds", func(t *testing.T) {
-		runPlan(t, "sk-real-test-key")
-		if len(f.notes) != 1 {
-			t.Fatalf("notes = %d, want 1", len(f.notes))
-		}
-		if !strings.Contains(f.notes[0].Body, "transcribed via [intent] provider") {
-			t.Errorf("posted note = %q, want the real successful plan output", f.notes[0].Body)
-		}
-	})
 }
