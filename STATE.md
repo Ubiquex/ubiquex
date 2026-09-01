@@ -7,62 +7,77 @@
 
 ## In flight
 
-**UBI-227: DONE (build), PR open, never self-merged.** Restore a stack to
-an earlier ledger head. Design reported and confirmed before building
-(the ticket's three open questions: cross-stack pins, restore-of-a-
-restore, whether `drift_revert` generalizes -- all resolved, see below).
-`ubx restore <head>` -- a normal proposal reusing `KindChange`, never
-`KindRevert` (stays declared, unimplemented). Diffs the target head's
-own exact shape against CURRENT live state (confirmed live that
-`resolveOnce` never infers create-vs-modify, only validates a caller-
-declared op -- restore does its own classification). New
-`intent.sources[].kind: "restore"` value mirrors `"promotion"`'s
-provenance-not-equality posture, rendered by `cli/why.go`. `ubx history`
-is the read-only half. `core.Ledger` gains `ChainFrom`/`FoldStateAt`/
-`AddressesAt`; `Chain`/`FoldState`/`Addresses` become thin wrappers --
-one real historical-walk implementation, per the founder's own explicit
-instruction citing UBI-197/UBI-233 (two implementations of the same fold
-silently diverging).
+**UBI-238/UBI-239: DONE (build), PR open, never self-merged.** Both
+fakeprovider findings UBI-227 surfaced, root-caused (as the founder
+explicitly asked, before any fix) and fixed for real.
 
-All three open questions resolved and proven live, not just reasoned
-about: cross-stack `$cross` pins replay frozen historical literals,
-never re-resolved (the marker is already gone by the time a value lands
-in ledger history). Restore of a restore needs no special handling --
-proven via a real double-restore test (`TestRestore_OfARestore`), not
-assumed from the design alone. `drift_revert` does not generalize
-(resource-scoped, modify-only, always-current-head-target -- a
-different, narrower job).
+- **UBI-238** (real, general executor gap, narrower than "nobody can
+  modify a resource twice"): `core/executor/ship.go`'s `shipModifyNode`
+  discarded `ApplyResourceChange`'s own fresh lookup return on every
+  successful modify (`result, _, applyErr := ...`), unlike the create
+  path, which explicitly captures and persists one with its own comment
+  stating why ("persist a lookup key, don't re-derive it"). A second,
+  related hole: `core.Ledger.LastLookup` (`core/fleet.go`) never
+  consulted a shipped modify's own apply record for a refreshed lookup
+  at all -- only a shipped create's. Together, a resource type whose
+  *required* lookup key includes a mutable attribute accumulated a
+  lookup frozen at create time forever. Real infrastructure never hits
+  this (id/ARN is genuinely immutable); `fake_widget`'s own degenerate
+  constant `"id"` forces its mutable `"name"` into that role, which is
+  what made it observable. Fixed: `shipModifyNode` now mirrors create's
+  own lookup-capture exactly; `shippedModifyFold` (`core/apply.go`) now
+  also returns the shipped lookup (mirroring `shippedCreateFold`);
+  `LastLookup` reordered to prefer a shipped create's or modify's fresh
+  apply-record lookup over a proposal's own frozen resolve-time
+  `resolution.inputs` entry, with a new `Delta.Modifies` loop added.
+  Invariant recorded, not just fixed silently: docs/architecture.md's
+  new "Invariant: lookup keys must be derivable from immutable
+  attributes" section. Regression test: `cli/ship_modify_twice_test.go`.
+- **UBI-239** (confirmed fixture-only, not a cty-msgpack bug -- that
+  original ticket guess was wrong and has been corrected in Linear):
+  `tags` is `Optional`, not `Required`, in `fake_widget`'s schema, so
+  `core.DeriveLookupFromResult` never includes it in the derived lookup
+  key regardless of its value. fakeprovider's echo-only `ReadResource`,
+  given a lookup that never mentions `tags`, defaults it to an empty
+  map -- spurious staleness on an entirely ordinary first modify whenever
+  `tags` is non-empty at create time. Fixed: `FAKEPROVIDER_STATE_DIR`'s
+  own pre-existing, previously opt-in persistence (UBI-85, already
+  correct when active) is now the default for every hermetic
+  `ok-v5`/`ok-v6` CLI test, via `cli/scan_test.go`'s
+  `ensureFakeProviderStateDir` (wired into `runUbx` and `runUbxTTY`).
+  Regression test: `cli/ship_modify_tags_test.go`.
 
-Two real, pre-existing, restore-unrelated fakeprovider findings surfaced
-while writing the end-to-end test, worked around in the test fixtures
-and reported here rather than silently folded into this ticket's own
-scope, since neither was asked for and neither blocks restore itself:
+Both findings share one root cause, now named directly in the fixture's
+own source (`provider/internal/fakeprovider/main.go`'s
+`FAKEPROVIDER_STATE_DIR` doc comment) so a third symptom of the same
+thing is recognized immediately rather than re-diagnosed: fakeprovider's
+echo-only `ReadResource` trusted the caller-supplied lookup as if it
+were the resource's own full current state, which no real provider ever
+does.
 
-- `FAKEPROVIDER_MODE=ok-v6` does not round-trip a `tags` map attribute
-  identically between `ApplyResourceChange` and a later `ReadResource`
-  -- trips a spurious stale-observation refusal on an entirely ordinary
-  first modify whenever `tags` is present at all. Confirmed via two
-  isolated manual repros outside restore entirely.
-- Shipping a SECOND real modify against the same resource address (after
-  a first modify already shipped successfully) fails with a genuine
-  stale-observation error, unrelated to tags. Confirmed via two isolated
-  manual repros (`/tmp/ubx-scratch/modify-repro`, `modify-repro2`,
-  neither persisted). A grep across `cli/*_test.go` found no existing
-  test that ships two sequential real modifies against fakeprovider
-  successfully -- `cli/receipt_modify_v2_test.go` only ever plans, never
-  ships; `cli/ship_modify_staleness_test.go` deliberately forces
-  staleness via `FAKEPROVIDER_EXTRA_TAG`, a different, deliberate
-  scenario. This may be genuinely unexercised territory in this
-  codebase's own test suite, not a known, already-worked-around case --
-  worth its own session to root-cause (fakeprovider's own apply/read
-  round-trip, or the executor's own freshness check) before anything
-  else depends on shipping repeated modifies to one address.
+PR `ubiquex#<TBD>` open (never self-merged), branched from current
+`main` (post-UBI-227-merge), not stacked on anything. Full repo
+`go build ./...`/`go test ./...` clean.
 
-PR `ubiquex#48` open (never self-merged): `cli/restore.go`, `cli/history.go`,
-`core/state.go`/`core/addresses.go` (ChainFrom/FoldStateAt/AddressesAt),
-`cli/why.go` (restore rendering), `docs/schema.md` ("Amendment: restore"),
-`docs/architecture.md` ("Restore" section), `docs/plan.md` changelog. Full
-repo `go build ./...`/`go test ./...` clean before opening the PR.
+**UBI-228 (aliases): real gap found in how PR #49 landed -- content is
+NOT actually on `main` despite showing "Merged" in GitHub.** PR #49's
+base was `feat/ubi-227-restore-stack` (a stacked branch, correct at the
+time since UBI-228 genuinely depended on UBI-227's own unmerged
+`cli/restore.go`). The founder merged both #48 and #49 -- but #48's own
+squash-merge (`c3f2842`) landed on `main` BEFORE #49 was merged into
+`feat/ubi-227-restore-stack`, and that branch was never itself merged
+into `main` a second time afterward. Confirmed directly: `main` has no
+`cli/alias.go` at all (`git show main:cli/alias.go` -> "does not exist");
+`git log main..origin/feat/ubi-227-restore-stack` shows 4 real commits
+main is missing, including #49's own squash commit `b94f6b6`. Nothing
+lost -- both branches still exist on the remote (`feat/ubi-227-restore-
+stack` at `b94f6b6`, `feat/ubi-228-ledger-head-aliases` at `83f3b11`) --
+but `ubx alias` does not exist on `main` today despite UBI-228 showing
+Done in Linear and #49 showing Merged on GitHub. Needs the founder's own
+call on how to land it (open a fresh PR from `feat/ubi-227-restore-
+stack` -> `main`, or merge that branch directly) -- not resolved by this
+session, flagged rather than silently fixed since it involves reconciling
+someone else's own merge action.
 
 **UBI-225: DONE.** Blueprint/hand-written composition reported, one real
 provenance gap fixed and released across three runtimes, a broader

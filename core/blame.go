@@ -186,7 +186,7 @@ func Blame(l *Ledger, addr Address) (*BlameResult, error) {
 			// (docs/architecture.md's own "Revert path": accepting either
 			// one IS the decision, independent of any later real apply).
 			if p.Kind == KindChange {
-				shipped, ferr := l.shippedModifyFold(p.ID, addr)
+				_, shipped, ferr := l.shippedModifyFold(p.ID, addr)
 				if ferr != nil {
 					return nil, fmt.Errorf("blame: %s: %w", addr, ferr)
 				}
