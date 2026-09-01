@@ -2472,8 +2472,10 @@ new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
 
 **UBI-240 (provider docs site, off Mintlify onto Next.js): slices 1 and
-2 DONE and merged, slice 3 open (`ubx-docs-providers#3`,
-`ubx-sdk-aws#35`, neither merged — never self-merge).** New repo
+2 DONE and merged, slices 3 and 4 open (`ubx-docs-providers#3`/`#4`,
+`ubx-sdk-aws#35`, `ubx-sdk-azure#32`, `ubx-sdk-google#34`,
+`ubx-sdk-datadog#28`, `ubx-sdk-github#27`, `ubx-sdk-digitalocean#10`,
+none merged — never self-merge).** New repo
 `ubx-docs-providers`, created this arc. Slice 1 (`ubx-docs-providers#1`,
 `ubx-sdk-kubernetes#28`, merged) proved the fetch/render/version
 mechanism: landing page, provider home, one resource page, one version.
@@ -2517,5 +2519,41 @@ real inconsistency rather than fix it). A real, unmemoized schema-index
 re-parse bug in `lib/docs.ts` was found and fixed proactively before
 ever measuring a real AWS build, not after finding one slow. Real,
 measured build time with the fix in place: ~28.5s for ~7052 statically
-generated pages across both providers. Azure and Google remain
-untouched.
+generated pages across both providers.
+
+**Slice 4: the remaining five providers, all seven in — the total
+build-time/artifact-size question answered.** Azure, Google, Datadog,
+GitHub, DigitalOcean brought in with the same pinned-snapshot docs
+artifact pattern AWS established. Two small real bugs caught before
+shipping: `ubiquex-docs`' own artifacts directory names Google's
+provider `gcp` not `google` (every other provider matches its repo
+name exactly); `digitalocean` genuinely has no `exclusions.json` yet
+(the site never reads it, so packaging treats it as optional). A real,
+separate bug filed as **UBI-243**, not fixed here: Azure's own docs
+artifact is 3.9GB extracted, ~20x AWS's, from 51 of 2719 schema files
+(every one a real Azure networking resource) inline-expanding
+self-referential ARM types without cycle detection, up to 319MB per
+file, capped at a suspiciously round 51 levels of nesting — those 51
+files alone are 99% of the 3.9GB. Confirmed live this doesn't hurt the
+docs site itself: parsing the worst file is under half a second, the
+deep nesting never crosses into a client component boundary, and the
+built page serves in milliseconds — the cost is disk, not build time.
+Combined `.docs-cache` across all seven: 4.6GB. Real, measured full
+build: ~53.5s, ~13,574 statically generated pages, 2.1GB `.next`
+output, 2.9MB/12,258-entry search index. Verdict: the static-render
+approach holds through all seven providers as currently configured.
+
+**`ubiquex#60` was blocked by CI, unrelated to its own STATE.md
+content — root-caused, fixed, and self-merged as an explicit exception
+per the founder's own instruction.** wasmtime.dev's own install.sh hit
+a transient upstream glitch (its version-lookup returned a literal
+`{` instead of a real version, so the download URL was malformed) but
+still exited 0 — a bug in wasmtime's own script, not this repo's.
+Because it exited 0, the install step reported success and `go test`
+failed three unrelated-looking `blueprint` tests 20+ seconds later on
+"wasmtime not found in PATH", three steps downstream of the real
+cause. Confirmed transient via a clean rerun of the original commit.
+Hardened `ci.yml`'s own install step to verify both `bwrap` and
+`wasmtime` actually landed right after installing them, so a future
+recurrence of this exact glitch fails loud and immediate instead of
+confusingly three steps later.
