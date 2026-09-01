@@ -39,6 +39,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newDestroyCmd())
 	root.AddCommand(newProvidersCmd())
 	root.AddCommand(newStoreCmd())
+	root.AddCommand(newHistoryCmd())
+	root.AddCommand(newRestoreCmd())
 
 	return root
 }

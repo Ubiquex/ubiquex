@@ -10,16 +10,35 @@ import (
 )
 
 // Chain returns every proposal in l, oldest (genesis) first, by walking
-// Parent links back from Head(). Ledgers are expected to be small at this
-// stage (foundational-slice scale); this is a straightforward linear walk,
-// not an indexed lookup.
+// Parent links back from Head(). A thin wrapper over ChainFrom -- see its
+// own doc comment for why that split exists and why it's the one real
+// walk, not two.
 func (l *Ledger) Chain() ([]*Proposal, error) {
 	head, err := l.Head()
 	if err != nil {
 		return nil, fmt.Errorf("chain: %w", err)
 	}
+	return l.ChainFrom(head)
+}
+
+// ChainFrom returns every proposal from genesis up to and including
+// headID, oldest first, by walking Parent links back from headID. This is
+// Chain()'s own real implementation, generalized to start anywhere in the
+// ledger rather than always the current Head() -- UBI-227's own restore
+// needs to reconstruct the ledger's truth as of an arbitrary historical
+// head, not just the current one, and every derived-state fold (FoldState,
+// Addresses) that used to hard-code "start from Head()" now threads its
+// own starting head through to this one walk instead of reimplementing
+// it. Deliberately one implementation: two independent walks of the same
+// Parent chain is exactly the shape that silently diverged before in this
+// codebase (UBI-197, UBI-233) -- Chain() itself is now nothing more than
+// "resolve Head(), then call this."
+//
+// Ledgers are expected to be small at this stage (foundational-slice
+// scale); this is a straightforward linear walk, not an indexed lookup.
+func (l *Ledger) ChainFrom(headID string) ([]*Proposal, error) {
 	var reversed []*Proposal
-	for id := head; id != ""; {
+	for id := headID; id != ""; {
 		p, err := l.Read(id)
 		if err != nil {
 			if len(reversed) == 0 && errors.Is(err, ErrProposalNotFound) {
@@ -279,7 +298,32 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 	if err != nil {
 		return nil, false, fmt.Errorf("fold state: %w", err)
 	}
+	return l.foldStateOverChain(chain, addr)
+}
 
+// FoldStateAt is FoldState's own real implementation, generalized to fold
+// over the chain as of headID rather than always the current Head() --
+// UBI-227's own restore reconstructs a target address's config as it
+// existed at an earlier ledger head, using the exact same fold rules
+// FoldState already uses for the current head (shipped-create/shipped-
+// modify/shipped-destroy gating, drift_revert's own immediate-on-accept
+// fold, all identical, all in the one shared helper below). FoldState
+// itself is a thin wrapper: ChainFrom(Head()) is Chain(), so
+// FoldStateAt(Head(), addr) and FoldState(addr) are the same computation
+// by construction, not by two implementations kept in sync by hand.
+func (l *Ledger) FoldStateAt(headID string, addr Address) (state json.RawMessage, found bool, err error) {
+	chain, err := l.ChainFrom(headID)
+	if err != nil {
+		return nil, false, fmt.Errorf("fold state: %w", err)
+	}
+	return l.foldStateOverChain(chain, addr)
+}
+
+// foldStateOverChain is the one real fold both FoldState and FoldStateAt
+// share -- see FoldState's own doc comment for the full account of what
+// this actually computes and why it's an O(chain length) walk, not an
+// indexed lookup.
+func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json.RawMessage, found bool, err error) {
 	var current map[string]interface{}
 	for _, p := range chain {
 		for _, raw := range p.Delta.Creates {

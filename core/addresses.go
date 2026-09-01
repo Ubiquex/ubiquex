@@ -45,7 +45,29 @@ func (l *Ledger) Addresses(stack string, includeTombstoned bool) ([]AddressEntry
 	if err != nil {
 		return nil, fmt.Errorf("addresses: %w", err)
 	}
+	return l.addressesOverChain(chain, stack, includeTombstoned)
+}
 
+// AddressesAt is Addresses' own real implementation, generalized to walk
+// the chain as of headID rather than always the current Head() -- UBI-227's
+// own restore needs the full set of addresses live at an earlier ledger
+// head (every resource the target shape actually contains), the exact
+// same discovery rules Addresses already uses for the current head, just
+// folded over an earlier chain. Addresses itself is a thin wrapper, the
+// same relationship Chain/ChainFrom and FoldState/FoldStateAt already
+// have: one real walk, never two kept in sync by hand.
+func (l *Ledger) AddressesAt(headID string, stack string, includeTombstoned bool) ([]AddressEntry, error) {
+	chain, err := l.ChainFrom(headID)
+	if err != nil {
+		return nil, fmt.Errorf("addresses: %w", err)
+	}
+	return l.addressesOverChain(chain, stack, includeTombstoned)
+}
+
+// addressesOverChain is the one real fold both Addresses and AddressesAt
+// share -- see Addresses' own doc comment for the full account of what
+// this actually discovers and why.
+func (l *Ledger) addressesOverChain(chain []*Proposal, stack string, includeTombstoned bool) ([]AddressEntry, error) {
 	latest := map[string]*Proposal{}
 	latestShippedProvider := map[string]*ProviderRef{}
 	tombstoned := map[string]bool{}

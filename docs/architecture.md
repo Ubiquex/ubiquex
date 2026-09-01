@@ -3564,6 +3564,60 @@ proposal's intent, re-resolve in the target context, stamp the
 promotion source, emit the draft) is a small build ticket, separate
 from this design.
 
+### Restore (decided 2026-09-01, design room -- UBI-227)
+
+Restoring a stack to an earlier ledger head is a normal proposal, not a
+rewind. The ledger stays append-only -- it appends a proposal whose delta
+produces the earlier shape, resolved against current reality, signed like
+anything else.
+
+**Exact-state semantics.** A resource that exists now but not in the
+target head is destroyed. One present in both, with a different config,
+is modified back to the target head's own historical value. One present
+in the target head but absent now is created fresh. Blast radius names
+every destroy, and nothing applies without a signature -- the same
+protection every other destructive proposal already gets
+(`--confirm-destroys` at `ubx accept`), no exemption for restore.
+
+**The restore link is evidence, not a pin -- the identical posture
+promotion above already established.** The restored proposal's
+`intent.sources` carries `{kind: "restore", ref: <target head>}` --
+additive, following the same source-kind extension precedent promotion
+used. It names a fixed historical fact, never re-validated: the target
+head advancing later (it can't -- a past head is immutable) or the
+current stack diverging further afterward has no bearing on this record.
+`ubx why` renders the trail: "restored ledger head `<short id>`".
+
+**Cross-stack pins replay frozen literals, never re-resolved.** A
+`$cross` reference is already a resolved literal by the time it appears
+in a historical proposal's applied state -- the marker itself is gone.
+Restore replays that literal exactly; a neighbor stack's head having
+moved on since has no bearing, because restore never re-resolves a
+`$cross` in the first place.
+
+**Restore of a restore needs no special handling.** The ledger can end up
+holding two (or more) proposals that each claim to restore a shape --
+walking the chain as of an arbitrary head (`ChainFrom`, generalizing the
+existing always-`Head()`-bound `Chain`) doesn't care whether an
+intermediate proposal was itself a restore. There is no "is this head
+itself a restore" branch anywhere in the fold.
+
+**`drift_revert` does not generalize to this.** It is resource-scoped,
+modify-only, and always targets "whatever the ledger currently believes"
+rather than an arbitrary earlier head -- a narrower mechanism built for a
+different job (reverting one resource's observed drift), not a smaller
+version of restore.
+
+**Two commands, since inspecting history and shipping an earlier state
+are different things and only one of them changes infrastructure.** `ubx
+history` is read-only -- a stack's real chain, newest head first. `ubx
+restore <head>` is the write side -- resolves and writes a plan exactly
+like `ubx propose`/`ubx plan` do, changing nothing until it is itself
+accepted and shipped.
+
+Full wire shape and hashing detail: docs/schema.md's "Amendment: restore"
+(2026-09-01, UBI-227).
+
 ## Component map (build order)
 
 1. Core IR + proposal schema (versioned; canonical hashing)
