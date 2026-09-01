@@ -35,28 +35,22 @@ different, narrower job).
 
 Two real, pre-existing, restore-unrelated fakeprovider findings surfaced
 while writing the end-to-end test, worked around in the test fixtures
-and reported here rather than silently folded into this ticket's own
-scope, since neither was asked for and neither blocks restore itself:
+and filed as their own tickets rather than left inline here or folded
+into this ticket's own scope, since neither was asked for and neither
+blocks restore itself:
 
-- `FAKEPROVIDER_MODE=ok-v6` does not round-trip a `tags` map attribute
-  identically between `ApplyResourceChange` and a later `ReadResource`
-  -- trips a spurious stale-observation refusal on an entirely ordinary
-  first modify whenever `tags` is present at all. Confirmed via two
-  isolated manual repros outside restore entirely.
-- Shipping a SECOND real modify against the same resource address (after
-  a first modify already shipped successfully) fails with a genuine
-  stale-observation error, unrelated to tags. Confirmed via two isolated
-  manual repros (`/tmp/ubx-scratch/modify-repro`, `modify-repro2`,
-  neither persisted). A grep across `cli/*_test.go` found no existing
-  test that ships two sequential real modifies against fakeprovider
-  successfully -- `cli/receipt_modify_v2_test.go` only ever plans, never
-  ships; `cli/ship_modify_staleness_test.go` deliberately forces
-  staleness via `FAKEPROVIDER_EXTRA_TAG`, a different, deliberate
-  scenario. This may be genuinely unexercised territory in this
-  codebase's own test suite, not a known, already-worked-around case --
-  worth its own session to root-cause (fakeprovider's own apply/read
-  round-trip, or the executor's own freshness check) before anything
-  else depends on shipping repeated modifies to one address.
+- **UBI-239**: `FAKEPROVIDER_MODE=ok-v6` does not round-trip a `tags`
+  map attribute identically between `ApplyResourceChange` and a later
+  `ReadResource` -- trips a spurious stale-observation refusal on an
+  entirely ordinary first modify whenever `tags` is present at all.
+- **UBI-238**: shipping a SECOND real modify against the same resource
+  address (after a first modify already shipped successfully) fails
+  with a genuine stale-observation error, unrelated to tags. A grep
+  across `cli/*_test.go` found no existing test that ships two
+  sequential real modifies against fakeprovider successfully -- this
+  may be genuinely unexercised territory in this codebase's own test
+  suite, root cause (fakeprovider's own apply/read round-trip, or the
+  executor's own freshness check) not yet diagnosed.
 
 PR `ubiquex#48` open (never self-merged): `cli/restore.go`, `cli/history.go`,
 `core/state.go`/`core/addresses.go` (ChainFrom/FoldStateAt/AddressesAt),
