@@ -9,7 +9,38 @@
 
 **UBI-224: markdown/diagram/chat dropped as authoring mediums, the SDK is
 the only one left. Stage 1 (code) and the orphaned-config follow-up are
-merged; stage 2 (docs/) is open, never self-merged.**
+merged; stage 2 (docs/) and stage 3 (both documentation sites) are open,
+never self-merged.**
+
+- **Stage 3 (documentation sites)**: `ubiquex-internals` PR #1 and
+  `ubiquex-docs` PR #78, both open, never self-merged. `ubiquex-internals`:
+  rewrote `overview.mdx`'s founding thesis (SDK code as the one frontend,
+  not "any medium"), `architecture.mdx`'s trust-chain diagram and
+  invariants, `concepts/blueprints.mdx`'s lifecycle (build parses a
+  pre-resolved document, never drafts), `concepts/ir.mdx` ("many
+  frontends" -> "one frontend"), `sync-state.json` bumped for every
+  mirrored source file this arc touched; `mint validate`/`broken-links`
+  clean. `ubiquex-docs`: deleted the three dedicated tutorial tracks
+  (`tutorial/markdown/`, `tutorial/chat/`, `tutorial/diagram/`),
+  `cli-reference/chat.mdx`, and three now-false authoring-depth concept
+  pages (`chat-depth.mdx`, `diagram-depth.mdx`,
+  `context-aware-drafting.mdx`); rewrote `concepts/mediums.mdx` into
+  "Authoring a Stack" rather than deleting it, per explicit instruction;
+  swept every surviving concept/cli-reference/tutorial/server/integrations
+  page referencing `--from-doc`/`--from-diagram`/`ubx chat`/the old prose
+  Ubxfile `resources:` form (54 files touched total, including renaming
+  `concepts/sdk-depth.mdx`'s title off "SDK Medium: Depth" now that SDK is
+  the only medium left); added redirects for all 16 removed URLs;
+  `mint validate`/`broken-links` clean (133 pre-existing warnings, all in
+  the generated `resource-reference/` tree, confirmed unrelated). `ubx
+  why`/`blame`/`promote` still explain proposals accepted before this
+  change; `ubx promote` now documented as refusing to re-resolve a
+  dialogue-sourced proposal outright, in both the CLI reference and the
+  promotion tutorial.
+- **Real-world Ubxfile migration filed as its own ticket, UBI-237** (see
+  below for the survey that found it) -- not attempted this arc, needs
+  live schema verification in a separate repo, not guessed attribute
+  names.
 
 - **Stage 1 (code)**: PR #43, merged 2026-09-01 (admin-merged after an
   explicit exception -- see below for why it was blocked). Removed
