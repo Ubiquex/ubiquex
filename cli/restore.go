@@ -73,6 +73,13 @@ import (
 // target the same way any other head is, and each restore's own
 // IntentSource names its own specific target -- ubx why never conflates
 // one restore with another.
+//
+// UBI-228: the target argument accepts a human-readable alias
+// (resolveHeadOrAlias, cli/alias.go) as well as a raw hash -- naming a
+// head rather than pasting one is exactly the interaction that ticket
+// exists for. A raw hash still resolves exactly as it always has; alias
+// resolution only ever runs when the argument doesn't already match the
+// hash shape.
 func newRestoreCmd() *cobra.Command {
 	var (
 		ledgerDir       string
@@ -86,10 +93,11 @@ func newRestoreCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "restore <head>",
+		Use:   "restore <head-or-alias>",
 		Short: "Generate a proposal restoring a stack to an earlier ledger head",
-		Long: `Reads <head> (a real, already-recorded proposal id -- "ubx history" lists real
-candidates) and reconstructs the stack's own exact shape as it existed at that head:
+		Long: `Reads <head-or-alias> (a real, already-recorded proposal id -- "ubx history" lists
+real candidates -- or an alias assigned via "ubx alias set", UBI-228) and reconstructs
+the stack's own exact shape as it existed at that head:
 every resource the target head's own chain actually contains, with its own resolved
 config frozen exactly as it was recorded then.
 
@@ -110,16 +118,23 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			targetHead := args[0]
-			if !proposalIDPattern.MatchString(targetHead) {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %q is not a well-formed proposal id -- want a real 64-char content hash naming an already-recorded head (\"ubx history\" lists real candidates)", targetHead)}
-			}
-
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %w", err)}
 			}
 			applyStackDefault(cmd, &stack, cfg)
+
+			// UBI-228: args[0] is either a real hash or an alias assigned
+			// via "ubx alias set" -- resolveHeadOrAlias tries the hash
+			// shape first, completely unchanged from before this ticket,
+			// so a raw hash here behaves exactly as it always has.
+			targetHead, resolvedStack, err := resolveHeadOrAlias(ledgerDir, stack, args[0])
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %w", err)}
+			}
+			if resolvedStack != "" {
+				stack = resolvedStack
+			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()

@@ -7,62 +7,69 @@
 
 ## In flight
 
-**UBI-227: DONE (build), PR open, never self-merged.** Restore a stack to
-an earlier ledger head. Design reported and confirmed before building
-(the ticket's three open questions: cross-stack pins, restore-of-a-
-restore, whether `drift_revert` generalizes -- all resolved, see below).
-`ubx restore <head>` -- a normal proposal reusing `KindChange`, never
-`KindRevert` (stays declared, unimplemented). Diffs the target head's
-own exact shape against CURRENT live state (confirmed live that
-`resolveOnce` never infers create-vs-modify, only validates a caller-
-declared op -- restore does its own classification). New
+**UBI-227: DONE, merged (`ubiquex#48`).** Restore a stack to an earlier
+ledger head. `ubx restore <head>` -- a normal proposal reusing
+`KindChange`, never `KindRevert` (stays declared, unimplemented). New
 `intent.sources[].kind: "restore"` value mirrors `"promotion"`'s
-provenance-not-equality posture, rendered by `cli/why.go`. `ubx history`
-is the read-only half. `core.Ledger` gains `ChainFrom`/`FoldStateAt`/
-`AddressesAt`; `Chain`/`FoldState`/`Addresses` become thin wrappers --
-one real historical-walk implementation, per the founder's own explicit
-instruction citing UBI-197/UBI-233 (two implementations of the same fold
-silently diverging).
+provenance-not-equality posture. `ubx history` is the read-only half.
+`core.Ledger` gains `ChainFrom`/`FoldStateAt`/`AddressesAt`;
+`Chain`/`FoldState`/`Addresses` become thin wrappers -- one real
+historical-walk implementation, per the founder's own explicit
+instruction citing UBI-197/UBI-233. All three of the ticket's open
+questions (cross-stack pins, restore-of-a-restore, `drift_revert`
+generalization) resolved and proven live. Full account: docs/schema.md's
+"Amendment: restore," docs/architecture.md's "Restore" section.
 
-All three open questions resolved and proven live, not just reasoned
-about: cross-stack `$cross` pins replay frozen historical literals,
-never re-resolved (the marker is already gone by the time a value lands
-in ledger history). Restore of a restore needs no special handling --
-proven via a real double-restore test (`TestRestore_OfARestore`), not
-assumed from the design alone. `drift_revert` does not generalize
-(resource-scoped, modify-only, always-current-head-target -- a
-different, narrower job).
+**UBI-228: DONE, merged.** Human-readable aliases for ledger heads.
+`ubx alias set|resolve|list|remove`; `set` refuses to repoint an
+existing alias without `--force`. Workspace-local `.ubx/aliases.json`,
+never a `core.LedgerStore` concern (confirmed live that a remote-store-
+backed `core.Ledger` carries no local directory at all). Namespaced per
+stack, shared via git exactly like `.ubx/config.hcl`. `resolveHeadOrAlias`
+wired into `ubx why` and `ubx restore`. Full account: docs/schema.md's
+"Amendment: human-readable aliases," docs/architecture.md's own section.
 
-Two real, pre-existing, restore-unrelated fakeprovider findings surfaced
-while writing the end-to-end test, worked around in the test fixtures
-and reported here rather than silently folded into this ticket's own
-scope, since neither was asked for and neither blocks restore itself:
+**Real, separate finding from this landing (2026-09-01): PR #49 showed
+"Merged" on GitHub, but its content never reached `main`.** PR #49's
+base was `feat/ubi-227-restore-stack` (correct at the time, since
+UBI-228 genuinely depended on UBI-227's own then-unmerged `cli/restore.go`).
+#48 was squash-merged into `main` as `c3f2842` before #49 was merged
+into `feat/ubi-227-restore-stack`, and that branch was never itself
+merged into `main` afterward -- confirmed directly (`git show
+main:cli/alias.go` -> "does not exist"), not inferred from either PR's
+own "Merged" badge. Landed properly this session via a fresh PR from
+`feat/ubi-227-restore-stack` into `main`, real merge (not squash, since
+the two branches share no common ancestor for the overlapping files
+after #48's own squash broke that lineage -- a real 3-way merge with
+manual conflict resolution on `cli/restore.go`/`cli/root.go`/`STATE.md`/
+`docs/architecture.md`/`docs/plan.md`/`docs/schema.md`, all unioned
+correctly, verified by reading `cli/alias.go` on `main` directly
+afterward, not by trusting the merge). See "Cross-repo state" below,
+or ask whether `stale-base-check` (ubx-sdk-* repos' own guard) can catch
+this shape -- it cannot; it guards a PR merging onto an already-merged
+base, this is the reverse (a base that never reaches `main` at all), a
+different failure shape the guard was never built to detect.
 
-- `FAKEPROVIDER_MODE=ok-v6` does not round-trip a `tags` map attribute
-  identically between `ApplyResourceChange` and a later `ReadResource`
-  -- trips a spurious stale-observation refusal on an entirely ordinary
-  first modify whenever `tags` is present at all. Confirmed via two
-  isolated manual repros outside restore entirely.
-- Shipping a SECOND real modify against the same resource address (after
-  a first modify already shipped successfully) fails with a genuine
-  stale-observation error, unrelated to tags. Confirmed via two isolated
-  manual repros (`/tmp/ubx-scratch/modify-repro`, `modify-repro2`,
-  neither persisted). A grep across `cli/*_test.go` found no existing
-  test that ships two sequential real modifies against fakeprovider
-  successfully -- `cli/receipt_modify_v2_test.go` only ever plans, never
-  ships; `cli/ship_modify_staleness_test.go` deliberately forces
-  staleness via `FAKEPROVIDER_EXTRA_TAG`, a different, deliberate
-  scenario. This may be genuinely unexercised territory in this
-  codebase's own test suite, not a known, already-worked-around case --
-  worth its own session to root-cause (fakeprovider's own apply/read
-  round-trip, or the executor's own freshness check) before anything
-  else depends on shipping repeated modifies to one address.
-
-PR `ubiquex#48` open (never self-merged): `cli/restore.go`, `cli/history.go`,
-`core/state.go`/`core/addresses.go` (ChainFrom/FoldStateAt/AddressesAt),
-`cli/why.go` (restore rendering), `docs/schema.md` ("Amendment: restore"),
-`docs/architecture.md` ("Restore" section), `docs/plan.md` changelog. Full
-repo `go build ./...`/`go test ./...` clean before opening the PR.
+**UBI-238/UBI-239: DONE (build), PR open, never self-merged.** Both
+fakeprovider findings UBI-227 surfaced, root-caused (as the founder
+explicitly asked, before any fix) and fixed for real. UBI-238 (real,
+general executor gap, narrower than "nobody can modify a resource
+twice"): `core/executor/ship.go`'s `shipModifyNode` discarded a fresh
+lookup key on every successful modify that `core.Ledger.LastLookup`
+would later need; fixed by mirroring create's own capture discipline,
+plus a `core/fleet.go` reorder so a shipped modify's fresh lookup is
+preferred over a stale resolve-time one. Real infrastructure never hits
+this (id/ARN is immutable); `fake_widget`'s own degenerate constant
+`"id"` is what exposed it. Invariant recorded: docs/architecture.md's
+new "Lookup keys must be derivable from immutable attributes" section.
+UBI-239 (confirmed fixture-only, corrected the ticket's own wrong
+cty-msgpack guess): `tags` is Optional, never enters the derived lookup
+key, so fakeprovider's echo-only `ReadResource` defaulted it away. Fixed
+by making `FAKEPROVIDER_STATE_DIR`'s own pre-existing, previously opt-in
+persistence the default for every hermetic test. Both share one root
+cause, named directly in fakeprovider's own source. PR `ubiquex#50` open
+(never self-merged), branched from `main`, not stacked on anything. Full
+repo `go build ./...`/`go test ./...` clean.
 
 **UBI-225: DONE.** Blueprint/hand-written composition reported, one real
 provenance gap fixed and released across three runtimes, a broader

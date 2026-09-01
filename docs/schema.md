@@ -2301,6 +2301,108 @@ source, never ambiguously.
 `addressesOverChain`), `cli/restore.go` (new), `cli/history.go` (new),
 `cli/why.go`'s `renderIntentSource` gains the `case "restore":` above.
 
+### Amendment: human-readable aliases for ledger heads -- workspace-local, not ledger content, no schema change (2026-09-01, UBI-228)
+
+This section's own founding text ("Notes," above) already anticipated this:
+"`id` is a content hash... human-friendly aliases allowed as labels." UBI-228
+builds that mechanism. Naming a head rather than pasting a hash is exactly
+the interaction `ubx restore <head>` (the amendment directly above) needs
+most, but this is genuinely general: any command accepting a proposal id
+can accept an alias in its place.
+
+**An alias is not part of the hashed proposal shape, and this amendment
+touches no `Proposal` field at all.** The constraint that matters, from
+the ticket itself: an alias must never become an alternative identity for
+a proposal. The hash is what gets signed and what the ledger chains on;
+an alias is a lookup pointing at a hash, stored completely outside
+hashed content, the same posture `acceptance`/`status` already have
+(docs/schema.md's own hash-exclusion list, above) except aliases are not
+even part of the `Proposal` struct to begin with. Renaming or repointing
+an alias can never change what a proposal means, and two aliases can
+never disagree about which one is "real" -- there is exactly one file
+recording the mapping, described below.
+
+**Where aliases live: workspace-local `.ubx/aliases.json`, never inside
+`core.LedgerStore`.** Confirmed, not assumed, by reading `core.Ledger`'s
+own construction: a remote-store-backed ledger (`OpenStore`/
+`OpenStoreForStack`, s3://, gs://, azblob://) carries no local directory
+at all -- only the git-directory `Open` sets one. Addressing an alias
+file through `LedgerStore` would mean new interface methods implemented
+across every store backend, for what is fundamentally a human-managed,
+git-shared artifact, not machine-written ledger content. The workspace
+directory (`--ledger-dir`, wherever `.ubx/config.hcl` lives) always
+exists locally regardless of which store backs the ledger's own
+proposals, so that is where aliases live too: `.ubx/aliases.json`,
+alongside `.ubx/plans/` (a draft plan is likewise workspace-local
+metadata about a proposal, never ledger content itself, docs/plan.md's
+own two-step-fusion amendment) and `.ubx/config.hcl`. One mechanism,
+uniform for a git-local or a remote-store-backed stack alike.
+
+```json
+{
+  "schema_version": 1,
+  "aliases": {
+    "<stack>": {
+      "<alias-name>": {
+        "head": "<proposal id>",
+        "created_at": "<RFC3339>",
+        "updated_at": "<RFC3339, omitted until first repoint>"
+      }
+    }
+  }
+}
+```
+
+Aliases are namespaced per stack, since a single ledger directory can
+legitimately hold an interleaved chain spanning multiple stacks
+(core/addresses.go's own `Addresses` doc comment). An alias name is
+validated against `^[A-Za-z][A-Za-z0-9_-]*$`: no dots, so it can never be
+mistaken for a `<stack>.<type>.<name>` resource address, and it must not
+itself match the 64-hex-char hash shape, so it can never be mistaken for
+a real proposal id and can never become unreachable by shadowing one.
+
+**Uniqueness and repointing.** An alias name is unique within its own
+stack's namespace. `ubx alias set <name> <head>` refuses to repoint a
+name that already points somewhere else unless `--force` is given --
+silently repointing something a human uses as a name is exactly the
+failure mode the ticket named as worth fearing, so moving an alias is an
+explicit act, not an incidental side effect of typing the same name
+twice. Assigning, repointing, or removing an alias never touches, never
+invalidates, and is never checked against the proposal it names --
+`core/resolver` has no concept of an alias at all; resolution only ever
+sees the real hash `resolveHeadOrAlias` (`cli/alias.go`) already resolved
+it to before any ledger-facing code runs.
+
+**Whether aliases are shared: yes, via git, exactly like `.ubx/config.hcl`
+already is -- no new conflict-resolution mechanism built.** Two people
+adding conflicting aliases on separate branches produce an ordinary git
+merge conflict on a JSON file, the same experience `.ubx/config.hcl`
+already has today; inventing a custom merge tool for this one file would
+be solving a problem git already solves adequately. Keys are sorted
+(`encoding/json`'s own map-key ordering), specifically so most single-
+alias edits stay a small, cleanly mergeable diff rather than reordering
+the whole file.
+
+**Scope, both built**: `ubx alias set|resolve|list|remove` (assign,
+inspect, enumerate, and remove an alias -- removal only ever touches the
+alias mapping, never the proposal it pointed at), and
+`resolveHeadOrAlias` wired into the two commands the ticket named:
+`ubx why <proposal-id-or-alias>` and `ubx restore <head-or-alias>`
+(UBI-227, the amendment directly above). Both keep accepting a raw hash
+completely unchanged -- alias resolution only ever runs when an argument
+matches neither the hash shape nor (for `ubx why`) the resource-address
+shape.
+
+**No `schema_version` bump, no `Proposal` field added.** This amendment
+is pure addition to a workspace-local file the resolver never reads and
+the ledger never stores -- there is nothing here for a `schema_version`
+to version.
+
+**Real code**: `cli/alias.go` (new: `aliasFile`, `loadAliasFile`,
+`saveAliasFile`, `resolveHeadOrAlias`, `ubx alias` and its four
+subcommands), `cli/why.go` and `cli/restore.go` (both route their own
+head argument through `resolveHeadOrAlias` before anything else).
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer
