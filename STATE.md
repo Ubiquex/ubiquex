@@ -74,7 +74,7 @@ merged; stage 2 (docs/) is open, never self-merged.**
   passages that named the removed mediums as current behavior; each
   file's own dated "built (date, session)" historical narrative logs are
   left untouched, matching how this project treats build-log content.
-- **Real-world Ubxfile survey (asked for, not yet acted on)**: every
+- **Real-world Ubxfile survey, filed as UBI-237**: every
   non-archived AND archived repo in the org checked directly (`gh api`
   git tree listing, not code search -- GitHub's code-search API returned
   zero hits for `filename:Ubxfile` even though a real one exists,
@@ -93,10 +93,10 @@ merged; stage 2 (docs/) is open, never self-merged.**
   (translating the prose into a real intent/v1 JSON document, correct
   against real `hashicorp/aws` attribute names) before anyone next runs
   `ubx blueprint build` on it, not something to leave to fail-and-
-  discover. Not attempted this session -- needs either real AWS provider
-  schema verification or a hand-written SDK program run through `ubx
-  resolve --from-code`, both real work in a separate repo, flagged for a
-  decision rather than guessed at.
+  discover. Migration itself not attempted this session -- needs either
+  real AWS provider schema verification or a hand-written SDK program
+  run through `ubx resolve --from-code`, both real work in a separate
+  repo. Filed as UBI-237 rather than guessed at.
 
 **UBI-222: real drift detection now exists for every provider, real
 drift was already found, and the founder is merging the last mile
@@ -2223,8 +2223,8 @@ carried forward from memory, as of 2026-08-29.
 **`ubx-sdk-blueprints`** (2026-09-01, UBI-224's own real-world Ubxfile
 survey): the one real Ubxfile outside this repo's own tests,
 `ci-platform/Ubxfile`, uses the old prose `resources:` form UBI-224
-retired -- see "In flight" above for the full account. Not yet migrated,
-no PR opened against that repo.
+retired -- see "In flight" above for the full account. Filed as UBI-237.
+Not yet migrated, no PR opened against that repo.
 
 **Schema repos** (`ubx-schema-<provider>`, real `manifest.json` + `members/`
 group snapshots consumed via `provider.AcquireSchema`):
