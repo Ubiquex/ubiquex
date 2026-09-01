@@ -17,12 +17,11 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // newPromoteCmd is UBI-55's CLI surface for the promotion design ratified
 // in docs/architecture.md's "Environments & promotion" (UBI-14):
-// "promote to prod" means the source proposal's own authoring document is
+// "promote to prod" means the source proposal's own authoring source is
 // resolved AGAIN, against the target environment's own reality (its
 // providers, its live state, its pins) -- never a copy of the source
 // proposal, which would be stale in the target by construction. The
@@ -32,14 +31,19 @@ import (
 // promoted proposal (docs/schema.md's own "Amendment: promotion
 // evidence").
 //
-// Reuses the exact same pipeline every other entry point already uses,
-// never a second implementation: draftFromDoc/draftFromDiagram (propose.go)
-// to re-derive the intent from the source's own document, loadResolveProviders
-// (resolve.go) for the target's own providers, resolver.Resolve for the
-// re-resolution itself, writePlanFile (plan.go) so the result is
-// immediately ship-able via the two-step flow -- promote never touches
-// the ledger directly, matching resolve/plan's own "preview, not record"
-// posture.
+// UBI-224 removed the .md/.d2 re-drafting paths this command used to
+// dispatch to (draftFromDoc/draftFromDiagram, propose.go) along with the
+// markdown/diagram authoring mediums themselves, and refuses to promote a
+// dialogue-sourced proposal outright (promoteDialogueSourceRefusal, below)
+// -- chat's own re-resolution machinery is gone with the medium that
+// produced dialogue sources in the first place. An SDK-sourced proposal
+// (.go/.ts/.py) is the one real re-derivable case left: reuses the exact
+// same pipeline every other SDK entry point already uses, never a second
+// implementation -- loadResolveProviders (resolve.go) for the target's
+// own providers, resolver.Resolve for the re-resolution itself,
+// writePlanFile (plan.go) so the result is immediately ship-able via the
+// two-step flow -- promote never touches the ledger directly, matching
+// resolve/plan's own "preview, not record" posture.
 func newPromoteCmd() *cobra.Command {
 	var (
 		ledgerDir       string
@@ -52,16 +56,13 @@ func newPromoteCmd() *cobra.Command {
 		out             string
 		timeout         time.Duration
 		knownDependents []string
-		summary         string
-		neighborLedgers []string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "promote <proposal-id> --to <target-dir>",
 		Short: "Re-resolve an accepted proposal's own authoring source against a target environment, with promotion evidence",
-		Long: `Reads an accepted source proposal's own authoring source (a markdown file, a .d2
-diagram, an SDK program, or a captured "ubx chat" dialogue, named by its own
-intent.sources), re-derives the intent AGAIN against --to <target-dir>'s own config
+		Long: `Reads an accepted source proposal's own authoring source (an SDK program, named by its
+own intent.sources), re-derives the intent AGAIN against --to <target-dir>'s own config
 (providers, ledger store, live state) -- never copies the source proposal, which would be
 stale in the target by construction -- and stamps the result's intent.sources with an
 additive {"kind":"promotion","ref":"<source proposal id>","base":"<source stack base>"}
@@ -76,23 +77,17 @@ The source proposal must be an already-accepted, ledger-recorded proposal, not a
 unaccepted "ubx plan" draft -- promotion evidence vouches for something that went through
 the normal accept ceremony.
 
-How each authoring source is re-derived (UBI-60):
-  - .md/.d2: re-read from disk and re-drafted/re-parsed exactly like "ubx propose
-    --from-doc/--from-diagram" originally did -- resolvable from the current working
-    directory the same way the original command was.
-  - An SDK program (--from-code, .go/.ts/.py): re-read from disk (its own ref is the
-    exact path given at drafting time, resolvable the same "same working directory" way)
-    and its content_hash is re-checked FIRST -- an unchanged file is re-run through the
-    real evaluator against the target's own real context (UBI-81: a program can
-    legitimately read the target stack's own name/config and draft differently, correctly,
-    per target); a CHANGED file is refused outright, since that's new intent, not a
-    promotion.
-  - A dialogue (ubx chat): the FINAL, converged intent/v1 draft captured in the dialogue's
-    own .dlg.json (relative to the SOURCE proposal's own --ledger-dir, not the current
-    working directory) is what gets re-resolved against the target -- never re-run through
-    an LLM a second time. The dialogue capture itself is carried forward as pinned
-    evidence in the promoted proposal's own intent.sources, not treated as a re-runnable
-    artifact.
+How an SDK-sourced proposal is re-derived (UBI-60): the entry file is re-read from disk
+(its own ref is the exact path given at resolve time, resolvable the same "same working
+directory" way) and its content_hash is re-checked FIRST -- an unchanged file is re-run
+through the real evaluator against the target's own real context (UBI-81: a program can
+legitimately read the target stack's own name/config and draft differently, correctly, per
+target); a CHANGED file is refused outright, since that's new intent, not a promotion.
+
+A proposal whose only re-resolvable source is a captured "ubx chat" dialogue is refused
+outright (UBI-224 removed chat as an authoring medium, along with the re-resolution
+machinery a dialogue-sourced promotion depended on) -- the dialogue capture itself stays
+readable by "ubx why", just not re-promotable.
 
 Never touches a ledger -- exactly like "ubx resolve"/"ubx plan", this only ever previews;
 the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, ready for
@@ -147,42 +142,17 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 				targetStack = toStack
 			}
 
-			// UBI-85: same fix as `ubx plan --from-doc` -- a promote that
-			// re-drafts from the source document against a TARGET stack
-			// that already has some or all of these resources (a repeat
-			// promotion, most commonly) has the identical bug otherwise:
-			// re-declaring already-promoted resources as fresh creates.
-			// Read-only, closed immediately; the later openLedgerForStack
-			// call below (unchanged) opens its own separate handle for
-			// the real resolve step.
-			var knownResources map[string]json.RawMessage
-			{
-				preLedger, closePreLedger, kerr := openLedgerForStack(ctx, to, targetStack, targetCfg)
-				if kerr != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", kerr)}
-				}
-				knownResources, kerr = knownResourcesForStack(preLedger, targetStack)
-				closePreLedger()
-				if kerr != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", kerr)}
-				}
-			}
-
 			var intent *resolver.IntentFile
 			switch authSource.Kind {
-			case intentprovider.SourceKindDocument:
+			case core.SourceKindDocument:
 				switch ext := strings.ToLower(filepath.Ext(authSource.Ref)); ext {
-				case ".md":
-					intent, err = draftFromDoc(cmd, targetCfg, authSource.Ref, targetStack, timeout, knownResources)
-				case ".d2":
-					intent, err = draftFromDiagram(cmd, targetCfg, authSource.Ref, targetStack, summary, neighborLedgers, timeout)
 				case ".go", ".ts", ".py":
 					intent, err = promoteSDKSource(ctx, cmd, authSource)
 				default:
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own document source (%q) has an unrecognized extension %q -- expected .md, .d2, .go, .ts, or .py", p.ID, authSource.Ref, ext)}
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own document source (%q) has an unrecognized extension %q -- expected .go, .ts, or .py", p.ID, authSource.Ref, ext)}
 				}
-			case intentprovider.SourceKindDialogue:
-				intent, err = promoteDialogueSource(ledgerDir, p, authSource)
+			case core.SourceKindDialogue:
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own authoring source is a captured \"ubx chat\" dialogue (%s) -- chat was removed as an authoring medium (UBI-224), and promote no longer re-resolves a dialogue source; \"ubx why %s\" still explains it", p.ID, authSource.Ref, p.ID)}
 			default:
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own authoring source has an unrecognized kind %q", p.ID, authSource.Kind)}
 			}
@@ -260,15 +230,10 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			st := newStyler(cmd)
 			fmt.Fprintf(outWriter, "promoted %s -> %s (%s)\n", st.Hash(p.ID), targetStack, to)
 			// UBI-72's own show_defaults toggle is hardcoded true here --
-			// promote's .md/.d2/SDK paths re-resolve fresh against the
-			// target's own live state/providers, never through an LLM, so
-			// Intent.Assumptions/Defaults are always empty for those three.
-			// The dialogue path is the one real exception (UBI-60):
-			// promoteDialogueSource re-resolves the ORIGINAL converged
-			// draft, Assumptions/Defaults and all, so a dialogue-sourced
-			// promotion's own receipt genuinely can show real AI defaults --
-			// always shown in full here regardless, matching every other
-			// path's own posture, never silently collapsed.
+			// promote's own SDK path re-resolves fresh against the target's
+			// own live state/providers, so Intent.Assumptions/Defaults are
+			// always empty in practice; shown in full regardless, matching
+			// every other path's own posture, never silently collapsed.
 			renderPlanReceipt(outWriter, st, np, planReceiptHeader(st, np.Stack, ""), true)
 			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}, np.BlastRadius.Destroys > 0))
 			return nil
@@ -283,39 +248,37 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 	cmd.Flags().StringVar(&source, "source", "", "provider source address for the target, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version; unused if --to's own config declares [thirdparty_providers])")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire for the target (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under --to's own .ubx/plans/ regardless)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "timeout for re-drafting (a .md source's own intent-provider round trip) and for the target's own provider acquisition/schema fetch -- one shared budget for the whole command")
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "timeout for re-evaluating the SDK program and for the target's own provider acquisition/schema fetch -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying, in the TARGET's own graph (repeatable)")
-	cmd.Flags().StringVar(&summary, "summary", "", "intent.summary override for a .d2-sourced proposal (only relevant when the source's own document is a diagram; defaults to a generated summary naming the target stack and resource count)")
-	cmd.Flags().StringArrayVar(&neighborLedgers, "neighbor-ledger", nil, "<stack>=<path> mapping a diagram's own cross-stack reference to a real ledger directory in the TARGET's own graph, overriding the \"../<stack>\" convention (repeatable, only relevant for a .d2-sourced proposal)")
 	return cmd
 }
 
-// findPromotableSource picks the one intent.sources entry ubx promote can
-// actually re-derive from: a "document" kind (a .md/.d2/.go/.ts/.py file
+// findPromotableSource picks the one intent.sources entry ubx promote
+// might be able to re-derive from: a "document" kind (a .go/.ts/.py file
 // still reachable from disk -- UBI-60 closed the SDK-authored gap, see
 // promoteSDKSource's own doc comment) or a "dialogue" kind (a captured
-// ubx chat session -- UBI-60 closed this gap too, see
-// promoteDialogueSource's own doc comment), stamped by ubx propose/plan's
-// own drafting modes or ubx chat's own /save. A "promotion" source itself
-// is never picked (it names a proposal id, not a file -- re-promoting an
-// already-promoted proposal re-resolves its own ORIGINAL source again,
-// see docs/schema.md's own "Amendment: promotion evidence" for why the
-// chain is walked one hop at a time rather than flattened). "document"
-// is checked first, matching the search order UBI-55 already established
-// (a proposal carrying both would be unusual, but document takes
-// priority the same way it always has).
+// ubx chat session, from before UBI-224 removed chat as an authoring
+// medium -- the caller refuses this kind outright rather than
+// re-resolving it, see newPromoteCmd's own RunE). A "promotion" source
+// itself is never picked (it names a proposal id, not a file --
+// re-promoting an already-promoted proposal re-resolves its own
+// ORIGINAL source again, see docs/schema.md's own "Amendment: promotion
+// evidence" for why the chain is walked one hop at a time rather than
+// flattened). "document" is checked first, matching the search order
+// UBI-55 already established (a proposal carrying both would be
+// unusual, but document takes priority the same way it always has).
 func findPromotableSource(p *core.Proposal) (*core.IntentSource, error) {
 	for i := range p.Intent.Sources {
-		if p.Intent.Sources[i].Kind == intentprovider.SourceKindDocument {
+		if p.Intent.Sources[i].Kind == core.SourceKindDocument {
 			return &p.Intent.Sources[i], nil
 		}
 	}
 	for i := range p.Intent.Sources {
-		if p.Intent.Sources[i].Kind == intentprovider.SourceKindDialogue {
+		if p.Intent.Sources[i].Kind == core.SourceKindDialogue {
 			return &p.Intent.Sources[i], nil
 		}
 	}
-	return nil, fmt.Errorf("%s has no re-resolvable authoring source in intent.sources -- promote needs a \"document\" source (from ubx propose --from-doc/--from-diagram/--from-code, or ubx plan's own equivalent) or a \"dialogue\" source (ubx chat) to re-resolve against the target", p.ID)
+	return nil, fmt.Errorf("%s has no re-resolvable authoring source in intent.sources -- promote needs a \"document\" source (from ubx resolve/plan --from-code) to re-resolve against the target", p.ID)
 }
 
 // promoteSDKSource is UBI-60's own SDK-promotion path (docs/schema.md's
@@ -383,52 +346,6 @@ func promoteSDKSource(ctx context.Context, cmd *cobra.Command, authSource *core.
 	case ".py":
 		if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
 			return nil, err
-		}
-	}
-	return &intent, nil
-}
-
-// promoteDialogueSource is UBI-60's own dialogue-promotion path
-// (docs/schema.md's "Amendment: promotion evidence" named this a known
-// gap through UBI-55: a dialogue's own Ref is relative to the SOURCE
-// proposal's own --ledger-dir, never portable to an arbitrary --to
-// target directory the way a .md/.d2 Ref -- read straight off the
-// current working directory -- already is).
-//
-// The real design decision this ticket confirmed: unlike an SDK program
-// (deterministic code, cheap and safe to re-run), a dialogue is NOT
-// re-run through the LLM a second time -- there is no clean way to
-// replay a multi-turn conversation deterministically, and doing so could
-// change the drafted STRUCTURE itself, not just a context-derived value
-// within it, which would defeat the whole point of promoting a reviewed
-// result. Instead, the FINAL, converged intent/v1 draft the dialogue
-// already produced (Dialogue.Draft, embedded in the .dlg.json at /save
-// time) is what gets re-resolved against the target -- the exact same
-// "re-resolve the intent, don't copy the proposal" shape every other
-// promotion path already has, just skipping the re-drafting step since
-// there's nothing left to draft. The dialogue capture itself (and the
-// intent_provider entry naming which model produced it) is carried
-// forward from the ORIGINAL accepted proposal's own intent.sources onto
-// the new intent -- pinned evidence of how the draft was produced, never
-// treated as something promote could re-run.
-func promoteDialogueSource(ledgerDir string, p *core.Proposal, authSource *core.IntentSource) (*resolver.IntentFile, error) {
-	fullPath := filepath.Join(ledgerDir, authSource.Ref)
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return nil, fmt.Errorf("re-read dialogue capture %s: %w", fullPath, err)
-	}
-	var dlg intentprovider.Dialogue
-	if err := json.Unmarshal(data, &dlg); err != nil {
-		return nil, fmt.Errorf("parse dialogue capture %s: %w", fullPath, err)
-	}
-	if dlg.Draft == nil {
-		return nil, fmt.Errorf("dialogue capture %s has no converged draft recorded", fullPath)
-	}
-
-	intent := *dlg.Draft
-	for _, s := range p.Intent.Sources {
-		if s.Kind == intentprovider.SourceKindDialogue || s.Kind == intentprovider.SourceKindIntentProvider {
-			intent.Intent.Sources = append(intent.Intent.Sources, s)
 		}
 	}
 	return &intent, nil

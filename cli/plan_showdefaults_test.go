@@ -16,7 +16,7 @@ const showDefaultsDraft = `{
 	"kind": "ubx:intent/v1",
 	"stack": "payments",
 	"intent": {
-		"summary": "widget via ubx plan --from-doc",
+		"summary": "widget via ubx plan",
 		"assumptions": [
 			{"text": "used the default tag set since none were specified", "affects": ["fake_widget.widget1.tags"]}
 		],
@@ -28,25 +28,28 @@ const showDefaultsDraft = `{
 		]
 	},
 	"resources": [
-		{"type": "fake_widget", "name": "widget1", "op": "create", "config": "{\"name\":\"widget1\"}"}
+		{"type": "fake_widget", "name": "widget1", "op": "create", "config": {"name":"widget1"}}
 	],
 	"destroys": []
 }`
 
 // runPlanWithShowDefaultsDraft is every test below's own shared
-// invocation: drafts showDefaultsDraft via the hermetic fake intent
-// adapter (no real LLM/network) and resolves it through `ubx plan
-// --from-doc`, with extraArgs appended verbatim (flags, mostly).
+// invocation: writes showDefaultsDraft -- a pre-resolved intent/v1
+// document, already carrying its own assumptions/defaults/questions --
+// straight to a file and resolves it through `ubx plan`, with extraArgs
+// appended verbatim (flags, mostly). UBI-224 removed the intent-provider
+// drafting step this once ran through (ubx plan --from-doc); assumptions/
+// defaults/questions are plain intent/v1 wire fields, not a drafting-only
+// concept, so a hand-written file with them already populated exercises
+// the exact same show_defaults rendering path.
 func runPlanWithShowDefaultsDraft(t *testing.T, ledgerDir string, extraArgs ...string) (out string, err error) {
 	t.Helper()
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: showDefaultsDraft})
-
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
-	docPath := filepath.Join(ledgerDir, "payments.md")
-	writeFile(t, docPath, "# Payments\n\nA single widget.")
+	intentPath := filepath.Join(ledgerDir, "intent.json")
+	writeFile(t, intentPath, showDefaultsDraft)
 
 	args := append([]string{
-		"plan", "--from-doc", docPath, "--stack", "payments",
+		"plan", intentPath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir,
 	}, extraArgs...)
 	return runUbx(t, env, args...)
@@ -64,7 +67,7 @@ func TestPlan_ShowDefaults_DefaultTrue_FullBlockShown(t *testing.T) {
 
 	out, err := runPlanWithShowDefaultsDraft(t, ledgerDir)
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan: %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected the full AI-defaults header by default, got: %s", out)
@@ -88,7 +91,7 @@ func TestPlan_ShowDefaults_ConfigFalse_CollapsesToOneLine(t *testing.T) {
 
 	out, err := runPlanWithShowDefaultsDraft(t, ledgerDir)
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan: %v\noutput: %s", err, out)
 	}
 	if strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected the full header collapsed away, got: %s", out)
@@ -126,7 +129,7 @@ func TestPlan_ShowDefaults_QuestionsNeverCollapse(t *testing.T) {
 
 	out, err := runPlanWithShowDefaultsDraft(t, ledgerDir)
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan: %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, "should this widget be public?") {
 		t.Fatalf("expected the blocking question rendered in full even with show_defaults=false, got: %s", out)
@@ -150,7 +153,7 @@ func TestPlan_ShowDefaultsFlag_OverridesConfigFalse(t *testing.T) {
 
 	out, err := runPlanWithShowDefaultsDraft(t, ledgerDir, "--show-defaults")
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc --show-defaults: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan --show-defaults: %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected --show-defaults to override config's show_defaults=false, got: %s", out)
@@ -169,7 +172,7 @@ func TestPlan_HideDefaultsFlag_OverridesConfigDefaultTrue(t *testing.T) {
 
 	out, err := runPlanWithShowDefaultsDraft(t, ledgerDir, "--hide-defaults")
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc --hide-defaults: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan --hide-defaults: %v\noutput: %s", err, out)
 	}
 	if strings.Contains(out, "AI defaults — you are signing these:") {
 		t.Fatalf("expected --hide-defaults to collapse the block despite no config override, got: %s", out)
@@ -202,17 +205,16 @@ func TestPlan_ShowDefaults_TTY_CollapsedLineIsPurple_NOCOLORStripsIt(t *testing.
 	ledgerDir := t.TempDir()
 	withConfigSearchDir(t, ledgerDir)
 	writeConfig(t, ledgerDir, `intent = { show_defaults = false }`)
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: showDefaultsDraft})
 
-	docPath := filepath.Join(ledgerDir, "payments.md")
-	writeFile(t, docPath, "# Payments\n\nA single widget.")
+	intentPath := filepath.Join(ledgerDir, "intent.json")
+	writeFile(t, intentPath, showDefaultsDraft)
 
 	out, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR="},
-		"plan", "--from-doc", docPath, "--stack", "payments",
+		"plan", intentPath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir,
 	)
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc: %v\noutput: %s", err, out)
+		t.Fatalf("ubx plan: %v\noutput: %s", err, out)
 	}
 	line := lineContaining(out, "AI default(s) in effect")
 	if line == "" {
@@ -223,11 +225,11 @@ func TestPlan_ShowDefaults_TTY_CollapsedLineIsPurple_NOCOLORStripsIt(t *testing.
 	}
 
 	noColorOut, err := runUbxTTY(t, "", []string{"FAKEPROVIDER_MODE=ok-v6", "NO_COLOR=1"},
-		"plan", "--from-doc", docPath, "--stack", "payments",
+		"plan", intentPath,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir,
 	)
 	if err != nil {
-		t.Fatalf("ubx plan --from-doc (NO_COLOR): %v\noutput: %s", err, noColorOut)
+		t.Fatalf("ubx plan (NO_COLOR): %v\noutput: %s", err, noColorOut)
 	}
 	if strings.Contains(noColorOut, ansiPurple) {
 		t.Fatalf("expected NO_COLOR to strip all ANSI codes, got: %s", noColorOut)

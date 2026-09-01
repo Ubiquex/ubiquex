@@ -9,10 +9,10 @@ import (
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
-// GenerateTS compiles a resolved intent draft (the SAME already-drafted
-// value GenerateGo consumes -- Slice 4's own "the AI draft happens
-// exactly once, regardless of how many languages are requested" rule)
-// into a real, self-contained TypeScript module pair: one file with a
+// GenerateTS compiles a resolved intent (the SAME already-parsed value
+// GenerateGo consumes -- Slice 4's own "resources: is parsed exactly
+// once, regardless of how many languages are requested" rule) into a
+// real, self-contained TypeScript module pair: one file with a
 // ResourceBinding literal per resource type, one file with the
 // blueprint's own parameterized function. docs/blueprint.md's own
 // "Multi-language codegen" section has the full design and the real

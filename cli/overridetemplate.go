@@ -2,9 +2,11 @@
 // own templating half (UBI-86 Part 2, design comment item 10, CONFIRMED
 // as its own requirement): status --drift (by way of scanDrift,
 // drift.go) already computes the exact address/field/old/new values --
-// turning that into "override X's Y to Z" syntax in a target medium is
-// templating into that medium's own grammar, never interpretation. Zero
-// AI anywhere in this file.
+// turning that into an override-statement call in the calling stack's
+// own SDK language is templating into that language's own grammar,
+// never interpretation. Zero AI anywhere in this file. UBI-224 removed
+// the diagram/md variants this once also templated into, along with the
+// authoring mediums that consumed them.
 package cli
 
 import (
@@ -25,22 +27,17 @@ import (
 // reused, not reimplemented: the SAME real file-sniffing autodetectMedium
 // already uses for `ubx plan`'s own bare-invocation auto-detection is
 // what "in whichever medium the calling stack is authored in" (UBI-86's
-// own design comment) means here too.
+// own design comment) means here too. UBI-224 removed the markdown/
+// diagram authoring mediums, so autodetectMedium never returns anything
+// but an SDK program now -- dispatch is by extension alone.
 func overrideMediumFromDetected(d detectedMedium) (string, error) {
-	switch d.flag {
-	case "--from-doc":
-		return "md", nil
-	case "--from-diagram":
-		return "diagram", nil
-	case "--from-code":
-		switch strings.ToLower(filepath.Ext(d.path)) {
-		case ".go":
-			return "go", nil
-		case ".ts":
-			return "ts", nil
-		case ".py":
-			return "py", nil
-		}
+	switch strings.ToLower(filepath.Ext(d.path)) {
+	case ".go":
+		return "go", nil
+	case ".ts":
+		return "ts", nil
+	case ".py":
+		return "py", nil
 	}
 	return "", fmt.Errorf("render: %s: unrecognized authoring medium", d.path)
 }
@@ -108,10 +105,6 @@ func renderOverrideStatement(medium string, addr core.Address, fields []DriftedF
 		return renderOverrideTS(addr.String(), sorted), nil
 	case "py":
 		return renderOverridePython(addr.String(), sorted), nil
-	case "diagram":
-		return renderOverrideDiagram(addr, sorted)
-	case "md":
-		return renderOverrideMd(addr.String(), sorted), nil
 	default:
 		return "", fmt.Errorf("render: unrecognized override medium %q", medium)
 	}
@@ -146,103 +139,6 @@ func renderOverridePython(addr string, fields []DriftedField) string {
 	}
 	b.WriteString("})\n")
 	return b.String()
-}
-
-// renderOverrideDiagram templates a real ubx_override node
-// (diagram/parse.go's own overrideFromNode is what actually consumes
-// this syntax on the parse side -- kept in sync by construction: both
-// this renderer and that parser exist in the same UBI-86 change).
-// Diagram's own structural-attribute-reading mechanism, like
-// ubx_required before it, only ever expresses a plain STRING-valued
-// attribute (ubxRequiredAttrValue always JSON-string-encodes raw D2
-// text) -- a real, pre-existing, documented scope boundary this
-// function inherits rather than works around; a non-string drifted
-// value is a clear, named refusal here, not a silently wrong render.
-func renderOverrideDiagram(addr core.Address, fields []DriftedField) (string, error) {
-	key := diagramNodeKey(addr)
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s: \"fix %s\" {\n", key, addr.Name)
-	b.WriteString("  class: ubx_override\n")
-	fmt.Fprintf(&b, "  address: %s\n", d2QuoteForOverride(addr.String()))
-	for _, f := range fields {
-		s, ok := jsonStringValue(f.After)
-		if !ok {
-			return "", fmt.Errorf("render --sync-overrides: %s.%s: diagram override syntax only supports string-valued overrides (matching ubx_required's own established scope) -- use --md against a Go/TS/Python-authored stack for a non-string value instead", addr, f.Path)
-		}
-		fmt.Fprintf(&b, "  %s: %s\n", f.Path, d2QuoteForOverride(s))
-	}
-	b.WriteString("}\n")
-	return b.String(), nil
-}
-
-func renderOverrideMd(addr string, fields []DriftedField) string {
-	parts := make([]string, len(fields))
-	for i, f := range fields {
-		parts[i] = fmt.Sprintf("%s to %s", f.Path, mdValueText(f.After))
-	}
-	return fmt.Sprintf("Override %s's %s.\n", addr, strings.Join(parts, ", "))
-}
-
-// diagramNodeKey derives a legal, deterministic D2 identifier from addr
-// -- addr.Name may itself contain characters D2's own bare-identifier
-// grammar doesn't accept (a hyphen, say -- "pipeline-events" is a
-// perfectly normal ubx resource name); "fix_" plus every non-
-// alphanumeric character folded to "_" is always safe, mirroring
-// diagram/emit.go's own synthetic "rN"/"bpN" key convention (a legible-
-// enough key is nice to have, but never load-bearing -- the node's own
-// D2 label, and its "address:" attribute, are what actually carry the
-// real address).
-func diagramNodeKey(addr core.Address) string {
-	var b strings.Builder
-	b.WriteString("fix_")
-	for _, r := range addr.Name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
-}
-
-// d2QuoteForOverride mirrors diagram/emit.go's own unexported d2Quote --
-// package boundaries mean this is a small, deliberately independent
-// mirror (diagram can't import cli, cli already imports diagram), the
-// same precedent diagram.ShortBlueprintRef's own doc comment already
-// established for the reverse direction.
-func d2QuoteForOverride(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	return `"` + s + `"`
-}
-
-// jsonStringValue reports whether raw decodes to a plain JSON string,
-// returning its own decoded value.
-func jsonStringValue(raw json.RawMessage) (string, bool) {
-	var v interface{}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return "", false
-	}
-	s, ok := v.(string)
-	return s, ok
-}
-
-// mdValueText renders raw for the md medium's own generated prose -- a
-// string renders as its own quoted text (matching the design comment's
-// own literal worked example, "...to new_value."); anything else renders
-// as its own compact JSON text, since md prose has no separate literal
-// grammar of its own to borrow from the way Go/TS/Python each do.
-func mdValueText(raw json.RawMessage) string {
-	if s, ok := jsonStringValue(raw); ok {
-		return fmt.Sprintf("%q", s)
-	}
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, raw); err != nil {
-		return string(raw)
-	}
-	return buf.String()
 }
 
 // jsonToGoLiteral/jsonToTSLiteral/jsonToPyLiteral render one JSON value

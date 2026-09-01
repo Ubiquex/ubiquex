@@ -15,7 +15,6 @@ import (
 
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/intentprovider"
 )
 
 // proposalIDPattern matches a full 64-hex-char content hash — the only
@@ -86,7 +85,7 @@ func newWhyCmd() *cobra.Command {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
 					}
 				}
-				var dlg *intentprovider.Dialogue
+				var dlg *resolver.Dialogue
 				if dialogue {
 					dlg = loadDialogueSource(ledgerDir, p)
 				}
@@ -179,12 +178,12 @@ func newWhyCmd() *cobra.Command {
 // forms are genuinely different views, not one view with an optional
 // extra field.
 type whyJSON struct {
-	Format           int                      `json:"format"`
-	Proposal         *core.Proposal           `json:"proposal,omitempty"`
-	Chain            []*core.Proposal         `json:"chain,omitempty"`
-	Applies          []*core.ApplyRecord      `json:"applies,omitempty"`
-	VerifyAcceptance *verifyAcceptanceJSON    `json:"verify_acceptance,omitempty"`
-	Dialogue         *intentprovider.Dialogue `json:"dialogue,omitempty"`
+	Format           int                   `json:"format"`
+	Proposal         *core.Proposal        `json:"proposal,omitempty"`
+	Chain            []*core.Proposal      `json:"chain,omitempty"`
+	Applies          []*core.ApplyRecord   `json:"applies,omitempty"`
+	VerifyAcceptance *verifyAcceptanceJSON `json:"verify_acceptance,omitempty"`
+	Dialogue         *resolver.Dialogue    `json:"dialogue,omitempty"`
 }
 
 // renderProposal is the full single-proposal view, unchanged from before
@@ -606,16 +605,16 @@ func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent s
 // proposal that didn't come from `ubx chat`) returns nil -- an ordinary,
 // expected case, not an error; renderDialogue says so plainly rather
 // than printing nothing with no explanation.
-func loadDialogueSource(ledgerDir string, p *core.Proposal) *intentprovider.Dialogue {
+func loadDialogueSource(ledgerDir string, p *core.Proposal) *resolver.Dialogue {
 	for _, s := range p.Intent.Sources {
-		if s.Kind != intentprovider.SourceKindDialogue {
+		if s.Kind != core.SourceKindDialogue {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(ledgerDir, s.Ref))
 		if err != nil {
 			return nil
 		}
-		var dlg intentprovider.Dialogue
+		var dlg resolver.Dialogue
 		if err := json.Unmarshal(data, &dlg); err != nil {
 			return nil
 		}
@@ -628,7 +627,7 @@ func loadDialogueSource(ledgerDir string, p *core.Proposal) *intentprovider.Dial
 // found one -- the actual turns, not just the source line's own
 // kind/ref/hash (renderIntentSource's own job, unchanged, still printed
 // first as part of renderProposal).
-func renderDialogue(out io.Writer, p *core.Proposal, dlg *intentprovider.Dialogue) {
+func renderDialogue(out io.Writer, p *core.Proposal, dlg *resolver.Dialogue) {
 	if dlg == nil {
 		fmt.Fprintln(out, "\n--dialogue: this proposal has no captured dialogue source (it wasn't drafted via `ubx chat`, or the file couldn't be read)")
 		return

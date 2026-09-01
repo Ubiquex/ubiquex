@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ubiquex/ubiquex/diagram"
 )
 
 // conformanceWidgetEnv ships/scans a single-attribute (name) fake_widget
@@ -16,9 +14,8 @@ import (
 // ok-v6 mode, whose only drift-simulation lever (FAKEPROVIDER_EXTRA_TAG)
 // is tags-only, conformance mode's FAKEPROVIDER_MUTATE_ATTR/VALUE can
 // drift ANY declared attribute, giving a real TOP-LEVEL SCALAR drift --
-// exactly what both the Go and diagram override-statement renderers need
-// to prove correctness against (diagram's own override syntax, like
-// ubx_required before it, only expresses string-valued overrides).
+// exactly what the Go override-statement renderer needs to prove
+// correctness against.
 var conformanceWidgetEnv = []string{
 	"FAKEPROVIDER_MODE=conformance-v6",
 	"FAKEPROVIDER_RESOURCE_TYPE=fake_widget",
@@ -83,103 +80,6 @@ func TestRenderSyncOverrides_GoSyntax_CorrectStatement(t *testing.T) {
 	want := "sdk.Override(\"payments.fake_widget.primary\", map[string]any{\n\t\"name\": \"v2\",\n})\n"
 	if out != want+"\n" {
 		t.Fatalf("generated statement mismatch:\n got:  %q\nwant:  %q", out, want+"\n")
-	}
-}
-
-// TestRenderSyncOverrides_DiagramSyntax_CorrectStatement is UBI-86 Part
-// 2's own required proof, second-medium half: the identical drift,
-// rendered against a directory whose one authoring file is a .d2
-// diagram, produces a real ubx_override node -- correct, parseable
-// syntax (confirmed by round-tripping it through the real
-// diagram.Parse, not just string-matched).
-func TestRenderSyncOverrides_DiagramSyntax_CorrectStatement(t *testing.T) {
-	ledgerDir := t.TempDir()
-	shipOneDriftableWidget(t, ledgerDir)
-	diagramPath := filepath.Join(ledgerDir, "payments.d2")
-	if err := os.WriteFile(diagramPath, []byte("classes: {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--sync-overrides",
-		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
-	if err != nil {
-		t.Fatalf("ubx render --md --sync-overrides: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "class: ubx_override") {
-		t.Fatalf("expected a ubx_override node, got:\n%s", out)
-	}
-	if !strings.Contains(out, `address: "payments.fake_widget.primary"`) {
-		t.Fatalf("expected the correct target address, got:\n%s", out)
-	}
-	if !strings.Contains(out, `name: "v2"`) {
-		t.Fatalf("expected the drifted value, got:\n%s", out)
-	}
-
-	intent, perr := diagram.Parse("test.d2", strings.NewReader(out), "payments", nil, diagram.Options{})
-	if perr != nil {
-		t.Fatalf("diagram.Parse (round-trip of the generated syntax): %v\ngenerated:\n%s", perr, out)
-	}
-	if len(intent.Overrides) != 1 {
-		t.Fatalf("expected the generated D2 to parse back into exactly 1 override, got %d: %+v", len(intent.Overrides), intent.Overrides)
-	}
-	ov := intent.Overrides[0]
-	if ov.Address != "payments.fake_widget.primary" {
-		t.Errorf("Address = %q, want %q", ov.Address, "payments.fake_widget.primary")
-	}
-	if string(ov.Config["name"]) != `"v2"` {
-		t.Errorf("Config[name] = %s, want a JSON string \"v2\"", ov.Config["name"])
-	}
-}
-
-// TestRenderSyncOverrides_Write_AppendsIntoDiagramFile confirms --write
-// appends the generated statement directly into the calling stack's own
-// source file, verbatim, real bytes on disk.
-func TestRenderSyncOverrides_Write_AppendsIntoDiagramFile(t *testing.T) {
-	ledgerDir := t.TempDir()
-	shipOneDriftableWidget(t, ledgerDir)
-	diagramPath := filepath.Join(ledgerDir, "payments.d2")
-	original := "classes: {}\n"
-	if err := os.WriteFile(diagramPath, []byte(original), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--sync-overrides", "--write",
-		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
-	if err != nil {
-		t.Fatalf("ubx render --md --sync-overrides --write: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "wrote 1 override statement(s) into "+diagramPath) {
-		t.Fatalf("unexpected stdout: %s", out)
-	}
-
-	after, err := os.ReadFile(diagramPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(string(after), original) {
-		t.Fatalf("expected the original file content preserved at the start, got:\n%s", after)
-	}
-	if !strings.Contains(string(after), "class: ubx_override") {
-		t.Fatalf("expected the override node appended, got:\n%s", after)
-	}
-}
-
-// TestRenderSyncOverrides_Write_RefusedForGoAuthoredStack confirms
-// --write REFUSES for an SDK-authored stack rather than producing
-// uncompilable/misplaced source -- a real, named scope boundary
-// (overridetemplate.go's own doc comment), never a silent bad write.
-func TestRenderSyncOverrides_Write_RefusedForGoAuthoredStack(t *testing.T) {
-	ledgerDir := t.TempDir()
-	shipOneDriftableWidget(t, ledgerDir)
-	if err := os.WriteFile(filepath.Join(ledgerDir, "create_primary.go"), []byte(goSDKMarkerFile), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--sync-overrides", "--write",
-		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
-	requireExitCode(t, err, 2, out)
-	if !strings.Contains(err.Error(), "not supported for an SDK-authored stack") {
-		t.Fatalf("expected a clear SDK-authored refusal, got: %v", err)
 	}
 }
 
@@ -264,12 +164,12 @@ func quoteHCL(s string) string {
 func TestRenderSyncOverrides_AmbiguousMedium_Refused(t *testing.T) {
 	ledgerDir := t.TempDir()
 	shipOneDriftableWidget(t, ledgerDir)
-	// Two candidate authoring files -- ambiguous, must refuse rather than
+	// Two candidate SDK programs -- ambiguous, must refuse rather than
 	// guess (autodetectMedium's own established "pick one" contract).
 	if err := os.WriteFile(filepath.Join(ledgerDir, "create_primary.go"), []byte(goSDKMarkerFile), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ledgerDir, "payments.d2"), []byte("classes: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ledgerDir, "create_secondary.go"), []byte(goSDKMarkerFile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

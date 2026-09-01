@@ -258,11 +258,17 @@ type Ubxfile struct {
 	// Params is params:, in file declaration order (never a map --
 	// determinism, docs/blueprint.md).
 	Params []Param
-	// Resources is the resolved resource prose -- either read verbatim
-	// from resources:'s own inline value, or (when resources: names an
-	// existing .md file) that file's own content.
+	// Resources is a pre-resolved intent/v1 JSON document (the SAME
+	// wire shape "ubx resolve --from-code --out <file>" already
+	// produces, unmarshalable directly into resolver.IntentFile) --
+	// either read verbatim from resources:'s own inline value, or (when
+	// resources: names an existing .json file) that file's own content.
+	// UBI-224 removed blueprint build's own intent-provider draft step:
+	// a blueprint author now produces this JSON themselves, via the SDK
+	// (or "ubx blueprint convert"), before it's ever checked in --
+	// build has nothing left to interpret, only to parse.
 	Resources string
-	// ResourcesSource is "inline" or the resolved .md file path,
+	// ResourcesSource is "inline" or the resolved .json file path,
 	// recorded for provenance/logging only.
 	ResourcesSource string
 	// Outputs is outputs: (UBI-128), in file declaration order -- empty
@@ -464,13 +470,14 @@ func parseDefaultValue(typ ParamType, text string) (any, error) {
 }
 
 // resolveResources disambiguates resources:'s own value -- a path to an
-// existing .md file, or literal inline prose -- the same way a human
-// reading the Ubxfile would: a single-line value ending in .md that
-// actually resolves to a real file is a path; anything else is prose,
-// verbatim (docs/blueprint.md).
+// existing .json file (a pre-resolved intent/v1 document), or literal
+// inline JSON -- the same way a human reading the Ubxfile would: a
+// single-line value ending in .json that actually resolves to a real
+// file is a path; anything else is inline JSON, verbatim
+// (docs/blueprint.md).
 func resolveResources(dir, value string) (resources, source string, err error) {
 	trimmed := strings.TrimSpace(value)
-	if !strings.Contains(trimmed, "\n") && strings.HasSuffix(trimmed, ".md") {
+	if !strings.Contains(trimmed, "\n") && strings.HasSuffix(trimmed, ".json") {
 		candidate := trimmed
 		if !filepath.IsAbs(candidate) {
 			candidate = filepath.Join(dir, candidate)

@@ -10,13 +10,13 @@ import (
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
-// GenerateGo compiles a resolved intent draft (already drafted from an
-// Ubxfile's own resources: prose, exactly once, by the caller -- this
-// function makes no intent-provider call of its own) into a real,
-// self-contained Go package: one file with a ResourceBinding+Config
-// struct pair per resource type, one file with the blueprint's own
-// parameterized function. docs/blueprint.md has the full design and the
-// reasoning behind every decision named in this file's own comments.
+// GenerateGo compiles a resolved intent (parsed from an Ubxfile's own
+// resources: JSON, exactly once, by the caller -- this function makes
+// no intent-provider call of its own) into a real, self-contained Go
+// package: one file with a ResourceBinding+Config struct pair per
+// resource type, one file with the blueprint's own parameterized
+// function. docs/blueprint.md has the full design and the reasoning
+// behind every decision named in this file's own comments.
 //
 // blueprintName is the caller's own chosen name for this blueprint
 // (Slice 1: the Ubxfile's own directory basename) -- GenerateGo has no

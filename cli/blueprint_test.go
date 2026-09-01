@@ -8,25 +8,38 @@ import (
 	"testing"
 )
 
+// blueprintTestDraft is a pre-resolved intent/v1 document -- the SAME
+// wire shape "ubx resolve --from-code --out <file>" produces -- standing
+// in for what a blueprint author now writes themselves (via the SDK, or
+// "ubx blueprint convert") before checking an Ubxfile in. UBI-224
+// removed blueprint build's own intent-provider draft step, so build no
+// longer interprets prose -- resources: below always points straight at
+// this file.
 const blueprintTestDraft = `{
   "schema_version": 1,
   "kind": "ubx:intent/v1",
   "stack": "ci-platform",
   "intent": {"summary": "CI platform blueprint"},
   "resources": [
-    {"type": "aws_ecr_repository", "name": "ci-artifacts", "op": "create", "config": "{\"name\": \"{repo_name}\"}"}
+    {"type": "aws_ecr_repository", "name": "ci-artifacts", "op": "create", "config": {"name": "{repo_name}"}}
   ]
 }`
 
-func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
-	fake := &fakeIntentAdapter{draft: blueprintTestDraft}
-	withBuildIntentAdapter(t, fake)
+// writeBlueprintTestResources writes blueprintTestDraft to dir/resources.json
+// and returns an Ubxfile's own resources: value pointing at it.
+func writeBlueprintTestResources(t *testing.T, dir string) string {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, "resources.json"), blueprintTestDraft)
+	return "resources.json"
+}
 
+func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ci-platform")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
+	writeBlueprintTestResources(t, dir)
+	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: resources.json\n")
 
 	out, err := runUbx(t, nil, "blueprint", "build", dir, "--lang", "go")
 	if err != nil {
@@ -53,31 +66,18 @@ func TestBlueprintBuild_WritesCompilableGoPackage(t *testing.T) {
 	if !strings.Contains(string(fn), "func CiPlatform(repoName string) {") {
 		t.Fatalf("ciplatform.go missing expected signature:\n%s", fn)
 	}
-
-	// The adapter should have received the parameter-preservation
-	// preamble, not the bare resources: prose.
-	if !strings.Contains(fake.lastReq.Stack, "ci-platform") {
-		t.Fatalf("draft stack = %q, want the blueprint's own directory-derived name", fake.lastReq.Stack)
-	}
-	if !strings.Contains(string(fake.lastReq.Content), "repo_name") || !strings.Contains(string(fake.lastReq.Content), "PARAMETERIZED BLUEPRINT") {
-		t.Fatalf("adapter content missing the parameter-preservation preamble:\n%s", fake.lastReq.Content)
-	}
 }
 
 // TestBlueprintBuild_DefaultLangBuildsAllThree confirms Slice 4's own
 // resolved "--lang default" design: omitting --lang entirely builds ALL
-// THREE languages from the SAME single AI draft call (fake.calls tracks
-// how many times the adapter itself was invoked -- must stay 1, not 3,
-// proving the draft genuinely isn't repeated per language).
+// THREE languages from the SAME single parsed resources: document.
 func TestBlueprintBuild_DefaultLangBuildsAllThree(t *testing.T) {
-	fake := &fakeIntentAdapter{draft: blueprintTestDraft}
-	withBuildIntentAdapter(t, fake)
-
 	dir := filepath.Join(t.TempDir(), "ci-platform")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
+	writeBlueprintTestResources(t, dir)
+	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: resources.json\n")
 
 	out, err := runUbx(t, nil, "blueprint", "build", dir)
 	if err != nil {
@@ -90,9 +90,6 @@ func TestBlueprintBuild_DefaultLangBuildsAllThree(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 			t.Fatalf("expected %s to be written: %v", want, err)
 		}
-	}
-	if fake.calls != 1 {
-		t.Fatalf("intent-provider adapter was called %d time(s), want exactly 1 (one draft, three languages compiled from it)", fake.calls)
 	}
 }
 
@@ -115,14 +112,12 @@ func TestBlueprintBuild_MissingUbxfile(t *testing.T) {
 }
 
 func TestBlueprintBuild_DefaultsToCurrentDirectory(t *testing.T) {
-	fake := &fakeIntentAdapter{draft: blueprintTestDraft}
-	withBuildIntentAdapter(t, fake)
-
 	dir := filepath.Join(t.TempDir(), "ci-platform")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: hello\n")
+	writeBlueprintTestResources(t, dir)
+	writeFile(t, filepath.Join(dir, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: resources.json\n")
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -217,16 +212,14 @@ func TestBlueprintPull_LocalToGitToVerify_RealGoBuild(t *testing.T) {
 		t.Skip("git not available")
 	}
 
-	// Build (fake adapter) a real blueprint package, exactly the same as
+	// Build a real blueprint package, exactly the same as
 	// TestBlueprintBuild_WritesCompilableGoPackage.
-	fake := &fakeIntentAdapter{draft: blueprintTestDraft}
-	withBuildIntentAdapter(t, fake)
-
 	built := filepath.Join(t.TempDir(), "ci-platform")
 	if err := os.MkdirAll(built, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(built, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: |\n  An ECR repository called \"{repo_name}\".\n")
+	writeBlueprintTestResources(t, built)
+	writeFile(t, filepath.Join(built, "Ubxfile"), "lang: go\nparams:\n  repo_name: string, required\nresources: resources.json\n")
 	if _, err := runUbx(t, nil, "blueprint", "build", built, "--lang", "go"); err != nil {
 		t.Fatalf("blueprint build: %v", err)
 	}

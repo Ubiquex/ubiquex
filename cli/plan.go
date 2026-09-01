@@ -17,15 +17,13 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/intentprovider/claude"
 )
 
 // newPlanCmd is UBI-49's own terraform-shaped fusion of propose+resolve+
 // preview into one command (docs/architecture.md's "Two-step fusion"
-// amendment): takes any medium input this codebase already knows how to
-// turn into an ubx:intent/v1 document (a hand-written intent file,
-// --from-code's TypeScript SDK, --from-doc's markdown draft, or
-// --from-diagram's .d2 topology), resolves it through the exact same,
+// amendment): takes either input this codebase now knows how to turn
+// into an ubx:intent/v1 document (a hand-written intent file, or
+// --from-code's SDK program), resolves it through the exact same,
 // unmodified core/resolver.Resolve every other entry point already uses,
 // renders the full receipt (delta, cost_delta, blast radius, assumptions/
 // questions) for a human to review right here, and saves the result as a
@@ -34,16 +32,13 @@ import (
 // like `ubx resolve` and `ubx propose` today, this is preview-only; only
 // `ubx accept`/`ubx ship` ever record anything.
 //
-// The md/diagram media's own established "draft, then a separate human
-// checkpoint before resolving" posture (docs/intent-provider.md,
-// docs/diagram-medium.md) is deliberately NOT reproduced here: `ubx plan`
-// is a new, additional fast path for the sandbox/solo workflow, and its
-// own receipt (rendered before anything is saved or shipped) already IS
-// that checkpoint, now covering the full resolved proposal -- delta, cost,
-// blast radius, and any ambiguity content together -- rather than the
-// draft's ambiguity content alone. `ubx propose --from-doc`/`--from-
-// diagram`'s own draft-only, stop-before-resolving behavior is completely
-// unchanged for teams who want that extra checkpoint as a separate step.
+// UBI-224 removed this command's own --from-doc and --from-diagram
+// modes along with the markdown and diagram authoring mediums: both
+// used to draft an intent/v1 document from a real authoring input
+// before resolving it here in the same command, the same two real
+// draft producers `ubx propose` itself used to expose separately.
+// --from-code has no draft step to remove: an SDK program has no
+// ambiguity to review before resolving, by construction.
 func newPlanCmd() *cobra.Command {
 	var (
 		ledgerDir        string
@@ -54,11 +49,6 @@ func newPlanCmd() *cobra.Command {
 		timeout          time.Duration
 		knownDependents  []string
 		fromCode         string
-		fromDoc          string
-		fromDiagram      string
-		stack            string
-		summary          string
-		neighborLedgers  []string
 		fullHashes       bool
 		showDefaultsFlag bool
 		hideDefaultsFlag bool
@@ -66,20 +56,17 @@ func newPlanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "plan [intent-file]",
-		Short: "Resolve any medium input into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
+		Short: "Resolve a hand-written intent file or an SDK program into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
 		Long: `Fuses "ubx propose" + "ubx resolve" + a preview render into one command -- the
 terraform-shaped, two-step half of this project's own workflow (plan, then "ubx ship <hash>").
 
-Exactly one input is required: a hand-written ubx:intent/v1 file (the positional argument),
+Exactly one input is required: a hand-written ubx:intent/v1 file (the positional argument), or
 --from-code <entry>.ts|.go|.py (a TypeScript, Go, or Python SDK program, dispatched by
-extension to the identical evaluator "ubx resolve --from-code" uses), --from-doc <file>.md
---stack <stack> (a markdown authoring document, transcribed via the configured [intent]
-provider adapter exactly like "ubx propose --from-doc"), or --from-diagram <file>.d2 --stack
-<stack> (a D2 diagram's own topology, parsed exactly like "ubx propose --from-diagram").
+extension to the identical evaluator "ubx resolve --from-code" uses).
 
-Bare "ubx plan" (no argument, no --from-*) auto-detects a single medium file in the working
-directory (an intent .md authoring doc, a .d2 diagram, or a .ts/.go/.py SDK program) and plans
-it automatically. Multiple candidates are listed, never guessed -- rerun naming one explicitly.
+Bare "ubx plan" (no argument, no --from-code) auto-detects a single SDK program in the working
+directory and plans it automatically. Multiple candidates are listed, never guessed -- rerun
+naming one explicitly.
 
 The result resolves through the identical, unmodified core/resolver.Resolve every other entry
 point already uses -- same invariants, same orphan/pin checks, same failure modes. Its full
@@ -102,40 +89,27 @@ propose-time PR trailer hash, etc.).`,
 			if fromCode != "" {
 				modes++
 			}
-			if fromDoc != "" {
-				modes++
-			}
-			if fromDiagram != "" {
-				modes++
-			}
 			if modes > 1 {
-				return &ExitCodeError{Code: 2, Err: errors.New("plan: an intent-file argument, --from-code, --from-doc, and --from-diagram are mutually exclusive")}
+				return &ExitCodeError{Code: 2, Err: errors.New("plan: an intent-file argument and --from-code are mutually exclusive")}
 			}
 			if modes == 0 {
 				candidates, derr := autodetectMedium(ledgerDir)
 				if derr != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram (auto-detection failed: %w)", derr)}
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: requires exactly one of an intent-file argument or --from-code (auto-detection failed: %w)", derr)}
 				}
 				switch len(candidates) {
 				case 1:
-					switch candidates[0].flag {
-					case "--from-doc":
-						fromDoc = candidates[0].path
-					case "--from-diagram":
-						fromDiagram = candidates[0].path
-					case "--from-code":
-						fromCode = candidates[0].path
-					}
+					fromCode = candidates[0].path
 				case 0:
-					return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument, --from-code, --from-doc, or --from-diagram")}
+					return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument or --from-code")}
 				default:
 					names := make([]string, len(candidates))
 					hints := make([]string, len(candidates))
 					for i, c := range candidates {
 						names[i] = c.path
-						hints[i] = fmt.Sprintf("ubx plan %s %s", c.flag, c.path)
+						hints[i] = fmt.Sprintf("ubx plan --from-code %s", c.path)
 					}
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple mediums found: %s -- pick one: %s", strings.Join(names, ", "), strings.Join(hints, " | "))}
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one: %s", strings.Join(names, ", "), strings.Join(hints, " | "))}
 				}
 			}
 
@@ -161,83 +135,7 @@ propose-time PR trailer hash, etc.).`,
 
 			var intent resolver.IntentFile
 			var sourceLabel string
-			var showedDraftProgress bool
 			switch {
-			case fromDoc != "":
-				applyStackDefault(cmd, &stack, cfg)
-				if stack == "" {
-					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-doc", rc.Files)}
-				}
-				// UBI-85: read the target stack's own currently-recorded
-				// state BEFORE drafting, not after -- the root cause this
-				// ticket fixes was exactly that `ubx plan --from-doc` used
-				// to open a ledger only for its own later resolve step,
-				// leaving the drafting step itself with zero awareness of
-				// what's already shipped, so every resource redrafted as a
-				// fresh create even when unchanged. This ledger handle is
-				// closed immediately after computing knownResources -- the
-				// LATER openLedgerForStack call below (unchanged) opens its
-				// own separate handle for the real resolve step; core.Open's
-				// own git-local path is a lightweight struct with no
-				// persistent lock to conflict with itself over, so opening
-				// it twice here is harmless, not a double-lock hazard.
-				var knownResources map[string]json.RawMessage
-				{
-					preLedger, closePreLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
-					}
-					knownResources, err = knownResourcesForStack(preLedger, stack)
-					closePreLedger()
-					if err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
-					}
-				}
-				// docs/cli-output-spec.md §v2's own "plan -- progress" rule
-				// (UBI-63): the intent-provider call is seconds-long against
-				// a real API, so a bare receipt render with nothing printed
-				// in between reads as a hang, not a wait. Named here (not
-				// inside draftFromDoc itself, which `ubx propose --from-doc`
-				// also calls) so propose's own output is untouched --
-				// resolving, the second half of this line, is meaningless
-				// there, since propose never resolves.
-				adapterName := cfg.Intent.Adapter
-				if adapterName == "" {
-					adapterName = "claude"
-				}
-				model := cfg.Intent.Model
-				if model == "" {
-					model = claude.DefaultModel
-				}
-				fmt.Fprintf(outWriter, "drafting via %s:%s… ", adapterName, model)
-				showedDraftProgress = true
-				draft, err := draftFromDoc(cmd, cfg, fromDoc, stack, timeout, knownResources)
-				if err != nil {
-					fmt.Fprintln(outWriter)
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-doc: %w", err)}
-				}
-				fmt.Fprint(outWriter, "✓ · resolving…")
-				intent = *draft
-				sourceLabel = fromDoc
-			case fromDiagram != "":
-				applyStackDefault(cmd, &stack, cfg)
-				if stack == "" {
-					return &ExitCodeError{Code: 2, Err: stackRequiredError("plan --from-diagram", rc.Files)}
-				}
-				// draftFromDiagram already loads every declared provider
-				// once for diagram.Parse's own type-inference pass; the
-				// resolver.Resolve call below loads them again (schema-only,
-				// no cloud calls either time) -- a real, known duplication,
-				// accepted here rather than threading a providers slice
-				// through draftFromDiagram's own signature, which every
-				// other caller (propose.go's runProposeFromDiagram) doesn't
-				// need at all.
-				draft, err := draftFromDiagram(cmd, cfg, fromDiagram, stack, summary, neighborLedgers, timeout)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan --from-diagram: %w", err)}
-				}
-				intent = *draft
-				sourceLabel = fromDiagram
 			case fromCode != "":
 				// blueprintRefs (UBI-126) is deliberately unused here --
 				// `ubx plan --from-code` has never wired blueprint
@@ -273,51 +171,29 @@ propose-time PR trailer hash, etc.).`,
 			}
 
 			// UBI-86: cli/resolve.go's own identical pair of calls,
-			// mirrored here -- a pre-existing gap (plan.go never called
-			// ExpandCalls at all, so `ubx plan --from-diagram` against a
-			// ubx_blueprint node would have hard-failed with
-			// ErrUnexpandedBlueprintCalls) closed as part of wiring
-			// overrides through plan.go too, since the override round
-			// trip needs to work via `ubx plan`, not only `ubx resolve`.
+			// mirrored here so the override round trip works via
+			// `ubx plan`, not only `ubx resolve`.
 			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
-				if showedDraftProgress {
-					fmt.Fprintln(outWriter)
-				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 			if err := blueprint.ApplyOverrides(&intent); err != nil {
-				if showedDraftProgress {
-					fmt.Fprintln(outWriter)
-				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 
 			providers, err := loadResolveProviders(ctx, cmd, cfg, &providerPath, &source, &providerVersion)
 			if err != nil {
-				if showedDraftProgress {
-					fmt.Fprintln(outWriter)
-				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 
 			ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, intent.Stack, cfg)
 			if err != nil {
-				if showedDraftProgress {
-					fmt.Fprintln(outWriter)
-				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 			defer closeLedger()
 
 			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
 			if err != nil {
-				if showedDraftProgress {
-					fmt.Fprintln(outWriter)
-				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
-			}
-			if showedDraftProgress {
-				fmt.Fprintln(outWriter)
 			}
 
 			hash, err := core.Hash(p)
@@ -367,36 +243,14 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under .ubx/plans/ regardless)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition, drafting (--from-doc), and evaluation (--from-code) -- one shared budget for the whole command")
+	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition and evaluation (--from-code) -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file")
-	cmd.Flags().StringVar(&fromDoc, "from-doc", "", "path to a markdown authoring document -- transcribes it into an intent/v1 draft via the configured [intent] provider, then resolves it")
-	cmd.Flags().StringVar(&fromDiagram, "from-diagram", "", "path to a .d2 diagram -- transcribes its topology into an intent/v1 draft, then resolves it")
-	cmd.Flags().StringVar(&stack, "stack", "", "target stack name (required with --from-doc or --from-diagram; the intent-file and --from-code inputs already name their own stack)")
-	cmd.Flags().StringVar(&summary, "summary", "", "intent.summary for the draft (only with --from-diagram -- a diagram has no prose to derive one from; defaults to a generated summary naming the stack and resource count if omitted)")
-	cmd.Flags().StringArrayVar(&neighborLedgers, "neighbor-ledger", nil, "<stack>=<path> mapping a diagram's own cross-stack reference to a real ledger directory, overriding the \"../<stack>\" convention (repeatable, only with --from-diagram)")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	cmd.Flags().BoolVar(&showDefaultsFlag, "show-defaults", false, "render the full \"AI defaults\" block regardless of [intent] show_defaults (mutually exclusive with --hide-defaults)")
 	cmd.Flags().BoolVar(&hideDefaultsFlag, "hide-defaults", false, "collapse the \"AI defaults\" block to a one-line count regardless of [intent] show_defaults (mutually exclusive with --show-defaults) -- full detail is always in the saved plan file and the signed proposal either way")
 	return cmd
-}
-
-// nonAuthoringMarkdownBasenames is docs/cli-output-spec.md §v2's own
-// "README.md-class files must never false-positive" detection rule --
-// well-known project-meta markdown files that are never themselves an
-// authoring document for bare `ubx plan`'s auto-detection, checked
-// case-insensitively against the candidate's own basename (some of
-// these conventionally have no extension at all).
-var nonAuthoringMarkdownBasenames = map[string]bool{
-	"readme": true, "readme.md": true,
-	"changelog": true, "changelog.md": true,
-	"license": true, "license.md": true,
-	"contributing": true, "contributing.md": true,
-	"code_of_conduct": true, "code_of_conduct.md": true,
-	"security": true, "security.md": true,
-	"authors": true, "authors.md": true,
-	"notice": true, "notice.md": true,
 }
 
 // sdkImportMarkers is what distinguishes a real SDK authoring program
@@ -411,18 +265,16 @@ var sdkImportMarkers = map[string]string{
 	".py": "import ubx_sdk",
 }
 
-// detectedMedium is one candidate file autodetectMedium found, paired
-// with the --from-* flag it corresponds to -- used both to auto-plan a
-// lone candidate and to build the "pick one" teaching error naming each
-// candidate's own correct flag.
+// detectedMedium is one SDK program candidate autodetectMedium found --
+// used both to auto-plan a lone candidate and to build the "pick one"
+// teaching error naming each candidate's own path.
 type detectedMedium struct {
 	path string
-	flag string // "--from-doc", "--from-diagram", or "--from-code"
 }
 
 // autodetectMedium implements docs/cli-output-spec.md §v2's own bare
-// "ubx plan" auto-detection: exactly one medium file in dir plans
-// automatically, no --from-* flag needed; multiple candidates are
+// "ubx plan" auto-detection: exactly one SDK program in dir plans
+// automatically, no --from-code flag needed; multiple candidates are
 // listed and the caller must pick explicitly, never guessed. A single,
 // non-recursive directory listing -- bare `ubx plan` is a one-
 // directory-at-a-time convenience, matching every other relative-path
@@ -440,20 +292,13 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 		name := e.Name()
 		path := filepath.Join(dir, name)
 		switch ext := strings.ToLower(filepath.Ext(name)); ext {
-		case ".md":
-			if nonAuthoringMarkdownBasenames[strings.ToLower(name)] {
-				continue
-			}
-			found = append(found, detectedMedium{path: path, flag: "--from-doc"})
-		case ".d2":
-			found = append(found, detectedMedium{path: path, flag: "--from-diagram"})
 		case ".ts", ".go", ".py":
 			marker := sdkImportMarkers[ext]
 			content, err := os.ReadFile(path)
 			if err != nil || !strings.Contains(string(content), marker) {
 				continue
 			}
-			found = append(found, detectedMedium{path: path, flag: "--from-code"})
+			found = append(found, detectedMedium{path: path})
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].path < found[j].path })
@@ -471,11 +316,10 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 // header is the caller-built "Plan  <stack> · from <source>"-shaped
 // first line (docs/cli-output-spec.md's own worked plan example) --
 // built by the caller, not derived here, since what counts as "source"
-// differs per caller (an authoring document's path for `ubx plan
-// --from-doc`/`--from-diagram`, an intent file's path for a hand-written
-// one, nothing at all for `ubx terminate`, whose own address IS the
-// spec) and `ubx ship`'s own confirmation header names a plan age
-// instead of a source entirely.
+// differs per caller (an SDK program's path for `ubx plan --from-code`,
+// an intent file's path for a hand-written one, nothing at all for
+// `ubx terminate`, whose own address IS the spec) and `ubx ship`'s own
+// confirmation header names a plan age instead of a source entirely.
 //
 // showDefaults is UBI-72's own [intent] show_defaults resolution
 // (config.go's resolveShowDefaults) -- `ubx plan` passes its own resolved

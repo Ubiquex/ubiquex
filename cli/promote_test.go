@@ -17,21 +17,6 @@ import (
 	"github.com/ubiquex/ubiquex/ledgerstore"
 )
 
-// promoteFakeWidgetDraft is a fakeIntentAdapter draft producing one
-// fake_widget create -- fakeprovider's own known-good schema (plan_test.go's
-// own convention), reused here so promote's own re-derivation exercises a
-// real resolver.Resolve/fakeprovider round trip, not a hand-rolled shortcut.
-const promoteFakeWidgetDraft = `{
-  "schema_version": 1,
-  "kind": "ubx:intent/v1",
-  "stack": "payments",
-  "intent": {"summary": "widget, modeled on staging"},
-  "resources": [
-    {"type": "fake_widget", "name": "widget1", "op": "create", "config": "{\"name\":\"widget1\",\"tags\":{\"env\":\"prod\"}}"}
-  ],
-  "destroys": []
-}`
-
 // appendAcceptedProposal directly appends an already-"accepted" proposal to
 // ledgerDir's own ledger -- the same shortcut cli/status_test.go's own
 // TestStatus_Drift_MissingLookup_Unreadable_ExitTwo uses to build a ledger
@@ -54,68 +39,6 @@ func appendAcceptedProposal(t *testing.T, ledgerDir, id, stack string, sources [
 		t.Fatalf("append fixture proposal: %v", err)
 	}
 	return p
-}
-
-func TestPromote_HappyPath_ReResolvesAgainstTarget(t *testing.T) {
-	sourceDir := t.TempDir()
-	targetDir := t.TempDir()
-
-	docPath := filepath.Join(sourceDir, "payments.md")
-	writeFile(t, docPath, "# Payments\n\nA widget, like staging.")
-
-	sourceID := strings.Repeat("a", 64)
-	appendAcceptedProposal(t, sourceDir, sourceID, "payments", []core.IntentSource{
-		{Kind: "document", Ref: docPath, ContentHash: "sha256:deadbeef"},
-		{Kind: "intent_provider", Ref: "fake:fake-model-v1", ContentHash: "sha256:beadfeed"},
-	})
-
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: promoteFakeWidgetDraft})
-
-	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "promote", sourceID,
-		"--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary)
-	if err != nil {
-		t.Fatalf("ubx promote: %v\noutput: %s", err, out)
-	}
-
-	if !strings.Contains(out, "promoted "+displayHash(sourceID, false)+" -> payments") {
-		t.Errorf("expected a promoted-header line, got:\n%s", out)
-	}
-	if !strings.Contains(out, "delta: +1 create(s)") {
-		t.Errorf("expected the target's own fresh resolve delta, got:\n%s", out)
-	}
-
-	hash := mustExtractPlanHash(t, targetDir, out)
-	planFile := filepath.Join(targetDir, ".ubx", "plans", hash+".json")
-	if _, err := os.Stat(planFile); err != nil {
-		t.Fatalf("expected a saved plan file at %s: %v", planFile, err)
-	}
-
-	np, err := readPlanFile(targetDir, hash)
-	if err != nil {
-		t.Fatalf("read saved plan: %v", err)
-	}
-	if !hasPromotionSourceRef(np, sourceID) {
-		t.Fatalf("expected a promotion source referencing %s, got sources: %+v", sourceID, np.Intent.Sources)
-	}
-	var promo *core.IntentSource
-	for i := range np.Intent.Sources {
-		if np.Intent.Sources[i].Kind == "promotion" {
-			promo = &np.Intent.Sources[i]
-		}
-	}
-	if promo == nil || promo.Base != sourceDir {
-		t.Errorf("promotion source's base = %+v, want %q (the source's own --ledger-dir, git-local has no other stack-base concept)", promo, sourceDir)
-	}
-	// The fresh re-resolution's own document/intent_provider sources must
-	// also be present -- promotion is additive, never a replacement.
-	var hasDoc, hasProvider bool
-	for _, s := range np.Intent.Sources {
-		hasDoc = hasDoc || s.Kind == "document"
-		hasProvider = hasProvider || s.Kind == "intent_provider"
-	}
-	if !hasDoc || !hasProvider {
-		t.Errorf("expected fresh document/intent_provider sources from re-resolution, got: %+v", np.Intent.Sources)
-	}
 }
 
 func TestPromote_SourceProposalNotFound(t *testing.T) {
@@ -177,78 +100,29 @@ func TestPromote_NoReResolvableSource_Refused(t *testing.T) {
 	}
 }
 
-// TestPromote_DialogueSource_ReResolvesAgainstTarget is UBI-60's own
-// dialogue happy-path proof, replacing the UBI-55 refusal this exact
-// scenario used to hit. Builds a GENUINE .dlg.json the same way a real
-// user would: a real "ubx chat" session (runUbxWithStdin, a fake
-// adapter, a real /save), producing a real captured dialogue file
-// through finalizeChat itself -- never a hand-marshaled Dialogue struct
-// standing in for one -- then resolves+accepts the emitted draft for
-// real, giving promote a real accepted proposal with a real dialogue
-// source to work from.
-func TestPromote_DialogueSource_ReResolvesAgainstTarget(t *testing.T) {
+// TestPromote_DialogueSource_Refused is UBI-224's own required refusal
+// case, replacing the UBI-60 happy-path proof this exact scenario used
+// to be: chat is gone as an authoring medium, and with it the dialogue
+// re-resolution machinery a dialogue-sourced promotion depended on.
+// Nothing here needs a real captured .dlg.json on disk -- the refusal
+// fires on authSource.Kind alone, before promote ever tries to read the
+// referenced file, so a source naming a Ref that doesn't even exist is
+// sufficient to prove it.
+func TestPromote_DialogueSource_Refused(t *testing.T) {
 	sourceDir := t.TempDir()
 	targetDir := t.TempDir()
-	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: promoteFakeWidgetDraft})
+	sourceID := strings.Repeat("c", 64)
+	appendAcceptedProposal(t, sourceDir, sourceID, "payments", []core.IntentSource{
+		{Kind: "dialogue", Ref: "dialogues/does-not-exist.dlg.json", ContentHash: "sha256:deadbeef"},
+	})
 
-	draftPath := filepath.Join(t.TempDir(), "draft.json")
-	chatOut, err := runUbxWithStdin(t, "We need a widget for payments.\n/save\n",
-		"chat", "--stack", "payments", "--ledger-dir", sourceDir, "--out", draftPath)
-	if err != nil {
-		t.Fatalf("ubx chat: %v\noutput: %s", err, chatOut)
+	_, err := runUbx(t, nil, "promote", sourceID, "--ledger-dir", sourceDir, "--to", targetDir)
+	if err == nil {
+		t.Fatal("expected promote to refuse a dialogue-sourced proposal")
 	}
-
-	dialogueFiles, err := os.ReadDir(filepath.Join(sourceDir, "dialogues"))
-	if err != nil {
-		t.Fatalf("read dialogues/: %v", err)
-	}
-	if len(dialogueFiles) != 1 {
-		t.Fatalf("dialogues/ = %v, want exactly one real .dlg.json file", dialogueFiles)
-	}
-
-	resolvedPath := filepath.Join(t.TempDir(), "resolved.json")
-	resolveOut, err := runUbx(t, env, "resolve", draftPath, "--provider", fakeProviderBinary, "--ledger-dir", sourceDir, "--out", resolvedPath)
-	if err != nil {
-		t.Fatalf("ubx resolve (chat draft): %v\noutput: %s", err, resolveOut)
-	}
-	acceptOut, err := runUbx(t, env, "accept", resolvedPath, "--ledger-dir", sourceDir)
-	if err != nil {
-		t.Fatalf("ubx accept (chat draft): %v\noutput: %s", err, acceptOut)
-	}
-	sourceID := mustExtractID(t, acceptOut)
-
-	out, err := runUbx(t, env, "promote", sourceID, "--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary)
-	if err != nil {
-		t.Fatalf("ubx promote (dialogue source): %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "delta: +1 create(s)") {
-		t.Errorf("expected the converged draft's own real fake_widget create, got:\n%s", out)
-	}
-
-	hash := mustExtractPlanHash(t, targetDir, out)
-	np, err := readPlanFile(targetDir, hash)
-	if err != nil {
-		t.Fatalf("read saved plan: %v", err)
-	}
-	if len(np.Delta.Creates) != 1 || !strings.Contains(string(np.Delta.Creates[0]), `"widget1"`) {
-		t.Fatalf("expected the real widget1 resource the converged dialogue draft declares, got: %+v", np.Delta.Creates)
-	}
-
-	// The dialogue + intent_provider sources are carried forward as
-	// PINNED EVIDENCE from the original accepted proposal -- never
-	// re-run, never dropped.
-	var hasDialogue, hasIntentProvider bool
-	for _, s := range np.Intent.Sources {
-		hasDialogue = hasDialogue || s.Kind == "dialogue"
-		hasIntentProvider = hasIntentProvider || s.Kind == "intent_provider"
-	}
-	if !hasDialogue || !hasIntentProvider {
-		t.Errorf("expected the dialogue+intent_provider sources carried forward as pinned evidence, got: %+v", np.Intent.Sources)
-	}
-	if !hasPromotionSourceRef(np, sourceID) {
-		t.Fatalf("expected a promotion source referencing %s, got sources: %+v", sourceID, np.Intent.Sources)
+	if !strings.Contains(err.Error(), "chat was removed as an authoring medium") {
+		t.Errorf("error = %v, want it to name the chat-removed refusal reason", err)
 	}
 }
 
@@ -464,6 +338,7 @@ func TestPromote_SDKAuthoredSource_ContextAwareDrafting_DiffersByTarget(t *testi
 }
 
 func TestPromote_TargetDirWithNoConfig_Allowed(t *testing.T) {
+	requireDeno(t)
 	// "target dir has no config" is deliberately NOT an error -- every
 	// other command already treats a missing .ubx/config as "defaults
 	// apply" (LoadConfig's own documented behavior), and promote follows
@@ -473,38 +348,33 @@ func TestPromote_TargetDirWithNoConfig_Allowed(t *testing.T) {
 	sourceDir := t.TempDir()
 	targetDir := t.TempDir() // no .ubx/config ever written here
 
-	docPath := filepath.Join(sourceDir, "payments.md")
-	writeFile(t, docPath, "# Payments\n\nA widget.")
 	sourceID := strings.Repeat("e", 64)
 	appendAcceptedProposal(t, sourceDir, sourceID, "payments", []core.IntentSource{
-		{Kind: "document", Ref: docPath, ContentHash: "sha256:deadbeef"},
+		{Kind: "document", Ref: sdkResolveTSEntryPath, ContentHash: sdkResolveTSContentHash},
 	})
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: promoteFakeWidgetDraft})
 
 	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "promote", sourceID,
-		"--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary)
+		"--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary, "--timeout", "60s")
 	if err != nil {
 		t.Fatalf("ubx promote against a target dir with no .ubx/config: %v\noutput: %s", err, out)
 	}
 }
 
 func TestPromote_ChainOfPromotionEvidence_WalksOneHopAtATime(t *testing.T) {
+	requireDeno(t)
 	stagingDir := t.TempDir()
 	qaDir := t.TempDir()
 	prodDir := t.TempDir()
 
-	docPath := filepath.Join(stagingDir, "payments.md")
-	writeFile(t, docPath, "# Payments\n\nA widget.")
 	stagingID := strings.Repeat("1", 64)
 	appendAcceptedProposal(t, stagingDir, stagingID, "payments", []core.IntentSource{
-		{Kind: "document", Ref: docPath, ContentHash: "sha256:deadbeef"},
+		{Kind: "document", Ref: sdkResolveTSEntryPath, ContentHash: sdkResolveTSContentHash},
 	})
 
-	withBuildIntentAdapter(t, &fakeIntentAdapter{draft: promoteFakeWidgetDraft})
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 
 	// staging -> qa, then accept it for real in qa so it can itself be promoted.
-	qaPromoteOut, err := runUbx(t, env, "promote", stagingID, "--ledger-dir", stagingDir, "--to", qaDir, "--provider", fakeProviderBinary)
+	qaPromoteOut, err := runUbx(t, env, "promote", stagingID, "--ledger-dir", stagingDir, "--to", qaDir, "--provider", fakeProviderBinary, "--timeout", "60s")
 	if err != nil {
 		t.Fatalf("promote staging->qa: %v\noutput: %s", err, qaPromoteOut)
 	}
@@ -526,7 +396,7 @@ func TestPromote_ChainOfPromotionEvidence_WalksOneHopAtATime(t *testing.T) {
 	}
 
 	// qa -> prod: promotes qa's own now-accepted id.
-	prodPromoteOut, err := runUbx(t, env, "promote", qaHash, "--ledger-dir", qaDir, "--to", prodDir, "--provider", fakeProviderBinary)
+	prodPromoteOut, err := runUbx(t, env, "promote", qaHash, "--ledger-dir", qaDir, "--to", prodDir, "--provider", fakeProviderBinary, "--timeout", "60s")
 	if err != nil {
 		t.Fatalf("promote qa->prod: %v\noutput: %s", err, prodPromoteOut)
 	}

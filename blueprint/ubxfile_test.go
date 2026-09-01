@@ -61,10 +61,10 @@ resources: |
 
 func TestParseUbxfile_ResourcesFromFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "platform.md"), []byte("# platform\n\nAn SQS queue.\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "platform.json"), []byte(`{"schema_version":1,"kind":"ubx:intent/v1","stack":"platform","intent":{"summary":"An SQS queue."},"resources":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, UbxfileName), []byte("lang: go\nresources: ./platform.md\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, UbxfileName), []byte("lang: go\nresources: ./platform.json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,15 +73,15 @@ func TestParseUbxfile_ResourcesFromFile(t *testing.T) {
 		t.Fatalf("ParseUbxfile: %v", err)
 	}
 	if uf.ResourcesSource == "inline" {
-		t.Fatalf("ResourcesSource = inline, want the resolved platform.md path")
+		t.Fatalf("ResourcesSource = inline, want the resolved platform.json path")
 	}
 	if !strings.Contains(uf.Resources, "SQS queue") {
 		t.Fatalf("Resources = %q, want the included file's own content", uf.Resources)
 	}
 }
 
-func TestParseUbxfile_MissingMdFallsBackToInline(t *testing.T) {
-	dir := writeUbxfile(t, "lang: go\nresources: ./does-not-exist.md\n")
+func TestParseUbxfile_MissingJSONFallsBackToInline(t *testing.T) {
+	dir := writeUbxfile(t, "lang: go\nresources: ./does-not-exist.json\n")
 
 	uf, err := ParseUbxfile(dir)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestParseUbxfile_MissingMdFallsBackToInline(t *testing.T) {
 	if uf.ResourcesSource != "inline" {
 		t.Fatalf("ResourcesSource = %q, want inline (no such file on disk)", uf.ResourcesSource)
 	}
-	if uf.Resources != "./does-not-exist.md" {
+	if uf.Resources != "./does-not-exist.json" {
 		t.Fatalf("Resources = %q, want the literal value", uf.Resources)
 	}
 }

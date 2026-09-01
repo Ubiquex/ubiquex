@@ -6,27 +6,11 @@ import (
 	"testing"
 )
 
-// TestAutodetectMedium_SingleDoc_Detected is docs/cli-output-spec.md
-// §v2's own bare "ubx plan" auto-detection (UBI-63): exactly one .md
-// authoring doc in the directory is detected as a --from-doc candidate.
-func TestAutodetectMedium_SingleDoc_Detected(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "platform.md"), "# Platform\n\nA queue.")
-
-	found, err := autodetectMedium(dir)
-	if err != nil {
-		t.Fatalf("autodetectMedium: %v", err)
-	}
-	if len(found) != 1 || found[0].flag != "--from-doc" {
-		t.Fatalf("expected exactly one --from-doc candidate, got %+v", found)
-	}
-}
-
-// TestAutodetectMedium_ReadmeNeverFalsePositive is the founder's own
-// explicit rule from docs/cli-output-spec.md §v2: "README.md-class
-// files must not false-positive." A directory with only a README (and
-// a few other well-known project-meta markdown files) has NO detected
-// medium candidates.
+// TestAutodetectMedium_ReadmeNeverFalsePositive proves an ordinary
+// markdown file sitting in the directory (README-shaped or otherwise)
+// is never mistaken for an SDK program -- UBI-224 removed markdown as an
+// authoring medium entirely, so autodetectMedium no longer has any .md
+// handling at all to false-positive on in the first place.
 func TestAutodetectMedium_ReadmeNeverFalsePositive(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"README.md", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.md"} {
@@ -39,23 +23,6 @@ func TestAutodetectMedium_ReadmeNeverFalsePositive(t *testing.T) {
 	}
 	if len(found) != 0 {
 		t.Fatalf("expected README/CHANGELOG/LICENSE/CONTRIBUTING to never be detected as a medium, got %+v", found)
-	}
-}
-
-// TestAutodetectMedium_DiagramAndDoc_BothCandidates proves a .d2
-// diagram and a real .md doc both surface as separate candidates when
-// both are present -- the "multiple mediums found, pick one" case.
-func TestAutodetectMedium_DiagramAndDoc_BothCandidates(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "platform.md"), "# Platform\n\nA queue.")
-	writeFile(t, filepath.Join(dir, "topology.d2"), "queue: SQS queue")
-
-	found, err := autodetectMedium(dir)
-	if err != nil {
-		t.Fatalf("autodetectMedium: %v", err)
-	}
-	if len(found) != 2 {
-		t.Fatalf("expected 2 candidates (doc + diagram), got %+v", found)
 	}
 }
 
@@ -89,60 +56,80 @@ func main() { _ = sdk.Main }
 	if err != nil {
 		t.Fatalf("autodetectMedium: %v", err)
 	}
-	if len(found) != 1 || found[0].flag != "--from-code" {
+	if len(found) != 1 {
 		t.Fatalf("expected exactly one --from-code candidate (the real SDK program), got %+v", found)
 	}
 }
 
+// autodetectSDKProgram is a single, self-contained TS SDK program (its
+// own inline binding, never a second "./bindings.ts" file) that creates
+// one fake_widget -- used to prove bare `ubx plan`'s auto-detection
+// actually resolves, not just finds, a lone candidate. Self-contained
+// so writing it alone into a directory is exactly one autodetectMedium
+// candidate.
+const autodetectSDKProgram = `import { intent, resource, stack } from "@ubx/sdk";
+import type { FieldMap, ResourceBinding } from "@ubx/sdk";
+
+interface FakeWidgetConfig {
+  name: string;
+  tags?: Record<string, string>;
+}
+interface FakeWidgetAttrs {
+  id: string;
+  name: string;
+  tags: Record<string, string>;
+}
+const fields: FieldMap = { name: "name", tags: "tags" };
+const FakeWidget: ResourceBinding<FakeWidgetConfig, FakeWidgetAttrs> = {
+  wireType: "fake_widget",
+  fields,
+};
+
+export default stack("playground", () => {
+  intent({ summary: "queue via auto-detected ubx plan" });
+  resource(FakeWidget, "widget1", { name: "widget1" });
+});
+`
+
 // TestPlanAutodetect_SingleDoc_PlansAutomatically is the end-to-end
-// proof: bare `ubx plan` (no --from-doc, no positional argument) with
-// exactly one authoring doc in --ledger-dir plans it automatically.
+// proof: bare `ubx plan` (no --from-code, no positional argument) with
+// exactly one SDK program in --ledger-dir plans it automatically.
 func TestPlanAutodetect_SingleDoc_PlansAutomatically(t *testing.T) {
-	fake := &fakeIntentAdapter{draft: `{
-		"schema_version": 1,
-		"kind": "ubx:intent/v1",
-		"stack": "playground",
-		"intent": {"summary": "queue via auto-detected ubx plan"},
-		"resources": [
-			{"type": "fake_widget", "name": "widget1", "op": "create", "config": "{\"name\":\"widget1\"}"}
-		],
-		"destroys": []
-	}`}
-	withBuildIntentAdapter(t, fake)
+	requireDeno(t)
 
 	ledgerDir := t.TempDir()
 	withConfigSearchDir(t, ledgerDir)
 	writeConfig(t, ledgerDir, `stack = "playground"`)
-	writeFile(t, filepath.Join(ledgerDir, "platform.md"), "# Platform\n\nA queue.")
+	writeFile(t, filepath.Join(ledgerDir, "platform.ts"), autodetectSDKProgram)
 
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 	out, err := runUbx(t, env, "plan", "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
 	if err != nil {
-		t.Fatalf("bare ubx plan with one auto-detected doc: %v\noutput: %s", err, out)
+		t.Fatalf("bare ubx plan with one auto-detected SDK program: %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, "blast radius: +1 ~0 -0") {
-		t.Fatalf("expected the auto-detected doc's own resolved delta, got: %s", out)
+		t.Fatalf("expected the auto-detected program's own resolved delta, got: %s", out)
 	}
-	if !strings.Contains(out, "platform.md") {
+	if !strings.Contains(out, "platform.ts") {
 		t.Fatalf("expected the auto-detected file's own name in the receipt header, got: %s", out)
 	}
 }
 
 // TestPlanAutodetect_MultipleCandidates_ListsAndAsks proves multiple
-// medium candidates are never guessed between -- a teaching error lists
-// every candidate with its own correct --from-* flag.
+// SDK program candidates are never guessed between -- a teaching error
+// lists every candidate with its own correct --from-code invocation.
 func TestPlanAutodetect_MultipleCandidates_ListsAndAsks(t *testing.T) {
 	ledgerDir := t.TempDir()
-	writeFile(t, filepath.Join(ledgerDir, "platform.md"), "# Platform\n\nA queue.")
-	writeFile(t, filepath.Join(ledgerDir, "topology.d2"), "queue: SQS queue")
+	writeFile(t, filepath.Join(ledgerDir, "platform.ts"), autodetectSDKProgram)
+	writeFile(t, filepath.Join(ledgerDir, "platform2.ts"), autodetectSDKProgram)
 
 	out, err := runUbx(t, nil, "plan", "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "multiple mediums found") {
-		t.Fatalf("expected a multiple-mediums-found error, got: %v\noutput: %s", err, out)
+	if !strings.Contains(err.Error(), "multiple SDK programs found") {
+		t.Fatalf("expected a multiple-SDK-programs-found error, got: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(err.Error(), "--from-doc") || !strings.Contains(err.Error(), "--from-diagram") {
-		t.Fatalf("expected both candidates' own correct flags named, got: %v", err)
+	if !strings.Contains(err.Error(), "platform.ts") || !strings.Contains(err.Error(), "platform2.ts") || !strings.Contains(err.Error(), "ubx plan --from-code") {
+		t.Fatalf("expected both candidates' own correct --from-code invocation named, got: %v", err)
 	}
 }
 

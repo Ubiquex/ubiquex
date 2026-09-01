@@ -6,25 +6,26 @@ import (
 	"testing"
 )
 
-// TestPaymentsGoldenCase_Render is the diagram medium's own conformance
-// suite (docs/diagram-medium.md's slice 5), RENDER direction --
-// diagram/conformance/runner/runner_test.go's own PARSE-direction sibling,
-// split into this package deliberately (see that file's own package doc
-// for the full reasoning): Emit needs a real, shipped Fleet entry, which
-// needs the real core/executor.Applier adapter this package already owns
-// correctly (cli/stateadapter.go), reimplementing it a second time
-// elsewhere would risk a real divergence for no benefit.
+// TestPaymentsGoldenCase_Render is diagram.Emit's own conformance test
+// (UBI-224: the PARSE-direction sibling this once split from,
+// diagram/conformance/runner/runner_test.go, is gone along with the
+// diagram authoring medium it tested; Emit itself is a read-only
+// projection of ledger state, load-bearing for `ubx render`, and stays).
+// Emit needs a real, shipped Fleet entry, which needs the real
+// core/executor.Applier adapter this package already owns correctly
+// (cli/stateadapter.go), reimplementing it a second time elsewhere
+// would risk a real divergence for no benefit -- why this test lives
+// here rather than in the diagram package itself.
 //
-// Ships the identical topology diagram/conformance/golden/payments.d2
-// and golden/payments-topology.json both describe -- main-vpc,
-// payments-db depending on it -- through the hermetic fakeprovider
-// binary (never a real cloud provider, this session's own explicit
-// "hermetic only" instruction, and the standing rule UBI-47 session 4's
-// own real AWS incident established: fakeprovider + UBX_PROVIDER_MIRROR
-// for anything that reaches `ubx ship`), renders it, and byte-compares
-// against golden/payments-rendered.d2 -- a real, ongoing regression test
-// for Emit's own determinism and correctness, the same discipline
-// sdk/conformance/runner already established for the SDK arc.
+// Ships a real, hand-built topology (main-vpc, payments-db depending on
+// it, matching what the now-removed parse-direction fixture used to
+// describe) through the hermetic fakeprovider binary (never a real
+// cloud provider, the standing rule UBI-47 session 4's own real AWS
+// incident established: fakeprovider + UBX_PROVIDER_MIRROR for anything
+// that reaches `ubx ship`), renders it, and byte-compares against
+// testdata/render_golden/payments-rendered.d2 -- a real, ongoing
+// regression test for Emit's own determinism and correctness, the same
+// discipline sdk/conformance/runner already established for the SDK arc.
 func TestPaymentsGoldenCase_Render(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
@@ -75,7 +76,7 @@ func TestPaymentsGoldenCase_Render(t *testing.T) {
 		t.Fatalf("ubx render: %v\noutput: %s", err, got)
 	}
 
-	goldenPath := filepath.Join("..", "diagram", "conformance", "golden", "payments-rendered.d2")
+	goldenPath := filepath.Join("testdata", "render_golden", "payments-rendered.d2")
 	want, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("read golden fixture %s: %v", goldenPath, err)
