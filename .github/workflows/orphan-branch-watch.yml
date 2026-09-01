@@ -1,0 +1,113 @@
+name: orphan-branch-watch
+
+# Companion to coverage-watch.yml, same cadence, different question.
+# coverage-watch asks "has the schema grown past what the corpus
+# covers". This asks "is there real, complete work sitting on a
+# branch that nobody ever asked main to absorb" -- the gap named
+# directly by the UBI-187 GCP beta/alpha incident: eight batches were
+# stacked and fully merged among themselves, batch1 landed on main,
+# and batches 2-8 then sat complete, valid, and invisible for two days
+# because nothing ever opened a PR from the stack's own tip to main.
+# Investigating that incident also surfaced a second, more serious
+# shape scripts/orphan_branch_check.py now also detects: two OTHER
+# branches showing MERGED on GitHub whose real content -- confirmed,
+# not hypothetical -- never actually reached main at all, the mark of
+# a base-retarget gap this org's own PR-stacking convention has hit
+# more than once before.
+#
+# Like coverage-watch, there is no single fix to open a PR with here
+# (an orphan tip needs a real decision: land it, or explain why not) --
+# opens/updates one standing tracking issue and closes it once clean.
+
+on:
+  schedule:
+    - cron: "0 8 * * 4" # every Thursday, 08:00 UTC -- offset from coverage-watch's own Monday run so the two don't compete for review attention on the same day
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TRACKING_ISSUE_LABEL: orphan-branch
+
+jobs:
+  orphan-branch-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ubiquex-docs (full history -- the check needs real branch ancestry, not a shallow clone)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the orphan-branch check
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/orphan_branch_check.py \
+            --repo "${{ github.repository }}" \
+            --json "${{ runner.temp }}/orphan-report.json" \
+            > "${{ runner.temp }}/orphan-report.txt" 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat "${{ runner.temp }}/orphan-report.txt"
+          set -e
+
+      - name: Find the existing tracking issue, if any
+        id: existing
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number="$(gh issue list --label "$TRACKING_ISSUE_LABEL" --state open --json number --jq '.[0].number // empty')"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the tracking issue (orphan branches found, or the check itself failed to run)
+        if: steps.check.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            if [ "${{ steps.check.outputs.exit_code }}" = "2" ]; then
+              echo "**orphan_branch_check.py could not run to completion** (exit 2 -- a setup error, not a reported finding)."
+            else
+              echo "**Branch(es) found with real, complete work never reachable from main.**"
+              echo
+              echo "A branch marked SUSPICIOUS shows a merged PR on GitHub whose own merge commit still isn't reachable from main -- investigate directly, don't just re-open a PR against it blind. A branch with no PR at all just needs one opened."
+            fi
+            echo
+            echo "Full workflow run: $run_url"
+            echo
+            echo '```'
+            cat "${{ runner.temp }}/orphan-report.txt"
+            echo '```'
+          } > "${{ runner.temp }}/issue-body.md"
+
+          if [ -n "${{ steps.existing.outputs.number }}" ]; then
+            gh issue comment "${{ steps.existing.outputs.number }}" --body-file "${{ runner.temp }}/issue-body.md"
+          else
+            gh issue create \
+              --title "Orphan branches: complete work not reachable from main" \
+              --label "$TRACKING_ISSUE_LABEL" \
+              --body-file "${{ runner.temp }}/issue-body.md"
+          fi
+          exit 1
+
+      - name: Close the tracking issue (clean run, one existed from a prior finding)
+        if: steps.check.outputs.exit_code == '0' && steps.existing.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue comment "${{ steps.existing.outputs.number }}" \
+            --body "Clean as of $(date -u +%Y-%m-%dT%H:%M:%SZ) -- orphan_branch_check.py found zero orphan tips. Closing."
+          gh issue close "${{ steps.existing.outputs.number }}"
