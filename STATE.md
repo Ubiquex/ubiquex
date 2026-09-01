@@ -7,6 +7,30 @@
 
 ## In flight
 
+**UBI-228: DONE (build), PR open, never self-merged, stacked on UBI-227's
+own still-open PR.** Human-readable aliases for ledger heads --
+docs/schema.md already anticipated this ("id is a content hash...
+human-friendly aliases allowed as labels") but it was never built until
+UBI-227's restore made naming a head the whole interaction. New
+workspace-local `.ubx/aliases.json` (confirmed live, not assumed, that a
+remote-store-backed `core.Ledger` carries no local directory at all --
+`core.LedgerStore` gains no alias methods, and never should). `ubx alias
+set|resolve|list|remove`; `set` refuses to repoint an existing alias
+without `--force`, answering the ticket's own named "silently
+repointing something a human uses as a name" fear directly. Aliases
+namespaced per stack, shared via git exactly like `.ubx/config.hcl`
+already is -- a conflicting alias on two branches is an ordinary merge
+conflict, no new mechanism built for it. `resolveHeadOrAlias`
+(`cli/alias.go`) wired into `ubx why` and `ubx restore`, both still
+accepting a raw hash unchanged. 6 new hermetic tests, all passing; full
+repo `go build`/`go test` clean. PR `ubiquex#49` open against
+`feat/ubi-227-restore-stack` (`ubiquex#48`), NOT against `main` --
+`cli/restore.go` and why.go's own restore-provenance rendering don't
+exist on `main` yet, so this genuinely depends on #48 merging first, not
+an artificial ordering choice. Full detail: docs/schema.md's "Amendment:
+human-readable aliases," docs/architecture.md's own section,
+docs/plan.md's changelog.
+
 **UBI-227: DONE (build), PR open, never self-merged.** Restore a stack to
 an earlier ledger head. Design reported and confirmed before building
 (the ticket's three open questions: cross-stack pins, restore-of-a-
