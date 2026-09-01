@@ -2471,29 +2471,51 @@ precedent), all left open, not self-merged: `ubx-sdk-typescript#16`
 new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
 
-**UBI-240 (provider docs site, off Mintlify onto Next.js): slice 1 + 2
-both DONE and merged, new repo `ubx-docs-providers` created this arc.**
-Kubernetes only so far, by explicit instruction — AWS deliberately held
-pending its own service-group-count problem (299 groups) getting
-designed first, not started. Slice 1 (`ubx-docs-providers#1`,
-`ubx-sdk-kubernetes#28`) proved the fetch/render/version mechanism:
-landing page, provider home, one resource page, one version. Slice 2
-(`ubx-docs-providers#2`, open, not merged — never self-merge) widened to
-every real resource (92) and data source (75), a per-service listing
-page, data sources under their own `/data/` URL segment, real prebuilt
-search, and a second real SDK version (`v1.0.0`, cut retroactively for
-`ubx-sdk-kubernetes`, byte-identical resource schema to `v1.1.0`, 0 data
-sources — accurate to what that version actually shipped) so the
-version selector is proven live, including the honest-404 case for a
-data source that only exists at the newer version. Three real bugs
-found by testing the actual artifact shape rather than assuming it:
-`descriptions.json` entries are `{source, text}` objects not bare
-strings; `categories.json` overrides are keyed without the `data_`
-prefix even for a data source; a brand-new GitHub Release's
-unauthenticated API path 504s for several minutes post-publish (fixed
-with optional `GITHUB_TOKEN`/`GH_TOKEN` support in `fetch-docs.mjs`).
-Slice 1 also surfaced real drift in the published `ubx-sdk-kubernetes`
-data source count (README/repo claims 116, a fresh `ubx sdk gen
---dump-ir` against the same pinned schema found 75, all 41 missing
-entries `_list` variants) — filed separately as **UBI-241**, explicitly
-not this ticket's problem to fix, unrelated to the docs site itself.
+**UBI-240 (provider docs site, off Mintlify onto Next.js): slices 1 and
+2 DONE and merged, slice 3 open (`ubx-docs-providers#3`,
+`ubx-sdk-aws#35`, neither merged — never self-merge).** New repo
+`ubx-docs-providers`, created this arc. Slice 1 (`ubx-docs-providers#1`,
+`ubx-sdk-kubernetes#28`, merged) proved the fetch/render/version
+mechanism: landing page, provider home, one resource page, one version.
+Slice 2 (`ubx-docs-providers#2`, merged) widened Kubernetes to every
+real resource (92) and data source (75), a per-service listing page,
+data sources under their own `/data/` URL segment, real prebuilt
+search, and a second real SDK version (`v1.0.0`) so the version
+selector is proven live, including the honest-404 case. Three real bugs
+found by testing the actual artifact shape: `descriptions.json` entries
+are `{source, text}` objects not bare strings; `categories.json`
+overrides are keyed without the `data_` prefix even for a data source;
+a brand-new GitHub Release's unauthenticated API path 504s for several
+minutes post-publish (fixed with optional `GITHUB_TOKEN`/`GH_TOKEN`
+support in `fetch-docs.mjs`). Slice 1 also surfaced real drift in the
+published `ubx-sdk-kubernetes` data source count (README/repo claims
+116, a fresh `ubx sdk gen --dump-ir` found 75) — filed as **UBI-241**,
+unrelated to the docs site itself.
+
+**Slice 3: AWS brought in, the service-group-scale problem designed and
+solved generally, not AWS-special-cased.** The provider home page's
+static service-group grid (fine at Kubernetes's 22) is replaced by a
+filter + A-Z-sectioned browser, same component regardless of provider
+or group count. Bringing AWS in required generalizing the whole site
+off its Kubernetes-only hardcoding (`generateStaticParams`, example-
+code import paths — AWS's own Go module path genuinely differs,
+`.../sdk/go/v2`). AWS's own docs artifact step differs from
+Kubernetes's for a real reason: AWS's schema is two sources (CFN
+registry zip, Smithy models) merged only at snapshot-cut time, no
+lightweight live fetch exists, so it uses the already-pinned,
+already-published `ubx-schema-aws` snapshot instead of re-implementing
+`hash-watch.yml`'s own merge logic. What AWS revealed: real scale is
+503 distinct service keys (not the 299 estimated — that was the
+resource side alone), real artifact size ~479MB extracted (more than
+double the 212MB estimate, 14MB compressed), and a real, separate
+upstream bug — 51 real AWS services split into two service groups
+because CFN and Smithy normalize service names differently
+(`access_analyzer` vs `accessanalyzer`, 49 more pairs), confirmed live
+in the currently published `ubx-sdk-aws` v2.1.0 code itself, filed as
+**UBI-242**, not fixed in the docs site (wrong layer — would hide the
+real inconsistency rather than fix it). A real, unmemoized schema-index
+re-parse bug in `lib/docs.ts` was found and fixed proactively before
+ever measuring a real AWS build, not after finding one slow. Real,
+measured build time with the fix in place: ~28.5s for ~7052 statically
+generated pages across both providers. Azure and Google remain
+untouched.

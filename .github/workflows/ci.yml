@@ -51,11 +51,36 @@ jobs:
         # by this workflow's own first real PR run failing blueprint's
         # own real evaluator tests with "executable file not found in
         # $PATH" for exactly these two.
+        #
+        # Found unblocking an unrelated PR, not tied to any ticket's own
+        # content: wasmtime.dev's own install.sh hit a transient
+        # upstream glitch (its own version-lookup
+        # returned a literal, unsubstituted "{" instead of a real
+        # version, so it tried to curl ".../download/{/wasmtime-{-...")
+        # and printed "Error: Could not download Wasmtime version '{'"
+        # but still exited 0 -- a real bug in wasmtime's own script, not
+        # this repo's. Because it exited 0, `set -e` never caught it,
+        # this whole step reported success, and the job ran another 20+
+        # seconds of go test before failing three unrelated-looking
+        # blueprint tests on "wasmtime not found in PATH" -- confusing
+        # three steps downstream of the real cause. Verifying both
+        # binaries actually landed, right after installing them, turns
+        # that into an immediate, unambiguous failure at the step that
+        # caused it, the next time this same upstream glitch happens.
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo "bubblewrap did not install correctly -- bwrap not on PATH" >&2
+            exit 1
+          fi
+          if [ ! -x "$HOME/.wasmtime/bin/wasmtime" ]; then
+            echo "wasmtime did not install correctly -- $HOME/.wasmtime/bin/wasmtime missing or not executable (wasmtime.dev/install.sh can fail this way while still exiting 0, confirmed live)" >&2
+            exit 1
+          fi
 
       - name: Allow unprivileged user namespaces for bwrap
         # The exact caveat docs/sdk.md's own "Linux: namespaces" section
