@@ -62,7 +62,17 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 	}
 
 	files := map[string]string{
-		"go/go.mod":      fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.0.0\n", pkgName),
+		// v0.3.0: the real, currently-tagged github.com/ubiquex/ubx-sdk-go
+		// release that first has BlueprintName/PushBlueprintSource/
+		// PopBlueprintSource (runtime commit 65200d9) -- this generator's
+		// own output has called all three since UBI-225, but this literal
+		// stayed pinned at the placeholder v0.0.0 from before any real
+		// tagged release existed, so every blueprint this command built
+		// failed to compile against the real published module (only
+		// hermetic tests, which always append their own local `replace`
+		// directive over whatever version this says, never noticed).
+		// Found live migrating ubx-sdk-blueprints/ci-platform (UBI-237).
+		"go/go.mod":      fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.3.0\n", pkgName),
 		"go/bindings.go": renderGoBindings(pkgName, blueprintName, g.ordered()),
 	}
 	fnSrc, err := renderGoFunction(pkgName, funcName, blueprintName, ubxfile.Params, g)
