@@ -2470,3 +2470,30 @@ precedent), all left open, not self-merged: `ubx-sdk-typescript#16`
 `ubx-sdk-digitalocean#7`. `ubx-sdk-python#15` (the version-bump PR the
 new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
+
+**UBI-240 (provider docs site, off Mintlify onto Next.js): slice 1 + 2
+both DONE and merged, new repo `ubx-docs-providers` created this arc.**
+Kubernetes only so far, by explicit instruction — AWS deliberately held
+pending its own service-group-count problem (299 groups) getting
+designed first, not started. Slice 1 (`ubx-docs-providers#1`,
+`ubx-sdk-kubernetes#28`) proved the fetch/render/version mechanism:
+landing page, provider home, one resource page, one version. Slice 2
+(`ubx-docs-providers#2`, open, not merged — never self-merge) widened to
+every real resource (92) and data source (75), a per-service listing
+page, data sources under their own `/data/` URL segment, real prebuilt
+search, and a second real SDK version (`v1.0.0`, cut retroactively for
+`ubx-sdk-kubernetes`, byte-identical resource schema to `v1.1.0`, 0 data
+sources — accurate to what that version actually shipped) so the
+version selector is proven live, including the honest-404 case for a
+data source that only exists at the newer version. Three real bugs
+found by testing the actual artifact shape rather than assuming it:
+`descriptions.json` entries are `{source, text}` objects not bare
+strings; `categories.json` overrides are keyed without the `data_`
+prefix even for a data source; a brand-new GitHub Release's
+unauthenticated API path 504s for several minutes post-publish (fixed
+with optional `GITHUB_TOKEN`/`GH_TOKEN` support in `fetch-docs.mjs`).
+Slice 1 also surfaced real drift in the published `ubx-sdk-kubernetes`
+data source count (README/repo claims 116, a fresh `ubx sdk gen
+--dump-ir` against the same pinned schema found 75, all 41 missing
+entries `_list` variants) — filed separately as **UBI-241**, explicitly
+not this ticket's problem to fix, unrelated to the docs site itself.
