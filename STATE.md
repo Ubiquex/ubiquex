@@ -7,6 +7,63 @@
 
 ## In flight
 
+**UBI-227: DONE (build), PR open, never self-merged.** Restore a stack to
+an earlier ledger head. Design reported and confirmed before building
+(the ticket's three open questions: cross-stack pins, restore-of-a-
+restore, whether `drift_revert` generalizes -- all resolved, see below).
+`ubx restore <head>` -- a normal proposal reusing `KindChange`, never
+`KindRevert` (stays declared, unimplemented). Diffs the target head's
+own exact shape against CURRENT live state (confirmed live that
+`resolveOnce` never infers create-vs-modify, only validates a caller-
+declared op -- restore does its own classification). New
+`intent.sources[].kind: "restore"` value mirrors `"promotion"`'s
+provenance-not-equality posture, rendered by `cli/why.go`. `ubx history`
+is the read-only half. `core.Ledger` gains `ChainFrom`/`FoldStateAt`/
+`AddressesAt`; `Chain`/`FoldState`/`Addresses` become thin wrappers --
+one real historical-walk implementation, per the founder's own explicit
+instruction citing UBI-197/UBI-233 (two implementations of the same fold
+silently diverging).
+
+All three open questions resolved and proven live, not just reasoned
+about: cross-stack `$cross` pins replay frozen historical literals,
+never re-resolved (the marker is already gone by the time a value lands
+in ledger history). Restore of a restore needs no special handling --
+proven via a real double-restore test (`TestRestore_OfARestore`), not
+assumed from the design alone. `drift_revert` does not generalize
+(resource-scoped, modify-only, always-current-head-target -- a
+different, narrower job).
+
+Two real, pre-existing, restore-unrelated fakeprovider findings surfaced
+while writing the end-to-end test, worked around in the test fixtures
+and reported here rather than silently folded into this ticket's own
+scope, since neither was asked for and neither blocks restore itself:
+
+- `FAKEPROVIDER_MODE=ok-v6` does not round-trip a `tags` map attribute
+  identically between `ApplyResourceChange` and a later `ReadResource`
+  -- trips a spurious stale-observation refusal on an entirely ordinary
+  first modify whenever `tags` is present at all. Confirmed via two
+  isolated manual repros outside restore entirely.
+- Shipping a SECOND real modify against the same resource address (after
+  a first modify already shipped successfully) fails with a genuine
+  stale-observation error, unrelated to tags. Confirmed via two isolated
+  manual repros (`/tmp/ubx-scratch/modify-repro`, `modify-repro2`,
+  neither persisted). A grep across `cli/*_test.go` found no existing
+  test that ships two sequential real modifies against fakeprovider
+  successfully -- `cli/receipt_modify_v2_test.go` only ever plans, never
+  ships; `cli/ship_modify_staleness_test.go` deliberately forces
+  staleness via `FAKEPROVIDER_EXTRA_TAG`, a different, deliberate
+  scenario. This may be genuinely unexercised territory in this
+  codebase's own test suite, not a known, already-worked-around case --
+  worth its own session to root-cause (fakeprovider's own apply/read
+  round-trip, or the executor's own freshness check) before anything
+  else depends on shipping repeated modifies to one address.
+
+PR `ubiquex#48` open (never self-merged): `cli/restore.go`, `cli/history.go`,
+`core/state.go`/`core/addresses.go` (ChainFrom/FoldStateAt/AddressesAt),
+`cli/why.go` (restore rendering), `docs/schema.md` ("Amendment: restore"),
+`docs/architecture.md` ("Restore" section), `docs/plan.md` changelog. Full
+repo `go build ./...`/`go test ./...` clean before opening the PR.
+
 **UBI-225: DONE.** Blueprint/hand-written composition reported, one real
 provenance gap fixed and released across three runtimes, a broader
 `publish.yml` branch-protection bug found and fixed in eight more repos.
