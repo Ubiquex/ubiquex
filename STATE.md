@@ -29,26 +29,46 @@ stack, shared via git exactly like `.ubx/config.hcl`. `resolveHeadOrAlias`
 wired into `ubx why` and `ubx restore`. Full account: docs/schema.md's
 "Amendment: human-readable aliases," docs/architecture.md's own section.
 
-**Real, separate finding from this landing (2026-09-01): PR #49 showed
-"Merged" on GitHub, but its content never reached `main`.** PR #49's
-base was `feat/ubi-227-restore-stack` (correct at the time, since
+**RESOLVED, 2026-09-01: PR #49 had shown "Merged" on GitHub while its
+content never reached `main` -- now genuinely landed, verified.** PR
+#49's base was `feat/ubi-227-restore-stack` (correct at the time, since
 UBI-228 genuinely depended on UBI-227's own then-unmerged `cli/restore.go`).
 #48 was squash-merged into `main` as `c3f2842` before #49 was merged
 into `feat/ubi-227-restore-stack`, and that branch was never itself
 merged into `main` afterward -- confirmed directly (`git show
-main:cli/alias.go` -> "does not exist"), not inferred from either PR's
-own "Merged" badge. Landed properly this session via a fresh PR from
-`feat/ubi-227-restore-stack` into `main`, real merge (not squash, since
-the two branches share no common ancestor for the overlapping files
-after #48's own squash broke that lineage -- a real 3-way merge with
-manual conflict resolution on `cli/restore.go`/`cli/root.go`/`STATE.md`/
-`docs/architecture.md`/`docs/plan.md`/`docs/schema.md`, all unioned
-correctly, verified by reading `cli/alias.go` on `main` directly
-afterward, not by trusting the merge). See "Cross-repo state" below,
-or ask whether `stale-base-check` (ubx-sdk-* repos' own guard) can catch
-this shape -- it cannot; it guards a PR merging onto an already-merged
-base, this is the reverse (a base that never reaches `main` at all), a
-different failure shape the guard was never built to detect.
+main:cli/alias.go` -> "does not exist" at the time), not inferred from
+either PR's own "Merged" badge. Landed via `ubiquex#51`, a fresh PR from
+`feat/ubi-227-restore-stack` into `main`, a real merge commit (not
+squash, since the two branches shared no common ancestor for the
+overlapping files after #48's own squash broke that lineage -- a real
+3-way merge with manual conflict resolution on `cli/restore.go`/
+`cli/root.go`/`STATE.md`/`docs/architecture.md`/`docs/plan.md`/
+`docs/schema.md`, all unioned correctly). Verified for real after
+merging: `git fetch origin main` + `git show origin/main:cli/alias.go`
+returned the real 403-line file, not inferred from the merge succeeding.
+
+Asked whether `stale-base-check` (ubx-sdk-go/py/ts's own guard,
+`.github/workflows/stale-base-check.yml`) can catch this shape: **no,
+and it should not be extended to try.** The guard runs on
+`pull_request: [opened, synchronize, reopened]` and checks one fact at
+that moment: is this PR's own base branch already an ancestor of the
+default branch (`git merge-base --is-ancestor base_sha default_sha`).
+That is a check about the PAST, verifiable at PR-check time. What
+happened here is a check about the FUTURE: after PR #49 merged into its
+base branch, would anyone later remember to land that base branch into
+`main` -- unknowable at #49's own check-run time, since it depends on a
+human action that had not happened yet and might never happen. No CI
+check running on one PR can verify a future action on a different PR
+that may not even exist yet. Separately, even the guard's own real
+check would have missed this specific case for an unrelated reason:
+`git merge-base --is-ancestor` relies on ancestry, and a squash merge
+(what #48 was) creates a new commit with no ancestry link to the
+original branch, so the base would read as "not yet merged" even after
+the squash landed. The actual gap this exposed has no per-PR gate
+answer -- it needs either a periodic sweep for branches with unreachable-
+from-main commits and no open PR, or discipline: retarget a stacked PR's
+base to `main` (not leave it pointed at the now-merged branch) the
+moment the branch it was stacked on merges.
 
 **UBI-238/UBI-239: DONE (build), PR open, never self-merged.** Both
 fakeprovider findings UBI-227 surfaced, root-caused (as the founder
