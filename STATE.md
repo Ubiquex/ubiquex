@@ -7,6 +7,97 @@
 
 ## In flight
 
+**UBI-224: markdown/diagram/chat dropped as authoring mediums, the SDK is
+the only one left. Stage 1 (code) and the orphaned-config follow-up are
+merged; stage 2 (docs/) is open, never self-merged.**
+
+- **Stage 1 (code)**: PR #43, merged 2026-09-01 (admin-merged after an
+  explicit exception -- see below for why it was blocked). Removed
+  `intentprovider/`, `cli/chat.go`, `--from-doc`/`--from-diagram` on
+  propose/plan/promote, diagram's parse/crossref/topology (walk.go/emit.go
+  untouched, `ubx render` unaffected). Two founder decisions implemented:
+  `ubx blueprint build` no longer drafts via the intent provider --
+  `resources:` in an Ubxfile is now a pre-resolved intent/v1 document
+  (the same shape `ubx resolve --from-code --out <file>` produces), build
+  only parses it, never interprets it (a real Ubxfile format change,
+  confirmed with the founder before implementing); `core.SourceKindDocument`/
+  `SourceKindDialogue`/`SourceKindIntentProvider` and `resolver.Dialogue`/
+  `Turn` survive as read-only types so `ubx why`/`blame`/`promote` can
+  still explain a proposal accepted before this change -- `ubx promote`
+  refuses to re-resolve a dialogue source outright now (chat's own
+  re-resolution machinery is gone).
+  - **Why #43 was blocked before merging**: `ubiquex`'s `build-test`
+    required check failed once, on `TestShip_ConcurrentIndependentCreates_
+    NoResourceEverLost` (`core/executor`) -- a pre-existing timing flake
+    unrelated to this change (confirmed: passes reliably across repeated
+    runs in isolation, `core/executor` untouched by this arc). Re-ran the
+    CI job rather than bypass the check (branch protection has
+    `enforce_admins: true`, `gh pr merge --admin` genuinely refuses a
+    failing required check, confirmed directly, not assumed) -- the
+    re-run passed, then merged under the founder's explicit exception.
+  - Consequent cleanup found while removing the two mediums, not a
+    separately authorized decision: `render --sync-overrides`/
+    `--from-drift` only ever templates into an SDK language now (diagram/
+    md were the only two mediums that could reach the removed branches),
+    so those branches and the `--write` flag (only ever valid for them,
+    now always refused) were removed too. A `blueprint_calls` entry is
+    still reachable from a hand-written intent/v1 file, independent of
+    any authoring medium -- tests that exercised it through diagram/md
+    now do so directly against that same wire shape.
+- **Orphaned config removed**: PR #44, merged 2026-09-01. `cli/config.go`'s
+  `IntentConfig` drops `Adapter`/`Model`/`KeyRef`/`Auth`/`Vertex` and the
+  `KeyRefConfig`/`VertexConfig` types (their only real consumer,
+  `cli/intentadapter.go`, became dead code once stage 1 landed) --
+  `ShowDefaults` stays, it's not drafting-dependent. `server.Config.
+  IntentProviderKey`, the `--intent-provider-key` flag, and
+  `intentProviderEnv()` (forwarded to a `ubx plan` subprocess as
+  `UBX_INTENT_PROVIDER_KEY`, which nothing downstream read anymore) are
+  gone too, along with the three flow tests that existed only to prove
+  that forwarding worked.
+- **Stage 2 (docs/)**: PR #45, open, never self-merged. Updates `docs/`
+  to match the code -- `docs/plan.md` deliberately untouched (changelog,
+  this project doesn't rewrite closed history). Four dedicated design
+  docs for the removed mechanisms (`docs/intent-provider.md`,
+  `docs/diagram-medium.md`, `docs/intent-provider-adversarial.md`,
+  `docs/intent-provider-conformance-report.md`) get a superseded notice
+  at the top rather than deletion -- body stays as real historical
+  record, since it's densely cross-referenced from architecture.md's/
+  schema.md's own "closed" historical sections. `diagram-medium.md`'s own
+  render-direction section is explicitly NOT superseded (`diagram.Walk`/
+  `Emit`/`ubx render` are unaffected). `architecture.md`'s founding
+  Thesis/trust-chain/Core-concepts, `blueprint.md`'s Ubxfile-format/
+  build-pipeline/cross-medium-calling sections, and `cli-output-spec.md`'s
+  medium-auto-detection section (the live spec `autodetectMedium`'s own
+  code comments cite by name) got real content rewrites, not just
+  banners. `schema.md`/`resolver.md`/`resolver-adversarial.md`/
+  `executor.md`/`sdk.md`/`source-tree.md` got targeted fixes on specific
+  passages that named the removed mediums as current behavior; each
+  file's own dated "built (date, session)" historical narrative logs are
+  left untouched, matching how this project treats build-log content.
+- **Real-world Ubxfile survey (asked for, not yet acted on)**: every
+  non-archived AND archived repo in the org checked directly (`gh api`
+  git tree listing, not code search -- GitHub's code-search API returned
+  zero hits for `filename:Ubxfile` even though a real one exists,
+  confirmed not to be trusted for this). Exactly one real Ubxfile exists
+  outside this repo's own tests: `ubx-sdk-blueprints/ci-platform/Ubxfile`,
+  using the old prose `resources:` form (real AWS resources -- ECR, SQS,
+  IAM role/policy -- described in natural language, not JSON). It will
+  fail loudly (not silently) if `ubx blueprint build` is ever re-run
+  against it, with the new, clear "resources: is not a valid pre-resolved
+  intent/v1 document" refusal. No CI in that repo re-runs build
+  automatically (confirmed: no `.github/workflows/` at all), so nothing
+  breaks on its own right now -- but the checked-in `go/`/`bindings.go`/
+  `go.mod` output already predates UBI-74 Slice 4's nested-`<lang>/`-
+  directory layout, meaning nobody has rebuilt this blueprint in a while;
+  it's real, checked-in, coordinated-repo content that needs migrating
+  (translating the prose into a real intent/v1 JSON document, correct
+  against real `hashicorp/aws` attribute names) before anyone next runs
+  `ubx blueprint build` on it, not something to leave to fail-and-
+  discover. Not attempted this session -- needs either real AWS provider
+  schema verification or a hand-written SDK program run through `ubx
+  resolve --from-code`, both real work in a separate repo, flagged for a
+  decision rather than guessed at.
+
 **UBI-222: real drift detection now exists for every provider, real
 drift was already found, and the founder is merging the last mile
 through the GitHub UI.** Full arc below; nothing here is a new
@@ -2128,6 +2219,12 @@ Nothing currently blocked.
 `ubiquex` is the coordinating repo — this section is its responsibility to keep
 current, not any other repo's own `STATE.md`. Verified directly (`gh api`), not
 carried forward from memory, as of 2026-08-29.
+
+**`ubx-sdk-blueprints`** (2026-09-01, UBI-224's own real-world Ubxfile
+survey): the one real Ubxfile outside this repo's own tests,
+`ci-platform/Ubxfile`, uses the old prose `resources:` form UBI-224
+retired -- see "In flight" above for the full account. Not yet migrated,
+no PR opened against that repo.
 
 **Schema repos** (`ubx-schema-<provider>`, real `manifest.json` + `members/`
 group snapshots consumed via `provider.AcquireSchema`):
