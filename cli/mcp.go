@@ -8,23 +8,34 @@
 // cobra subcommand like every other verb, just one that blocks serving
 // requests instead of running once and exiting.
 //
-// Three tools (cli/mcp_why.go, cli/mcp_status.go, cli/mcp_scan.go), each
-// producing the exact same JSON shape the CLI's own --json output does --
-// never a parallel API, never a different shape than UBI-20's format:1
-// contract already defines. Not literally shared code with the CLI's own
-// --json path, though: `cli/why.go`/`cli/status.go`/`cli/scan.go` each
-// grew their own [ledger]-aware lookup (openLedgerForStack, UBI-32)
-// independently of these compute*JSON functions, which needed the
-// identical fix applied here separately (a real, if narrow, divergence
-// this session found and closed -- see each compute*JSON function's own
-// doc comment).
+// Three read/query tools (cli/mcp_why.go, cli/mcp_status.go,
+// cli/mcp_scan.go), each producing the exact same JSON shape the CLI's
+// own --json output does -- never a parallel API, never a different
+// shape than UBI-20's format:1 contract already defines. Not literally
+// shared code with the CLI's own --json path, though: `cli/why.go`/
+// `cli/status.go`/`cli/scan.go` each grew their own [ledger]-aware
+// lookup (openLedgerForStack, UBI-32) independently of these
+// compute*JSON functions, which needed the identical fix applied here
+// separately (a real, if narrow, divergence this session found and
+// closed -- see each compute*JSON function's own doc comment).
+//
+// Five more (cli/mcp_blueprint.go, UBI-223): draft_ubxfile,
+// validate_ubxfile, build_blueprint, list_blueprints, describe_blueprint
+// -- blueprint authoring, independent tools rather than a fixed
+// pipeline, matching that ticket's own name for itself.
+// push_blueprint is deliberately excluded (see cli/mcp_blueprint.go's
+// own package doc comment for the full account) -- publishing is the one
+// irreversible, externally-consumed step, and gets the identical
+// boundary-by-omission treatment as accept/ship below rather than a
+// runtime gate.
 //
 // Boundary by omission, stated here and in --help, not left to be
 // inferred: `ubx accept`/`ship`/`writeback`/`revert-plan` (and
-// `scan --surface-as`, which opens a real GitHub issue/PR) are
-// deliberately NOT exposed as tools. Accepting a proposal is a recorded
-// human (or PR-merge-derived) decision -- never something an assistant
-// does on a human's behalf mid-conversation.
+// `scan --surface-as`, which opens a real GitHub issue/PR, and
+// `blueprint push`) are deliberately NOT exposed as tools. Accepting a
+// proposal (or publishing a blueprint) is a recorded human (or
+// PR-merge-derived) decision -- never something an assistant does on a
+// human's behalf mid-conversation.
 package cli
 
 import (
@@ -40,7 +51,7 @@ import (
 func newMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve ubx's read-only tools (why/status/scan) over MCP, for an AI assistant to call directly",
+		Short: "Serve ubx's read-only and blueprint-authoring tools over MCP, for an AI assistant to call directly",
 		Long: `Serves the Model Context Protocol (MCP) over stdio, so an AI assistant (Claude Code, Claude
 Desktop, any MCP client) can ask ubx questions directly in conversation -- "who changed this bucket and
 when" -- without the human already needing to know ubx's own command shapes.
@@ -52,11 +63,20 @@ already produces:
   ubx_status  optional stack filter, optional live-state drift check -> fleet report
   ubx_scan    single resource -> new/drifted/unchanged classification + the generated proposal, inline
 
+Five blueprint-authoring tools (UBI-223), independent, callable in any order:
+
+  draft_ubxfile      pieces you've already decided -> an assembled Ubxfile (mechanical, never AI drafting)
+  validate_ubxfile   an Ubxfile (a dir, or inline content) -> valid/invalid, cheap, no codegen
+  build_blueprint    an Ubxfile -> compiled Go/TS/Python source, returned inline, nothing written by default
+  list_blueprints    a directory tree -> every real Ubxfile found in it
+  describe_blueprint one already-known ref (git/oci/tarball/local) -> its name, params, resources
+
 Boundary by omission: ubx accept/ship/writeback/revert-plan (and scan --surface-as, which opens a real
-GitHub issue/PR) are NOT exposed here, deliberately. Accepting a proposal is a recorded human (or
-PR-merge-derived) decision -- never something an assistant does on a human's behalf mid-conversation.
-This server surfaces information; it never signs anything, never writes to a live resource, and never
-appends to the ledger.
+GitHub issue/PR, and blueprint push) are NOT exposed here, deliberately. Accepting a proposal (or
+publishing a blueprint) is a recorded human (or PR-merge-derived) decision -- never something an
+assistant does on a human's behalf mid-conversation. This server surfaces information and, for blueprint
+authoring, returns generated content; it never signs anything, never writes to a live resource or a real
+repository, and never appends to the ledger.
 
 Configuration discovers .ubx/config from this process's own working directory, exactly like every other
 ubx command -- point your MCP client's "cwd" at a real ledger checkout to get the same defaults a human
@@ -82,6 +102,11 @@ func newMCPServer() *mcp.Server {
 	registerWhyTool(server)
 	registerStatusTool(server)
 	registerScanTool(server)
+	registerDraftUbxfileTool(server)
+	registerValidateUbxfileTool(server)
+	registerBuildBlueprintTool(server)
+	registerListBlueprintsTool(server)
+	registerDescribeBlueprintTool(server)
 	return server
 }
 
