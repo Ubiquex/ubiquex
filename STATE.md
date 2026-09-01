@@ -2347,6 +2347,51 @@ Nothing currently blocked.
 current, not any other repo's own `STATE.md`. Verified directly (`gh api`), not
 carried forward from memory, as of 2026-08-29.
 
+**`orphan-branch-watch` rolled out org-wide (2026-09-01), a real gap found
+along the way, both fixed and verified, DONE.** Reuses `ubiquex-docs`'s own
+`scripts/orphan_branch_check.py` + `.github/workflows/orphan-branch-watch.yml`
+verbatim (never a second implementation) -- vendored into 21 more repos (22
+total including `ubiquex-docs`), self-merged (explicit exception, identical
+file copied verbatim across repos, matching `stale-base-check.yml`'s own
+precedent). Skipped 5, with reasons: `ubiquex-docs` (already has it),
+`ubiquex.io`/`ubiquex-web`/`ubx-sdk-blueprints` (no active branch-stacking
+pattern, minimal or dormant activity), `ubx-providers-check-demo` (a
+synthetic test harness whose own disposable `provider-bump/<timestamp>`
+branches are the intended shape, not a real finding).
+
+The first real run found the workflow itself had never actually worked:
+`ubiquex-docs`'s own scheduled run (2026-08-27, the only one that ever
+fired) failed at setup (`gh pr list`: `Resource not accessible by
+integration`, since the `permissions:` block never declared
+`pull-requests: read`), and its own fallback issue-creation attempt then
+also failed separately (`orphan-branch` label never existed in the repo).
+Both real, both fixed across all 22 repos carrying the workflow
+(`pull-requests: read` added, the label created per repo, self-merged),
+verified by dispatching a real run in `ubiquex-docs` after the fix: it
+reached its own real detection logic for the first time and successfully
+opened a real, correctly labeled tracking issue.
+
+That first real run found `ubiquex-docs` itself carrying 3 genuinely lost
+stacks (13 branches: a vendor-spec-tag rename + description-regen chain,
+the GCP beta/alpha coverage batches 2 through 8 -- the exact incident
+that motivated building this tool in the first place, still sitting
+there unremediated -- and a bindings_status recompute pair). All three
+confirmed superseded by later, independent work already on main (checked
+directly: the renamed tag, the AI-inferred marker, all sixteen GCP
+services' own resource-reference pages, and the identical-named
+`fetch_published_idents.py` script all already exist on main via commits
+dated after these branches forked). Deleted, not just left alone --
+recovering any of it would have regressed main to stale, pre-regeneration
+content. 6 further one-off manual verification branches
+(`probe/branch-protection-spotcheck[2]` in `ubx-provider-dynamic`/
+`ubx-sdk-aws`/`ubx-sdk-go`, `test-stack-verify` in `ubx-provider-runbook`)
+confirmed as single-line marker-file test probes before any deletion was
+attempted -- found already gone by the time of that check, nothing left
+to do. Tracking issue `ubiquex-docs#82` updated with the full resolution
+and closed; 3 remaining tips in `ubiquex-docs` are the checker's own
+"likely benign" classification (ordinary squash-merge shape, content
+already on main) and need no action.
+
 **`ubx-sdk-blueprints`** (2026-09-01, UBI-224's own real-world Ubxfile
 survey): the one real Ubxfile outside this repo's own tests,
 `ci-platform/Ubxfile`, uses the old prose `resources:` form UBI-224
