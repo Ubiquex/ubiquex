@@ -1,5 +1,11 @@
 # Intent-provider adversarial program (UBI-41)
 
+> **Superseded (UBI-224, 2026-09-01): the `intentprovider` package this
+> adversarial program tested is removed**, along with markdown as an
+> authoring medium (docs/architecture.md's own Thesis). Left in place,
+> unedited below, as the real historical record of what was tested and
+> why -- not as a description of any suite that still runs.
+
 > Every row here is a failure injected on purpose, with a REQUIRED
 > observable outcome — written as the spec, before any code exists to pass
 > it, the same discipline docs/executor-adversarial.md,

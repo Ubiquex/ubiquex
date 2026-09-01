@@ -1437,6 +1437,15 @@ field would be.
 
 ### Amendment: intent-provider drafts — ambiguity content + two new `intent.sources[].kind` values (2026-07-27, UBI-41)
 
+> **Producer removed, wire shape still real (UBI-224, 2026-09-01).** The
+> `intentprovider` package that used to WRITE the fields below is gone,
+> along with markdown as an authoring medium. `assumptions`/`defaults`/
+> `questions` are not drafting-only, though: any intent/v1 producer,
+> hand-written or SDK, can still populate them, and `ubx plan`'s own
+> show_defaults rendering still reads them regardless of source. The two
+> `intent.sources[].kind` values stay real, read-only, for the same
+> reason `docs/intent-provider.md`'s own superseded notice gives.
+
 Design only, session 1 of UBI-41 — no code lands with this amendment (see
 docs/intent-provider.md, docs/plan.md's own wedge subsection for the
 session breakdown). Pins the wire-format half of docs/intent-provider.md's
@@ -1530,6 +1539,13 @@ proposal recorded before this amendment simply has none of these fields,
 never ambiguously.
 
 ### Amendment: the chat medium — dialogue capture (2026-07-28, UBI-46)
+
+> **Producer removed, format still read (UBI-224, 2026-09-01).** `ubx
+> chat` is gone; nothing writes a new `dialogues/<hash>.dlg.json` file
+> anymore. The format below stays real because `ubx why` still reads a
+> dialogue captured before this change (`resolver.Dialogue`/`Turn`,
+> `core/resolver/dialogue.go`) -- a proposal accepted under the old medium
+> must still be explainable.
 
 Real code, live-verified the same session (see docs/intent-provider.md's
 own "Amendment: the chat medium" for the full design account and
@@ -1748,6 +1764,19 @@ render` actually uses this to draw a `$cross` edge from the correct
 node.
 
 ### Amendment: promotion evidence — a new `intent.sources[].kind` value + `.base` field (2026-07-30, UBI-55)
+
+> **Promotable source set narrowed (UBI-224, 2026-09-01).** The wire
+> shape below (the `promotion` kind, `Base` field) is unchanged and still
+> current. What actually re-resolves is not: `draftFromDoc`/
+> `draftFromDiagram` are gone along with markdown/diagram as authoring
+> mediums, so `ubx promote` no longer has a `.md`/`.d2` case at all.
+> `promoteSDKSource` (below) is unaffected and still re-resolves an
+> SDK-authored source. `promoteDialogueSource` (below) is gone --
+> `ubx promote` now refuses a dialogue-sourced proposal outright, by
+> name, rather than re-resolving `Dialogue.Draft`; the rest of this
+> section's account of how dialogue promotion USED to work is left as
+> historical record of a real, closed design decision, not current
+> behavior.
 
 Resolves the "Environment/promotion model" open question below, per the
 design ratified in docs/architecture.md's "Environments & promotion"

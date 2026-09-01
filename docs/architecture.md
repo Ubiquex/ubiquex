@@ -7,22 +7,26 @@ not the state. Every change is a typed, hashed, signed contract; the append-only
 **ledger** of accepted proposals is the sole source of truth. Current infrastructure
 = fold(applied proposals).
 
-One sentence: *a compiler where code, diagrams, documents, and conversation are all
-frontends to one typed, signed IR.*
+One sentence: *a compiler where code is a frontend to one typed, signed IR.*
+
+(UBI-224, 2026-09-01: markdown, diagram, and chat were also frontends here,
+through 2026-08. The SDK is now the only one. `docs/plan.md` has the closed
+history of why; this document states only what's true today.)
 
 ## The trust chain
 
 ```
-author (any medium) → resolver → PROPOSAL (typed, resolved, hashed)
+author (the SDK) → resolver → PROPOSAL (typed, resolved, hashed)
 → acceptance (signature bound to hash) → ledger append → executor (ship)
 → cloud, via Terraform providers directly
 ```
 
 Invariants:
 1. What applies is exactly what was signed (hash match), never a file, never chat.
-2. Every resource traces to a proposal, its dialogue/intent, and its approver (`ubx why`).
-3. The LLM operates in intent-space only; the deterministic resolver computes all
-   values; nothing the LLM emits reaches apply without resolution + human signature.
+2. Every resource traces to a proposal, its intent, and its approver (`ubx why`).
+3. An SDK program operates in intent-space only; the deterministic resolver computes
+   all values; nothing an SDK program emits reaches apply without resolution + human
+   signature.
 4. Staleness by construction: if referenced live state or a neighbor ledger changes
    after resolution, the hash breaks and the proposal must be re-resolved.
 
@@ -47,15 +51,16 @@ Invariants:
 - **Policies** — typed predicates over whole proposals (not just resources): cost,
   blast radius, approver requirements. Evaluated at author/propose/ship time.
   Policies are themselves ledger content. Authored via SDK.
-- **Projections** — hub-and-spoke. Ledger IR is the hub; code (SDK), markdown docs,
-  diagrams, canonical IR dump are spokes. `render --check` byte-compare is the CI
-  invariant. Lossy mediums author only their slice (diagram = topology, md = intent).
-- **SDK** — describe-only (Pulumi ergonomics, zero execution authority). Code
-  evaluates in a hermetic sandbox (no net/env/fs — a security boundary) with a
-  double-run determinism check; the frozen IR snapshot is what gets hashed.
-  Codegen'd from provider schemas. TS first, Go second.
-- **Intent provider** — LLM behind a plugin interface (Claude/OpenAI/local),
-  structured-output validated against the proposal schema.
+- **Projections** -- hub-and-spoke, output only (UBI-224: markdown/diagram
+  authoring is gone; both survive as read-only OUTPUT of ledger state, never
+  input). Ledger IR is the hub; a markdown current-state document
+  (`render --md`) and a canonical D2 diagram (`render`) are spokes.
+  `render --check` byte-compare is the CI invariant.
+- **SDK** -- describe-only (Pulumi ergonomics, zero execution authority), and
+  the only authoring medium (UBI-224). Code evaluates in a hermetic sandbox
+  (no net/env/fs -- a security boundary) with a double-run determinism check;
+  the frozen IR snapshot is what gets hashed. Codegen'd from provider
+  schemas. TS first, Go second.
 
 ## Execution layer
 
@@ -2719,9 +2724,8 @@ folded in as the single lowest-priority source underneath whatever the
 project cascade supplies. The reason it's kept structurally separate,
 not just prioritized last: **a checkout must resolve identically on
 every machine.** A project-truth key — `stack`, `providers`,
-`provider_configs`, `ledger` (its `store`), and `intent` (the
-intent-provider config — `adapter`/`model`/`key_ref`, designed UBI-41
-session 1, docs/intent-provider.md; not yet implemented) — read from a
+`provider_configs`, `ledger` (its `store`), and `intent` (its
+`show_defaults` key, UBI-72) — read from a
 per-user file would mean the same commit resolves two different ways for
 two different people, or for the same person on two different laptops,
 which is precisely the failure mode this project's own "files, not a
@@ -3045,6 +3049,10 @@ fields.
 
 ## Intent provider + md medium (built, UBI-41 — docs/intent-provider.md; closed)
 
+> **Removed (UBI-224, 2026-09-01).** The section below is the closed
+> historical record of this arc; it does not describe current behavior.
+> The SDK is now the only authoring medium (this document's own Thesis).
+
 Phase 3's opener: the first session where an LLM enters the product.
 Full design in docs/intent-provider.md (the transcription-only boundary,
 the adapter interface, config, the conformance suite) and
@@ -3147,6 +3155,11 @@ all, by construction, a real and named divergence from the md medium's
 own design center rather than an oversight.
 
 ## Diagram medium (built, UBI-47 — docs/diagram-medium.md; closed)
+
+> **Authoring half removed (UBI-224, 2026-09-01).** The section below
+> describes the PARSE direction (`ubx propose --from-diagram`) as closed
+> history; it is gone. The RENDER direction (`FoldState` → canonical D2,
+> `ubx render`) is not superseded and remains current.
 
 Component map #7's fourth authoring frontend, and the first that is
 bidirectional by construction. Full design in docs/diagram-medium.md
@@ -3465,27 +3478,20 @@ freshness re-verification, idempotent re-run) stays exactly as strict;
 nothing here is a new gate, and nothing existing is deprecated.
 
 **`ubx plan`** fuses `propose` + `resolve` + a preview render into one
-command: any medium input this project already knows how to turn into an
-`ubx:intent/v1` document (a hand-written intent file, `--from-code`'s
-TypeScript SDK, `--from-doc`'s markdown draft, `--from-diagram`'s D2
-topology) resolves through the identical, unmodified
+command: either input this project knows how to turn into an
+`ubx:intent/v1` document (a hand-written intent file, or `--from-code`'s
+SDK program) resolves through the identical, unmodified
 `core/resolver.Resolve` every other entry point uses, and renders a full
 receipt — delta, cost_delta, blast radius, and any assumptions/defaults/
 questions the intent carried — for a human to review right there. Nothing
-is accepted or applied; like `ubx resolve` and `ubx propose` today, this is
-preview-only.
+is accepted or applied; like `ubx resolve` today, this is preview-only.
 
-The md/diagram media's own established "draft, then a separate human
-checkpoint before resolving" posture (docs/intent-provider.md, docs/
-diagram-medium.md) is deliberately **not** reproduced inside `ubx plan`:
-`ubx propose --from-doc`/`--from-diagram` keep their exact existing
-behavior (draft only, stop before resolving) for teams that want that
-extra checkpoint as its own step. `ubx plan` is a new, additional fast
-path whose own receipt — rendered before anything is saved, covering the
-full resolved proposal rather than just the draft's ambiguity content —
-already **is** the checkpoint. Nothing about the resolved proposal is
-signed or applied by rendering it; the checkpoint is real regardless of
-which step it happens at.
+(UBI-224, 2026-09-01: `ubx plan` also fused with the markdown/diagram
+media's own "draft, then a separate human checkpoint before resolving"
+posture through `--from-doc`/`--from-diagram`, and `ubx propose` itself
+had matching modes that stopped at the draft. Both mediums, and
+`propose`'s own drafting modes, are gone; `propose` is now hash-computation
+only, on an already-resolved draft.)
 
 The resolved-but-unaccepted proposal is written to a local, hash-addressed
 store — `.ubx/plans/<hash>.json`, alongside `.ubx/salt`/`.ubx/lock` but
@@ -3519,13 +3525,7 @@ under a hash that no longer describes its actual content).
 policy gates, no auto-accept rules, no environment awareness (a future
 policy engine's own natural home is this exact inline-accept point in
 `ubx ship`, gating it, not a new mechanism grafted elsewhere); no change to
-what PR-merge acceptance is or how it's derived. `ubx plan --from-diagram`
-does incur one real, accepted inefficiency: `draftFromDiagram`'s own
-type-inference pass and the later `resolver.Resolve` call each launch
-every declared provider once, a real double schema-fetch (never a double
-cloud call — schema-only, cheap) rather than a deeper refactor threading a
-shared providers slice through both call sites, kept out of this arc's own
-tight scope.
+what PR-merge acceptance is or how it's derived.
 
 ### Environments & promotion (decided 2026-07-30, design room — UBI-14)
 

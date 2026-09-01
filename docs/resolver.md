@@ -28,12 +28,13 @@ but resolver *code* implementing it is still session 2+ work of that same
 ticket (this document is amended docs-first, per this project's own
 session protocol, before any of it is built).
 
-Also out of scope, named so it isn't assumed covered: diagram/markdown/SDK
-frontends (docs/architecture.md's component map #7 — "Authoring
-frontends"), an intent provider (LLM-authored intent, component map #10's
-neighbor), and a real policy engine (component map #9) — the resolver's own
-contract names a policy-stub hook (below) purely so nothing about its
-shape has to change once one exists.
+Also out of scope, named so it isn't assumed covered: the SDK authoring
+frontend (docs/architecture.md's component map #7 — "Authoring
+frontends"; UBI-224, 2026-09-01: the diagram/markdown frontends and the
+intent provider this line used to also name are gone, along with
+component map #10) and a real policy engine (component map #9) — the
+resolver's own contract names a policy-stub hook (below) purely so
+nothing about its shape has to change once one exists.
 
 ## A real, honest correction before any design: where "v1" actually lives
 
@@ -167,7 +168,11 @@ and `assume_role_policy_document` for `aws_iam_role`'s real `name` and
 **Confirmed empirically, not assumed, why the two existing validation
 layers upstream of resolve never had a chance to catch this**
 (`intentprovider/schema.go`/`validate.go`, docs/intent-provider.md's own
-"Structured-output validation" section): a resource's own `config` is typed
+"Structured-output validation" section -- UBI-224, 2026-09-01: that
+package is gone along with markdown as an authoring medium; left here as
+the real historical account of why resolve's OWN check, below, is the
+one durable defense regardless of what upstream validation a producer
+does or doesn't have): a resource's own `config` is typed
 as an opaque JSON-encoded **string** in the structured-output JSON Schema
 handed to an adapter (`IntentDraftJSONSchema`) — deliberately, since a
 JSON-Schema object node must declare a closed shape, and `config`'s real
@@ -218,11 +223,12 @@ recognized.
 
 Model-agnostic by construction, not by intent: `resolveOnce` has no
 provenance information about a `ResourceIntent` at all (a hand-written
-file, an evaluated SDK program, and any `intentprovider.Adapter`'s own
-draft all arrive as the identical `resolver.IntentFile` shape) — there is
-no branch to add or forget. `intentprovider/conformance/regression_test.go`
-keeps the original haiku + `platform.md` repro runnable forever as a
-hermetic regression case, alongside a `core/resolver` hermetic suite
+file and an evaluated SDK program both arrive as the identical
+`resolver.IntentFile` shape -- UBI-224, 2026-09-01: an LLM-drafted
+`intentprovider.Adapter` output used to be a third, identical arrival
+shape here too, before markdown was removed as an authoring medium) --
+there is no branch to add or forget. `core/resolver` keeps its own
+hermetic regression suite
 (`resolver_test.go`) and a `cli/resolve_test.go` end-to-end test against
 the real `fakeprovider` binary (`FAKEPROVIDER_MODE=conformance-v6`,
 configured with `aws_iam_role`'s real attribute names) proving the actual

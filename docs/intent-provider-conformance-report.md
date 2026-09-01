@@ -1,5 +1,11 @@
 # Intent-provider conformance report (UBI-41)
 
+> **Superseded (UBI-224, 2026-09-01): the `intentprovider` package this
+> report was drafted against is removed**, along with markdown as an
+> authoring medium (docs/architecture.md's own Thesis). Left in place,
+> unedited below, as the real historical record of what was run and what
+> it found -- not as a description of any suite that still runs.
+
 > Drafted from `intentprovider/conformance`'s own fixture suite
 > (`intentprovider/conformance/fixtures/payments.md`, fixture #1 —
 > docs/intent-provider.md's own "Conformance suite" section) and this

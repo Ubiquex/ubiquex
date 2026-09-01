@@ -257,18 +257,20 @@ This session takes that literally rather than as a slogan:
   real, unstarted work — named in Implementation slices, below — not
   claimed done by this document.
 - **The conformance harness's own discipline is stricter than
-  `intent-provider`'s, and that's a real, checked divergence, not an
-  oversight.** docs/intent-provider.md's own conformance suite uses
-  per-fixture assertion functions, not a golden byte-diff, because LLM
-  output isn't deterministic the way a tfplugin provider's — or an SDK
-  evaluator's — is. An SDK program is typed, human-authored code with no
-  interpretation step; `core.DoubleRun` (below) enforces that a single
-  evaluator run is even internally reproducible before conformance ever
-  compares across languages. So SDK conformance gets to be the strictly
-  stronger discipline the original `conformance/` harness (UBI-9,
-  provider types) already has — byte-exact, not "close enough by some
-  assertion" — while `intent-provider`'s own weaker discipline stays
-  correctly scoped to the one producer that actually needs it.
+  `intent-provider`'s was, and that was a real, checked divergence, not
+  an oversight** (UBI-224, 2026-09-01: `intentprovider` and markdown as
+  an authoring medium are gone; this comparison is left as the real
+  historical reasoning for why SDK conformance is byte-exact, still
+  accurate on its own terms). docs/intent-provider.md's own conformance
+  suite used per-fixture assertion functions, not a golden byte-diff,
+  because LLM output isn't deterministic the way a tfplugin provider's —
+  or an SDK evaluator's — is. An SDK program is typed, human-authored
+  code with no interpretation step; `core.DoubleRun` (below) enforces
+  that a single evaluator run is even internally reproducible before
+  conformance ever compares across languages. So SDK conformance gets to
+  be the strictly stronger discipline the original `conformance/`
+  harness (UBI-9, provider types) already has — byte-exact, not "close
+  enough by some assertion."
 
 ## `sdk/` monorepo layout
 
@@ -304,9 +306,8 @@ sdk/
 the IR-model half is one Go package with zero per-language assumptions
 baked in; a template is a per-language plugin to it, matching the
 project's existing "shared core, swappable adapter" shape
-(`intentprovider.Adapter`, `core.StateReader`, `gcpaudit`/`cloudtrail`
-behind `EventLookup`) rather than inventing a new extension pattern for
-this one case.
+(`core.StateReader`, `gcpaudit`/`cloudtrail` behind `EventLookup`)
+rather than inventing a new extension pattern for this one case.
 
 ## The describe-only runtime surface
 
@@ -755,10 +756,7 @@ is a deliberate consequence of the hermetic evaluator's own "no network"
 requirement: if evaluating a program meant re-fetching or regenerating
 bindings on the spot, the evaluator subprocess would need exactly the
 network access this whole design exists to deny. Generation is a
-separate, explicit, online step (same "the network-touching step is
-distinct from, and reviewed before, the trust-boundary step" shape
-`--from-doc`'s own `ubx propose` already has relative to `ubx resolve`);
-evaluation, afterward, is fully offline against already-generated,
+separate, explicit, online step; evaluation, afterward, is fully offline against already-generated,
 already-on-disk files. Each generated file embeds the exact provider
 source+version it was generated from (a comment plus a machine-readable
 marker) — real, checked provenance for the "codegen against unknown
@@ -782,8 +780,8 @@ not just a paragraph.
 | 2 | Sandbox escape — fs/env/net reach | A program calls `Deno.readTextFileSync`/`Deno.writeTextFileSync`/`Deno.env.get`/`fetch` (awaited) directly inside its `stack()` body. | Every one throws `NotCapable`, confirmed this session's own probes with zero `--allow-*` flags plus the evaluator's explicit `--deny-*` set — never configurable wider by the program itself or by any `[sdk]`-style config table (no such table exists; the flag set is fixed in the harness, not exposed as a setting), matching the same "never enforced by default, always an explicit, narrower-only choice" posture `ubx scan --surface-as`'s own default already established (UBI-11 stage 3). |
 | 2b | Sandbox escape — remote module resolution | A program's own `import` (static or dynamic `await import(...)`) names an `https://` specifier, or an unpinned bare npm specifier requiring registry resolution. | Blocked unconditionally by `--no-remote`, confirmed this session as the one flag that actually closes this path (`--deny-net` alone does not — see the evaluator section's own empirical finding). Every specifier a program can legally import is either a literal, statically-analyzable path the evaluator's own generated runner script already resolved (the entry file, its own local relative imports, `ubx sdk gen`'s generated bindings) or the `@ubx/sdk` runtime via the harness's own import map (session 3's own build: embedded in the `ubx` binary, extracted to a temp directory once per process) — nothing is ever fetched at evaluate time, and (session 3's own correction to this row's original text) no `--allow-read` carve-out is needed for any of it at all; see the evaluator section's own "Slice 4: built" account for the full, corrected mechanism. |
 | 3 | Codegen against an unknown/mismatched provider version | `.ubx/config`'s `[thirdparty_providers]` pins `hashicorp/aws = 6.60.0`; the bindings actually on disk under `sdk/generated/` were generated against a different version whose schema disagrees (a field renamed, removed, or type-changed). | `ubx sdk gen` always regenerates from the exact config-pinned version's real, freshly-acquired schema — never a stale cache from a different version (same `provider.Acquire` version-pinned cache discipline `ubx scan`/`ubx accept --reverify-with` already trust). A genuine mismatch between what's on disk and current config is a distinct, named condition the CLI checks and reports before evaluation (comparing the generated file's own embedded version marker against `[thirdparty_providers]`), not silently evaluated anyway. If evaluation proceeds regardless (e.g. bindings never regenerated after a version bump) and produces a `resources[].type`/config shape the real pinned provider's schema doesn't actually own or accept, the failure is caught by `ubx resolve`'s own existing, unmodified "unowned type"/schema-mismatch checks (docs/multi-provider-adversarial.md row 3) — the SDK gets no bespoke second error path for a failure category the resolver already owns. |
-| 4 | Program throws mid-evaluation | A `stack()` body throws a JS exception after some `resource()` calls already ran (e.g. the third of five resource calls throws). | The whole evaluation is a hard failure — no partial `intent/v1` is ever emitted, matching the project's standing "one whole draft, never a partial one" rule (chat's full-transcript redraft, `--from-doc`'s atomic write). The collector is only ever read by the harness after `stack()`'s body returns normally; a thrown exception is caught by the Deno-side harness wrapper (never left to crash the subprocess uncleanly) and surfaced through to `ubx resolve --from-code`'s own stderr with the program's real stack trace and message, verbatim — never swallowed, matching UBI-20's own "teaching errors" hardening discipline. |
-| 5 | Output exceeding the `intent/v1` schema | A `resource()` config value is something `intent/v1` cannot represent at all — a function, a `Symbol`, a value containing a circular JS object reference, `undefined`, a float literal with no valid decimal-string encoding, or a raw, un-marked `Computed<T>` handle used directly as a value (row-1-adjacent, see `Computed<T>`'s own `ComputedCoercionError` above). | The collected document is validated against the existing, hand-maintained `intent/v1` JSON Schema (the identical schema `--from-doc`'s own structured-output validation already uses, reused unchanged — not a second, divergent schema for this producer) before it is ever handed to `ubx resolve` or written anywhere. A violation is a hard failure naming the exact resource, field, and JSON-Schema rule that failed — never a best-effort coercion (silently `JSON.stringify`-ing a function to `null`, dropping an unrepresentable field, etc.). |
+| 4 | Program throws mid-evaluation | A `stack()` body throws a JS exception after some `resource()` calls already ran (e.g. the third of five resource calls throws). | The whole evaluation is a hard failure — no partial `intent/v1` is ever emitted, matching the project's standing "one whole draft, never a partial one" rule. The collector is only ever read by the harness after `stack()`'s body returns normally; a thrown exception is caught by the Deno-side harness wrapper (never left to crash the subprocess uncleanly) and surfaced through to `ubx resolve --from-code`'s own stderr with the program's real stack trace and message, verbatim — never swallowed, matching UBI-20's own "teaching errors" hardening discipline. |
+| 5 | Output exceeding the `intent/v1` schema | A `resource()` config value is something `intent/v1` cannot represent at all — a function, a `Symbol`, a value containing a circular JS object reference, `undefined`, a float literal with no valid decimal-string encoding, or a raw, un-marked `Computed<T>` handle used directly as a value (row-1-adjacent, see `Computed<T>`'s own `ComputedCoercionError` above). | The collected document is strict-unmarshaled against `core/resolver.IntentFile` -- the same real, load-bearing Go type `ubx resolve` itself already parses a hand-written intent file into (`tseval/validate.go`'s `validateIntentShape`; refined during implementation from this row's own original sketch of reusing a hand-maintained JSON Schema, which turned out to validate an incompatible, string-encoded-config shape -- see that function's own doc comment) -- before it is ever handed to `ubx resolve` or written anywhere. A violation is a hard failure naming the exact resource, field, and JSON-Schema rule that failed — never a best-effort coercion (silently `JSON.stringify`-ing a function to `null`, dropping an unrepresentable field, etc.). |
 
 **What this table doesn't yet cover, named rather than assumed
 exhaustive** (matching docs/intent-provider-adversarial.md's own

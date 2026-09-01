@@ -2343,8 +2343,10 @@ responseElements.role.roleName: "terraform-c6f2a8e7195d77006645ad7d4f"
 provider-auto-generated name, never `ci-runner-v15`. Because
 `aws_iam_role.name` is Optional (not Required) on the real
 `hashicorp/aws` schema, `ubx_required`'s own scope-discipline check
-(UBI-91: "an attribute is not required... use --from-doc or an SDK
-program") REFUSES `ubx_required.name` on this type outright — there is
+(UBI-91: "an attribute is not required... use the SDK instead" -- UBI-224,
+2026-09-01: `ubx_required` and the diagram medium it belonged to are
+gone; this incident is left as historical record) REFUSES
+`ubx_required.name` on this type outright — there is
 no sanctioned way to set it from a diagram at all. Terraform/AWS's own
 established behavior for an omitted `name`/`name_prefix` is to
 auto-generate one (`terraform-<hash>`), unknown to ubx or the diagram
@@ -2460,11 +2462,12 @@ Optional (not Required) attribute the sibling never set — `ubx_required`
 refuses to let you set it (out of scope, UBI-91's own discipline, correct
 on its own terms), and the referencing resource's own `ubx_required.<ref
 attr>` has no way to point at "whatever name/ARN the sibling ends up
-getting" the way a real `$ref`/`$computed` substitution would. This is a
+getting" the way a real `$ref`/`$computed` substitution would. This was a
 real, load-bearing gap in the diagram medium specifically for exactly the
 `aws_iam_role`/`aws_iam_policy` → `aws_iam_role_policy_attachment` shape
-that has now caused two separate live incidents. Tracked as UBI-94
-rather than redesigned here.
+that had caused two separate live incidents, tracked as UBI-94. Moot as
+of UBI-224 (2026-09-01): the diagram medium and `ubx_required` are gone;
+an SDK program always has a real `$ref`/`$computed` to reach for here.
 
 **Hermetic**: `core/executor/create_dependency_retry_test.go`'s new
 `TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly`

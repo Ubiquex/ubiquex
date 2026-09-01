@@ -1,5 +1,17 @@
 # Intent provider + md medium — AI transcription behind the deterministic line (UBI-41)
 
+> **Superseded (UBI-224, 2026-09-01): the markdown authoring medium and the
+> `intentprovider` package this document specifies are removed.** The SDK
+> is now the only authoring medium (docs/architecture.md's own Thesis).
+> `core.SourceKindDocument`/`SourceKindDialogue`/`SourceKindIntentProvider`
+> and `resolver.Dialogue`/`Turn` survive as read-only types so `ubx why`
+> can still explain a proposal accepted before this change; the drafting
+> machinery this document describes (the Adapter interface, DraftWithRetry,
+> Redact, the claude adapter, the structured-output schema/validation) does
+> not. Left in place, unedited below, as the real historical design record
+> for why those types exist and what they used to drive -- not as a
+> description of anything ubx does today.
+
 > This document is the spec, written before any code, per this project's own
 > session protocol (CLAUDE.md: "a plan change is not real until it lands in
 > docs/plan.md," and design decisions live in docs/ before implementation).
