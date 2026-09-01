@@ -55,7 +55,7 @@ echo-only `ReadResource` trusted the caller-supplied lookup as if it
 were the resource's own full current state, which no real provider ever
 does.
 
-PR `ubiquex#<TBD>` open (never self-merged), branched from current
+PR `ubiquex#50` open (never self-merged), branched from current
 `main` (post-UBI-227-merge), not stacked on anything. Full repo
 `go build ./...`/`go test ./...` clean.
 
