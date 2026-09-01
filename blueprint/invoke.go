@@ -171,22 +171,21 @@ func parseCrossRefArg(raw string) (stackName, to string, err error) {
 // renderArgLiteral renders one resolved arg's own raw string value into
 // lang's own literal syntax for p.Type -- string/number/bool coercion
 // against the target blueprint's own declared param type, deferred
-// entirely to this point (neither the diagram medium nor the md medium
-// has this type information available when the call is first
-// extracted -- see resolver.BlueprintCall's own doc comment).
+// entirely to this point (a hand-written intent/v1 file, this struct's
+// own one real remaining producer since UBI-224 removed diagram/md,
+// has no reason to have this type information in hand when the call is
+// first written -- see resolver.BlueprintCall's own doc comment).
 //
 // UBI-129: a list-typed param's own raw value is the SAME kind of plain
-// string every other param's Args entry already is -- diagram/parse.go's
-// own generic "every non-reserved child attribute is one Arg, verbatim
-// raw text" capture and the md medium's own identical Args convention
-// both need ZERO changes to carry a comma-separated list value (e.g.
-// "eu-central-1a, eu-central-1b, eu-central-1c") -- this is the ONE
-// place that raw text is actually split and rendered as a real
+// string every other param's Args entry already is -- a comma-separated
+// list value (e.g. "eu-central-1a, eu-central-1b, eu-central-1c") needs
+// no special capture convention of its own -- this is the ONE place
+// that raw text is actually split and rendered as a real
 // language-native list literal, splitListArg below.
 //
 // UBI-134: a ParamCrossRef param's own raw value is, identically, the
-// SAME plain "@<stack>.<type>.<name>.<attr-path>" string every medium's
-// Args capture already carries verbatim -- rendered here as a real
+// SAME plain "@<stack>.<type>.<name>.<attr-path>" string Args already
+// carries verbatim -- rendered here as a real
 // sdk.CrossStack(...)/crossStack(...)/sdk.cross_stack(...) construction
 // (matching each language's own real, already-exported $cross
 // constructor -- sdk/go/runtime, sdk/ts/runtime, sdk/py -- never a raw

@@ -247,13 +247,13 @@ type IntentFile struct {
 	Destroys    []string           `json:"destroys,omitempty"`
 
 	// BlueprintCalls was added 2026-08-04 (UBI-74 Slice 5): one entry per
-	// blueprint invocation this document names -- a diagram's own
-	// ubx_blueprint-classed node (diagram/parse.go), or an md draft's own
-	// "Use blueprint X with..." recognition (intentprovider/validate.go),
-	// both compile down to this SAME shape. An SDK program's own direct
-	// function call to a blueprint package (UBI-74 Slice 2) never
-	// produces one -- the call already happened in-process by the time
-	// its own intent/v1 is emitted, so there is nothing left to expand.
+	// blueprint invocation this document names -- a hand-written
+	// intent/v1 file's own explicit entry, the one real remaining
+	// producer since UBI-224 removed the diagram/md mediums that used to
+	// also reach this field. An SDK program's own direct function call
+	// to a blueprint package (UBI-74 Slice 2) never produces one -- the
+	// call already happened in-process by the time its own intent/v1 is
+	// emitted, so there is nothing left to expand.
 	//
 	// Purely additive and optional, matching DependsOn's own precedent
 	// (above): every OTHER producer of an intent file (a hand-written
@@ -274,13 +274,10 @@ type IntentFile struct {
 	// "a blueprint's own internal resource attributes are owned by the
 	// blueprint's AUTHOR, not the caller; only call-site parameters are
 	// editable" (the design comment's own framing). An SDK program's
-	// direct `override(address, {...})` call (Go/TS/Python, zero AI), a
-	// diagram's own ubx_override-classed node (structural read, zero
-	// AI), or an md draft's "Override the X's Y to Z" prose (the ONLY
-	// call site needing AI, and only a thin mapping step -- never
-	// re-drafting the blueprint's own resources) all compile down to
-	// this SAME shape, mirroring BlueprintCalls' own "three mediums, one
-	// wire shape" precedent exactly.
+	// direct `override(address, {...})` call (Go/TS/Python, zero AI) or
+	// a hand-written intent/v1 file's own explicit entry (UBI-224
+	// removed the diagram/md mediums that used to also reach this field)
+	// both compile down to this SAME shape.
 	//
 	// Purely additive and optional, matching BlueprintCalls' own
 	// precedent: every OTHER producer of an intent file leaves this nil
@@ -324,16 +321,15 @@ type Override struct {
 // account of where this comes from and how it gets expanded. Args is
 // always string-keyed/string-valued regardless of a param's own real
 // declared type (docs/blueprint.md's own "Cross-medium calling"
-// section) -- neither the diagram medium (a D2 node attribute's own raw
-// text) nor the md medium (an LLM extracting a value from prose) has
-// the target blueprint's own Ubxfile in hand at the point this struct
-// is populated, so type coercion (string -> the param's own real
+// section) -- a hand-written intent/v1 file, this struct's own one real
+// remaining producer since UBI-224 removed diagram/md, has no reason to
+// know the target blueprint's own declared param types when it's
+// written, so type coercion (string -> the param's own real
 // string/number/bool type) is deferred entirely to expansion time, once
 // the target blueprint's own declared params are actually known.
 type BlueprintCall struct {
-	// Name is a short, human-readable label for this call (a diagram
-	// node's own label, or an md draft's own short description) -- used
-	// only for error messages and the synthesized calling stack's own
+	// Name is a short, human-readable label for this call -- used only
+	// for error messages and the synthesized calling stack's own
 	// intent.summary, never part of any resource's own address.
 	Name string `json:"name"`
 	// Blueprint names the blueprint to call -- an absolute or relative
@@ -357,18 +353,17 @@ type BlueprintCall struct {
 	// CallName was added 2026-08-06 (UBI-128): the caller-chosen name
 	// this specific call's own declared outputs (blueprint/ubxfile.go's
 	// outputs: key) can be referenced by, WITHIN THIS SAME DOCUMENT --
-	// the diagram medium's own ubx_blueprint node identifier (implicit,
-	// always present), or the md medium's own explicit "Call blueprint X
-	// as 'name' with:" clause (a real, new grammar addition, never part
-	// of Name above, which is a free-text label only). Empty is legal --
-	// a call whose own outputs are never referenced needs no CallName at
-	// all, and every producer of a BlueprintCall before this ticket
-	// (a direct SDK-import call has none of these at all; Slice 2's own
-	// calling convention isn't a BlueprintCall in the first place) leaves
-	// this empty and is completely unaffected. Purely additive, matching
-	// every other BlueprintCall field's own precedent -- resolveOnce
-	// itself has zero awareness this exists; blueprint.ExpandCalls is
-	// the only place it's ever read (blueprint/outputs.go).
+	// a hand-written intent/v1 file's own explicit label for the call,
+	// never part of Name above, which is a free-text label only. Empty
+	// is legal -- a call whose own outputs are never referenced needs no
+	// CallName at all, and every producer of a BlueprintCall before this
+	// ticket (a direct SDK-import call has none of these at all; Slice
+	// 2's own calling convention isn't a BlueprintCall in the first
+	// place) leaves this empty and is completely unaffected. Purely
+	// additive, matching every other BlueprintCall field's own
+	// precedent -- resolveOnce itself has zero awareness this exists;
+	// blueprint.ExpandCalls is the only place it's ever read
+	// (blueprint/outputs.go).
 	//
 	// Deliberately NOT the same mechanism as @stack.type.name (UBI-47)
 	// cross-stack references: a CallName only ever resolves an output

@@ -93,6 +93,12 @@ func TestGeneratePython_CiPlatform(t *testing.T) {
 	if !strings.Contains(bindings, "@dataclasses.dataclass") {
 		t.Fatalf("bindings.py missing a dataclass Config declaration:\n%s", bindings)
 	}
+	// UBI-225: every generated binding carries the blueprint's own bare
+	// name, so a resource() call built directly from it (bypassing the
+	// wrapper function) still gets real provenance.
+	if !strings.Contains(bindings, `blueprint_name="ci-platform"`) {
+		t.Fatalf("bindings.py missing blueprint_name (UBI-225):\n%s", bindings)
+	}
 }
 
 func TestGeneratePython_DuplicateIdentifier(t *testing.T) {

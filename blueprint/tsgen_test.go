@@ -97,6 +97,12 @@ func TestGenerateTS_CiPlatform(t *testing.T) {
 	if !strings.Contains(bindings, "ResourceBinding<any, any>") {
 		t.Fatalf("bindings.ts should type every binding ResourceBinding<any, any> (no schema to derive Config/Attrs interfaces from):\n%s", bindings)
 	}
+	// UBI-225: every generated binding carries the blueprint's own bare
+	// name, so a resource() call built directly from it (bypassing the
+	// wrapper function) still gets real provenance.
+	if !strings.Contains(bindings, `blueprintName: "ci-platform"`) {
+		t.Fatalf("bindings.ts missing blueprintName (UBI-225):\n%s", bindings)
+	}
 }
 
 func TestGenerateTS_DuplicateIdentifier(t *testing.T) {
