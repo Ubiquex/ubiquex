@@ -7,6 +7,70 @@
 
 ## In flight
 
+**UBI-225: how blueprints and hand-written SDK resources compose in one
+stack -- reported, one real gap found and fixed in code (four PRs, none
+merged), documentation not yet written.**
+
+- **The report** (delivered before any code touched, per explicit
+  instruction): built a real Ubxfile with a declared `outputs:`,
+  `ubx blueprint build`'d it for real, wrote a real mixed Go stack
+  (blueprint call + two hand-written resources), ran it through real
+  `ubx resolve`/`accept`/`ship` against `fakeprovider`, then real
+  `ubx why`/`ubx render`. Findings, all live-verified: a blueprint call
+  returns real `*sdk.Computed` handles, the exact type hand-written
+  resources already consume -- the forward direction works cleanly,
+  producing a real `$computed` graph edge. The reverse direction (a
+  hand-written resource's own output as a blueprint call argument) does
+  not work at all -- confirmed with a real Go compiler error, not
+  inferred from the type signature; a blueprint's declared params only
+  ever compile to string/number/bool/list or `sdk.CrossMarker`
+  (cross-**stack** only), never a same-stack `*sdk.Computed`. The
+  blueprint call is never opaque to the dependency graph -- its
+  resources become ordinary graph nodes once produced. `ubx why` shows
+  `source: blueprint <name>:sha256:<hash>` plus the dual-signature note
+  only for blueprint-produced resources; `ubx render` groups only those
+  inside a dashed-border container. The ticket's own named "known gap"
+  (a blueprint imported as a library, bypassing the call path, produces
+  a resource with zero provenance) was confirmed STILL real and
+  reachable by accident, live, in all three languages -- `bindings.go`/
+  `.ts`/`.py` export ordinary `XBinding`/`XConfig` symbols using the
+  exact `sdk.Resource(SomeBinding, name, SomeConfig{...})` shape every
+  provider SDK tutorial teaches, with no separate warning that this
+  skips the wrapper function's own provenance scope entirely.
+- **The fix, built as proposed after the report (provenance stamped on
+  the binding itself, not access-controlled)**: `ResourceBinding` gains
+  `BlueprintName`/`blueprintName`/`blueprint_name`, set only by a
+  blueprint's own generated bindings (never by an ordinary provider SDK
+  binding). Each runtime's `Resource()` now falls back to it exactly
+  when no push-scope is open, closing the gap uniformly across Go/TS/
+  Python -- access-control (hiding the export) was considered and
+  rejected: Go could hide it, but TS/Python generate the binding and the
+  wrapper function into separate files/modules, so hiding it there would
+  also block the wrapper function's own legitimate use, an asymmetric,
+  worse fix. Four PRs, all open, none merged: `ubx-sdk-go#14`,
+  `ubx-sdk-typescript#15`, `ubx-sdk-python#13` (the three runtimes), and
+  `ubiquex#46` (all three blueprint codegens stamping the new field,
+  two stale doc comments in `core/resolver/resolver.go`/
+  `blueprint/invoke.go` fixed alongside since they cited the same dead
+  diagram/md mediums, a new hermetic regression test in
+  `cli/blueprint_binding_provenance_test.go`).
+- **Real sequencing dependency, named in `ubiquex#46`'s own PR body,
+  not silently left implicit**: that branch does not build against the
+  currently pinned `sdk/go`/`sdk/ts`/`sdk/py` submodule commits at all
+  -- the codegen unconditionally emits the new field now. Merge order:
+  the three runtime PRs first, then bump this repo's submodule pins to
+  their new releases (a real follow-up commit, not attempted yet --
+  pinning to an unmerged branch tip isn't a stable target), only then
+  `ubiquex#46`. Verified locally against each runtime's own fix branch
+  checked out under `sdk/go`/`sdk/ts`/`sdk/py` (`go test ./...` clean
+  on that basis), and via a real manual end-to-end repro (a real
+  `ubx blueprint build`-produced package, real `fakeprovider` ship)
+  confirming the gap actually closes, not just that tests pass.
+- **Documentation not yet written** -- next: `ubiquex-docs` (how to
+  write a mixed stack, the reverse-direction asymmetry named plainly)
+  and `ubiquex-internals` (the composition contract, why provenance
+  works the way it does).
+
 **UBI-224: markdown/diagram/chat dropped as authoring mediums, the SDK is
 the only one left. Stage 1 (code) and the orphaned-config follow-up are
 merged; stage 2 (docs/) and stage 3 (both documentation sites) are open,
