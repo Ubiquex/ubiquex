@@ -36,7 +36,7 @@ func newWhyCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "why <proposal-id> | <stack>.<type>.<name>",
+		Use:   "why <proposal-id-or-alias> | <stack>.<type>.<name>",
 		Short: "Explain an accepted proposal, or a resource's full proposal history",
 		Args:  cobra.ExactArgs(1),
 		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
@@ -57,7 +57,28 @@ func newWhyCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			st := newStylerFull(cmd, fullHashes)
 
-			if proposalIDPattern.MatchString(args[0]) {
+			// UBI-228: args[0] may be a human-readable alias (ubx alias
+			// set) rather than a hash or an address -- tried only when it
+			// matches neither existing shape, so a raw hash or a real
+			// <stack>.<type>.<name> address behaves exactly as before
+			// this ticket. A failed alias lookup falls through silently;
+			// the existing "not a valid proposal ID or resource address"
+			// error below is still the single source of truth for
+			// "neither shape matched," now also naming alias as a third
+			// option.
+			whyArg := args[0]
+			if !proposalIDPattern.MatchString(whyArg) {
+				if _, ok := core.ParseAddress(whyArg); !ok {
+					if resolved, resolvedStack, aerr := resolveHeadOrAlias(ledgerDir, stack, whyArg); aerr == nil {
+						whyArg = resolved
+						if resolvedStack != "" {
+							stack = resolvedStack
+						}
+					}
+				}
+			}
+
+			if proposalIDPattern.MatchString(whyArg) {
 				// A bare proposal ID carries no stack of its own -- unlike
 				// the address branch below, which derives one directly
 				// from the argument -- so --stack (or its config default)
@@ -69,7 +90,7 @@ func newWhyCmd() *cobra.Command {
 				}
 				defer closeLedger()
 
-				p, err := ledger.Read(args[0])
+				p, err := ledger.Read(whyArg)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
@@ -116,9 +137,9 @@ func newWhyCmd() *cobra.Command {
 				return verifyErr
 			}
 
-			addr, ok := core.ParseAddress(args[0])
+			addr, ok := core.ParseAddress(whyArg)
 			if !ok {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a valid proposal ID (64-char hex) or resource address (<stack>.<type>.<name>)", args[0])}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a valid proposal ID (64-char hex), resource address (<stack>.<type>.<name>), or known alias", args[0])}
 			}
 			// The address itself already names its own stack -- used
 			// directly, regardless of --stack/config's own default, since

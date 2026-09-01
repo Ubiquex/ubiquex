@@ -41,6 +41,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newStoreCmd())
 	root.AddCommand(newHistoryCmd())
 	root.AddCommand(newRestoreCmd())
+	root.AddCommand(newAliasCmd())
 
 	return root
 }
