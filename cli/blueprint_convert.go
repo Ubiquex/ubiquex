@@ -34,11 +34,12 @@ at all, matching this project's own established discipline for schema-to-code tr
 already precise, so there's no ambiguity for a model to resolve.
 
 Writes an Ubxfile plus the built go/ts/py package(s) directly into --out, exactly like "ubx blueprint build" would
-have produced from an equivalent AI-drafted resources: prose -- except the Ubxfile's own resources: field is
-documentation only for a converted blueprint (a short, deterministic summary of what was converted): running
-"ubx blueprint build" again on a converted directory re-drafts resources: through the AI pipeline like any other
-Ubxfile, and there's no guarantee that re-draft reproduces this command's own deterministic translation -- this
-command's OWN output (the go/ts/py packages it writes) is the source of truth for a converted blueprint.
+have produced -- except the Ubxfile's own resources: field is documentation only for a converted blueprint (a
+short, deterministic summary of what was converted, not a pre-resolved intent/v1 JSON document): "ubx blueprint
+build" no longer has any drafting step at all (UBI-224 removed it -- build only ever parses resources: as JSON
+now), so running it again on a converted directory fails outright, a JSON parse error, rather than reproducing
+anything -- this command's OWN output (the go/ts/py packages it writes) is the source of truth for a converted
+blueprint.
 
 What converts mechanically: variable blocks (params:), resource blocks (resource calls, including a real
 count = length(var.list)/for_each = var.list|toset(var.list) -> blueprint's own for_each translation), output

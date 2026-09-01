@@ -2213,6 +2213,88 @@ same way a bare `ubx why <id> --ledger-dir <path>` always has —
 `ledger_dir` is an explicit input on every tool for exactly this reason,
 never assumed from an ambient shell state an MCP server doesn't have.
 
+### Blueprint-authoring tools (UBI-223)
+
+The three original tools (UBI-25) answer questions about a ledger that
+already exists. UBI-223 adds a second group that helps an assistant
+author a blueprint before any ledger exists at all -- `draft_ubxfile`,
+`validate_ubxfile`, `build_blueprint`, `list_blueprints`,
+`describe_blueprint`. The ticket that opened this work named six tools
+and left two questions open; both were answered before anything was
+built, and the answers are the shape of this group.
+
+**`push_blueprint` is not a tool, at all.** It is the one irreversible
+step in the blueprint lifecycle -- a real ORAS upload to an OCI registry
+(`blueprint.Push`, `ubx blueprint push`) -- and the one step every other
+consumer (`blueprint.Pull`, `ubx blueprint pull`) treats as trustworthy
+once it happens. This is the exact shape "Boundary by omission" above
+already drew for `ubx accept`/`ubx ship`/`ubx writeback`/`ubx
+revert-plan`/`ubx scan --surface-as`: an irreversible, externally-visible
+act stays a human's own decision, made by running the real CLI command,
+never something an assistant reaches mid-conversation. `push_blueprint`
+is simply never registered -- the same omission-not-gate discipline, and
+it is named explicitly in `ubx mcp --help` and the docs page so the gap
+reads as deliberate, not missed.
+
+**Every tool in this group returns content; none of them write to a
+repository.** `draft_ubxfile` assembles an `Ubxfile` and a
+`resources.json` from agent-supplied pieces and hands both back as
+strings -- there is no repo for an assistant to have opened, and keeping
+it that way means committing the result stays a human act, same as
+`ubx_scan`'s own "never accepted" posture for a live read. `build_blueprint`
+follows the same rule with one explicit, additive exception: an
+optional `out_dir` input, mirroring `ubx_scan`'s own `out` field -- when
+given, the generated go/ts/py files are ALSO written there, on top of
+the inline response, never instead of it. Nothing else in the group
+touches a caller-supplied path; `validate_ubxfile`'s and
+`build_blueprint`'s own `dir` input is read-only, and the one place any
+tool in this group writes to disk at all is a throwaway `os.MkdirTemp`
+scratch directory, per call, for inline content.
+
+**`validate_ubxfile` and `build_blueprint` share one validation
+implementation, not two.** `decodeBlueprint` (`blueprint/decode.go`) was
+already the single language-neutral check `GenerateGo`/`GenerateTS`/
+`GeneratePython` each ran before their own codegen -- every resource is
+`op:create`, no duplicate addresses, every `for_each`/`$ref`/
+`depends_on` resolves, topological ordering succeeds, every `outputs:`
+target resolves to a real resource attribute. UBI-223 adds exactly one
+new entry point in front of it, `blueprint.Validate(dir)` -- parse the
+Ubxfile, unmarshal `resources:` into a `resolver.IntentFile`, run
+`decodeBlueprint`. `ubx blueprint build`'s own CLI `RunE` and both new
+MCP tools call this same function; none of the three carries a parallel
+copy of the check. This was a deliberate constraint on the build, not
+an incidental convenience -- two independent implementations of the same
+fold silently diverging is the exact shape UBI-197 and UBI-233 both
+hit, and the fix here is structural (one function, three callers)
+rather than a rule to remember.
+
+**`draft_ubxfile` does not invoke a second LLM.** The ticket that
+proposed this tool predates UBI-224, which removed blueprint build's
+own intent-provider draft step entirely -- `resources:` is now always a
+pre-resolved `ubx:intent/v1` document, the same wire shape `ubx resolve
+--from-code --out <file>` produces, never prose for a model to
+interpret. `draft_ubxfile` reflects that directly: it is deterministic
+assembly of agent-decided pieces (a resources array the calling
+assistant has already reasoned about, plus params/outputs specs) into
+the two files a blueprint directory needs, self-validated via the same
+`blueprint.Validate` the other tools call, before ever being handed
+back. There is no drafting intelligence inside the tool to keep in sync
+with anything -- the assistant supplies the intelligence, the tool
+supplies the exact wire shape.
+
+**`list_blueprints` reports what's on disk, not a registry.** Strata's
+own registry service (referenced in `blueprint.Pull`'s own "4 source
+forms" account below) isn't built yet -- there is no server-side
+list/search capability to wrap. `list_blueprints` walks a given root
+directory for real `Ubxfile`-rooted directories and validates each one
+it finds, best-effort (an invalid blueprint is reported with its own
+error, never fails the whole call). `describe_blueprint` pulls one of
+the four real source forms into a scratch directory, attempts
+`blueprint.Verify` (tamper-evidence hash check, succeeds only for an
+already-packaged blueprint) and `blueprint.Validate` independently, and
+reports whichever succeeded -- read-only, the scratch directory is
+always removed after.
+
 ## Ledger stores (decided 2026-07-17; config cascade/formats built UBI-32 Arc A; LedgerStore interface + git reference impl + s3 store + addressing (including `$cross` by stack name + `[ledger.external]`) built UBI-32 Arc B, live-verified against real S3 including a real two-stack cross-stack pin and neighbor-advance staleness catch; the full primary CLI surface -- resolve/accept (local and --from-merge)/ship/why/status/scan/revert-plan/writeback/the MCP surface -- all wired onto `.ubx/config`'s own `[ledger]` table; PR-acceptance ceremony built and live-verified against a real GitHub PR + real S3 -- gs/azblob still designed, not wired, its own follow-up; see STATE.md for the full session-by-session history)
 
 Two storage questions, decided separately:

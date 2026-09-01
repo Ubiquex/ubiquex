@@ -2,6 +2,32 @@
 
 ## Changelog
 
+- 2026-09-01 -- UBI-223 built: 5 MCP blueprint-authoring tools
+  (`draft_ubxfile`, `validate_ubxfile`, `build_blueprint`,
+  `list_blueprints`, `describe_blueprint`). Two decisions the ticket
+  left open, both answered before building: `push_blueprint` is not
+  registered at all -- the one irreversible, externally-consumed step
+  in the blueprint lifecycle, matching UBI-25's own "boundary by
+  omission" exclusion of accept/ship/writeback/revert-plan -- and every
+  tool returns content rather than writing to a repository
+  (`build_blueprint`'s own `out_dir` is an explicit, additive opt-in,
+  mirroring `ubx_scan`'s `out` field, never a default). New
+  `blueprint.Validate` is the one shared entry point `ubx blueprint
+  build`'s own CLI `RunE`, `validate_ubxfile`, and `build_blueprint` all
+  call -- parses the Ubxfile, unmarshals `resources:`, runs the
+  already-existing, already-shared `decodeBlueprint` every codegen
+  backend already used internally. No parallel validation copy, the
+  shape that caused UBI-197 and UBI-233. `draft_ubxfile` invokes no
+  second LLM: UBI-224 already removed blueprint build's own
+  intent-provider draft step, so `resources:` is deterministic assembly
+  from agent-supplied pieces, self-validated before being returned.
+  Drive-by fix: `blueprint convert`'s own doc comment corrected --
+  re-running `build` on a converted directory now fails outright with a
+  JSON parse error (post-UBI-224), not merely "not guaranteed to
+  reproduce." 10 new hermetic MCP tests, full repo `go build`/`go test`
+  clean. docs/architecture.md's new "Blueprint-authoring tools" section
+  has the full design and the reasoning behind both decisions.
+
 - 2026-09-01 -- UBI-238/UBI-239 fixed: both real, root-caused before any
   fix, per the founder's own explicit "report the cause before fixing"
   instruction. UBI-238 (real, general, narrower than "nobody can modify
@@ -7251,6 +7277,36 @@ untested: the namespace derivation itself (`ir.ServiceAndLocalNameForType`)
 and all three languages' full `GeneratedRepo` output (paths, package
 identity, same-WireType coexistence, zero collisions) are covered
 directly, hermetically, without it.
+
+### MCP blueprint-authoring tools (UBI-223)
+
+A second MCP tool group, alongside UBI-25's original three: `draft_ubxfile`,
+`validate_ubxfile`, `build_blueprint`, `list_blueprints`,
+`describe_blueprint`. The ticket named six tools and left two questions
+open, both answered before building: `push_blueprint` is not registered
+at all (it is the one irreversible, externally-consumed step in the
+blueprint lifecycle, the same "boundary by omission" shape UBI-25's own
+accept/ship/writeback/revert-plan exclusion already drew), and every
+tool returns content rather than writing to a repository (`build_blueprint`
+carries one explicit, additive `out_dir` opt-in, mirroring `ubx_scan`'s
+own `out` field precedent, on top of the inline response, never instead
+of it). `validate_ubxfile` and `build_blueprint` share one validation
+implementation, a new `blueprint.Validate` in front of the
+already-existing, already-shared `decodeBlueprint` every codegen
+backend already called — not two copies of the same check, the shape
+that caused UBI-197 and UBI-233. `draft_ubxfile` does not invoke a
+second LLM: UBI-224 already removed blueprint build's own
+intent-provider draft step, so `resources:` is always a pre-resolved
+`ubx:intent/v1` document the calling assistant has already reasoned
+about, never prose for a model to interpret — the tool is deterministic
+assembly, self-validated before being handed back. A drive-by fix
+landed in the same body of work: `blueprint convert`'s own doc comment
+still described re-running `build` on a converted directory as
+"not guaranteed to reproduce," which UBI-224 made stronger than that —
+it now fails outright with a JSON parse error, since a converted
+blueprint's `resources:` is documentation-only summary text, never
+valid `intent/v1` JSON. See docs/architecture.md's "Blueprint-authoring
+tools" section for the full design.
 
 ## Deferred (explicitly not now)
 

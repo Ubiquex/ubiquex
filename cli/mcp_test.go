@@ -90,7 +90,11 @@ func TestMCP_ListTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	want := map[string]bool{"ubx_why": true, "ubx_status": true, "ubx_scan": true}
+	want := map[string]bool{
+		"ubx_why": true, "ubx_status": true, "ubx_scan": true,
+		"draft_ubxfile": true, "validate_ubxfile": true, "build_blueprint": true,
+		"list_blueprints": true, "describe_blueprint": true,
+	}
 	if len(res.Tools) != len(want) {
 		t.Fatalf("got %d tools, want %d", len(res.Tools), len(want))
 	}
@@ -103,9 +107,11 @@ func TestMCP_ListTools(t *testing.T) {
 		}
 	}
 	// Boundary by omission (docs/architecture.md -- MCP server): confirm
-	// none of the mutating verbs are exposed, not just that the three
-	// expected tools are present.
-	for _, forbidden := range []string{"ubx_accept", "ubx_ship", "ubx_writeback", "ubx_revert_plan", "ubx_revert-plan"} {
+	// none of the mutating verbs are exposed, not just that the expected
+	// tools are present. push_blueprint (UBI-223) gets the identical
+	// treatment as accept/ship/writeback -- irreversible, externally
+	// consumed, omitted from registration entirely, never gated.
+	for _, forbidden := range []string{"ubx_accept", "ubx_ship", "ubx_writeback", "ubx_revert_plan", "ubx_revert-plan", "push_blueprint"} {
 		if want[forbidden] {
 			t.Errorf("test setup bug: %q listed as wanted", forbidden)
 		}

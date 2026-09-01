@@ -7,6 +7,7 @@
 package blueprint
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
 // UbxfileName is the literal filename `ubx blueprint build .` looks for
@@ -342,6 +345,31 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 		ResourcesSource: source,
 		Outputs:         outputs,
 	}, nil
+}
+
+// Validate is the one shared front half every blueprint entry point
+// uses -- `ubx blueprint build`'s own CLI RunE, and the MCP
+// validate_ubxfile/build_blueprint tools (UBI-223): parse the Ubxfile,
+// unmarshal resources: into a resolver.IntentFile, and run it through
+// decodeBlueprint -- the SAME language-neutral check GenerateGo/
+// GenerateTS/GeneratePython already perform internally before their own
+// codegen. A caller that only needs to know "is this valid" never has
+// to run codegen to find out, and this check has exactly one
+// implementation, never one kept separately in sync per caller -- the
+// shape UBI-197 and UBI-233 both hit.
+func Validate(dir string) (*Ubxfile, *resolver.IntentFile, error) {
+	ubxfile, err := ParseUbxfile(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var draft resolver.IntentFile
+	if err := json.Unmarshal([]byte(ubxfile.Resources), &draft); err != nil {
+		return nil, nil, fmt.Errorf("blueprint: resources: is not a valid pre-resolved intent/v1 document (%s): %w", ubxfile.ResourcesSource, err)
+	}
+	if _, err := decodeBlueprint(&draft, ubxfile.Params, ubxfile.Outputs); err != nil {
+		return nil, nil, err
+	}
+	return ubxfile, &draft, nil
 }
 
 // parseOutputs walks node's own key/value pairs in FILE ORDER (never a

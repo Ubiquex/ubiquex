@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,23 +108,18 @@ omitted entirely, since resources: is only ever parsed once regardless of how ma
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
 			}
 
-			ubxfile, err := blueprint.ParseUbxfile(absDir)
+			ubxfile, draft, err := blueprint.Validate(absDir)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
 			}
 
 			blueprintName := filepath.Base(absDir)
 
-			var draft resolver.IntentFile
-			if err := json.Unmarshal([]byte(ubxfile.Resources), &draft); err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: resources: is not a valid pre-resolved intent/v1 document (%s): %w", ubxfile.ResourcesSource, err)}
-			}
-
 			outWriter := cmd.OutOrStdout()
 
 			allFiles := map[string]string{}
 			for _, l := range langs {
-				files, err := blueprintGenerators[l](blueprintName, ubxfile, &draft)
+				files, err := blueprintGenerators[l](blueprintName, ubxfile, draft)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build (%s): %w", l, err)}
 				}
