@@ -146,8 +146,8 @@ func TestMCP_ValidateUbxfile_MissingBoth(t *testing.T) {
 // TestMCP_BuildBlueprint_ReturnsFilesNotWritten is the core write-
 // versus-return proof: building from inline content (nothing ever
 // saved anywhere by the caller) returns real, compilable file content
-// inline, with no out_dir given -- nothing is written to disk anywhere
-// the test could observe.
+// inline, and never writes anything to disk -- there is no opt-in to
+// turn that off, unlike an earlier version of this tool.
 func TestMCP_BuildBlueprint_ReturnsFilesNotWritten(t *testing.T) {
 	session := connectMCPTestClient(t)
 	res := callTool(t, session, "build_blueprint", map[string]any{
@@ -175,30 +175,7 @@ func TestMCP_BuildBlueprint_ReturnsFilesNotWritten(t *testing.T) {
 		t.Fatalf("expected a go.mod among the returned files, got: %v", files)
 	}
 	if _, wrote := payload["written_to"]; wrote {
-		t.Fatalf("expected no written_to field when out_dir is omitted, got: %v", payload["written_to"])
-	}
-}
-
-// TestMCP_BuildBlueprint_OutDirOptIn proves the purely-additive escape
-// hatch: out_dir, when explicitly given, ALSO writes the files for
-// real, on top of (never instead of) the inline response.
-func TestMCP_BuildBlueprint_OutDirOptIn(t *testing.T) {
-	outDir := t.TempDir()
-	session := connectMCPTestClient(t)
-	res := callTool(t, session, "build_blueprint", map[string]any{
-		"ubxfile":   "lang: go\nparams:\n  repo_name: string, required\nresources: resources.json\n",
-		"resources": blueprintTestDraft,
-		"out_dir":   outDir,
-	})
-	if res.IsError {
-		t.Fatalf("build_blueprint: %s", toolTextContent(t, res))
-	}
-	payload := res.StructuredContent.(map[string]any)
-	if payload["written_to"] != outDir {
-		t.Fatalf("expected written_to=%q, got: %v", outDir, payload["written_to"])
-	}
-	if _, err := os.Stat(filepath.Join(outDir, "go", "go.mod")); err != nil {
-		t.Fatalf("expected a real go/go.mod written to out_dir: %v", err)
+		t.Fatalf("expected no written_to field, this tool never writes to disk, got: %v", payload["written_to"])
 	}
 }
 

@@ -2237,19 +2237,27 @@ it is named explicitly in `ubx mcp --help` and the docs page so the gap
 reads as deliberate, not missed.
 
 **Every tool in this group returns content; none of them write to a
-repository.** `draft_ubxfile` assembles an `Ubxfile` and a
-`resources.json` from agent-supplied pieces and hands both back as
-strings -- there is no repo for an assistant to have opened, and keeping
-it that way means committing the result stays a human act, same as
-`ubx_scan`'s own "never accepted" posture for a live read. `build_blueprint`
-follows the same rule with one explicit, additive exception: an
-optional `out_dir` input, mirroring `ubx_scan`'s own `out` field -- when
-given, the generated go/ts/py files are ALSO written there, on top of
-the inline response, never instead of it. Nothing else in the group
-touches a caller-supplied path; `validate_ubxfile`'s and
-`build_blueprint`'s own `dir` input is read-only, and the one place any
-tool in this group writes to disk at all is a throwaway `os.MkdirTemp`
-scratch directory, per call, for inline content.
+repository, no opt-in either.** `draft_ubxfile` assembles an `Ubxfile`
+and a `resources.json` from agent-supplied pieces and hands both back
+as strings -- there is no repo for an assistant to have opened, and
+keeping it that way means committing the result stays a human act, same
+as `ubx_scan`'s own "never accepted" posture for a live read.
+`build_blueprint` follows the same rule with no exception: it computes
+its output as an in-memory map and returns it, the same map `ubx
+blueprint build`'s own CLI RunE would otherwise have written to disk,
+and never touches a caller-supplied path itself. An earlier version of
+this tool had an opt-in `out_dir` field, mirroring `ubx_scan`'s own
+`out` field -- removed on review, because the mirror didn't hold:
+`ubx_scan`'s `out` writes one inert proposal file nobody acts on until a
+human runs `ubx accept` by hand, while `out_dir` would have written the
+actual generated source tree, the real deliverable, directly into a
+caller-given directory, exactly the write this design ruled out rather
+than an equivalent-risk analog of it. An agent that genuinely wants the
+result on disk already has its own file tools for that.
+`validate_ubxfile`'s and `build_blueprint`'s own `dir` input stays
+read-only, and the one place any tool in this group writes to disk at
+all is a throwaway `os.MkdirTemp` scratch directory, per call, for
+inline content.
 
 **`validate_ubxfile` and `build_blueprint` share one validation
 implementation, not two.** `decodeBlueprint` (`blueprint/decode.go`) was

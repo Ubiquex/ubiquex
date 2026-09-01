@@ -14,15 +14,21 @@
 // entirely. push_blueprint gets the identical treatment -- it stays a
 // CLI-only verb, "ubx blueprint push", run by a human directly.
 //
-// No tool here writes to a repository. build_blueprint already computes
-// its own output as an in-memory map[string]string before ubx blueprint
-// build's own CLI RunE ever touches disk (cli/blueprint.go's allFiles) --
-// this returns that same map as content instead, the same posture the
-// three existing tools already hold ("it never writes to a live
-// resource"). An optional out_dir field lets a caller opt INTO also
-// persisting the result, purely additive, mirroring ubx_scan's own `out`
-// field precedent (cli/mcp.go) -- the default, out_dir omitted, never
-// writes anywhere.
+// No tool here writes to a repository, at all -- no opt-in either.
+// build_blueprint already computes its own output as an in-memory
+// map[string]string before ubx blueprint build's own CLI RunE ever
+// touches disk (cli/blueprint.go's allFiles); this returns that same map
+// as content instead, the same posture the three existing tools already
+// hold ("it never writes to a live resource"). An earlier version of
+// this tool had an opt-in out_dir field, mirroring ubx_scan's own `out`
+// field (cli/mcp.go) -- removed on review: ubx_scan's out writes one
+// inert proposal file nobody consumes until a human runs ubx accept on
+// it by hand, while out_dir would have written the actual generated
+// source tree, the real deliverable, directly into a caller-given
+// directory -- exactly the write this design ruled out, not an
+// equivalent-risk mirror of it. The calling agent already has its own
+// file tools for the cases where writing the result to disk is
+// genuinely wanted.
 //
 // draft_ubxfile does not invoke a second LLM. UBI-224 removed the
 // intent-provider package this ticket's own "second LLM" question
@@ -46,7 +52,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -311,7 +316,6 @@ type buildBlueprintInput struct {
 	Ubxfile   string `json:"ubxfile,omitempty" jsonschema:"inline Ubxfile text not yet saved anywhere -- requires resources alongside it, mutually exclusive with dir"`
 	Resources string `json:"resources,omitempty" jsonschema:"inline resources.json text, paired with ubxfile"`
 	Lang      string `json:"lang,omitempty" jsonschema:"target language(s): go, ts, py, or all -- default: the Ubxfile's own declared lang:"`
-	OutDir    string `json:"out_dir,omitempty" jsonschema:"OPTIONAL: also write the compiled files to this real directory on disk, exactly like \"ubx blueprint build\" would. The compiled files are always returned inline regardless -- this never replaces the response, only additionally persists it (the same pattern ubx_scan's own \"out\" field already uses). Omit this to keep the result entirely in the response, nothing written anywhere"`
 }
 
 func registerBuildBlueprintTool(server *mcp.Server) {
@@ -320,9 +324,9 @@ func registerBuildBlueprintTool(server *mcp.Server) {
 		Description: "Compile a valid Ubxfile into real, compilable Go/TypeScript/Python SDK package source -- the " +
 			"exact same codegen \"ubx blueprint build\" runs. Pass either dir (an existing Ubxfile directory) or " +
 			"ubxfile+resources (content not yet saved anywhere, e.g. straight from draft_ubxfile). Returns every " +
-			"generated file's own path and content inline; nothing is written to disk unless out_dir is explicitly " +
-			"given. Fails with the real validation error if the Ubxfile isn't valid -- call validate_ubxfile first if " +
-			"you want to check without paying for codegen.",
+			"generated file's own path and content inline; never writes to disk. Fails with the real validation " +
+			"error if the Ubxfile isn't valid -- call validate_ubxfile first if you want to check without paying " +
+			"for codegen.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in buildBlueprintInput) (*mcp.CallToolResult, any, error) {
 		dir, cleanup, err := resolveBlueprintDir(in.Dir, in.Ubxfile, in.Resources)
 		if err != nil {
@@ -364,24 +368,6 @@ func registerBuildBlueprintTool(server *mcp.Server) {
 			"files":          allFiles,
 			"resource_count": len(draft.Resources),
 			"languages":      langs,
-		}
-
-		if in.OutDir != "" {
-			names := make([]string, 0, len(allFiles))
-			for name := range allFiles {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				full := filepath.Join(in.OutDir, name)
-				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-					return nil, nil, fmt.Errorf("build_blueprint: write %s: %w", name, err)
-				}
-				if err := os.WriteFile(full, []byte(allFiles[name]), 0o644); err != nil {
-					return nil, nil, fmt.Errorf("build_blueprint: write %s: %w", name, err)
-				}
-			}
-			result["written_to"] = in.OutDir
 		}
 
 		return nil, result, nil
