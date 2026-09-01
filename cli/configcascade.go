@@ -378,15 +378,12 @@ var knownProviderKeys = map[string]bool{"path": true, "source": true, "version":
 var knownK8sAuditKeys = map[string]bool{"cluster": true, "region": true, "log_group": true}
 var knownLedgerKeys = map[string]bool{"store": true, "external": true}
 
-// knownIntentKeys is IntentConfig's own known shape (UBI-41,
-// docs/intent-provider.md's own "Unknown-key checking, extended" note --
-// this is that extension, built). key_ref/vertex are themselves nested
-// objects (env; project/location) but, matching every other table here,
-// only checked one level deep -- no existing table's own unknown-key
-// check recurses further than its own immediate sub-keys either.
+// knownIntentKeys is IntentConfig's own known shape -- UBI-224 removed
+// adapter/model/key_ref/auth/vertex along with the intent-provider
+// drafting machinery they configured; show_defaults is the one key
+// with no drafting dependency (IntentConfig's own doc comment).
 var knownIntentKeys = map[string]bool{
-	"adapter": true, "model": true, "key_ref": true,
-	"auth": true, "vertex": true, "show_defaults": true,
+	"show_defaults": true,
 }
 
 // warnUnknownKeys checks one already-parsed layer against config's known

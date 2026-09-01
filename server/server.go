@@ -237,26 +237,6 @@ func (s *Server) providerArgs() []string {
 	return args
 }
 
-// intentProviderEnv returns the extra env vars a `ubx plan` subprocess
-// needs to transcribe a markdown-authored proposal via the configured
-// [intent] provider (docs/intent-provider.md) -- UBX_INTENT_PROVIDER_KEY
-// carries the real secret value (never logged, never written to disk),
-// under the one fixed name Config.IntentProviderKey's own doc comment
-// documents every watched repo's own .ubx/config [intent].key_ref.env
-// is expected to reference, so package server never needs to parse that
-// repo-owned TOML cascade itself to learn a repo-chosen name. Empty
-// when Config.IntentProviderKey is unset -- a real, legitimate
-// deployment for an operator who never accepts markdown-authored
-// proposals at all; `ubx plan`'s own existing resolveKeyRef error
-// surfaces as a real, posted PR/MR comment in that case, not a silent
-// failure.
-func (s *Server) intentProviderEnv() []string {
-	if s.cfg.IntentProviderKey == "" {
-		return nil
-	}
-	return []string{"UBX_INTENT_PROVIDER_KEY=" + s.cfg.IntentProviderKey}
-}
-
 // runPlanAndComment is core-flow steps 1 and 3: run `ubx plan` against
 // prNumber's own real head commit, and post/edit the result as a single
 // PR comment (comment.go's own edit-last mechanism) -- one real,
@@ -264,7 +244,7 @@ func (s *Server) intentProviderEnv() []string {
 // behavior, reused here rather than reimplemented.
 func (s *Server) runPlanAndComment(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int, repoDir, ledgerDir string) error {
 	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
 	}
@@ -369,7 +349,7 @@ func (s *Server) repoDirForGitLab(ctx context.Context, project string) (string, 
 // own real Notes API instead.
 func (s *Server) runPlanAndCommentGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, repoDir, ledgerDir string) error {
 	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
 	}
@@ -443,7 +423,7 @@ func (s *Server) repoDirForAzureDevOps(ctx context.Context, project, repositoryI
 // Azure DevOps' own real comment-thread API instead.
 func (s *Server) runPlanAndCommentAzureDevOps(ctx context.Context, api *adevops.Client, project, repositoryID string, prID int, repoDir, ledgerDir string) error {
 	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
 	}
@@ -512,7 +492,7 @@ func (s *Server) repoDirForBitbucketServer(ctx context.Context, projectKey, repo
 // against Bitbucket Server's own real flat-comment API instead.
 func (s *Server) runPlanAndCommentBitbucketServer(ctx context.Context, api *bbserver.Client, projectKey, repositorySlug string, prID int, repoDir, ledgerDir string) error {
 	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
 	}
@@ -597,7 +577,7 @@ func (s *Server) checkoutForBitbucketCloud(ctx context.Context, workspace, repoS
 // against Bitbucket Cloud's own real comment API instead.
 func (s *Server) runPlanAndCommentBitbucketCloud(ctx context.Context, api *bbcloud.Client, workspace, repoSlug string, prID int64, repoDir, ledgerDir string) error {
 	args := append([]string{"plan", "--ledger-dir", ledgerDir}, s.providerArgs()...)
-	result, err := runUbx(ctx, s.self, repoDir, s.intentProviderEnv(), args...)
+	result, err := runUbx(ctx, s.self, repoDir, nil, args...)
 	if err != nil {
 		return err
 	}

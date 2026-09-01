@@ -342,31 +342,6 @@ type Config struct {
 	// not a different host for this one.
 	BitbucketCloudAPIBaseURL string `yaml:"-"`
 
-	// IntentProviderKey: env UBX_SERVER_INTENT_PROVIDER_KEY, flag
-	// --intent-provider-key. Deliberately no YAML key, same
-	// "self-provisioned, masked variable, never literally in the file"
-	// reasoning GitHubWebhookSecret's own doc comment gives -- this is a
-	// real LLM/intent-provider API key (docs/intent-provider.md), not a
-	// VCS credential, but the same secrets discipline applies.
-	//
-	// Forwarded into every `ubx plan` subprocess (runPlanAndComment,
-	// runPlanAndCommentGitLab) as UBX_INTENT_PROVIDER_KEY, a fixed name
-	// every watched repo's own .ubx/config [intent].key_ref.env is
-	// expected to reference -- package server never parses that
-	// repo-owned TOML cascade itself to learn a repo-chosen env var
-	// name (cli/config.go's own IntentConfig.KeyRef.Env can be anything
-	// a given repo's operator chose), so this fixed name is the one real
-	// contract point between the two. Empty is a real, legitimate
-	// deployment state (an operator who never accepts markdown-authored,
-	// --from-doc-drafted proposals at all needs no intent-provider
-	// credential); in that case a markdown-authored PR's automatic plan
-	// step fails with `ubx plan`'s own existing, real error
-	// ("key_ref.env names %q, but that environment variable is unset or
-	// empty"), posted as a real PR/MR comment like any other plan
-	// failure -- not silently, and not this package's own separate error
-	// path to build.
-	IntentProviderKey string `yaml:"-"`
-
 	// ProviderSource: yaml `provider_source`, env UBX_SERVER_PROVIDER_SOURCE, flag --provider-source.
 	ProviderSource string `yaml:"provider_source"`
 	// ProviderVersion: yaml `provider_version`, env UBX_SERVER_PROVIDER_VERSION, flag --provider-version.
@@ -645,9 +620,6 @@ func applyEnv(cfg *Config) {
 	if v, ok := os.LookupEnv("UBX_SERVER_BITBUCKET_CLOUD_API_BASE_URL"); ok {
 		cfg.BitbucketCloudAPIBaseURL = v
 	}
-	if v, ok := os.LookupEnv("UBX_SERVER_INTENT_PROVIDER_KEY"); ok {
-		cfg.IntentProviderKey = v
-	}
 	if v, ok := os.LookupEnv("UBX_SERVER_PROVIDER_SOURCE"); ok {
 		cfg.ProviderSource = v
 	}
@@ -755,9 +727,6 @@ func applyFlags(cfg *Config, flags *pflag.FlagSet) error {
 	}
 	if flags.Changed("bitbucket-cloud-api-base-url") {
 		cfg.BitbucketCloudAPIBaseURL, _ = flags.GetString("bitbucket-cloud-api-base-url")
-	}
-	if flags.Changed("intent-provider-key") {
-		cfg.IntentProviderKey, _ = flags.GetString("intent-provider-key")
 	}
 	if flags.Changed("provider-source") {
 		cfg.ProviderSource, _ = flags.GetString("provider-source")

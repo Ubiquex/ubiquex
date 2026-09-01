@@ -92,7 +92,6 @@ defaults -- see the Configuration reference for the complete, real key mapping.`
 	cmd.Flags().String("bitbucket-cloud-bot-account-id", "", "the access token's own real, current account_id (Bitbucket Cloud accounts carry no username at all, and nickname/display_name are both user-changeable, so identity here is an account_id)")
 	cmd.Flags().String("bitbucket-cloud-webhook-secret", "", "the real, static secret configured on every Bitbucket Cloud webhook, verified via its own HMAC X-Hub-Signature header (required for Bitbucket Cloud support; also settable via UBX_SERVER_BITBUCKET_CLOUD_WEBHOOK_SECRET, never the YAML file)")
 	cmd.Flags().String("bitbucket-cloud-api-base-url", "", "override the Bitbucket Cloud API base URL (test-only; the real default is https://api.bitbucket.org/2.0)")
-	cmd.Flags().String("intent-provider-key", "", "forwarded to \"ubx plan\" as UBX_INTENT_PROVIDER_KEY (also settable via UBX_SERVER_INTENT_PROVIDER_KEY, never the YAML file) -- UBI-224 removed the markdown-authored (--from-doc) mode this once served; no known live consumer left, kept only pending a decision on removing it (see UBI-224's own Stage 1 report)")
 	cmd.Flags().String("provider-source", "", "provider source for plan/ship/status --drift, e.g. hashicorp/aws")
 	cmd.Flags().String("provider-version", "", "provider version to acquire")
 	cmd.Flags().String("provider-config", "", "JSON object configuring the provider (default \"{}\")")
