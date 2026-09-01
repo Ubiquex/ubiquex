@@ -549,8 +549,12 @@ func renderProposalCompact(out io.Writer, st *styler, ledger *core.Ledger, p *co
 // than a bare enum value. "promotion" sources (UBI-55) render the exact
 // human story docs/architecture.md's own "Environments & promotion"
 // names literally ("promoted from staging/8f3c…") — see docs/schema.md's
-// "Amendment: promotion evidence" for the field shape. Every other kind
-// (dialogue/manual_edit/issue) is unchanged from before this session.
+// "Amendment: promotion evidence" for the field shape. "restore" sources
+// (UBI-227) render just as directly ("restored ledger head 8f3c...") --
+// the same provenance-not-equality posture "promotion" already
+// established, applied to naming which earlier head a restore
+// proposal targeted. Every other kind (dialogue/manual_edit/issue) is
+// unchanged from before this session.
 func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent string) {
 	label := st.Purple("source:")
 	switch s.Kind {
@@ -565,6 +569,14 @@ func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent s
 		fmt.Fprintf(out, "%s%s cloudtrail_unattributed -- %s\n", indent, label, unattributedReason(s.Reason))
 	case "promotion":
 		fmt.Fprintf(out, "%s%s promoted from %s/%s\n", indent, label, s.Base, st.Hash(s.Ref))
+	case "restore":
+		// UBI-227: Ref is the target head this proposal restored -- a
+		// provenance claim, never an equality claim, exactly like
+		// "promotion" above (core/proposal.go's own doc comment). So
+		// months later, "ubx why" names which head this change restored
+		// directly, rather than someone having to infer it from a gap in
+		// history.
+		fmt.Fprintf(out, "%s%s restored ledger head %s\n", indent, label, st.Hash(s.Ref))
 	case "blueprint":
 		// UBI-74 Slice 6: Ref is always "<name>:<content_hash>"
 		// (blueprint.ExpandCalls' own stamping) -- split so the hash

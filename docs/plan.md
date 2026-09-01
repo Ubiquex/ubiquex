@@ -2,6 +2,37 @@
 
 ## Changelog
 
+- 2026-09-01 -- UBI-227 built: restore a stack to an earlier ledger head.
+  Design reported and confirmed before building: a restore is a normal
+  proposal (reuses `KindChange`, never `KindRevert` -- that enum slot
+  stays declared but unimplemented), evidenced by a new
+  `intent.sources[].kind: "restore"` value mirroring `"promotion"`'s own
+  provenance-not-equality posture. `core.Ledger` gains `ChainFrom`,
+  `FoldStateAt`, `AddressesAt` -- the existing `Chain`/`FoldState`/
+  `Addresses` become thin wrappers around these, one real head-
+  parameterized fold each rather than a second hand-kept walk (the shape
+  UBI-197 and UBI-233 both hit). Two new commands: `ubx history`
+  (read-only, `Chain()` newest head first) and `ubx restore <head>`
+  (resolves and writes a plan like `ubx propose`/`ubx plan`, changing
+  nothing until accepted and shipped). Restore itself classifies
+  create/modify/destroy against CURRENT live state, not the resolver --
+  confirmed live that `resolveOnce` never infers create-vs-modify, only
+  validates a caller-declared op. Three open questions from the ticket,
+  all resolved: cross-stack `$cross` pins replay frozen historical
+  literals, never re-resolved (the marker is already gone by the time a
+  value lands in ledger history); restore of a restore needs no special
+  handling, proven live via a real double-restore test, not just reasoned
+  about; `drift_revert` does not generalize (resource-scoped, modify-
+  only, always-current-head-target -- a different, narrower job). Two
+  real, pre-existing, restore-unrelated fakeprovider findings surfaced
+  during testing and reported separately, not folded into this ticket's
+  own scope: `ok-v6` mode does not round-trip a "tags" map attribute
+  identically between apply and read, and shipping a second real modify
+  against the same address fails with a genuine stale-observation error
+  -- both confirmed via isolated manual repros outside restore entirely.
+  Full detail: docs/schema.md's "Amendment: restore," docs/architecture.md's
+  "Restore" section. PR against `ubiquex` open (never self-merge).
+
 - 2026-08-27 -- UBI-194 built: publish and acquire the
   `ubx-provider-dynamic` binary itself. Every real `[providers.<name>]`
   pin published so far resolved a real schema snapshot but had nothing

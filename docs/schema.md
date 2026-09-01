@@ -2187,6 +2187,120 @@ value, the same "extensible list, new kind, no re-pin" discipline
 each already established. Nothing about `Proposal`'s own ratified
 hashed-content shape, domain prefix, or canonicalization rules changes.
 
+### Amendment: restore -- a new `intent.sources[].kind` value, no new proposal kind (2026-09-01, UBI-227)
+
+A restore (`ubx restore <head>`) is a normal proposal, never a rewind: the
+ledger stays append-only, and the proposal reuses `KindChange` exactly
+like any hand-authored or SDK-authored change -- `KindRevert` (declared in
+`core.ProposalKind`, never implemented, no `validateKind` case) stays
+untouched; restore does not become its first user. What makes a restore
+recognizable is a new `intent.sources[].kind` value, additive evidence in
+exactly the shape `"promotion"` already established above:
+
+```json
+{
+  "kind": "restore",
+  "ref": "<target head proposal id>"
+}
+```
+
+- `ref` is the target head's own proposal id -- the ledger head `ubx
+  restore` was asked to reproduce, in this same stack's own chain. No
+  `base` field (unlike `"promotion"`): a restore is always same-stack,
+  so there is no separate stack base to name.
+- No `content_hash` -- same reasoning as `"promotion"`: this names a
+  proposal id, not a file.
+- **A provenance claim, never an equality claim**, the identical posture
+  `"promotion"` already has: `core.Validate`/`core/resolver` never read
+  this field, never compare the restored proposal's values against the
+  target head's. `cli/why.go`'s `renderIntentSource` gains a `case
+  "restore":` rendering "restored ledger head `<short id>`" so a reviewer
+  -- or a session reading `ubx why` months later -- sees which head a
+  change actually restored, without inferring it from a gap in history.
+- **Evidence, not a pin.** Exactly like `"promotion"`, `core/resolver`
+  never reads a `restore` source at resolve time and it never activates
+  staleness detection -- the target head is a fixed historical fact, not
+  something that can go stale.
+
+**Exact-state semantics.** `ubx restore <head>` diffs the target head's
+own resource shape against the CURRENT live ledger state, both folded by
+the same real mechanism (see below), for the same stack:
+
+- An address present in the target head and present now, with a
+  different config: **modify**, back to the target head's own historical
+  value.
+- An address present in the target head and present now, with an
+  IDENTICAL config: left alone. No `Delta.Modifies` entry at all -- a
+  restore never emits a no-op modify.
+- An address present in the target head but absent now (destroyed since):
+  **create**, from the target head's own historical config.
+- An address present now but absent from the target head: **destroy**.
+  Blast radius names every one of these, and nothing ships without a
+  signature -- `--confirm-destroys` at `ubx accept` time, the exact same
+  standing safety mechanism every other destructive proposal already
+  requires (docs/schema.md's own "Amendment: destroys," above). Restore
+  gets no exemption and needed no new mechanism here.
+
+Both foldable state and the live address set have to be computable AS OF
+an arbitrary earlier head, not just the current one -- `core.Ledger`
+gains `ChainFrom(headID)`, `FoldStateAt(headID, addr)`, and
+`AddressesAt(headID, stack, includeTombstoned)`, generalizing the
+existing `Chain()`/`FoldState()`/`Addresses()`, which become thin
+wrappers around the new, head-parameterized versions
+(`head, _ := l.Head(); return l.ChainFrom(head)`, and likewise for the
+other two) rather than a second, hand-kept walk. One real fold each,
+never two implementations that can silently diverge -- the shape UBI-197
+and UBI-233 both hit.
+
+**Cross-stack pins replay frozen literals, never re-resolved.** A
+`$cross` reference is already resolved to a literal value by the time
+it's recorded in a historical proposal's own applied state (the marker
+itself is gone, docs/architecture.md's own "pinned imports, never live
+pointers"). `FoldStateAt` returns that already-resolved literal exactly
+as recorded; restore replays it unchanged. A neighbor stack's head having
+moved on since the target head was originally shipped has no bearing --
+restore never re-resolves a `$cross`, so there is nothing to go stale.
+
+**Restore of a restore needs no special handling.** The ledger ends up
+holding two proposals that each claim to restore a shape (or more, if
+restored again); `ChainFrom`/`AddressesAt`/`FoldStateAt` walk however many
+proposals are actually in the chain, restore-sourced or not -- there is no
+"is this head itself a restore" branch anywhere in the fold. Proven live,
+not just reasoned about: restoring to a head, then restoring forward to a
+LATER head that predates the first restore's own shipped head, lands on
+the exact same shape a direct restore to that later head would (a third,
+unshipped restore to the same later head after the fact resolves to a
+genuinely empty delta).
+
+**`drift_revert` does not generalize to this.** `KindDriftRevert` is
+resource-scoped (one address per proposal), modify-only (never creates or
+destroys), and its target is always "whatever the ledger currently
+believes," never an arbitrary earlier head -- a fundamentally narrower
+shape built for a different job (reverting one resource's observed drift
+back to recorded truth), not a smaller version of restore.
+
+**Two commands, not one -- inspecting history and shipping an earlier
+state are different things and only one of them changes infrastructure.**
+`ubx history` is read-only: `Chain()`, newest head first, one line per
+proposal (kind, blast-radius summary, who accepted it) -- the same UBI-20
+read-only contract every other projection command already has, 0 on any
+successful listing including an empty one. `ubx restore <head>` is the
+write side: resolves and writes a plan exactly like `ubx propose`/`ubx
+plan` do, changing nothing until it is itself accepted and shipped.
+
+**No `schema_version` bump.** `"restore"` is a new, purely additive
+`intent.sources[].kind` value -- the same "extensible list, no re-pin"
+discipline `"promotion"`/`"intent_provider"`/`"cloudtrail"` etc. each
+already established. Nothing about `Proposal`'s own ratified hashed-
+content shape, domain prefix, or canonicalization rules changes. A
+proposal recorded before this amendment simply has no `restore`-kind
+source, never ambiguously.
+
+**Real code**: `core/state.go` (`ChainFrom`, `FoldStateAt`,
+`foldStateOverChain`), `core/addresses.go` (`AddressesAt`,
+`addressesOverChain`), `cli/restore.go` (new), `cli/history.go` (new),
+`cli/why.go`'s `renderIntentSource` gains the `case "restore":` above.
+
 ## Canonical hashing — RATIFIED v1
 
 > See "Ratification — Hashing (2026-07-10)" below. This section is no longer

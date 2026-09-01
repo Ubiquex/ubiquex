@@ -157,7 +157,7 @@ type Question struct {
 // document/intent_provider/dialogue sources the fresh re-resolution
 // already produced, never replacing them -- see cli/promote.go.
 type IntentSource struct {
-	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed | document | intent_provider | promotion
+	Kind        string `json:"kind"` // dialogue | manual_edit | issue | cloudtrail | cloudtrail_unattributed | gcp_audit | audit_unattributed | document | intent_provider | promotion | restore
 	Ref         string `json:"ref,omitempty"`
 	ContentHash string `json:"content_hash,omitempty"`
 
