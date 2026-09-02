@@ -2626,3 +2626,44 @@ so no render-time duplicate was ever baked in.
 
 All six providers' artifacts stay in `ubiquex-docs` too, same posture
 as kubernetes — their own Mintlify pages still read them.
+
+**Slice 6 (continued): `ubx-provider-runbook` reshaped for the new
+structure, plan reported and approved before rewriting.**
+`ubx-provider-runbook#14` (not merged). Onboarding a provider used to
+generate pages and artifacts into `ubiquex-docs` — no longer where they
+live. `onboard-provider.md`'s own hop 6 gains a new
+`--schema-pin-version` flag; hop 7 becomes "bring the provider onto the
+docs site" (verify the docs release, add one config entry to
+`ubx-docs-providers`, confirm it renders live); a new hop 8 names
+`write-artifacts`/`regen-mintlify-docs` (renamed from `regen-docs`) as
+explicitly optional polish, never a new provider's own default path.
+`write-artifacts.md` now targets `ubx-sdk-<provider>`'s own
+`artifacts/<provider>/` by default, gains a step regenerating the
+codegen-ready export after every batch. `TRAPS.md` states plainly, not
+just as a note, that its own "hardcoded provider allowlist" trap
+category (six real dicts DigitalOcean hit) does not apply to the
+SDK-repo target at all — confirmed live, not assumed: a genuinely
+unregistered fake provider name ran clean through the new path with
+zero failures.
+
+Real, adjacent code change in the same pass, `ubiquex#65` (not merged):
+`sdk/codegen/templates/repo/publish.yml` — the actual template `ubx sdk
+init-repo` writes — never carried the docs-artifact step at all; every
+one of the seven providers migrated this arc got it added by hand,
+same class of gap as the missing `deno.json`/`build-npm.mjs` UBI-222
+already fixed here once. Templated now (`Scaffold` gains a
+`schemaPinVersion` parameter, threaded from a new required CLI flag),
+verified with a real, live `ubx sdk init-repo` run against a scratch
+provider, not just the unit test. Found and fixed the same pass, real
+and adjacent, not scope creep: the template's own version-bump step
+still pushed directly to `main` — the exact shape UBI-225 already fixed
+in every real provider repo after branch protection made that fail
+outright. A newly scaffolded provider would have hit that failure on
+its own first real version bump.
+
+`ubiquex-docs#coverage_check.py` (committed directly, that repo's own
+convention) gains `--artifacts-root`, closing the "unknown provider"
+failure at its own real source rather than only working around it
+downstream — `check_provider` now falls back to the provider's own name
+when it has no `providers.py` registry entry, instead of a hard
+`KeyError`.
