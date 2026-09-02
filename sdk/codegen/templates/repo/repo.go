@@ -44,6 +44,20 @@ type scaffoldData struct {
 	SourceNote      string
 }
 
+// docsArtifactPlaceholder/schemaPinVersionPlaceholder are publish.yml's
+// own real, literal tokens for the docs-artifact step (UBI-240) --
+// deliberately distinct from "kubernetes" (the substitution source for
+// every other real occurrence in this file, see below): a blanket bare
+// "kubernetes" replace would also mangle this file's own real
+// historical reference to three OTHER providers ("datadog/github/
+// kubernetes each had this exact shape"), which must survive
+// untouched. These two tokens appear nowhere else in the template, so
+// replacing them is unambiguous.
+const (
+	docsArtifactPlaceholder     = "__PROVIDER__"
+	schemaPinVersionPlaceholder = "__SCHEMA_PIN_VERSION__"
+)
+
 // Scaffold returns path (relative to the repo root) -> content for
 // every one-time file a new ubx-sdk-<shortName> repo needs that
 // `ubx sdk gen` itself does not produce.
@@ -58,7 +72,18 @@ type scaffoldData struct {
 // argument, not derived here: what's unusual about a given provider's
 // own real source (Datadog's own real v1/v2 API merge, for one
 // confirmed example) is a judgment call, not something this package
-// can infer from a provider name alone.
+// can infer from a provider name alone. schemaPinVersion is the
+// [dynamic_providers.<shortName>]'s own real, current pinned `version`
+// value in sdk/providers/.ubx/config at the moment this command runs
+// (UBI-240) -- onboard-provider's own hop 5 always switches the pin to
+// its pinned source/version shape before hop 6 (this command) runs, so
+// this value is always real and already known by the caller, never
+// guessed here. A provider whose own upstream has no discrete
+// pinnable release (Kubernetes is the one real exception in this org)
+// needs the generated publish.yml's own schema-dump step hand-adjusted
+// afterward; this parameter still takes the pin version that would
+// otherwise apply, left unused in the generated file's own comment
+// trail for that one real case.
 //
 // LICENSE and build-npm.mjs are embedded verbatim -- confirmed
 // byte-identical across every existing provider repo before being
@@ -66,8 +91,11 @@ type scaffoldData struct {
 // ubx-sdk-<name>/sdk_<name> occurrence substituted via plain string
 // replacement, never Go's own {{ }} template syntax -- this file's
 // real content is full of literal GitHub Actions ${{ }} expressions
-// that would collide with it.
-func Scaffold(shortName, providerDisplay, sourceNote string) (map[string]string, error) {
+// that would collide with it. The docs-artifact step's own bare
+// provider-name and schema-pin-version occurrences use two distinct,
+// unambiguous literal tokens (docsArtifactPlaceholder,
+// schemaPinVersionPlaceholder) for the same reason.
+func Scaffold(shortName, providerDisplay, sourceNote, schemaPinVersion string) (map[string]string, error) {
 	license, err := files.ReadFile("LICENSE")
 	if err != nil {
 		return nil, fmt.Errorf("sdk/codegen/templates/repo: %w", err)
@@ -92,6 +120,8 @@ func Scaffold(shortName, providerDisplay, sourceNote string) (map[string]string,
 	publish = strings.ReplaceAll(publish, "sdk-kubernetes", "sdk-"+shortName)
 	publish = strings.ReplaceAll(publish, "sdk_kubernetes", "sdk_"+shortName)
 	publish = strings.ReplaceAll(publish, "kubernetes-go", shortName+"-go")
+	publish = strings.ReplaceAll(publish, docsArtifactPlaceholder, shortName)
+	publish = strings.ReplaceAll(publish, schemaPinVersionPlaceholder, schemaPinVersion)
 
 	data := scaffoldData{ShortName: shortName, ProviderDisplay: providerDisplay, SourceNote: sourceNote}
 	claude, err := renderTemplate("claude.md.tmpl", data)

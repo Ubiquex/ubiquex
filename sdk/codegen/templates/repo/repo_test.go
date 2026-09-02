@@ -6,7 +6,7 @@ import (
 )
 
 func TestScaffold_RealValues(t *testing.T) {
-	files, err := Scaffold("digitalocean", "DigitalOcean", "OpenAPI-sourced via `ubx-provider-dynamic`")
+	files, err := Scaffold("digitalocean", "DigitalOcean", "OpenAPI-sourced via `ubx-provider-dynamic`", "1.0.1")
 	if err != nil {
 		t.Fatalf("Scaffold: %v", err)
 	}
@@ -45,6 +45,30 @@ func TestScaffold_RealValues(t *testing.T) {
 	mustContain(t, publish, "datadog/github/kubernetes each had this exact")
 	mustNotContain(t, publish, "ubx-sdk-kubernetes")
 	mustNotContain(t, publish, "ubx_sdk_kubernetes")
+
+	// UBI-240: the docs-artifact step's own real substitution points --
+	// every __PROVIDER__ occurrence replaced with the real short name,
+	// every __SCHEMA_PIN_VERSION__ occurrence replaced with the real
+	// pin version, neither placeholder token left behind.
+	mustContain(t, publish, "[dynamic_providers.digitalocean]")
+	mustContain(t, publish, `source = "ubiquex/digitalocean"`)
+	mustContain(t, publish, `version = "1.0.1"`)
+	mustContain(t, publish, "sdk gen --only digitalocean")
+	mustContain(t, publish, `cp -r "${{ runner.temp }}/schema-dump/digitalocean" "$staging/schema"`)
+	mustContain(t, publish, `cp "artifacts/digitalocean/descriptions.json"`)
+	mustContain(t, publish, `'provider': 'digitalocean',`)
+	mustNotContain(t, publish, "__PROVIDER__")
+	mustNotContain(t, publish, "__SCHEMA_PIN_VERSION__")
+
+	// UBI-225: the version bump opens a PR, it never pushes to main
+	// directly -- the template's own prior "Commit version bump" step
+	// (a real, direct `git push origin main`) predated this fix and
+	// would have failed outright (GH006) against any branch-protected
+	// new repo.
+	mustContain(t, publish, "Open a PR for the version bump")
+	mustContain(t, publish, "gh pr create")
+	mustNotContain(t, publish, "Commit version bump")
+	mustNotContain(t, publish, "git push origin main")
 
 	buildNPM := files[".github/scripts/build-npm.mjs"]
 	mustContain(t, buildNPM, "UBX_SDK_RUNTIME_VERSION")
