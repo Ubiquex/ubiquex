@@ -95,27 +95,21 @@ version = "3.0.1"
 source = "ubiquex/github"
 version = "1.0.1"
 
-# UBI-102 -- see the datadog entry's own doc comment for the full real
-# design record. Migration closes a real, pre-existing gap here: 95
-# real entries in ubiquex-docs' own comprehensive corpus were never in
-# the local file this replaces -- genuine content, not new authoring.
-[dynamic_providers.github.descriptions]
-source = "ubiquex/github"
-version = "1.0.1"
+# UBI-240 slice 6: the [dynamic_providers.github.descriptions] pin that
+# used to live here is retired -- the corpus now lives inside
+# ubx-sdk-github itself (artifacts/github/). See the kubernetes entry's
+# own comment above, and UBI-102's own comment thread, for the full
+# finding.
 
 [dynamic_providers.datadog]
 source = "ubiquex/datadog"
 version = "1.0.1"
 
-# UBI-102: pilot -- the replacement for this provider's own local,
-# checked-in sdk/providers/descriptions/datadog.json. Resolved via
-# provider.AcquireDescriptions (real, tagged release, ubiquex-docs'
-# own repo, verified byte-identical against the file it replaces
-# before landing). See docs/ (moved from sdk/providers/docs) for the
-# full real design record once the migration finishes.
-[dynamic_providers.datadog.descriptions]
-source = "ubiquex/datadog"
-version = "1.0.0"
+# UBI-240 slice 6: the [dynamic_providers.datadog.descriptions] pin
+# that used to live here is retired -- the corpus now lives inside
+# ubx-sdk-datadog itself (artifacts/datadog/). See the kubernetes
+# entry's own comment above, and UBI-102's own comment thread, for the
+# full finding.
 
 [dynamic_providers.aws]
 source = "ubiquex/aws"
@@ -141,35 +135,21 @@ version = "1.0.0"
 source = "ubiquex/azure"
 version = "1.0.1"
 
-# UBI-102: replaces this provider's own local, checked-in
-# sdk/providers/descriptions/azure.json. ubiquex-docs' own corpus was
-# authored against the raw (doubled) wire; the pinned corpus has
-# already had azure_corrected_wire applied at export time so it keys
-# identically to this file's own (already-corrected) keys and to what
-# ubx sdk gen actually generates. Zero real gap: all 851 sdk entries
-# covered, exact text match, 70972 net-new entries. See docs/ for the
-# full design record.
-[dynamic_providers.azure.descriptions]
-source = "ubiquex/azure"
-version = "1.0.0"
+# UBI-240 slice 6: the [dynamic_providers.azure.descriptions] pin that
+# used to live here is retired -- the corpus now lives inside
+# ubx-sdk-azure itself (artifacts/azure/). See the kubernetes entry's
+# own comment above, and UBI-102's own comment thread, for the full
+# finding.
 
 [dynamic_providers.google]
 source = "ubiquex/google"
 version = "1.0.1"
 
-# UBI-102: replaces this provider's own local, checked-in
-# sdk/providers/descriptions/google.json. That file's 541 sdk-only keys
-# were a stale artifact of an over-simplified plural-to-singular
-# stripping bug in ubx-provider-dynamic's own discoverydoc.singularize
-# ("policies" -> "policie", "prefixes" -> "prefixe" for 14 real
-# resource types), already fixed there (commit be0fd82, unrelated
-# prior work) -- every one resolves to content already present in
-# ubiquex-docs' own corpus under the correct name. Confirmed zero
-# impact on already-published ubx-sdk-google (go/ts/py): none contain
-# the broken names. See docs/ for the full design record.
-[dynamic_providers.google.descriptions]
-source = "ubiquex/google"
-version = "1.0.1"
+# UBI-240 slice 6: the [dynamic_providers.google.descriptions] pin that
+# used to live here is retired -- the corpus now lives inside
+# ubx-sdk-google itself (artifacts/google/). See the kubernetes entry's
+# own comment above, and UBI-102's own comment thread, for the full
+# finding.
 
 # UBI-216/UBI-222: seventh provider, DigitalOcean -- proving case for
 # the ubx-provider-runbook onboarding runbook, driven end to end through
