@@ -2472,11 +2472,9 @@ new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
 
 **UBI-240 (provider docs site, off Mintlify onto Next.js): slices 1 and
-2 DONE and merged, slices 3, 4, and 5 open (`ubx-docs-providers#3`/`#4`,
-`ubx-sdk-aws#35`, `ubx-sdk-azure#32`, `ubx-sdk-google#34`,
-`ubx-sdk-datadog#28`, `ubx-sdk-github#27`, `ubx-sdk-digitalocean#10`,
-`ubx-sdk-kubernetes#29`, `ubiquex#62`, none merged — never self-merge).**
-New repo
+2 DONE and merged, slices 3 through 6 open — every real PR listed under
+each slice's own paragraph below, none merged, never self-merge.** New
+repo
 `ubx-docs-providers`, created this arc. Slice 1 (`ubx-docs-providers#1`,
 `ubx-sdk-kubernetes#28`, merged) proved the fetch/render/version
 mechanism: landing page, provider home, one resource page, one version.
@@ -2591,6 +2589,40 @@ Deliberate deviation from the stated plan, flagged rather than silently
 done: `artifacts/kubernetes/` stays in `ubiquex-docs` for now — 169
 real, live Mintlify pages and that repo's own coverage/regen tooling
 still read it. No longer canonical, but deleting it is retiring those
-pages, a separate decision. Azure, Google, Datadog, GitHub,
-DigitalOcean remain on the old ubiquex-docs-hosted artifacts,
-unmigrated.
+pages, a separate decision.
+
+**Slice 6: the remaining six providers, same pattern, same
+verification bar.** AWS, Azure, Google, Datadog, GitHub, DigitalOcean
+all migrated. Described-field count per provider, real
+regen before → after: kubernetes 0→12,165 (slice 5), aws 0→30,601,
+azure 0→71,696, google 0→33,034, datadog 0→437, github 0→3,386,
+digitalocean 0→86. Every provider's byte-identical check passed
+against currently published code.
+
+**One real qualification to "0 before," found for AWS specifically,
+stated plainly rather than smoothed over**: AWS's own `hash-watch.yml`
+is structurally different from the other five — it regenerates from
+the real central `sdk/providers/.ubx/config`, not a scratch config, and
+that config carried a genuinely live `.descriptions` pin. AWS's real,
+current, automated regen already applied the corpus correctly before
+this migration (1,433 published AI-described files; a fresh regen
+through the same pin reproduces `ecs/service.go` byte-identical). This
+migration removes the network/pin dependency for AWS, it doesn't fix a
+silent gap the way it did for kubernetes/github/digitalocean — reported
+honestly rather than forced into the same "0 before, broken" framing.
+Sequencing handled carefully: `ubx-sdk-aws#36` switches `hash-watch.yml`
+to an explicit local `--descriptions-dir` first (a safe no-op while the
+central pin still exists, per `resolveDescriptionsDir`'s own real
+precedence); `ubiquex#64` (the pin removal) must merge after it, never
+before, or AWS's regen goes dark in between.
+
+Two real, separate findings: Google's `export_raw_descriptions.py`
+needs `provider_display="GCP"`, not `providers.py`'s own registered
+`"Google Cloud"` — the published code's own qualifier suffixes read
+"...computed by GCP.", confirmed by a byte-identical diff failing until
+corrected. AWS and Azure's own corpora were confirmed (not assumed) to
+need no qualifier-stripping at all — their text was never MDX-scraped,
+so no render-time duplicate was ever baked in.
+
+All six providers' artifacts stay in `ubiquex-docs` too, same posture
+as kubernetes — their own Mintlify pages still read them.
