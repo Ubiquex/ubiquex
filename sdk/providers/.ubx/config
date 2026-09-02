@@ -80,17 +80,16 @@
 source = "ubiquex/kubernetes"
 version = "3.0.1"
 
-# UBI-102: replaces this provider's own local, checked-in
-# sdk/providers/descriptions/kubernetes.json. Resolved via
-# provider.AcquireDescriptions, ubiquex-docs' own repo, verified against
-# an isolated with/without-pin diff on the identical current schema
-# before landing. 68 keys existed in both corpora with differing text;
-# docs' text wins in every case (the reviewed, rendered corpus, not the
-# migrated one). 1065 entries are net new. See docs/ for the full design
-# record.
-[dynamic_providers.kubernetes.descriptions]
-source = "ubiquex/kubernetes"
-version = "1.0.1"
+# UBI-240 slice 5: the [dynamic_providers.kubernetes.descriptions] pin
+# that used to live here is retired, not just removed -- the corpus it
+# pointed at now lives inside ubx-sdk-kubernetes itself
+# (artifacts/kubernetes/), so there is no cross-repo drift left for a
+# pin to bridge. ubx-sdk-kubernetes's own hash-watch.yml -- the workflow
+# that actually keeps the published SDK current -- never invoked this
+# pin at all (its own regen step builds a separate, schema-only scratch
+# config); this migration is what makes description enrichment actually
+# reach a real regen for the first time. See UBI-102's own comment
+# thread for the full finding.
 
 [dynamic_providers.github]
 source = "ubiquex/github"
