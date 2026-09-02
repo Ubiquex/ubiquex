@@ -34,10 +34,11 @@ import (
 // exists (a real `ubx sdk gen --lang go` output) and go.sum does not.
 func newSDKInitRepoCmd() *cobra.Command {
 	var (
-		out             string
-		shortName       string
-		providerDisplay string
-		sourceNote      string
+		out              string
+		shortName        string
+		providerDisplay  string
+		sourceNote       string
+		schemaPinVersion string
 	)
 
 	cmd := &cobra.Command{
@@ -50,11 +51,15 @@ sdk/go/go.sum via "go mod tidy" if sdk/go/go.mod already exists and go.sum
 does not. Every file that already exists is left untouched, reported as
 skipped rather than silently overwritten.
 
+publish.yml already includes the real docs-artifact step (UBI-240) --
+no separate, hand-added step needed the way every provider onboarded
+before this got.
+
 deno.json is NOT written here -- ubx sdk gen --lang ts already writes it
 directly as real, per-provider generated content (its own "exports" map),
 not scaffold.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSDKInitRepo(cmd.Context(), cmd, out, shortName, providerDisplay, sourceNote)
+			return runSDKInitRepo(cmd.Context(), cmd, out, shortName, providerDisplay, sourceNote, schemaPinVersion)
 		},
 	}
 
@@ -62,7 +67,8 @@ not scaffold.`,
 	cmd.Flags().StringVar(&shortName, "short-name", "", `the real, published SDK repo's own short name (e.g. "digitalocean") -- matches [dynamic_providers.<name>] in ubiquex's own sdk/providers/.ubx/config`)
 	cmd.Flags().StringVar(&providerDisplay, "provider-display", "", `the real, human display name (e.g. "DigitalOcean")`)
 	cmd.Flags().StringVar(&sourceNote, "source-note", "", "one real, honest sentence describing this provider's own schema source and format (e.g. \"OpenAPI-sourced via `ubx-provider-dynamic`\") -- a deliberate, per-provider judgment call, not inferred from the name")
-	for _, name := range []string{"out", "short-name", "provider-display", "source-note"} {
+	cmd.Flags().StringVar(&schemaPinVersion, "schema-pin-version", "", `the [dynamic_providers.<short-name>] entry's own real, current pinned "version" value in sdk/providers/.ubx/config -- baked into the generated publish.yml's own docs-artifact step (UBI-240); onboard-provider's own hop 5 always switches to this pinned shape before this command runs, so the real value is already known, never guessed here`)
+	for _, name := range []string{"out", "short-name", "provider-display", "source-note", "schema-pin-version"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
 			panic(err)
 		}
@@ -70,8 +76,8 @@ not scaffold.`,
 	return cmd
 }
 
-func runSDKInitRepo(ctx context.Context, cmd *cobra.Command, out, shortName, providerDisplay, sourceNote string) error {
-	files, err := repotemplate.Scaffold(shortName, providerDisplay, sourceNote)
+func runSDKInitRepo(ctx context.Context, cmd *cobra.Command, out, shortName, providerDisplay, sourceNote, schemaPinVersion string) error {
+	files, err := repotemplate.Scaffold(shortName, providerDisplay, sourceNote, schemaPinVersion)
 	if err != nil {
 		return err
 	}

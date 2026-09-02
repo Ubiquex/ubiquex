@@ -41,6 +41,19 @@ name: publish
 # Requires PYPI_TOKEN and NPM_TOKEN repo secrets (Settings -> Secrets
 # and variables -> Actions) -- dedicated CI tokens, scoped to this
 # repo/package.
+#
+# UBI-240: a docs artifact also publishes alongside the three
+# registries, a real GitHub Release (v$new_version, distinct from the
+# Go module's own sdk/go/v$new_version) carrying docs.tar.gz +
+# SHA256SUMS -- the real schema dump (ubx sdk gen --dump-ir against the
+# pinned, already-published ubx-schema-<name> snapshot) plus the
+# descriptions/intros/categories/exclusions artifacts this repo's own
+# artifacts/<name>/ directory carries. Inputs for ubx-docs-providers to
+# render at build time, never rendered pages themselves. Once this
+# release exists, add an entry for this provider to
+# ubx-docs-providers' own config/providers.json (see that repo's own
+# README) -- a separate, one-time step this workflow does not do for
+# you.
 
 on:
   workflow_dispatch: {}
@@ -48,6 +61,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  pull-requests: write
 
 jobs:
   publish:
@@ -236,7 +250,120 @@ jobs:
             git push origin "$v"
           fi
 
-      - name: Commit version bump
+      - name: Refuse to republish an existing docs release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          if gh release view "v$v" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "v$v already has a docs release -- nothing to do" >&2
+            exit 1
+          fi
+
+      - name: Check out ubiquex and ubx-provider-dynamic (to build ubx and dump the real schema)
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --recurse-submodules \
+            "https://github.com/Ubiquex/ubiquex.git" \
+            "${{ runner.temp }}/ubiquex-src"
+          git clone --depth=1 \
+            "https://github.com/Ubiquex/ubx-provider-dynamic.git" \
+            "${{ runner.temp }}/ubx-provider-dynamic-src"
+
+      - name: Set up Go (for ubx and the schema dump -- publish.yml otherwise never needs it)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ runner.temp }}/ubiquex-src/go.mod
+
+      - name: Build ubx
+        run: |
+          set -euo pipefail
+          go build -C "${{ runner.temp }}/ubiquex-src" -o "${{ runner.temp }}/ubx" ./cmd/ubx
+          "${{ runner.temp }}/ubx" version
+
+      - name: Dump the real, pinned __PROVIDER__ schema
+        # Uses the already-pinned, already-published ubx-schema-__PROVIDER__
+        # snapshot (matches sdk/providers/.ubx/config's own real
+        # [dynamic_providers.__PROVIDER__] entry in ubiquex exactly), not a
+        # live fetch. A provider whose own upstream has no discrete
+        # pinnable release (Kubernetes's own OpenAPI spec, fetched
+        # unpinned from a live branch tip, is the one real exception in
+        # this org) needs this step hand-adjusted to a schema_source/
+        # schema_url live-fetch shape instead -- see ubx-sdk-kubernetes's
+        # own publish.yml for that real, working shape.
+        env:
+          UBX_PROVIDER_DYNAMIC_REPO: ${{ runner.temp }}/ubx-provider-dynamic-src
+        run: |
+          set -euo pipefail
+          gendir="${{ runner.temp }}/ubxgen"
+          mkdir -p "$gendir/.ubx" "${{ runner.temp }}/schema-dump" "${{ runner.temp }}/gen-unused"
+          cat > "$gendir/.ubx/config" <<EOF
+          [dynamic_providers.__PROVIDER__]
+          source = "ubiquex/__PROVIDER__"
+          version = "__SCHEMA_PIN_VERSION__"
+          EOF
+          (cd "$gendir" && "${{ runner.temp }}/ubx" sdk gen --only __PROVIDER__ \
+            --dump-ir "${{ runner.temp }}/schema-dump" \
+            --out "${{ runner.temp }}/gen-unused" --lang go)
+
+      - name: Package the docs artifact
+        # artifacts/__PROVIDER__/ lives in this repo's own checkout, so
+        # the descriptions/intros/categories/exclusions files this step
+        # needs are already sitting in the working tree from this job's
+        # first checkout step -- no second clone.
+        run: |
+          set -euo pipefail
+          staging="${{ runner.temp }}/docs-artifact"
+          mkdir -p "$staging/artifacts"
+          cp -r "${{ runner.temp }}/schema-dump/__PROVIDER__" "$staging/schema"
+          cp "artifacts/__PROVIDER__/descriptions.json" \
+             "artifacts/__PROVIDER__/intros.json" \
+             "artifacts/__PROVIDER__/categories.json" \
+             "artifacts/__PROVIDER__/exclusions.json" \
+             "$staging/artifacts/"
+          r="$(find "$staging/schema" -maxdepth 1 -name '*.json' ! -name 'data_*' ! -name 'schema.json' ! -name 'PROVENANCE.json' | wc -l | tr -d ' ')"
+          d="$(find "$staging/schema" -maxdepth 1 -name 'data_*.json' | wc -l | tr -d ' ')"
+          v="${{ steps.bump.outputs.new_version }}"
+          python3 -c "
+          import json
+          json.dump({
+              'schema_version': 1,
+              'provider': '__PROVIDER__',
+              'sdk_version': '$v',
+              'resource_count': $r,
+              'data_source_count': $d,
+          }, open('$staging/manifest.json', 'w'), indent=2)
+          "
+          tar czf "${{ runner.temp }}/docs.tar.gz" -C "$staging" .
+          sha256sum "${{ runner.temp }}/docs.tar.gz" > "${{ runner.temp }}/SHA256SUMS"
+
+      - name: Create the docs release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          gh release create "v$v" "${{ runner.temp }}/docs.tar.gz" "${{ runner.temp }}/SHA256SUMS" \
+            --repo "${{ github.repository }}" \
+            --title "v$v" \
+            --notes "Docs artifact for ubx-sdk-__PROVIDER__ v$v (UBI-240): the real schema dump (ubx sdk gen --dump-ir against the pinned, already-published ubx-schema-__PROVIDER__ snapshot) plus the descriptions/intros/categories/exclusions artifacts. Inputs for ubx-docs-providers to render at build time, not rendered pages themselves."
+
+      - name: Verify the docs release is real and carries exactly the two expected assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.new_version }}"
+          gh release view "v$v" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | sort > "${{ runner.temp }}/got-docs-assets"
+          printf '%s\n' "SHA256SUMS" "docs.tar.gz" | sort > "${{ runner.temp }}/want-docs-assets"
+          if ! diff -u "${{ runner.temp }}/want-docs-assets" "${{ runner.temp }}/got-docs-assets"; then
+            echo "docs release v$v does not have exactly the two expected assets" >&2
+            exit 1
+          fi
+          echo "v$v docs release published with exactly the two expected assets."
+
+      - name: Open a PR for the version bump
         # Deliberately runs LAST, after npm + PyPI + the Go tag have all
         # already succeeded -- moved here from right after the in-place
         # file bump (UBI-143). Previously this committed and pushed the
@@ -247,16 +374,32 @@ jobs:
         # every publish step above has already succeeded means a
         # partial failure leaves nothing committed, so main can never
         # claim a release that does not exist.
+        #
+        # UBI-225: opens a PR rather than pushing to main directly --
+        # main is branch-protected, so a direct push here always fails
+        # with GH006. Every registry already has the real content by
+        # the time this runs, so a human merging the bump PR late costs
+        # nothing but a brief window where the registries are ahead of
+        # what main claims, never the other way around. Never
+        # self-merged.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if git diff --quiet -- sdk/typescript/package.json sdk/typescript/deno.json sdk/python/pyproject.toml; then
             echo "already at ${{ steps.bump.outputs.new_version }} -- nothing to commit"
           else
+            v="${{ steps.bump.outputs.new_version }}"
+            branch="version-bump/v$v"
             git config user.name "ubx-bot"
             git config user.email "actions@users.noreply.github.com"
+            git checkout -b "$branch"
             git add sdk/typescript/package.json sdk/typescript/deno.json sdk/python/pyproject.toml
-            git commit -m "sdk: bump to v${{ steps.bump.outputs.new_version }}"
-            git push origin main
+            git commit -m "sdk: bump to v$v"
+            git push origin "$branch"
+            gh pr create --title "sdk: bump to v$v" \
+              --body "Every registry already has v$v (this workflow only opens this PR after every publish step above succeeds). Merging this brings main's own committed version files in line with what is already published." \
+              --base main --head "$branch"
           fi
 
       - name: Verify registries agree
