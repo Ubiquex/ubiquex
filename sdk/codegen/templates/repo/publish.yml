@@ -309,9 +309,18 @@ jobs:
 
       - name: Package the docs artifact
         # artifacts/__PROVIDER__/ lives in this repo's own checkout, so
-        # the descriptions/intros/categories/exclusions files this step
-        # needs are already sitting in the working tree from this job's
-        # first checkout step -- no second clone.
+        # the descriptions/intros/categories files this step needs are
+        # already sitting in the working tree from this job's first
+        # checkout step -- no second clone. exclusions.json is handled
+        # separately, tolerant of being missing -- confirmed live,
+        # UBI-222: not every provider has one yet (ubx-sdk-digitalocean's
+        # own real, published copy genuinely has none), ubx-docs-providers
+        # never reads this file today, so its absence is not a reason to
+        # fail a real release. A prior version of this template bundled
+        # it into the same required cp as the other three, which would
+        # have hard-failed this exact step the first time a genuinely new
+        # provider reached it with no exclusions.json of its own -- caught
+        # before it ever ran for real, not after.
         run: |
           set -euo pipefail
           staging="${{ runner.temp }}/docs-artifact"
@@ -320,8 +329,9 @@ jobs:
           cp "artifacts/__PROVIDER__/descriptions.json" \
              "artifacts/__PROVIDER__/intros.json" \
              "artifacts/__PROVIDER__/categories.json" \
-             "artifacts/__PROVIDER__/exclusions.json" \
              "$staging/artifacts/"
+          cp "artifacts/__PROVIDER__/exclusions.json" \
+             "$staging/artifacts/" 2>/dev/null || true
           r="$(find "$staging/schema" -maxdepth 1 -name '*.json' ! -name 'data_*' ! -name 'schema.json' ! -name 'PROVENANCE.json' | wc -l | tr -d ' ')"
           d="$(find "$staging/schema" -maxdepth 1 -name 'data_*.json' | wc -l | tr -d ' ')"
           v="${{ steps.bump.outputs.new_version }}"
