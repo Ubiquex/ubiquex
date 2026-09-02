@@ -121,21 +121,18 @@ version = "1.0.0"
 source = "ubiquex/aws"
 version = "1.0.0"
 
-# UBI-102: replaces this provider's own local, checked-in
-# sdk/providers/descriptions/aws.json. Includes vendor-spec entries
-# (the one real exception among the six providers) -- a direct
-# --dump-ir check with --descriptions-dir disabled confirmed
-# ubx-provider-dynamic's own cloudformation/smithy translation does
-# not natively carry this text for 11,954 fields the way docs' own
-# separate schema dump does, so excluding it would have silently
-# regressed generated code comments the moment the old file was
-# retired. Zero real gap once included (all 29942 sdk entries
-# covered), 202 genuinely net-new entries, 4 known conflicts where
-# docs' own hand-refined text wins by construction. See docs/ for the
-# full design record.
-[dynamic_providers.aws.descriptions]
-source = "ubiquex/aws"
-version = "1.0.0"
+# UBI-240 slice 6: the [dynamic_providers.aws.descriptions] pin that
+# used to live here is retired -- the corpus now lives inside
+# ubx-sdk-aws itself (artifacts/aws/). Unlike the other five providers,
+# this pin was genuinely live: ubx-sdk-aws's own hash-watch.yml
+# regenerates from this real central config (not a scratch one), so
+# every real regen actually applied it. Land ubx-sdk-aws#36 (which
+# switches hash-watch.yml to an explicit --descriptions-dir at the new
+# local path) BEFORE merging this PR -- resolveDescriptionsDir's own
+# real precedence means the pin still wins over that explicit flag
+# until it's removed, so merging in this order never leaves a window
+# where neither path is live. See UBI-102's own comment thread for the
+# full finding.
 
 [dynamic_providers.azure]
 source = "ubiquex/azure"
