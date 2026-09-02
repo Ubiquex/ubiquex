@@ -2472,8 +2472,9 @@ new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
 
 **UBI-240 (provider docs site, off Mintlify onto Next.js): slices 1 and
-2 DONE and merged, slices 3 through 6 open — every real PR listed under
-each slice's own paragraph below, none merged, never self-merge.** New
+2 DONE and merged, slices 3 through 6 and the final deployment slice
+open — every real PR listed under each slice's own paragraph below,
+none merged, never self-merge.** New
 repo
 `ubx-docs-providers`, created this arc. Slice 1 (`ubx-docs-providers#1`,
 `ubx-sdk-kubernetes#28`, merged) proved the fetch/render/version
@@ -2667,3 +2668,33 @@ failure at its own real source rather than only working around it
 downstream — `check_provider` now falls back to the provider's own name
 when it has no `providers.py` registry entry, instead of a hard
 `KeyError`.
+
+**UBI-240, final slice: deployment. Real measurement first, decision
+second — `ubx-docs-providers#5` (not merged, never self-merge).** Real
+static export (`output: "export"`) measured at **2.2GB, 67,924 files**
+(larger than the 2.1GB `.next` build directory, not smaller). Rules
+out GitHub Pages outright (~1GB soft cap) and Cloudflare Pages Free
+(20,000-file cap, ~3.4x over). Real cold build (cache cleared, includes
+the real 4.6GB artifact fetch): ~90s, well under every host's build
+timeout — size, never build time, was the real constraint. A real
+hypothesis was tested, not assumed either way: disabling RSC prefetch
+(`<Link prefetch={false}>`) on every `Link` in the app, not just the
+service tree and search results named in the ask, to isolate the
+variable cleanly. Result: identical 2.2GB / 67,924 files with prefetch
+on or off — Next.js's static export emits the RSC navigation payload
+per route segment unconditionally at build time, independent of any
+Link's own prefetch setting. Reverted; kept prefetch on since
+disabling it would cost real navigation speed for zero size benefit.
+
+**Decision: Cloudflare Pages, Workers Paid plan ($5/month minimum)**,
+unchanged from the pre-prefetch-test recommendation, since the premise
+that prefetch could bring the free tier into reach didn't hold.
+`.github/workflows/deploy.yml` is real and wired (`wrangler pages
+deploy`); `next.config.ts`/`app/[provider]/page.tsx` (a missing
+`generateStaticParams`, required for static export to build at all)
+are the real code changes needed. First real deploy still needs, from
+someone with real Cloudflare account access: `CLOUDFLARE_API_TOKEN`/
+`CLOUDFLARE_ACCOUNT_ID` as real repo secrets, and the Workers Paid plan
+itself enabled on the real Cloudflare account — this workflow can use
+a credential, never create one, same shape as `NPM_TOKEN`/`PYPI_TOKEN`
+in every SDK repo's own onboarding.
