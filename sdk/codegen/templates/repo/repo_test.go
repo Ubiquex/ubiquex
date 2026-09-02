@@ -72,6 +72,22 @@ func TestScaffold_RealValues(t *testing.T) {
 
 	buildNPM := files[".github/scripts/build-npm.mjs"]
 	mustContain(t, buildNPM, "UBX_SDK_RUNTIME_VERSION")
+
+	// UBI-222: exclusions.json must be optional in the docs-artifact
+	// step, not bundled into the same required cp as
+	// descriptions/intros/categories -- confirmed live against
+	// Cloudflare: a genuinely new provider has no exclusions.json yet,
+	// and the prior template's own required cp would have hard-failed
+	// this step the first time a real publish.yml dispatch reached it.
+	// ubx-sdk-digitalocean's own real, published copy already carries
+	// this exact fix by hand; this proves the template now generates
+	// it from the start.
+	mustContain(t, publish, `cp "artifacts/digitalocean/descriptions.json" \
+             "artifacts/digitalocean/intros.json" \
+             "artifacts/digitalocean/categories.json" \
+             "$staging/artifacts/"`)
+	mustContain(t, publish, `cp "artifacts/digitalocean/exclusions.json" \
+             "$staging/artifacts/" 2>/dev/null || true`)
 }
 
 func mustContain(t *testing.T, content, substr string) {
