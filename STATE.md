@@ -2472,10 +2472,11 @@ new, fixed publish.yml itself opened on its first real dispatch) is
 also open, same reason.
 
 **UBI-240 (provider docs site, off Mintlify onto Next.js): slices 1 and
-2 DONE and merged, slices 3 and 4 open (`ubx-docs-providers#3`/`#4`,
+2 DONE and merged, slices 3, 4, and 5 open (`ubx-docs-providers#3`/`#4`,
 `ubx-sdk-aws#35`, `ubx-sdk-azure#32`, `ubx-sdk-google#34`,
 `ubx-sdk-datadog#28`, `ubx-sdk-github#27`, `ubx-sdk-digitalocean#10`,
-none merged — never self-merge).** New repo
+`ubx-sdk-kubernetes#29`, `ubiquex#62`, none merged — never self-merge).**
+New repo
 `ubx-docs-providers`, created this arc. Slice 1 (`ubx-docs-providers#1`,
 `ubx-sdk-kubernetes#28`, merged) proved the fetch/render/version
 mechanism: landing page, provider home, one resource page, one version.
@@ -2557,3 +2558,39 @@ Hardened `ci.yml`'s own install step to verify both `bwrap` and
 `wasmtime` actually landed right after installing them, so a future
 recurrence of this exact glitch fails loud and immediate instead of
 confusingly three steps later.
+
+**Slice 5: the structural half — Kubernetes's own docs/codegen
+artifacts moved out of ubiquex-docs, plan reported and approved before
+anything moved.** `artifacts/kubernetes/{descriptions,intros,
+categories,exclusions}.json` now live in `ubx-sdk-kubernetes` itself
+(byte-identical copies), alongside a new `kubernetes.json` (codegen-
+ready, qualifier-stripped, HTML-unescaped — `export_raw_descriptions.py`
+gained `--descriptions-path`/`--nested-out` to produce it, reusing its
+own already-tested transform rather than a second implementation).
+`hash-watch.yml` now passes `--descriptions-dir`; `publish.yml` reads
+the docs-facing files from its own checkout instead of sparse-cloning
+`ubiquex-docs`. `sdk/providers/.ubx/config`'s own dead
+`[dynamic_providers.kubernetes.descriptions]` pin is removed.
+
+**A real, load-bearing finding, recorded on UBI-102 itself, not just
+here**: that ticket's own pin was never actually wired into
+`hash-watch.yml` — the only thing that regenerates a published SDK.
+Confirmed live: the currently published kubernetes code carries real
+AI-authored descriptions (an exact text match against the checked-in
+corpus) only from whatever generation produced its one real commit,
+never refreshed since — the next real schema drift would have silently
+regenerated without the corpus, nothing anywhere flagging it. Verified
+the fix live, not assumed: 0 AI-inferred fields before the migrated
+`--descriptions-dir`, 12,165 after; `rbac/role.go` came back byte-for-
+byte identical to the currently published file. A real, separate gofmt
+gap found directly adjacent while verifying — neither `ubx sdk gen` nor
+`hash-watch.yml` runs gofmt, `ci.yml` has no gofmt gate — filed as
+**UBI-244**, not fixed here.
+
+Deliberate deviation from the stated plan, flagged rather than silently
+done: `artifacts/kubernetes/` stays in `ubiquex-docs` for now — 169
+real, live Mintlify pages and that repo's own coverage/regen tooling
+still read it. No longer canonical, but deleting it is retiring those
+pages, a separate decision. Azure, Google, Datadog, GitHub,
+DigitalOcean remain on the old ubiquex-docs-hosted artifacts,
+unmigrated.
