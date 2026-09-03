@@ -1,0 +1,11 @@
+# Python build artifacts (a real, twice-repeated leak in ubx-sdk-aws's own
+# history: __pycache__ in the original generation, *.egg-info in its own
+# restructure) -- .gitignore added from the start here instead.
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# TypeScript/Deno
+node_modules/

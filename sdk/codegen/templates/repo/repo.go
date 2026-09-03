@@ -35,7 +35,7 @@ import (
 	"text/template"
 )
 
-//go:embed LICENSE build-npm.mjs publish.yml claude.md.tmpl readme.md.tmpl state.md.tmpl history.md.tmpl
+//go:embed LICENSE build-npm.mjs publish.yml claude.md.tmpl readme.md.tmpl state.md.tmpl history.md.tmpl .gitignore
 var files embed.FS
 
 type scaffoldData struct {
@@ -104,6 +104,10 @@ func Scaffold(shortName, providerDisplay, sourceNote, schemaPinVersion string) (
 	if err != nil {
 		return nil, fmt.Errorf("sdk/codegen/templates/repo: %w", err)
 	}
+	gitignore, err := files.ReadFile(".gitignore")
+	if err != nil {
+		return nil, fmt.Errorf("sdk/codegen/templates/repo: %w", err)
+	}
 	publishRaw, err := files.ReadFile("publish.yml")
 	if err != nil {
 		return nil, fmt.Errorf("sdk/codegen/templates/repo: %w", err)
@@ -143,6 +147,7 @@ func Scaffold(shortName, providerDisplay, sourceNote, schemaPinVersion string) (
 
 	return map[string]string{
 		"LICENSE":                       string(license),
+		".gitignore":                    string(gitignore),
 		".github/scripts/build-npm.mjs": string(buildNPM),
 		".github/workflows/publish.yml": publish,
 		"CLAUDE.md":                     claude,
