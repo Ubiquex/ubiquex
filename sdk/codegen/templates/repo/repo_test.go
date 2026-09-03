@@ -12,7 +12,7 @@ func TestScaffold_RealValues(t *testing.T) {
 	}
 
 	wantPaths := []string{
-		"LICENSE", ".github/scripts/build-npm.mjs", ".github/workflows/publish.yml",
+		"LICENSE", ".gitignore", ".github/scripts/build-npm.mjs", ".github/workflows/publish.yml",
 		"CLAUDE.md", "README.md", "STATE.md", "HISTORY.md",
 	}
 	for _, p := range wantPaths {
@@ -25,6 +25,12 @@ func TestScaffold_RealValues(t *testing.T) {
 	}
 
 	mustContain(t, files["LICENSE"], "Apache License")
+	// UBI-222: ubx-sdk-cloudflare had no .gitignore at all -- confirmed
+	// live, node_modules/ and deno.lock showed up as untracked instead
+	// of ignored/tracked-on-purpose, the same real gap every other
+	// ubx-sdk-<provider> repo's own hand-added copy already avoids.
+	mustContain(t, files[".gitignore"], "node_modules/")
+	mustContain(t, files[".gitignore"], "__pycache__/")
 	mustContain(t, files["CLAUDE.md"], "# CLAUDE.md -- ubx-sdk-digitalocean")
 	mustContain(t, files["CLAUDE.md"], "Typed bindings for DigitalOcean")
 	mustContain(t, files["CLAUDE.md"], "OpenAPI-sourced via `ubx-provider-dynamic`")
