@@ -110,16 +110,21 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// guard -- it's always the fixed literal "" or "data" (never
 	// wire-derived), and "data" is neither a Python keyword nor
 	// digit-leading.
+	// ir.ResolveServiceAndLocalNames (UBI-250 follow-up), not a plain
+	// per-rt ir.ServiceAndLocalNameForType call -- see sdk/codegen/
+	// templates/ts's own identical comment for the real, live collision
+	// this resolves (DigitalOcean's own data_digitalocean_accelerator /
+	// data_digitalocean_dedicated_inference_accelerator).
+	names, err := ir.ResolveServiceAndLocalNames(sorted)
+	if err != nil {
+		return nil, fmt.Errorf("sdk/codegen/templates/py: %w", err)
+	}
 	type pkgKey struct{ namespace, service string }
 	byService := map[pkgKey][]entry{}
 	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
-		if err != nil {
-			return nil, fmt.Errorf("sdk/codegen/templates/py: %w", err)
-		}
-		service = pyModuleIdent(service)
-		local = pyModuleIdent(local)
+		sln := names[rt]
+		namespace, service, local := sln.Namespace, pyModuleIdent(sln.Service), pyModuleIdent(sln.LocalWireName)
 		pascal, err := pascalCase(local)
 		if err != nil {
 			return nil, fmt.Errorf("sdk/codegen/templates/py: %s: local name %q: %w", rt.WireType, local, err)

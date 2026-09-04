@@ -714,6 +714,95 @@ func TestServiceAndLocalNameForType_DataSourceNamespace(t *testing.T) {
 	}
 }
 
+// TestResolveServiceAndLocalNames_RealDigitalOceanCollision is UBI-250's
+// own real regression test: two genuinely distinct DigitalOcean data
+// sources (dedicatedInferences_list_accelerators and
+// dedicatedInferences_get_accelerator, confirmed live against the real
+// spec) resolved to the identical (namespace, service, localWireName)
+// triple under a plain, per-type ServiceAndLocalNameForType call --
+// data_digitalocean_accelerator never had a prefix to strip, while
+// data_digitalocean_dedicated_inference_accelerator's own real
+// namespace ("dedicatedinference") matched and stripped its own
+// "dedicated_inference" prefix, collapsing both to local "accelerator"
+// and colliding at the identical generated file path. Confirmed real,
+// not synthetic: sdk/codegen/templates/ts's own collision guard is
+// what caught this live, refusing to generate at all.
+func TestResolveServiceAndLocalNames_RealDigitalOceanCollision(t *testing.T) {
+	list := &ResourceType{WireType: "digitalocean_accelerator", RealNamespace: "dedicatedinference", IsDataSource: true}
+	get := &ResourceType{WireType: "digitalocean_dedicated_inference_accelerator", RealNamespace: "dedicatedinference", IsDataSource: true}
+
+	// Confirm the real collision exists before the fix -- otherwise this
+	// test would pass for the wrong reason if the underlying naming
+	// scheme ever changed shape.
+	_, listService, listLocal, err := ServiceAndLocalNameForType(list)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	_, getService, getLocal, err := ServiceAndLocalNameForType(get)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if listService != getService || listLocal != getLocal {
+		t.Fatalf("expected ServiceAndLocalNameForType to collide before resolving (list=%q/%q, get=%q/%q) -- this test's own premise no longer holds, update it against the real current shape", listService, listLocal, getService, getLocal)
+	}
+
+	resolved, err := ResolveServiceAndLocalNames([]*ResourceType{list, get})
+	if err != nil {
+		t.Fatalf("ResolveServiceAndLocalNames: %v", err)
+	}
+
+	listSLN := resolved[list]
+	getSLN := resolved[get]
+
+	if listSLN.Namespace != "data" || getSLN.Namespace != "data" {
+		t.Fatalf("expected both data sources to keep namespace \"data\", got list=%q get=%q", listSLN.Namespace, getSLN.Namespace)
+	}
+	if listSLN.Service != "dedicatedinference" || getSLN.Service != "dedicatedinference" {
+		t.Fatalf("expected both to keep service \"dedicatedinference\", got list=%q get=%q", listSLN.Service, getSLN.Service)
+	}
+	if listSLN.LocalWireName == getSLN.LocalWireName {
+		t.Fatalf("expected the collision to be resolved (distinct local names), both still %q", listSLN.LocalWireName)
+	}
+	// list never had anything to strip -- must be completely unaffected.
+	if listSLN.LocalWireName != "accelerator" {
+		t.Fatalf("list local name = %q, want unchanged \"accelerator\" (nothing to strip, must not be widened)", listSLN.LocalWireName)
+	}
+	// get regains the real, distinguishing prefix the strip discarded.
+	if getSLN.LocalWireName != "dedicated_inference_accelerator" {
+		t.Fatalf("get local name = %q, want \"dedicated_inference_accelerator\" (the unstripped remainder)", getSLN.LocalWireName)
+	}
+}
+
+// TestResolveServiceAndLocalNames_NoCollision_Unaffected proves the fix
+// only ever widens a colliding group -- every real, non-colliding
+// resource type across a normal provider schema must come out byte-
+// identical to a plain ServiceAndLocalNameForType call, matching the
+// AWS CFN cases ServiceAndLocalNameForType's own real fix already
+// covers.
+func TestResolveServiceAndLocalNames_NoCollision_Unaffected(t *testing.T) {
+	rts := []*ResourceType{
+		{WireType: "aws_instance", RealNamespace: "ec2"},
+		{WireType: "aws_api_gateway_deployment", RealNamespace: "apigateway"},
+		{WireType: "aws_ecr_repository", RealNamespace: "ecr"},
+		{WireType: "aws_ecr_repository", RealNamespace: "ecr", IsDataSource: true},
+	}
+	resolved, err := ResolveServiceAndLocalNames(rts)
+	if err != nil {
+		t.Fatalf("ResolveServiceAndLocalNames: %v", err)
+	}
+	for _, rt := range rts {
+		wantNamespace, wantService, wantLocal, err := ServiceAndLocalNameForType(rt)
+		if err != nil {
+			t.Fatalf("%s: %v", rt.WireType, err)
+		}
+		got := resolved[rt]
+		if got.Namespace != wantNamespace || got.Service != wantService || got.LocalWireName != wantLocal {
+			t.Fatalf("%s (data source=%v): resolved (%q, %q, %q), want unchanged (%q, %q, %q)",
+				rt.WireType, rt.IsDataSource, got.Namespace, got.Service, got.LocalWireName, wantNamespace, wantService, wantLocal)
+		}
+	}
+}
+
 // TestServiceAndLocalName_NoCollisions_RealFullProviderSchema is this
 // derivation's own must-hold property, checked against the real, full
 // hashicorp/aws@6.54.0 schema's own 1,682 wire type names (a static

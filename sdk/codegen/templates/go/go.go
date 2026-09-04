@@ -149,15 +149,21 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 	// source counterpart (hashicorp/aws's own "aws_instance" is both)
 	// never merge into the same directory/package, the same real
 	// collision ir.ServiceAndLocalNameForType exists to prevent.
+	// ir.ResolveServiceAndLocalNames (UBI-250 follow-up), not a plain
+	// per-rt ir.ServiceAndLocalNameForType call -- see sdk/codegen/
+	// templates/ts's own identical comment for the real, live collision
+	// this resolves (DigitalOcean's own data_digitalocean_accelerator /
+	// data_digitalocean_dedicated_inference_accelerator).
+	names, err := ir.ResolveServiceAndLocalNames(sorted)
+	if err != nil {
+		return nil, fmt.Errorf("sdk/codegen/templates/go: %w", err)
+	}
 	type pkgKey struct{ namespace, service string }
 	byService := map[pkgKey][]entry{}
 	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
-		if err != nil {
-			return nil, fmt.Errorf("sdk/codegen/templates/go: %w", err)
-		}
-		service = goPackageIdent(service)
+		sln := names[rt]
+		namespace, service, local := sln.Namespace, goPackageIdent(sln.Service), sln.LocalWireName
 		key := pkgKey{namespace, service}
 		if _, ok := byService[key]; !ok {
 			pkgKeys = append(pkgKeys, key)

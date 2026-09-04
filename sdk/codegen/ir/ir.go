@@ -380,6 +380,92 @@ func ServiceAndLocalNameForType(rt *ResourceType) (namespace, service, localWire
 	return namespace, service, localWireName, nil
 }
 
+// ServiceLocalName is one resource type's own resolved (namespace,
+// service, localWireName) triple, ResolveServiceAndLocalNames' own
+// per-type result.
+type ServiceLocalName struct {
+	Namespace, Service, LocalWireName string
+}
+
+// ResolveServiceAndLocalNames is ServiceAndLocalNameForType's own
+// collision-aware batch form (UBI-250 follow-up): calling
+// ServiceAndLocalNameForType one resource at a time, as every template
+// did before this existed, has no way to know that stripping ONE
+// resource's own real-namespace prefix produces the identical
+// (namespace, service, localWireName) triple ANOTHER, unrelated
+// resource already has -- confirmed real and live, not theoretical:
+// DigitalOcean's own data_digitalocean_accelerator (no namespace
+// prefix to strip, local name "accelerator" from the start) and
+// data_digitalocean_dedicated_inference_accelerator (RealNamespace
+// "dedicatedinference", whose own "dedicated_inference" prefix strips
+// clean, per this function's own stripping rule) both resolve to
+// service "dedicatedinference", local "accelerator" -- two real,
+// distinct data sources (one lists every accelerator for a dedicated
+// inference deployment, the other gets a single one by ID) collapsed
+// onto the same generated file path, caught only because
+// sdk/codegen/templates/ts's own collision guard refuses to generate
+// rather than silently overwrite.
+//
+// The fix: resolve every resource type's own triple first via
+// ServiceAndLocalNameForType, unchanged, then find any (namespace,
+// service, localWireName) more than one resource type maps to. For
+// every resource type in a colliding group, recompute localWireName
+// WITHOUT the real-namespace-prefix strip (the full, unstripped
+// remainder of rt.WireType past the provider token) -- the one real
+// piece of information the strip was discarding that would have kept
+// them apart. A resource type that never had anything stripped in the
+// first place (like data_digitalocean_accelerator above) is
+// unaffected: its unstripped and stripped forms are already identical.
+// Every resource type NOT in a colliding group keeps
+// ServiceAndLocalNameForType's own original, unchanged result -- this
+// only ever widens a name where doing so is the one thing that
+// resolves a real collision, never as a blanket policy change.
+//
+// Deliberately still local/offline-only (ServiceAndLocalName's own doc
+// comment): this only ever looks at the resource types the caller
+// already has in memory for one provider's own generation pass, no
+// network or external taxonomy involved.
+//
+// A collision that survives this widening (two resource types whose
+// own unstripped remainders are ALSO identical, a genuinely duplicate
+// wire type or a real naming clash this function has no basis to
+// invent a third name for) is left as ServiceAndLocalNameForType
+// already resolved it -- sdk/codegen/templates/ts's own existing
+// collision guard is still the real, correct backstop for that case,
+// exactly as before this function existed.
+func ResolveServiceAndLocalNames(rts []*ResourceType) (map[*ResourceType]ServiceLocalName, error) {
+	type key struct{ namespace, service, local string }
+
+	resolved := make(map[*ResourceType]ServiceLocalName, len(rts))
+	groups := map[key][]*ResourceType{}
+
+	for _, rt := range rts {
+		namespace, service, local, err := ServiceAndLocalNameForType(rt)
+		if err != nil {
+			return nil, err
+		}
+		sln := ServiceLocalName{namespace, service, local}
+		resolved[rt] = sln
+		k := key{namespace, service, local}
+		groups[k] = append(groups[k], rt)
+	}
+
+	for _, members := range groups {
+		if len(members) < 2 {
+			continue
+		}
+		for _, rt := range members {
+			tokens := strings.Split(rt.WireType, "_")
+			unstripped := strings.Join(tokens[1:], "_")
+			sln := resolved[rt]
+			sln.LocalWireName = unstripped
+			resolved[rt] = sln
+		}
+	}
+
+	return resolved, nil
+}
+
 // maxFileStem caps a generated file's own base name (never the exported
 // identifier -- pascalCase always derives from the full, untruncated
 // localWireName, in every template, so this never touches a package's

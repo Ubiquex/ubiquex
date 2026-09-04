@@ -66,14 +66,24 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType) 
 	// for a data source (ir.ServiceAndLocalNameForType's own doc
 	// comment), keyed separately from service so a resource and its
 	// same-named data source counterpart never land at the same path.
+	//
+	// ir.ResolveServiceAndLocalNames (UBI-250 follow-up), not a plain
+	// per-rt ir.ServiceAndLocalNameForType call: resolved once, across
+	// every real resource type in this generation pass, so a
+	// real-namespace-prefix strip that would collapse two genuinely
+	// distinct resource types onto the identical local name gets
+	// widened back out before this loop ever sees it, rather than
+	// tripped over below by the collision guard alone.
+	names, err := ir.ResolveServiceAndLocalNames(sorted)
+	if err != nil {
+		return nil, fmt.Errorf("sdk/codegen/templates/ts: %w", err)
+	}
 	type pkgKey struct{ namespace, service string }
 	byService := map[pkgKey][]entry{}
 	var pkgKeys []pkgKey
 	for _, rt := range sorted {
-		namespace, service, local, err := ir.ServiceAndLocalNameForType(rt)
-		if err != nil {
-			return nil, fmt.Errorf("sdk/codegen/templates/ts: %w", err)
-		}
+		sln := names[rt]
+		namespace, service, local := sln.Namespace, sln.Service, sln.LocalWireName
 		key := pkgKey{namespace, service}
 		if _, ok := byService[key]; !ok {
 			pkgKeys = append(pkgKeys, key)
