@@ -2442,17 +2442,30 @@ proxy:
 | Repo | PyPI | npm | Go |
 |---|---|---|---|
 | kubernetes | 1.1.0 | 1.1.0 | v1.1.0 |
-| github | 1.2.0 | 1.2.0 | v1.2.0 |
+| github | **1.2.2** | **1.2.2** | **v1.2.2** (module at `sdk/go`, not repo root) |
 | datadog | 1.2.0 | 1.2.0 | v1.2.0 |
 | azure | 1.1.0 | 1.1.0 | v1.1.0 |
 | google | 1.2.0 | 1.2.0 | v1.2.0 |
+| cloudflare | 1.0.1 | 1.0.1 | v1.0.1 |
+| digitalocean | 1.0.1 | 1.0.1 | v1.0.1 |
 | aws | 2.1.0 | 2.1.0 | v2.1.0 (module path `/v2`) |
 
-All six confirmed to carry real `DataSourceBinding` content (downloaded and
+All confirmed to carry real `DataSourceBinding` content (downloaded and
 inspected the real published artifact, not inferred from the version number
 alone). Every one migrated `deno.json`/`package.json` from `jsr:@ubx/sdk` to
 `npm:@ubx/sdk`, and `hash-watch.yml` now passes `--require-clean-provenance`
 and commits a real `PROVENANCE.json`.
+
+**github only re-verified this session (UBI-249), post-publish, per
+registry** — see the UBI-249 entry below for the full account.
+kubernetes/datadog/azure/google/cloudflare/digitalocean's own rows above
+predate this session and were not re-checked against the registries
+this pass; --descriptions-dir and PROVENANCE.json fix PRs merged for
+all seven this session (kubernetes/azure/google/datadog/cloudflare/
+digitalocean/github) did not necessarily trigger a new publish for the
+six not re-verified here — confirm each repo's own committed version
+against its live registry before trusting the numbers above as
+currently published, not just currently committed.
 
 **Open PRs across the org**: `ubx-provider-dynamic#40` (UBI-206, real
 path-param PascalCase collision fix, tested and pushed, deliberately not
@@ -2698,3 +2711,121 @@ someone with real Cloudflare account access: `CLOUDFLARE_API_TOKEN`/
 itself enabled on the real Cloudflare account — this workflow can use
 a credential, never create one, same shape as `NPM_TOKEN`/`PYPI_TOKEN`
 in every SDK repo's own onboarding.
+
+**SUPERSEDED (UBI-249 arc): the deployment target moved from Cloudflare
+Pages to S3 + CloudFront.** Not yet implemented — confirmed directly
+this session: `ubx-docs-providers`' own `.github/workflows/` carries
+only `ci.yml`, no `deploy.yml` of any kind (the Cloudflare one
+described above no longer exists either), and `providers.ubiquex.io`
+does not resolve (real `NXDOMAIN`, checked directly). Whoever picks
+this up next needs the real S3 bucket + CloudFront distribution
+provisioned, a new deploy workflow written against that target (the
+static-export size numbers above, 2.2GB / 67,924 files, still hold —
+S3 has no comparable size cap the way GitHub Pages/Cloudflare Pages
+Free did, so that constraint that drove the original Cloudflare choice
+may no longer bind the same way), and real AWS credentials as repo
+secrets. Nothing about this pivot's own reasoning is recorded here —
+only the fact of the decision and its current unimplemented state.
+
+**UBI-249: hash-watch.yml's own blind spot (spec drift only, never
+translator version) closed with a real, verified, three-stage sibling
+workflow, now live on all seven `ubx-sdk-<provider>` repos — DONE,
+merged.** Full design: detect a real translator-tag move against this
+repo's own `PROVENANCE.json`, regenerate holding the schema fixed at
+the repo's own pinned version (`ubiquex`'s central
+`sdk/providers/.ubx/config`, never a live fetch, so any diff is
+attributable to the translator alone), self-heal (`PROVENANCE.json`
+only) on an empty diff, open a real review PR on a genuine one. Never
+auto-merges, matching every other workflow in this org.
+
+Before landing, a real, previously-invisible gap was found and fixed
+across all seven repos: **every hand regeneration this session had
+omitted `--descriptions-dir`**, so curated description text was
+correctly serving the docs site (reads `descriptions.json` directly)
+but never reached the actual generated `.go`/`.ts`/`.py` code comments.
+Fixed with real regenerations, verified (`go build`/`vet`, `deno
+check --frozen`, a real Python import-all per repo), merged.
+
+**The PROVENANCE.json audit that motivated building the watch in the
+first place found two distinct problems, not one:** four repos
+(kubernetes/cloudflare/github/digitalocean) have a `hash-watch.yml`
+that auto-regenerates and correctly commits `PROVENANCE.json` on spec
+drift; the other three (azure/google/datadog) were rewritten under
+UBI-222 to check spec drift and open a tracking issue only — confirmed
+directly, no `sdk gen` call anywhere in those files, so
+`translator-watch.yml` is the ONLY automated path that will ever keep
+`PROVENANCE.json` current for those three.
+
+**Verifying the new workflow actually worked (not just that it
+parsed) found and fixed four real, load-bearing bugs on its first live
+dispatch**, none caught by review alone: `--require-clean-provenance`
+rejected a detached tag checkout as unpushed (fixed: reset the
+existing tracking branch onto the target commit instead); raw
+generator output isn't `gofmt`-canonical but every committed tree in
+this org has always been formatted before commit, so every file looked
+changed with zero real content difference (fixed: `gofmt -w` before
+diffing); `deno cache` alone doesn't populate `node_modules/` for
+`npm:@ubx/sdk`, `deno check --frozen` failed outright (fixed: `deno
+install` first); the Python diff was missing the same `-x
+pyproject.toml` exclusion the Go/TS diffs already had (fixed).
+Confirmed live against real dispatches (disposable test branches,
+since deleted, PRs closed after confirming, never merged): a rolled-
+back `PROVENANCE.json` correctly resolves to the administrative
+self-heal path, a genuinely diverged tree correctly opens a full
+regeneration PR with all sanity checks passing.
+
+**A second, unrelated real bug surfaced by that same verification,
+found and fixed: `ubx-sdk-github`'s own `.gitignore` had a bare,
+unanchored `build/` line** (meant for Python's own build-artifact
+directory) that also matched `sdk/go/github/data/build/`, a real
+generated package for the `github_build` data source — silently
+excluding it from every commit in that repo since its creation. A
+concrete, real symptom: the already-committed `deno.json` exports map
+had listed `./github/data/build/build.ts` as a real export path the
+entire time, pointing at a file that never existed in the published
+npm package, a genuinely broken import for as long as the package has
+existed. Fixed org-wide: `build/`/`dist/` anchored to `sdk/python/` in
+all six repos carrying this `.gitignore` (`digitalocean` has none, so
+was never exposed). Checked all seven providers, all three languages,
+for any other silent exclusion the same way — `github`'s `data/build`
+is the only real hit anywhere.
+
+**`data_github_build` shipped for the first time, published, verified
+directly against all three registries and the actual published
+package content, not just the workflow's own exit status:**
+
+| Registry | Version | Verified how |
+|---|---|---|
+| npm (`@ubx/sdk-github`) | 1.2.2 | `npm view`, then `npm pack` — real tarball inspected, `data/build/build.js`+`.d.ts` present |
+| PyPI (`ubx-sdk-github`) | 1.2.2 | PyPI JSON API, then the real downloaded wheel inspected — `ubx/github/data/build/build.py` present |
+| Go proxy | v1.2.2 | module is nested at `github.com/ubiquex/ubx-sdk-github/sdk/go`, not the repo root (confirmed via `go.mod` directly) — real module zip inspected, `github/data/build/build.go` present |
+
+Its intro and field descriptions were already authored and already
+counted in coverage from before it ever shipped. Ran a real local dev
+server against the freshly `fetch-docs`-downloaded (sha256-verified)
+release and confirmed the actual page (`/github/1.2.2/data/build/build`)
+renders HTTP 200 with the real intro and all four real field
+descriptions, not placeholders.
+
+**Two real items still open, neither resolved this session:**
+
+1. **The category fix for `github_build` is merged to `ubx-sdk-github`
+   main but NOT in any published release yet — confirmed directly, not
+   assumed.** The `v1.2.2` git tag points to `42876ca` (before the
+   categories fix); the fix landed on `main` afterward as a separate
+   commit (`b19888c`+). `fetch-docs.mjs` downloads the tagged release
+   artifact, not live `main`, so the docs site (once actually deployed
+   — see the S3/CloudFront item above) will keep showing
+   `data_github_build` as Uncategorized until a new version is cut and
+   published with the fix included. Needs a version bump (1.2.3) and a
+   real `publish.yml` dispatch — not done here, since it's a new
+   version-bump decision beyond what was asked this pass.
+2. **84 pre-existing `github` wire types are uncategorized, unrelated
+   to any of this session's own work.** `github@1.2.1` was 340/340
+   categorized (zero gaps); `github@1.2.2` (404 wire types, +64 from
+   this session's own earlier UBI-250/coverage-gap work, only one of
+   which is `data_github_build`) sits at 320/404 after this session's
+   own category fix — 84 wire types that gained coverage responsibility
+   somewhere in that +64 growth but never got a real category override
+   authored. Not investigated further or fixed this pass — a real,
+   separate `write-artifacts`-shaped gap for whoever picks this up.
