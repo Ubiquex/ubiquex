@@ -52,6 +52,7 @@ func newInitCmd() *cobra.Command {
 		full            bool
 		format          string
 		stack           string
+		dynamicSource   string
 		source          string
 		providerVersion string
 		providerPath    string
@@ -88,6 +89,18 @@ Refuses to overwrite an existing config unless --force is given.`,
 			}
 			if providerPath != "" && source != "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --provider and --source are mutually exclusive")}
+			}
+			// All three write a different provider table, so at most one
+			// may be given. Named explicitly rather than folded into one
+			// message, so the error says which pair actually collided.
+			if dynamicSource != "" && source != "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --dynamic-source and --source are mutually exclusive (--dynamic-source writes [providers], --source writes [thirdparty_providers])")}
+			}
+			if dynamicSource != "" && providerPath != "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --dynamic-source and --provider are mutually exclusive")}
+			}
+			if dynamicSource != "" && providerVersion == "" {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --dynamic-source requires --provider-version (explicit version pins only)")}
 			}
 			if source != "" && providerVersion == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --source requires --provider-version (explicit version pins only)")}
@@ -179,6 +192,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 
 			values := configTemplateValues{
 				Stack:           stack,
+				DynamicSource:   dynamicSource,
 				Source:          source,
 				ProviderVersion: providerVersion,
 				ProviderPath:    providerPath,
@@ -200,7 +214,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 			fmt.Fprintf(out, "%s\n", st.Green(fmt.Sprintf("+ %s has been generated successfully", path)))
 			fmt.Fprintf(out, "%s\n", st.Dim(fmt.Sprintf("    see %s", docsConfigRef)))
 			if !hasProvider(values) {
-				fmt.Fprintf(out, "next: add a provider (re-run with --source/--provider-version, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
+				fmt.Fprintf(out, "next: add a provider (re-run with --dynamic-source/--provider-version for a ubx dynamic provider such as ubiquex/aws, or --source/--provider-version for a Terraform-registry one, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
 			} else {
 				fmt.Fprintf(out, "next: write an intent file and run `ubx plan <file>.json`, or write an SDK program and run `ubx plan --from-code <file>.ts` -- see %s\n", docsConfigRef)
 			}
@@ -213,6 +227,7 @@ Refuses to overwrite an existing config unless --force is given.`,
 	cmd.Flags().BoolVar(&full, "full", false, "write the full, exhaustive annotated reference instead of the default minimal runnable config (every key, real values where given, commented examples for the rest)")
 	cmd.Flags().StringVar(&format, "format", "hcl", "config format to write: hcl (canonical), toml, or yaml (strict); falls back to ~/.ubx/config's own init_format, then hcl, if not given")
 	cmd.Flags().StringVar(&stack, "stack", "", "default stack name to write into the config (default: this directory's own name)")
+	cmd.Flags().StringVar(&dynamicSource, "dynamic-source", "", "ubx dynamic provider to pin, e.g. ubiquex/aws -- written into the modern [providers] table. This is the path most stacks want: ubx ships its own pinned, vendor-sourced schemas for aws, azure, google, kubernetes, github, datadog, digitalocean and cloudflare. Requires --provider-version; mutually exclusive with --source and --provider")
 	cmd.Flags().StringVar(&source, "source", "", "default provider registry source, e.g. hashicorp/aws -- written into the modern [thirdparty_providers] map (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version, e.g. 6.54.0 (required with --source; no \"latest\" resolution)")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "default provider binary path -- a local/dev escape hatch, written into the legacy singular [provider] table (mutually exclusive with --source; there is no local-path slot in the modern map)")
@@ -357,7 +372,15 @@ func deriveStackFromDir(dir string) string {
 // zero values mean "write a commented example instead" (or, in the
 // default minimal template, "omit entirely").
 type configTemplateValues struct {
-	Stack           string
+	Stack string
+	// DynamicSource is a ubx dynamic provider (e.g. "ubiquex/aws"),
+	// written into the modern [providers.<name>] table. Distinct from
+	// Source, which is a Terraform registry address feeding
+	// [thirdparty_providers]. UBI-247 added this because there was no
+	// way to `ubx init` a dynamic provider at all: --source writes the
+	// thirdparty table and --provider writes the legacy local-path
+	// shape, so the path most users should take had no flag.
+	DynamicSource   string
 	Source          string
 	ProviderVersion string
 	ProviderPath    string
@@ -370,7 +393,7 @@ type configTemplateValues struct {
 // the one condition that decides both the closing "next:" hint's own
 // wording and the minimal template's provider block content.
 func hasProvider(v configTemplateValues) bool {
-	return v.ProviderPath != "" || v.Source != ""
+	return v.ProviderPath != "" || v.Source != "" || v.DynamicSource != ""
 }
 
 // nextStepComment is the closing "next:" pointer every template (minimal
@@ -419,6 +442,20 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	switch {
 	case v.ProviderPath != "":
 		fmt.Fprintf(&b, "provider = {\n  path = %s\n}\n\n", literalValue(v.ProviderPath))
+	case v.DynamicSource != "":
+		// [providers.<name>] keyed by the short name, the same derivation
+		// providerShortName already uses everywhere else, so "ubiquex/aws"
+		// becomes [providers.aws].
+		fmt.Fprintf(&b, "providers = {\n  %s = {\n    source  = %s\n    version = %s\n  }\n}\n\n",
+			literalValue(providerShortName(v.DynamicSource)), literalValue(v.DynamicSource), literalValue(v.ProviderVersion))
+		if len(v.ProviderConfig) > 0 {
+			b.WriteString("provider_configs = {\n")
+			fmt.Fprintf(&b, "  %s = {\n", literalValue(providerShortName(v.DynamicSource)))
+			for _, k := range sortedKeys(v.ProviderConfig) {
+				fmt.Fprintf(&b, "    %s = %s\n", k, literalValue(v.ProviderConfig[k]))
+			}
+			b.WriteString("  }\n}\n\n")
+		}
 	case v.Source != "":
 		fmt.Fprintf(&b, "thirdparty_providers = {\n  %s = %s\n}\n\n", literalValue(v.Source), literalValue(v.ProviderVersion))
 		if len(v.ProviderConfig) > 0 {
@@ -481,6 +518,16 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	case v.ProviderPath != "":
 		b.WriteString("[provider]\n")
 		fmt.Fprintf(&b, "path = %q\n\n", v.ProviderPath)
+	case v.DynamicSource != "":
+		fmt.Fprintf(&b, "[providers.%s]\n", providerShortName(v.DynamicSource))
+		fmt.Fprintf(&b, "source  = %q\nversion = %q\n\n", v.DynamicSource, v.ProviderVersion)
+		if len(v.ProviderConfig) > 0 {
+			fmt.Fprintf(&b, "[provider_configs.%s]\n", providerShortName(v.DynamicSource))
+			for _, k := range sortedKeys(v.ProviderConfig) {
+				fmt.Fprintf(&b, "%s = %s\n", k, literalValue(v.ProviderConfig[k]))
+			}
+			b.WriteString("\n")
+		}
 	case v.Source != "":
 		b.WriteString("[thirdparty_providers]\n")
 		fmt.Fprintf(&b, "%q = %q\n\n", v.Source, v.ProviderVersion)

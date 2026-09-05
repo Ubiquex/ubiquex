@@ -447,3 +447,67 @@ func TestInit_OutputImmediatelySupportsPlan_ViaMirror(t *testing.T) {
 		t.Fatalf("expected a resolved create, got: %s", planOut)
 	}
 }
+
+// TestInit_DynamicSource_WritesProvidersTable is UBI-247's own real gap:
+// before this, `ubx init` could not write a dynamic provider at all.
+// --source writes [thirdparty_providers] (a Terraform registry address)
+// and --provider writes the legacy local-binary-path shape, so the path
+// most stacks should take had no flag and every tutorial taught
+// hashicorp/aws by default.
+func TestInit_DynamicSource_WritesProvidersTable(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := runUbx(t, nil, "init", "--dir", dir, "--dynamic-source", "ubiquex/aws", "--provider-version", "1.0.0"); err != nil {
+		t.Fatalf("ubx init: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".ubx", "config.hcl"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{"providers = {", `"aws" = {`, `source  = "ubiquex/aws"`, `version = "1.0.0"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config missing %q:\n%s", want, got)
+		}
+	}
+	// It must NOT write the thirdparty table, which is a different
+	// mechanism reaching a different registry.
+	if strings.Contains(got, "thirdparty_providers = {") {
+		t.Fatalf("--dynamic-source wrote thirdparty_providers:\n%s", got)
+	}
+}
+
+// TestInit_DynamicSource_KeyedByShortName proves the [providers] key is
+// the short name, matching providerShortName's derivation used
+// everywhere else, rather than the full source address.
+func TestInit_DynamicSource_KeyedByShortName(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := runUbx(t, nil, "init", "--dir", dir, "--dynamic-source", "ubiquex/digitalocean", "--provider-version", "1.0.1"); err != nil {
+		t.Fatalf("ubx init: %v\n%s", err, out)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".ubx", "config.hcl"))
+	if !strings.Contains(string(data), `"digitalocean" = {`) {
+		t.Fatalf("expected [providers] keyed by short name:\n%s", data)
+	}
+}
+
+// TestInit_SourceStillWritesThirdparty guards the sibling flag against
+// regression. --source was deliberately NOT repointed: it means the same
+// thing on eleven commands (init, plan, resolve, scan, ship, status,
+// promote, restore, render, terminate, config), and making it mean
+// something different on init alone would let `ubx init --source X`
+// succeed and `ubx plan --source X` then fail at a distance.
+func TestInit_SourceStillWritesThirdparty(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := runUbx(t, nil, "init", "--dir", dir, "--source", "hashicorp/aws", "--provider-version", "6.54.0"); err != nil {
+		t.Fatalf("ubx init: %v\n%s", err, out)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".ubx", "config.hcl"))
+	got := string(data)
+	if !strings.Contains(got, "thirdparty_providers = {") {
+		t.Fatalf("--source no longer writes thirdparty_providers:\n%s", got)
+	}
+	if strings.Contains(got, "providers = {\n  \"aws\"") {
+		t.Fatalf("--source wrote the dynamic providers table:\n%s", got)
+	}
+}
