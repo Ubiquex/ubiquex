@@ -42,6 +42,31 @@ jobs:
         with:
           go-version-file: go.mod
 
+
+      - name: go.mod and go.sum are tidy
+        # Enforced here rather than fixed at release time. The release
+        # config used to run `go mod tidy` as a before-hook, which
+        # rewrote go.mod/go.sum during the build and stamped every
+        # released binary -dirty via Go's own vcs.modified setting, while
+        # goreleaser's own cleanliness check (which runs before its
+        # hooks) saw nothing. It also meant the shipped binary was built
+        # from dependency requirements nobody had reviewed.
+        #
+        # Failing here instead means drift surfaces on the PR that
+        # introduces it, as a reviewable diff, rather than being applied
+        # silently to a release.
+        run: |
+          set -euo pipefail
+          cp go.mod /tmp/go.mod.before
+          cp go.sum /tmp/go.sum.before
+          go mod tidy
+          if ! diff -u /tmp/go.mod.before go.mod || ! diff -u /tmp/go.sum.before go.sum; then
+            echo
+            echo "go.mod/go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+          echo "go.mod and go.sum are tidy"
+
       - name: Install bubblewrap and wasmtime
         # goeval's own real Linux sandbox is bubblewrap (docs/sdk.md's
         # own "Linux: namespaces (bwrap)" section); pyeval's own real
