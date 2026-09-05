@@ -128,9 +128,15 @@ version = "1.0.0"
 # where neither path is live. See UBI-102's own comment thread for the
 # full finding.
 
+# UBI-249 follow-on: bumped 1.0.1 -> 2.0.0. ubx-schema-azure cut v2.0.0
+# on 2026-08-31 (schema_format 3) and nothing in this pipeline verifies
+# that a pin still matches its own repo's latest release, so this drift
+# went unnoticed for days -- found only by a direct pin-vs-release audit
+# across all eight providers, which confirmed azure was the ONLY one
+# adrift (the other seven each matched their own latest release exactly).
 [dynamic_providers.azure]
 source = "ubiquex/azure"
-version = "1.0.1"
+version = "2.0.0"
 
 # UBI-240 slice 6: the [dynamic_providers.azure.descriptions] pin that
 # used to live here is retired -- the corpus now lives inside
