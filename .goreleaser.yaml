@@ -2,9 +2,29 @@ version: 2
 
 project_name: ubx
 
-before:
-  hooks:
-    - go mod tidy
+# No `before: hooks: - go mod tidy`, deliberately.
+#
+# It used to run here and it is why v0.3.0's own released binary reported
+# 0.3.0+5c6f8a2-DIRTY. Reproduced on a completely fresh recursive clone
+# at that tag: git status is empty, then `go mod tidy` rewrites go.mod
+# (-19 lines) and go.sum (-33 lines), and every binary compiled after
+# that is stamped dirty by Go's own vcs.modified build setting.
+#
+# GoReleaser's own git-cleanliness validation runs BEFORE these hooks, so
+# it saw a clean tree and raised nothing while its own hook dirtied it.
+#
+# Two real problems, not one cosmetic one. The -dirty suffix is the only
+# field in the version string that answers "does this binary correspond
+# to the commit it names", and this repo leans on exactly that
+# distinction elsewhere (PROVENANCE.json's own dirty/unpushed fields,
+# --require-clean-provenance). Firing it on every official release trains
+# readers to ignore the one signal that is supposed to be rare. And
+# tidying at release time means the shipped binary is built from
+# dependency requirements that differ from what was committed and
+# reviewed.
+#
+# Tidiness is enforced in ci.yml instead, where a diff fails the PR and
+# can be reviewed, rather than being applied silently at release.
 
 builds:
   - id: ubx
