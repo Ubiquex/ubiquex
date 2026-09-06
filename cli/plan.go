@@ -382,6 +382,7 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	if isPricedCostDelta(p.CostDelta) {
 		fmt.Fprintln(out, st.Bold(fmt.Sprintf("cost delta: $%s/mo", p.CostDelta.MonthlyUSD)))
 	}
+	renderPinnedHeads(out, st, p.Resolution.Inputs)
 
 	if len(p.Intent.Assumptions) == 0 && len(p.Intent.Defaults) == 0 && len(p.Intent.Questions) == 0 {
 		return

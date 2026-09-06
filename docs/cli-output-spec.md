@@ -320,7 +320,22 @@ of medium to detect between, only how many SDK-program candidates
   delta: +5 create(s), ~0 change(s), -0 terminate(s)
 
   blast radius: +5 ~0 -0
+  pinned: network @ 4b1e77a2c3d4
   ```
+  **Amendment (UBI-251): pinned heads.** One line per distinct neighbour
+  ledger a cross-stack reference resolved against, deduplicated by
+  (ledger, head) since several references into one neighbour all pin the
+  same head. Nothing renders when a stack has no cross-stack references.
+
+  It reads from `Resolution.Inputs` entries with
+  `Kind == "cross_stack_pin"`, which the resolver already records. The
+  marketing design wanted this as prose inside the summary paragraph
+  ("pinned to the network stack at head 4b1e77"), and the summary cannot
+  carry it: `Intent.Summary` is written by the author's own program
+  before resolution computes any head, and nothing rewrites it
+  afterwards. Previously a pinned head was visible only in `ubx why`'s
+  pin chain, after the fact, or as JSON from `ubx addresses`. It belongs
+  on the receipt a reader is signing.
   **Amendment (UBI-251): the cost line does not render at all until
   something can price a change.** It used to render unconditionally, as
   `cost delta: $0/mo`, and the markup earlier in this document shows that
