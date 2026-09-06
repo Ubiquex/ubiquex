@@ -243,3 +243,46 @@ func isPricedCostDelta(c core.CostDelta) bool {
 	}
 	return true
 }
+
+// renderPinnedHeads shows which neighbour ledger head each cross-stack
+// reference resolved against (UBI-251).
+//
+// This is here because the marketing design wanted the sentence "pinned
+// to the network stack at head 4b1e77" in the summary paragraph, and the
+// summary is the wrong place for it. Intent.Summary is written by the
+// author's own program, before resolution computes any head, and nothing
+// rewrites it afterwards, so an authored summary can never carry a head
+// hash. The fact itself is real and already on the proposal: the
+// resolver records {Kind: "cross_stack_pin", LedgerDir, PinnedHead} into
+// Resolution.Inputs, which renderPlanReceipt already holds.
+//
+// So the receipt states it directly rather than hoping prose does. A
+// proposal recording which neighbour head it resolved against is the
+// ledger argument in one line, and it was previously visible only in
+// `ubx why`'s pin chain, after the fact, or as JSON from
+// `ubx addresses`. It belongs on the receipt a reader is signing.
+//
+// Deduplicated by (ledger, head): several references into one neighbour
+// stack all pin the same head, and repeating the line once per reference
+// would say the same thing five times.
+func renderPinnedHeads(out io.Writer, st *styler, inputs []core.ResolutionInput) {
+	seen := map[string]bool{}
+	for _, in := range inputs {
+		if in.Kind != "cross_stack_pin" || in.PinnedHead == "" {
+			continue
+		}
+		// LedgerDir names the neighbour; fall back to the resource
+		// address when a caller recorded a pin without one, so a pin is
+		// never silently invisible.
+		where := in.LedgerDir
+		if where == "" {
+			where = in.Resource
+		}
+		key := where + "\x00" + in.PinnedHead
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fmt.Fprintln(out, st.Bold(fmt.Sprintf("pinned: %s @ %s", where, st.Hash(in.PinnedHead))))
+	}
+}

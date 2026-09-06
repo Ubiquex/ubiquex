@@ -141,3 +141,39 @@ func TestReceiptCostLine_RendersOnceThereIsAFigure(t *testing.T) {
 		}
 	}
 }
+
+func TestReceiptPinnedHead_RendersEachNeighbourOnce(t *testing.T) {
+	// The design wanted "pinned to the network stack at head 4b1e77" in
+	// the summary. It cannot go there: Intent.Summary is written by the
+	// author's program before resolution computes any head. It goes on
+	// its own line, from the data the resolver already records.
+	p := authoredProposal("adds a replica alongside the primary")
+	p.Resolution = core.Resolution{Inputs: []core.ResolutionInput{
+		// Two references into the same neighbour: one line, not two.
+		{Kind: "cross_stack_pin", Resource: "payments.aws_db_instance.primary", LedgerDir: "network", PinnedHead: "4b1e77a2c3d4"},
+		{Kind: "cross_stack_pin", Resource: "payments.aws_db_instance.replica", LedgerDir: "network", PinnedHead: "4b1e77a2c3d4"},
+		// A different neighbour does get its own line.
+		{Kind: "cross_stack_pin", Resource: "payments.aws_sqs_queue.settlements", LedgerDir: "shared", PinnedHead: "9c2f11b8e7a0"},
+		// Not a pin, and must not render.
+		{Kind: "data_source", Resource: "payments.aws_ami.base", ObservedHash: "deadbeef"},
+	}}
+	out := renderReceipt(t, p)
+	if n := strings.Count(out, "pinned: network @"); n != 1 {
+		t.Fatalf("expected one line for the network neighbour, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "pinned: shared @ 9c2f11b8e7a0") {
+		t.Fatalf("a second neighbour should get its own line, got:\n%s", out)
+	}
+	if strings.Contains(out, "aws_ami.base") {
+		t.Fatalf("a non-pin resolution input must not render, got:\n%s", out)
+	}
+}
+
+func TestReceiptPinnedHead_SilentWhenThereAreNone(t *testing.T) {
+	// A stack with no cross-stack references says nothing, rather than
+	// an empty heading, matching how the cost line now behaves.
+	out := renderReceipt(t, authoredProposal("a self-contained change"))
+	if strings.Contains(out, "pinned:") {
+		t.Fatalf("no pins means no line, got:\n%s", out)
+	}
+}
