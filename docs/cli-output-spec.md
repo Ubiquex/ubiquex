@@ -236,10 +236,43 @@ of medium to detect between, only how many SDK-program candidates
 
 - Header: `Plan  <stack> · from <file>` — the "from &lt;file&gt;" segment
   dim.
-- NO AI summary sentence under the header (removed) — the field itself
-  (`Intent.Summary`) is untouched in the stored proposal; only the
-  render was dropped, once every resource block below it already shows
-  the real content in full.
+- A summary sentence renders under the header, but ONLY for a proposal
+  whose intent came from an authored or AI-derived source
+  (`document`, `dialogue`, `intent_provider`). First paragraph only.
+
+  **Amendment (UBI-251).** This rule previously read "NO AI summary
+  sentence under the header (removed)", on the reasoning that the line
+  was pure noise once every resource block below it already shows the
+  real content in full. That was correct about the summary it was judged
+  against and wrong as a general rule.
+
+  The real authored summary in the corpus
+  (`sdk/conformance/golden/payments.json`) is "Provision a small Postgres
+  RDS instance in the payments stack, modeled on the staging database but
+  downsized for low initial traffic." The clause after the comma appears
+  in no resource block and cannot: rendering attributes never tells a
+  reader the shape was derived from staging and deliberately reduced.
+  That is interpretation, not paraphrase.
+
+  It does not overlap the AI defaults block, which answers "what did the
+  model choose where your document was silent". In that same fixture the
+  assumptions, defaults and questions are all empty while the summary is
+  substantial, so one cannot be standing in for the other.
+
+  The gate is on SOURCE kind, not proposal kind. Three paths write a
+  mechanical template into the same field: scan's "adopt existing
+  &lt;address&gt; into the ledger (discovered by scan)" and "record drift on
+  &lt;address&gt;…", and restore's "restore &lt;stack&gt; to ledger head &lt;hash&gt;".
+  Rendering those would print exactly the paraphrase this rule removed.
+  `ubx restore` builds a `KindChange` proposal, so gating on proposal
+  kind would print its template; the source kind is what separates them.
+  Promotion keeps its summary because `cli/promote.go` appends its own
+  source rather than replacing the authored one.
+
+  First paragraph only, because the marketing design's second paragraph
+  is a cost claim ("the replica is the largest share of the cost
+  increase") and nothing can price a change yet. The stored field is
+  untouched either way.
 - Each resource block is ONE header line, colored+bolded by its own op
   (the general "+/~/- `<address>` `<op>`" header rule, UBI-88): green
   `+ <type>.<name> create`, yellow/orange `~ <address> change`, red
@@ -287,8 +320,22 @@ of medium to detect between, only how many SDK-program candidates
   delta: +5 create(s), ~0 change(s), -0 terminate(s)
 
   blast radius: +5 ~0 -0
-  cost delta: $0/mo
   ```
+  **Amendment (UBI-251): the cost line does not render at all until
+  something can price a change.** It used to render unconditionally, as
+  `cost delta: $0/mo`, and the markup earlier in this document shows that
+  zero because that is what the binary printed. Every writer of
+  `CostDelta.MonthlyUSD` sets a literal 0 (`core/scan.go` twice,
+  `core/resolver/resolver.go`, `conformance/destroy_probe.go`) and there
+  is no pricing source anywhere in the tree. The guard was
+  `len(...) > 0`, which never suppressed anything: `json.RawMessage("0")`
+  has length 1.
+
+  A visible `$0/mo` reads as free, which is a stronger and more wrong
+  claim than saying nothing, since a reader cannot tell it apart from a
+  real zero. When a pricing source exists the line returns unchanged, in
+  the position shown above. The scope of that work is recorded on
+  UBI-251.
   The delta line's own vocabulary is "change(s)"/"terminate(s)" (UBI-88),
   matching the change/terminate wording the op headers above already use
   — not "modify(ies)"/"destroy(s)". The same rename also applies (UBI-88
