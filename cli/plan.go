@@ -328,13 +328,17 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 // (no LLM in either path) -- there's nothing for false to ever collapse
 // there, so neither needs its own --show-defaults/--hide-defaults flags.
 func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool) {
-	// docs/cli-output-spec.md §v2: "NO AI summary sentence under the
-	// header (remove it)" -- the founder's own markup against the real
-	// 5-resource platform.md case found this line pure noise once every
-	// resource block below it already renders in full; p.Intent.Summary
-	// still exists in the stored proposal (nothing here removes the
-	// field), it's simply not rendered a second time.
+	// UBI-251: the summary sentence is back, under the header, but only
+	// where it carries authored or AI-derived content. v2 removed it as
+	// noise against a case where it paraphrased the resource list;
+	// authoredSummary (cli/intentrender.go) documents why that was right
+	// about that case and wrong as a rule, and why the gate is on source
+	// kind rather than proposal kind.
 	fmt.Fprintln(out, header)
+	if summary := authoredSummary(p.Intent); summary != "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, summary)
+	}
 	fmt.Fprintln(out)
 
 	renderCreates(out, st, p.Delta.Creates, "  ")
@@ -363,7 +367,19 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
 		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),
 		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))))
-	if len(p.CostDelta.MonthlyUSD) > 0 {
+	// UBI-251, interim: render nothing rather than $0/mo.
+	//
+	// The field exists and this line has always rendered, but every writer
+	// sets a literal 0 (core/scan.go twice, core/resolver/resolver.go,
+	// conformance/destroy_probe.go) because there is no pricing source
+	// anywhere in the tree. The old guard was len(...) > 0, which never
+	// suppressed anything: json.RawMessage("0") has length 1.
+	//
+	// A visible "$0/mo" reads as free. That is a stronger and more wrong
+	// claim than saying nothing, since a reader has no way to tell it
+	// apart from a real zero. The line comes back when a pricing source
+	// does; the scope of that arc is recorded on UBI-251.
+	if isPricedCostDelta(p.CostDelta) {
 		fmt.Fprintln(out, st.Bold(fmt.Sprintf("cost delta: $%s/mo", p.CostDelta.MonthlyUSD)))
 	}
 

@@ -55,8 +55,12 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if !strings.Contains(planOut, "blast radius: +1 ~0 -0") {
 		t.Fatalf("expected a blast radius line in the receipt, got: %s", planOut)
 	}
-	if !strings.Contains(planOut, "cost delta: $") {
-		t.Fatalf("expected a cost delta line in the receipt, got: %s", planOut)
+	// UBI-251: no cost line at all while the delta is the placeholder
+	// zero every writer sets. This assertion used to require the line to
+	// be present, which it always was, at "$0/mo", because nothing in the
+	// tree can price anything yet. A visible zero reads as free.
+	if strings.Contains(planOut, "cost delta:") {
+		t.Fatalf("expected NO cost delta line while there is no pricing source, got: %s", planOut)
 	}
 
 	hash := mustExtractPlanHash(t, ledgerDir, planOut)

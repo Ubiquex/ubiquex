@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
@@ -134,4 +135,111 @@ func renderQuestions(w io.Writer, st *styler, questions []core.Question) {
 			fmt.Fprintf(w, "      affects: %s\n", a)
 		}
 	}
+}
+
+// authoredSummary is the receipt's own summary line, or "" when there
+// should not be one (UBI-251).
+//
+// A prose summary was removed in v2 as noise, the reasoning recorded at
+// docs/cli-output-spec.md's own plan-receipt section: once every resource
+// block renders in full, a sentence paraphrasing the resource list says
+// nothing new. That judgement was correct about the summary it was made
+// against and wrong as a general rule, which is the whole of why this
+// exists again.
+//
+// The real authored summary in the corpus (sdk/conformance/golden/
+// payments.json) reads "Provision a small Postgres RDS instance in the
+// payments stack, modeled on the staging database but downsized for low
+// initial traffic." The clause after the comma is in no resource block
+// and cannot be: no amount of rendering attributes tells a reader the
+// shape was derived from staging and deliberately reduced. That is
+// interpretation, not paraphrase, and it is what this renders.
+//
+// SOURCE-GATED, and that is the load-bearing part. Three paths write a
+// mechanical template into the same field: scan's "adopt existing
+// <address> into the ledger (discovered by scan)" and "record drift on
+// <address> observed outside the ledger", and restore's "restore <stack>
+// to ledger head <hash>". Rendering those would print exactly the
+// paraphrase-of-one-resource that v2 removed, so the rule is a positive
+// allow-list of authored and AI-derived source kinds rather than a
+// blocklist of the paths that exist today.
+//
+// Proposal.Kind is NOT the discriminator, though it looks like one.
+// `ubx restore` builds a KindChange proposal with a mechanical summary
+// (cli/restore.go), so gating on kind would print it. The source kind is
+// what actually separates them.
+//
+// Promotion keeps working because cli/promote.go APPENDS its own
+// {Kind: "promotion"} source to the ones already there rather than
+// replacing them, so a promoted proposal still carries the document or
+// dialogue it was authored from and still shows its summary.
+func authoredSummary(in core.Intent) string {
+	if !hasAuthoredSource(in) {
+		return ""
+	}
+	return firstParagraph(in.Summary)
+}
+
+// hasAuthoredSource reports whether any of the intent's sources is one a
+// person or the model actually wrote.
+//
+// The machine-derived kinds are the rest of what the codebase writes:
+// live_state (scan), restore, promotion, cloudtrail, gcp_audit,
+// cloudtrail_unattributed, audit_unattributed. Scan, adopt and revert
+// populate no sources at all, so they fall out here too.
+//
+// IntentSource.Kind's own doc comment also lists "manual_edit" and
+// "issue". Neither is written anywhere in the tree today, so neither is
+// listed here: an allow-list should name what exists, and a kind that
+// starts being written can be added alongside the code that writes it.
+func hasAuthoredSource(in core.Intent) bool {
+	for _, s := range in.Sources {
+		switch s.Kind {
+		case core.SourceKindDocument, core.SourceKindDialogue, core.SourceKindIntentProvider:
+			return true
+		}
+	}
+	return false
+}
+
+// firstParagraph returns everything up to the first blank line.
+//
+// The marketing design shows two paragraphs, and the second one reads
+// "The replica is the largest share of the cost increase." That is a cost
+// claim, and ubx has no pricing source (UBI-251's own cost arc), so a
+// model writing it would be asserting something the binary cannot
+// compute. Rendering only the first paragraph is what keeps the receipt
+// to what is actually known, and it costs nothing today since every
+// summary in the corpus is a single paragraph already.
+func firstParagraph(s string) string {
+	s = strings.TrimSpace(s)
+	for _, sep := range []string{"\n\n", "\r\n\r\n"} {
+		if i := strings.Index(s, sep); i >= 0 {
+			s = s[:i]
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// isPricedCostDelta reports whether a cost delta carries a real figure,
+// as opposed to the placeholder zero every writer sets today (UBI-251).
+//
+// MonthlyUSD is json.RawMessage holding a union per docs/schema.md's
+// ratified number rule: a bare JSON integer, or a JSON string for
+// anything fractional, never a float literal. So "is this zero" has more
+// than one spelling to check, and the string form has quotes.
+//
+// Absent and zero are treated identically on purpose. Both mean the same
+// thing right now, which is that nothing priced this change, and a
+// receipt should not distinguish two flavours of "unknown" to a reader.
+// A genuine, computed zero is indistinguishable from the placeholder
+// today; when a pricing source exists it can say so explicitly rather
+// than by writing the same byte the placeholder writes.
+func isPricedCostDelta(c core.CostDelta) bool {
+	raw := strings.TrimSpace(string(c.MonthlyUSD))
+	switch raw {
+	case "", "0", `"0"`, "null", `""`:
+		return false
+	}
+	return true
 }
