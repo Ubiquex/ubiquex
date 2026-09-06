@@ -7,6 +7,46 @@
 
 ## In flight
 
+**UBI-247: DONE. Both documentation sites are live.** The user docs moved
+off Mintlify onto Next.js at `docs.ubiquex.io` (`ubx-docs-users`,
+147 pages across six sections), alongside `providers.ubiquex.io`, which
+is the "two deployments" the ticket scoped. DNS cut over from
+`cname.mintlify.builders` on 2026-09-06 and verified serving the new
+site directly: zero Mintlify markers, valid ACM cert, real pages, 404s
+handled.
+
+Infrastructure mirrors the provider site: S3 `ubx-docs-users-site`
+(private, Origin Access Control only), CloudFront `EJSUGHAX0MZCR`
+(`d3919omo84z6mg.cloudfront.net`), function `ubx-docs-users-rewrite`,
+ACM cert `2a020e28-...`, OIDC role `ubx-docs-users-deploy`. Committed in
+`ubx-docs-users/infra/`, created via its own `infra/create.sh`.
+
+Three findings from that arc worth carrying forward, because each was a
+class of bug rather than one instance:
+
+1. **A shared component library does not produce shared output unless
+   the CSS build sees it.** Tailwind v4 skips `node_modules`, so every
+   utility class used only inside `@ubx/docs-ui` was never generated.
+   Both sites rendered the shared header and footer partly unstyled, and
+   they diverged from each other because a class survived only where the
+   consuming site happened to use it locally too. Fixed with an
+   `@source` directive in each site's `globals.css`. Anything added to
+   that package from now on depends on it.
+
+2. **Sharing the parts is not sharing the arrangement.** Both sites
+   assembled Header/Footer/search themselves and had already drifted
+   (`lg:grid-cols-[280px_1fr]` against `flex gap-10`). `PageShell`
+   (0.4.0) owns the composition. Search moved into the header there,
+   because it had been on exactly one page type per site.
+
+3. **Identity leaks into shared components silently.** `Footer`
+   hardcoded the provider tagline and rendered it on 137 hand-written
+   pages; `MobileSidebarToggle` hardcoded "Services". Reading each
+   component caught neither. `ubx-docs-ui/test/no-site-identity.test.mjs`
+   makes it mechanical: no literal URLs, and every user-visible string
+   on an allowlist. It scans JSX text, attributes, object properties and
+   default parameter values, each shape added after one slipped past.
+
 **UBI-227: DONE, merged (`ubiquex#48`).** Restore a stack to an earlier
 ledger head. `ubx restore <head>` -- a normal proposal reusing
 `KindChange`, never `KindRevert` (stays declared, unimplemented). New
@@ -2346,6 +2386,33 @@ Nothing currently blocked.
 `ubiquex` is the coordinating repo — this section is its responsibility to keep
 current, not any other repo's own `STATE.md`. Verified directly (`gh api`), not
 carried forward from memory, as of 2026-08-29.
+
+**Documentation sites, verified live 2026-09-06.** Three repos, all public.
+
+| repo | role | state |
+|---|---|---|
+| `ubx-docs-users` | user docs, `docs.ubiquex.io` | live, 147 pages, deploys on push to `main` |
+| `ubx-docs-providers` | provider reference, `providers.ubiquex.io` | live, ~26,500 pages |
+| `ubx-docs-ui` | shared UI, npm `@ubx/docs-ui` | **0.4.0** published, both sites consume it |
+
+`@ubx/docs-ui` 0.3.0 exists in git history but was never published: 0.4.0
+superseded it before a release was cut. Both sites pin `^0.4.0`, and on a
+0.x version npm's caret does not cross the minor, so a future 0.5.0 needs
+an explicit bump in each site. That is deliberate, and it is also how the
+provider site sat on 0.1.0 for a while after 0.2.0 shipped.
+
+Neither `ubx-docs-users` nor `ubx-docs-ui` carries a `CLAUDE.md`, where
+`ubx-docs-providers` does. Real gap, not yet filled. None of the three
+carries the `STATE.md`/`HISTORY.md` pair, which is correct: rule 3 names
+`ubx-provider-dynamic`, the six `ubx-sdk-*` and the six `ubx-schema-*`
+repos, and the docs repos follow `ubiquex-docs`'s own precedent instead.
+
+`ubiquex-docs` is now superseded. It held the Mintlify content that
+`docs.ubiquex.io` served until the cutover, and that hostname no longer
+points at it. The repo is still public and unarchived, and its
+`resource-reference/` tree is still the input the provider-site corpus
+is generated from, so it is not simply dead. What is dead is its role as
+the user-facing site.
 
 **`orphan-branch-watch` rolled out org-wide (2026-09-01), a real gap found
 along the way, both fixed and verified, DONE.** Reuses `ubiquex-docs`'s own
