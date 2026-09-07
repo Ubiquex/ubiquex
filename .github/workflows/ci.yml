@@ -123,3 +123,13 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+      - name: Provider pins agree with what is committed and released
+        # A snapshot travels through three places that can each move
+        # alone: a schema repo's committed manifest, its latest release,
+        # and the pin here. Nothing watched the gaps. UBI-249, found
+        # during UBI-241: five of eight were stranded, three of them a
+        # full major version merged but never published, for over a week.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 sdk/providers/check_pins.py
