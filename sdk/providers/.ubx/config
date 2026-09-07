@@ -93,7 +93,7 @@ version = "3.0.3"
 
 [dynamic_providers.github]
 source = "ubiquex/github"
-version = "1.0.1"
+version = "2.0.0"
 
 # UBI-240 slice 6: the [dynamic_providers.github.descriptions] pin that
 # used to live here is retired -- the corpus now lives inside
@@ -103,7 +103,7 @@ version = "1.0.1"
 
 [dynamic_providers.datadog]
 source = "ubiquex/datadog"
-version = "1.0.1"
+version = "3.0.0"
 
 # UBI-240 slice 6: the [dynamic_providers.datadog.descriptions] pin
 # that used to live here is retired -- the corpus now lives inside
@@ -113,7 +113,7 @@ version = "1.0.1"
 
 [dynamic_providers.aws]
 source = "ubiquex/aws"
-version = "1.0.0"
+version = "3.0.0"
 
 # UBI-240 slice 6: the [dynamic_providers.aws.descriptions] pin that
 # used to live here is retired -- the corpus now lives inside
@@ -136,7 +136,7 @@ version = "1.0.0"
 # adrift (the other seven each matched their own latest release exactly).
 [dynamic_providers.azure]
 source = "ubiquex/azure"
-version = "2.0.0"
+version = "2.1.0"
 
 # UBI-240 slice 6: the [dynamic_providers.azure.descriptions] pin that
 # used to live here is retired -- the corpus now lives inside
@@ -146,7 +146,7 @@ version = "2.0.0"
 
 [dynamic_providers.google]
 source = "ubiquex/google"
-version = "1.0.1"
+version = "3.0.0"
 
 # UBI-240 slice 6: the [dynamic_providers.google.descriptions] pin that
 # used to live here is retired -- the corpus now lives inside
