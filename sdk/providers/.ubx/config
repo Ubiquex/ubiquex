@@ -78,7 +78,7 @@
 
 [dynamic_providers.kubernetes]
 source = "ubiquex/kubernetes"
-version = "3.0.1"
+version = "3.0.3"
 
 # UBI-240 slice 5: the [dynamic_providers.kubernetes.descriptions] pin
 # that used to live here is retired, not just removed -- the corpus it
