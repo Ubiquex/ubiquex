@@ -25,6 +25,7 @@ package gotmpl
 
 import (
 	"fmt"
+	"go/format"
 	"sort"
 	"strings"
 
@@ -288,6 +289,47 @@ func GeneratedRepo(shortName, source, version string, types []*ir.ResourceType, 
 			}
 			files[path] = content
 		}
+	}
+
+	// Format every .go file before it leaves this package, so unformatted
+	// Go is not something a caller has to remember to clean up.
+	//
+	// Nothing did. Codegen never ran gofmt, hash-watch.yml never ran it
+	// either, and neither did any ubx-sdk-* CI, which only ever ran
+	// `go build ./...`. gofmt is not a matter of taste in Go, it is the
+	// single canonical form the whole ecosystem assumes, and the output
+	// here was not in it: struct-literal fields were tab-separated where
+	// gofmt aligns them in columns.
+	//
+	// UBI-244 recorded this as a latent risk on the grounds that the
+	// published code was clean and only a FUTURE regeneration would be
+	// sloppy. That was true when it was filed and is not true now. By
+	// the time it was picked up, 12,271 of the 14,260 generated Go files
+	// across the six published SDKs were not gofmt-clean, because the
+	// regenerations in between had all landed through the unformatted
+	// path. Whatever produced the one clean commit the ticket points at
+	// must have been a manual gofmt pass outside any committed workflow,
+	// and it was never repeated.
+	//
+	// Here rather than in a workflow step, because a workflow step is a
+	// thing eight repos have to each remember and this is one place they
+	// all already go through. A CI gofmt gate in those repos is still
+	// worth having, as a check that this stays true rather than as the
+	// mechanism that makes it true.
+	//
+	// A format error is returned rather than swallowed: it means this
+	// package emitted Go that does not parse, which is a real codegen
+	// bug, and it is much cheaper to see it here than as a compile error
+	// in a generated repo nobody is looking at yet.
+	for path, content := range files {
+		if !strings.HasSuffix(path, ".go") {
+			continue
+		}
+		formatted, err := format.Source([]byte(content))
+		if err != nil {
+			return nil, fmt.Errorf("sdk/codegen/templates/go: generated %s does not parse as Go: %w", path, err)
+		}
+		files[path] = string(formatted)
 	}
 	return files, nil
 }

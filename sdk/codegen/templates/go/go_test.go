@@ -1,6 +1,7 @@
 package gotmpl
 
 import (
+	"go/format"
 	"strings"
 	"testing"
 
@@ -834,5 +835,62 @@ func mustNotContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if strings.Contains(haystack, needle) {
 		t.Fatalf("output unexpectedly contains %q:\n%s", needle, haystack)
+	}
+}
+
+// TestGeneratedRepo_OutputIsGofmtClean is UBI-244.
+//
+// gofmt is not a style preference in Go, it is the single canonical form
+// the whole ecosystem assumes, and nothing in the pipeline was applying
+// it. Codegen did not, hash-watch.yml did not, and no ubx-sdk-* CI did
+// either: those only ever ran `go build ./...`, which is perfectly happy
+// with unformatted source.
+//
+// The ticket recorded this as a latent risk, on the grounds that the
+// published code was clean and only a future regeneration would be
+// sloppy. By the time it was picked up that had already stopped being
+// true: 12,271 of the 14,260 generated Go files across the six published
+// SDKs were not gofmt-clean, because every regeneration in between went
+// through the unformatted path.
+//
+// This asserts the property directly rather than checking for a call to
+// format.Source, so it holds however the formatting is done. Confirmed
+// to fail with the formatting pass removed, on the struct-literal
+// alignment gofmt turns into columns.
+func TestGeneratedRepo_OutputIsGofmtClean(t *testing.T) {
+	types := []*ir.ResourceType{
+		rt("aws_iam_role",
+			scalarField("id", ir.ScalarString, false, false, true, false),
+			scalarField("name", ir.ScalarString, true, false, false, false),
+			scalarField("description", ir.ScalarString, false, true, false, false),
+		),
+		rt("data_aws_iam_role",
+			scalarField("id", ir.ScalarString, true, false, false, false),
+		),
+	}
+	files, err := GeneratedRepo("aws", "hashicorp/aws", "6.54.0", types, "1.23")
+	if err != nil {
+		t.Fatalf("GeneratedRepo: %v", err)
+	}
+
+	checked := 0
+	for path, content := range files {
+		if !strings.HasSuffix(path, ".go") {
+			continue
+		}
+		checked++
+		want, err := format.Source([]byte(content))
+		if err != nil {
+			t.Errorf("%s does not parse as Go: %v", path, err)
+			continue
+		}
+		if string(want) != content {
+			t.Errorf("%s is not gofmt-clean.\n--- got\n%s\n--- want\n%s", path, content, want)
+		}
+	}
+	// Never pass by checking nothing: a repo shape that emitted no Go at
+	// all would satisfy the loop above vacuously.
+	if checked == 0 {
+		t.Fatal("no .go files in the generated repo, so this test proved nothing")
 	}
 }
