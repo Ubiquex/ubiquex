@@ -44,6 +44,18 @@ type providerPool struct {
 // network access; newRealLaunchFunc is the only production implementation.
 type launchFunc func(ctx context.Context, source, version string) (executor.Applier, io.Closer, error)
 
+// newDynamicLaunch builds the dynamic-provider launch func a pool uses,
+// and is a package-level var purely so tests can swap it.
+//
+// providerpool_test.go reaches a pool's own dynamicLaunch field directly,
+// which works when the test constructs the pool. A command that builds
+// its own pool internally (cli/scan.go's single-resource path) leaves no
+// such handle, and the real func acquires a pinned snapshot and launches
+// a real ubx-provider-dynamic, neither of which belongs in this suite.
+// Same shape and same reason as resolve.go's own fetchThirdpartySchema/
+// fetchDynamicSchema seams.
+var newDynamicLaunch = newDynamicProviderLaunchFunc
+
 // newProviderPool builds a providerPool from .ubx/config's own
 // [thirdparty_providers]/[provider_configs] tables (versions/configs,
 // already decoded -- see applyMultiProviderConfig) plus salt, the same
@@ -67,7 +79,7 @@ func newProviderPool(salt []byte, versions map[string]string, dynamic map[string
 		dynamic:       dynamic,
 		configs:       resolvedConfigs,
 		launch:        newRealLaunchFunc(salt),
-		dynamicLaunch: newDynamicProviderLaunchFunc(salt, dynamic),
+		dynamicLaunch: newDynamicLaunch(salt, dynamic),
 		launched:      map[string]executor.Applier{},
 	}, nil
 }
