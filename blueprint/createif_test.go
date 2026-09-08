@@ -27,7 +27,7 @@ params:
 
 resources: |
   {"schema_version":1,"kind":"ubx:intent/v1","stack":"bp","intent":{"summary":"s"},
-   "resources":[{"type":"aws_sqs_queue","name":"this","op":"create","create_if":"create",
+   "resources":[{"type":"aws_sqs_queue","name":"this","op":"create","create_if":["create"],
                  "config":{"queue_name":"{queue_name}"}}]}
 `
 
@@ -62,7 +62,7 @@ func TestCreateIf_GeneratesAConditional(t *testing.T) {
 }
 
 func TestCreateIf_RejectsUndeclaredParam(t *testing.T) {
-	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":"create"`, `"create_if":"nope"`, 1))
+	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":["create"]`, `"create_if":["nope"]`, 1))
 	_, _, err := Validate(dir)
 	if err == nil || !strings.Contains(err.Error(), "names no declared param") {
 		t.Fatalf("expected an undeclared-param refusal, got: %v", err)
@@ -70,7 +70,7 @@ func TestCreateIf_RejectsUndeclaredParam(t *testing.T) {
 }
 
 func TestCreateIf_RejectsNonBoolParam(t *testing.T) {
-	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":"create"`, `"create_if":"queue_name"`, 1))
+	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":["create"]`, `"create_if":["queue_name"]`, 1))
 	_, _, err := Validate(dir)
 	if err == nil || !strings.Contains(err.Error(), "must name a bool param") {
 		t.Fatalf("expected a non-bool refusal, got: %v", err)
@@ -91,7 +91,7 @@ params:
 
 resources: |
   {"schema_version":1,"kind":"ubx:intent/v1","stack":"bp","intent":{"summary":"s"},
-   "resources":[{"type":"aws_sqs_queue","name":"this","op":"create","create_if":"create","config":{}},
+   "resources":[{"type":"aws_sqs_queue","name":"this","op":"create","create_if":["create"],"config":{}},
                 {"type":"aws_sqs_queue_policy","name":"p","op":"create",
                  "config":{"queue_url":{"$ref":{"to":"bp.aws_sqs_queue.this.queue_url"}}}}]}
 `)
@@ -119,7 +119,7 @@ params:
 resources: |
   {"schema_version":1,"kind":"ubx:intent/v1","stack":"bp","intent":{"summary":"s"},
    "resources":[{"type":"aws_sqs_queue","name":"q-{names}","op":"create",
-                 "for_each":"names","create_if":"create","config":{}}]}
+                 "for_each":"names","create_if":["create"],"config":{}}]}
 `)
 	_, _, err := Validate(dir)
 	if err == nil || !strings.Contains(err.Error(), "create_if and for_each cannot both be set") {
@@ -131,7 +131,7 @@ resources: |
 // this field existed: create_if empty is every resource ever produced
 // until now.
 func TestCreateIf_AbsentChangesNothing(t *testing.T) {
-	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":"create",`, "", 1))
+	dir := writeUbxfile(t, strings.Replace(createIfUbxfile, `"create_if":["create"],`, "", 1))
 	uf, draft, err := Validate(dir)
 	if err != nil {
 		t.Fatalf("Validate: %v", err)

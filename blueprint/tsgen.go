@@ -670,6 +670,24 @@ func renderTSFunction(funcName, blueprintName string, params []Param, g *tsGener
 			body.WriteString("  });\n")
 			continue
 		}
+		if len(tr.dr.CreateIf) > 0 {
+			// UBI-125: a real `if`, not a single unconditional call.
+			// Always the bare-call form, never bound to a name:
+			// decodeBlueprint refuses a conditional resource that anything
+			// references, so nothing can need the value.
+			cond, err := g.createIfCondition(tr.dr)
+			if err != nil {
+				return "", err
+			}
+			var call strings.Builder
+			fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, tr.nameExpr)
+			for _, f := range tr.fields {
+				fmt.Fprintf(&call, "      %s: %s,\n", f.idiomatic, tr.valueExprs[f.idiomatic])
+			}
+			call.WriteString("    })")
+			fmt.Fprintf(&body, "  if (%s) {\n    %s;\n  }\n", cond, call.String())
+			continue
+		}
 		varName := lowerFirst(tr.ident)
 		var call strings.Builder
 		fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, tr.nameExpr)
@@ -846,4 +864,23 @@ func newTSForEach(g *tsGenerator, allParams []Param) (*tsForEach, error) {
 	}
 
 	return &tsForEach{paramIdent: paramIdent, valueIdent: valueIdent, indexIdent: indexIdent, accumIdent: accumIdent}, nil
+}
+
+// createIfCondition renders dr's own create_if terms into one TypeScript
+// boolean expression: a conjunction of signed param references, in the
+// order the source declared them.
+func (g *tsGenerator) createIfCondition(dr *decodedResource) (string, error) {
+	terms := make([]string, len(dr.CreateIf))
+	for i, term := range dr.CreateIf {
+		name, negated := parseCreateIfTerm(term)
+		ref, err := g.paramRef(name)
+		if err != nil {
+			return "", fmt.Errorf("blueprint: resource %s.%s: create_if: %w", dr.RI.Type, dr.RI.Name, err)
+		}
+		if negated {
+			ref = "!" + ref
+		}
+		terms[i] = ref
+	}
+	return strings.Join(terms, " && "), nil
 }

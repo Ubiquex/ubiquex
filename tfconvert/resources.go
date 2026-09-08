@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
@@ -22,11 +23,12 @@ import (
 type resourceInfo struct {
 	slug         string // this resource's own final blueprint Name (== the HCL label, or "<label>-{param}" for a for_each resource)
 	forEachParam string // "" for an ordinary resource
-	// createIfParam is the declared bool param guarding whether this
-	// resource is created at all -- "" for an unconditional one. Mutually
-	// exclusive with forEachParam by construction (both come from the same
-	// count attribute, and decodeBlueprint refuses the combination too).
-	createIfParam string
+	// createIfTerms are the signed bool param names that must all hold for
+	// this resource to be created -- nil for an unconditional one. Each
+	// entry is "name" or "!name". Mutually exclusive with forEachParam by
+	// construction (both come from the same count attribute, and
+	// decodeBlueprint refuses the combination too).
+	createIfTerms []string
 	skipped       bool
 }
 
@@ -43,6 +45,8 @@ func (c *converter) convertResources() {
 			c.addQuestion(fmt.Sprintf("resource %q: %s -- this resource was NOT converted; nothing referencing it can be either", addr, reason), c.stack+"."+addr)
 		}
 	}
+
+	c.disambiguateSlugs()
 
 	for _, rb := range c.mod.resources {
 		addr := rb.Labels[0] + "." + rb.Labels[1]
@@ -86,14 +90,17 @@ func (c *converter) planResource(rb *hclsyntax.Block) (resourceInfo, string) {
 		return resourceInfo{skipped: true}, "declares both count and for_each (mutually exclusive in Terraform itself) -- malformed source, or two conflicting edits"
 	case hasCount:
 		expr := rb.Body.Attributes["count"].Expr
-		if boolName, ok := conditionalCountVar(expr); ok {
+		if terms, ok := conditionalCountTerms(expr); ok {
 			// UBI-125: `count = var.create ? 1 : 0`, the house style
 			// across terraform-aws-modules and the single shape that
 			// blocked converting essentially that whole ecosystem.
-			if reason := c.checkCreateIfSource(boolName); reason != "" {
-				return resourceInfo{skipped: true}, reason
+			for _, term := range terms {
+				name, _ := strings.CutPrefix(term, "!")
+				if reason := c.checkCreateIfSource(name); reason != "" {
+					return resourceInfo{skipped: true}, reason
+				}
 			}
-			return resourceInfo{slug: label, createIfParam: boolName}, ""
+			return resourceInfo{slug: label, createIfTerms: terms}, ""
 		}
 		name, ok := lengthOfVarList(expr)
 		if !ok {
@@ -134,6 +141,59 @@ func (c *converter) checkForEachSource(name string) string {
 	return ""
 }
 
+// disambiguateSlugs rewrites any blueprint slug that more than one
+// converted resource would otherwise claim.
+//
+// Terraform labels are unique per TYPE, so `aws_sqs_queue.this` and
+// `aws_sqs_queue_policy.this` are distinct addresses and both perfectly
+// legal. A blueprint slug is not type-qualified for identifier purposes:
+// every generator derives its own resource identifier from the name
+// alone, so both would produce `This` and codegen refuses the collision.
+// "this" is the near-universal Terraform label, so real modules hit this
+// constantly -- terraform-aws-sqs has five resources named "this".
+//
+// Only colliding slugs are rewritten, so a module without collisions
+// converts byte-identically to before. The rewrite prefixes the resource
+// type with its provider prefix stripped ("aws_sqs_queue_policy" ->
+// "sqs_queue_policy-this"), which is derived from the source rather than
+// invented, and stays stable across runs.
+//
+// The underlying limitation is in codegen rather than here: an identifier
+// derived from the name alone cannot distinguish two types sharing a
+// label. Fixing it there would also help authored blueprints, and is
+// deliberately not attempted in this change.
+func (c *converter) disambiguateSlugs() {
+	bySlug := map[string][]string{} // slug -> addrs claiming it
+	for addr, info := range c.resourceInfo {
+		if info.skipped {
+			continue
+		}
+		bySlug[info.slug] = append(bySlug[info.slug], addr)
+	}
+	for slug, addrs := range bySlug {
+		if len(addrs) < 2 {
+			continue
+		}
+		sort.Strings(addrs) // deterministic, though every one is rewritten
+		for _, addr := range addrs {
+			info := c.resourceInfo[addr]
+			typeName := addr[:strings.Index(addr, ".")]
+			info.slug = stripProviderPrefix(typeName) + "-" + slug
+			c.resourceInfo[addr] = info
+		}
+	}
+}
+
+// stripProviderPrefix drops the leading provider segment from a Terraform
+// resource type ("aws_sqs_queue_policy" -> "sqs_queue_policy"), which is
+// noise in a slug: every resource in one converted module shares it.
+func stripProviderPrefix(typeName string) string {
+	if i := strings.Index(typeName, "_"); i >= 0 {
+		return typeName[i+1:]
+	}
+	return typeName
+}
+
 // checkCreateIfSource confirms name is a real, declared bool param --
 // empty return means OK. Mirrors checkForEachSource exactly.
 func (c *converter) checkCreateIfSource(name string) string {
@@ -150,24 +210,69 @@ func (c *converter) checkCreateIfSource(name string) string {
 	return ""
 }
 
-// conditionalCountVar recognizes exactly "var.<name> ? 1 : 0", the shape
-// Terraform modules use to make a resource optional.
+// conditionalCountTerms recognizes "<conjunction> ? 1 : 0", the shape
+// Terraform modules use to make a resource optional, where the condition
+// is a conjunction of declared bool params, each optionally negated:
 //
-// Deliberately narrow. `? 0 : 1` (inverted), `var.a && var.b ? 1 : 0`
-// (compound) and `length(x) > 0 ? 1 : 0` (derived) are all real shapes in
-// the wild, and none of them is a single declared bool param, so none has
-// a create_if to name. They fall through to the unrecognized-count
-// question rather than being approximated: a converter that guessed here
-// would silently change which resources a module creates.
-func conditionalCountVar(expr hclsyntax.Expression) (string, bool) {
+//	var.create ? 1 : 0
+//	var.create && var.create_dlq ? 1 : 0
+//	var.create && !var.create_dlq ? 1 : 0
+//
+// Returns one signed term per conjunct, in source order.
+//
+// Deliberately closed. A conjunction with optional negation is what
+// terraform-aws-modules actually writes, and it is the largest shape that
+// stays mechanically translatable. Everything else falls through to the
+// unrecognized-count question rather than being approximated:
+//
+//   - `? 0 : 1` (inverted) reads as "create when false", which is
+//     expressible as a negated term but is not what the source says, and
+//     a converter that silently rewrites the polarity of a create flag is
+//     changing which resources exist.
+//   - `a || b` (disjunction) has no conjunction to express it.
+//   - `length(var.x) > 0` (derived) is not a declared bool param at all.
+//
+// A converter that guessed at any of these would silently change which
+// resources a module creates.
+func conditionalCountTerms(expr hclsyntax.Expression) ([]string, bool) {
 	cond, ok := expr.(*hclsyntax.ConditionalExpr)
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if !isIntLiteral(cond.TrueResult, 1) || !isIntLiteral(cond.FalseResult, 0) {
-		return "", false
+		return nil, false
 	}
-	return varRefName(cond.Condition)
+	return conjunctionTerms(cond.Condition)
+}
+
+// conjunctionTerms flattens a left-nested && chain into signed param
+// names. Any operand that is not `var.<name>` or `!var.<name>` makes the
+// whole condition unrecognized, rather than converting the recognizable
+// half and silently dropping the rest.
+func conjunctionTerms(expr hclsyntax.Expression) ([]string, bool) {
+	if op, ok := expr.(*hclsyntax.BinaryOpExpr); ok && op.Op == hclsyntax.OpLogicalAnd {
+		left, ok := conjunctionTerms(op.LHS)
+		if !ok {
+			return nil, false
+		}
+		right, ok := conjunctionTerms(op.RHS)
+		if !ok {
+			return nil, false
+		}
+		return append(left, right...), true
+	}
+	if unary, ok := expr.(*hclsyntax.UnaryOpExpr); ok && unary.Op == hclsyntax.OpLogicalNot {
+		name, ok := varRefName(unary.Val)
+		if !ok {
+			return nil, false
+		}
+		return []string{"!" + name}, true
+	}
+	name, ok := varRefName(expr)
+	if !ok {
+		return nil, false
+	}
+	return []string{name}, true
 }
 
 // isIntLiteral reports whether expr is exactly the given integer literal.
@@ -278,7 +383,7 @@ func (c *converter) translateResource(rb *hclsyntax.Block, addr string, info res
 		Config:    cfgJSON,
 		DependsOn: deps,
 		ForEach:   info.forEachParam,
-		CreateIf:  info.createIfParam,
+		CreateIf:  info.createIfTerms,
 	}
 }
 

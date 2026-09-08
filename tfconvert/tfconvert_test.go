@@ -554,8 +554,8 @@ resource "aws_sqs_queue" "this" {
 	if len(res.Intent.Resources) != 1 {
 		t.Fatalf("expected 1 converted resource, got %d (questions: %+v)", len(res.Intent.Resources), res.Questions)
 	}
-	if got := res.Intent.Resources[0].CreateIf; got != "create" {
-		t.Fatalf("create_if = %q, want \"create\"", got)
+	if got := res.Intent.Resources[0].CreateIf; len(got) != 1 || got[0] != "create" {
+		t.Fatalf("create_if = %v, want [create]", got)
 	}
 	// The slug must NOT be templated the way a for_each resource's is:
 	// a conditional resource is one instance or none, never a series.
@@ -564,11 +564,10 @@ resource "aws_sqs_queue" "this" {
 	}
 }
 
-// Deliberately narrow. A compound condition is not a single declared bool
-// param, so there is no create_if to name, and guessing would silently
-// change which resources a module creates. It is refused with a question
-// rather than approximated.
-func TestConvert_CompoundConditionalCount_IsRefused(t *testing.T) {
+// A conjunction of declared bool params converts, in source order. This
+// is the dominant shape in terraform-aws-modules: a create flag plus one
+// or more per-feature flags.
+func TestConvert_ConjunctionCount_BecomesSignedTerms(t *testing.T) {
 	dir := writeModule(t, map[string]string{"main.tf": `
 variable "create" {
   type    = bool
@@ -588,8 +587,70 @@ resource "aws_sqs_queue" "this" {
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
+	if len(res.Intent.Resources) != 1 {
+		t.Fatalf("expected the conjunction to convert, got %d resource(s) (questions: %+v)", len(res.Intent.Resources), res.Questions)
+	}
+	got := res.Intent.Resources[0].CreateIf
+	if len(got) != 2 || got[0] != "create" || got[1] != "create_dlq" {
+		t.Fatalf("create_if = %v, want [create create_dlq] in source order", got)
+	}
+}
+
+// Negation converts too, as a signed term. terraform-aws-modules uses
+// `var.create && !var.create_dlq` to mean "only when there is no DLQ".
+func TestConvert_NegatedConjunction_BecomesSignedTerms(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+variable "create_dlq" {
+  type    = bool
+  default = false
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create && !var.create_dlq ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 1 {
+		t.Fatalf("expected the negated conjunction to convert, got %d (questions: %+v)", len(res.Intent.Resources), res.Questions)
+	}
+	got := res.Intent.Resources[0].CreateIf
+	if len(got) != 2 || got[0] != "create" || got[1] != "!create_dlq" {
+		t.Fatalf("create_if = %v, want [create !create_dlq]", got)
+	}
+}
+
+// A derived condition is not a declared bool param, so it has no term to
+// name and stays refused. This is the shape the conjunction form
+// deliberately does not grow to accept.
+func TestConvert_DerivedCondition_IsRefused(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+variable "redrive_policy" {
+  type    = list(string)
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create && length(var.redrive_policy) > 0 ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
 	if len(res.Intent.Resources) != 0 {
-		t.Fatalf("a compound conditional must not convert, got %d resource(s)", len(res.Intent.Resources))
+		t.Fatalf("a derived condition must not convert, got %d resource(s)", len(res.Intent.Resources))
 	}
 	var found bool
 	for _, q := range res.Questions {

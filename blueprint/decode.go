@@ -52,9 +52,10 @@ type decodedResource struct {
 	// without re-checking.
 	ForEach string
 	// CreateIf (UBI-125) mirrors RI.CreateIf verbatim once validated --
-	// the bare declared bool param name deciding whether this resource is
-	// created at all, "" for an unconditional one.
-	CreateIf string
+	// the signed bool param names that must ALL hold for this resource to
+	// be created, empty for an unconditional one. Each entry is "name" or
+	// "!name".
+	CreateIf []string
 }
 
 // decodedOutput is one outputs: entry (UBI-128), already resolved
@@ -174,15 +175,31 @@ func decodeBlueprint(intent *resolver.IntentFile, params []Param, outputs []Outp
 	// terraform-aws-modules uses (a create flag plus per-feature flags,
 	// each guarding a different subset).
 	for _, dr := range b.Resources {
-		if dr.RI.CreateIf == "" {
+		if len(dr.RI.CreateIf) == 0 {
 			continue
 		}
-		p, ok := paramByName[dr.RI.CreateIf]
-		if !ok {
-			return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q names no declared param", dr.RI.Type, dr.RI.Name, dr.RI.CreateIf)
-		}
-		if p.Type != ParamBool {
-			return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q must name a bool param, got %q", dr.RI.Type, dr.RI.Name, dr.RI.CreateIf, p.Type)
+		seen := map[string]bool{}
+		for _, term := range dr.RI.CreateIf {
+			name, negated := parseCreateIfTerm(term)
+			if name == "" {
+				return nil, fmt.Errorf("blueprint: resource %s.%s: create_if term %q is empty -- each term is a bool param name, optionally prefixed with %q", dr.RI.Type, dr.RI.Name, term, "!")
+			}
+			p, ok := paramByName[name]
+			if !ok {
+				return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q names no declared param", dr.RI.Type, dr.RI.Name, name)
+			}
+			if p.Type != ParamBool {
+				return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q must name a bool param, got %q", dr.RI.Type, dr.RI.Name, name, p.Type)
+			}
+			// The same param twice is either redundant (a && a) or
+			// contradictory (a && !a, which can never be true and would
+			// silently produce a resource that is never created). Both
+			// are mistakes worth naming rather than compiling.
+			if seen[name] {
+				return nil, fmt.Errorf("blueprint: resource %s.%s: create_if names %q more than once -- a repeated term is redundant, and a negated repeat can never be satisfied", dr.RI.Type, dr.RI.Name, name)
+			}
+			seen[name] = true
+			_ = negated
 		}
 		// A resource that may not exist cannot also be the one being
 		// iterated: the two would compose into a loop that may or may not
@@ -237,11 +254,11 @@ func decodeBlueprint(intent *resolver.IntentFile, params []Param, outputs []Outp
 	// than emitting code whose failure mode depends on the language it
 	// was generated into.
 	for _, dr := range b.Resources {
-		if dr.CreateIf == "" {
+		if len(dr.CreateIf) == 0 {
 			continue
 		}
 		if b.Referenced[dr.Address] {
-			return nil, fmt.Errorf("blueprint: resource %s.%s is conditional (create_if %q) and is also referenced by another resource or an output -- a reference to a resource that may not exist has no representation yet, so this blueprint cannot be built", dr.RI.Type, dr.RI.Name, dr.CreateIf)
+			return nil, fmt.Errorf("blueprint: resource %s.%s is conditional (create_if %s) and is also referenced by another resource or an output -- a reference to a resource that may not exist has no representation yet, so this blueprint cannot be built", dr.RI.Type, dr.RI.Name, strings.Join(dr.CreateIf, " && "))
 		}
 	}
 	// A for_each resource's own Name must genuinely vary per iteration
@@ -585,4 +602,15 @@ func numberLiteral(t float64) string {
 func jsonStringLiteral(s string) string {
 	raw, _ := json.Marshal(s) // a Go string can always be JSON-marshaled
 	return string(raw)
+}
+
+// parseCreateIfTerm splits one create_if term into its param name and
+// whether it is negated. "create" -> ("create", false); "!create_dlq" ->
+// ("create_dlq", true). A term that is only "!" yields an empty name,
+// which the caller reports rather than silently dropping.
+func parseCreateIfTerm(term string) (name string, negated bool) {
+	if strings.HasPrefix(term, "!") {
+		return strings.TrimPrefix(term, "!"), true
+	}
+	return term, false
 }

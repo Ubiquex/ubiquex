@@ -472,10 +472,24 @@ type ResourceIntent struct {
 	// same as if a caller had hand-written N separate resource() calls.
 	ForEach string `json:"for_each,omitempty"`
 
-	// CreateIf (UBI-125) is the bare name of a declared bool params:
-	// entry deciding whether this resource is created at all -- "" for an
+	// CreateIf (UBI-125) is the set of declared bool params: entries that
+	// must ALL hold for this resource to be created at all -- empty for an
 	// ordinary, unconditional resource, which is every resource produced
 	// before this field existed.
+	//
+	// Each entry is a bare param name, or a param name prefixed with "!"
+	// meaning it must be false. A conjunction with optional negation, and
+	// nothing else: no disjunction, no comparison, no nesting.
+	//
+	// A closed list of signed names rather than an expression form,
+	// deliberately. terraform-aws-modules guards resources with exactly
+	// this shape (`var.create && var.create_dlq`,
+	// `var.create && !var.create_dlq`), so a conjunction reaches most of
+	// what real modules need, while an expression form would invite
+	// `length(x) > 0` and then arithmetic and then a language, and stop
+	// being something a converter can translate deterministically. What
+	// does not fit stays refused and surfaces as a question, which is
+	// honest; a form that grows to accept anything is not.
 	//
 	// It exists because Terraform's `count = var.create ? 1 : 0` is the
 	// house style across terraform-aws-modules, and blocked conversion of
@@ -495,7 +509,7 @@ type ResourceIntent struct {
 	// compiled by each language's own codegen into a real `if`, and never
 	// surviving past codegen -- an invoked blueprint emits either one
 	// ordinary ResourceIntent with CreateIf empty, or none at all.
-	CreateIf string `json:"create_if,omitempty"`
+	CreateIf []string `json:"create_if,omitempty"`
 }
 
 const (
