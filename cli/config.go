@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -438,4 +439,48 @@ func resolveShowDefaults(cmd *cobra.Command, cfg *Config) (bool, error) {
 		return *cfg.Intent.ShowDefaults, nil
 	}
 	return true, nil
+}
+
+// validateProviderConfigsAgainstDynamic refuses a [provider_configs]
+// entry keyed to a [providers] key.
+//
+// A ubx dynamic provider declares an empty provider schema block in every
+// one of its servers, and its ConfigureProvider is a no-op that discards
+// whatever it is handed. So such an entry has exactly two possible fates
+// and neither is what the author wanted: the encoder rejects it at the
+// first Configure with `unsupported attribute "<key>"`, or, if the schema
+// were ever widened to accept it, it is accepted and silently ignored.
+//
+// Refused at load, loudly, rather than at whichever command happens to
+// configure a provider first. Configure has only two callers, RunScan and
+// executor.Ship, and plan is neither, so `ubx init --region ... ` wrote a
+// config that planned cleanly and failed at ship, the last command in the
+// documented flow and the one where a failure costs the most attention.
+// The config is wrong the moment it is written, so that is where it is
+// reported.
+//
+// The message names [dynamic_providers.<key>.auth] because that is where
+// the setting actually lives: a pinned snapshot carries its own auth
+// block, fixed when the snapshot was generated, and the launch passes the
+// provider nothing but its name and that snapshot's path. Saying only
+// "not supported" would leave the reader with no next move.
+func validateProviderConfigsAgainstDynamic(cfg *Config) error {
+	if len(cfg.ProviderConfigs) == 0 || len(cfg.Providers) == 0 {
+		return nil
+	}
+	var bad []string
+	for key := range cfg.ProviderConfigs {
+		if _, dynamic := cfg.Providers[key]; dynamic {
+			bad = append(bad, key)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("load config: [provider_configs.%s] is set, but %q is a ubx dynamic provider declared under [providers]: "+
+		"a dynamic provider declares no provider-level configuration and takes its region and credentials from the pinned "+
+		"snapshot's own [dynamic_providers.%s.auth] block, fixed when that snapshot was generated. Remove this entry; "+
+		"to run against different settings, pin a snapshot generated for them",
+		bad[0], bad[0], bad[0])
 }

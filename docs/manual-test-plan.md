@@ -98,8 +98,16 @@ only to teach; it is deliberately not an alias.
 
 ```
 mkdir -p ~/ubxflow && cd ~/ubxflow
-$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0 --region us-east-1
+$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0
 ```
+
+No `--region` here, and that is the point rather than an omission. A ubx
+dynamic provider declares no provider-level configuration at all, so a
+region written into `provider_configs` is rejected by the provider at the
+first read or apply. `ubx init` refuses the flag on this path as of
+2026-09-08. Region and credentials come from the pinned snapshot's own
+`[dynamic_providers.aws.auth]` block, fixed when the snapshot was
+generated. See section 2.1a.
 
 **Correct:** it completes immediately without asking anything, and the
 next-step line on stdout matches the comment written into the file. Both
@@ -114,12 +122,39 @@ providers = {
     version = "3.0.0"
   }
 }
-provider_configs = {
-  "aws" = {
-    region = "us-east-1"
-  }
-}
 ```
+
+There is deliberately no `provider_configs` table. If you see one for a
+`[providers]` key, that is the bug this section exists to catch: every
+later command now refuses to load such a config.
+
+### 2.1a The region flag is refused, loudly
+
+```
+$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0 --region us-east-1
+```
+
+**Correct:** it refuses, names `--region`, and names
+`[dynamic_providers.aws.auth]` as where the setting actually lives. The
+same refusal applies to `--provider-config`, since `--region` describes
+itself as shorthand for it.
+
+**Failure:** it succeeds. A config that writes a region here plans
+cleanly and fails at `ubx ship`, because `plan` never configures a
+provider, so the error surfaces at the last command in the flow rather
+than the first. Silently dropping the region instead would be worse
+still: the stack would run in whichever region the snapshot baked,
+without ever saying so.
+
+Hand-write the same shape to check the load-time refusal:
+
+```
+printf '\n[provider_configs.aws]\nregion = "us-east-1"\n' >> .ubx/config
+$UBX history --stack billing
+```
+
+**Correct:** any command refuses at load, naming the auth block. Remove
+those two lines before continuing.
 
 **Failure:** it sits at a `Provider, e.g. ...` prompt despite both
 provider flags being given. That was the behaviour until 2026-09-08 and
