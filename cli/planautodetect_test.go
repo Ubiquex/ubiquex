@@ -164,7 +164,11 @@ func TestPlanAutodetect_ReadmeOnly_StillRequiresInput(t *testing.T) {
 // file's content hash, which is what makes an SDK-authored proposal
 // auditable at all.
 func TestPlanAutodetect_ConventionalEntryWinsOverOtherPrograms(t *testing.T) {
+	requireDeno(t)
+
 	dir := t.TempDir()
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `stack = "playground"`)
 	writeFile(t, filepath.Join(dir, "billing.ts"), autodetectSDKProgram)
 	writeFile(t, filepath.Join(dir, "stack.ts"), autodetectSDKProgram)
 
