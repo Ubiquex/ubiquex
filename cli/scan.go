@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/discovery"
 	"github.com/ubiquex/ubiquex/provider"
 )
@@ -229,49 +230,93 @@ func newScanCmd() *cobra.Command {
 			}
 			defer closeLedger()
 
-			// UBI-49 finding #4: single-resource scan used to resolve a
-			// provider ONLY through the legacy singular --provider/--source
-			// flags/[provider] config, even on a stack whose real authority
-			// is a [thirdparty_providers] table (the same table --all/--discover/ship/
-			// status already honor) -- unreadable there without falling
-			// back to flags the stack doesn't otherwise need. When
-			// cfg.ThirdpartyProviders is declared, infer which source owns
-			// resourceType (a real, free schema check -- see
-			// inferProviderForType) instead of the legacy path.
-			if len(cfg.ThirdpartyProviders) > 0 {
-				warnIfLegacyProviderFlagsGiven(cmd)
-				inferredSource, inferredVersion, ierr := inferProviderForType(ctx, cfg.ThirdpartyProviders, resourceType)
-				if ierr != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, ierr)}
-				}
-				source = inferredSource
-				providerVersion = inferredVersion
-				providerPath = ""
-				if !cmd.Flags().Changed("provider-config") {
-					if pc, ok := cfg.ProviderConfigs[inferredSource]; ok {
-						b, merr := json.Marshal(pc)
-						if merr != nil {
-							return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: provider_configs: marshal %q: %w", addr, inferredSource, merr)}
-						}
-						providerConfig = string(b)
-					}
-				}
-			}
-
-			path, checksum, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
-			}
-
-			client, err := provider.Launch(ctx, path)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
-			}
-			defer client.Close()
-
 			salt, err := ledger.Salt()
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
+			}
+
+			// UBI-49 finding #4: single-resource scan used to resolve a
+			// provider ONLY through the legacy singular --provider/--source
+			// flags/[provider] config, even on a stack whose real authority
+			// is a provider table (the same table --all/--discover/ship/
+			// status already honor) -- unreadable there without falling
+			// back to flags the stack doesn't otherwise need. When a table
+			// is declared, infer which provider owns resourceType instead of
+			// taking the legacy path.
+			//
+			// That fix read [thirdparty_providers] only, and went on reading
+			// only it after ccd8b8d3 split the table in two, so a stack
+			// declaring nothing but [providers] was invisible to it: the
+			// same unfinished migration that left `ubx ship` unable to use a
+			// dynamic provider, in a differently-shaped place. ship's half
+			// was one condition, because ship already built a pool. This one
+			// was structural -- there was no pool here at all, just a single
+			// acquire-and-launch, and a dynamic provider is not acquired
+			// from a registry, so no condition could have reached it.
+			//
+			// It now goes through exactly the mechanism the five commands
+			// swept by d2d235ac already use: a pool, declaredProvidersForInference
+			// to launch each declared provider and read its schema, and
+			// resolver.InferProvider to pick the owner. Both kinds of table
+			// entry route through pool.Get, which dispatches on the key
+			// itself, so neither is a special case here.
+			var reader core.StateReader
+			var checksum string
+
+			if hasProviderTable(cfg) {
+				warnIfLegacyProviderFlagsGiven(cmd)
+				pool, perr := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
+				if perr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, perr)}
+				}
+				defer pool.Close()
+
+				versions := resolvedProviderVersions(cfg)
+				declared, derr := declaredProvidersForInference(ctx, pool, versions)
+				if derr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, derr)}
+				}
+				winner, ierr := resolver.InferProvider(declared, resourceType, nil)
+				if ierr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, ierr)}
+				}
+
+				app, poolConfig, gerr := pool.Get(ctx, winner.Source, winner.Version)
+				if gerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, gerr)}
+				}
+				// The pool hands back an executor.Applier, and the concrete
+				// value behind it is stateReaderAdapter -- the identical
+				// struct newStateReader builds, since it implements the read
+				// and apply surfaces both. The assertion is the seam between
+				// those two views of one object, not a conversion.
+				sr, ok := app.(core.StateReader)
+				if !ok {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: provider %q cannot read state", addr, winner.Source)}
+				}
+				reader = sr
+				source = winner.Source
+				providerVersion = winner.Version
+				providerPath = ""
+				if !cmd.Flags().Changed("provider-config") && len(poolConfig) > 0 {
+					providerConfig = string(poolConfig)
+				}
+				// checksum stays empty, matching resolveProviderBinary's own
+				// answer for a direct --provider path: nothing was acquired
+				// from a registry, so there is no release digest to attribute.
+				// Recording a made-up one would be worse than recording none.
+			} else {
+				path, ck, rerr := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+				if rerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, rerr)}
+				}
+				client, lerr := provider.Launch(ctx, path)
+				if lerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, lerr)}
+				}
+				defer client.Close()
+				reader = newStateReader(client.Provider, salt, source)
+				checksum = ck
 			}
 
 			// UBI-49 finding #5: an already-tracked address's own recorded
@@ -289,7 +334,7 @@ func newScanCmd() *cobra.Command {
 				}
 			}
 
-			res, err := core.RunScan(ctx, newStateReader(client.Provider, salt, source), ledger, core.ScanRequest{
+			res, err := core.RunScan(ctx, reader, ledger, core.ScanRequest{
 				Address:          addr,
 				ProviderConfig:   json.RawMessage(providerConfig),
 				CurrentState:     currentState,
