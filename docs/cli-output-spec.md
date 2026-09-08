@@ -373,10 +373,8 @@ of medium to detect between, only how many SDK-program candidates
 - Summary block, each line BOLD (`forceBold`, style.go — a plain nested
   `Bold(Green(...))` call doesn't compose correctly with this package's
   single-reset-per-call color design; see its own doc comment), one
-  empty line between the delta line and the blast-radius/cost block:
+  empty line before the blast-radius/cost block:
   ```
-  delta: +5 create(s), ~0 change(s), -0 terminate(s)
-
   blast radius: +5 ~0 -0
   pinned: network @ 4b1e77a2c3d4
   ```
@@ -409,7 +407,7 @@ of medium to detect between, only how many SDK-program candidates
   real zero. When a pricing source exists the line returns unchanged, in
   the position shown above. The scope of that work is recorded on
   UBI-251.
-  The delta line's own vocabulary is "change(s)"/"terminate(s)" (UBI-88),
+  The spelled-out "change(s)"/"terminate(s)" vocabulary (UBI-88),
   matching the change/terminate wording the op headers above already use
   — not "modify(ies)"/"destroy(s)". The same rename also applies (UBI-88
   vocabulary sweep) to every other spelled-out create/modify/destroy count

@@ -432,9 +432,22 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	// already use (renderModifies' "~ <address> change", renderDestroys'
 	// "- <address> destroy" -- word ORDER now matches, the op word itself
 	// stays "destroy", a deliberately scoped decision, not an oversight).
-	fmt.Fprintln(out, st.forceBold("delta: "+deltaCounts(st,
-		int64(len(p.Delta.Creates)), int64(len(p.Delta.Modifies)), int64(len(p.Delta.Destroys)))))
-	fmt.Fprintln(out)
+	// No "delta:" line. It printed the same three numbers as blast radius
+	// directly beneath it: core/resolver sets BlastRadius to exactly
+	// len(creates)/len(modifies)/len(destroys), so on a receipt the two
+	// were always identical, and the resource list above already says
+	// what changed.
+	//
+	// blast radius is the one that survives because it is the schema
+	// field, and `--confirm-destroys` gates on blast_radius.destroys, so
+	// the receipt names the thing the acceptance check will refer to.
+	//
+	// This inverts UBI-88's own decision, which deliberately kept delta
+	// spelled out and blast radius symbol-only. That split made sense
+	// while they were the only summary lines; it stopped making sense
+	// once `ubx history` adopted the compact form too, leaving one
+	// vocabulary for the same three numbers in three places and a second
+	// one here.
 	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("blast radius: %s %s %s",
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
 		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),

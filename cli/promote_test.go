@@ -163,7 +163,7 @@ func TestPromote_SDKAuthoredSource_ReResolvesAgainstTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx promote (SDK source): %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "delta: +1 ") {
+	if !strings.Contains(out, "blast radius: +1 ") {
 		t.Errorf("expected a real 1-create delta from actually re-running the program, got:\n%s", out)
 	}
 
