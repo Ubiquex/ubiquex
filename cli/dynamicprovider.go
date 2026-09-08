@@ -465,38 +465,39 @@ func acquireSchemaResult(ctx context.Context, name, src, version string) (*provi
 // providerPool.Get path, and loadDynamicProviderSchema's own ubx
 // resolve/ubx plan path) share this one function so binary resolution
 // can never drift between them.
-func acquirePinnedSchemaAndBinary(ctx context.Context, name string, params map[string]any) (binPath string, env []string, err error) {
+func acquirePinnedSchemaAndBinary(ctx context.Context, name string, params map[string]any) (binPath string, env []string, snapshotDir string, err error) {
 	src, version, pinned, err := pinnedSchemaFields(params)
 	if err != nil {
-		return "", nil, fmt.Errorf("[providers.%s]: %w", name, err)
+		return "", nil, "", fmt.Errorf("[providers.%s]: %w", name, err)
 	}
 	if !pinned {
-		return "", nil, fmt.Errorf("[providers.%s] must be pinned (\"source\" and \"version\" both required) -- live-fetch config (schema_source/schema_url/...) belongs under [dynamic_providers.%s] instead, never [providers.%s]", name, name, name)
+		return "", nil, "", fmt.Errorf("[providers.%s] must be pinned (\"source\" and \"version\" both required) -- live-fetch config (schema_source/schema_url/...) belongs under [dynamic_providers.%s] instead, never [providers.%s]", name, name, name)
 	}
 
 	schemaResult, err := acquireSchemaResult(ctx, name, src, version)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	env = []string{"UBX_DYNAMIC_PROVIDER_NAME=" + name, "UBX_SNAPSHOT_PATH=" + schemaResult.Path}
+	snapshotDir = schemaResult.Path
 
 	if os.Getenv("UBX_PROVIDER_DYNAMIC_REPO") != "" {
 		binPath, err = resolveAmbientDynamicProviderBinary()
 		if err != nil {
-			return "", nil, err
+			return "", nil, "", err
 		}
-		return binPath, env, nil
+		return binPath, env, snapshotDir, nil
 	}
 
 	binVersion, err := provider.ResolveDynamicProviderBinaryVersion(schemaResult.Path)
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve ubx-provider-dynamic version for %q: %w", name, err)
+		return "", nil, "", fmt.Errorf("resolve ubx-provider-dynamic version for %q: %w", name, err)
 	}
 	binResult, err := provider.AcquireDynamicProviderBinary(ctx, binVersion)
 	if err != nil {
-		return "", nil, fmt.Errorf("acquire ubx-provider-dynamic@%s for %q: %w", binVersion, name, err)
+		return "", nil, "", fmt.Errorf("acquire ubx-provider-dynamic@%s for %q: %w", binVersion, name, err)
 	}
-	return binResult.Path, env, nil
+	return binResult.Path, env, snapshotDir, nil
 }
 
 // dynamicProviderEnv resolves the real env vars a launched
@@ -640,7 +641,7 @@ func resolveAmbientDynamicProviderBinary() (string, error) {
 // shape resolve's own thirdparty branch already has for a real
 // Terraform-registry provider).
 func loadDynamicProviderSchema(ctx context.Context, name string, params map[string]any) (*provider.Schemas, error) {
-	binPath, env, err := acquirePinnedSchemaAndBinary(ctx, name, params)
+	binPath, env, _, err := acquirePinnedSchemaAndBinary(ctx, name, params)
 	if err != nil {
 		return nil, err
 	}
@@ -775,9 +776,25 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		// checkout dependency, and no workDir at all (a pinned launch
 		// is fully self-sufficient via UBX_SNAPSHOT_PATH, per
 		// acquirePinnedSchemaAndBinary's own doc comment).
-		binPath, env, err := acquirePinnedSchemaAndBinary(ctx, key, params)
+		binPath, env, snapshotDir, err := acquirePinnedSchemaAndBinary(ctx, key, params)
 		if err != nil {
 			return nil, nil, err
+		}
+
+		// The snapshot's own answer to "which attributes identify one
+		// instance of this resource type", when it publishes one. Read
+		// here because this is where the snapshot directory is in scope,
+		// and handed to the applier, which is where a lookup key is
+		// actually derived at apply time.
+		//
+		// A read failure is fatal rather than degrading to nil: nil means
+		// "this snapshot cannot say" and is a legitimate answer for every
+		// snapshot published before identity.json existed, so swallowing
+		// a genuine parse error here would be indistinguishable from that
+		// and would silently restore the derivation this replaces.
+		identity, err := provider.ReadSnapshotIdentity(snapshotDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("provider %q: %w", key, err)
 		}
 
 		client, err := provider.Launch(ctx, binPath,
@@ -787,7 +804,7 @@ func newDynamicProviderLaunchFunc(salt []byte, dynamic map[string]map[string]any
 		if err != nil {
 			return nil, nil, fmt.Errorf("launch ubx-provider-dynamic for %q: %w", key, err)
 		}
-		return newApplier(client.Provider, salt, "ubiquex/dynamic/"+key), client, nil
+		return newApplierWithIdentity(client.Provider, salt, "ubiquex/dynamic/"+key, identity), client, nil
 	}
 }
 

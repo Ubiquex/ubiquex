@@ -30,6 +30,14 @@ type stateReaderAdapter struct {
 	p      provider.Provider
 	salt   []byte
 	source string
+
+	// identity is resource type -> the attribute names that identify one
+	// instance, when the provider was able to say. Populated from the
+	// snapshot's own identity.json for a dynamic provider; nil for a
+	// Terraform registry provider, which has no such file and for which
+	// the "id" convention the fallback assumes is genuinely correct.
+	// See ApplyResourceChange for what it is used for.
+	identity map[string][]string
 }
 
 func (a stateReaderAdapter) Schema(ctx context.Context) (any, map[string]any, error) {
@@ -119,6 +127,35 @@ func (a stateReaderAdapter) ApplyResourceChange(ctx context.Context, resourceSch
 	// own id-only default (core/apply.go's own doc comment: "id" alone
 	// doesn't round-trip back into a working re-read for every real
 	// resource type, aws_iam_role_policy_attachment confirmed live).
+	// The provider's own answer wins when it has one.
+	//
+	// The derivation below asks the schema, and the schema cannot say:
+	// tfplugin6 gives an attribute Required/Optional/Computed/Sensitive
+	// and nothing that means "this is how you find the resource again".
+	// So it guesses the Terraform way, "id" or else the Required
+	// attributes, which is right for a registry provider and wrong for a
+	// CloudFormation one, whose identifier is readOnly and therefore
+	// Computed and therefore deliberately excluded here. Measured against
+	// the real AWS snapshot, that left 10% of resource types with no
+	// lookup key at all and 53% with one that could not re-find the
+	// resource, which meant they could not be destroyed and were never
+	// drift-checked.
+	//
+	// A dynamic provider's snapshot now publishes the answer directly
+	// (provider.ReadSnapshotIdentity), so when it is present it is used
+	// verbatim rather than re-derived. Absent falls through unchanged,
+	// which is every registry provider and every snapshot published
+	// before identity.json existed.
+	if ident := a.identity[typeName]; len(ident) > 0 {
+		if lookup := core.DeriveLookupFromResult(redacted, ident); len(lookup) > 0 {
+			return redacted, lookup, nil
+		}
+		// Declared identity that produced nothing means the observed
+		// result did not carry the attributes the provider named. Falling
+		// through is right: a partial key is worse than the old guess,
+		// and the guess at least has a chance of finding an "id".
+	}
+
 	var requiredAttrs []string
 	for _, attr := range rs.Block.Attributes {
 		if attr.Required {
@@ -166,4 +203,11 @@ func newStateReader(p provider.Provider, salt []byte, source string) core.StateR
 // ship.go's own call site never needs to know the concrete adapter type.
 func newApplier(p provider.Provider, salt []byte, source string) executor.Applier {
 	return stateReaderAdapter{p: p, salt: salt, source: source}
+}
+
+// newApplierWithIdentity is newApplier for a provider that publishes its
+// own identity map. Only the dynamic launch path has one; see
+// stateReaderAdapter.identity and ApplyResourceChange.
+func newApplierWithIdentity(p provider.Provider, salt []byte, source string, identity map[string][]string) executor.Applier {
+	return stateReaderAdapter{p: p, salt: salt, source: source, identity: identity}
 }
