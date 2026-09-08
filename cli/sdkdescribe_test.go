@@ -140,7 +140,7 @@ func TestEnrichDescriptions_StaleCheckedInEntry_PrunedNotAppliedWhenSourced(t *t
 	checkedIn := checkedInDescriptions{
 		"github_repository": {
 			"private":    "Whether the repository is private.", // stale -- must be pruned
-			"visibility": "The repository's visibility level.",  // still genuinely needed -- must survive
+			"visibility": "The repository's visibility level.", // still genuinely needed -- must survive
 		},
 	}
 

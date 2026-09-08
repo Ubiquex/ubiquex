@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ubiquex/ubiquex/core"
 	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
-	"github.com/ubiquex/ubiquex/core"
 	ghub "github.com/ubiquex/ubiquex/vcs/github"
 	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
 	"github.com/ubiquex/ubiquex/writeback"

@@ -316,7 +316,7 @@ func promoteSDKSource(ctx context.Context, cmd *cobra.Command, authSource *core.
 	sum := sha256.Sum256(data)
 	currentHash := "sha256:" + hex.EncodeToString(sum[:])
 	if currentHash != authSource.ContentHash {
-		return nil, fmt.Errorf("%s has changed since the source proposal was drafted (was %s, now %s) -- promote only re-runs an UNCHANGED program; a changed program is new intent, not a promotion. Draft it fresh instead, e.g. \"ubx plan --from-code %s\"", authSource.Ref, authSource.ContentHash, currentHash, authSource.Ref)
+		return nil, fmt.Errorf("%s has changed since the source proposal was drafted (was %s, now %s) -- promote only re-runs an UNCHANGED program; a changed program is new intent, not a promotion. Draft it fresh instead, e.g. \"ubx plan %s\"", authSource.Ref, authSource.ContentHash, currentHash, authSource.Ref)
 	}
 
 	canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, authSource.Ref)

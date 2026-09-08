@@ -60,13 +60,13 @@ func newPlanCmd() *cobra.Command {
 		Long: `Fuses "ubx propose" + "ubx resolve" + a preview render into one command -- the
 terraform-shaped, two-step half of this project's own workflow (plan, then "ubx ship <hash>").
 
-Exactly one input is required: a hand-written ubx:intent/v1 file (the positional argument), or
---from-code <entry>.ts|.go|.py (a TypeScript, Go, or Python SDK program, dispatched by
-extension to the identical evaluator "ubx resolve --from-code" uses).
+One file argument, dispatched by its own extension: an ubx:intent/v1 file, or a
+TypeScript, Go or Python SDK program (.ts/.go/.py) evaluated through the same evaluator
+"ubx resolve" uses.
 
-Bare "ubx plan" (no argument, no --from-code) auto-detects a single SDK program in the working
-directory and plans it automatically. Multiple candidates are listed, never guessed -- rerun
-naming one explicitly.
+Bare "ubx plan" with no argument finds the program itself: stack.ts (or stack.go,
+stack.py) if one is there, otherwise the only SDK program in the directory. Several
+programs with no conventional entry among them are listed, never guessed.
 
 The result resolves through the identical, unmodified core/resolver.Resolve every other entry
 point already uses -- same invariants, same orphan/pin checks, same failure modes. Its full
@@ -85,17 +85,26 @@ propose-time PR trailer hash, etc.).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A positional SDK program needs no flag: `ubx plan stack.ts`.
+			// Promoted before the mutual-exclusion check below, so passing
+			// both an argument and --from-code still errors rather than
+			// silently preferring one.
+			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0], false) {
+				fromCode = args[0]
+				args = nil
+			}
+
 			modes := len(args)
 			if fromCode != "" {
 				modes++
 			}
 			if modes > 1 {
-				return &ExitCodeError{Code: 2, Err: errors.New("plan: an intent-file argument and --from-code are mutually exclusive")}
+				return &ExitCodeError{Code: 2, Err: errors.New("plan: pass one file argument, not both a positional file and --from-code")}
 			}
 			if modes == 0 {
 				candidates, derr := autodetectMedium(ledgerDir)
 				if derr != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: requires exactly one of an intent-file argument or --from-code (auto-detection failed: %w)", derr)}
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: no file argument given and the directory could not be searched for one: %w", derr)}
 				}
 				// A conventional name wins outright, so a directory can hold
 				// more than one SDK program without bare `ubx plan` becoming
@@ -118,7 +127,7 @@ propose-time PR trailer hash, etc.).`,
 						hints := make([]string, len(candidates))
 						for i, c := range candidates {
 							names[i] = c.path
-							hints[i] = fmt.Sprintf("ubx plan --from-code %s", c.path)
+							hints[i] = fmt.Sprintf("ubx plan %s", c.path)
 						}
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one with `ubx plan --from-code <file>`, or name one of them %s: %s", strings.Join(names, ", "), conventionalEntryNames(), strings.Join(hints, " | "))}
 					}
@@ -255,10 +264,17 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under .ubx/plans/ regardless)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition and evaluation (--from-code) -- one shared budget for the whole command")
+	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition and SDK program evaluation -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file")
+	// --from-code is kept, hidden, as an alias for the positional form.
+	// It distinguishes nothing since UBI-224 removed the other authoring
+	// mediums, but it is spelled out across the tutorials, in `ubx
+	// promote`'s own teaching errors, and in this command's own
+	// multiple-candidate hint, so removing it outright would break
+	// working invocations for no gain.
+	_ = cmd.Flags().MarkHidden("from-code")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	cmd.Flags().BoolVar(&showDefaultsFlag, "show-defaults", false, "render the full \"AI defaults\" block regardless of [intent] show_defaults (mutually exclusive with --hide-defaults)")
 	cmd.Flags().BoolVar(&hideDefaultsFlag, "hide-defaults", false, "collapse the \"AI defaults\" block to a one-line count regardless of [intent] show_defaults (mutually exclusive with --show-defaults) -- full detail is always in the saved plan file and the signed proposal either way")
@@ -628,4 +644,33 @@ func conventionalEntryNames() string {
 		names[i] = conventionalEntryBase + ext
 	}
 	return strings.Join(names, "/")
+}
+
+// sdkEntryFile reports whether path names an authoring program rather
+// than a pre-resolved intent/v1 document, by extension, using exactly
+// the dispatch --from-code already performed.
+//
+// This is what lets `ubx plan stack.ts` work without a flag. --from-code
+// existed to tell an SDK program apart from the markdown, diagram and
+// chat mediums, and UBI-224 removed all three, so from then on it
+// distinguished nothing: every non-intent-file input was an SDK program.
+// A flag whose only job is to say "this argument is the kind of argument
+// it obviously is" is a flag worth not typing.
+//
+// allowHCL follows each command's own existing contract rather than
+// unifying them behind this change's back: `ubx resolve --from-code`
+// has always accepted a .ubx.hcl blueprint-calling file, and `ubx plan
+// --from-code` has always rejected one. Widening plan's accepted set is
+// a real behaviour change with its own argument to make, not a
+// side effect of dropping a flag.
+func sdkEntryFile(path string, allowHCL bool) bool {
+	lower := strings.ToLower(path)
+	if allowHCL && strings.HasSuffix(lower, ".ubx.hcl") {
+		return true
+	}
+	switch filepath.Ext(lower) {
+	case ".ts", ".go", ".py":
+		return true
+	}
+	return false
 }

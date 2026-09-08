@@ -12,14 +12,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/provider"
 	adevops "github.com/ubiquex/ubiquex/vcs/azuredevops"
 	bbcloud "github.com/ubiquex/ubiquex/vcs/bitbucketcloud"
 	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
-	"github.com/ubiquex/ubiquex/core"
-	"github.com/ubiquex/ubiquex/core/resolver"
 	ghub "github.com/ubiquex/ubiquex/vcs/github"
 	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
-	"github.com/ubiquex/ubiquex/provider"
 )
 
 func newAcceptCmd() *cobra.Command {

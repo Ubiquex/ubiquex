@@ -53,7 +53,7 @@ func newResolveCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "resolve <intent-file>",
-		Short: "Resolve a typed ubx:intent/v1 file (or a TypeScript/Go/Python SDK program or a .ubx.hcl blueprint-calling file, --from-code) into a draft change proposal",
+		Short: "Resolve an ubx:intent/v1 file, a TypeScript/Go/Python SDK program, or a .ubx.hcl blueprint-calling file into a draft change proposal",
 		Long: `Resolves a hand-written, machine-shaped intent file (ubx:intent/v1) into a draft
 kind:"change" proposal -- creates, modifies, and destroys (docs/resolver.md).
 Intra-stack references are checked against the ledger's own dependency graph (with real cycle
@@ -61,8 +61,7 @@ detection) and emitted in dependency order; cross-stack references are pinned ag
 ledger's current head, activating neighbor-advance staleness for real once the proposal is accepted
 (see "ubx accept"'s own pin re-verification).
 
---from-code <entry>.ts|.go|.py|.ubx.hcl, mutually exclusive with the positional intent-file
-argument, dispatched by the entry file's own extension. .ts/.go/.py evaluate a real SDK program:
+The file argument is dispatched by its own extension. .ts/.go/.py evaluate a real SDK program:
 .ts through the hermetic Deno evaluator (tseval, @ubx/sdk), .go by compiling the program to a real
 binary and running it under this platform's own OS-level sandbox (goeval, github.com/ubiquex/
 ubx-sdk-go; sandbox-exec on macOS, bubblewrap on Linux), .py under WASI (pyeval, ubx_sdk; wasmtime
@@ -75,8 +74,8 @@ intent/v1 document, provenance-stamped with the entry file's own content hash (i
 {"kind":"document", "ref", "content_hash"}) for an SDK program, is handed to the exact same,
 completely unmodified pipeline below: an SDK program or a .ubx.hcl file is just another intent/v1
 producer, never a special case, regardless of which. A typed SDK program or a .ubx.hcl file has no
-ambiguity to review before resolving -- it says what it says -- so --from-code resolves directly,
-one command, no separate draft step.
+ambiguity to review before resolving -- it says what it says -- so it resolves directly, one
+command, no separate draft step.
 
 A destroy is explicit intent only (the intent file's own top-level "destroys" list, addresses
 never inferred from a resource's absence) and resolve-time orphan-protected: a destroy target
@@ -102,11 +101,19 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
 
+			// A positional SDK program or .ubx.hcl file needs no flag:
+			// `ubx resolve stack.ts`. Promoted before the mutual-exclusion
+			// check below, so passing both still errors.
+			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0], true) {
+				fromCode = args[0]
+				args = nil
+			}
+
 			if fromCode != "" && len(args) > 0 {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: --from-code and a positional intent-file argument are mutually exclusive")}
 			}
 			if fromCode == "" && len(args) == 0 {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires either an intent-file argument or --from-code <entry>.ts|.go|.py|.ubx.hcl")}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: requires a file argument -- an ubx:intent/v1 file, or an SDK program (.ts, .go, .py) or .ubx.hcl blueprint-calling file")}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -256,10 +263,17 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "write the resolved proposal here instead of stdout")
-	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and (--from-code) evaluating the SDK program -- one shared budget for the whole command, not per sub-operation")
+	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and evaluating an SDK program -- one shared budget for the whole command, not per sub-operation")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, or parse a .ubx.hcl blueprint-calling file, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
+	// --from-code is kept, hidden, as an alias for the positional form.
+	// It distinguishes nothing since UBI-224 removed the other authoring
+	// mediums, but it is spelled out across the tutorials, in `ubx
+	// promote`'s own teaching errors, and in this command's own
+	// multiple-candidate hint, so removing it outright would break
+	// working invocations for no gain.
+	_ = cmd.Flags().MarkHidden("from-code")
 
 	return cmd
 }

@@ -204,3 +204,94 @@ func TestPlanAutodetect_NoConventionalEntry_StillRefusesAndTeaches(t *testing.T)
 		t.Errorf("the ambiguity error does not name the conventional way out: %v", err)
 	}
 }
+
+// TestPlanResolve_PositionalSDKProgram_NeedsNoFlag is UBI-224's own
+// delayed consequence: --from-code existed to tell an SDK program apart
+// from the markdown, diagram and chat mediums, all three of which that
+// ticket removed. From then on it distinguished nothing, because every
+// input that is not an intent file is an SDK program.
+//
+// Both commands, deliberately. Leaving one on a flag and the other not
+// is worse than either state on its own.
+func TestPlanResolve_PositionalSDKProgram_NeedsNoFlag(t *testing.T) {
+	requireDeno(t)
+
+	for _, verb := range []string{"plan", "resolve"} {
+		t.Run(verb, func(t *testing.T) {
+			dir := t.TempDir()
+			withConfigSearchDir(t, dir)
+			writeConfig(t, dir, `stack = "playground"`)
+			entry := filepath.Join(dir, "app.ts")
+			writeFile(t, entry, autodetectSDKProgram)
+
+			env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+			out, err := runUbx(t, env, verb, entry, "--provider", fakeProviderBinary, "--ledger-dir", dir)
+			if err != nil {
+				t.Fatalf("ubx %s <program.ts> with no flag: %v\noutput: %s", verb, err, out)
+			}
+			if !strings.Contains(out, "1 create") {
+				t.Fatalf("expected the program to have been evaluated, got: %s", out)
+			}
+		})
+	}
+}
+
+// The flag stays as a hidden alias. It is spelled out across the
+// tutorials, in `ubx promote`'s own teaching errors, and in this
+// command's multiple-candidate hint, so removing it outright would break
+// working invocations for no gain.
+func TestPlanResolve_FromCodeFlag_StillWorksButIsHidden(t *testing.T) {
+	requireDeno(t)
+
+	for _, verb := range []string{"plan", "resolve"} {
+		t.Run(verb, func(t *testing.T) {
+			dir := t.TempDir()
+			withConfigSearchDir(t, dir)
+			writeConfig(t, dir, `stack = "playground"`)
+			entry := filepath.Join(dir, "app.ts")
+			writeFile(t, entry, autodetectSDKProgram)
+
+			env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+			out, err := runUbx(t, env, verb, "--from-code", entry, "--provider", fakeProviderBinary, "--ledger-dir", dir)
+			if err != nil {
+				t.Fatalf("ubx %s --from-code still has to work: %v\noutput: %s", verb, err, out)
+			}
+
+			help, err := runUbx(t, nil, verb, "--help")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(help, "from-code") {
+				t.Errorf("ubx %s --help still advertises the alias, which teaches a flag nobody needs to type:\n%s", verb, help)
+			}
+		})
+	}
+}
+
+// A positional intent file must still be read as an intent file: the
+// extension dispatch must not swallow the original argument.
+func TestPlan_PositionalIntentFile_StillReadsAsIntent(t *testing.T) {
+	dir := t.TempDir()
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `stack = "payments"`)
+	intentPath := filepath.Join(dir, "intent.json")
+	writeIntentFile(t, intentPath, map[string]interface{}{
+		"schema_version": 1,
+		"kind":           "ubx:intent/v1",
+		"stack":          "payments",
+		"intent":         map[string]interface{}{"summary": "add widget1"},
+		"resources": []map[string]interface{}{
+			{"type": "fake_widget", "name": "widget1", "op": "create",
+				"config": map[string]interface{}{"name": "widget1"}},
+		},
+	})
+
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	out, err := runUbx(t, env, "plan", intentPath, "--provider", fakeProviderBinary, "--ledger-dir", dir)
+	if err != nil {
+		t.Fatalf("ubx plan <intent.json>: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, "1 create") {
+		t.Fatalf("expected the intent file to resolve, got: %s", out)
+	}
+}

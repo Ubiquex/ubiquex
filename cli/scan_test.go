@@ -89,8 +89,29 @@ func runUbx(t *testing.T, env []string, args ...string) (stdout string, err erro
 	ensureFakeProviderStateDir(t)
 
 	err = root.Execute()
+	// A command that needed Deno on a machine without it is not a
+	// failure, it is a test that cannot run here. Skipping on the real
+	// error is what makes requireDeno(t) impossible to forget: the guard
+	// no longer depends on an author remembering to write it, and a
+	// static scan for "does this test look like it evaluates something"
+	// was tried first and cannot tell a test that RUNS a program from one
+	// that merely mentions one (it flagged TestPlan_MutuallyExclusiveInputs,
+	// which fails on flag parsing long before any evaluator).
+	//
+	// This was forgotten twice in one evening, in two packages, each time
+	// three lines below a sibling that had the guard, and caught only by
+	// CI both times.
+	if err != nil && strings.Contains(err.Error(), denoMissingMarker) {
+		t.Skipf("deno not found in PATH -- skipping, this test evaluates an SDK program:\n%v", err)
+	}
 	return out.String(), err
 }
+
+// denoMissingMarker is the distinctive part of tseval's own "deno not
+// found" error. Matched on rather than re-running exec.LookPath, so the
+// skip fires exactly when a command really did need Deno and could not
+// find it, never merely because the host happens to lack it.
+const denoMissingMarker = "deno not found in PATH"
 
 // ensureFakeProviderStateDir is UBI-239's own real fix, applied once here
 // rather than per test: fakeprovider's ReadResource (ok-v5/ok-v6 modes) is

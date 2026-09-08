@@ -34,6 +34,16 @@ func requireDeno(t *testing.T) {
 
 func evalCtx(t *testing.T) context.Context {
 	t.Helper()
+	// The Deno guard lives here rather than in each test, because every
+	// test that evaluates anything already calls this to get its context
+	// and none that skips it can reach the evaluator. Leaving it to each
+	// author to remember requireDeno(t) is what produced two green local
+	// runs and two red CI runs in one evening.
+	//
+	// requireDeno is still exported and still called explicitly by the
+	// tests that had it: harmless, and it keeps those tests readable
+	// about what they need.
+	requireDeno(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	return ctx
