@@ -118,7 +118,15 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			}
 			defer closeSource()
 
-			p, err := sourceLedger.Read(args[0])
+			// Resolve a prefix before reading. Reading args[0] directly
+			// reported "proposal not found in ledger" for a hash the
+			// ledger does hold, which is worse than a validation error
+			// because it denies the proposal exists.
+			ref, refErr := resolveProposalPrefix(ledgerDir, args[0])
+			if refErr != nil {
+				ref = args[0]
+			}
+			p, err := sourceLedger.Read(ref)
 			if err != nil {
 				if errors.Is(err, core.ErrProposalNotFound) {
 					if _, planErr := readPlanFile(ledgerDir, args[0]); planErr == nil {

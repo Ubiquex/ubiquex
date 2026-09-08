@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,11 +71,21 @@ func newWhyCmd() *cobra.Command {
 			whyArg := args[0]
 			if !proposalIDPattern.MatchString(whyArg) {
 				if _, ok := core.ParseAddress(whyArg); !ok {
-					if resolved, resolvedStack, aerr := resolveHeadOrAlias(ledgerDir, stack, whyArg); aerr == nil {
+					resolved, resolvedStack, aerr := resolveHeadOrAlias(ledgerDir, stack, whyArg)
+					switch {
+					case aerr == nil:
 						whyArg = resolved
 						if resolvedStack != "" {
 							stack = resolvedStack
 						}
+					case errors.Is(aerr, ErrRefAmbiguous), errors.Is(aerr, ErrRefTooShort):
+						// These two carry their own advice and have to
+						// survive: one names the candidates, the other says
+						// how many characters are missing. The generic
+						// message below would throw both away and tell the
+						// reader their hash was malformed when it was merely
+						// short or shared.
+						return &ExitCodeError{Code: 2, Err: aerr}
 					}
 				}
 			}
@@ -140,7 +151,7 @@ func newWhyCmd() *cobra.Command {
 
 			addr, ok := core.ParseAddress(whyArg)
 			if !ok {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a valid proposal ID (64-char hex), resource address (<stack>.<type>.<name>), or known alias", args[0])}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%q is not a proposal hash or a prefix of one, a resource address (<stack>.<type>.<name>), or a known alias -- `ubx history` lists real candidates", args[0])}
 			}
 			// The address itself already names its own stack -- used
 			// directly, regardless of --stack/config's own default, since

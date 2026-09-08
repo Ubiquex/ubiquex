@@ -124,6 +124,25 @@ func resolveHeadOrAlias(ledgerDir, stack, arg string) (resolvedHash, resolvedSta
 	if proposalIDPattern.MatchString(arg) {
 		return arg, stack, nil
 	}
+	// A hex string that is not a full hash is a prefix, not an alias
+	// name, and resolving it here is what makes every caller of this
+	// function accept the short form the receipts actually print.
+	//
+	// Checked before the alias lookup, and only for hex, so the two
+	// namespaces stay separate: `ubx alias set` already refuses a name
+	// that looks like a hash, so nothing legal can be both. Reporting a
+	// real hash as a missing alias, which is what happened before, sent
+	// the reader looking for an alias they never created.
+	if isHexRef(arg) {
+		full, prefixErr := resolveProposalPrefix(ledgerDir, arg)
+		if prefixErr == nil {
+			return full, stack, nil
+		}
+		if errors.Is(prefixErr, ErrRefAmbiguous) || errors.Is(prefixErr, ErrRefTooShort) {
+			return "", "", prefixErr
+		}
+		return "", "", fmt.Errorf("%q does not match any proposal in this ledger, and is not a known alias -- `ubx history` lists real candidates", arg)
+	}
 	af, err := loadAliasFile(ledgerDir)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve alias %q: %w", arg, err)
