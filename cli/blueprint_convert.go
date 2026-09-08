@@ -138,6 +138,32 @@ or silently producing something wrong.`,
 					fmt.Fprintf(outWriter, "  - %s: %s %s\n", p.LocalName, p.Source, p.Version)
 				}
 			}
+			// Converting nothing is a failed conversion, not a quiet one.
+			//
+			// Measured against terraform-aws-modules/terraform-aws-sqs
+			// (UBI-125, 2026-09-08): every one of its eight resources uses
+			// `count = var.create ? 1 : 0`, which this converter does not
+			// support, so all eight were skipped and all ten outputs
+			// dropped. The command printed
+			// `converted 0 resource(s) (8 skipped)` and exited 0, leaving
+			// an empty blueprint that builds, packages and hashes exactly
+			// like a real one. Conditional count is the house style across
+			// that entire org, so this is the common case for a real
+			// published module, not an edge case.
+			//
+			// Exit 1, not 2: this is an actionable finding about the input
+			// module, the same tier `ubx scan` uses for a real drift
+			// finding, not a usage error. The questions above already say
+			// which constructs were refused, so this adds the verdict
+			// rather than repeating them.
+			if len(res.Intent.Resources) == 0 {
+				fmt.Fprintf(outWriter, "converted 0 resource(s) (%d skipped) -> %s (%s: %s)\n",
+					len(res.SkippedResources), absOut, strings.Join(langs, ", "), strings.Join(names, ", "))
+				return &ExitCodeError{Code: 1, Err: fmt.Errorf(
+					"blueprint convert: nothing was converted -- every resource in %s was skipped, so the blueprint written to %s is empty and describes none of that module. "+
+						"Review the question(s) above for which constructs were refused; an empty blueprint still builds, packages and hashes like a real one, which is why this is an error rather than a warning",
+					fromTerraform, absOut)}
+			}
 			fmt.Fprintf(outWriter, "converted %d resource(s) (%d skipped) -> %s (%s: %s)\n",
 				len(res.Intent.Resources), len(res.SkippedResources), absOut, strings.Join(langs, ", "), strings.Join(names, ", "))
 			return nil
