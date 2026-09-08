@@ -614,3 +614,70 @@ func parseCreateIfTerm(term string) (name string, negated bool) {
 	}
 	return term, false
 }
+
+// identSources returns, per resource address, the string each language's
+// own generator derives its binding/config identifier from.
+//
+// Ordinarily that is the resource's own name, exactly as before. For a
+// name shared by more than one resource it is the name qualified by the
+// resource TYPE, which is what makes the pair distinguishable.
+//
+// The collision is real and common. A Terraform label is unique per type,
+// so aws_sqs_queue.this and aws_sqs_queue_policy.this are both legal and
+// distinct, but an identifier derived from the name alone collapses them
+// and codegen refused the pair outright. "this" is the near-universal
+// Terraform label: terraform-aws-sqs has five resources named it.
+//
+// Qualified only on collision, deliberately, and this is the opposite of
+// what it first looks like. Always qualifying is more stable, since a
+// resource's identifier would then depend only on itself rather than on
+// what else is in the blueprint. But the identifiers this feeds are
+// EXPORTED and are a supported surface: UBI-225 established that
+// importing a blueprint's own bindings directly
+// (platform.Primary/platform.PrimaryConfig) is a real, reachable case
+// that stamps provenance correctly rather than being refused, and
+// cli/blueprint_binding_provenance_test.go pins it. So always qualifying
+// would rename that surface for every existing blueprint.
+//
+// Qualifying only on collision cannot rename anything that compiles
+// today, because a collision is currently a hard error. Every blueprint
+// that builds keeps byte-identical identifiers; only blueprints that were
+// previously refused gain new ones. The instability that argues against
+// this approach in general -- adding a resource can rename a sibling --
+// only bites when a collision is introduced, which today fails outright.
+func identSources(resources []*decodedResource) (map[string]string, error) {
+	basis := make(map[string]string, len(resources))
+	// Counted by the DERIVED identifier, not the raw name. Two names can
+	// collide without being equal: "ci-runner" and "ci_runner" are
+	// different names that both normalize to CiRunner. Counting raw names
+	// would leave that pair refused while fixing only the exact-duplicate
+	// case, which is half a fix and an arbitrary half.
+	count := map[string]int{}
+	derived := make(map[string]string, len(resources))
+	for _, dr := range resources {
+		name := dr.RI.Name
+		if dr.ForEach != "" {
+			// A for_each resource's own Name is a template
+			// ("subnet-{availability_zones}"); every instance shares ONE
+			// binding, derived from the placeholder-stripped basis.
+			b, err := forEachIdentifierBasis(dr.RI.Name)
+			if err != nil {
+				return nil, fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
+			}
+			name = b
+		}
+		basis[dr.Address] = name
+		ident, err := pascalCase(name)
+		if err != nil {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
+		}
+		derived[dr.Address] = ident
+		count[ident]++
+	}
+	for _, dr := range resources {
+		if count[derived[dr.Address]] > 1 {
+			basis[dr.Address] = dr.RI.Type + "_" + basis[dr.Address]
+		}
+	}
+	return basis, nil
+}
