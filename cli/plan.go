@@ -432,10 +432,8 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	// already use (renderModifies' "~ <address> change", renderDestroys'
 	// "- <address> destroy" -- word ORDER now matches, the op word itself
 	// stays "destroy", a deliberately scoped decision, not an oversight).
-	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("delta: %s, %s, %s",
-		st.Green(fmt.Sprintf("+%d create(s)", len(p.Delta.Creates))),
-		st.Yellow(fmt.Sprintf("~%d change(s)", len(p.Delta.Modifies))),
-		st.Red(fmt.Sprintf("-%d terminate(s)", len(p.Delta.Destroys))))))
+	fmt.Fprintln(out, st.forceBold("delta: "+deltaCounts(st,
+		int64(len(p.Delta.Creates)), int64(len(p.Delta.Modifies)), int64(len(p.Delta.Destroys)))))
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("blast radius: %s %s %s",
 		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
