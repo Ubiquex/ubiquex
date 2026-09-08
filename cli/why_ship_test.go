@@ -68,7 +68,7 @@ func TestWhy_ShippedDriftRevert_ShowsApplyHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why (after ship): %v", err)
 	}
-	for _, want := range []string{"ship history:", "attempt 1: outcome=shipped", "payments.fake_widget.widget-why-ship", "shipped at"} {
+	for _, want := range []string{"attempt 1", "shipped", "payments.fake_widget.widget-why-ship"} {
 		if !strings.Contains(afterShip, want) {
 			t.Fatalf("expected why output to contain %q, got: %s", want, afterShip)
 		}

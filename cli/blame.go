@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -167,7 +168,10 @@ func isBlameDefaultValue(raw json.RawMessage) bool {
 }
 
 func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showAll bool) {
-	fmt.Fprintf(out, "Blame  %s\n\n", result.Address)
+	now := time.Now().UTC()
+	fmt.Fprintln(out, readHeader(st, "Blame", result.Address.String(),
+		fmt.Sprintf("%d attribute%s", countBlamedAttrs(result), plural(countBlamedAttrs(result)))))
+	fmt.Fprintln(out)
 	if result.Destroyed {
 		fmt.Fprintf(out, "%s by %s at %s -- blaming the final pre-destroy state\n\n",
 			st.Red("DESTROYED"), st.Hash(result.DestroyedBy.ProposalID), result.DestroyedBy.At)
@@ -201,18 +205,25 @@ func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showA
 		// shot, the same technique plan.go's delta/blast-radius summary
 		// already uses (see forceBold's own doc comment for why a naive
 		// Bold(text-with-embedded-colors) call doesn't work).
-		header := fmt.Sprintf("%s %d attribute(s) · set by %s (%s) · %s",
-			st.Dim("▸"), len(g.Entries), st.Hash(g.ProposalID), g.Kind, g.SetAt)
+		who := ""
 		switch g.AcceptanceMethod {
 		case "":
 			// no acceptance recorded -- shouldn't happen for anything
 			// reachable via ProposalsForAddress, but never crash over it.
 		case "pr_merge":
-			header += fmt.Sprintf(" · pr_merge (%s)", strings.Join(g.Approvers, ", "))
+			who = st.Approver(strings.Join(g.Approvers, ", ")) + st.Dim(" via pr_merge")
 		default:
-			header += fmt.Sprintf(" · %s", g.AcceptanceMethod)
+			if len(g.Approvers) > 0 {
+				who = st.Approver(strings.Join(g.Approvers, ", ")) + st.Dim(" via "+g.AcceptanceMethod)
+			} else {
+				who = st.Dim("via " + g.AcceptanceMethod)
+			}
 		}
-		fmt.Fprintln(out, st.forceBold(header))
+		fmt.Fprintln(out, readGroup(st,
+			fmt.Sprintf("%s  %s", st.Hash(g.ProposalID), st.Dim(string(g.Kind))),
+			fmt.Sprintf("%d attribute%s", len(g.Entries), plural(len(g.Entries))),
+			who,
+			st.Dim(relativeTime(g.SetAt, now))))
 		switch {
 		case len(g.AttributedActors) > 0:
 			fmt.Fprintf(out, "    %s %s\n", st.Purple("attributed to:"), strings.Join(g.AttributedActors, ", "))
@@ -235,7 +246,7 @@ func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showA
 			if e.Redacted {
 				value = "(redacted)"
 			}
-			fmt.Fprintf(out, "    %s: %s\n", e.Path, value)
+			fmt.Fprintln(out, "    "+st.Attr(e.Path, value))
 		}
 		if len(hidden) > 0 {
 			fmt.Fprintf(out, "    %s %d provider default(s) hidden -- --all to show\n", st.Dim("·"), len(hidden))
@@ -300,4 +311,10 @@ func blameToJSON(result *core.BlameResult) blameJSON {
 		payload.Entries = append(payload.Entries, entry)
 	}
 	return payload
+}
+
+// countBlamedAttrs is the header's own total: every attribute this
+// address has, across all the proposals that set them.
+func countBlamedAttrs(result *core.BlameResult) int {
+	return len(result.Entries)
 }

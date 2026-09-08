@@ -102,13 +102,25 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 
 			if !drift {
 				resources := make([]statusResourceJSON, 0, len(fleet))
+				now := time.Now().UTC()
+				if !jsonOut && len(fleet) > 0 {
+					// The count and the "no live comparison" qualifier belong
+					// in the header, not on a trailing line. As a last line it
+					// read like a warning that something had gone wrong,
+					// rather than a description of the view the reader asked
+					// for by omitting --drift.
+					fmt.Fprintln(out, readHeader(st, "Status", stack,
+						fmt.Sprintf("%d resource%s", len(fleet), plural(len(fleet))),
+						"ledger only"))
+					fmt.Fprintln(out)
+				}
 				for _, e := range fleet {
 					if !jsonOut {
-						// UBI-68: everything after the address's own colon --
-						// kind, hash, "accepted <timestamp>" -- reads as one
-						// dim metadata block, so the address itself (printed
-						// outside forceDim, untouched) reads brightest.
-						fmt.Fprintf(out, "%s: %s\n", e.Address, st.forceDim(fmt.Sprintf("%s %s (accepted %s)", e.Kind, st.Hash(e.ProposalID), e.AcceptedAt)))
+						fmt.Fprintln(out, readGroup(st,
+							e.Address.String(),
+							st.Dim(string(e.Kind)),
+							st.Hash(e.ProposalID),
+							st.Dim(relativeTime(e.AcceptedAt, now))))
 					}
 					resources = append(resources, statusResourceJSON{
 						Address:    addressToJSON(e.Address),
@@ -129,7 +141,9 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 					}
 					return nil
 				}
-				fmt.Fprintf(out, "%d resource(s) (ledger-only, no live comparison)\n", len(fleet))
+				if len(fleet) == 0 {
+					fmt.Fprintln(out, readHeader(st, "Status", stack, "0 resources", "ledger only"))
+				}
 				return nil
 			}
 

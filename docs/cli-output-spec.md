@@ -9,8 +9,37 @@
 1. **Color by verb, everywhere deltas render**: green `+` creates, yellow/orange
    `~` modifies, red `-` destroys. One visual language across plan, ship, scan,
    status, terminate, promote, render.
+
+   The full ratified palette, which every surface that prints a proposal or a
+   resource uses:
+
+   | | |
+   |---|---|
+   | green | creates, confirmations, a successful outcome |
+   | yellow | hashes, and property names |
+   | red | destroys, and property values |
+   | blue | the approver identity |
+   | dim | structure, separators, timestamps, kinds |
+   | purple | AI judgment and attribution |
+
+   Hashes were blue until 2026-09-08, when they moved to yellow so blue could
+   carry the approver. Blue's ratified meaning was "hashes and identities" and an
+   approver is an identity, so the meaning narrows rather than collides: blue is
+   the person, yellow is the thing being referred to. The approver had no color
+   at all before, and it is the single field a reader scans `ubx why` and `ubx
+   history` for.
+
+   Property names and values were uncolored until the same date. A property name
+   in a fifty-line receipt is as scannable as an approver name, and the reason
+   for coloring one applies to the other.
 2. **TTY-only decoration**: NO_COLOR and non-TTY get today's plain output;
    `--json` untouched; docs transcripts captured from the plain variant.
+
+   Relative times in human output, absolute in `--json`. A reader scanning a
+   history wants "3 minutes ago", not a UTC instant to subtract in their head;
+   `--json` is where an exact instant is the point. Where several transitions
+   share one second, which is every ordinary ship, they collapse to one line
+   rather than repeating the same timestamp.
 3. **The hash is the handoff**: every command that produces or implies a next
    step ends with `next: ubx <verb> …`. Short hashes (12 chars) everywhere;
    `--full-hashes` opts into full. Short-form input accepted wherever hashes are
@@ -26,6 +55,35 @@
 6. **Teaching errors enumerate all modes** and name config alternatives with
    the file consulted ("pass --stack or set stack=… in .ubx/config.hcl").
 7. **Internal ticket numbers never appear in user-facing output.**
+
+
+### The read commands share one shape
+
+`ubx history`, `ubx status`, `ubx why` and `ubx blame` answer four questions
+about the same ledger, and each used to print in a format of its own. `blame`
+was the only one with real structure, so it is the pattern the other three
+adopted (2026-09-08):
+
+```
+Title  subject · count
+
+▸ <hash>  <kind>  · who · when
+    indented content
+```
+
+A count or a qualifier belongs in the header's dim trailer, never on a trailing
+line: `status` used to end with "1 resource(s) (ledger-only, no live
+comparison)", which reads as a warning that something went wrong rather than a
+description of the view that was asked for.
+
+Resource attributes render flattened, one leaf per line, `tags.env: "prod"`,
+never a nested JSON block. The exception is a string value that itself contains
+JSON, an IAM or trust policy most often, which still renders as a formatted
+block per this document's own §v2 requirement: escaping one of those onto a
+single line is exactly what a reviewer cannot read.
+
+The helpers live in `cli/readview.go` so a fifth read command reaches for them
+rather than inventing a sixth format.
 
 ## Per-verb targets (playground examples)
 

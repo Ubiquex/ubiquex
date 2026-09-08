@@ -263,7 +263,7 @@ func TestBlame_JSON_Shape(t *testing.T) {
 // embedded Dim "▸" and blue hash segments it's composed from -- not just
 // bold up to the first inner color()'s own reset (forceBold's own
 // documented reason for reasserting after every embedded reset).
-func TestBlame_TTY_GroupHeaderRendersBold(t *testing.T) {
+func TestBlame_TTY_GroupHeaderUsesTheRatifiedPalette(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 	addr := "payments.fake_widget.widget-blame-bold"
@@ -290,32 +290,26 @@ func TestBlame_TTY_GroupHeaderRendersBold(t *testing.T) {
 		t.Fatalf("ubx blame: %v\noutput: %s", err, out)
 	}
 
-	line := lineContaining(out, "attribute(s) · set by")
+	line := lineContaining(out, "▸")
 	if line == "" {
 		t.Fatalf("expected a group header line, got: %s", out)
 	}
-	if !strings.HasPrefix(line, ansiBold) {
-		t.Fatalf("expected the group header to start bold, got: %q", line)
+	// The group line is no longer force-bolded as a whole. The ratified
+	// palette (docs/cli-output-spec.md) makes structure and timestamps
+	// dim, and wrapping the entire line in bold fought that: the dim
+	// separators came out bold-dim. Emphasis now comes from the lead
+	// instead, which is the hash, in yellow.
+	if !strings.Contains(line, ansiYellow) {
+		t.Fatalf("expected the group header's hash to render yellow, got: %q", line)
 	}
-	if !strings.HasSuffix(line, ansiReset) {
-		t.Fatalf("expected the group header to end with a reset, got: %q", line)
-	}
-	// Every reset embedded from the inner Dim "▸"/blue hash segments must
-	// be immediately followed by a bold reassertion, except the line's own
-	// final reset -- otherwise bold would cut out right after the hash
-	// instead of covering "(kind) · timestamp" too.
-	resets := strings.Count(line, ansiReset)
-	reassertions := strings.Count(line, ansiReset+ansiBold)
-	if reassertions != resets-1 {
-		t.Fatalf("expected every reset but the last immediately followed by a bold reassertion (resets=%d, reassertions=%d), got: %q", resets, reassertions, line)
-	}
-	// forceBold adds bold on top -- it must not strip the semantic colors
-	// already embedded in the composed header.
 	if !strings.Contains(line, ansiDim) {
-		t.Fatalf("expected the \"▸\" glyph's own dim color preserved, got: %q", line)
+		t.Fatalf("expected the group header's structure to render dim, got: %q", line)
 	}
 	if !strings.Contains(line, ansiBlue) {
-		t.Fatalf("expected the hash's own blue color preserved, got: %q", line)
+		t.Fatalf("expected the approver to render blue, got: %q", line)
+	}
+	if !strings.HasSuffix(strings.TrimRight(line, "\n"), ansiReset) {
+		t.Fatalf("expected the group header to end with a reset, got: %q", line)
 	}
 }
 

@@ -99,7 +99,7 @@ func TestResolveAcceptShip_CreateChain_RealFakeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why: %v\noutput: %s", err, whyOut)
 	}
-	if !strings.Contains(whyOut, "ship history:") {
+	if !strings.Contains(whyOut, "attempt 1") {
 		t.Fatalf("expected why to render ship history for a change proposal, got: %s", whyOut)
 	}
 	if !strings.Contains(whyOut, "payments.fake_widget.mirror") {

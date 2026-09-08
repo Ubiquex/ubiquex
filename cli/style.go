@@ -93,9 +93,17 @@ func colorEnabled(cmd *cobra.Command) bool {
 // to decide whether to wrap text in ANSI codes -- a struct rather than a
 // bare bool so call sites read as "st.Green(x)", not a color constant
 // threaded everywhere by hand. The semantic mapping (founder-ratified,
-// same session as docs/cli-output-spec.md): green creates/confirmations,
-// yellow modifies/drift/verification, red destroys, blue hashes/
-// identities, purple AI judgment/attribution.
+// docs/cli-output-spec.md): green creates/confirmations/success, yellow
+// hashes and property names, red destroys and property values, blue the
+// approver identity, dim structure and timestamps, purple AI
+// judgment/attribution.
+//
+// Hashes moved from blue to yellow, which frees blue for the approver.
+// Blue's ratified meaning was "hashes and identities" and an approver is
+// an identity, so the meaning narrows rather than collides: blue now
+// means the person, yellow means the thing being referred to. The
+// approver had no color at all before, and it is the single most scanned
+// field in `ubx why` and `ubx history`.
 type styler struct {
 	enabled    bool
 	fullHashes bool
@@ -122,14 +130,13 @@ func newStylerFull(cmd *cobra.Command, fullHashes bool) *styler {
 // string for later use) or that explicitly want unstyled text.
 func plainStyler() *styler { return &styler{enabled: false} }
 
-// Hash renders id per this styler's own --full-hashes setting, blue
-// (docs/cli-output-spec.md's ratified color semantics: blue = hashes/
-// identities) -- the one call every render function should use for a
-// proposal/plan hash, rather than composing displayHash + Blue by hand
-// at each call site.
+// Hash renders id per this styler's own --full-hashes setting, yellow
+// (docs/cli-output-spec.md: yellow = hashes and property names) -- the
+// one call every render function should use for a proposal/plan hash,
+// rather than composing displayHash + Yellow by hand at each call site.
 func (s *styler) Hash(id string) string {
 	full := s != nil && s.fullHashes
-	return s.Blue(displayHash(id, full))
+	return s.Yellow(displayHash(id, full))
 }
 
 // Ref is Hash's own marker-free sibling, for a hash rendered where it
@@ -139,9 +146,9 @@ func (s *styler) Hash(id string) string {
 // Still honors --full-hashes.
 func (s *styler) Ref(id string) string {
 	if s != nil && s.fullHashes {
-		return s.Blue(id)
+		return s.Yellow(id)
 	}
-	return s.Blue(shortRef(id))
+	return s.Yellow(shortRef(id))
 }
 
 func (s *styler) color(code, text string) string {
@@ -325,4 +332,23 @@ func shortRef(id string) string {
 		return id
 	}
 	return id[:shortLen]
+}
+
+// Approver renders who accepted something, blue. The one field a reader
+// scans a history for, and it had no color at all until the palette
+// moved hashes off blue to make room for it.
+func (s *styler) Approver(name string) string { return s.Blue(name) }
+
+// Attr renders one "name: value" pair in the ratified palette: the name
+// yellow, the value red. Used by every surface that prints resource
+// attributes, so the receipt and the read commands cannot drift apart
+// again.
+func (s *styler) Attr(name, value string) string {
+	return s.Yellow(name) + ": " + s.Red(value)
+}
+
+// AttrChange is Attr for a modification, "name: old -> new". The arrow
+// stays dim: it is structure, not content.
+func (s *styler) AttrChange(name, before, after string) string {
+	return s.Yellow(name) + ": " + s.Red(before) + " " + s.Dim("->") + " " + s.Red(after)
 }

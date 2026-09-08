@@ -91,10 +91,10 @@ func TestPlanShip_SimpleCreate_FusedAcceptApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why: %v\noutput: %s", err, whyOut)
 	}
-	if !strings.Contains(whyOut, "via local at") {
+	if !strings.Contains(whyOut, "via local") {
 		t.Fatalf("expected why to show local acceptance method, got: %s", whyOut)
 	}
-	if !strings.Contains(whyOut, "ship history:") {
+	if !strings.Contains(whyOut, "attempt 1") {
 		t.Fatalf("expected why to show ship history, got: %s", whyOut)
 	}
 }
