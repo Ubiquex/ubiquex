@@ -103,22 +103,22 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 		return nil, err
 	}
 
-	runnerPath, err := writeRunnerScript(assetsDir, absEntry)
+	runnerPath, err := writeRunnerScript(filepath.Dir(absEntry), assetsDir, absEntry)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(runnerPath)
 
-	args := make([]string, 0, len(evaluatorFlags)+1)
+	args := make([]string, 0, len(evaluatorFlags)+3)
 	args = append(args, evaluatorFlags...)
+	// The import map has to be named explicitly now. It used to be found
+	// by Deno's own config discovery, which walks up from the entry
+	// SCRIPT -- that worked only while the runner lived beside it in
+	// assetsDir, and the runner has moved (see writeRunnerScript).
+	args = append(args, "--import-map="+filepath.Join(assetsDir, "deno.json"))
 	args = append(args, runnerPath)
 
 	cmd := exec.CommandContext(ctx, denoPath, args...)
-	// assetsDir also holds deno.json (the @ubx/sdk import map) -- running
-	// from there is what makes Deno's own config-file discovery (walking
-	// up from the entry SCRIPT passed on the command line, i.e. runnerPath)
-	// find it without needing an explicit --config flag.
-	cmd.Dir = assetsDir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -132,14 +132,69 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// writeRunnerScript writes a fresh runner .ts file into assetsDir (a
-// unique name per call, so concurrent Evaluate calls -- or DoubleRun's
-// own two sequential calls -- never race on the same path) and returns
-// its path.
-func writeRunnerScript(assetsDir, absEntryFile string) (string, error) {
-	f, err := os.CreateTemp(assetsDir, "runner-*.ts")
+// writeRunnerScript writes a fresh runner .ts file into dir (a unique
+// name per call, so concurrent Evaluate calls -- or DoubleRun's own two
+// sequential calls -- never race on the same path) and returns its path.
+//
+// dir is the ENTRY FILE'S OWN DIRECTORY, not assetsDir, and that is the
+// whole of UBI-252's fix.
+//
+// Deno resolves a bare npm specifier from the package.json/node_modules
+// it finds by walking up from the ROOT OF THE MODULE GRAPH, which is
+// this runner script. Not from the working directory, and not from the
+// file doing the importing. So while the runner lived in assetsDir, a
+// program written the way docs.ubiquex.io/tutorial/sdk/install
+// documents it --
+//
+//	npm install @ubx/sdk-aws
+//	import { Queue } from "@ubx/sdk-aws/aws/sqs/queue";
+//
+// -- could not be evaluated at all: "Import ... not a dependency and
+// not in import map". The documented TypeScript path type-checked
+// under tsc and then failed at `ubx plan`. Only a relative import into
+// the user's own tree worked, which is not what any documentation
+// describes.
+//
+// Isolated empirically rather than reasoned about, because the obvious
+// fix is the wrong one. cmd.Dir has no bearing on this:
+//
+//	runner in the project,  cwd outside  -> resolves
+//	runner outside,         cwd inside   -> fails
+//	runner outside,         cwd outside  -> fails (the old shape)
+//
+// Permissions are untouched. The full locked-down flag set still
+// applies, --deny-read and --no-remote included, verified by running
+// the real documented program under exactly those flags. That matches
+// what evaluatorFlags' own comment already establishes: a static,
+// literal specifier is part of Deno's pre-execution module-graph
+// analysis and ungated by --deny-read, and an import-map-resolved bare
+// specifier was already known to be. Node resolution turns out to sit
+// on the same side of that line.
+//
+// --no-remote keeps its meaning, and that is a constraint on this fix
+// rather than a coincidence: resolution comes from an already-installed
+// node_modules on disk. Mapping npm: specifiers instead would push
+// resolution into Deno's own registry cache and weaken the one flag
+// that closes the dynamic-import gap.
+//
+// The cost is a temp file in the author's directory for the duration of
+// one evaluation. It is uniquely named, removed by the caller's defer
+// on every path, and never written anywhere but beside a file the
+// author already owns.
+func writeRunnerScript(dir, assetsDir, absEntryFile string) (string, error) {
+	f, err := os.CreateTemp(dir, ".ubx-runner-*.ts")
 	if err != nil {
-		return "", fmt.Errorf("write runner script: %w", err)
+		// Worth explaining rather than surfacing a bare EACCES: this is
+		// the one case where the fix above is visible to an author, and
+		// "permission denied" on a file they never asked for is
+		// otherwise baffling. No silent fallback to a temp directory --
+		// that would trade this clear failure for an unresolvable bare
+		// import later, which is much harder to diagnose.
+		return "", fmt.Errorf("write runner script in %s: %w\n"+
+			"the evaluator writes one short-lived runner file beside your entry file, "+
+			"then removes it -- Deno resolves an npm package from the node_modules it "+
+			"finds by walking up from that file, so it has to live in your project for "+
+			"a bare import like \"@ubx/sdk-aws/aws/sqs/queue\" to resolve at all", dir, err)
 	}
 	defer f.Close()
 
