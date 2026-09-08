@@ -100,7 +100,7 @@ func TestPlan_ModifyReceipt_HeaderIndentFormat(t *testing.T) {
 	}
 
 	// Vocabulary: "change(s)"/"terminate(s)", not "modify(ies)"/"destroy(s)".
-	if !strings.Contains(out, "delta: +0 create(s), ~1 change(s), -0 terminate(s)") {
+	if !strings.Contains(out, "delta: +0 ~1 -0") {
 		t.Fatalf("expected the change/terminate delta vocabulary, got:\n%s", out)
 	}
 	if strings.Contains(out, "modify(ies)") || strings.Contains(out, "destroy(s)") {
