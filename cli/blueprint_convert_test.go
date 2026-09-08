@@ -202,18 +202,28 @@ func sdkGoModuleRootForCLI(t *testing.T) string {
 	return root
 }
 
-// convertNothingModule is the shape that made this necessary: every
-// resource guarded by a conditional count, every output wrapped in
-// try(). Reduced from terraform-aws-modules/terraform-aws-sqs, where all
-// eight resources and all ten outputs look like this.
+// convertNothingModule is a module where nothing converts: a COMPOUND
+// conditional count, which is deliberately not supported (only a single
+// declared bool param converts, see conditionalCountVar), plus an output
+// wrapped in try(). Reduced from terraform-aws-modules/terraform-aws-sqs,
+// which uses both the simple and compound forms.
+//
+// The simple `count = var.create ? 1 : 0` form this originally used now
+// converts, via create_if, which is why this fixture had to move to a
+// shape that still does not.
 const convertNothingModule = `
 variable "create" {
   type    = bool
   default = true
 }
 
+variable "create_dlq" {
+  type    = bool
+  default = false
+}
+
 resource "aws_sqs_queue" "this" {
-  count      = var.create ? 1 : 0
+  count      = var.create && var.create_dlq ? 1 : 0
   queue_name = "q"
 }
 

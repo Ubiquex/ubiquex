@@ -471,6 +471,31 @@ type ResourceIntent struct {
 	// ResourceIntent values with ForEach empty on every one of them, the
 	// same as if a caller had hand-written N separate resource() calls.
 	ForEach string `json:"for_each,omitempty"`
+
+	// CreateIf (UBI-125) is the bare name of a declared bool params:
+	// entry deciding whether this resource is created at all -- "" for an
+	// ordinary, unconditional resource, which is every resource produced
+	// before this field existed.
+	//
+	// It exists because Terraform's `count = var.create ? 1 : 0` is the
+	// house style across terraform-aws-modules, and blocked conversion of
+	// essentially that whole ecosystem: converting
+	// terraform-aws-modules/terraform-aws-sqs produced zero of eight
+	// resources, every one guarded by that shape.
+	//
+	// Deliberately its own field rather than desugaring into ForEach over
+	// a synthetic zero-or-one list. Both express "this resource may not
+	// exist", and ForEach could carry it, but the generated signature
+	// would then take a list where the module took a bool and callers
+	// would write ["x"] to mean true. A converter whose value is that
+	// your module comes across recognisably should not do that.
+	//
+	// Same lifecycle as ForEach in every other respect: set at build
+	// time, validated by blueprint/decode.go against the declared params,
+	// compiled by each language's own codegen into a real `if`, and never
+	// surviving past codegen -- an invoked blueprint emits either one
+	// ordinary ResourceIntent with CreateIf empty, or none at all.
+	CreateIf string `json:"create_if,omitempty"`
 }
 
 const (

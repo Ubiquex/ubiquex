@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
+	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
@@ -21,7 +22,12 @@ import (
 type resourceInfo struct {
 	slug         string // this resource's own final blueprint Name (== the HCL label, or "<label>-{param}" for a for_each resource)
 	forEachParam string // "" for an ordinary resource
-	skipped      bool
+	// createIfParam is the declared bool param guarding whether this
+	// resource is created at all -- "" for an unconditional one. Mutually
+	// exclusive with forEachParam by construction (both come from the same
+	// count attribute, and decodeBlueprint refuses the combination too).
+	createIfParam string
+	skipped       bool
 }
 
 // convertResources translates every `resource "<type>" "<name>" { ... }`
@@ -80,9 +86,18 @@ func (c *converter) planResource(rb *hclsyntax.Block) (resourceInfo, string) {
 		return resourceInfo{skipped: true}, "declares both count and for_each (mutually exclusive in Terraform itself) -- malformed source, or two conflicting edits"
 	case hasCount:
 		expr := rb.Body.Attributes["count"].Expr
+		if boolName, ok := conditionalCountVar(expr); ok {
+			// UBI-125: `count = var.create ? 1 : 0`, the house style
+			// across terraform-aws-modules and the single shape that
+			// blocked converting essentially that whole ecosystem.
+			if reason := c.checkCreateIfSource(boolName); reason != "" {
+				return resourceInfo{skipped: true}, reason
+			}
+			return resourceInfo{slug: label, createIfParam: boolName}, ""
+		}
 		name, ok := lengthOfVarList(expr)
 		if !ok {
-			return resourceInfo{skipped: true}, fmt.Sprintf("count = %s isn't a recognized shape -- only count = length(var.<list param>) converts to a for_each resource", c.exprText(expr))
+			return resourceInfo{skipped: true}, fmt.Sprintf("count = %s isn't a recognized shape -- only count = length(var.<list param>) and count = var.<bool param> ? 1 : 0 convert", c.exprText(expr))
 		}
 		if reason := c.checkForEachSource(name); reason != "" {
 			return resourceInfo{skipped: true}, reason
@@ -117,6 +132,56 @@ func (c *converter) checkForEachSource(name string) string {
 		return fmt.Sprintf("its own for_each source var.%s is declared %q, not a list type -- only iterating over a list(string)/list(number) param converts", name, typ)
 	}
 	return ""
+}
+
+// checkCreateIfSource confirms name is a real, declared bool param --
+// empty return means OK. Mirrors checkForEachSource exactly.
+func (c *converter) checkCreateIfSource(name string) string {
+	if c.unsupportedParams[name] {
+		return fmt.Sprintf("its own conditional-count source var.%s was dropped from the converted blueprint (see the question about that variable)", name)
+	}
+	typ, ok := c.paramType[name]
+	if !ok {
+		return fmt.Sprintf("its own conditional-count source var.%s isn't declared in any variable {} block", name)
+	}
+	if typ != blueprint.ParamBool {
+		return fmt.Sprintf("its own conditional-count source var.%s is declared %q, not bool -- only a bool param converts to a conditional resource", name, typ)
+	}
+	return ""
+}
+
+// conditionalCountVar recognizes exactly "var.<name> ? 1 : 0", the shape
+// Terraform modules use to make a resource optional.
+//
+// Deliberately narrow. `? 0 : 1` (inverted), `var.a && var.b ? 1 : 0`
+// (compound) and `length(x) > 0 ? 1 : 0` (derived) are all real shapes in
+// the wild, and none of them is a single declared bool param, so none has
+// a create_if to name. They fall through to the unrecognized-count
+// question rather than being approximated: a converter that guessed here
+// would silently change which resources a module creates.
+func conditionalCountVar(expr hclsyntax.Expression) (string, bool) {
+	cond, ok := expr.(*hclsyntax.ConditionalExpr)
+	if !ok {
+		return "", false
+	}
+	if !isIntLiteral(cond.TrueResult, 1) || !isIntLiteral(cond.FalseResult, 0) {
+		return "", false
+	}
+	return varRefName(cond.Condition)
+}
+
+// isIntLiteral reports whether expr is exactly the given integer literal.
+func isIntLiteral(expr hclsyntax.Expression, want int64) bool {
+	lit, ok := expr.(*hclsyntax.LiteralValueExpr)
+	if !ok {
+		return false
+	}
+	bf := lit.Val.AsBigFloat()
+	if !bf.IsInt() {
+		return false
+	}
+	got, _ := bf.Int64()
+	return got == want
 }
 
 // lengthOfVarList recognizes exactly "length(var.<name>)".
@@ -213,6 +278,7 @@ func (c *converter) translateResource(rb *hclsyntax.Block, addr string, info res
 		Config:    cfgJSON,
 		DependsOn: deps,
 		ForEach:   info.forEachParam,
+		CreateIf:  info.createIfParam,
 	}
 }
 

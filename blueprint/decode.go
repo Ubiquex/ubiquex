@@ -51,6 +51,10 @@ type decodedResource struct {
 	// a real, list-typed param -- every later reader can trust it
 	// without re-checking.
 	ForEach string
+	// CreateIf (UBI-125) mirrors RI.CreateIf verbatim once validated --
+	// the bare declared bool param name deciding whether this resource is
+	// created at all, "" for an unconditional one.
+	CreateIf string
 }
 
 // decodedOutput is one outputs: entry (UBI-128), already resolved
@@ -163,27 +167,31 @@ func decodeBlueprint(intent *resolver.IntentFile, params []Param, outputs []Outp
 	if b.ForEach != nil && len(outputs) > 0 {
 		return nil, fmt.Errorf("blueprint: a blueprint with a for_each resource cannot also declare outputs: -- combining a per-iteration return list with named outputs isn't supported yet")
 	}
-	// A for_each resource's own Name must genuinely vary per iteration
-	// (docs/blueprint.md's own "explicit per-instance resource naming,
-	// never Terraform-style indexed addressing" requirement) -- a fixed
-	// literal Name would call sdk.Resource() with the IDENTICAL address
-	// on every iteration, a real runtime duplicate-resource bug that
-	// would otherwise only surface confusingly, at call time, far from
-	// its own real cause. Caught here, at build/decode time, by checking
-	// its own {param}/{param_index} tokens directly rather than waiting
-	// for it to misbehave.
-	if b.ForEach != nil {
-		base := b.ForEach.RI.ForEach
-		var usesToken bool
-		for _, m := range placeholderToken.FindAllStringSubmatch(b.ForEach.RI.Name, -1) {
-			if m[1] == base || m[1] == base+"_index" {
-				usesToken = true
-				break
-			}
+
+	// UBI-125: create_if must name a real, declared bool param. Unlike
+	// for_each there is no "at most one" rule: any number of resources may
+	// be conditional, independently, which is exactly the shape
+	// terraform-aws-modules uses (a create flag plus per-feature flags,
+	// each guarding a different subset).
+	for _, dr := range b.Resources {
+		if dr.RI.CreateIf == "" {
+			continue
 		}
-		if !usesToken {
-			return nil, fmt.Errorf("blueprint: resource %s.%s: for_each is set, but its own name %q never references {%s} or {%s_index} -- every iteration would create the SAME resource name, colliding at call time; give it a name that genuinely varies per iteration", b.ForEach.RI.Type, b.ForEach.RI.Name, b.ForEach.RI.Name, base, base)
+		p, ok := paramByName[dr.RI.CreateIf]
+		if !ok {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q names no declared param", dr.RI.Type, dr.RI.Name, dr.RI.CreateIf)
 		}
+		if p.Type != ParamBool {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: create_if %q must name a bool param, got %q", dr.RI.Type, dr.RI.Name, dr.RI.CreateIf, p.Type)
+		}
+		// A resource that may not exist cannot also be the one being
+		// iterated: the two would compose into a loop that may or may not
+		// run, which is expressible but has no Terraform shape asking for
+		// it yet, and would double the codegen surface for every language.
+		if dr.RI.ForEach != "" {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: create_if and for_each cannot both be set on one resource -- a conditional iteration isn't supported yet", dr.RI.Type, dr.RI.Name)
+		}
+		dr.CreateIf = dr.RI.CreateIf
 	}
 
 	for _, dr := range b.Resources {
@@ -217,6 +225,46 @@ func decodeBlueprint(intent *resolver.IntentFile, params []Param, outputs []Outp
 
 	if b.ForEach != nil && b.Referenced[b.ForEach.Address] {
 		return nil, fmt.Errorf("blueprint: resource %s.%s is a for_each resource -- it cannot be targeted by a sibling $ref/depends_on (an individual iteration's own instance isn't addressable that way); only the compiled function's own returned list exposes its instances", b.ForEach.RI.Type, b.ForEach.RI.Name)
+	}
+
+	// A conditional resource may not be referenced by a sibling's config
+	// or by an output, because the reference would be to a resource that
+	// may not exist. Terraform expresses that with try(x[0].attr, null);
+	// a blueprint has no way to say it, and the three SDK runtimes each
+	// mishandle an absent reference differently (a nil-pointer panic in
+	// Go, a silent null in TypeScript before ubx-sdk-typescript#21, a
+	// silent omission in Python). Refused here, at build time, rather
+	// than emitting code whose failure mode depends on the language it
+	// was generated into.
+	for _, dr := range b.Resources {
+		if dr.CreateIf == "" {
+			continue
+		}
+		if b.Referenced[dr.Address] {
+			return nil, fmt.Errorf("blueprint: resource %s.%s is conditional (create_if %q) and is also referenced by another resource or an output -- a reference to a resource that may not exist has no representation yet, so this blueprint cannot be built", dr.RI.Type, dr.RI.Name, dr.CreateIf)
+		}
+	}
+	// A for_each resource's own Name must genuinely vary per iteration
+	// (docs/blueprint.md's own "explicit per-instance resource naming,
+	// never Terraform-style indexed addressing" requirement) -- a fixed
+	// literal Name would call sdk.Resource() with the IDENTICAL address
+	// on every iteration, a real runtime duplicate-resource bug that
+	// would otherwise only surface confusingly, at call time, far from
+	// its own real cause. Caught here, at build/decode time, by checking
+	// its own {param}/{param_index} tokens directly rather than waiting
+	// for it to misbehave.
+	if b.ForEach != nil {
+		base := b.ForEach.RI.ForEach
+		var usesToken bool
+		for _, m := range placeholderToken.FindAllStringSubmatch(b.ForEach.RI.Name, -1) {
+			if m[1] == base || m[1] == base+"_index" {
+				usesToken = true
+				break
+			}
+		}
+		if !usesToken {
+			return nil, fmt.Errorf("blueprint: resource %s.%s: for_each is set, but its own name %q never references {%s} or {%s_index} -- every iteration would create the SAME resource name, colliding at call time; give it a name that genuinely varies per iteration", b.ForEach.RI.Type, b.ForEach.RI.Name, b.ForEach.RI.Name, base, base)
+		}
 	}
 
 	return b, nil
