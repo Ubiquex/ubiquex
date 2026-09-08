@@ -37,27 +37,47 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
    six `ubx-sdk-*` repos, the six `ubx-schema-*` repos — carries the identical
    `STATE.md`/`HISTORY.md` pair and this identical rule in its own `CLAUDE.md`.)
 4. A plan change is not real until it lands in `docs/plan.md` (with changelog entry).
-5. User-visible changes (new commands, flags, behaviors) update ubiquex-docs
+5. User-visible changes (new commands, flags, behaviors) update the user docs
    in the SAME session: pages verified against the actual built binary
-   (transcripts real, flags from --help), mint validate clean, committed and
-   pushed. If genuinely infeasible in-session, record a docs-debt entry in
-   STATE.md as the exception — never skip silently. Internal docs (docs/ in
-   this repo) are updated immediately as before. The real, git-connected
-   ubiquex-docs checkout is `~/Ubiquex/ubiquex-docs` (remote:
-   `github.com/Ubiquex/ubiquex-docs`, confirm with `git remote -v` before
-   editing, not assumed) -- `~/Ubiquex/documentation` is a disconnected,
-   non-git leftover copy with no remote at all; check `ls -la <path>/.git`
-   before editing docs in ANY path whose name isn't verified first. "committed
-   and pushed" for a docs change is only true once `git log -1` in the real
-   checkout shows the commit AND the content is confirmed via the GitHub API
-   against the actual repo (it's private -- `raw.githubusercontent.com`
-   404s unauthenticated; use `gh api repos/Ubiquex/ubiquex-docs/contents/<path>`
-   instead), matching rule 8's discipline for shared runtimes/bindings repos.
+   (transcripts real, flags from --help), the repo's own checks clean,
+   committed and pushed. If genuinely infeasible in-session, record a
+   docs-debt entry in STATE.md as the exception — never skip silently.
+   Internal docs (docs/ in this repo) are updated immediately as before.
+
+   The user docs are `ubx-docs-users` (Next.js), checkout
+   `~/Ubiquex/ubx-docs-users`, remote `github.com/Ubiquex/ubx-docs-users`,
+   serving `docs.ubiquex.io`. Its checks are `npm run build`,
+   `npm run check:links` and `npm run check:size`, not `mint validate`.
+   Provider and resource reference is a SEPARATE site, `ubx-docs-providers`,
+   which builds from the `ubx-sdk-*` repos' own releases.
+
+   `ubiquex-docs` is the RETIRED Mintlify site, archived 2026-09-08. It
+   serves nothing. Do not edit it, do not open PRs against it, and do not
+   take its content as current: it still holds a full `resource-reference/`
+   tree and a `scripts/resource-reference-gen/` pipeline, both superseded.
+   `~/Ubiquex/documentation` is a third trap, a disconnected non-git leftover
+   with no remote at all. Confirm `git remote -v` and `ls -la <path>/.git`
+   before editing docs in ANY path whose name isn't verified first.
+
+   "committed and pushed" for a docs change is only true once `git log -1`
+   in the real checkout shows the commit AND the content is confirmed via
+   the GitHub API against the actual repo (`gh api
+   repos/Ubiquex/ubx-docs-users/contents/<path>`), matching rule 8's
+   discipline for shared runtimes/bindings repos. Use `gh api` rather than
+   `raw.githubusercontent.com` regardless of repo visibility: it is the
+   authenticated path that works whether or not a repo is public, and
+   visibility has already changed once under this rule's feet.
+
    (UBI-140 and UBI-141 were both genuinely fixed and verified locally, then
    reported "committed and pushed" twice in a row -- both times the edits and
-   local verification were real, but landed in `~/Ubiquex/documentation`, never
-   in the real `ubiquex-docs` git repo; caught only when the founder checked
-   the real GitHub repo directly and found no update in over 10 hours.)
+   local verification were real, but landed in `~/Ubiquex/documentation`,
+   never in the real docs repo; caught only when the founder checked the real
+   GitHub repo directly and found no update in over 10 hours. Then on
+   2026-09-08 a session wrote a correct docs fix, verified it against the
+   real repo via `gh api`, and still shipped it nowhere: it edited
+   `ubiquex-docs`, which this rule named, months after the site moved. Naming
+   the right repo IS the rule; verification discipline cannot catch a
+   correct edit to a dead target.)
 6. Only reference Linear issue IDs given in the handoff prompt; never infer one.
    When filing new issues, verify the title against the Linear board.
 7. Background agents are not used in this project's sessions — work is sequential
@@ -113,7 +133,7 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
   under Roozbeh's own git identity and signing key. Never alter
   `user.name` / `user.email` / signing config. Never self-merge a PR
   with content to judge, matching the same convention already
-  established for `ubiquex-docs` and every PR-only repo.
+  established for `ubx-docs-users` and every PR-only repo.
 - NO AI attribution anywhere: no Co-Authored-By trailers, no "Generated with"
   lines, not in commit messages, not in PR bodies. (`includeCoAuthoredBy` is
   disabled in settings; do not re-add manually.)

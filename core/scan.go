@@ -429,7 +429,9 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 // value is the misleading natural-key attribute a user might have reached
 // for alone, not the field that's actually missing.
 func lookupHintText(providerSource, resourceType string) string {
-	docsLink := "see https://github.com/Ubiquex/ubiquex-docs, cli/lookup"
+	// docs.ubiquex.io, not the retired ubiquex-docs repo this used to name
+	// -- see cli/init.go's own docsConfigRef for the same correction.
+	docsLink := "see https://docs.ubiquex.io/cli-reference/scan"
 	if naturalKey, ok := lookuphints.For(providerSource, resourceType); ok {
 		return fmt.Sprintf("%s's lookup must include \"id\" -- %s alone is not enough (%s)",
 			resourceType, strings.Join(naturalKey, "/"), docsLink)

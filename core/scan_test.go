@@ -174,8 +174,11 @@ func TestRunScan_ResourceUnreadable_TeachesKnownType(t *testing.T) {
 	if !strings.Contains(err.Error(), `"id"`) {
 		t.Errorf("expected the error to teach \"id\" as the fix for aws_s3_bucket, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "cli/lookup") {
-		t.Errorf("expected a link to the lookup docs page, got: %v", err)
+	// docs.ubiquex.io, not the retired ubiquex-docs repo. Asserting on the
+	// live host rather than only on a path fragment, since a path that
+	// still resolves on a dead site is exactly what this used to pass on.
+	if !strings.Contains(err.Error(), "https://docs.ubiquex.io/cli-reference/scan") {
+		t.Errorf("expected a link to the live lookup docs page, got: %v", err)
 	}
 }
 
