@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -197,3 +199,77 @@ func TestEvaluate_Row4_ThrowMidEvaluation_NoPartialOutput(t *testing.T) {
 // Go-side check with bad output at all -- it is real, load-bearing
 // defense-in-depth (a runtime bug, a version-mismatched @ubx/sdk), not
 // something a live fixture program can exercise honestly.
+
+// TestEvaluate_BareNpmSpecifier_ResolvesFromProjectNodeModules is
+// UBI-252's own regression: the ONE authoring shape every published
+// document describes.
+//
+// docs.ubiquex.io/tutorial/sdk/install tells a TypeScript author to run
+// `npm install @ubx/sdk-aws` and then import bindings by bare
+// specifier. That program type-checks cleanly under tsc and, until this
+// test's own fix, could not be evaluated at all:
+//
+//	Import "@ubx/sdk-aws/aws/sqs/queue" not a dependency and not in
+//	import map
+//
+// Nothing caught it because every existing test here, and every
+// hand-written repro, imports by RELATIVE path -- the one shape the
+// documentation never describes.
+//
+// The fixture is a minimal hand-built node_modules rather than a real
+// npm install: this is testing Deno's resolution of a bare specifier
+// through package.json/node_modules, not npm itself, and a hermetic
+// `go test ./...` must not reach the network.
+func TestEvaluate_BareNpmSpecifier_ResolvesFromProjectNodeModules(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"name":"proj","type":"module","dependencies":{"widgets":"1.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(dir, "node_modules", "widgets")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "package.json"),
+		[]byte(`{"name":"widgets","version":"1.0.0","type":"module","exports":{"./queue":"./queue.js"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A real ResourceBinding, the same shape `ubx sdk gen` emits.
+	if err := os.WriteFile(filepath.Join(pkg, "queue.js"),
+		[]byte("export const Queue = { wireType: \"widget_queue\", fields: { name: \"name\" } };\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := filepath.Join(dir, "app.ts")
+	program := `import { intent, resource, stack } from "@ubx/sdk";
+import { Queue } from "widgets/queue";
+
+export default stack("payments", () => {
+  intent({ summary: "bare specifier resolves" });
+  resource(Queue, "q1", { name: "q1" });
+});
+`
+	if err := os.WriteFile(entry, []byte(program), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := Evaluate(evalCtx(t), entry)
+	if err != nil {
+		t.Fatalf("a bare npm specifier, the shape every published document describes, failed to evaluate: %v", err)
+	}
+	if !strings.Contains(string(out), "widget_queue") {
+		t.Fatalf("evaluated document does not carry the binding's own wireType: %s", out)
+	}
+
+	// The runner is written beside the entry file and must not survive.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".ubx-runner-") {
+			t.Errorf("runner script left behind in the author's own directory: %s", e.Name())
+		}
+	}
+}
