@@ -182,22 +182,12 @@ func (g *goGenerator) topoOrdered() []*goResource {
 // $ref can point forward OR backward in the draft's own resource order).
 func (g *goGenerator) wrap() error {
 	seenIdent := map[string]string{} // ident -> the resource Name that first claimed it
+	sources, err := identSources(g.blueprint.Resources)
+	if err != nil {
+		return err
+	}
 	for _, dr := range g.blueprint.Resources {
-		identSource := dr.RI.Name
-		if dr.ForEach != "" {
-			// UBI-129: a for_each resource's own Name is a TEMPLATE
-			// ("subnet-{availability_zones}"), not plain text -- derive
-			// the shared binding/config identifier from its own
-			// placeholder-stripped basis instead (every instance shares
-			// ONE binding regardless of its own per-iteration runtime
-			// name).
-			basis, err := forEachIdentifierBasis(dr.RI.Name)
-			if err != nil {
-				return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
-			}
-			identSource = basis
-		}
-		ident, err := pascalCase(identSource)
+		ident, err := pascalCase(sources[dr.Address])
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}

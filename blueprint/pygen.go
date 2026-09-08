@@ -127,16 +127,12 @@ func (g *pyGenerator) topoOrdered() []*pyResource {
 // can be called alone (--lang py).
 func (g *pyGenerator) wrap() error {
 	seenIdent := map[string]string{}
+	sources, err := identSources(g.blueprint.Resources)
+	if err != nil {
+		return err
+	}
 	for _, dr := range g.blueprint.Resources {
-		identSource := dr.RI.Name
-		if dr.ForEach != "" {
-			basis, err := forEachIdentifierBasis(dr.RI.Name)
-			if err != nil {
-				return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
-			}
-			identSource = basis
-		}
-		ident, err := pascalCase(identSource)
+		ident, err := pascalCase(sources[dr.Address])
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}

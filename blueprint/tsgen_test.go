@@ -105,13 +105,23 @@ func TestGenerateTS_CiPlatform(t *testing.T) {
 	}
 }
 
+// The SAME type twice, deliberately. Two DIFFERENT types whose names
+// normalize alike (aws_iam_role.ci-runner and aws_iam_policy.ci_runner,
+// which this test used to pair) now converts: identSources qualifies a
+// colliding identifier by resource type, so they become
+// AwsIamRoleCiRunner and AwsIamPolicyCiRunner.
+//
+// One type with two names that normalize alike has no qualification left
+// to apply -- the type is already the same -- so it is still a real,
+// unresolvable collision, and this test still pins that it is refused
+// rather than silently resolved.
 func TestGenerateTS_DuplicateIdentifier(t *testing.T) {
 	intent := mustIntentFile(t, `{
 		"schema_version": 1, "kind": "ubx:intent/v1", "stack": "s",
 		"intent": {"summary": "x"},
 		"resources": [
 			{"type": "aws_iam_role", "name": "ci-runner", "op": "create", "config": {}},
-			{"type": "aws_iam_policy", "name": "ci_runner", "op": "create", "config": {}}
+			{"type": "aws_iam_role", "name": "ci_runner", "op": "create", "config": {}}
 		]
 	}`)
 	if _, err := GenerateTS("s", &Ubxfile{Lang: "ts"}, intent); err == nil {

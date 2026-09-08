@@ -146,3 +146,79 @@ func TestCreateIf_AbsentChangesNothing(t *testing.T) {
 		}
 	}
 }
+
+// Two types sharing a name is legal in Terraform and now legal here.
+//
+// A Terraform label is unique per TYPE, so aws_sqs_queue.this and
+// aws_sqs_queue_policy.this are both legal and distinct. An identifier
+// derived from the name alone collapsed them and codegen refused the
+// pair. "this" is the near-universal Terraform label, and
+// terraform-aws-sqs has five resources named it, so any real module hit
+// this the moment more than one of its resources converted.
+func TestIdentifierCollision_TwoTypesOneName_Qualifies(t *testing.T) {
+	dir := writeUbxfile(t, `lang: go
+
+resources: |
+  {"schema_version":1,"kind":"ubx:intent/v1","stack":"bp","intent":{"summary":"s"},
+   "resources":[{"type":"aws_sqs_queue","name":"this","op":"create","config":{}},
+                {"type":"aws_sqs_queue_policy","name":"this","op":"create","config":{}}]}
+`)
+	uf, draft, err := Validate(dir)
+	if err != nil {
+		t.Fatalf("two types sharing a name must build: %v", err)
+	}
+	files, err := GenerateGo("bp", uf, draft)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+	var bindings string
+	for name, content := range files {
+		if strings.HasSuffix(name, "bindings.go") {
+			bindings = content
+		}
+	}
+	for _, want := range []string{"AwsSqsQueueThis", "AwsSqsQueuePolicyThis"} {
+		if !strings.Contains(bindings, want) {
+			t.Errorf("expected a type-qualified identifier %q:\n%s", want, bindings)
+		}
+	}
+}
+
+// The other side of the same rule, and the one that keeps this from being
+// a silent rename: a blueprint WITHOUT a collision must keep the exact
+// identifiers it had before, because those are an exported, supported
+// surface (UBI-225: importing a blueprint's bindings directly is a real
+// case, pinned by cli/blueprint_binding_provenance_test.go). Qualifying
+// only on collision is what makes this change unable to rename anything
+// that compiles today.
+func TestIdentifierCollision_NoCollision_NamesUnchanged(t *testing.T) {
+	dir := writeUbxfile(t, `lang: go
+
+resources: |
+  {"schema_version":1,"kind":"ubx:intent/v1","stack":"bp","intent":{"summary":"s"},
+   "resources":[{"type":"aws_sqs_queue","name":"primary","op":"create","config":{}},
+                {"type":"aws_sqs_queue_policy","name":"policy","op":"create","config":{}}]}
+`)
+	uf, draft, err := Validate(dir)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	files, err := GenerateGo("bp", uf, draft)
+	if err != nil {
+		t.Fatalf("GenerateGo: %v", err)
+	}
+	var bindings string
+	for name, content := range files {
+		if strings.HasSuffix(name, "bindings.go") {
+			bindings = content
+		}
+	}
+	for _, want := range []string{"var Primary =", "var Policy ="} {
+		if !strings.Contains(bindings, want) {
+			t.Errorf("a non-colliding blueprint's identifiers changed, want %q:\n%s", want, bindings)
+		}
+	}
+	if strings.Contains(bindings, "AwsSqsQueuePrimary") {
+		t.Errorf("a non-colliding resource was type-qualified anyway:\n%s", bindings)
+	}
+}
