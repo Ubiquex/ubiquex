@@ -101,8 +101,10 @@ mkdir -p ~/ubxflow && cd ~/ubxflow
 $UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0 --region us-east-1
 ```
 
-**Correct:** `.ubx/config.hcl` is written and the next-step hint names
-`ubx plan --from-code <file>.ts`. The config holds:
+**Correct:** it completes immediately without asking anything, and the
+next-step line on stdout matches the comment written into the file. Both
+should tell you to install bindings and write `stack.ts`. The config
+holds:
 
 ```hcl
 stack = "billing"
@@ -119,11 +121,24 @@ provider_configs = {
 }
 ```
 
-**Failure:** it overwrites an existing config without `--force`.
+**Failure:** it sits at a `Provider, e.g. ...` prompt despite both
+provider flags being given. That was the behaviour until 2026-09-08 and
+it blocked the first command anyone runs until stdin closed. Also a
+failure: stdout and the generated comment disagreeing about what to do
+next, or either one naming `--from-doc`, which is not a flag on any
+command.
 
-**Worth knowing:** bare `ubx init` with no provider writes a *different*
-next-step hint, naming `ubx plan --from-doc <file>.md`. That flag does
-not exist. See 12.1. The `--dynamic-source` path above is correct.
+**Try the prompt too**, since it is what a user with no provider in mind
+sees. Run bare `ubx init` in an empty directory:
+
+```
+Provider, e.g. ubiquex/aws (enter to skip, configure later):
+```
+
+**Correct:** it suggests a ubx provider, not a Terraform registry one.
+Answering `ubiquex/aws` writes a `providers` table; answering
+`hashicorp/aws` writes `thirdparty_providers`. Those are different
+tables read by different code, and the namespace is what picks.
 
 ### 2.2 Confirm the config is really being read
 
@@ -773,16 +788,28 @@ all, and no amount of local testing will reach them.
 
 All reproduced against `fa490ca` while writing this. None filed.
 
-### 12.1 `ubx init` with no provider writes a hint for a flag that does not exist
+### 12.1 First-contact defects in `ubx init`, fixed 2026-09-08
 
-Bare `ubx init` ends its generated config with `then ubx plan --from-doc
-<file>.md`. Running that gives `unknown flag: --from-doc`, exit 2. The
-real flag is `--from-code`, and it takes a `.ts`, `.go`, `.py` or
-`.ubx.hcl` file rather than markdown, so the hint is wrong twice over.
+Three, all on the first command anyone runs. Fixed together; recorded
+because a binary older than that date has all of them.
 
-`ubx init --dynamic-source` writes a correct hint, so this only affects
-the path a user takes when they have not chosen a provider yet, which is
-the more likely first run.
+**It prompted for a provider it had already been given.** The guard
+checked `--provider` and `--source` but not `--dynamic-source`, so the
+exact command the SDK install tutorial gives prompted anyway and blocked
+until stdin closed.
+
+**The prompt suggested `hashicorp/aws`.** ubx ships its own pinned
+schemas for eight clouds and that is the path most stacks want, so the
+first example a new user saw pointed at the fallback. It now suggests
+`ubiquex/aws`, and routes by namespace: a `ubiquex/` source writes
+`providers`, anything else writes `thirdparty_providers`.
+
+**The generated config advertised `ubx plan --from-doc <file>.md`.** That
+flag has never existed on `ubx plan` and never took markdown, and stdout
+in the same command printed something else, so one command gave two
+contradictory instructions. My earlier note here claimed the
+`--dynamic-source` path was correct; that was wrong, and only stdout was.
+Both now say the same thing.
 
 ### 12.2 The documented TypeScript path did not run, and now does
 

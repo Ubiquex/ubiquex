@@ -149,7 +149,7 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 		t.Errorf("TFDir = %q, want ./terraform", cfg.TFDir)
 	}
 
-	if !strings.Contains(out, "next: write an intent file") {
+	if !strings.Contains(out, "write stack.ts") || strings.Contains(out, "add a provider above") {
 		t.Fatalf("expected the has-a-provider next: hint, got: %s", out)
 	}
 }
@@ -188,8 +188,13 @@ func TestInit_ProviderPath_StillWritesLegacySingularTable(t *testing.T) {
 	if len(cfg.ThirdpartyProviders) != 0 {
 		t.Fatalf("Providers = %v, want none (a local path was given, not a registry source)", cfg.ThirdpartyProviders)
 	}
-	if !strings.Contains(out, "next: write an intent file") {
+	if !strings.Contains(out, "write stack.ts") || strings.Contains(out, "add a provider above") {
 		t.Fatalf("expected the has-a-provider next: hint (a local path still counts as configured), got: %s", out)
+	}
+	// A local provider binary has no published @ubx/sdk-<name> package,
+	// so the npm line must not appear on this path.
+	if strings.Contains(out, "npm install") {
+		t.Errorf("a local provider path was told to npm install bindings that do not exist for it: %s", out)
 	}
 }
 
@@ -377,7 +382,7 @@ func TestInit_TTYPrompt_FillsInProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx init (TTY prompt): %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "Provider registry source") {
+	if !strings.Contains(out, "Provider, e.g. ubiquex/aws") {
 		t.Fatalf("expected the prompt itself in output, got: %s", out)
 	}
 	cfg := loadConfigFrom(t, dir)
@@ -509,5 +514,104 @@ func TestInit_SourceStillWritesThirdparty(t *testing.T) {
 	}
 	if strings.Contains(got, "providers = {\n  \"aws\"") {
 		t.Fatalf("--source wrote the dynamic providers table:\n%s", got)
+	}
+}
+
+// TestInit_DynamicSource_DoesNotPromptAndWritesNoDeadFlag covers the two
+// things a brand-new user hits on the very first command.
+//
+// The prompt guard checked --provider and --source but not
+// --dynamic-source, so the exact command the SDK install tutorial gives
+// prompted anyway, for a provider it had just been told, and blocked
+// until stdin closed. This test cannot see a TTY prompt directly (the
+// harness's stdin is not a terminal, which is what makes the prompt
+// skip), so it asserts the observable half: the flags produce a complete
+// provider with no interaction, which is only true if the guard sees
+// dynamicSource.
+//
+// It also pins the generated next-step comment. That comment named `ubx
+// plan --from-doc <file>.md` -- a flag that has never existed on `ubx
+// plan` and never took markdown -- while stdout in the same command
+// printed something else entirely. One command, two contradictory
+// instructions, both wrong in the file's case.
+func TestInit_DynamicSource_DoesNotPromptAndWritesNoDeadFlag(t *testing.T) {
+	dir := t.TempDir()
+	out, err := runUbx(t, nil, "init", "--dir", dir,
+		"--stack", "billing",
+		"--dynamic-source", "ubiquex/aws",
+		"--provider-version", "3.0.0")
+	if err != nil {
+		t.Fatalf("ubx init: %v\noutput: %s", err, out)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, ".ubx", "config.hcl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+
+	if !strings.Contains(got, `source  = "ubiquex/aws"`) {
+		t.Errorf("the dynamic provider is missing from the config, so the flags did not take effect:\n%s", got)
+	}
+	if strings.Contains(got, "--from-doc") {
+		t.Errorf("generated config still advertises --from-doc, which is not a flag on any command:\n%s", got)
+	}
+	if strings.Contains(out, "--from-doc") {
+		t.Errorf("stdout still advertises --from-doc: %s", out)
+	}
+	// The file and stdout must agree on what to do next.
+	for _, want := range []string{"stack.ts", "ubx plan"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated config's next-step comment does not mention %q:\n%s", want, got)
+		}
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout's next-step line does not mention %q: %s", want, out)
+		}
+	}
+}
+
+// TestInit_Prompt_SuggestsAUbxProvider pins what the first example a new
+// user sees actually is. It suggested hashicorp/aws, a Terraform
+// registry provider, when ubx ships its own pinned schemas for the eight
+// common clouds and that is the path most stacks want.
+func TestInit_Prompt_SuggestsAUbxProvider(t *testing.T) {
+	src, err := os.ReadFile("init.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	if !strings.Contains(s, `"Provider, e.g. "+ubxProviderNamespace+"/aws`) {
+		t.Error("the provider prompt no longer suggests a ubx dynamic provider as its example")
+	}
+	if strings.Contains(s, "e.g. hashicorp/aws (enter to skip") {
+		t.Error("the provider prompt suggests hashicorp/aws again, pointing a first-time user at the fallback path")
+	}
+}
+
+// TestInit_TTYPrompt_UbxProviderGoesToProvidersTable is the other half of
+// the prompt's routing rule. A ubx dynamic provider and a Terraform
+// registry provider live in different config tables, read by different
+// code, so the prompt has to choose between them, and the namespace is
+// what decides: ubx publishes its own schemas under "ubiquex/".
+//
+// TestInit_TTYPrompt_FillsInProvider already covers the other branch,
+// where hashicorp/aws lands in [thirdparty_providers].
+func TestInit_TTYPrompt_UbxProviderGoesToProvidersTable(t *testing.T) {
+	dir := t.TempDir()
+	stdin := "ubiquex/aws\n3.0.0\nus-east-1\n"
+	out, err := runUbxTTY(t, stdin, nil, "init", "--dir", dir, "--stack", "payments")
+	if err != nil {
+		t.Fatalf("ubx init (TTY prompt): %v\noutput: %s", err, out)
+	}
+	cfg := loadConfigFrom(t, dir)
+	if len(cfg.ThirdpartyProviders) != 0 {
+		t.Errorf("a ubiquex/ provider went into [thirdparty_providers], where nothing reads it as a dynamic provider: %v", cfg.ThirdpartyProviders)
+	}
+	entry, ok := cfg.Providers["aws"]
+	if !ok {
+		t.Fatalf("a ubiquex/ provider did not land in [providers]: %v", cfg.Providers)
+	}
+	if entry["source"] != "ubiquex/aws" || entry["version"] != "3.0.0" {
+		t.Errorf("[providers] entry = %v, want source ubiquex/aws version 3.0.0", entry)
 	}
 }
