@@ -98,8 +98,16 @@ only to teach; it is deliberately not an alias.
 
 ```
 mkdir -p ~/ubxflow && cd ~/ubxflow
-$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0
+$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.1.0
 ```
+
+Pin 3.1.0, not 3.0.0. Every snapshot up to and including 3.0.0 pins
+ubx-provider-dynamic 1.2.0, which cannot create any AWS resource carrying
+a computed attribute (96% of them): the create fails at
+`encode planned state: wire: cannot serialize an unknown value`. 3.1.0 is
+the first snapshot pinning 1.2.1, which fixes it. The binary a stack runs
+is resolved from the snapshot's own manifest, so the pin is what delivers
+the fix.
 
 No `--region` here, and that is the point rather than an omission. A ubx
 dynamic provider declares no provider-level configuration at all, so a
@@ -131,7 +139,7 @@ later command now refuses to load such a config.
 ### 2.1a The region flag is refused, loudly
 
 ```
-$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.0.0 --region us-east-1
+$UBX init --stack billing --dynamic-source ubiquex/aws --provider-version 3.1.0 --region us-east-1
 ```
 
 **Correct:** it refuses, names `--region`, and names
