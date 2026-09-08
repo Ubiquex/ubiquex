@@ -64,7 +64,11 @@ plan"; executor trust comes later).`,
 			}
 			defer closeLedger()
 
-			p, err := ledger.Read(args[0])
+			ref, refErr := resolveProposalPrefix(ledgerDir, args[0])
+			if refErr != nil {
+				ref = args[0]
+			}
+			p, err := ledger.Read(ref)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}

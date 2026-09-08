@@ -93,7 +93,7 @@ func TestWhy_InvalidArgument(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an argument that's neither an id nor an address")
 	}
-	if !strings.Contains(err.Error(), "not a valid proposal ID") {
+	if !strings.Contains(err.Error(), "is not a proposal hash or a prefix of one") {
 		t.Fatalf("expected the invalid-argument error, got: %v", err)
 	}
 }
