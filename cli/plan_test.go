@@ -308,8 +308,8 @@ func TestPlan_MutuallyExclusiveInputs(t *testing.T) {
 
 	_, err := runUbx(t, nil, "plan", intentPath, "--from-code", "entry.ts", "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("expected a mutually-exclusive-inputs error, got: %v", err)
+	if !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("expected a one-file-argument error, got: %v", err)
 	}
 }
 

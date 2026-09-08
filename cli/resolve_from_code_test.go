@@ -300,7 +300,7 @@ func TestResolveFromCode_RequiresOneOrTheOther(t *testing.T) {
 	ledgerDir := t.TempDir()
 	_, err := runUbx(t, nil, "resolve", "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "requires either") {
-		t.Fatalf("expected a \"requires either\" error, got: %v", err)
+	if !strings.Contains(err.Error(), "requires a file argument") {
+		t.Fatalf("expected a requires-a-file-argument error, got: %v", err)
 	}
 }
