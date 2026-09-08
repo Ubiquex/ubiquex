@@ -17,6 +17,7 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
+	"github.com/ubiquex/ubiquex/hclstack"
 )
 
 // newPlanCmd is UBI-49's own terraform-shaped fusion of propose+resolve+
@@ -56,17 +57,19 @@ func newPlanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "plan [intent-file]",
-		Short: "Resolve a hand-written intent file or an SDK program into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
+		Short: "Resolve an intent file, an SDK program, or a .ubx.hcl blueprint-calling file into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
 		Long: `Fuses "ubx propose" + "ubx resolve" + a preview render into one command -- the
 terraform-shaped, two-step half of this project's own workflow (plan, then "ubx ship <hash>").
 
-One file argument, dispatched by its own extension: an ubx:intent/v1 file, or a
+One file argument, dispatched by its own extension: an ubx:intent/v1 file, a
 TypeScript, Go or Python SDK program (.ts/.go/.py) evaluated through the same evaluator
-"ubx resolve" uses.
+"ubx resolve" uses, or a .ubx.hcl blueprint-calling file, which is parsed rather than
+evaluated so no code runs.
 
-Bare "ubx plan" with no argument finds the program itself: stack.ts (or stack.go,
-stack.py) if one is there, otherwise the only SDK program in the directory. Several
-programs with no conventional entry among them are listed, never guessed.
+Bare "ubx plan" with no argument finds the entry file itself: stack.ts, stack.go,
+stack.py or stack.ubx.hcl if one is there, otherwise the only SDK program in the
+directory. Two conventional entries in different media are refused rather than ranked,
+since one evaluates code and the other only parses.
 
 The result resolves through the identical, unmodified core/resolver.Resolve every other entry
 point already uses -- same invariants, same orphan/pin checks, same failure modes. Its full
@@ -89,7 +92,7 @@ propose-time PR trailer hash, etc.).`,
 			// Promoted before the mutual-exclusion check below, so passing
 			// both an argument and --from-code still errors rather than
 			// silently preferring one.
-			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0], false) {
+			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0], true) {
 				fromCode = args[0]
 				args = nil
 			}
@@ -114,9 +117,20 @@ propose-time PR trailer hash, etc.).`,
 				// itself, merging has no sane cross-language semantics, and
 				// one entry file is what makes the provenance content hash
 				// mean anything at all.
-				if entry, ok := conventionalEntry(candidates); ok {
+				entry, conflicting, ok := conventionalEntry(candidates)
+				switch {
+				case ok:
 					fromCode = entry
-				} else {
+				case len(conflicting) > 1:
+					// Deliberately not the multiple-programs message. That
+					// one reads as "you left two files lying around"; this
+					// is a different situation and the error should say so,
+					// because the fix is a decision about which medium the
+					// stack is authored in, not tidying up.
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf(
+						"plan: %s each name this stack's entry point, in different authoring media -- ubx will not choose between them, since one evaluates code and the other only parses; keep the one this stack is authored in, or name the file explicitly",
+						strings.Join(conflicting, " and "))}
+				default:
 					switch len(candidates) {
 					case 1:
 						fromCode = candidates[0].path
@@ -129,7 +143,7 @@ propose-time PR trailer hash, etc.).`,
 							names[i] = c.path
 							hints[i] = fmt.Sprintf("ubx plan %s", c.path)
 						}
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one with `ubx plan --from-code <file>`, or name one of them %s: %s", strings.Join(names, ", "), conventionalEntryNames(), strings.Join(hints, " | "))}
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one with `ubx plan <file>`, or name one of them %s: %s", strings.Join(names, ", "), conventionalEntryNames(), strings.Join(hints, " | "))}
 					}
 				}
 			}
@@ -157,6 +171,22 @@ propose-time PR trailer hash, etc.).`,
 			var intent resolver.IntentFile
 			var sourceLabel string
 			switch {
+			case isHCLStackFile(fromCode):
+				// A .ubx.hcl file is parsed, never evaluated: no code runs,
+				// so there is no receipts/blueprintRefs output and nothing
+				// to stamp. The identical branch `ubx resolve` has always
+				// had (UBI-226), shared here rather than reimplemented.
+				//
+				// plan refused this medium outright until now, which made
+				// the front door the one command that could not plan a
+				// whole authoring medium. Widening it is the same asymmetry
+				// the positional form fixed.
+				parsed, err := hclstack.Parse(fromCode)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+				}
+				intent = *parsed
+				sourceLabel = fromCode
 			case fromCode != "":
 				// blueprintRefs (UBI-126) is deliberately unused here --
 				// `ubx plan --from-code` has never wired blueprint
@@ -184,6 +214,13 @@ propose-time PR trailer hash, etc.).`,
 				data, err := os.ReadFile(args[0])
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
+				}
+				if looksLikeHCL(args[0], data) {
+					// Reaching the intent-file reader with HCL used to
+					// report "invalid character 's' looking for beginning of
+					// value", a JSON parse error about a file that was never
+					// JSON. It named the wrong problem entirely.
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %s looks like HCL but is not named *.ubx.hcl -- a blueprint-calling file has to carry that exact suffix to be parsed as one, and anything else is read as an ubx:intent/v1 JSON document", args[0])}
 				}
 				if err := json.Unmarshal(data, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse intent file: %w", err)}
@@ -319,6 +356,15 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 		}
 		name := e.Name()
 		path := filepath.Join(dir, name)
+		if isHCLStackFile(name) {
+			// No content sniffing here, unlike the three SDK languages. A
+			// .ubx.hcl file carries no import to look for -- it is parsed,
+			// not run -- and the double extension is itself the marker: no
+			// file is named .ubx.hcl by accident the way a stray .go file
+			// lands in a Go module.
+			found = append(found, detectedMedium{path: path})
+			continue
+		}
 		switch ext := strings.ToLower(filepath.Ext(name)); ext {
 		case ".ts", ".go", ".py":
 			marker := sdkImportMarkers[ext]
@@ -610,40 +656,87 @@ func resolveAcceptedProposal(ledger *core.Ledger, ref string) (*core.Proposal, e
 // author actually wrote.
 const conventionalEntryBase = "stack"
 
+// conventionalEntrySuffixes are the exact file names bare `ubx plan`
+// prefers, one per authoring medium.
+//
+// ".ubx.hcl" is why this is a suffix list rather than a base name plus
+// filepath.Ext. It is a DOUBLE extension, so TrimSuffix(name, Ext(name))
+// yields "stack.ubx", not "stack", and the original check silently
+// failed to match the one medium it was later asked to cover.
+var conventionalEntrySuffixes = []string{
+	conventionalEntryBase + ".ts",
+	conventionalEntryBase + ".go",
+	conventionalEntryBase + ".py",
+	conventionalEntryBase + ".ubx.hcl",
+}
+
+// isConventionalEntry reports whether path's base name is one of them.
+func isConventionalEntry(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	for _, s := range conventionalEntrySuffixes {
+		if base == s {
+			return true
+		}
+	}
+	return false
+}
+
+// isHCLStackFile reports whether path is a .ubx.hcl blueprint-calling
+// file, the one medium that is parsed rather than evaluated.
+func isHCLStackFile(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".ubx.hcl")
+}
+
+// looksLikeHCL is a last-resort check for a file that reached the
+// intent-file reader and is plainly not JSON. Deliberately narrow: an
+// intent/v1 document always starts with "{", so anything with a .hcl
+// extension or an HCL-shaped first token is worth naming rather than
+// letting a JSON decoder describe.
+func looksLikeHCL(path string, data []byte) bool {
+	if strings.HasSuffix(strings.ToLower(path), ".hcl") {
+		return true
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "stack ") || strings.HasPrefix(trimmed, "stack=") ||
+		strings.HasPrefix(trimmed, "blueprint ")
+}
+
 // conventionalEntry picks the conventional entry file out of candidates,
 // if exactly one is present. More than one (stack.ts AND stack.go in the
 // same directory) is a genuine ambiguity and falls through to the normal
 // multiple-candidates error rather than picking a language for the
 // author.
-func conventionalEntry(candidates []detectedMedium) (string, bool) {
-	var found string
-	n := 0
+func conventionalEntry(candidates []detectedMedium) (string, []string, bool) {
+	var conventional []string
 	for _, c := range candidates {
-		name := filepath.Base(c.path)
-		if strings.TrimSuffix(name, filepath.Ext(name)) == conventionalEntryBase {
-			found = c.path
-			n++
+		if isConventionalEntry(c.path) {
+			conventional = append(conventional, c.path)
 		}
 	}
-	if n == 1 {
-		return found, true
+	switch len(conventional) {
+	case 1:
+		return conventional[0], nil, true
+	case 0:
+		return "", nil, false
+	default:
+		// More than one conventional entry is a genuine ambiguity and gets
+		// refused, never resolved by precedence. stack.ts and
+		// stack.ubx.hcl are not two spellings of one stack: they are two
+		// different authoring media, and one of them runs code while the
+		// other only parses. Any fixed precedence would mean a user who
+		// adds a second file silently changes which one ships.
+		sort.Strings(conventional)
+		return "", conventional, false
 	}
-	return "", false
 }
 
 // conventionalEntryNames renders the conventional names for a teaching
 // error, in a stable order.
 func conventionalEntryNames() string {
-	exts := make([]string, 0, len(sdkImportMarkers))
-	for ext := range sdkImportMarkers {
-		exts = append(exts, ext)
-	}
-	sort.Strings(exts)
-	names := make([]string, len(exts))
-	for i, ext := range exts {
-		names[i] = conventionalEntryBase + ext
-	}
-	return strings.Join(names, "/")
+	return strings.Join(conventionalEntrySuffixes, "/")
 }
 
 // sdkEntryFile reports whether path names an authoring program rather
