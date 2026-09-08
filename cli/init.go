@@ -239,7 +239,11 @@ Refuses to overwrite an existing config unless --force is given.`,
 				fmt.Fprintf(out, "next: add a provider (re-run with --dynamic-source/--provider-version for a ubx dynamic provider such as ubiquex/aws, or --source/--provider-version for a Terraform-registry one, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
 			} else {
 				if dynamicSource != "" {
-					fmt.Fprintf(out, "next: install this provider's bindings (`npm install @ubx/sdk-<name>`), write stack.ts, and run `ubx plan` -- see %s\n", docsConfigRef)
+					// The provider is known here, so name it. A literal
+					// <name> placeholder in a command a reader is meant to
+					// run is a small thing that still has to be decoded
+					// before it works, and this command has the answer.
+					fmt.Fprintf(out, "next: install this provider's bindings (`npm install @ubx/sdk-%s`), write stack.ts, and run `ubx plan` -- see %s\n", providerShortName(dynamicSource), docsConfigRef)
 				} else {
 					fmt.Fprintf(out, "next: write stack.ts against this provider's bindings and run `ubx plan` -- see %s\n", docsConfigRef)
 				}
@@ -435,7 +439,7 @@ func hasProvider(v configTemplateValues) bool {
 // straight to `ubx plan`; one with no provider yet needs that filled in
 // first, or `ubx plan` fails immediately, no better than before this
 // session.
-func nextStepComment(hasProvider, isDynamic bool) string {
+func nextStepComment(hasProvider, isDynamic bool, shortName string) string {
 	if !hasProvider {
 		return fmt.Sprintf(
 			"# next: add a provider above (uncomment providers/provider_configs, or\n"+
@@ -450,9 +454,9 @@ func nextStepComment(hasProvider, isDynamic bool) string {
 	// after something that does not exist.
 	if isDynamic {
 		return fmt.Sprintf(
-			"# next: install this provider's bindings (`npm install @ubx/sdk-<name>`),\n"+
+			"# next: install this provider's bindings (`npm install @ubx/sdk-%s`),\n"+
 				"# write stack.ts, and run `ubx plan` -- see %s\n",
-			docsConfigRef)
+			shortName, docsConfigRef)
 	}
 	return fmt.Sprintf(
 		"# next: write stack.ts against this provider's bindings and run\n"+
@@ -525,7 +529,7 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
@@ -587,7 +591,7 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
@@ -636,7 +640,7 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
@@ -737,7 +741,7 @@ func renderConfigTemplateFullTOML(v configTemplateValues) string {
 	b.WriteString("[ledger]\n")
 	b.WriteString("# store = \"s3://acme-ledger/acme/prod/\"\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
@@ -817,7 +821,7 @@ func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
 	b.WriteString("# ledger = {\n#   store = \"s3://acme-ledger/acme/prod/\"\n# }\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
@@ -897,7 +901,7 @@ func renderConfigTemplateFullYAML(v configTemplateValues) string {
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
 	b.WriteString("# ledger:\n#   store: \"s3://acme-ledger/acme/prod/\"\n\n")
 
-	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != "", providerShortName(v.DynamicSource)))
 	return b.String()
 }
 
