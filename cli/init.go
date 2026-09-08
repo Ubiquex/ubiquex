@@ -17,7 +17,17 @@ import (
 // annotated key encyclopedia actually lives (UBI-59: it moved to
 // cli/config.mdx -- `ubx init`'s own generated output, and its `--full`
 // mode, both point here instead of re-documenting every key inline).
-const docsConfigRef = "https://github.com/Ubiquex/ubiquex-docs, cli/config"
+// docsConfigRef is what `ubx init` prints and writes into the generated
+// config's own comment, so it is the first documentation link most users
+// ever follow.
+//
+// It pointed at github.com/Ubiquex/ubiquex-docs, the retired Mintlify
+// repo, which serves nothing and is now archived. The live site is
+// docs.ubiquex.io (served from ubx-docs-users), and pointing at a docs
+// site rather than at a source repo is the right shape regardless of
+// which repo is current: the URL a reader is handed should be the one
+// that renders the page.
+const docsConfigRef = "https://docs.ubiquex.io/cli-reference/config"
 
 // ubxProviderNamespace is the namespace ubx publishes its own pinned,
 // vendor-sourced provider schemas under. A source in this namespace is a
