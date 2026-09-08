@@ -5,9 +5,9 @@ installed `ubx` and is building a real stack for the first time. The
 order is the order they would hit things, not the order the codebase is
 organised in.
 
-Everything here was run against the real binary at commit `fa490ca`,
-against the real `ubiquex/aws` 3.0.0 provider pin, with real generated
-bindings and a real TypeScript program. Where output is shown, that
+Everything here was run against the real binary, against the real
+`ubiquex/aws` 3.0.0 provider pin, with the real published
+`@ubx/sdk-aws` package a user installs and a real TypeScript program. Where output is shown, that
 output was produced by running the command. Where something did not
 work, it is written down as what it did, not as what it should do.
 
@@ -26,16 +26,23 @@ has to be exercised somewhere.
 | | |
 |---|---|
 | `ubx` | built from this repo, see 1.1 |
-| Deno | 2.x, for the TypeScript evaluator and for editor types |
+| Node.js | 22.x or newer, to install the bindings |
+| Deno | 2.x, which `ubx` invokes as the TypeScript evaluator |
 | a provider pin | this plan uses `ubiquex/aws` at `3.0.0` |
+
+You never invoke Deno yourself. `ubx` shells out to it to evaluate an
+SDK program, under a locked-down sandbox with no network, filesystem or
+environment access.
 
 No cloud credentials are needed for sections 1 through 7. Schema comes
 from a pinned, checksum-verified snapshot, and nothing in those sections
 contacts AWS.
 
-Two snags will interrupt this flow. Both are real, both are in section
-12, and both are called out again where you hit them. Read section 12
-first if you would rather not be surprised.
+This flow is four commands and no detours: `ubx init`, `npm install`,
+write the program, `ubx plan`. It was not, until 2026-09-08. If any step
+in sections 3 through 6 fails, check section 12.2 first: the fix that
+made the documented TypeScript path run at all is recent, and a binary
+older than it cannot complete this.
 
 ---
 
@@ -136,125 +143,80 @@ stack = billing                          <- …/.ubx/config.hcl
 
 **Failure:** a key missing, or attributed to the wrong file.
 
-### 2.3 The first snag: add the table `sdk gen` actually reads
+## 3. Install the bindings
+
+The SDK is the authoring medium, and the bindings are a published
+package. You do not generate them. `ubx sdk gen` exists to produce the
+`ubx-sdk-*` repos from a central config; it is not part of authoring and
+no documentation asks a user to run it.
 
 ```
-cat >> .ubx/config.hcl <<'EOF'
-
-dynamic_providers = {
-  aws = {
-    source  = "ubiquex/aws"
-    version = "3.0.0"
-  }
-}
-EOF
+npm init -y
+npm install @ubx/sdk-aws
 ```
 
-You have now declared the same provider twice, under two different key
-names, because `ubx init` writes `providers` and `ubx sdk gen` reads
-`dynamic_providers`. Both are real: `providers` is what the plan and
-ship path consults. This is 12.2, and it is the largest papercut in the
-flow.
-
-**Correct after adding it:** `$UBX config` shows both tables.
-
----
-
-## 3. Generate the bindings
-
-The SDK is the authoring medium, so this is the step that makes the
-stack writable at all.
+**Correct:** two packages, one copy each.
 
 ```
-$UBX sdk gen --lang ts --out sdk
+@ubx/sdk-aws     3.0.1
+@ubx/sdk         1.0.2
 ```
 
-Expect a few minutes for AWS.
+One install pulls both, because the bindings declare the runtime as
+their own dependency. The runtime is `stack`/`resource`/`intent`; the
+bindings are the typed resource classes. Neither works alone.
 
-**Correct:**
+**Failure:** more than one `@ubx/sdk` in `node_modules`. Check with
+`find node_modules -path '*@ubx/sdk/package.json'`. Two copies means two
+nominally distinct `Computed` types and cross-resource references stop
+type-checking.
 
-```
-ubx-provider-dynamic: serving "aws" (mixed: [cloudformation smithy]) from real group
-  snapshot ~/.ubx/schemas/ubiquex/aws/3.0.0 (version 3.0.0, schema_format 3),
-  zero network at schema resolution time
-generated 6262 resource type(s) for dynamic provider "aws" -> sdk/aws
-real description coverage:
-  aws: 381573 fields: 21554 sourced (6%), 0 AI-inferred (0%), 360019 none (94%)
-```
-
-6,956 `.ts` files under `sdk/aws/sdk/typescript/`, one per resource
-type, grouped by service. The snapshot is local and checksum-verified,
-so this works offline once cached.
-
-**Failure:** `no [thirdparty_providers] or [dynamic_providers.<name>]
-declared` means you skipped 2.3.
-
-**Two warnings you will see and can ignore for now:**
+### 3.1 Confirm you got current bindings
 
 ```
-sdk gen: dynamic provider "aws": signal collection failed, continuing without
-  enum/constraint context: dump signals for dynamic provider "aws": exit status 1
-ubx-provider-dynamic: snapshot …: group spans more than one real schema source --
-  merging into one served schema is not yet supported: member "aws" is
-  "cloudformation", member(s) already seen are "smithy"
+npm ls @ubx/sdk-aws
 ```
 
-Generation still completes and the bindings are usable. Both are
-recorded in 12.5. The 6% description coverage is an aggregate across all
-6,262 types; the common services are much better covered than that
-number suggests, which 4.2 lets you check for yourself.
+**Correct:** 3.0.1 or later.
+
+**Worth knowing for Go:** the equivalent `go get` must carry the major
+version in the module path, `github.com/ubiquex/ubx-sdk-aws/sdk/go/v3`.
+Without the `/v3` it silently resolves v1.0.0, two majors behind, with
+no error. That was wrong in the docs until 2026-09-08.
 
 ---
 
 ## 4. Editor types
 
 This is the step that decides whether authoring feels like writing code
-or like guessing at JSON.
+or guessing at JSON. Nothing extra to install: the types came with the
+package.
 
-### 4.1 Make `@ubx/sdk` resolvable, exactly once
-
-```
-deno add npm:@ubx/sdk
-```
-
-**Correct:** `@ubx/sdk` at 1.0.2 or later added to a `deno.json` at your
-project root.
-
-**Do not** run `deno install` inside `sdk/aws/sdk/typescript/`. The
-generated `package.json` there declares its own `@ubx/sdk` dependency
-and installing it gives you a second copy, which breaks type checking in
-a way whose error message actively misleads. That is 12.3, and it is
-worth reproducing once deliberately so you recognise it.
-
-### 4.2 Read a real binding
+### 4.1 Read a real binding
 
 ```
-less sdk/aws/sdk/typescript/aws/sqs/queue.ts
+less node_modules/@ubx/sdk-aws/aws/sqs/queue.d.ts
 ```
 
-**Correct:** a typed `QueueConfig` with real AWS documentation on the
-fields, carried through from the provider's own schema:
+**Correct:** a typed `QueueConfig` carrying the provider's own
+documentation, and a separate `QueueAttrs`:
 
 ```ts
 export interface QueueConfig {
-  /** The time in seconds for which the delivery of all messages in the queue
-      is delayed. You can specify an integer value of ``0`` to ``900`` (15
-      minutes). The default value is ``0``. */
+  /** The time in seconds for which the delivery of all messages in the
+      queue is delayed. You can specify an integer value of ``0`` to
+      ``900`` (15 minutes). The default value is ``0``. */
   delaySeconds?: number | Computed<number>;
   …
 }
-export const Queue: ResourceBinding<QueueConfig, QueueAttrs> = {
-  wireType: "aws_sqs_queue",
 ```
 
-**Failure:** fields typed `any`, or a `Config` holding nothing but a
-path parameter. That is a real shape for some providers, see 12.6, and
-it means that provider is not usefully authorable yet.
+`QueueConfig` is what you set. `QueueAttrs` is what exists once it is
+created. You reference the second.
 
-Note the split: `QueueConfig` is what you set, `QueueAttrs` is what
-exists after it is created. You reference the second, not the first.
-
----
+**Failure:** fields typed `any`, or a `Config` holding only a path
+parameter. That is a real shape for some providers, see 12.5, and it
+means that provider is not usefully authorable yet.
 
 ## 5. Write the stack
 
@@ -262,8 +224,8 @@ Create `billing.ts`:
 
 ```ts
 import { intent, resource, stack } from "@ubx/sdk";
-import { Dbinstance } from "./sdk/aws/sdk/typescript/aws/rds/dbinstance.ts";
-import { Queue } from "./sdk/aws/sdk/typescript/aws/sqs/queue.ts";
+import { Dbinstance } from "@ubx/sdk-aws/aws/rds/dbinstance";
+import { Queue } from "@ubx/sdk-aws/aws/sqs/queue";
 
 export default stack("billing", () => {
   intent({ summary: "billing database and its work queue" });
@@ -286,19 +248,24 @@ export default stack("billing", () => {
 ### 5.1 Type check it
 
 ```
-deno check billing.ts
+npm install -D typescript
+npx tsc --noEmit --module nodenext --moduleResolution nodenext --target es2022 --strict billing.ts
 ```
 
-**Correct:** `Check billing.ts` and nothing else.
+**Correct:** no output at all.
 
 **Failure worth causing on purpose:** change `invoices.arn` to
 `invoices.queueName` and re-run. You should get a type error, because
 `queueName` is a `Config` field and not an `Attrs` field, so there is
 nothing to reference. Confirm the compiler catches it before `ubx` does.
 
-If instead you see `Type 'ComputedMarker' is not assignable to type
-'string | ComputedMarker | undefined'`, you have two copies of
-`@ubx/sdk`. See 12.3.
+Also worth causing: change `visibilityTimeout: 300` to `"300"` and
+confirm `TS2322` names the real expected type. If a wrong value type
+passes, the bindings are not being type-checked at all.
+
+If you see `Type 'ComputedMarker' is not assignable to type 'string |
+ComputedMarker | undefined'`, which reads as a contradiction, you have
+two copies of `@ubx/sdk`. Go back to section 3.
 
 ### 5.2 What to look for while writing it
 
@@ -309,7 +276,7 @@ If instead you see `Type 'ComputedMarker' is not assignable to type
 - `invoices.arn` should autocomplete from `QueueAttrs`.
 
 **Failure:** no autocomplete, which means the editor is not resolving
-either `@ubx/sdk` or the generated tree.
+`@ubx/sdk-aws`.
 
 ---
 
@@ -817,45 +784,48 @@ real flag is `--from-code`, and it takes a `.ts`, `.go`, `.py` or
 the path a user takes when they have not chosen a provider yet, which is
 the more likely first run.
 
-### 12.2 `init` and `sdk gen` do not agree on where a provider is declared
+### 12.2 The documented TypeScript path did not run, and now does
 
-`ubx init --dynamic-source` writes a `providers` table.
-`ubx sdk gen` reads `thirdparty_providers` or `dynamic_providers` and
-fails with:
-
-```
-sdk gen: no [thirdparty_providers] or [dynamic_providers.<name>] declared in .ubx/config
-```
-
-Both key names are real. `providers` is read by `providerpool.go` for
-the resolve and ship path, so it is not dead. But the two commands a new
-user runs back to back do not connect, and the fix is to declare the
-same provider twice under two names, which nothing tells you.
-
-This is the largest friction in the flow: it stops a first-time user
-between step one and step two with an error that names two keys their
-config does not have and does not mention the key it does have.
-
-### 12.3 Two copies of `@ubx/sdk` break type checking with a contradictory error
-
-The generated tree carries its own `package.json` declaring
-`"@ubx/sdk": "^1.0.0"`. Running `deno install` there, which that file
-invites and which the `ubx-sdk-*` repos' own CI does, gives you a second
-copy alongside whatever your project root resolves. Then:
+`npm install @ubx/sdk-aws` plus a bare import, exactly as
+docs.ubiquex.io/tutorial/sdk/install describes it, type-checked cleanly
+under `tsc --strict` and then failed at `ubx plan`:
 
 ```
-TS2322 [ERROR]: Type 'ComputedMarker' is not assignable to type
-  'string | ComputedMarker | undefined'.
-    tags: [{ key: "queue", value: invoices.arn }],
+error: Import "@ubx/sdk-aws/aws/sqs/queue" not a dependency and not in import map
 ```
 
-The message says a type is not assignable to a union containing that
-same type, because they are two structurally identical but nominally
-distinct types from two installations (1.0.1 nested, 1.0.2 at the root).
+Deno resolves a bare npm specifier from the `node_modules` it finds by
+walking up from the root of the module graph, which is the generated
+runner script, and that script lived in an extracted temp directory. The
+runner now lives beside the entry file. Fixed in ubiquex#90 (UBI-252),
+with a regression test, and the flow in sections 3 through 6 depends on
+it: check `ubx version` carries that fix before concluding anything here.
 
-It breaks precisely the cross-resource reference idiom, which is the
-core of the SDK. The fix is one `@ubx/sdk` in the graph: `deno add
-npm:@ubx/sdk` at the project root and no nested `node_modules`.
+Two things this turned up are worth knowing while testing. A project
+`deno.json` now reaches the evaluator and its `unstable` flags take
+effect, though every capability behind them is still denied by the
+permission sandbox and an explicit `--import-map` means the project
+cannot hijack `@ubx/sdk`. And a read-only project directory now fails,
+because the evaluator needs to write one short-lived file there.
+
+### 12.3 The SDK install page was wrong in all three languages
+
+Corrected in ubx-docs-users#25 on 2026-09-08. Worth knowing because
+anyone who followed it earlier is carrying the results.
+
+`go get github.com/ubiquex/ubx-sdk-aws/sdk/go` resolved **v1.0.0**, two
+majors behind, silently, because Go carries the major in the module path
+from v2 onward and the unsuffixed path still resolves to the last
+release that had none.
+
+Both the Go and TypeScript hello worlds set a field that does not exist,
+`Name` / `name` on an SQS queue, where the real field is `QueueName` /
+`queueName` / `queue_name`. So the first program a user copied did not
+compile in two of three languages.
+
+Bindings versions were stale by a major on npm and PyPI (2.2.1 against
+3.0.1), and the Go runtime line named v0.3.0 where the documented
+command actually resolves v0.2.0.
 
 ### 12.4 Short hashes are printed everywhere and accepted almost nowhere
 
@@ -875,25 +845,10 @@ Separately, `ubx terminate` ends with `next: ubx ship <hash>
 --confirm-terminate` while the refusal says `pass --confirm-destroys`.
 Both flags work and set the same bool.
 
-### 12.5 `sdk gen` warnings on the AWS group snapshot
+### 12.5 Some providers publish bindings that are not authorable
 
-Two warnings on every AWS generation:
-
-```
-signal collection failed, continuing without enum/constraint context: … exit status 1
-group spans more than one real schema source -- merging into one served schema is
-  not yet supported: member "aws" is "cloudformation", member(s) already seen are "smithy"
-```
-
-Generation completes and produces usable bindings either way. The first
-means generated types carry no enum or constraint context. Neither is
-explained to the user as harmless, and both look alarming on a first
-run.
-
-### 12.6 Some providers generate bindings that are not authorable
-
-DigitalOcean's droplet binding, generated from the same pipeline, comes
-out as:
+DigitalOcean's droplet binding, from the same pipeline that produces
+every published package, comes out as:
 
 ```go
 type DropletConfig struct {
@@ -905,8 +860,26 @@ type DropletConfig struct {
 No typed fields for the resource body at all. This is a schema-shape
 problem for OpenAPI-sourced providers, not a Go or codegen problem, and
 it means picking that provider for a first stack gives you nothing to
-write against. Worth knowing before recommending a provider to a new
-user.
+write against. It is also what section 4.1 asks you to check for, since
+it is visible the moment you read a binding.
+
+### 12.6 `ubx sdk gen` warnings, for whoever runs the publishing pipeline
+
+Not a user-facing path: `ubx sdk gen` produces the published `ubx-sdk-*`
+repos from a central config and no documentation asks a user to run it.
+Recorded here for whoever does run it. Two warnings on every AWS
+generation:
+
+```
+signal collection failed, continuing without enum/constraint context: … exit status 1
+group spans more than one real schema source -- merging into one served schema is
+  not yet supported: member "aws" is "cloudformation", member(s) already seen are "smithy"
+```
+
+Generation completes and produces usable bindings either way. The first
+means generated types carry no enum or constraint context. Neither is
+explained to the user as harmless, and both look alarming on a first
+run.
 
 ### 12.7 Automated coverage exists where human runs do not
 
@@ -924,10 +897,16 @@ useless. Sections 8.5 and 8.8 are where that gets closed.
 
 ### 12.8 What this plan does not verify
 
-The Go and Python authoring paths. `ubx sdk gen --lang go` was confirmed
-to generate (225 types for DigitalOcean), but no Go program was written
-or evaluated, so the Go evaluator, its OS-level sandbox and the
-`ubx-sdk-go` runtime dependency are untested here. Python is untouched.
+The Python authoring path. `pip install ubx-sdk-aws` was confirmed to
+install and its `QueueConfig` fields read, while correcting the install
+page, but no Python program was written or evaluated, so the WASI
+evaluator is untested here.
 
-Both are supported authoring media. A future pass should walk section 5
-in each.
+Go is partly covered. A real program using `go get
+github.com/ubiquex/ubx-sdk-aws/sdk/go/v3` plus bare module imports
+compiles and plans correctly, so the Go evaluator works and the
+documented path is sound there. But no Go stack was carried past `ubx
+plan`, and sections 7 onward were exercised only in TypeScript.
+
+A future pass should walk sections 5 and 6 in Python, and 7 onward in
+Go.
