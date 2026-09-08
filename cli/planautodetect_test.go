@@ -143,7 +143,64 @@ func TestPlanAutodetect_ReadmeOnly_StillRequiresInput(t *testing.T) {
 
 	_, err := runUbx(t, nil, "plan", "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "requires exactly one of") {
-		t.Fatalf("expected the ordinary requires-one-input error, got: %v", err)
+	if !strings.Contains(err.Error(), "no SDK program found here") {
+		t.Fatalf("expected the ordinary no-input refusal, got: %v", err)
+	}
+	// The refusal now names the conventional entry, so a reader learns
+	// what to write rather than only that something is missing.
+	if !strings.Contains(err.Error(), "stack.ts") {
+		t.Fatalf("the refusal does not name the conventional entry file, got: %v", err)
+	}
+}
+
+// TestPlanAutodetect_ConventionalEntryWinsOverOtherPrograms is the
+// conventional-entry rule: bare `ubx plan` in a directory holding more
+// than one SDK program picks stack.<ext> rather than refusing.
+//
+// Deliberately not directory merging the way Terraform concatenates
+// every .tf file. These languages already have imports, so a stack
+// spanning several files says so in its own language; merging has no
+// coherent cross-language meaning; and intent.sources stamps ONE entry
+// file's content hash, which is what makes an SDK-authored proposal
+// auditable at all.
+func TestPlanAutodetect_ConventionalEntryWinsOverOtherPrograms(t *testing.T) {
+	requireDeno(t)
+
+	dir := t.TempDir()
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `stack = "playground"`)
+	writeFile(t, filepath.Join(dir, "billing.ts"), autodetectSDKProgram)
+	writeFile(t, filepath.Join(dir, "stack.ts"), autodetectSDKProgram)
+
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	out, err := runUbx(t, env, "plan", "--provider", fakeProviderBinary, "--ledger-dir", dir)
+	if err != nil {
+		t.Fatalf("bare ubx plan with a conventional entry present: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, "stack.ts") {
+		t.Fatalf("expected the conventional entry to win, got: %s", out)
+	}
+	if strings.Contains(out, "billing.ts") {
+		t.Errorf("the non-conventional program should not have been planned: %s", out)
+	}
+}
+
+// Two non-conventional programs is still a genuine ambiguity, refused
+// with a teaching error rather than guessed. The error now also names
+// the convention, so the reader learns the way out rather than only the
+// escape hatch.
+func TestPlanAutodetect_NoConventionalEntry_StillRefusesAndTeaches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "billing.ts"), autodetectSDKProgram)
+	writeFile(t, filepath.Join(dir, "other.ts"), autodetectSDKProgram)
+
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+	_, err := runUbx(t, env, "plan", "--provider", fakeProviderBinary, "--ledger-dir", dir)
+	requireExitCode(t, err, 2, "")
+	if !strings.Contains(err.Error(), "multiple SDK programs found") {
+		t.Fatalf("expected the ambiguity refusal, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stack.ts") {
+		t.Errorf("the ambiguity error does not name the conventional way out: %v", err)
 	}
 }

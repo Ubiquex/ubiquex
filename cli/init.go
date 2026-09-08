@@ -19,6 +19,12 @@ import (
 // mode, both point here instead of re-documenting every key inline).
 const docsConfigRef = "https://github.com/Ubiquex/ubiquex-docs, cli/config"
 
+// ubxProviderNamespace is the namespace ubx publishes its own pinned,
+// vendor-sourced provider schemas under. A source in this namespace is a
+// dynamic provider and belongs in [providers]; anything else is a
+// Terraform registry provider and belongs in [thirdparty_providers].
+const ubxProviderNamespace = "ubiquex"
+
 // newInitCmd is UBI-19's config bootstrapper -- a new verb, no
 // init-shaped command existed before this session
 // (docs/architecture.md — Config defaults).
@@ -154,9 +160,25 @@ Refuses to overwrite an existing config unless --force is given.`,
 			// fails the first `ubx plan`. A non-interactive invocation
 			// with no provider flags gets exactly the old silent behavior
 			// -- no hang, no guess -- just a config with no provider yet.
-			if providerPath == "" && source == "" && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout()) {
+			// dynamicSource belongs in this guard alongside the other two.
+			// Without it, the exact command the SDK install tutorial gives
+			// -- `ubx init --dynamic-source ubiquex/aws --provider-version
+			// 3.0.0` -- prompted anyway, for a provider it had just been
+			// told, and sat there until stdin closed. The first command
+			// anyone runs, blocking on a question already answered.
+			if providerPath == "" && source == "" && dynamicSource == "" && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout()) {
 				promptedSource, promptedVersion, promptedConfig := promptForProvider(cmd)
-				source, providerVersion = promptedSource, promptedVersion
+				// A ubx dynamic provider goes in [providers]; a Terraform
+				// registry one goes in [thirdparty_providers]. They are
+				// different tables read by different code, so the prompt
+				// has to choose, and the namespace is what distinguishes
+				// them: ubx publishes its own schemas under "ubiquex/".
+				if strings.HasPrefix(promptedSource, ubxProviderNamespace+"/") {
+					dynamicSource = promptedSource
+				} else {
+					source = promptedSource
+				}
+				providerVersion = promptedVersion
 				if promptedConfig != nil {
 					providerConfigMap = promptedConfig
 				}
@@ -216,7 +238,11 @@ Refuses to overwrite an existing config unless --force is given.`,
 			if !hasProvider(values) {
 				fmt.Fprintf(out, "next: add a provider (re-run with --dynamic-source/--provider-version for a ubx dynamic provider such as ubiquex/aws, or --source/--provider-version for a Terraform-registry one, or edit %s by hand -- see %s), then ubx plan\n", path, docsConfigRef)
 			} else {
-				fmt.Fprintf(out, "next: write an intent file and run `ubx plan <file>.json`, or write an SDK program and run `ubx plan --from-code <file>.ts` -- see %s\n", docsConfigRef)
+				if dynamicSource != "" {
+					fmt.Fprintf(out, "next: install this provider's bindings (`npm install @ubx/sdk-<name>`), write stack.ts, and run `ubx plan` -- see %s\n", docsConfigRef)
+				} else {
+					fmt.Fprintf(out, "next: write stack.ts against this provider's bindings and run `ubx plan` -- see %s\n", docsConfigRef)
+				}
 			}
 			return nil
 		},
@@ -320,7 +346,13 @@ func promptForProvider(cmd *cobra.Command) (source, version string, providerConf
 	out := cmd.OutOrStdout()
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 
-	fmt.Fprint(out, "Provider registry source, e.g. hashicorp/aws (enter to skip, configure later): ")
+	// ubiquex/aws, not hashicorp/aws. ubx ships its own pinned,
+	// vendor-sourced schemas for aws, azure, google, kubernetes, github,
+	// datadog, digitalocean and cloudflare, and that is the path most
+	// stacks want: no Terraform registry download, no provider binary,
+	// zero network once cached. Suggesting a Terraform provider as the
+	// first example a new user sees pointed them at the fallback.
+	fmt.Fprint(out, "Provider, e.g. "+ubxProviderNamespace+"/aws (enter to skip, configure later): ")
 	if !scanner.Scan() {
 		return "", "", nil
 	}
@@ -329,7 +361,7 @@ func promptForProvider(cmd *cobra.Command) (source, version string, providerConf
 		return "", "", nil
 	}
 
-	fmt.Fprint(out, "Version, e.g. 6.60.0 (required -- no \"latest\" pin): ")
+	fmt.Fprint(out, "Version, e.g. 3.0.0 (required -- no \"latest\" pin): ")
 	if !scanner.Scan() {
 		return "", "", nil
 	}
@@ -403,21 +435,29 @@ func hasProvider(v configTemplateValues) bool {
 // straight to `ubx plan`; one with no provider yet needs that filled in
 // first, or `ubx plan` fails immediately, no better than before this
 // session.
-func nextStepComment(stack string, hasProvider bool) string {
-	if stack == "" {
-		stack = "<stack>"
-	}
+func nextStepComment(hasProvider, isDynamic bool) string {
 	if !hasProvider {
 		return fmt.Sprintf(
 			"# next: add a provider above (uncomment providers/provider_configs, or\n"+
-				"# re-run `ubx init --source <registry-source> --provider-version <version>`),\n"+
-				"# then `ubx plan --from-doc <file>.md --stack %s` -- see %s\n",
-			stack, docsConfigRef)
+				"# re-run `ubx init --dynamic-source ubiquex/<name> --provider-version <version>`),\n"+
+				"# then write stack.ts and run `ubx plan` -- see %s\n",
+			docsConfigRef)
+	}
+	// The npm line only belongs on the dynamic path. ubx publishes
+	// @ubx/sdk-<name> bindings for the providers it ships schemas for; a
+	// Terraform registry source or a local provider binary has no such
+	// package, and telling their user to install one would send them
+	// after something that does not exist.
+	if isDynamic {
+		return fmt.Sprintf(
+			"# next: install this provider's bindings (`npm install @ubx/sdk-<name>`),\n"+
+				"# write stack.ts, and run `ubx plan` -- see %s\n",
+			docsConfigRef)
 	}
 	return fmt.Sprintf(
-		"# next: write an intent file and run `ubx plan <file>.json`, or\n"+
-			"# `ubx plan --from-doc <file>.md --stack %s` -- see %s\n",
-		stack, docsConfigRef)
+		"# next: write stack.ts against this provider's bindings and run\n"+
+			"# `ubx plan` -- see %s\n",
+		docsConfigRef)
 }
 
 // --- Minimal, runnable templates (UBI-59's own default) --------------------
@@ -485,7 +525,7 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 
@@ -547,7 +587,7 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 
@@ -596,7 +636,7 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 
@@ -697,7 +737,7 @@ func renderConfigTemplateFullTOML(v configTemplateValues) string {
 	b.WriteString("[ledger]\n")
 	b.WriteString("# store = \"s3://acme-ledger/acme/prod/\"\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 
@@ -777,7 +817,7 @@ func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
 	b.WriteString("# ledger = {\n#   store = \"s3://acme-ledger/acme/prod/\"\n# }\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 
@@ -857,7 +897,7 @@ func renderConfigTemplateFullYAML(v configTemplateValues) string {
 	b.WriteString("# always appended as a further path segment, never configured here.\n")
 	b.WriteString("# ledger:\n#   store: \"s3://acme-ledger/acme/prod/\"\n\n")
 
-	b.WriteString(nextStepComment(v.Stack, hasProvider(v)))
+	b.WriteString(nextStepComment(hasProvider(v), v.DynamicSource != ""))
 	return b.String()
 }
 

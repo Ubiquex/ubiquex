@@ -317,8 +317,8 @@ func TestPlan_RequiresOneInput(t *testing.T) {
 	ledgerDir := t.TempDir()
 	_, err := runUbx(t, nil, "plan", "--ledger-dir", ledgerDir)
 	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "requires exactly one of") {
-		t.Fatalf("expected a requires-one-input error, got: %v", err)
+	if !strings.Contains(err.Error(), "no SDK program found here") {
+		t.Fatalf("expected a no-input refusal, got: %v", err)
 	}
 }
 

@@ -97,19 +97,31 @@ propose-time PR trailer hash, etc.).`,
 				if derr != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: requires exactly one of an intent-file argument or --from-code (auto-detection failed: %w)", derr)}
 				}
-				switch len(candidates) {
-				case 1:
-					fromCode = candidates[0].path
-				case 0:
-					return &ExitCodeError{Code: 2, Err: errors.New("plan: requires exactly one of an intent-file argument or --from-code")}
-				default:
-					names := make([]string, len(candidates))
-					hints := make([]string, len(candidates))
-					for i, c := range candidates {
-						names[i] = c.path
-						hints[i] = fmt.Sprintf("ubx plan --from-code %s", c.path)
+				// A conventional name wins outright, so a directory can hold
+				// more than one SDK program without bare `ubx plan` becoming
+				// unusable. Deliberately NOT directory merging the way
+				// Terraform concatenates every .tf file: these languages
+				// already have imports, so a stack that spans files says so
+				// itself, merging has no sane cross-language semantics, and
+				// one entry file is what makes the provenance content hash
+				// mean anything at all.
+				if entry, ok := conventionalEntry(candidates); ok {
+					fromCode = entry
+				} else {
+					switch len(candidates) {
+					case 1:
+						fromCode = candidates[0].path
+					case 0:
+						return &ExitCodeError{Code: 2, Err: errors.New("plan: no SDK program found here -- write stack.ts (or stack.go, stack.py) and run `ubx plan` again, or name a file explicitly")}
+					default:
+						names := make([]string, len(candidates))
+						hints := make([]string, len(candidates))
+						for i, c := range candidates {
+							names[i] = c.path
+							hints[i] = fmt.Sprintf("ubx plan --from-code %s", c.path)
+						}
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one with `ubx plan --from-code <file>`, or name one of them %s: %s", strings.Join(names, ", "), conventionalEntryNames(), strings.Join(hints, " | "))}
 					}
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: multiple SDK programs found: %s -- pick one: %s", strings.Join(names, ", "), strings.Join(hints, " | "))}
 				}
 			}
 
@@ -563,4 +575,57 @@ func resolveAcceptedProposal(ledger *core.Ledger, ref string) (*core.Proposal, e
 		sort.Strings(ids)
 		return nil, fmt.Errorf("%s: %w (matches %s)", ref, ErrProposalAmbiguous, strings.Join(ids, ", "))
 	}
+}
+
+// conventionalEntryBase is the file name, without extension, that bare
+// `ubx plan` prefers over any other SDK program in the directory.
+//
+// One conventional entry point per language, "stack.ts"/"stack.go"/
+// "stack.py", so a directory holding more than one SDK program is still
+// plannable without naming a file every time. Terraform's own answer to
+// the same question is to merge every .tf file in the directory; this is
+// deliberately not that. These languages already have imports, so a
+// stack spanning several files expresses that itself, in its own
+// language, checked by its own compiler. Merging would also have no
+// coherent cross-language meaning, and it would break the one thing that
+// makes an SDK-authored proposal auditable: intent.sources stamps ONE
+// entry file's content hash, and a hash over a set of files the tool
+// happened to concatenate proves much less than a hash over the file the
+// author actually wrote.
+const conventionalEntryBase = "stack"
+
+// conventionalEntry picks the conventional entry file out of candidates,
+// if exactly one is present. More than one (stack.ts AND stack.go in the
+// same directory) is a genuine ambiguity and falls through to the normal
+// multiple-candidates error rather than picking a language for the
+// author.
+func conventionalEntry(candidates []detectedMedium) (string, bool) {
+	var found string
+	n := 0
+	for _, c := range candidates {
+		name := filepath.Base(c.path)
+		if strings.TrimSuffix(name, filepath.Ext(name)) == conventionalEntryBase {
+			found = c.path
+			n++
+		}
+	}
+	if n == 1 {
+		return found, true
+	}
+	return "", false
+}
+
+// conventionalEntryNames renders the conventional names for a teaching
+// error, in a stable order.
+func conventionalEntryNames() string {
+	exts := make([]string, 0, len(sdkImportMarkers))
+	for ext := range sdkImportMarkers {
+		exts = append(exts, ext)
+	}
+	sort.Strings(exts)
+	names := make([]string, len(exts))
+	for i, ext := range exts {
+		names[i] = conventionalEntryBase + ext
+	}
+	return strings.Join(names, "/")
 }
