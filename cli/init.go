@@ -111,6 +111,41 @@ Refuses to overwrite an existing config unless --force is given.`,
 			if source != "" && providerVersion == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("init: --source requires --provider-version (explicit version pins only)")}
 			}
+			// A dynamic provider takes no provider-level configuration, so
+			// writing any is writing a config that cannot ship.
+			//
+			// ubx-provider-dynamic declares an empty provider schema block
+			// in every one of its servers and its ConfigureProvider is a
+			// no-op, so a [provider_configs] entry for a [providers] key is
+			// rejected by the encoder at the first Configure with
+			// `unsupported attribute`. That is the first read or apply, not
+			// plan, because plan never configures a provider -- so init
+			// accepted the flag and the failure waited until ship.
+			//
+			// Refused loudly here rather than accepted and dropped. A stack
+			// silently inheriting the snapshot's baked region is worse than
+			// being told it cannot choose one: the first is a wrong region
+			// nobody sees until it has built something somewhere
+			// unintended, the second is a sentence at init.
+			//
+			// --provider-config is refused on the same terms and not as an
+			// afterthought: --region's own help calls itself equivalent to
+			// --provider-config '{"region":"..."}', so refusing one and
+			// writing the other would be incoherent.
+			if dynamicSource != "" && (region != "" || providerConfig != "") {
+				given := "--region"
+				if region == "" {
+					given = "--provider-config"
+				} else if providerConfig != "" {
+					given = "--region/--provider-config"
+				}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf(
+					"init: %s cannot be used with --dynamic-source: a ubx dynamic provider declares no provider-level configuration, "+
+						"and takes its region and credentials from the pinned snapshot's own [dynamic_providers.%s.auth] block, "+
+						"fixed when that snapshot was generated. A [provider_configs] entry here would be rejected by the provider "+
+						"at the first read or apply. Omit the flag; to run against different settings, pin a snapshot generated for them",
+					given, providerShortName(dynamicSource))}
+			}
 			if !cmd.Flags().Changed("format") {
 				userFormat, err := userGlobalInitFormat()
 				if err != nil {
@@ -373,6 +408,22 @@ func promptForProvider(cmd *cobra.Command) (source, version string, providerConf
 	if version == "" {
 		fmt.Fprintln(out, "no version given -- leaving the provider unconfigured; fill in providers/provider_configs by hand, or re-run with --source/--provider-version")
 		return "", "", nil
+	}
+
+	// Not asked at all for a ubx dynamic provider, because the answer has
+	// nowhere to go. Such a provider declares no provider-level
+	// configuration and takes its region from the pinned snapshot's own
+	// auth block, so a region collected here would either be written into
+	// a [provider_configs] entry that fails at the first read or apply, or
+	// quietly dropped. The prompt suggests ubiquex/aws, so this is the
+	// likely path rather than the exotic one.
+	//
+	// Said out loud rather than skipped in silence: a user who came here
+	// to set a region needs to know the pin decides it, not to notice
+	// later that nothing asked.
+	if strings.HasPrefix(source, ubxProviderNamespace+"/") {
+		fmt.Fprintf(out, "Region: fixed by the pinned snapshot for %s, not set per stack -- skipping\n", source)
+		return source, version, nil
 	}
 
 	fmt.Fprint(out, "Region, optional (enter to skip): ")

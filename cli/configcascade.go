@@ -136,6 +136,9 @@ func loadConfigResolvedFromDir(dir string, warnOut io.Writer) (*ResolvedConfig, 
 	if err != nil {
 		return nil, fmt.Errorf("load config: decode merged config: %w", err)
 	}
+	if err := validateProviderConfigsAgainstDynamic(cfg); err != nil {
+		return nil, err
+	}
 	files := make([]string, len(walk.layers))
 	for i, l := range walk.layers {
 		files[i] = l.file
