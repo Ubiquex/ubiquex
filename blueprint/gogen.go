@@ -776,6 +776,37 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 			b.WriteString("\t}\n")
 			continue
 		}
+		if len(gr.dr.CreateIf) > 0 {
+			// UBI-125: a real `if`, not a single unconditional call.
+			// Terraform's `count = var.create ? 1 : 0` compiles to this.
+			//
+			// Always the bare-call form, never assigned to a variable:
+			// decodeBlueprint refuses a conditional resource that anything
+			// references, so there is no sibling $ref or output that could
+			// need the value. That refusal is what keeps this branch from
+			// having to represent "a reference to a resource that may not
+			// exist", which none of the three SDK runtimes can express.
+			terms := make([]string, len(gr.dr.CreateIf))
+			for i, term := range gr.dr.CreateIf {
+				name, negated := parseCreateIfTerm(term)
+				ref, err := g.paramRef(name)
+				if err != nil {
+					return "", fmt.Errorf("blueprint: resource %s.%s: create_if: %w", gr.dr.RI.Type, gr.dr.RI.Name, err)
+				}
+				if negated {
+					ref = "!" + ref
+				}
+				terms[i] = ref
+			}
+			cond := strings.Join(terms, " && ")
+			call := fmt.Sprintf("sdk.Resource(%s, %s, %s{\n", gr.ident, gr.nameExpr, gr.configName)
+			for _, f := range gr.fields {
+				call += fmt.Sprintf("\t\t\t%s: %s,\n", f.goName, gr.valueExprs[f.goName])
+			}
+			call += "\t\t})"
+			fmt.Fprintf(&b, "\tif %s {\n\t\t%s\n\t}\n", cond, call)
+			continue
+		}
 		varName := lowerFirst(gr.ident)
 		call := fmt.Sprintf("sdk.Resource(%s, %s, %s{\n", gr.ident, gr.nameExpr, gr.configName)
 		for _, f := range gr.fields {

@@ -471,6 +471,45 @@ type ResourceIntent struct {
 	// ResourceIntent values with ForEach empty on every one of them, the
 	// same as if a caller had hand-written N separate resource() calls.
 	ForEach string `json:"for_each,omitempty"`
+
+	// CreateIf (UBI-125) is the set of declared bool params: entries that
+	// must ALL hold for this resource to be created at all -- empty for an
+	// ordinary, unconditional resource, which is every resource produced
+	// before this field existed.
+	//
+	// Each entry is a bare param name, or a param name prefixed with "!"
+	// meaning it must be false. A conjunction with optional negation, and
+	// nothing else: no disjunction, no comparison, no nesting.
+	//
+	// A closed list of signed names rather than an expression form,
+	// deliberately. terraform-aws-modules guards resources with exactly
+	// this shape (`var.create && var.create_dlq`,
+	// `var.create && !var.create_dlq`), so a conjunction reaches most of
+	// what real modules need, while an expression form would invite
+	// `length(x) > 0` and then arithmetic and then a language, and stop
+	// being something a converter can translate deterministically. What
+	// does not fit stays refused and surfaces as a question, which is
+	// honest; a form that grows to accept anything is not.
+	//
+	// It exists because Terraform's `count = var.create ? 1 : 0` is the
+	// house style across terraform-aws-modules, and blocked conversion of
+	// essentially that whole ecosystem: converting
+	// terraform-aws-modules/terraform-aws-sqs produced zero of eight
+	// resources, every one guarded by that shape.
+	//
+	// Deliberately its own field rather than desugaring into ForEach over
+	// a synthetic zero-or-one list. Both express "this resource may not
+	// exist", and ForEach could carry it, but the generated signature
+	// would then take a list where the module took a bool and callers
+	// would write ["x"] to mean true. A converter whose value is that
+	// your module comes across recognisably should not do that.
+	//
+	// Same lifecycle as ForEach in every other respect: set at build
+	// time, validated by blueprint/decode.go against the declared params,
+	// compiled by each language's own codegen into a real `if`, and never
+	// surviving past codegen -- an invoked blueprint emits either one
+	// ordinary ResourceIntent with CreateIf empty, or none at all.
+	CreateIf []string `json:"create_if,omitempty"`
 }
 
 const (

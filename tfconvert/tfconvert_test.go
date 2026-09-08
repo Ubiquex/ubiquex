@@ -529,3 +529,159 @@ resource "aws_instance" "x" {
 		t.Fatalf("expected a question naming data sources as unsupported, got: %+v", res.Questions)
 	}
 }
+
+// count = var.<bool> ? 1 : 0 converts into a create_if resource.
+//
+// This is the shape that blocked terraform-aws-modules: converting
+// terraform-aws-sqs produced zero of eight resources before it, every one
+// guarded by a conditional count.
+func TestConvert_ConditionalCount_BecomesCreateIf(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 1 {
+		t.Fatalf("expected 1 converted resource, got %d (questions: %+v)", len(res.Intent.Resources), res.Questions)
+	}
+	if got := res.Intent.Resources[0].CreateIf; len(got) != 1 || got[0] != "create" {
+		t.Fatalf("create_if = %v, want [create]", got)
+	}
+	// The slug must NOT be templated the way a for_each resource's is:
+	// a conditional resource is one instance or none, never a series.
+	if got := res.Intent.Resources[0].Name; got != "this" {
+		t.Fatalf("name = %q, want \"this\" (not a for_each-style template)", got)
+	}
+}
+
+// A conjunction of declared bool params converts, in source order. This
+// is the dominant shape in terraform-aws-modules: a create flag plus one
+// or more per-feature flags.
+func TestConvert_ConjunctionCount_BecomesSignedTerms(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+variable "create_dlq" {
+  type    = bool
+  default = false
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create && var.create_dlq ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 1 {
+		t.Fatalf("expected the conjunction to convert, got %d resource(s) (questions: %+v)", len(res.Intent.Resources), res.Questions)
+	}
+	got := res.Intent.Resources[0].CreateIf
+	if len(got) != 2 || got[0] != "create" || got[1] != "create_dlq" {
+		t.Fatalf("create_if = %v, want [create create_dlq] in source order", got)
+	}
+}
+
+// Negation converts too, as a signed term. terraform-aws-modules uses
+// `var.create && !var.create_dlq` to mean "only when there is no DLQ".
+func TestConvert_NegatedConjunction_BecomesSignedTerms(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+variable "create_dlq" {
+  type    = bool
+  default = false
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create && !var.create_dlq ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 1 {
+		t.Fatalf("expected the negated conjunction to convert, got %d (questions: %+v)", len(res.Intent.Resources), res.Questions)
+	}
+	got := res.Intent.Resources[0].CreateIf
+	if len(got) != 2 || got[0] != "create" || got[1] != "!create_dlq" {
+		t.Fatalf("create_if = %v, want [create !create_dlq]", got)
+	}
+}
+
+// A derived condition is not a declared bool param, so it has no term to
+// name and stays refused. This is the shape the conjunction form
+// deliberately does not grow to accept.
+func TestConvert_DerivedCondition_IsRefused(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = bool
+  default = true
+}
+variable "redrive_policy" {
+  type    = list(string)
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create && length(var.redrive_policy) > 0 ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 0 {
+		t.Fatalf("a derived condition must not convert, got %d resource(s)", len(res.Intent.Resources))
+	}
+	var found bool
+	for _, q := range res.Questions {
+		if strings.Contains(q.Text, "isn't a recognized shape") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an unrecognized-count question, got: %+v", res.Questions)
+	}
+}
+
+// A conditional count naming a non-bool param is refused rather than
+// converted against the wrong type.
+func TestConvert_ConditionalCountOnNonBoolParam_IsRefused(t *testing.T) {
+	dir := writeModule(t, map[string]string{"main.tf": `
+variable "create" {
+  type    = string
+  default = "yes"
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create ? 1 : 0
+  queue_name = "q"
+}
+`})
+	res, err := Convert(dir, "bp")
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(res.Intent.Resources) != 0 {
+		t.Fatalf("a non-bool conditional source must not convert, got %d", len(res.Intent.Resources))
+	}
+}
