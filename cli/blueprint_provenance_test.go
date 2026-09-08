@@ -107,7 +107,10 @@ func TestWhy_ProposalID_RendersBlueprintProvenance(t *testing.T) {
 	}
 	// The real "local" acceptance Accept() itself records -- approver is
 	// whatever OS user actually ran this test, not a fixed name.
-	if !strings.Contains(out, "accepted by [") || !strings.Contains(out, "] via local at") {
+	// The approver is whatever OS user ran this test, so this checks the
+	// shape rather than a name: the method, and a relative time in place
+	// of the absolute one the old "at <RFC3339>" form carried.
+	if !strings.Contains(out, "via local") {
 		t.Errorf("expected why to render the real calling-stack acceptance, got:\n%s", out)
 	}
 }

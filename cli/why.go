@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -114,7 +115,7 @@ func newWhyCmd() *cobra.Command {
 				if !jsonOut {
 					renderProposal(out, st, p)
 					renderPinChain(out, st, cmd.Context(), p)
-					renderApplies(out, attempts)
+					renderApplies(out, st, attempts)
 					if dialogue {
 						renderDialogue(out, p, dlg)
 					}
@@ -213,23 +214,29 @@ type whyJSON struct {
 // line — dialogue/manual_edit/issue sources render byte-identically to
 // before; only cloudtrail/cloudtrail_unattributed sources look different.
 func renderProposal(out io.Writer, st *styler, p *core.Proposal) {
-	fmt.Fprintf(out, "proposal %s (%s)\n", st.Hash(p.ID), p.Kind)
-	fmt.Fprintf(out, "stack:  %s\n", p.Stack)
-	fmt.Fprintf(out, "status: %s\n", p.Status)
-	fmt.Fprintf(out, "intent: %s\n", p.Intent.Summary)
-	for _, s := range p.Intent.Sources {
-		renderIntentSource(out, st, s, "  ")
+	now := time.Now().UTC()
+	fmt.Fprintln(out, readHeader(st, "Why", st.Hash(p.ID),
+		string(p.Kind), string(p.Status), p.Stack))
+	if p.Intent.Summary != "" {
+		fmt.Fprintf(out, "\n%s\n", p.Intent.Summary)
 	}
+
+	facts := []string{deltaCounts(st, p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)}
 	if p.Acceptance != nil {
-		fmt.Fprintf(out, "accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
+		facts = append(facts,
+			st.Approver(strings.Join(p.Acceptance.Approvers, ", "))+st.Dim(" via "+p.Acceptance.Method),
+			st.Dim(relativeTime(p.Acceptance.AcceptedAt, now)))
+	} else {
+		facts = append(facts, st.Dim("not yet accepted"))
 	}
-	fmt.Fprintf(out, "blast radius: %s %s %s\n",
-		st.Green(fmt.Sprintf("+%d", p.BlastRadius.Creates)),
-		st.Yellow(fmt.Sprintf("~%d", p.BlastRadius.Modifies)),
-		st.Red(fmt.Sprintf("-%d", p.BlastRadius.Destroys)))
-	renderCreates(out, st, p.Delta.Creates, "")
-	renderModifies(out, st, p.Delta.Modifies, "")
-	renderDestroys(out, st, p.Delta.Destroys, "", true)
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, readGroup(st, st.Dim("decision"), facts...))
+	for _, s := range p.Intent.Sources {
+		renderIntentSource(out, st, s, "    ")
+	}
+	renderCreates(out, st, p.Delta.Creates, "    ")
+	renderModifies(out, st, p.Delta.Modifies, "    ")
+	renderDestroys(out, st, p.Delta.Destroys, "    ", true)
 }
 
 // renderPinChain is UBI-57 Part 2's own addition: renders the FULL,
@@ -286,19 +293,25 @@ func plural(n int) string {
 // line, matching this command's existing terseness. Every attempt is
 // shown, sealed or not, oldest first (docs/schema.md: an unsealed attempt
 // is a real, honest artifact of an interrupted run, not something to hide).
-func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
+func renderApplies(out io.Writer, st *styler, attempts []*core.ApplyRecord) {
 	if len(attempts) == 0 {
 		return
 	}
-	fmt.Fprintln(out, "ship history:")
+	now := time.Now().UTC()
 	for _, a := range attempts {
-		status := "unsealed (interrupted or still in progress)"
+		status := st.Dim("unsealed (interrupted or still in progress)")
 		if a.Sealed() {
-			status = fmt.Sprintf("outcome=%s", displayOutcome(a.Summary.Outcome))
+			shown := displayOutcome(string(a.Summary.Outcome))
+			if shown == "shipped" {
+				status = st.Green(shown)
+			} else {
+				status = st.Red(shown)
+			}
 		}
-		fmt.Fprintf(out, "  attempt %d: %s\n", a.Attempt, status)
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, readGroup(st, st.Dim(fmt.Sprintf("attempt %d", a.Attempt)), status))
 		for _, ra := range a.Resources {
-			fmt.Fprintf(out, "    %s:\n", ra.Address)
+			fmt.Fprintf(out, "    %s\n", ra.Address)
 			// UBI-30: a destroy's own terminal "applied"/"shipped" transition
 			// means either "destroyed" or "already_absent" -- neither of
 			// which reads as a create/modify's own plain "shipped" at all,
@@ -306,25 +319,24 @@ func renderApplies(out io.Writer, attempts []*core.ApplyRecord) {
 			// than leaving a reader to notice and interpret the reconcile:
 			// lines below on their own.
 			outcome := destroyOutcome(ra.Reconciliation)
-			for i, t := range ra.Transitions {
-				fmt.Fprintf(out, "      %s at %s", displayResourceState(string(t.State)), t.At)
-				if t.Detail != "" {
-					fmt.Fprintf(out, " -- %s", t.Detail)
-				}
-				if t.State == core.ResourceApplied && i == len(ra.Transitions)-1 && outcome != "" {
-					fmt.Fprintf(out, " (%s)", outcome)
-				}
-				fmt.Fprintln(out)
+			// A resource's pending, in_flight and shipped transitions all
+			// land inside the same second on any ordinary ship, so printing
+			// one line each printed the same timestamp three times and said
+			// nothing. Collapsed to the path plus one relative time, unless
+			// a transition carries a real detail of its own, which is the
+			// only case where the individual steps say anything.
+			for _, line := range collapseTransitions(st, transitionViews(ra.Transitions), outcome, now) {
+				fmt.Fprintf(out, "      %s\n", line)
 			}
 			for _, r := range ra.Reconciliation {
-				fmt.Fprintf(out, "      reconcile: %s at %s", r.Outcome, r.At)
+				fmt.Fprintf(out, "      %s %s %s", st.Dim("reconcile:"), r.Outcome, st.Dim(relativeTime(r.At, now)))
 				if r.Detail != "" {
-					fmt.Fprintf(out, " -- %s", r.Detail)
+					fmt.Fprintf(out, " %s %s", st.Dim("--"), r.Detail)
 				}
 				fmt.Fprintln(out)
 			}
 			for _, e := range ra.Errors {
-				fmt.Fprintf(out, "      error (%s): %s\n", e.Classification, e.Message)
+				fmt.Fprintf(out, "      %s %s\n", st.Red(fmt.Sprintf("error (%s):", e.Classification)), e.Message)
 			}
 		}
 	}
@@ -369,24 +381,20 @@ func renderCreates(out io.Writer, st *styler, creates []json.RawMessage, indent 
 		for _, s := range node.Sources {
 			renderIntentSource(out, st, s, indent+"  ")
 		}
-		keys := make([]string, 0, len(node.Config))
-		for k := range node.Config {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
 		attrIndent := indent + "    "
-		for _, k := range keys {
-			// docs/cli-output-spec.md §v2: JSON-valued attributes (IAM/
-			// trust policies) render as formatted, readable JSON blocks,
-			// never escaped single-line strings; a resolved $computed
-			// marker renders as the friendly $ref:<address> notation
-			// (formatConfigValueV2, configvaluev2.go).
-			val := formatConfigValueV2(attrIndent, node.Config[k])
-			if strings.Contains(val, "\n") {
-				fmt.Fprintf(out, "%s%s:\n%s%s\n", attrIndent, k, attrIndent, val)
-			} else {
-				fmt.Fprintf(out, "%s%s: %s\n", attrIndent, k, val)
-			}
+		// Flattened, one leaf per line, in the ratified palette: name
+		// yellow, value red. This used to open a JSON block for any
+		// object-valued attribute, so three tags cost six lines and the
+		// reader tracked indentation to know which key they were under.
+		// `ubx blame` already flattened and was the most readable of the
+		// four read commands because of it, so the receipt adopts its
+		// form rather than the other way round.
+		//
+		// A resolved $computed marker still renders as the friendly
+		// $ref:<address> notation, which formatConfigValueV2 owns and
+		// this defers to for any value it recognises.
+		for _, k := range sortedRawKeys(node.Config) {
+			renderConfigAttr(out, st, attrIndent, k, node.Config[k])
 		}
 	}
 }
@@ -417,7 +425,7 @@ func renderModifies(out io.Writer, st *styler, modifies []core.Modification, ind
 		fmt.Fprintf(out, "%s%s\n", indent, st.YellowBold(fmt.Sprintf("~ %s change", m.Target)))
 		attrIndent := indent + "    "
 		for _, path := range sortedAttributePaths(m.Before, m.After) {
-			fmt.Fprintf(out, "%s%s: %s -> %s\n", attrIndent, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
+			fmt.Fprintln(out, attrIndent+st.AttrChange(path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path])))
 		}
 	}
 }
@@ -482,20 +490,14 @@ func renderDestroys(out io.Writer, st *styler, destroys []core.DestroyEntry, ind
 		// other two).
 		attrIndent := indent + "    "
 		for _, k := range keys {
-			// UBI-78: the same formatted-JSON-block treatment renderCreates
-			// already gives Delta.Creates' own config values -- before this,
-			// a destroy's full-state block (plan/terminate/why's single-
-			// proposal view all share this one renderer) was the one place
-			// left rendering a JSON-valued attribute (an IAM/trust policy
-			// document) as a raw escaped single-line string instead, in
-			// violation of docs/cli-output-spec.md v2's own "JSON-valued
-			// attributes render as FORMATTED, readable JSON blocks" rule.
-			val := formatConfigValueV2(attrIndent, state[k])
-			if strings.Contains(val, "\n") {
-				fmt.Fprintf(out, "%s%s:\n%s%s\n", attrIndent, k, attrIndent, val)
-			} else {
-				fmt.Fprintf(out, "%s%s: %s\n", attrIndent, k, val)
-			}
+			// The identical treatment renderCreates gives a create's own
+			// config: flattened leaves, and a JSON-valued string still a
+			// formatted block. UBI-78 fixed this renderer's own escaped
+			// single-line-string bug by routing it through
+			// formatConfigValueV2; renderConfigAttr now owns both halves,
+			// so a destroy's full-state block and a create's config cannot
+			// diverge again.
+			renderConfigAttr(out, st, attrIndent, k, state[k])
 		}
 	}
 }
@@ -557,7 +559,7 @@ func renderProposalCompact(out io.Writer, st *styler, ledger *core.Ledger, p *co
 		if err != nil {
 			return err
 		}
-		renderApplies(out, attempts)
+		renderApplies(out, st, attempts)
 	}
 	return nil
 }
@@ -686,4 +688,21 @@ func unattributedReason(reason string) string {
 	default:
 		return reason
 	}
+}
+
+// transitionViews adapts core's own Transition records to the minimal
+// shape collapseTransitions needs. OK marks a terminal state that
+// actually succeeded, which is what decides whether the collapsed line
+// renders green or red.
+func transitionViews(ts []core.Transition) []transitionView {
+	out := make([]transitionView, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, transitionView{
+			State:  string(t.State),
+			At:     t.At,
+			Detail: t.Detail,
+			OK:     t.State == core.ResourceApplied,
+		})
+	}
+	return out
 }

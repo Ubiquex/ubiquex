@@ -34,7 +34,7 @@ func TestStatus_LedgerOnly_EmptyLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx status: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "0 resource(s) (ledger-only") {
+	if !strings.Contains(out, "0 resources") || !strings.Contains(out, "ledger only") {
 		t.Fatalf("expected a 0-resource ledger-only summary, got: %s", out)
 	}
 }
@@ -49,13 +49,13 @@ func TestStatus_LedgerOnly_ListsAdoptedResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx status: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(out, "payments.fake_widget.widget-status-1: adoption") {
+	if !strings.Contains(out, "payments.fake_widget.widget-status-1") || !strings.Contains(out, "adoption") {
 		t.Fatalf("expected widget-status-1 listed, got: %s", out)
 	}
-	if !strings.Contains(out, "payments.fake_widget.widget-status-2: adoption") {
+	if !strings.Contains(out, "payments.fake_widget.widget-status-2") {
 		t.Fatalf("expected widget-status-2 listed, got: %s", out)
 	}
-	if !strings.Contains(out, "2 resource(s) (ledger-only") {
+	if !strings.Contains(out, "2 resources") || !strings.Contains(out, "ledger only") {
 		t.Fatalf("expected a 2-resource ledger-only summary, got: %s", out)
 	}
 	// No provider was launched -- no --provider flag was even given.
@@ -74,7 +74,7 @@ func TestStatus_MultiStack_FilterByStack(t *testing.T) {
 	if !strings.Contains(allOut, "payments.fake_widget.widget-multi-a") || !strings.Contains(allOut, "network.fake_widget.widget-multi-b") {
 		t.Fatalf("expected both stacks' resources listed by default, got: %s", allOut)
 	}
-	if !strings.Contains(allOut, "2 resource(s)") {
+	if !strings.Contains(allOut, "2 resources") {
 		t.Fatalf("expected a 2-resource summary, got: %s", allOut)
 	}
 
@@ -88,7 +88,7 @@ func TestStatus_MultiStack_FilterByStack(t *testing.T) {
 	if strings.Contains(filteredOut, "network.fake_widget.widget-multi-b") {
 		t.Fatalf("--stack payments must not list the network resource, got: %s", filteredOut)
 	}
-	if !strings.Contains(filteredOut, "1 resource(s)") {
+	if !strings.Contains(filteredOut, "1 resource") {
 		t.Fatalf("expected a 1-resource summary, got: %s", filteredOut)
 	}
 }
@@ -405,29 +405,27 @@ func TestStatus_TTY_LedgerOnlyLine_AddressBrightMetadataDim(t *testing.T) {
 		t.Fatalf("ubx status: %v\noutput: %s", err, out)
 	}
 
-	line := lineContaining(out, addr+": ")
+	line := lineContaining(out, addr)
 	if line == "" {
 		t.Fatalf("expected a line for %s, got: %q", addr, out)
 	}
-	prefix := addr + ": "
-	if !strings.HasPrefix(line, prefix) {
-		t.Fatalf("expected the address to render with no leading ANSI code (brightest), got line: %q", line)
+	// The address itself still carries no color of its own, so it reads
+	// brightest against the dim structure around it. The line now opens
+	// with the group marker rather than the address (readGroup), so the
+	// check is that the address is not wrapped, not that it is first.
+	if strings.Contains(line, ansiDim+addr) {
+		t.Fatalf("the address should not be dimmed, got line: %q", line)
 	}
-	rest := strings.TrimPrefix(line, prefix)
-	if !strings.HasPrefix(rest, ansiDim) {
-		t.Fatalf("expected the metadata after the colon to start dim, got: %q", line)
+	// Kind and timestamp are dim, and the hash is yellow per the ratified
+	// palette (docs/cli-output-spec.md).
+	if !strings.Contains(line, ansiDim+"adoption") {
+		t.Fatalf("expected the kind to render dim, got: %q", line)
 	}
-	if !strings.HasSuffix(rest, ansiReset) {
-		t.Fatalf("expected the dimmed metadata to end with a reset, got: %q", line)
+	if !strings.Contains(line, ansiYellow) {
+		t.Fatalf("expected the hash to render yellow, got: %q", line)
 	}
-	if !strings.Contains(rest, "adoption") || !strings.Contains(rest, "(accepted ") {
-		t.Fatalf("expected kind and accepted-timestamp text preserved inside the dimmed segment, got: %q", line)
-	}
-	// The hash keeps its own blue coloring (st.Hash), reasserted-dim
-	// around it rather than losing its color -- confirmed by the presence
-	// of both codes together, not just one or the other.
-	if !strings.Contains(rest, ansiBlue) {
-		t.Fatalf("expected the hash's own blue color preserved inside the dimmed segment, got: %q", line)
+	if !strings.HasSuffix(strings.TrimRight(line, "\n"), ansiReset) {
+		t.Fatalf("expected the line to end with a reset, got: %q", line)
 	}
 }
 

@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -60,7 +62,7 @@ func newHistoryCmd() *cobra.Command {
 				return writeJSON(out, historyToJSON(chain))
 			}
 			st := newStylerFull(cmd, fullHashes)
-			renderHistoryHuman(out, st, chain)
+			renderHistoryHuman(out, st, stack, chain)
 			return nil
 		},
 	}
@@ -77,21 +79,32 @@ func newHistoryCmd() *cobra.Command {
 // vocabulary "ubx scan"'s own renderScanCard already established
 // (cli/scan.go) rather than inventing a second phrasing for the same
 // three counts.
-func renderHistoryHuman(out io.Writer, st *styler, chain []*core.Proposal) {
+func renderHistoryHuman(out io.Writer, st *styler, stack string, chain []*core.Proposal) {
 	if len(chain) == 0 {
 		fmt.Fprintln(out, "(empty -- no proposals recorded yet)")
 		return
 	}
+	now := time.Now().UTC()
+	fmt.Fprintln(out, readHeader(st, "History", stack,
+		fmt.Sprintf("%d proposal%s", len(chain), plural(len(chain)))))
 	for i := len(chain) - 1; i >= 0; i-- {
 		p := chain[i]
-		who := "(not yet accepted)"
+		who := st.Dim("not yet accepted")
+		when := relativeTime(p.Resolution.ResolvedAt, now)
 		if p.Acceptance != nil {
-			who = fmt.Sprintf("%v via %s", p.Acceptance.Approvers, p.Acceptance.Method)
+			who = st.Approver(strings.Join(p.Acceptance.Approvers, ", ")) +
+				st.Dim(" via "+p.Acceptance.Method)
+			when = relativeTime(p.Acceptance.AcceptedAt, now)
 		}
-		summary := fmt.Sprintf("+%d create(s) ~%d change(s) -%d terminate(s)", p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)
-		fmt.Fprintf(out, "%s  %-14s %s\n", st.Hash(p.ID), p.Kind, summary)
-		fmt.Fprintf(out, "    %s\n", p.Intent.Summary)
-		fmt.Fprintf(out, "    resolved %s, accepted by %s\n", p.Resolution.ResolvedAt, who)
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, readGroup(st,
+			fmt.Sprintf("%s  %s", st.Hash(p.ID), st.Dim(string(p.Kind))),
+			deltaCounts(st, p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys),
+			who,
+			st.Dim(when)))
+		if p.Intent.Summary != "" {
+			fmt.Fprintf(out, "    %s\n", p.Intent.Summary)
+		}
 	}
 }
 

@@ -105,7 +105,10 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why %s: %v", revertID, err)
 	}
-	if !strings.Contains(revertSingle, "blast radius: +0 ~1 -0") {
+	// The three counts moved into the decision group's own facts, in the
+	// receipt's compact form, rather than a "blast radius:" line of their
+	// own.
+	if !strings.Contains(revertSingle, "+0 ~1 -0") {
 		t.Fatalf("expected a real (non-zero) blast radius for the drift_revert, got: %s", revertSingle)
 	}
 
@@ -113,7 +116,7 @@ func TestWhy_ChainWithMixedKinds_DistinguishableAtAGlance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ubx why %s: %v", driftAdoptID, err)
 	}
-	if !strings.Contains(driftAdoptSingle, "blast radius: +0 ~0 -0") {
+	if !strings.Contains(driftAdoptSingle, "+0 ~0 -0") {
 		t.Fatalf("expected an all-zero blast radius for the drift_adopt, got: %s", driftAdoptSingle)
 	}
 }
