@@ -126,9 +126,14 @@ resource "aws_instance" "x" {
 `)
 	outDir := filepath.Join(t.TempDir(), "skipped")
 	out, err := runUbx(t, nil, "blueprint", "convert", "--from-terraform", modDir, "--out", outDir, "--lang", "go")
-	if err != nil {
-		t.Fatalf("blueprint convert: %v\noutput:\n%s", err, out)
+	// This module's only resource is skipped, so nothing is converted,
+	// which is now a failure rather than a quiet success -- see
+	// TestBlueprintConvert_NothingConverted_Fails for why. The loudness
+	// this test exists to check is unchanged and still asserted below.
+	if err == nil {
+		t.Fatalf("expected converting zero resources to fail:\n%s", out)
 	}
+	requireExitCode(t, err, 1, out)
 	if !strings.Contains(out, "converted 0 resource(s) (1 skipped)") {
 		t.Fatalf("output = %q, want a 0-converted/1-skipped line", out)
 	}
@@ -195,4 +200,79 @@ func sdkGoModuleRootForCLI(t *testing.T) string {
 		t.Fatalf("expected %s to be sdk/go's own module root: %v", root, err)
 	}
 	return root
+}
+
+// convertNothingModule is the shape that made this necessary: every
+// resource guarded by a conditional count, every output wrapped in
+// try(). Reduced from terraform-aws-modules/terraform-aws-sqs, where all
+// eight resources and all ten outputs look like this.
+const convertNothingModule = `
+variable "create" {
+  type    = bool
+  default = true
+}
+
+resource "aws_sqs_queue" "this" {
+  count      = var.create ? 1 : 0
+  queue_name = "q"
+}
+
+output "arn" {
+  value = try(aws_sqs_queue.this[0].arn, null)
+}
+`
+
+// Converting nothing is a failed conversion, not a quiet one.
+//
+// Measured 2026-09-08: converting terraform-aws-sqs skipped all eight
+// resources, dropped all ten outputs, printed "converted 0 resource(s)
+// (8 skipped)" and exited 0. The empty blueprint it left behind builds,
+// packages and content-hashes exactly like a real one, so nothing
+// downstream would have caught it either.
+func TestBlueprintConvert_NothingConverted_Fails(t *testing.T) {
+	modDir := t.TempDir()
+	writeFile(t, filepath.Join(modDir, "main.tf"), convertNothingModule)
+	outDir := filepath.Join(t.TempDir(), "bp")
+
+	out, err := runUbx(t, nil, "blueprint", "convert",
+		"--from-terraform", modDir, "--out", outDir, "--lang", "go")
+	if err == nil {
+		t.Fatalf("converting zero resources must not report success:\n%s", out)
+	}
+	requireExitCode(t, err, 1, out)
+
+	all := out + errText(err)
+	// The verdict has to name the consequence, not just the count.
+	for _, want := range []string{"nothing was converted", "is empty and describes none of that module"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("error does not say %q:\n%s", want, all)
+		}
+	}
+	// And the questions explaining WHY must still be shown, since the
+	// error deliberately does not repeat them.
+	if !strings.Contains(all, "isn't a recognized shape") {
+		t.Errorf("the questions explaining which constructs were refused were lost:\n%s", all)
+	}
+}
+
+// A module that converts at least one resource still succeeds, so the
+// new check cannot turn a partial conversion into a failure. Partial is
+// the normal case and is already reported through questions.
+func TestBlueprintConvert_PartialConversion_StillSucceeds(t *testing.T) {
+	modDir := t.TempDir()
+	writeFile(t, filepath.Join(modDir, "main.tf"), convertNothingModule+`
+resource "aws_sqs_queue" "plain" {
+  queue_name = "plain"
+}
+`)
+	outDir := filepath.Join(t.TempDir(), "bp")
+
+	out, err := runUbx(t, nil, "blueprint", "convert",
+		"--from-terraform", modDir, "--out", outDir, "--lang", "go")
+	if err != nil {
+		t.Fatalf("a partial conversion must still succeed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "converted 1 resource(s)") {
+		t.Fatalf("expected 1 converted resource, got:\n%s", out)
+	}
 }
