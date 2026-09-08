@@ -424,7 +424,7 @@ func setUpPinnedBinaryMirror(t *testing.T) {
 func TestAcquirePinnedSchemaAndBinary_PinnedMode_Succeeds(t *testing.T) {
 	setUpPinnedBinaryMirror(t)
 
-	binPath, env, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
+	binPath, env, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"source":  "ubiquex/widget",
 		"version": "1.0.0",
 	})
@@ -467,7 +467,7 @@ func TestAcquirePinnedSchemaAndBinary_RepoOverride_BypassesRealAcquisition(t *te
 	setUpPinnedSchemaMirror(t)
 	t.Setenv("UBX_PROVIDER_DYNAMIC_REPO", "/this/checkout/does/not/exist")
 
-	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
+	_, _, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"source":  "ubiquex/widget",
 		"version": "1.0.0",
 	})
@@ -489,7 +489,7 @@ func TestAcquirePinnedSchemaAndBinary_RepoOverride_BypassesRealAcquisition(t *te
 // writeDynamicProviderConfig, any live fetch, or any real acquisition
 // at all.
 func TestAcquirePinnedSchemaAndBinary_LiveShapedParams_FailsLoud(t *testing.T) {
-	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
+	_, _, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"schema_source": "openapi",
 		"schema_url":    "https://example.invalid/spec.json",
 	})
@@ -505,7 +505,7 @@ func TestAcquirePinnedSchemaAndBinary_LiveShapedParams_FailsLoud(t *testing.T) {
 // pinnedSchemaFields' own existing "source without version" error still
 // propagates correctly through the new, fuller function.
 func TestAcquirePinnedSchemaAndBinary_MissingVersion_Errors(t *testing.T) {
-	_, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
+	_, _, _, err := acquirePinnedSchemaAndBinary(context.Background(), "widget", map[string]any{
 		"source": "ubiquex/widget",
 	})
 	if err == nil {
