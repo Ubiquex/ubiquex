@@ -272,8 +272,25 @@ type Ubxfile struct {
 	// build has nothing left to interpret, only to parse.
 	Resources string
 	// ResourcesSource is "inline" or the resolved .json file path,
-	// recorded for provenance/logging only.
+	// recorded for provenance/logging only. Deliberately NOT a
+	// converted/authored marker: an authored blueprint with inline JSON
+	// and a converted one both report "inline", and this field is
+	// recomputed at parse time rather than read from the file, so it
+	// carries nothing across a write. ConvertedFrom is the real marker.
 	ResourcesSource string
+	// ConvertedFrom is the Terraform module directory this blueprint was
+	// converted from, set only by `ubx blueprint convert` and absent from
+	// every authored Ubxfile.
+	//
+	// It exists so a converted blueprint is identifiable rather than
+	// inferred from a failure. A converted blueprint's resources: is a
+	// prose summary, not a pre-resolved intent/v1 document, so `ubx
+	// blueprint build` cannot rebuild one -- and before this it said so
+	// by reporting a JSON parse error at a character offset ("invalid
+	// character 'C' looking for beginning of value", the C of
+	// "Converted"), which is accurate and tells the reader nothing about
+	// what to do.
+	ConvertedFrom string
 	// Outputs is outputs: (UBI-128), in file declaration order -- empty
 	// for a blueprint that declares none, the overwhelming common case
 	// until this ticket, and completely unaffected by it (every codegen
@@ -283,16 +300,17 @@ type Ubxfile struct {
 }
 
 // rawUbxfile is the strict-decode target -- KnownFields(true) rejects
-// any key besides these four, which is what makes uses: (UBI-121) a
+// any key besides these five, which is what makes uses: (UBI-121) a
 // loud, immediate parse error rather than a silently-ignored key.
 // Params/Outputs are captured as raw yaml.Node, not map[string]string,
 // specifically to preserve declaration order (a Go map has none) --
 // ParseUbxfile walks their own .Content pairs directly.
 type rawUbxfile struct {
-	Lang      string    `yaml:"lang"`
-	Params    yaml.Node `yaml:"params"`
-	Resources string    `yaml:"resources"`
-	Outputs   yaml.Node `yaml:"outputs"`
+	Lang          string    `yaml:"lang"`
+	Params        yaml.Node `yaml:"params"`
+	Resources     string    `yaml:"resources"`
+	Outputs       yaml.Node `yaml:"outputs"`
+	ConvertedFrom string    `yaml:"converted_from"`
 }
 
 // ParseUbxfile reads and parses the Ubxfile in dir.
@@ -340,6 +358,7 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 	return &Ubxfile{
 		Dir:             dir,
 		Lang:            raw.Lang,
+		ConvertedFrom:   raw.ConvertedFrom,
 		Params:          params,
 		Resources:       resources,
 		ResourcesSource: source,
@@ -362,8 +381,32 @@ func Validate(dir string) (*Ubxfile, *resolver.IntentFile, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// A converted blueprint is identified, not diagnosed. Its resources:
+	// is a prose summary by design, so the JSON parse below would always
+	// fail, and reporting that failure tells the reader where the parser
+	// stopped rather than what to do about it.
+	if ubxfile.ConvertedFrom != "" {
+		return nil, nil, fmt.Errorf("blueprint: %s was converted from the Terraform module at %s and cannot be rebuilt: "+
+			"its resources: is a summary of what was converted, not a pre-resolved intent/v1 document, so there is nothing here to rebuild from. "+
+			"The generated package(s) are this blueprint's own source of truth. "+
+			"To change it, edit the Terraform module and re-run: ubx blueprint convert --from-terraform %s --out %s --lang all",
+			UbxfileName, ubxfile.ConvertedFrom, ubxfile.ConvertedFrom, ubxfile.Dir)
+	}
+
 	var draft resolver.IntentFile
 	if err := json.Unmarshal([]byte(ubxfile.Resources), &draft); err != nil {
+		// A blueprint converted before converted_from existed has no
+		// marker, so the shape of resources: is the only signal left.
+		// Naming that possibility is worth more than the offset alone,
+		// and it is offered as a possibility rather than asserted, since
+		// an authored blueprint with genuinely malformed JSON lands here
+		// too and must not be told it was converted.
+		if !looksLikeJSONObject(ubxfile.Resources) {
+			return nil, nil, fmt.Errorf("blueprint: resources: is not a pre-resolved intent/v1 document (%s): it does not even begin as a JSON object. "+
+				"If this blueprint was produced by `ubx blueprint convert`, it cannot be rebuilt: re-run that command against the original Terraform module instead. "+
+				"Otherwise, resources: must be the intent/v1 JSON that `ubx resolve --out` produces. Underlying parse error: %w",
+				ubxfile.ResourcesSource, err)
+		}
 		return nil, nil, fmt.Errorf("blueprint: resources: is not a valid pre-resolved intent/v1 document (%s): %w", ubxfile.ResourcesSource, err)
 	}
 	if _, err := decodeBlueprint(&draft, ubxfile.Params, ubxfile.Outputs); err != nil {
@@ -530,4 +573,13 @@ func yamlKindName(k yaml.Kind) string {
 	default:
 		return "an unrecognized node"
 	}
+}
+
+// looksLikeJSONObject reports whether s begins as a JSON object once
+// whitespace is removed. Used only to choose between two error messages,
+// never to decide whether to parse: the parse itself is always what
+// decides, so a false answer here can make an error less specific and can
+// never make a valid blueprint fail.
+func looksLikeJSONObject(s string) bool {
+	return strings.HasPrefix(strings.TrimSpace(s), "{")
 }

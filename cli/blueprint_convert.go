@@ -78,9 +78,14 @@ or silently producing something wrong.`,
 			if len(langs) == 1 {
 				ubxLang = langs[0]
 			}
+			absFrom, err := filepath.Abs(fromTerraform)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint convert: %w", err)}
+			}
 			ubxfile := &blueprint.Ubxfile{
 				Dir:             absOut,
 				Lang:            ubxLang,
+				ConvertedFrom:   absFrom,
 				Params:          res.Params,
 				Resources:       res.Summary,
 				ResourcesSource: "inline",
@@ -165,6 +170,13 @@ func renderConvertedUbxfile(u *blueprint.Ubxfile) string {
 		for _, p := range u.Params {
 			fmt.Fprintf(&b, "  %s: %s\n", p.Name, renderParamSpec(p))
 		}
+	}
+
+	// converted_from marks this blueprint as one `ubx blueprint build`
+	// cannot rebuild, so it can say that plainly instead of failing on a
+	// JSON parse at the first letter of the prose below.
+	if u.ConvertedFrom != "" {
+		fmt.Fprintf(&b, "converted_from: %s\n", u.ConvertedFrom)
 	}
 
 	b.WriteString("\nresources: |\n")
