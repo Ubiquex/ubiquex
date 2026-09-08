@@ -165,6 +165,30 @@ consistency shows its own work instead of sitting silent.`,
 				if verr != nil {
 					return &ExitCodeError{Code: acceptErrorCode(verr), Err: fmt.Errorf("ship: %w", verr)}
 				}
+				// The one window where this check is worth anything.
+				//
+				// confirmAndAccept, on the next line, is the signing moment:
+				// it appends to an append-only ledger, and a ledger cannot
+				// un-append. Provider resolution used to happen about seventy
+				// lines further down, so a stack with no reachable provider
+				// got its proposal durably accepted and only then refused for
+				// want of a flag, leaving an accepted-but-unshippable record
+				// nothing can retract.
+				//
+				// Not any earlier, either, and the placement is load-bearing
+				// in both directions: above this point a missing or invalid
+				// plan has not been diagnosed yet, and jumping the queue
+				// would answer "no provider" to someone whose real problem is
+				// a plan that does not exist. Only a kind that actually
+				// executes is asked for a provider at all -- a record-only
+				// proposal's resolution IS its acceptance, it never launches
+				// anything, and demanding a provider for one would refuse a
+				// flow that has always worked without.
+				if draft.Kind == core.KindDriftRevert || draft.Kind == core.KindChange {
+					if perr := preflightProviderRoute(cmd, cfg, providerPath, source, providerVersion); perr != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", perr)}
+					}
+				}
 				accepted, cerr := confirmAndAccept(cmd, ledger, st, draft, yes)
 				if errors.Is(cerr, errShipDeclined) {
 					return nil
@@ -214,8 +238,9 @@ consistency shows its own work instead of sitting silent.`,
 			}
 
 			// docs/executor.md's own "Amendment (UBI-43): multi-provider
-			// stacks" client pool -- a stack with a real [thirdparty_providers] table
-			// in .ubx/config gets a genuine multi-entry pool (cli/providerpool.go),
+			// stacks" client pool -- a stack with a real provider table in
+			// .ubx/config, [thirdparty_providers] or [providers] or both
+			// (hasProviderTable), gets a genuine multi-entry pool (cli/providerpool.go),
 			// lazily launching whichever providers this specific proposal's
 			// own nodes actually need; a single-provider stack (no table)
 			// keeps working exactly as it always has, one provider launched
@@ -224,7 +249,7 @@ consistency shows its own work instead of sitting silent.`,
 			// --source/--provider-version retirement plan for what happens
 			// when a table AND the singular flags are both given.
 			var pool executor.ApplierPool
-			if len(cfg.ThirdpartyProviders) > 0 {
+			if hasProviderTable(cfg) {
 				warnIfLegacyProviderFlagsGiven(cmd)
 				pp, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
