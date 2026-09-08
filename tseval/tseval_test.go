@@ -221,6 +221,7 @@ func TestEvaluate_Row4_ThrowMidEvaluation_NoPartialOutput(t *testing.T) {
 // through package.json/node_modules, not npm itself, and a hermetic
 // `go test ./...` must not reach the network.
 func TestEvaluate_BareNpmSpecifier_ResolvesFromProjectNodeModules(t *testing.T) {
+	requireDeno(t)
 	dir := t.TempDir()
 
 	if err := os.WriteFile(filepath.Join(dir, "package.json"),
