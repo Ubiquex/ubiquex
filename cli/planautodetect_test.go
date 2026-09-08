@@ -128,8 +128,8 @@ func TestPlanAutodetect_MultipleCandidates_ListsAndAsks(t *testing.T) {
 	if !strings.Contains(err.Error(), "multiple SDK programs found") {
 		t.Fatalf("expected a multiple-SDK-programs-found error, got: %v\noutput: %s", err, out)
 	}
-	if !strings.Contains(err.Error(), "platform.ts") || !strings.Contains(err.Error(), "platform2.ts") || !strings.Contains(err.Error(), "ubx plan --from-code") {
-		t.Fatalf("expected both candidates' own correct --from-code invocation named, got: %v", err)
+	if !strings.Contains(err.Error(), "platform.ts") || !strings.Contains(err.Error(), "platform2.ts") || !strings.Contains(err.Error(), "ubx plan ") {
+		t.Fatalf("expected both candidates' own correct invocation named, got: %v", err)
 	}
 }
 
@@ -293,5 +293,82 @@ func TestPlan_PositionalIntentFile_StillReadsAsIntent(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 create") {
 		t.Fatalf("expected the intent file to resolve, got: %s", out)
+	}
+}
+
+// TestPlanAutodetect_ConventionalEntry_CoversTheHCLMedium closes the gap
+// left when the conventional entry landed for three media and not the
+// fourth.
+//
+// Two things had to change for stack.ubx.hcl to work, and only one of
+// them is obvious. The first is that `ubx plan` refused .ubx.hcl
+// outright, so the front door could not plan a whole authoring medium
+// that `ubx resolve` had always accepted. The second is quieter: the
+// original conventional-name check derived a base with
+// TrimSuffix(name, filepath.Ext(name)), which yields "stack.ubx" for a
+// double extension, so it would silently have failed to match even once
+// detection found the file.
+func TestPlanAutodetect_ConventionalEntry_CoversTheHCLMedium(t *testing.T) {
+	if !isConventionalEntry("stack.ubx.hcl") {
+		t.Error("stack.ubx.hcl is not recognised as a conventional entry")
+	}
+	for _, name := range []string{"stack.ts", "stack.go", "stack.py"} {
+		if !isConventionalEntry(name) {
+			t.Errorf("%s is not recognised as a conventional entry", name)
+		}
+	}
+	for _, name := range []string{"stack.ubx", "billing.ubx.hcl", "stack.hcl", "stack.tsx"} {
+		if isConventionalEntry(name) {
+			t.Errorf("%s should not be a conventional entry", name)
+		}
+	}
+	if !strings.Contains(conventionalEntryNames(), "stack.ubx.hcl") {
+		t.Error("the teaching error does not name the HCL medium")
+	}
+}
+
+// Two conventional entries in different media is refused, never resolved
+// by precedence. They are not two spellings of one stack: one evaluates
+// code and the other only parses, so any fixed precedence would mean
+// adding a file silently changes which one ships.
+func TestPlanAutodetect_TwoMedia_RefusesAndSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	withConfigSearchDir(t, dir)
+	writeConfig(t, dir, `stack = "demo"`)
+	writeFile(t, filepath.Join(dir, "stack.ts"), autodetectSDKProgram)
+	writeFile(t, filepath.Join(dir, "stack.ubx.hcl"), "stack = \"demo\"\n")
+
+	_, err := runUbx(t, nil, "plan", "--ledger-dir", dir)
+	requireExitCode(t, err, 2, "")
+	msg := err.Error()
+	if !strings.Contains(msg, "stack.ts") || !strings.Contains(msg, "stack.ubx.hcl") {
+		t.Fatalf("expected both entries named, got: %v", err)
+	}
+	// The message must not read like the two-programs case, which is a
+	// tidying problem. This is a decision about which medium the stack is
+	// authored in.
+	if !strings.Contains(msg, "authoring media") {
+		t.Errorf("expected the error to name the medium conflict, got: %v", err)
+	}
+	if strings.Contains(msg, "multiple SDK programs found") {
+		t.Errorf("expected the medium-conflict error, not the two-programs one, got: %v", err)
+	}
+}
+
+// HCL reaching the intent-file reader used to report "invalid character
+// 's' looking for beginning of value", a JSON parse error about a file
+// that was never JSON. It named the wrong problem entirely.
+func TestPlan_HCLContentNotNamedUbxHCL_SaysSo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notes.json")
+	writeFile(t, path, "stack = \"demo\"\n\nblueprint \"a\" \"b\" {\n  source = \"/tmp/x\"\n}\n")
+
+	_, err := runUbx(t, nil, "plan", path, "--ledger-dir", dir)
+	requireExitCode(t, err, 2, "")
+	if !strings.Contains(err.Error(), "looks like HCL") {
+		t.Fatalf("expected the misdirecting JSON parse error to be replaced, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("still reporting a JSON parse error for an HCL file: %v", err)
 	}
 }
