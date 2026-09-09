@@ -675,6 +675,48 @@ straight into `resolver.Resolve`'s own new parameter of the same name —
 the plain, direct instantiation of "operator-supplied ledger directories"
 this section already named, not a new decision.
 
+**Amendment (2026-09-09): the list moved to config, and the evidence
+became visible.** Two things were wrong with the shape above, both found
+when an MCP session read `not_performed` out of a real terminate's
+proposal JSON and asked what it meant.
+
+The first is where the list lived. A repeatable flag and nothing else
+meant the neighbours had to be remembered per invocation, by a human, at
+the exact moment they were destroying something, which is the weakest
+possible place to require memory. The set of stacks that depend on yours
+is a stable property of your stack, not of one command run, so it now
+also comes from `.ubx/config`'s own top-level `known_dependents` list,
+read by every command that resolves a destroy (`terminate`, `plan`,
+`resolve`, `promote`, `restore`; `promote` reads the TARGET's config,
+since a destroy resolved there orphans whoever depends on the target).
+The flag still works and **adds to** the configured list rather than
+replacing it: a neighbour that matters for one destroy only is exactly
+what a flag is for, and having a flag silently drop the configured
+entries would turn "also check here" into "check only here", which is
+the wrong direction for a safety check to fail in. Nothing about the
+resolver's own contract changed; `knownDependentsFor` (cli) merges the
+two sources before `Resolve` ever sees them.
+
+The second is that the evidence was invisible. This section's whole
+argument for recording `not_performed` is that a human reviewing and
+signing a destroy sees the gap rather than being handed a silent
+assumption of safety. That never happened: `renderPinnedHeads` rendered
+`cross_stack_pin` entries and skipped every other kind, so the status
+reached the proposal JSON and `ubx why --json` and stopped there. The
+audience was inverted, with an assistant reading raw JSON able to see it
+and the person signing unable to. `renderOrphanCheck` now renders it in
+the plan receipt and again at the ship confirmation, immediately above
+the prompt. `checked_clear` renders too, naming the directories walked:
+showing only the warning would leave a clean check and a version of ubx
+that performs no check at all looking identical from the output, which
+is the same indistinguishability this mechanism exists to remove.
+
+Both halves are surfacing and sourcing only. The check itself, its
+best-effort scope, and the honest `not_performed`/`checked_clear`
+recording are exactly as designed above, and the missing piece
+(docs/schema.md's own "cross-stack workspace index format") is still
+open and still the reason this is explicit rather than automatic.
+
 ### `delta.destroys` carries full folded state, not just an address — a deliberate divergence from `Modification`'s terser shape
 
 `Modification.Before`/`.After` deliberately hold only the attributes that

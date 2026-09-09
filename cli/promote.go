@@ -205,7 +205,11 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			}
 			defer closeTarget()
 
-			np, err := resolver.Resolve(targetLedger, providers, intent, knownDependents)
+			// targetCfg, not sourceCfg: this resolve runs against the
+			// target ledger, so a destroy in it orphans whoever depends
+			// on the TARGET stack. The source environment's own
+			// neighbours are the wrong list to check here.
+			np, err := resolver.Resolve(targetLedger, providers, intent, knownDependentsFor(targetCfg, knownDependents))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}
 			}
@@ -257,7 +261,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire for the target (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under --to's own .ubx/plans/ regardless)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "timeout for re-evaluating the SDK program and for the target's own provider acquisition/schema fetch -- one shared budget for the whole command")
-	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying, in the TARGET's own graph (repeatable)")
+	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying, in the TARGET's own graph (repeatable; adds to the TARGET .ubx/config's own known_dependents list rather than replacing it)")
 	return cmd
 }
 

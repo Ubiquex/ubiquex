@@ -249,7 +249,7 @@ propose-time PR trailer hash, etc.).`,
 			}
 			defer closeLedger()
 
-			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
@@ -303,7 +303,7 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under .ubx/plans/ regardless)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition and SDK program evaluation -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
-		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file")
 	// --from-code is kept, hidden, as an alias for the positional form.
 	// It distinguishes nothing since UBI-224 removed the other authoring
@@ -455,6 +455,7 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 		fmt.Fprintln(out, st.Bold(fmt.Sprintf("cost delta: $%s/mo", p.CostDelta.MonthlyUSD)))
 	}
 	renderPinnedHeads(out, st, p.Resolution.Inputs)
+	renderOrphanCheck(out, st, p.Resolution.Inputs)
 
 	if len(p.Intent.Assumptions) == 0 && len(p.Intent.Defaults) == 0 && len(p.Intent.Questions) == 0 {
 		return

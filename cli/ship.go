@@ -424,6 +424,12 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 	// not a second full copy of it.
 	renderShipConfirmSummary(out, st, draft, age)
 	warnIfRecentUnattributedAdopt(out, st, draft)
+	// The last moment before a destroy is signed, and the only one where
+	// the human is being asked a direct question. renderPlanReceipt shows
+	// the same evidence at plan time; a plan can be minutes or days old
+	// by the time it is shipped, and the person shipping is not always
+	// the person who planned.
+	renderOrphanCheck(out, st, draft.Resolution.Inputs)
 
 	if !yes {
 		if !isTerminal(cmd.InOrStdin()) {

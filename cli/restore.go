@@ -301,7 +301,7 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 				Destroys:      destroys,
 			}
 
-			p, err := resolver.Resolve(ledger, providers, intent, knownDependents)
+			p, err := resolver.Resolve(ledger, providers, intent, knownDependentsFor(cfg, knownDependents))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %w", err)}
 			}
@@ -351,6 +351,6 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under .ubx/plans/ regardless)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Minute, "timeout for provider acquisition and schema fetch")
-	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
 	return cmd
 }
