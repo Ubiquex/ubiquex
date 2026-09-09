@@ -96,6 +96,17 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
 			}
+			// A second full pass over the same proposals, deliberately:
+			// Fleet calls Chain internally and throws the length away, so
+			// the honest options were re-reading here or changing Fleet's
+			// signature and every caller of it. Status is not a hot path
+			// and this buys a zero-resource answer that says whether the
+			// ledger is empty or merely folded to nothing. Fleet returning
+			// the count it already has is the obvious later cleanup.
+			chain, err := ledger.Chain()
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
+			}
 
 			out := cmd.OutOrStdout()
 			st := newStyler(cmd)
@@ -134,7 +145,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 						Format:       jsonFormatVersion,
 						DriftChecked: false,
 						Resources:    resources,
-						Summary:      statusSummaryJSON{Total: len(fleet)},
+						Summary:      statusSummaryJSON{Total: len(fleet), ProposalsTotal: len(chain)},
 					}
 					if err := writeJSON(out, payload); err != nil {
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
@@ -272,9 +283,10 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 					DriftChecked: true,
 					Resources:    resources,
 					Summary: statusSummaryJSON{
-						Total:      len(fleet),
-						Drifted:    driftedCount,
-						Unreadable: unreadableCount,
+						Total:          len(fleet),
+						Drifted:        driftedCount,
+						Unreadable:     unreadableCount,
+						ProposalsTotal: len(chain),
 					},
 				}
 				if err := writeJSON(out, payload); err != nil {
@@ -363,6 +375,17 @@ type statusSummaryJSON struct {
 	Total      int `json:"total"`
 	Drifted    int `json:"drifted"`
 	Unreadable int `json:"unreadable"`
+	// ProposalsTotal is how many proposals this ledger's chain holds,
+	// which is NOT Total and is not filtered by stack.
+	//
+	// Total is a fold, and a fold can legitimately be empty while the
+	// ledger holds real history: a resource created and later destroyed
+	// is tombstoned and skipped (core/fleet.go), so a ledger with two
+	// proposals reports zero resources. An MCP session read exactly that
+	// and concluded the ledger was empty. Without this field the two
+	// situations are byte-identical in the response and the only way to
+	// tell them apart is a second call the caller has no reason to make.
+	ProposalsTotal int `json:"proposals_total"`
 }
 
 // unreadableNoLookup builds e's "unreadable" entry for the "no lookup key

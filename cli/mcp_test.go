@@ -124,7 +124,7 @@ func TestMCP_ListTools(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	want := map[string]bool{
-		"ubx_why": true, "ubx_status": true, "ubx_scan": true,
+		"ubx_why": true, "ubx_status": true, "ubx_scan": true, "ubx_history": true,
 		"draft_ubxfile": true, "validate_ubxfile": true, "build_blueprint": true,
 		"list_blueprints": true, "describe_blueprint": true,
 	}

@@ -2,6 +2,21 @@
 
 ## Changelog
 
+- 2026-09-09 -- `ubx_history` is the ninth MCP tool. An MCP session
+  concluded a ledger was empty when it held two proposals: `ubx_status`
+  reports the current fold, a created-then-destroyed resource is
+  tombstoned and skipped, and nothing could answer what had happened,
+  since `ubx_why` needs an address the caller does not have yet. A
+  separate tool rather than a mode on `ubx_status`, because the two
+  return different shapes and because the observed failure was tool
+  selection, which a parameter cannot fix. Ships with the two changes
+  that address the wrong conclusion directly: `ubx_status`'s description
+  no longer claims to report "every resource the ledger knows about",
+  and `statusJSON`'s summary gains `proposals_total` so a zero-resource
+  answer is self-distinguishing in the payload. `ubx_history` takes a
+  `limit` (default 50, ceiling 500) and reports `total`/`truncated`, so
+  a shortened list is never mistaken for a complete history. See
+  docs/architecture.md, "MCP server".
 - 2026-09-09 -- `cross_stack_orphan_check` is visible and configurable.
   A destroy resolved with no neighbours named records
   `status: "not_performed"`, deliberately, so the gap is never
