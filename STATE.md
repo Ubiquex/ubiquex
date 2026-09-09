@@ -7,6 +7,55 @@
 
 ## In flight
 
+**MCP `ledger_dir`: three defects on one parameter, four PRs open, all
+green.** Two were reported from a real Claude Desktop session, the
+third found while tracing them.
+
+- `ubiquex#115` (defects 1 and 2). A `ledger_dir` that did not exist, or
+  was never a ubx root, returned a successful empty result, because
+  `core.Open` is a pure constructor that stats nothing. A stack tracking
+  nothing, a directory that was never a root, and a mistyped path were
+  byte-identical in the response; the model said explicitly it could not
+  tell them apart. Now refused, discriminating on `.ubx/`. The
+  discriminator matters and is not the obvious one: `ubx init` writes
+  `.ubx/config.hcl` with no `ledger/`, and `ubx accept --ledger-dir`
+  writes `.ubx/ledger.lock` and `ledger/` with no config, so requiring
+  either `ledger/` or a config file would refuse a real shape ubx itself
+  creates. Also expands a leading `~/`, at the MCP boundary only.
+- `ubiquex#116` (defect 3), **stacked on #115, merge #115 first**.
+  `ledger_dir` did not supply `.ubx/config` despite its own schema
+  description saying it does: config came from the server process's cwd,
+  so a call naming one stack could run against another stack's provider
+  identity and remote ledger store with no signal. Now resolved from the
+  stack root the call names.
+- `ubiquex-internals#8` and `ubx-docs-users#31` cover both code PRs.
+
+Behaviour change to be aware of: with `ledger_dir` omitted nothing
+moves, and a `ledger_dir` nested under the server cwd still inherits
+that config since the cascade walks upward. A `ledger_dir` in an
+unrelated tree no longer inherits the cwd's provider identity, so a
+drift check there needs `provider_path`/`source`/`provider_version`
+passed explicitly. Those are already tool inputs.
+
+Two traps worth carrying forward from this arc:
+
+1. **`filepath.Dir(".")` is `"."`.** A config cascade started at a
+   relative `"."` stops at the first directory and never walks upward.
+   `resolveLedgerDir` returns an absolute path for exactly this reason,
+   guarded by `TestMCP_ConfigCascadesUpwardFromLedgerDir`.
+2. **A test fixture named a literal `s3://` bucket and a test run made a
+   real AWS `GetObject`** with this machine's credentials. Remote-store
+   fixtures must route through `remoteStoreFixture`'s in-memory bucket:
+   a test for "did it open the wrong ledger" is precisely the one that
+   opens it, so it has to be unable to leave the process even when the
+   code under test is broken.
+
+Docs debt found, not fixed, deliberately out of scope: several
+`ubiquex-internals` pages (`concepts/blueprints.mdx`,
+`concepts/hcl-blueprint-calling.mdx`, and the `mcp-tools.mdx` section now
+marked as history) still describe `ubx blueprint convert` and
+`tfconvert` as live. UBI-125 deleted both on 2026-09-09.
+
 **UBI-247: DONE. Both documentation sites are live.** The user docs moved
 off Mintlify onto Next.js at `docs.ubiquex.io` (`ubx-docs-users`,
 147 pages across six sections), alongside `providers.ubiquex.io`, which

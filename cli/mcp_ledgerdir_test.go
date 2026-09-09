@@ -143,16 +143,17 @@ func TestMCP_LedgerDir_AcceptedLedgerWithoutConfigIsARoot(t *testing.T) {
 // it -- otherwise the model is told "not a ubx root" about a path it
 // never supplied and cannot inspect.
 func TestMCP_LedgerDir_DefaultNamesTheServersOwnCwd(t *testing.T) {
+	cwd := notARoot(t)
+	orig := configSearchStartDir
+	configSearchStartDir = func() (string, error) { return cwd, nil }
+	t.Cleanup(func() { configSearchStartDir = orig })
+
 	session := connectMCPTestClient(t)
 	res := callTool(t, session, "ubx_status", map[string]any{})
 	if !res.IsError {
-		t.Skip("the test binary's own cwd is a ubx root, so the default cannot be exercised here")
+		t.Fatalf("expected a cwd that is not a ubx root to be refused, got: %s", toolTextContent(t, res))
 	}
 	text := toolTextContent(t, res)
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !strings.Contains(text, cwd) {
 		t.Fatalf("the error must name the server's own current directory, since the caller cannot see it; got: %s", text)
 	}
