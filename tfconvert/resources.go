@@ -354,6 +354,29 @@ func (c *converter) translateResource(rb *hclsyntax.Block, addr string, info res
 		config[k] = v
 	}
 
+	// Attribute retention, recorded per resource so the caller can report
+	// what a conversion actually preserved rather than only how many
+	// resources it produced. A resource converting is not the same as a
+	// resource surviving: terraform-aws-sqs converts six resources, of
+	// which four retain exactly one attribute each (region) having lost
+	// queue_url and their entire policy document. Counting resources alone
+	// reported that as a success.
+	source := 0
+	for _, k := range keys {
+		switch k {
+		case "count", "for_each", "provider", "depends_on":
+			continue
+		}
+		source++
+	}
+	c.retention = append(c.retention, Retention{
+		Address:     addr,
+		Slug:        rb.Labels[0] + "." + info.slug,
+		SourceAttrs: source,
+		KeptAttrs:   len(config),
+		Kept:        sortedKeys(config),
+	})
+
 	for _, nb := range rb.Body.Blocks {
 		switch nb.Type {
 		case "lifecycle":
@@ -417,4 +440,15 @@ func (c *converter) convertDependsOn(expr hclsyntax.Expression) ([]string, bool)
 		out = append(out, c.stack+"."+typeName+"."+info.slug)
 	}
 	return out, true
+}
+
+// sortedKeys returns a map's keys in a stable order, so a retention
+// report never differs between two runs over the same module.
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
