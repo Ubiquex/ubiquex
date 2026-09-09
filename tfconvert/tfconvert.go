@@ -43,7 +43,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
-	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/blueprint/spec"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
@@ -86,8 +86,8 @@ type RequiredProvider struct {
 // discipline (CLAUDE.md) -- this comment itself went stale once before,
 // caught only when UBI-226 touched a neighboring file and re-read it.
 type Result struct {
-	Params            []blueprint.Param
-	Outputs           []blueprint.Output
+	Params            []spec.Param
+	Outputs           []spec.Output
 	Intent            *resolver.IntentFile
 	Questions         []core.Question
 	Summary           string
@@ -282,8 +282,8 @@ type converter struct {
 	mod   *hclModule
 	stack string // this blueprint's own Stack -- the built directory's own basename, matching draftBlueprint's identical convention (cli/blueprint.go)
 
-	params            []blueprint.Param
-	paramType         map[string]blueprint.ParamType
+	params            []spec.Param
+	paramType         map[string]spec.ParamType
 	unsupportedParams map[string]bool // param name -> declared but dropped (unsupported type), so a later reference becomes its own Question
 
 	resourceAddrs map[string]bool         // "type.name" -> declared in this module
@@ -294,7 +294,7 @@ type converter struct {
 	retention  []Retention
 	hasForEach bool // true once any non-skipped resource carries a for_each (set during convertResources) -- decodeBlueprint's own permanent boundary is blanket, not per-output (blueprint/decode.go): a blueprint with ANY for_each resource can't declare outputs: AT ALL, even one targeting a different, ordinary resource
 
-	outputs []blueprint.Output
+	outputs []spec.Output
 
 	providers []RequiredProvider
 

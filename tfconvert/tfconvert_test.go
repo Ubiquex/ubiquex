@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/blueprint/spec"
 )
 
 func writeModule(t *testing.T, files map[string]string) string {
@@ -62,20 +62,20 @@ variable "tags" {
 	if len(res.Params) != 4 {
 		t.Fatalf("expected 4 params (map dropped), got %d: %+v", len(res.Params), res.Params)
 	}
-	byName := map[string]blueprint.Param{}
+	byName := map[string]spec.Param{}
 	for _, p := range res.Params {
 		byName[p.Name] = p
 	}
-	if p := byName["name"]; p.Type != blueprint.ParamString || p.Required || p.Default != "app" {
+	if p := byName["name"]; p.Type != spec.ParamString || p.Required || p.Default != "app" {
 		t.Fatalf("name param = %+v", p)
 	}
-	if p := byName["count_val"]; p.Type != blueprint.ParamNumber || p.Default != 3 {
+	if p := byName["count_val"]; p.Type != spec.ParamNumber || p.Default != 3 {
 		t.Fatalf("count_val param = %+v", p)
 	}
-	if p := byName["flag"]; p.Type != blueprint.ParamBool || p.Default != true {
+	if p := byName["flag"]; p.Type != spec.ParamBool || p.Default != true {
 		t.Fatalf("flag param = %+v", p)
 	}
-	if p := byName["azs"]; p.Type != blueprint.ParamListString || !p.Required {
+	if p := byName["azs"]; p.Type != spec.ParamListString || !p.Required {
 		t.Fatalf("azs param = %+v", p)
 	}
 	if !findQuestion(res, `variable "tags" declares type map(string)`) {
