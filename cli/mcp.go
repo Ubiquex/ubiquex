@@ -58,12 +58,13 @@ func newMCPCmd() *cobra.Command {
 Desktop, any MCP client) can ask ubx questions directly in conversation -- "who changed this bucket and
 when" -- without the human already needing to know ubx's own command shapes.
 
-Three read-only tools, each a thin wrapper over the exact JSON payload the equivalent --json CLI command
+Four read-only tools, each a thin wrapper over the exact JSON payload the equivalent --json CLI command
 already produces:
 
-  ubx_why     resource address or proposal ID -> its recorded history / one decision's full receipt
-  ubx_status  optional stack filter, optional live-state drift check -> fleet report
-  ubx_scan    single resource -> new/drifted/unchanged classification + the generated proposal, inline
+  ubx_why      resource address or proposal ID -> its recorded history / one decision's full receipt
+  ubx_status   optional stack filter, optional live-state drift check -> fleet report, as it stands now
+  ubx_history  a stack's whole proposal chain, newest first -> what has happened, including what is now gone
+  ubx_scan     single resource -> new/drifted/unchanged classification + the generated proposal, inline
 
 Five blueprint-authoring tools (UBI-223), independent, callable in any order:
 
@@ -111,6 +112,7 @@ func newMCPServer() *mcp.Server {
 	registerWhyTool(server)
 	registerStatusTool(server)
 	registerScanTool(server)
+	registerHistoryTool(server)
 	registerDraftUbxfileTool(server)
 	registerValidateUbxfileTool(server)
 	registerBuildBlueprintTool(server)
@@ -351,13 +353,18 @@ type statusToolInput struct {
 func registerStatusTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "ubx_status",
-		Description: "Report every infrastructure resource the ledger knows about -- its address, kind, and when " +
-			"it was accepted -- optionally checked against live state. Reach for this to answer \"what does ubx " +
-			"track\", \"what's the current fleet\", or (with drift=true and provider identity supplied) \"has " +
-			"anything drifted since we last recorded it\". Ledger-only mode (the default) is instant and needs no " +
-			"credentials; drift mode makes a real read against live infrastructure and needs the same provider " +
-			"identity ubx_scan does. A resource this tool can't read live state for is reported \"unreadable\" " +
-			"with a reason, not silently dropped -- the walk always covers every resource.",
+		Description: "Report what a stack tracks RIGHT NOW: every resource currently in its ledger's folded " +
+			"state, with address, kind, and when it was accepted, optionally checked against live state. Reach " +
+			"for this to answer \"what does ubx track\", \"what's the current fleet\", or (with drift=true and " +
+			"provider identity supplied) \"has anything drifted since we last recorded it\". This is the CURRENT " +
+			"state, not the history: a resource that was created and later destroyed is gone from it while its " +
+			"proposals remain in the ledger permanently, so zero resources does NOT mean the ledger is empty. " +
+			"The summary's proposals_total says how many proposals the chain holds; if that is above zero and " +
+			"resources is empty, call ubx_history to see what happened. Ledger-only mode (the default) is " +
+			"instant and needs no credentials; drift mode makes a real read against live infrastructure and " +
+			"needs the same provider identity ubx_scan does. A resource this tool can't read live state for is " +
+			"reported \"unreadable\" with a reason, not silently dropped -- the walk always covers every " +
+			"resource.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in statusToolInput) (*mcp.CallToolResult, any, error) {
 		ledgerDir, err := resolveLedgerDir(in.LedgerDir)
 		if err != nil {
@@ -403,6 +410,76 @@ func registerStatusTool(server *mcp.Server) {
 		}
 		return nil, payload, nil
 	})
+}
+
+// --- ubx_history ---
+
+type historyToolInput struct {
+	Stack     string `json:"stack,omitempty" jsonschema:"which stack's history to list -- required only when .ubx/config's [ledger] store is a remote store; unused for the default git store"`
+	LedgerDir string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"how many proposals to return, newest first (default 50, maximum 500). The response always reports total (how many the chain actually holds) and truncated, so a shortened list is never mistaken for a complete history"`
+}
+
+func registerHistoryTool(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "ubx_history",
+		Description: "List what has actually HAPPENED in a stack: every proposal in its ledger, newest first, " +
+			"with each one's kind, summary, blast radius, who accepted it and when. Reach for this to answer " +
+			"\"what has happened here\", \"what has been done to this stack\", or any question about the past " +
+			"rather than the present. This is the tool to use when ubx_status returns no resources but you have " +
+			"not established that the ledger is empty: status reports the CURRENT state, and a resource that was " +
+			"created and later destroyed leaves nothing in it while its proposals remain in the history " +
+			"permanently. Returns proposal IDs, each of which ubx_why takes directly for the full detail of one " +
+			"decision. Ledger-only and instant: no provider, no credentials, no network.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in historyToolInput) (*mcp.CallToolResult, any, error) {
+		ledgerDir, err := resolveLedgerDir(in.LedgerDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ubx_history: %w", err)
+		}
+		cfg, err := loadConfigFromDir(ledgerDir, os.Stderr)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ubx_history: %w", err)
+		}
+		stack := in.Stack
+		if stack == "" {
+			stack = cfg.Stack
+		}
+		payload, err := computeHistoryJSON(ctx, historyJSONOptions{
+			Config:    cfg,
+			LedgerDir: ledgerDir,
+			Stack:     stack,
+			Limit:     historyToolLimit(in.Limit),
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("ubx_history: %w", err)
+		}
+		return nil, payload, nil
+	})
+}
+
+// historyToolLimit applies ubx_history's own default and ceiling.
+//
+// A real default rather than "everything": a long-lived ledger's whole
+// chain dumped into a model's context is an unbounded cost, and the
+// answer to "what has happened here" is almost always in the recent
+// end. A ceiling as well as a default, because a caller asking for
+// 100000 is not making an informed choice about context budget, and the
+// payload's own total/truncated fields mean a capped answer still says
+// how much history it did not return. Zero or negative means unset, not
+// unlimited: unlimited is not on the menu here at all.
+func historyToolLimit(requested int) int {
+	const (
+		defaultLimit = 50
+		maxLimit     = 500
+	)
+	switch {
+	case requested <= 0:
+		return defaultLimit
+	case requested > maxLimit:
+		return maxLimit
+	default:
+		return requested
+	}
 }
 
 // --- ubx_scan ---

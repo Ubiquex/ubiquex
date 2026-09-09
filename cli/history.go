@@ -125,6 +125,18 @@ type historyEntryJSON struct {
 type historyJSON struct {
 	Format  int                `json:"format"`
 	Entries []historyEntryJSON `json:"entries"`
+	// Total is how many proposals the chain holds, which is len(Entries)
+	// unless something limited the walk. Truncated says so outright
+	// rather than leaving a consumer to compare the two and guess.
+	//
+	// The CLI never limits: `ubx history` prints the whole chain, so
+	// Total == len(Entries) and Truncated is false on every CLI
+	// invocation. The ubx_history MCP tool does limit, because an
+	// unbounded chain dumped into a model's context is a real cost with
+	// no ceiling, and a silently short list would read as a complete
+	// history.
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated"`
 }
 
 // historyToJSON mirrors renderHistoryHuman's own newest-first ordering
@@ -133,8 +145,26 @@ type historyJSON struct {
 // independently-assembled views" discipline every other --json command
 // in this package already holds to.
 func historyToJSON(chain []*core.Proposal) historyJSON {
-	payload := historyJSON{Format: jsonFormatVersion, Entries: make([]historyEntryJSON, 0, len(chain))}
-	for i := len(chain) - 1; i >= 0; i-- {
+	return historyToJSONLimited(chain, 0)
+}
+
+// historyToJSONLimited is historyToJSON with a cap on how many entries
+// it emits, newest first. limit <= 0 means no cap, which is what every
+// CLI caller passes. Total always counts the whole chain, never the
+// emitted subset, so a truncated payload still reports how much history
+// exists.
+func historyToJSONLimited(chain []*core.Proposal, limit int) historyJSON {
+	emit := len(chain)
+	if limit > 0 && limit < emit {
+		emit = limit
+	}
+	payload := historyJSON{
+		Format:    jsonFormatVersion,
+		Entries:   make([]historyEntryJSON, 0, emit),
+		Total:     len(chain),
+		Truncated: emit < len(chain),
+	}
+	for i := len(chain) - 1; i >= 0 && len(payload.Entries) < emit; i-- {
 		p := chain[i]
 		entry := historyEntryJSON{
 			ID:         p.ID,

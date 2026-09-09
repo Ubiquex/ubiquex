@@ -2130,7 +2130,7 @@ There is no reuse benefit to a second binary either: `ubx mcp`'s tool
 handlers import exactly the same `core`/`provider` packages every other
 `cli/*.go` file already does.
 
-### Three tools, wrapping the existing `--json` contract — not a parallel API
+### Four tools, wrapping the existing `--json` contract — not a parallel API
 
 UBI-20's `--json` payloads (`whyJSON`, `statusJSON`, `scanJSON`,
 `format: 1`) are not just "one more output mode" for this feature — they
@@ -2167,6 +2167,49 @@ a non-cobra caller at all; nothing about its behavior changed.
   configuration surfaces as an ordinary tool error with `ubx`'s own
   message — the teaching-error mechanism (UBI-20) already names the
   likely fix; there was nothing to add for MCP specifically.
+- **`ubx_history`** (added 2026-09-09) — input: an optional `stack`, an
+  optional `limit`. Output: `historyJSON`, the stack's whole proposal
+  chain newest first, exactly what `ubx history --json` produces.
+
+  Added because there was no way for an assistant to ask what has
+  happened in a ledger. `ubx_status` reports the current FOLD, and a
+  fold is not history: a resource created and later destroyed is
+  tombstoned and skipped (`core/fleet.go`), so a ledger holding real
+  proposals reports zero resources. `ubx_why` answers in full but needs
+  an address or proposal ID the caller does not have yet. A real MCP
+  session read `total: 0` against a two-proposal ledger and concluded it
+  was empty, which was a reasonable reading of what it was told.
+
+  A ninth tool rather than a `history` mode on `ubx_status`. The two
+  answer different questions and return different shapes: status is
+  resources keyed by address, history is proposals keyed by ID.
+  `ubx_status`'s own `drift` flag is not a precedent for merging them,
+  since drift enriches the same answer with live state and keeps the
+  same keys where history would replace the answer outright. And the
+  observed failure was tool SELECTION: the model committed to
+  `ubx_status` before any field description was in play, so only a
+  separate entry in the tool list, named for what it answers, changes
+  the outcome. It also makes `ubx_why`'s proposal-ID mode reachable,
+  which through MCP it previously was not, since nothing enumerated IDs.
+
+  Two changes ship with it rather than after it, because the tool alone
+  would not have prevented the wrong conclusion. `ubx_status`'s
+  description no longer opens "every infrastructure resource the ledger
+  knows about", which is the sentence that produced it: a destroyed
+  resource IS something the ledger knows about. And `statusJSON`'s
+  summary gains `proposals_total`, so a zero-resource answer is
+  self-distinguishing from an empty ledger in the response itself
+  rather than requiring a second call the caller has no reason to make.
+  This is the same principle as the `ledger_dir` refusal above: two
+  genuinely different situations must not be byte-identical in the
+  payload.
+
+  `limit` has a real default (50) and a ceiling (500), and the payload
+  carries `total` and `truncated`. An unbounded chain dumped into a
+  model's context is a cost with no ceiling, and a silently shortened
+  list would read as a complete history, which is the same class of
+  defect as everything else on this page.
+
 - **`ubx_scan`** — input: a single resource's `stack`/`type`/`name`/
   `lookup`, provider identity, exactly like `ubx scan`'s own
   single-resource flags. Output: the classification (`new`/`drifted`/

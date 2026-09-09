@@ -50,6 +50,12 @@ func computeStatusJSON(ctx context.Context, opts statusJSONOptions) (*statusJSON
 	if err != nil {
 		return nil, err
 	}
+	// See statusSummaryJSON.ProposalsTotal (cli/status.go) for why this
+	// second pass exists and what it costs.
+	chain, err := ledger.Chain()
+	if err != nil {
+		return nil, err
+	}
 
 	if !opts.Drift {
 		resources := make([]statusResourceJSON, 0, len(fleet))
@@ -65,7 +71,7 @@ func computeStatusJSON(ctx context.Context, opts statusJSONOptions) (*statusJSON
 			Format:       jsonFormatVersion,
 			DriftChecked: false,
 			Resources:    resources,
-			Summary:      statusSummaryJSON{Total: len(fleet)},
+			Summary:      statusSummaryJSON{Total: len(fleet), ProposalsTotal: len(chain)},
 		}, nil
 	}
 
@@ -145,9 +151,10 @@ func computeStatusJSON(ctx context.Context, opts statusJSONOptions) (*statusJSON
 		DriftChecked: true,
 		Resources:    resources,
 		Summary: statusSummaryJSON{
-			Total:      len(fleet),
-			Drifted:    driftedCount,
-			Unreadable: unreadableCount,
+			Total:          len(fleet),
+			Drifted:        driftedCount,
+			Unreadable:     unreadableCount,
+			ProposalsTotal: len(chain),
 		},
 	}, nil
 }
