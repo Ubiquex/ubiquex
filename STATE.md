@@ -7,6 +7,96 @@
 
 ## In flight
 
+**The stacked-PR trap is now enforced, not documented.** It fired twice
+in this repo: #99 merged into an already-merged base (recovered by
+#100), and #116 repeated it nine seconds after #115 landed (recovered
+by #117). Both showed `MERGED` with their content nowhere near `main`.
+
+The check that catches it was already written down three times, in
+`ubx-provider-runbook`'s TRAPS.md with a prescribed command, in this
+repo's CLAUDE.md rule 8, and in #116's own body as a commitment to run
+it afterwards, by the author who then stacked anyway. Writing it down a
+fourth time was not going to work.
+
+`ubiquex#120`: `ci.yml`'s first step fails any PR whose base is not
+`main`, from inside `build-test`, the job branch protection already
+requires, so a stacked PR cannot merge. Plus a `recent-merge-check` job
+on every push to `main` asking whether recently-merged PRs actually
+reached it. That second half is a **calibration fix, not new
+machinery**: `scripts/orphan_branch_check.py` already had
+`merge_commit_reaches_main` and already classified this shape, but the
+workflow runs weekly and the walk ignores branches younger than two
+days, so #116 would have surfaced somewhere between two and nine days
+later. Verified against the real pre-recovery state of `main` (pinned to
+a7970c7), where it names #116 by number and merge commit.
+
+**Rolled out: 26 further repos each have a one-step PR** (all opened
+2026-09-09, all signed, all green, listed by `gh pr list --head
+ci/base-is-main` per repo). Two are not covered and one needs a
+decision:
+
+- `ubiquex-internals` has branch protection but **no required status
+  checks at all** and no CI workflow, only two scheduled watchers. There
+  is no job to attach to, so nothing there can be enforcing without
+  adding a required context, which is a branch-protection change. Not
+  done, needs a call.
+- `ubx-providers-check-demo` is a private demo repo with no branch
+  protection available. Legitimately out of scope.
+
+**`stale-base-check` already existed in 20 repos and has a hole.** This
+was the surprise of the rollout. It is a real guard, built under
+UBI-222 for this exact trap, and it triggers on `pull_request`
+`opened`/`synchronize`/`reopened`. So it evaluates when a PR is pushed
+and never at the moment the merge button is clicked, which its own
+header comment names as "the one moment (clicking merge) the trap
+actually fires". A PR opened while its base was healthy stays green
+through the base merging out from under it, which is precisely what
+happened to #116. `ubiquex` was also one of eight repos that never got
+it at all.
+
+base-is-main subsumes it: if every base must be `main`, a stale base
+cannot exist. Retiring `stale-base-check` afterwards is worth
+considering and is a branch-protection change, so it is a decision
+rather than a cleanup.
+
+`ubx-provider-runbook#26` updates TRAPS.md with all of the above.
+
+**CI is red on `main` for external reasons, not content.** Two
+unrelated outages, both live as of 2026-09-09 17:40 UTC:
+
+1. `pyeval` downloads a CPython-WASI build from a GitHub release at
+   test time, and that URL returned HTTP 500, failing eight tests across
+   `blueprint` and `cli` on `main` itself. It answers 200 again now.
+2. The runner's `apt-get update` fails on a Chrome repo hash mismatch,
+   which breaks the bubblewrap/wasmtime install step.
+
+The first is worth a decision rather than a retry. CLAUDE.md's own code
+conventions say "Live tests are gated behind env vars; `go test ./...`
+stays hermetic", and a test that downloads a CPython build from GitHub
+is not hermetic. An upstream 500 taking `main` red contradicts a stated
+principle, and no ticket covers it.
+
+**Open PRs from this session**, all independent, none stacked:
+
+- `ubiquex#118`: the `cross_stack_orphan_check` evidence was recorded
+  for a human and rendered nowhere, reaching only the proposal JSON.
+  Now rendered in the plan receipt and at the ship confirmation. Plus a
+  `known_dependents` config key read by all five commands that resolve
+  a destroy, with `--known-dependent` adding to it rather than
+  replacing it. Green.
+- `ubiquex#119`: `ubx_history` as a ninth MCP tool, `ubx_status`'s
+  description fixed, `proposals_total` added to the status summary.
+- `ubiquex#120`: the enforcement above.
+- `ubx-docs-users#32`: user docs for #118 and #119, plus the `ubx
+  history` reference page it never had. Green.
+- `ubx-provider-runbook#26`: the TRAPS.md entry.
+
+Two small things left behind deliberately, neither a conflict, which is
+why they are written down: `#118`'s `seedShippedWidget` and `#119`'s
+`shipNewWidget` are near-duplicate test helpers in the same package,
+kept distinct so the branches compile independently and after merging.
+And `ubx restore` still has no user-docs reference page.
+
 **MCP `ledger_dir`: three defects on one parameter, four PRs open, all
 green.** Two were reported from a real Claude Desktop session, the
 third found while tracing them.

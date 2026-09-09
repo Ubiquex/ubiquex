@@ -57,7 +57,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def run(cmd):
@@ -146,13 +146,100 @@ def merge_commit_reaches_main(pr):
     return is_ancestor(sha, "origin/main")
 
 
+def check_recent_merges(repo, hours):
+    """The fast half of this check: for every PR merged in the last
+    `hours`, is its own merge commit actually reachable from main?
+
+    The orphan walk below is calibrated for archaeology. It ignores any
+    branch younger than --min-age-days (default 2) and the workflow runs
+    it weekly, so a PR whose content never reached main stays invisible
+    for up to nine days. That is the right shape for "is there complete
+    work nobody ever asked main to absorb" and the wrong shape entirely
+    for "did the thing I merged sixty seconds ago actually land", which
+    is the question two real incidents in ubiquex (#99/#100, #116/#117)
+    turned on. Both were caught by a human running git merge-base by
+    hand, after the fact.
+
+    Deliberately narrow: it looks only at recently-merged PRs and says
+    nothing about branch age, open PRs, or orphan tips. A merged PR
+    whose merge commit is not an ancestor of main is not a heuristic,
+    it is a fact, so this reports no false positives and needs no age
+    grace period.
+
+    Returns a list of findings; empty means clean.
+    """
+    out = run([
+        "gh", "pr", "list", "--repo", repo, "--state", "merged",
+        "--json", "number,headRefName,baseRefName,mergedAt,mergeCommit",
+        "--limit", "100",
+    ])
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    findings = []
+    for pr in json.loads(out):
+        merged_at = pr.get("mergedAt")
+        if not merged_at:
+            continue
+        when = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+        if when < cutoff:
+            continue
+        if merge_commit_reaches_main(pr) is not False:
+            continue
+        # A merge commit that is not on main is the symptom. It is not
+        # proof the content was lost, because a recovery PR from the
+        # base branch (the #100 and #117 shape) lands the head branch's
+        # own commits on main without ever making that original merge
+        # commit an ancestor. Check the head tip before reporting, so a
+        # recovered incident goes quiet instead of firing forever.
+        #
+        # A head ref that no longer resolves (branch deleted) is
+        # reported rather than skipped: not being able to tell is not
+        # the same as being fine, and this is a safety check.
+        pr["head_tip_on_main"] = None
+        try:
+            run(["git", "rev-parse", "--verify", f"origin/{pr['headRefName']}"])
+        except RuntimeError:
+            findings.append(pr)
+            continue
+        if is_ancestor(f"origin/{pr['headRefName']}", "origin/main"):
+            pr["head_tip_on_main"] = True
+            continue  # recovered
+        pr["head_tip_on_main"] = False
+        findings.append(pr)
+    return findings
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--repo", required=True, help='"Owner/repo", e.g. Ubiquex/ubiquex-docs')
     p.add_argument("--exclude-prefix", action="append", default=[], help="branch name prefix to skip (repeatable)")
     p.add_argument("--min-age-days", type=float, default=2.0)
+    p.add_argument("--recent-merges-hours", type=float, default=None,
+                   help="instead of the orphan walk, check only PRs merged in the last N hours "
+                        "and report any whose merge commit is not reachable from main")
     p.add_argument("--json", help="also write the full, machine-readable report to this path")
     args = p.parse_args()
+
+    if args.recent_merges_hours is not None:
+        try:
+            findings = check_recent_merges(args.repo, args.recent_merges_hours)
+        except RuntimeError as e:
+            print(f"setup error: {e}", file=sys.stderr)
+            sys.exit(2)
+        if args.json:
+            with open(args.json, "w") as fh:
+                json.dump({"recent_merges_hours": args.recent_merges_hours, "findings": findings}, fh, indent=2)
+        if not findings:
+            print(f"clean: every PR merged in the last {args.recent_merges_hours}h has its merge commit on main")
+            sys.exit(0)
+        print(f"{len(findings)} recently-merged PR(s) whose content is NOT on main:")
+        for pr in findings:
+            print(f"  - #{pr['number']} ({pr['headRefName']} -> {pr['baseRefName']}, merged {pr['mergedAt']}): "
+                  f"merge commit {(pr.get('mergeCommit') or {}).get('oid', '?')[:12]} is not an ancestor of main")
+        print()
+        print("This is the base-retarget gap: a PR based on a branch rather than main, merged")
+        print("after its base had already landed. The content is sitting on a dead branch.")
+        print("Recover it the way #100 and #117 did: open a PR from the base branch to main.")
+        sys.exit(1)
 
     try:
         run(["git", "fetch", "origin", "--quiet"])
