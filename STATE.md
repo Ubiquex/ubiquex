@@ -30,10 +30,36 @@ days, so #116 would have surfaced somewhere between two and nine days
 later. Verified against the real pre-recovery state of `main` (pinned to
 a7970c7), where it names #116 by number and merge commit.
 
-`ubx-provider-runbook#26` updates TRAPS.md. Both it and CLAUDE.md say
-explicitly that the enforcement exists **only in `ubiquex`**, so the
-trap is still open in the other 17 PR-only repos. Rolling it out is a
-decision, not done.
+**Rolled out: 26 further repos each have a one-step PR** (all opened
+2026-09-09, all signed, all green, listed by `gh pr list --head
+ci/base-is-main` per repo). Two are not covered and one needs a
+decision:
+
+- `ubiquex-internals` has branch protection but **no required status
+  checks at all** and no CI workflow, only two scheduled watchers. There
+  is no job to attach to, so nothing there can be enforcing without
+  adding a required context, which is a branch-protection change. Not
+  done, needs a call.
+- `ubx-providers-check-demo` is a private demo repo with no branch
+  protection available. Legitimately out of scope.
+
+**`stale-base-check` already existed in 20 repos and has a hole.** This
+was the surprise of the rollout. It is a real guard, built under
+UBI-222 for this exact trap, and it triggers on `pull_request`
+`opened`/`synchronize`/`reopened`. So it evaluates when a PR is pushed
+and never at the moment the merge button is clicked, which its own
+header comment names as "the one moment (clicking merge) the trap
+actually fires". A PR opened while its base was healthy stays green
+through the base merging out from under it, which is precisely what
+happened to #116. `ubiquex` was also one of eight repos that never got
+it at all.
+
+base-is-main subsumes it: if every base must be `main`, a stale base
+cannot exist. Retiring `stale-base-check` afterwards is worth
+considering and is a branch-protection change, so it is a decision
+rather than a cleanup.
+
+`ubx-provider-runbook#26` updates TRAPS.md with all of the above.
 
 **CI is red on `main` for external reasons, not content.** Two
 unrelated outages, both live as of 2026-09-09 17:40 UTC:
