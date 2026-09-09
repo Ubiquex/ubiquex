@@ -286,3 +286,94 @@ resource "aws_sqs_queue" "plain" {
 		t.Fatalf("expected 1 converted resource, got:\n%s", out)
 	}
 }
+
+// The summary states what a conversion preserved, not only how many
+// resources it produced.
+//
+// "converted N resource(s)" was a misleading measure. Converting
+// terraform-aws-modules/terraform-aws-sqs reported six resources, of
+// which four retained exactly one attribute each, all of them region,
+// having lost queue_url and their entire policy document. The questions
+// said so individually, 71 of them, and nothing summarised it.
+func TestBlueprintConvert_ReportsAttributeRetention(t *testing.T) {
+	modDir := t.TempDir()
+	writeFile(t, filepath.Join(modDir, "main.tf"), `
+variable "keep" {
+  type = string
+}
+
+resource "fake_widget" "gutted" {
+  name = var.keep
+  tags = jsonencode({ a = 1 })
+  size = try(var.missing, null)
+}
+`)
+	outDir := filepath.Join(t.TempDir(), "bp")
+	out, err := runUbx(t, nil, "blueprint", "convert",
+		"--from-terraform", modDir, "--out", outDir, "--lang", "go")
+	if err != nil {
+		t.Fatalf("blueprint convert: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "attribute(s) retained") {
+		t.Fatalf("summary does not report attribute retention:\n%s", out)
+	}
+	// A resource that lost most of itself is named, with what remains, so
+	// the reader does not have to reconstruct it from the questions.
+	if !strings.Contains(out, "lost more than half their attributes") {
+		t.Fatalf("summary does not name the gutted resource:\n%s", out)
+	}
+	if !strings.Contains(out, "kept 1 of 3 (name)") {
+		t.Fatalf("summary does not say what actually survived:\n%s", out)
+	}
+}
+
+// A resource that lost an attribute its provider marks Required is
+// refused, the same rule as an empty conversion one level down. A
+// fake_widget without "name" would fail at the provider or create
+// something meaningless.
+func TestBlueprintConvert_RefusesResourceMissingRequiredAttribute(t *testing.T) {
+	modDir := t.TempDir()
+	writeFile(t, filepath.Join(modDir, "main.tf"), `
+resource "fake_widget" "nameless" {
+  name = try(var.nope, null)
+  tags = {}
+}
+`)
+	outDir := filepath.Join(t.TempDir(), "bp")
+	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "blueprint", "convert",
+		"--from-terraform", modDir, "--out", outDir, "--lang", "go",
+		"--check-against-provider", fakeProviderBinary)
+
+	// Every resource was refused, so nothing converted, which the existing
+	// zero-resource rule turns into a failure.
+	all := out + errText(err)
+	if !strings.Contains(all, "lost required attribute(s) name") {
+		t.Fatalf("expected the resource to be refused for its missing required attribute:\n%s", all)
+	}
+	if !strings.Contains(all, "would fail at the provider or create something meaningless") {
+		t.Errorf("refusal does not say why it matters:\n%s", all)
+	}
+}
+
+// Opt-in: without a provider to check against, no required-attribute
+// check runs and the conversion is reported as-is. The converter has no
+// schema of its own, and a converted blueprint resolves against whatever
+// the calling stack configures, which is unknowable at convert time.
+func TestBlueprintConvert_WithoutCheckAgainst_NoRequiredCheck(t *testing.T) {
+	modDir := t.TempDir()
+	writeFile(t, filepath.Join(modDir, "main.tf"), `
+resource "fake_widget" "nameless" {
+  name = try(var.nope, null)
+  tags = {}
+}
+`)
+	outDir := filepath.Join(t.TempDir(), "bp")
+	out, err := runUbx(t, nil, "blueprint", "convert",
+		"--from-terraform", modDir, "--out", outDir, "--lang", "go")
+	if err != nil {
+		t.Fatalf("without --check-against the conversion must proceed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "lost required attribute") {
+		t.Fatalf("a required-attribute check ran without being asked for:\n%s", out)
+	}
+}

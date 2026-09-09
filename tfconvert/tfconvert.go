@@ -101,6 +101,32 @@ type Result struct {
 	// Questions, this is not additional information, just an index into
 	// it a caller doesn't have to re-derive by re-scanning Questions).
 	SkippedResources []string
+
+	// Retention is one entry per CONVERTED resource, recording how many
+	// of its own source attributes survived translation.
+	//
+	// It exists because "converted N resource(s)" was a misleading
+	// measure: converting terraform-aws-sqs reports six resources, of
+	// which four retain exactly one attribute each (region), having lost
+	// queue_url and their entire policy document. A queue policy with no
+	// policy and no queue_url is not a partial conversion, it is a
+	// resource that would fail at the provider or create something
+	// meaningless, and the resource count said nothing about that.
+	Retention []Retention
+}
+
+// Retention is one converted resource's own attribute survival.
+type Retention struct {
+	// Address is the SOURCE address ("aws_sqs_queue_policy.this"), for
+	// reading. Slug is the converted resource's own blueprint address,
+	// which differs when disambiguateSlugs rewrote a colliding name, and
+	// is what a caller filtering this list against the converted
+	// resources has to match on.
+	Address     string
+	Slug        string
+	SourceAttrs int
+	KeptAttrs   int
+	Kept        []string
 }
 
 // hclModule is every relevant block collected from every *.tf file in one
@@ -185,6 +211,7 @@ func Convert(dir, blueprintName string) (*Result, error) {
 		Summary:           c.summary(),
 		RequiredProviders: c.providers,
 		SkippedResources:  c.skipped,
+		Retention:         c.retention,
 	}, nil
 }
 
@@ -264,6 +291,7 @@ type converter struct {
 
 	resources  []resolver.ResourceIntent
 	skipped    []string
+	retention  []Retention
 	hasForEach bool // true once any non-skipped resource carries a for_each (set during convertResources) -- decodeBlueprint's own permanent boundary is blanket, not per-output (blueprint/decode.go): a blueprint with ANY for_each resource can't declare outputs: AT ALL, even one targeting a different, ordinary resource
 
 	outputs []blueprint.Output

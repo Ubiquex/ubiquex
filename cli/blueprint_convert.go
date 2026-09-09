@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/provider"
 	"github.com/ubiquex/ubiquex/tfconvert"
 )
 
@@ -24,6 +28,7 @@ import (
 // directly, from a deterministically-constructed draft.
 func newBlueprintConvertCmd() *cobra.Command {
 	var fromTerraform, out, lang string
+	var checkSource, checkVersion, checkProvider string
 
 	cmd := &cobra.Command{
 		Use:   "convert",
@@ -132,6 +137,34 @@ or silently producing something wrong.`,
 					fmt.Fprintf(errWriter, "  - %s\n", q.Text)
 				}
 			}
+			// Required-attribute validation, when a provider to check
+			// against was named.
+			//
+			// A resource can convert while losing the attributes it cannot
+			// work without: terraform-aws-sqs produces four queue-policy
+			// resources retaining only `region`, having lost queue_url and
+			// their entire policy document. That is not a partial
+			// conversion, it is a resource that would fail at the provider
+			// or create something meaningless, and reporting it as
+			// converted was the misleading half of the resource count.
+			//
+			// Requires a schema, which the converter otherwise never has,
+			// and a provider the caller must name: the module declares
+			// which provider IT used (hashicorp/aws here), but a converted
+			// blueprint resolves against whatever the calling stack
+			// configures, which is unknowable at convert time. So this is
+			// opt-in by flag rather than inferred, and its absence is
+			// reported rather than silent.
+			if checkSource != "" || checkProvider != "" {
+				dropped, cerr := refuseResourcesMissingRequired(cmd.Context(), res, checkProvider, checkSource, checkVersion)
+				if cerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint convert: --check-against: %w", cerr)}
+				}
+				for _, d := range dropped {
+					fmt.Fprintf(errWriter, "  - %s\n", d)
+				}
+			}
+
 			if len(res.RequiredProviders) > 0 {
 				fmt.Fprintln(outWriter, "declared provider(s) (confirm the converted blueprint resolves against these before trusting it):")
 				for _, p := range res.RequiredProviders {
@@ -166,6 +199,7 @@ or silently producing something wrong.`,
 			}
 			fmt.Fprintf(outWriter, "converted %d resource(s) (%d skipped) -> %s (%s: %s)\n",
 				len(res.Intent.Resources), len(res.SkippedResources), absOut, strings.Join(langs, ", "), strings.Join(names, ", "))
+			writeRetentionReport(outWriter, res.Retention)
 			return nil
 		},
 	}
@@ -173,6 +207,9 @@ or silently producing something wrong.`,
 	cmd.Flags().StringVar(&fromTerraform, "from-terraform", "", "path to a real Terraform module directory to convert (required)")
 	cmd.Flags().StringVar(&out, "out", "", "output directory for the converted blueprint (required)")
 	cmd.Flags().StringVar(&lang, "lang", "", "target language(s) to build: go, ts, py, or all (default: all)")
+	cmd.Flags().StringVar(&checkSource, "check-against", "", `provider source to validate the converted resources against, e.g. "ubiquex/aws" or "hashicorp/aws" -- requires --check-against-version. Without it, no required-attribute check runs and the conversion is reported as-is`)
+	cmd.Flags().StringVar(&checkVersion, "check-against-version", "", "explicit provider version to acquire for --check-against")
+	cmd.Flags().StringVar(&checkProvider, "check-against-provider", "", "path to a provider binary to validate against, instead of --check-against (mutually exclusive with it)")
 
 	return cmd
 }
@@ -239,4 +276,146 @@ func renderParamSpec(p blueprint.Param) string {
 	default:
 		return fmt.Sprintf("%s, required", p.Type)
 	}
+}
+
+// writeRetentionReport says what a conversion actually preserved, not
+// only how many resources it produced.
+//
+// "converted 6 resource(s)" was a misleading measure. Converting
+// terraform-aws-modules/terraform-aws-sqs reports six resources, of which
+// four retain exactly one attribute each, all of them region, having lost
+// queue_url and their entire policy document. A queue policy with no
+// policy and no queue_url is not a partial conversion; it is a resource
+// that would fail at the provider or create something meaningless. The
+// 71 questions said so individually and nothing summarised it.
+//
+// Stated as the fact rather than as a percentage. "40% of attributes
+// retained" reads like a partial success; "4 of 6 resources retained only
+// 1 attribute each (region)" is what actually happened, and names the
+// resources so the reader can go and look.
+func writeRetentionReport(w io.Writer, retention []tfconvert.Retention) {
+	if len(retention) == 0 {
+		return
+	}
+	source, kept := 0, 0
+	for _, r := range retention {
+		source += r.SourceAttrs
+		kept += r.KeptAttrs
+	}
+	fmt.Fprintf(w, "  %d of %d attribute(s) retained\n", kept, source)
+
+	// A resource that lost most of itself is the thing worth naming. The
+	// threshold is deliberately generous rather than tuned: losing more
+	// than half of a resource's own attributes is worth a reader's
+	// attention whatever the resource is.
+	var gutted []tfconvert.Retention
+	for _, r := range retention {
+		if r.SourceAttrs > 0 && r.KeptAttrs*2 <= r.SourceAttrs {
+			gutted = append(gutted, r)
+		}
+	}
+	if len(gutted) == 0 {
+		return
+	}
+	sort.Slice(gutted, func(i, j int) bool { return gutted[i].Address < gutted[j].Address })
+	fmt.Fprintf(w, "  %d of %d converted resource(s) lost more than half their attributes:\n", len(gutted), len(retention))
+	for _, r := range gutted {
+		remaining := "nothing"
+		if len(r.Kept) > 0 {
+			remaining = strings.Join(r.Kept, ", ")
+		}
+		fmt.Fprintf(w, "    %s: kept %d of %d (%s)\n", r.Address, r.KeptAttrs, r.SourceAttrs, remaining)
+	}
+}
+
+// refuseResourcesMissingRequired drops every converted resource that lost
+// an attribute the provider's own schema marks Required, and returns one
+// human-readable line per drop.
+//
+// The same rule as refusing an empty conversion, one level down. A
+// resource that converts without the attributes it cannot work without is
+// not partially converted: aws_sqs_queue_policy with no queue_url and no
+// policy would fail at the provider or create something meaningless, and
+// counting it as converted is what made "converted 6 resource(s)" a
+// misleading measure for terraform-aws-sqs.
+//
+// Dropped rather than failing the whole conversion, matching how every
+// other unconvertible thing here behaves: the resource is removed, the
+// reason is stated, and the rest of the module still converts. A
+// conversion that produces nothing at all still fails, via the existing
+// zero-resource check, which now also catches a module whose every
+// resource is refused here.
+//
+// Attributes the converter itself never sees cannot be judged: this only
+// checks top-level Required attributes, since nested block requirements
+// live behind a schema shape the converted config does not mirror
+// one-to-one.
+func refuseResourcesMissingRequired(ctx context.Context, res *tfconvert.Result, providerPath, source, version string) ([]string, error) {
+	if providerPath != "" && source != "" {
+		return nil, fmt.Errorf("--check-against and --check-against-provider are mutually exclusive")
+	}
+	path, _, err := resolveProviderBinary(ctx, providerPath, source, version)
+	if err != nil {
+		return nil, err
+	}
+	client, err := provider.Launch(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	schemas, err := client.Provider.Schema(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read provider schema: %w", err)
+	}
+
+	var dropped []string
+	kept := res.Intent.Resources[:0]
+	for _, ri := range res.Intent.Resources {
+		rs, ok := schemas.Resources[ri.Type]
+		if !ok {
+			// A type the checked provider does not have is not evidence
+			// the resource is wrong, only that this is the wrong provider
+			// to judge it. Said out loud rather than dropped or ignored.
+			dropped = append(dropped, fmt.Sprintf("resource %q: type %q is not in the checked provider's schema -- not validated (is --check-against the provider this blueprint will resolve against?)", ri.Type+"."+ri.Name, ri.Type))
+			kept = append(kept, ri)
+			continue
+		}
+		var config map[string]any
+		if err := json.Unmarshal(ri.Config, &config); err != nil {
+			return nil, fmt.Errorf("resource %s.%s: parse converted config: %w", ri.Type, ri.Name, err)
+		}
+		var missing []string
+		for _, a := range rs.Block.Attributes {
+			if a.Required {
+				if _, present := config[a.Name]; !present {
+					missing = append(missing, a.Name)
+				}
+			}
+		}
+		if len(missing) == 0 {
+			kept = append(kept, ri)
+			continue
+		}
+		sort.Strings(missing)
+		dropped = append(dropped, fmt.Sprintf("resource %q lost required attribute(s) %s -- NOT converted; a resource missing what it cannot work without would fail at the provider or create something meaningless",
+			ri.Type+"."+ri.Name, strings.Join(missing, ", ")))
+	}
+	res.Intent.Resources = kept
+
+	// Keep the retention report describing what actually survived. Left
+	// unfiltered it would report on resources this function just removed,
+	// so "converted 2 resource(s)" and "5 of 6 converted resource(s) lost
+	// more than half" would appear together and contradict each other.
+	surviving := make(map[string]bool, len(kept))
+	for _, ri := range kept {
+		surviving[ri.Type+"."+ri.Name] = true
+	}
+	keptRetention := res.Retention[:0]
+	for _, r := range res.Retention {
+		if surviving[r.Slug] {
+			keptRetention = append(keptRetention, r)
+		}
+	}
+	res.Retention = keptRetention
+	return dropped, nil
 }
