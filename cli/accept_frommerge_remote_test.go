@@ -70,15 +70,17 @@ func remoteStoreFixture(t *testing.T) (storeName string, bucket *blob.Bucket) {
 }
 
 // remoteConfigDir writes a .ubx/config (TOML) naming storeName as the
-// [ledger] store, in its own directory, and points configSearchStartDir
-// at it for the duration of the test -- independent of --ledger-dir/
-// --repo-dir, matching how the config cascade genuinely works (a property
-// of cwd, never of --ledger-dir).
-// remoteConfigDir builds a stack root whose .ubx/config names a remote
-// ledger store, points the config cascade at it, and returns it -- the
-// caller passes it as ledger_dir/--ledger-dir, since a stack's root
-// directory and the directory holding its config are the same
-// directory in every real deployment.
+// [ledger] store, in its own directory, points configSearchStartDir at
+// it for the duration of the test, and returns it.
+//
+// For the CLI, this is independent of --ledger-dir/--repo-dir, matching
+// how the config cascade genuinely works there: a property of cwd,
+// never of --ledger-dir. The MCP tools derive it from their own
+// ledger_dir instead (cli/mcp_config_test.go), so callers there pass
+// the returned directory as ledger_dir -- a stack's root and the
+// directory holding its config are the same directory in every real
+// deployment, and the fixture now says so rather than leaving the two
+// pointed at unrelated places.
 func remoteConfigDir(t *testing.T, storeName string) string {
 	t.Helper()
 	dir := t.TempDir()

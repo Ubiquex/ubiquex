@@ -2,6 +2,28 @@
 
 ## Changelog
 
+- 2026-09-09 -- MCP `ledger_dir` now means what its own schema
+  description always said. Three defects on one parameter, two of them
+  reported from a real Claude Desktop session. (1) A `ledger_dir` that
+  did not exist, or was never a ubx root, returned a successful empty
+  result: `core.Open` stats nothing, so the ledger "opened" at a missing
+  path and reported `total: 0`. A stack tracking nothing, a directory
+  that was never a root, and a mistyped path were byte-identical in the
+  response, and the model said explicitly that it could not tell them
+  apart. Now refused, discriminating on `.ubx/` (not `ledger/`, which a
+  fresh `ubx init` does not create, and not a config file, which
+  `ubx accept --ledger-dir` does not create). (2) A leading `~/` was
+  read as a relative directory literally named `~`. Now expanded against
+  the server's home directory, at the MCP boundary only, since every CLI
+  path arrives through a shell that has already done it. (3) `ledger_dir`
+  did not supply `.ubx/config` despite its description saying it does:
+  the config came from the server process's own cwd, so a call naming
+  one stack could run against another stack's provider identity and
+  remote ledger store with no signal. Now resolved from the stack root
+  the call names, still cascading upward from there. Behavior with
+  `ledger_dir` omitted is unchanged. See `docs/architecture.md`, "MCP
+  server -- Configuration".
+
 - 2026-09-09 -- UBI-125 REMOVED, not extracted: `ubx blueprint convert
   --from-terraform`, the `tfconvert/` package and its four user-facing
   docs pages are deleted. Blueprints themselves are untouched -- `build`,

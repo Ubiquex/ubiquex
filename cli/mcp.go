@@ -85,9 +85,11 @@ rather than reporting it as a ledger that happens to be empty, and expands a lea
 process's own home directory -- there is no shell in front of an MCP call to do either, and an empty
 result for a mistyped path is indistinguishable from a stack that genuinely tracks nothing.
 
-Configuration discovers .ubx/config from this process's own working directory, exactly like every other
-ubx command -- point your MCP client's "cwd" at a real ledger checkout to get the same defaults a human
-sitting there would (see ubx config).`,
+Configuration comes from the stack root each call names: a tool's own ledger_dir supplies its .ubx/config
+(cascading upward from there, exactly like every other ubx command does from cwd), so a call against one
+stack never silently inherits another stack's provider identity or ledger store. With ledger_dir omitted
+that root is this process's own working directory, unchanged -- point your MCP client's "cwd" at a real
+ledger checkout to get the same defaults a human sitting there would (see ubx config).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -180,6 +182,31 @@ func mcpDir(v string) (string, error) {
 	return orDot(expanded), nil
 }
 
+// mcpRootDir is mcpDir for a directory that also supplies the config
+// cascade's own starting point, which is every ledger_dir now that the
+// config comes from the stack root rather than from wherever the server
+// process was started.
+//
+// The default routes through configSearchStartDir, the package var,
+// rather than a literal "." -- in production that IS os.Getwd, so the
+// behavior is identical, but it keeps one notion of "where this process
+// looks by default" instead of two that could drift apart. It also
+// keeps this path inside the hermeticity pin the test package's own
+// TestMain sets on that var (cli/scan_test.go): a raw os.Getwd default
+// would read whatever .ubx/config happens to sit above the directory
+// `go test` was invoked from, which is exactly the ambient host state
+// that pin exists to rule out.
+func mcpRootDir(v string) (string, error) {
+	if v != "" {
+		return mcpDir(v)
+	}
+	dir, err := configSearchStartDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve the server's own working directory: %w", err)
+	}
+	return dir, nil
+}
+
 // resolveLedgerDir prepares ledger_dir for every tool that takes one:
 // applies the cwd default, expands a leading tilde, and refuses a path
 // that is not a ubx root.
@@ -201,19 +228,28 @@ func mcpDir(v string) (string, error) {
 // ledger/ but no config file of its own. Requiring a config file would
 // refuse that second shape, which ubx itself creates and this package's
 // own fixtures use.
+//
+// The result is absolute, and that is load-bearing rather than tidiness:
+// the config cascade this directory now feeds (loadConfigFromDir, per
+// each handler) walks UPWARD from its start directory, and
+// filepath.Dir(".") is "." -- so a relative "." start would stop dead at
+// the first directory and never see a parent's config, silently
+// narrowing the search the default case is supposed to leave untouched.
 func resolveLedgerDir(v string) (string, error) {
-	dir, err := mcpDir(v)
+	dir, err := mcpRootDir(v)
 	if err != nil {
 		return "", err
 	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", dir, err)
+	}
+	dir = abs
 	info, statErr := os.Stat(filepath.Join(dir, ".ubx"))
 	if statErr == nil && info.IsDir() {
 		return dir, nil
 	}
 	shown := dir
-	if abs, absErr := filepath.Abs(dir); absErr == nil {
-		shown = abs
-	}
 	if v == "" {
 		return "", fmt.Errorf("no ledger_dir was given and the server's own current directory (%s) is not a ubx root: it holds no .ubx/ directory. Pass ledger_dir naming the stack's root directory", shown)
 	}
@@ -258,7 +294,7 @@ func providerConfigJSON(m map[string]any) (string, error) {
 type whyToolInput struct {
 	Query            string `json:"query" jsonschema:"a resource address (<stack>.<type>.<name>) or a 64-character-hex proposal ID. A resource address returns its FULL history (every adoption and drift, newest first); a proposal ID returns one specific decision in detail, including attribution (who/when/from where) and every changed attribute."`
 	Stack            string `json:"stack,omitempty" jsonschema:"which stack's ledger to open, for a bare proposal-id query -- required only when .ubx/config's [ledger] store is a remote store (a resource-address query already names its own stack); unused for the default git store"`
-	LedgerDir        string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack, the directory holding its .ubx/ (and its ledger/, once anything has been accepted). A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
+	LedgerDir        string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
 	VerifyAcceptance bool   `json:"verify_acceptance,omitempty" jsonschema:"only meaningful with a proposal ID: re-derive a pr_merge acceptance against current git history and (if github_repo is set) the GitHub API, and report whether it still checks out"`
 	RepoDir          string `json:"repo_dir,omitempty" jsonschema:"local git working tree to verify verify_acceptance's merge commit against (default: the server's own current directory)"`
 	GithubRepo       string `json:"github_repo,omitempty" jsonschema:"owner/name of the GitHub repository, for verify_acceptance's reviewer re-check (the git-history re-check runs without it)"`
@@ -284,7 +320,7 @@ func registerWhyTool(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_why: repo_dir: %w", err)
 		}
-		cfg, err := LoadConfig(os.Stderr)
+		cfg, err := loadConfigFromDir(ledgerDir, os.Stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_why: %w", err)
 		}
@@ -305,7 +341,7 @@ func registerWhyTool(server *mcp.Server) {
 type statusToolInput struct {
 	Stack           string `json:"stack,omitempty" jsonschema:"restrict the report to one stack (default: every stack the ledger holds)"`
 	Drift           bool   `json:"drift,omitempty" jsonschema:"also read each resource's current live state and classify it clean/drifted/unreadable (requires provider identity below); false (the default) is ledger-only -- fast, no credentials needed, reports what the ledger last recorded without checking whether it's still true"`
-	LedgerDir       string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack, the directory holding its .ubx/ (and its ledger/, once anything has been accepted). A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
+	LedgerDir       string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
 	ProviderPath    string `json:"provider_path,omitempty" jsonschema:"path to a provider binary already on disk (mutually exclusive with source; only used when drift is true)"`
 	Source          string `json:"source,omitempty" jsonschema:"provider registry source, e.g. hashicorp/aws or hashicorp/kubernetes (mutually exclusive with provider_path; requires provider_version; only used when drift is true)"`
 	ProviderVersion string `json:"provider_version,omitempty" jsonschema:"explicit provider version to acquire, e.g. 6.54.0 (required with source)"`
@@ -327,7 +363,7 @@ func registerStatusTool(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_status: %w", err)
 		}
-		cfg, err := LoadConfig(os.Stderr)
+		cfg, err := loadConfigFromDir(ledgerDir, os.Stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_status: %w", err)
 		}
@@ -380,7 +416,7 @@ type scanToolInput struct {
 	Source          string `json:"source,omitempty" jsonschema:"provider registry source, e.g. hashicorp/aws (mutually exclusive with provider_path; requires provider_version)"`
 	ProviderVersion string `json:"provider_version,omitempty" jsonschema:"explicit provider version to acquire, e.g. 6.54.0 (required with source; no \"latest\" resolution)"`
 	ProviderConfig  string `json:"provider_config,omitempty" jsonschema:"JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"}"`
-	LedgerDir       string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack, the directory holding its .ubx/ (and its ledger/, once anything has been accepted). A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
+	LedgerDir       string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
 	Out             string `json:"out,omitempty" jsonschema:"optionally also write the generated proposal to this path on disk, exactly like ubx scan --out. The proposal is always returned inline regardless -- this never replaces the response, only additionally persists it"`
 	NoAttribution   bool   `json:"no_attribution,omitempty" jsonschema:"skip best-effort attribution (CloudTrail/GCP Cloud Audit Logs/EKS audit logs) for a drift finding"`
 	Propose         string `json:"propose,omitempty" jsonschema:"on drift, which resolution(s) to generate: adopt (record the new reality, default), revert (propose restoring the ledger's prior value), or both. No effect on a never-before-seen resource, which always generates an adoption"`
@@ -407,7 +443,7 @@ func registerScanTool(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_scan: out: %w", err)
 		}
-		cfg, err := LoadConfig(os.Stderr)
+		cfg, err := loadConfigFromDir(ledgerDir, os.Stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_scan: %w", err)
 		}

@@ -2201,17 +2201,52 @@ state match the ledger") and what its receipt means, not just a
 mechanical parameter list. Input field descriptions carry the same
 weight `--help` text does for the CLI flags they mirror.
 
-### Configuration: the server's own cwd, same discovery as any other invocation
+### Configuration: from the stack root each call names, not from ambient cwd
 
-`ubx mcp` looks up `.ubx/config` exactly the way every other `ubx`
-command does — nearest-wins discovery from the server process's own
-working directory (UBI-19), not a new configuration surface. An MCP
-client (Claude Desktop, Claude Code) that launches `ubx mcp` with a
-`cwd` set to a real ledger checkout gets the same defaults a human
-sitting in that directory would; a client that doesn't still works, the
-same way a bare `ubx why <id> --ledger-dir <path>` always has —
-`ledger_dir` is an explicit input on every tool for exactly this reason,
-never assumed from an ambient shell state an MCP server doesn't have.
+`ubx mcp` looks up `.ubx/config` with the same nearest-wins upward
+discovery every other `ubx` command uses (UBI-19), not a new
+configuration surface. What differs from the CLI is where the walk
+starts: a tool's own `ledger_dir` is the stack root, and its
+`.ubx/config` is what that call runs under. With `ledger_dir` omitted
+the root is the server process's own working directory, so an MCP
+client (Claude Desktop, Claude Code) launched with a `cwd` set to a real
+ledger checkout gets the same defaults a human sitting in that directory
+would.
+
+This section previously described the config as coming from the server's
+cwd unconditionally, and the code matched that description. It was
+wrong, in a way this same paragraph already argued against: `ledger_dir`
+is an explicit input on every tool precisely so nothing is assumed from
+an ambient shell state an MCP server does not have, and yet the ledger
+opened at `ledger_dir` while the provider identity, ledger store and
+stack default came from wherever the process happened to be started.
+Every tool's own schema description called `ledger_dir` "the directory
+containing ledger/ and .ubx/", so the contract was already the corrected
+one; only the implementation disagreed. A call naming one stack could
+run against another stack's remote ledger store, and nothing in the
+response said so.
+
+Two consequences worth stating, both deliberate. The walk still goes
+upward from `ledger_dir`, so a config in a parent directory applies
+exactly as it would from cwd, and a monorepo holding one config above
+several stack directories keeps working. And a `ledger_dir` in an
+unrelated tree no longer inherits the server cwd's provider identity: a
+drift check there needs `provider_path`/`source`/`provider_version`
+passed explicitly, which every tool already accepts as inputs. That is
+the intended correction rather than a regression, since the alternative
+is a live read performed with credentials and a provider the caller
+never named.
+
+`ledger_dir` is also refused rather than silently accepted when it names
+a directory that is not a ubx stack root (one holding `.ubx/`), and a
+leading `~/` in it is expanded against the server's home directory. Both
+exist because an MCP caller has no shell and cannot see the server's
+cwd: before, a mistyped path, a directory that was never a root, and a
+stack tracking nothing all returned the identical successful empty
+result. The discriminator is `.ubx/` rather than `ledger/` or a config
+file, because `ubx init` produces a root with a config and no `ledger/`
+while `ubx accept --ledger-dir` produces one with `ledger/` and no
+config, and both are legitimate.
 
 ### Blueprint-authoring tools (UBI-223)
 
