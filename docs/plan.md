@@ -2,6 +2,34 @@
 
 ## Changelog
 
+- 2026-09-09 -- UBI-125 REMOVED, not extracted: `ubx blueprint convert
+  --from-terraform`, the `tfconvert/` package and its four user-facing
+  docs pages are deleted. Blueprints themselves are untouched -- `build`,
+  `package`, `pull`, `push`, `verify`, the Ubxfile format, `create_if`,
+  `for_each`, all three generators and the MCP blueprint tools all stay.
+  Writing, building, packaging and using blueprints does not change.
+  Reason: the converter was heuristic where the rest of ubx is
+  deterministic, wanted frequent releases where ubx wants few, was a
+  migration aid rather than part of the trust chain, and its long tail
+  of `try`/`merge`/`coalesce` support pulled toward accepting more,
+  which inverts this project's own rule about refusing what cannot be
+  translated deterministically. Extraction into its own repo was
+  attempted first and abandoned mid-port: `ubiquex/blueprint` cannot be
+  imported by any external module, because it reaches `tseval`/`pyeval`,
+  which embed `sdk/ts` and `sdk/py`, and those are git submodules that
+  the Go proxy omits from a published module zip. That defect is real,
+  affects anyone using ubiquex as a library, has nothing to do with
+  Terraform, and is tracked on its own. State at removal, measured
+  against terraform-aws-sqs: 2 of 8 resources, 20 of 50 attributes, 71
+  questions; five of its seven remaining blockers were downstream of
+  absence representation, an intent/v1 decision rather than a converter
+  one. Kept because they are right regardless: `blueprint/spec` (the
+  params/outputs value types, split so importing them does not drag
+  three language evaluators), `create_if`, the identifier-collision fix,
+  and `$fn`/`cidrsubnet` marker support, which is a documented intent/v1
+  feature a hand-authored blueprint can still use. Full account in
+  docs/blueprint.md's own removal record.
+
 - 2026-09-01 -- UBI-226 built: `.ubx.hcl`, a thin HCL wrapper for calling
   blueprints in a stack. Not a fourth authoring medium, the SDK stays
   the only one -- deterministic, comparable to Terragrunt, composition
