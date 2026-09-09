@@ -3,11 +3,35 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// ubxRoot creates an initialized-but-empty ubx root: `.ubx/` holding a
+// config file, and no `ledger/` at all -- exactly what `ubx init`
+// leaves behind before anything has been accepted.
+//
+// Needed because a bare t.TempDir() is no longer a usable ledger_dir:
+// the MCP tools refuse a directory that is not a ubx root
+// (resolveLedgerDir, cli/mcp.go). That is the whole point of the check.
+// A scratch directory and a mistyped path were previously
+// indistinguishable from each other AND from a real stack that tracks
+// nothing, all three returning the same successful total: 0.
+func ubxRoot(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".ubx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ubx", "config.hcl"), []byte("stack = \"payments\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 // connectMCPTestClient wires an in-memory (never a real stdio
 // subprocess) client to a fresh ubx MCP server -- the same three tools
@@ -62,7 +86,16 @@ func toolTextContent(t *testing.T, res *mcp.CallToolResult) string {
 // shape a real onboarded resource would produce.
 func buildFixtureLedger(t *testing.T) (ledgerDir string, addr, proposalID string) {
 	t.Helper()
-	ledgerDir = t.TempDir()
+	return buildFixtureLedgerAt(t, t.TempDir())
+}
+
+// buildFixtureLedgerAt is buildFixtureLedger parameterized on where the
+// ledger goes, for the tilde tests, which need a real ledger at a known
+// path underneath a stubbed home directory rather than wherever
+// t.TempDir() happens to land.
+func buildFixtureLedgerAt(t *testing.T, dir string) (ledgerDir string, addr, proposalID string) {
+	t.Helper()
+	ledgerDir = dir
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
 	adoptPath := filepath.Join(ledgerDir, "adopt.json")
 
@@ -178,6 +211,12 @@ func TestMCP_Why_UnknownAddress(t *testing.T) {
 // TestMCP_Why_NoLedger is the "no ledger" adversarial case: a ledger_dir
 // that doesn't exist (or was never initialized) must surface as a tool
 // error, not a panic or a silently-empty payload.
+//
+// This asserted only IsError until now, and passed for the wrong
+// reason: the error was "no proposals found for X", the SAME answer a
+// real, correctly-opened ledger gives for a proposal it genuinely does
+// not hold. The test was green while the defect it names was live. It
+// now asserts the error is about the path.
 func TestMCP_Why_NoLedger(t *testing.T) {
 	session := connectMCPTestClient(t)
 	res := callTool(t, session, "ubx_why", map[string]any{
@@ -186,6 +225,13 @@ func TestMCP_Why_NoLedger(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected an error result when the ledger doesn't exist")
+	}
+	text := toolTextContent(t, res)
+	if !strings.Contains(text, "not a ubx root") {
+		t.Fatalf("expected the error to say the path is not a ubx root, got: %s", text)
+	}
+	if strings.Contains(text, "no proposals found") {
+		t.Fatalf("a nonexistent ledger_dir answered as though the ledger opened fine and simply held nothing: %s", text)
 	}
 }
 
@@ -251,7 +297,7 @@ func TestMCP_Status_Drift_Clean(t *testing.T) {
 
 func TestMCP_Scan_New(t *testing.T) {
 	t.Setenv("FAKEPROVIDER_MODE", "ok-v6")
-	ledgerDir := t.TempDir()
+	ledgerDir := ubxRoot(t)
 	session := connectMCPTestClient(t)
 
 	res := callTool(t, session, "ubx_scan", map[string]any{
@@ -284,9 +330,14 @@ func TestMCP_Scan_New(t *testing.T) {
 
 func TestMCP_Scan_MissingRequiredFields(t *testing.T) {
 	session := connectMCPTestClient(t)
-	res := callTool(t, session, "ubx_scan", map[string]any{"stack": "payments"})
+	// A real ledger_dir on purpose: without one this passes on the
+	// ledger_dir refusal instead of on the missing type/name it names.
+	res := callTool(t, session, "ubx_scan", map[string]any{"stack": "payments", "ledger_dir": ubxRoot(t)})
 	if !res.IsError {
 		t.Fatal("expected an error result when type/name are missing")
+	}
+	if text := toolTextContent(t, res); !strings.Contains(text, "type") || !strings.Contains(text, "name") {
+		t.Fatalf("expected the error to name the missing fields, got: %s", text)
 	}
 }
 

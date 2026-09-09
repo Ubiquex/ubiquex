@@ -181,7 +181,14 @@ func writeTempBlueprintDir(ubxfileYAML, resourcesJSON string) (dir string, clean
 // below them.
 func resolveBlueprintDir(dir, ubxfileYAML, resourcesJSON string) (resolvedDir string, cleanup func(), err error) {
 	if dir != "" {
-		return dir, func() {}, nil
+		// Tilde here for the same reason ledger_dir gets it (expandTilde,
+		// mcp.go): a model writes "~/blueprints/queue" and there is no
+		// shell in front of an MCP call to expand it.
+		expanded, err := expandTilde(dir)
+		if err != nil {
+			return "", nil, err
+		}
+		return expanded, func() {}, nil
 	}
 	if strings.TrimSpace(ubxfileYAML) == "" {
 		return "", nil, fmt.Errorf("either dir (an existing Ubxfile directory) or ubxfile (inline Ubxfile text) is required")
@@ -391,7 +398,10 @@ func registerListBlueprintsTool(server *mcp.Server) {
 			"this checkout\"; use describe_blueprint for one already-known ref (a git URL, an oci:// reference, a " +
 			"tarball) instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listBlueprintsInput) (*mcp.CallToolResult, any, error) {
-		root := orDot(in.RootDir)
+		root, err := mcpDir(in.RootDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list_blueprints: %w", err)
+		}
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			return nil, nil, fmt.Errorf("list_blueprints: %w", err)
@@ -454,6 +464,13 @@ func registerDescribeBlueprintTool(server *mcp.Server) {
 		if in.Source == "" {
 			return nil, nil, fmt.Errorf("describe_blueprint: source is required")
 		}
+		// source is a union (local dir, tarball, git URL, oci:// ref), but
+		// only the local forms can begin with "~", so expanding a leading
+		// tilde is unambiguous here.
+		source, err := expandTilde(in.Source)
+		if err != nil {
+			return nil, nil, fmt.Errorf("describe_blueprint: source: %w", err)
+		}
 		scratch, err := os.MkdirTemp("", "ubx-mcp-describe-*")
 		if err != nil {
 			return nil, nil, fmt.Errorf("describe_blueprint: %w", err)
@@ -461,11 +478,11 @@ func registerDescribeBlueprintTool(server *mcp.Server) {
 		defer os.RemoveAll(scratch)
 		dest := filepath.Join(scratch, "blueprint")
 
-		if _, err := blueprint.Pull(ctx, in.Source, dest, in.Ref, in.Path); err != nil {
+		if _, err := blueprint.Pull(ctx, source, dest, in.Ref, in.Path); err != nil {
 			return nil, nil, fmt.Errorf("describe_blueprint: %w", err)
 		}
 
-		result := map[string]any{"source": in.Source}
+		result := map[string]any{"source": source}
 		if manifest, err := blueprint.Verify(dest); err == nil {
 			result["name"] = manifest.Name
 			result["content_hash"] = manifest.ContentHash

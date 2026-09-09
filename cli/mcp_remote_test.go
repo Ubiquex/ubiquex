@@ -16,12 +16,12 @@ import (
 
 func TestMCP_Why_RemoteStore_ProposalID_RequiresStack(t *testing.T) {
 	storeName, _ := remoteStoreFixture(t)
-	remoteConfigDir(t, storeName)
+	rootDir := remoteConfigDir(t, storeName)
 	session := connectMCPTestClient(t)
 
 	res := callTool(t, session, "ubx_why", map[string]any{
 		"query":      "3ff1769e2c4d2cadc8e492cce9ae5b465b9263b3f39a5aae946617ae8fc028c0",
-		"ledger_dir": ".",
+		"ledger_dir": rootDir,
 	})
 	if !res.IsError {
 		t.Fatal("expected an error -- a bare proposal-id query against a remote store needs a stack")
@@ -33,7 +33,7 @@ func TestMCP_Why_RemoteStore_ProposalID_RequiresStack(t *testing.T) {
 
 func TestMCP_Why_RemoteStore_ProposalID_WithStack_ReadsFromStore(t *testing.T) {
 	storeName, bucket := remoteStoreFixture(t)
-	remoteConfigDir(t, storeName)
+	rootDir := remoteConfigDir(t, storeName)
 
 	// Accept a real proposal directly against the shared bucket first --
 	// ubx_why's own job is reading it back, not creating it.
@@ -55,7 +55,7 @@ func TestMCP_Why_RemoteStore_ProposalID_WithStack_ReadsFromStore(t *testing.T) {
 	res := callTool(t, session, "ubx_why", map[string]any{
 		"query":      "3ac4ad60be63780420495d6f6dc16e06c206ad5960fa0a664facce27e73ec6ae",
 		"stack":      "payments",
-		"ledger_dir": ".",
+		"ledger_dir": rootDir,
 	})
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", toolTextContent(t, res))
@@ -72,10 +72,10 @@ func TestMCP_Why_RemoteStore_ProposalID_WithStack_ReadsFromStore(t *testing.T) {
 
 func TestMCP_Status_RemoteStore_RequiresStack(t *testing.T) {
 	storeName, _ := remoteStoreFixture(t)
-	remoteConfigDir(t, storeName)
+	rootDir := remoteConfigDir(t, storeName)
 	session := connectMCPTestClient(t)
 
-	res := callTool(t, session, "ubx_status", map[string]any{"ledger_dir": "."})
+	res := callTool(t, session, "ubx_status", map[string]any{"ledger_dir": rootDir})
 	if !res.IsError {
 		t.Fatal("expected an error -- a remote store has no single fleet to enumerate without a stack")
 	}
@@ -87,7 +87,7 @@ func TestMCP_Status_RemoteStore_RequiresStack(t *testing.T) {
 func TestMCP_Scan_RemoteStore_WritesToConfiguredStore(t *testing.T) {
 	t.Setenv("FAKEPROVIDER_MODE", "ok-v6")
 	storeName, bucket := remoteStoreFixture(t)
-	remoteConfigDir(t, storeName)
+	rootDir := remoteConfigDir(t, storeName)
 	session := connectMCPTestClient(t)
 
 	res := callTool(t, session, "ubx_scan", map[string]any{
@@ -96,7 +96,7 @@ func TestMCP_Scan_RemoteStore_WritesToConfiguredStore(t *testing.T) {
 		"name":          "mcp-remote-fixture",
 		"lookup":        `{"name":"mcp-remote-fixture","tags":{"env":"prod"}}`,
 		"provider_path": fakeProviderBinary,
-		"ledger_dir":    ".",
+		"ledger_dir":    rootDir,
 	})
 	if res.IsError {
 		t.Fatalf("expected success, got error: %s", toolTextContent(t, res))
