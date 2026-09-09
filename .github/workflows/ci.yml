@@ -27,6 +27,50 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
+      # First step, before checkout, because it needs nothing from the
+      # repo and should fail in seconds rather than after a full build.
+      #
+      # This lives inside `build-test` rather than in a workflow of its
+      # own so that it lands in the job branch protection already
+      # requires on main. A separate job would need a
+      # branch-protection change to become enforcing, and an advisory
+      # check is exactly the thing that has already failed here.
+      - name: The base branch is main
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE" = "main" ]; then
+            echo "base is main"
+            exit 0
+          fi
+          {
+            echo "This PR targets \"$BASE\", not main."
+            echo
+            echo "A PR based on another branch merges into THAT branch. When the base"
+            echo "merges to main first, GitHub retargets the dependent PR, but only if"
+            echo "it gets there first. Twice in this repo it did not: the dependent PR"
+            echo "merged into an already-dead base seconds later, showed MERGED, and its"
+            echo "content never reached main. #99 was caught by accident and recovered by"
+            echo "#100; #116 repeated it nine seconds after #115 landed, and was recovered"
+            echo "by #117."
+            echo
+            echo "Nothing tells that apart from a real merge except an explicit ancestry"
+            echo "check, and that check was already written down three times: in"
+            echo "ubx-provider-runbook TRAPS.md, in this repo CLAUDE.md rule 8, and in the"
+            echo "body of #116 itself, where the author committed to running it and"
+            echo "stacked anyway. Writing it down is not what was missing."
+            echo
+            echo "Branch from main and open this against main. If it genuinely depends on"
+            echo "unmerged work, wait for that to land and rebase onto main:"
+            echo
+            echo "    git rebase --onto main <old-base> <this-branch>"
+            echo
+            echo "If a non-main base is ever genuinely right here, change this step"
+            echo "deliberately, in its own reviewed PR, rather than working around it."
+          } >&2
+          exit 1
       - name: Check out
         uses: actions/checkout@v4
         with:

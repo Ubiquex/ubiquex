@@ -23,6 +23,10 @@ on:
   schedule:
     - cron: "0 8 * * 4" # every Thursday, 08:00 UTC -- offset from coverage-watch's own Monday run so the two don't compete for review attention on the same day
   workflow_dispatch: {}
+  # Every merge to main, for the recent-merge job below only. The weekly
+  # walk stays weekly: it answers a question whose answer changes slowly.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -31,9 +35,79 @@ permissions:
 
 env:
   TRACKING_ISSUE_LABEL: orphan-branch
+  LOST_MERGE_ISSUE_LABEL: lost-merge
 
 jobs:
+  # Fires on every merge to main, and answers only "did what just merged
+  # actually land". Separate from the weekly walk below because the two
+  # are calibrated for opposite timescales: the walk deliberately ignores
+  # anything younger than --min-age-days (2) and runs once a week, which
+  # is right for "is there complete work nobody asked main to absorb" and
+  # useless for "did the PR I merged a minute ago reach main". Both of
+  # this repo's real base-retarget incidents (#99/#100, #116/#117) fired
+  # within seconds of a merge and were caught by a human running
+  # git merge-base by hand, after the fact.
+  #
+  # ci.yml's own "The base branch is main" step is what prevents the
+  # stacked-PR shape from arising here at all. This job is the backstop
+  # for every other way content can be marked merged without landing: a
+  # push to a branch whose PR already merged (TRAPS.md's own three-time
+  # trap), a base branch deleted mid-stack, an admin merge to the wrong
+  # target.
+  recent-merge-check:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out (full history -- ancestry, not a shallow clone)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every PR merged in the last 3 hours has its content on main
+        id: recent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/orphan_branch_check.py \
+            --repo "${{ github.repository }}" \
+            --recent-merges-hours 3 \
+            > "${{ runner.temp }}/recent-merge-report.txt" 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat "${{ runner.temp }}/recent-merge-report.txt"
+          set -e
+
+      - name: Open an issue naming the lost content
+        if: steps.recent.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            echo "**A PR shows MERGED and its content is not on \`main\`.**"
+            echo
+            echo "Recover it the way #100 and #117 did: open a PR from the base branch to \`main\`, so the diff is exactly the lost content. Do not re-merge the original PR."
+            echo
+            echo "Full workflow run: $run_url"
+            echo
+            echo '```'
+            cat "${{ runner.temp }}/recent-merge-report.txt"
+            echo '```'
+          } > "${{ runner.temp }}/lost-merge-body.md"
+          gh issue create \
+            --title "Merged PR content missing from main" \
+            --label "$LOST_MERGE_ISSUE_LABEL" \
+            --body-file "${{ runner.temp }}/lost-merge-body.md"
+          exit 1
+
   orphan-branch-check:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Check out ubiquex-docs (full history -- the check needs real branch ancestry, not a shallow clone)
