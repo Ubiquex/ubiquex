@@ -74,7 +74,12 @@ func remoteStoreFixture(t *testing.T) (storeName string, bucket *blob.Bucket) {
 // at it for the duration of the test -- independent of --ledger-dir/
 // --repo-dir, matching how the config cascade genuinely works (a property
 // of cwd, never of --ledger-dir).
-func remoteConfigDir(t *testing.T, storeName string) {
+// remoteConfigDir builds a stack root whose .ubx/config names a remote
+// ledger store, points the config cascade at it, and returns it -- the
+// caller passes it as ledger_dir/--ledger-dir, since a stack's root
+// directory and the directory holding its config are the same
+// directory in every real deployment.
+func remoteConfigDir(t *testing.T, storeName string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".ubx"), 0o755); err != nil {
@@ -87,6 +92,7 @@ func remoteConfigDir(t *testing.T, storeName string) {
 	orig := configSearchStartDir
 	configSearchStartDir = func() (string, error) { return dir, nil }
 	t.Cleanup(func() { configSearchStartDir = orig })
+	return dir
 }
 
 // bucketIsEmpty reports whether bucket contains no real objects at all --
