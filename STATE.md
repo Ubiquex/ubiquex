@@ -7,6 +7,74 @@
 
 ## In flight
 
+**Release readiness, walked rather than read off the board (2026-09-09).**
+`main` is 85 commits past `v0.3.0`, the release users actually have.
+
+Health is good where it is measurable. `go test ./...` clean, conformance
+clean, no TODO/FIXME debt in hand-written code (every hit is generated
+protobuf), every documented command's flags match the real binary
+(`--help` is the only diff), no docs page names a command that does not
+exist, and the core flow works end to end against `fakeprovider`: init,
+plan, ship, scan, no-drift, `status --drift`, `stats`, exit codes as
+documented.
+
+Three real gaps, none of which were on the board:
+
+1. **`ubx alias` and `ubx restore` are in the SHIPPED v0.3.0 binary and
+   have no user documentation at all.** Verified against the released
+   binary on PATH, not against source. `ubx history` was in the same
+   state until tonight. `ubx restore --help` even tells the user to run
+   `ubx history` to find candidates, so the whole restore discovery path
+   was undocumented end to end. This is CLAUDE.md rule 5's exact subject
+   and the rule did not hold for UBI-227 or UBI-228.
+
+2. **`ubx store` is documented as `store-gc.mdx`**, named for its
+   subcommand rather than the command. Minor, but it is why a
+   command-vs-page sweep flags it.
+
+3. **`core.KindRevert` is declared and referenced nowhere else.** A
+   hashed schema constant with no implementation behind it. Not a
+   blocker, a loose end in the constitution.
+
+Cross-repo publish state is healthy, checked against the real registries
+rather than GitHub releases: Go proxy has `ubx-sdk-go` v0.3.0,
+PyPI has `ubx-sdk` 0.2.1, jsr has `@ubx/sdk` 0.1.2.
+
+One trap for whoever checks that next: **the Go proxy's `@v/list`
+endpoint is not authoritative.** It returned only v0.1.1/v0.1.2/v0.2.0
+while `@latest` and `@v/v0.3.0.info` both resolve v0.3.0 fine. Rule 8
+prescribes a proxy query; use `@latest` or the specific `.info`, never
+`@v/list`, or you will report a published version as missing.
+
+**The stacking enforcement is now everywhere it can be.** 26 repos merged
+their base-is-main PR (verified present on each `main`, not inferred from
+the PR state). Two are not covered: `ubiquex-internals`, which has
+branch protection but no required status checks and no CI workflow to
+attach to, and `ubx-providers-check-demo`, a private demo repo with no
+branch protection available.
+
+**21 repos can now drop `stale-base-check` from their required checks.**
+It is fully subsumed: with base-is-main required, a PR whose base is not
+`main` cannot merge, so a stale base cannot exist, and stale-base-check
+short-circuits to "base is the default branch itself, nothing to check"
+on every run. Dropping a required context is a branch-protection change,
+so it is a decision, not a cleanup. The 21: `ubx-provider-dynamic`,
+`ubx-provider-runbook`, all eight `ubx-schema-*`, all nine
+`ubx-sdk-<cloud>`, `ubx-sdk-python`, `ubx-sdk-typescript`.
+
+**Residual gap in base-is-main, stated because the PR bodies overclaimed.**
+Every repo's `pull_request:` trigger has no `types:` filter, so it uses
+the default `opened`/`synchronize`/`reopened`. Neither base-is-main nor
+stale-base-check subscribes to `edited`, which is the event a base change
+fires. A PR opened against `main`, passing, and then retargeted to a
+feature branch keeps its stale green. That requires a deliberate retarget
+away from `main` rather than the accidental shape that caused #99 and
+#116, and stale-base-check is blind to the same event, so removing it
+loses nothing. Closing it means adding `edited` to the trigger types,
+which also re-runs the whole required job on every title and body edit
+(expensive where builds run an hour, as `ubx-docs-providers` does), or a
+separate small required workflow, which is a settings change per repo.
+
 **The stacked-PR trap is now enforced, not documented.** It fired twice
 in this repo: #99 merged into an already-merged base (recovered by
 #100), and #116 repeated it nine seconds after #115 landed (recovered
