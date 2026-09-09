@@ -49,6 +49,13 @@ func GenerateTS(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 	}
 
 	g := &tsGenerator{blueprint: b, params: paramByName, byAddress: map[string]*tsResource{}}
+	if ubxfile.SDK.enabled() && ubxfile.SDK.TS != "" {
+		targets, err := resolveSDKTargets(ubxfile.SDK, b.wireTypes())
+		if err != nil {
+			return nil, err
+		}
+		g.sdk, g.sdkTargets = ubxfile.SDK, targets
+	}
 	if err := g.wrap(); err != nil {
 		return nil, err
 	}
@@ -56,8 +63,9 @@ func GenerateTS(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 		return nil, err
 	}
 
-	files := map[string]string{
-		"ts/bindings.ts": renderTSBindings(blueprintName, g.ordered()),
+	files := map[string]string{}
+	if g.sdk == nil {
+		files["ts/bindings.ts"] = renderTSBindings(blueprintName, g.ordered())
 	}
 	fnSrc, err := renderTSFunction(funcName, blueprintName, ubxfile.Params, g)
 	if err != nil {
@@ -74,8 +82,12 @@ func GenerateTS(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 // and each field's own already-rendered TS value expression, keyed by
 // its camelCase idiomatic name.
 type tsResource struct {
-	dr         *decodedResource
-	ident      string // PascalCase binding const name, e.g. "ContainerRepo"
+	dr    *decodedResource
+	ident string // PascalCase binding const name, e.g. "ContainerRepo"
+	// localIdent is the local variable name, always derived from the
+	// resource name. Equal to ident except in sdk: mode, where ident
+	// becomes "<service>.<Type>" from the published SDK.
+	localIdent string
 	fields     []tsFieldEntry
 	valueExprs map[string]string // by idiomatic (camelCase) name
 
@@ -93,6 +105,12 @@ type tsFieldEntry struct {
 }
 
 type tsGenerator struct {
+	// sdk/sdkTargets: see goGenerator's own fields (blueprint/gogen.go).
+	// Nil unless the Ubxfile declares an sdk: block, and every nil path
+	// below is byte-identical to before this existed.
+	sdk        *SDKSpec
+	sdkTargets map[string]sdkTarget
+
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*tsResource
@@ -140,7 +158,11 @@ func (g *tsGenerator) wrap() error {
 			return fmt.Errorf("blueprint: resource names %q and %q both derive the TypeScript identifier %q -- rename one in resources.md", other, dr.RI.Name, ident)
 		}
 		seenIdent[ident] = dr.RI.Name
-		g.byAddress[dr.Address] = &tsResource{dr: dr, ident: ident, valueExprs: map[string]string{}}
+		bindingIdent := ident
+		if g.sdkTargets != nil {
+			bindingIdent = g.sdkTargets[dr.RI.Type].TypeName
+		}
+		g.byAddress[dr.Address] = &tsResource{dr: dr, ident: bindingIdent, localIdent: ident, valueExprs: map[string]string{}}
 	}
 	return nil
 }
@@ -271,7 +293,7 @@ func (g *tsGenerator) renderRef(to string) (string, error) {
 // another address+path pointing at a resource this same function already
 // declared a local const for, never a second expression-rendering path.
 func (g *tsGenerator) propertyExpr(target *decodedResource, path []string) string {
-	expr := lowerFirst(g.byAddress[target.Address].ident)
+	expr := lowerFirst(g.byAddress[target.Address].localIdent)
 	for _, seg := range path {
 		expr += "." + seg
 	}
@@ -369,7 +391,7 @@ func (g *tsGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 			return "", false, fmt.Errorf("embedded $ref %q: %w", addr, rerr)
 		}
 
-		refExpr := lowerFirst(g.byAddress[target.Address].ident)
+		refExpr := lowerFirst(g.byAddress[target.Address].localIdent)
 		for _, seg := range path {
 			refExpr += "." + seg
 		}
@@ -499,7 +521,7 @@ func renderTSBindings(blueprintName string, resources []*tsResource) string {
 	b.WriteString("import type { ResourceBinding } from \"@ubx/sdk\";\n\n")
 
 	for _, tr := range resources {
-		fmt.Fprintf(&b, "export const %s: ResourceBinding<any, any> = {\n", tr.ident)
+		fmt.Fprintf(&b, "export const %s: ResourceBinding<any, any> = {\n", tr.localIdent)
 		fmt.Fprintf(&b, "  wireType: %s,\n", jsonStringLiteral(tr.dr.RI.Type))
 		b.WriteString("  fields: {\n")
 		for _, f := range tr.fields {
@@ -577,12 +599,19 @@ func renderTSFunction(funcName, blueprintName string, params []Param, g *tsGener
 	}
 	b.WriteString(" } from \"@ubx/sdk\";\n")
 
-	names := make([]string, 0, len(g.byAddress))
-	for _, tr := range g.ordered() {
-		names = append(names, tr.ident)
-	}
-	if len(names) > 0 {
-		fmt.Fprintf(&b, "import { %s } from \"./bindings.ts\";\n", strings.Join(names, ", "))
+	if g.sdk != nil {
+		root := providerRootFromSDKSpec(g.sdk)
+		for _, t := range tsModulePaths(g.sdkTargets) {
+			fmt.Fprintf(&b, "import { %s } from \"%s/%s/%s/%s\";\n", t.TypeName, g.sdk.TS, root, t.Service, t.LocalWire)
+		}
+	} else {
+		names := make([]string, 0, len(g.byAddress))
+		for _, tr := range g.ordered() {
+			names = append(names, tr.localIdent)
+		}
+		if len(names) > 0 {
+			fmt.Fprintf(&b, "import { %s } from \"./bindings.ts\";\n", strings.Join(names, ", "))
+		}
 	}
 	b.WriteString("\n")
 
@@ -684,7 +713,7 @@ func renderTSFunction(funcName, blueprintName string, params []Param, g *tsGener
 			fmt.Fprintf(&body, "  if (%s) {\n    %s;\n  }\n", cond, call.String())
 			continue
 		}
-		varName := lowerFirst(tr.ident)
+		varName := lowerFirst(tr.localIdent)
 		var call strings.Builder
 		fmt.Fprintf(&call, "resource(%s, %s, {\n", tr.ident, tr.nameExpr)
 		for _, f := range tr.fields {
@@ -788,10 +817,10 @@ func tsDefaultLiteral(p Param) (string, error) {
 func checkTSIdentCollisions(g *tsGenerator, params []Param) error {
 	seen := map[string]string{}
 	for _, tr := range g.ordered() {
-		if tsReservedIdent(tr.ident) {
-			return fmt.Errorf("blueprint: resource %s.%s derives the TypeScript identifier %q, a reserved word -- rename it in resources.md", tr.dr.RI.Type, tr.dr.RI.Name, tr.ident)
+		if tsReservedIdent(tr.localIdent) {
+			return fmt.Errorf("blueprint: resource %s.%s derives the TypeScript identifier %q, a reserved word -- rename it in resources.md", tr.dr.RI.Type, tr.dr.RI.Name, tr.localIdent)
 		}
-		seen[tr.ident] = fmt.Sprintf("resource %s.%s", tr.dr.RI.Type, tr.dr.RI.Name)
+		seen[tr.localIdent] = fmt.Sprintf("resource %s.%s", tr.dr.RI.Type, tr.dr.RI.Name)
 	}
 	for _, p := range params {
 		cname, err := camelCase(p.Name)
@@ -833,11 +862,11 @@ func newTSForEach(g *tsGenerator, allParams []Param) (*tsForEach, error) {
 	}
 	valueIdent := paramIdent + "Value"
 	indexIdent := paramIdent + "Index"
-	accumIdent := lowerFirst(g.byAddress[fe.Address].ident) + "List"
+	accumIdent := lowerFirst(g.byAddress[fe.Address].localIdent) + "List"
 
 	used := map[string]string{"item": "the generated for_each loop's own per-iteration temporary"}
 	for _, tr := range g.ordered() {
-		used[tr.ident] = fmt.Sprintf("resource %s.%s", tr.dr.RI.Type, tr.dr.RI.Name)
+		used[tr.localIdent] = fmt.Sprintf("resource %s.%s", tr.dr.RI.Type, tr.dr.RI.Name)
 	}
 	for _, p := range allParams {
 		cname, err := camelCase(p.Name)

@@ -133,6 +133,11 @@ type Ubxfile struct {
 	// path stays byte-identical to before Outputs existed when this is
 	// empty).
 	Outputs []Output
+	// SDK is the sdk: block (opt-in): import a published per-provider
+	// SDK instead of emitting a bindings file. Nil for every blueprint
+	// that omits it, which is every blueprint written before this
+	// existed, and those build byte-identically to before.
+	SDK *SDKSpec
 }
 
 // rawUbxfile is the strict-decode target -- KnownFields(true) rejects
@@ -146,6 +151,15 @@ type rawUbxfile struct {
 	Params    yaml.Node `yaml:"params"`
 	Resources string    `yaml:"resources"`
 	Outputs   yaml.Node `yaml:"outputs"`
+	SDK       *rawSDK   `yaml:"sdk"`
+}
+
+// rawSDK is the sdk: block's own strict-decode target.
+type rawSDK struct {
+	Provider string `yaml:"provider"`
+	Go       string `yaml:"go"`
+	TS       string `yaml:"ts"`
+	Py       string `yaml:"py"`
 }
 
 // ParseUbxfile reads and parses the Ubxfile in dir.
@@ -190,6 +204,11 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 		return nil, err
 	}
 
+	sdkSpec, err := parseSDKBlock(raw.SDK, path)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Ubxfile{
 		Dir:             dir,
 		Lang:            raw.Lang,
@@ -197,7 +216,27 @@ func ParseUbxfile(dir string) (*Ubxfile, error) {
 		Resources:       resources,
 		ResourcesSource: source,
 		Outputs:         outputs,
+		SDK:             sdkSpec,
 	}, nil
+}
+
+// parseSDKBlock validates the optional sdk: block. Absent is the common
+// case and yields nil, which every generator treats as "emit bindings",
+// exactly as before this existed.
+func parseSDKBlock(raw *rawSDK, path string) (*SDKSpec, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if raw.Provider == "" {
+		return nil, fmt.Errorf("blueprint: %s: sdk: requires a provider: key naming the snapshot to resolve service packages from, e.g. \"ubiquex/aws@4.0.0\" -- without it the package a resource type lives in cannot be known", path)
+	}
+	if _, _, _, err := parseSDKProvider(raw.Provider); err != nil {
+		return nil, fmt.Errorf("blueprint: %s: %w", path, err)
+	}
+	if raw.Go == "" && raw.TS == "" && raw.Py == "" {
+		return nil, fmt.Errorf("blueprint: %s: sdk: names a provider but no package for any language -- set at least one of go:/ts:/py:, or drop the block to emit bindings instead", path)
+	}
+	return &SDKSpec{Provider: raw.Provider, Go: raw.Go, TS: raw.TS, Py: raw.Py}, nil
 }
 
 // Validate is the one shared front half every blueprint entry point

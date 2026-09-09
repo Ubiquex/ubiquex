@@ -54,11 +54,27 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 	}
 
 	g := &goGenerator{blueprint: b, params: paramByName, byAddress: map[string]*goResource{}}
+	if ubxfile.SDK.enabled() && ubxfile.SDK.Go != "" {
+		targets, err := resolveSDKTargets(ubxfile.SDK, b.wireTypes())
+		if err != nil {
+			return nil, err
+		}
+		g.sdk, g.sdkTargets = ubxfile.SDK, targets
+	}
 	if err := g.wrap(); err != nil {
 		return nil, err
 	}
 	if err := g.render(); err != nil {
 		return nil, err
+	}
+
+	goMod := fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.3.0\n", pkgName)
+	if g.sdk != nil {
+		modPath, modVersion, err := goModulePathAndVersion(g.sdk.Go)
+		if err != nil {
+			return nil, fmt.Errorf("blueprint: %w", err)
+		}
+		goMod = fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire (\n\t%s %s\n\tgithub.com/ubiquex/ubx-sdk-go v0.3.0\n)\n", pkgName, modPath, modVersion)
 	}
 
 	files := map[string]string{
@@ -72,8 +88,14 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 		// hermetic tests, which always append their own local `replace`
 		// directive over whatever version this says, never noticed).
 		// Found live migrating ubx-sdk-blueprints/ci-platform (UBI-237).
-		"go/go.mod":      fmt.Sprintf("module %s\n\ngo 1.23\n\nrequire github.com/ubiquex/ubx-sdk-go v0.3.0\n", pkgName),
-		"go/bindings.go": renderGoBindings(pkgName, blueprintName, g.ordered()),
+		"go/go.mod": goMod,
+	}
+	// The whole point of the sdk: block: no bindings file at all. The
+	// published SDK already ships these definitions, and emitting a
+	// narrowed copy of them per blueprint is the duplication this mode
+	// removes.
+	if g.sdk == nil {
+		files["go/bindings.go"] = renderGoBindings(pkgName, blueprintName, g.ordered())
 	}
 	fnSrc, err := renderGoFunction(pkgName, funcName, blueprintName, ubxfile.Params, g)
 	if err != nil {
@@ -95,8 +117,15 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 // legally collide once PascalCased) and each field's own already-
 // rendered Go value expression.
 type goResource struct {
-	dr         *decodedResource
-	ident      string
+	dr *decodedResource
+	// ident is the binding expression as written at the call site --
+	// a bare identifier for an emitted binding, or "<service>.<Type>"
+	// when importing a published SDK.
+	ident string
+	// localIdent is the Go variable this resource's own sdk.Resource()
+	// result is assigned to, always derived from the resource name so it
+	// is stable regardless of where the binding came from.
+	localIdent string
 	configName string
 	fields     []fieldEntry
 	valueExprs map[string]string
@@ -125,6 +154,15 @@ type goGenerator struct {
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*goResource
+
+	// sdk/sdkTargets (opt-in, blueprint/sdkimport.go) are set only when
+	// the Ubxfile declares an sdk: block. When set, wrap() qualifies
+	// every binding/config identifier with its own published-SDK service
+	// package and GenerateGo emits an import of that package instead of
+	// a bindings.go carrying a local copy. Nil otherwise, and every
+	// nil-case path below is byte-identical to before this existed.
+	sdk        *SDKSpec
+	sdkTargets map[string]sdkTarget
 
 	// currentDR (UBI-129) is the resource whose own name/config fields
 	// are being rendered RIGHT NOW -- nil outside of render()'s own
@@ -195,7 +233,20 @@ func (g *goGenerator) wrap() error {
 			return fmt.Errorf("blueprint: resource names %q and %q both derive the Go identifier %q -- rename one in resources.md", other, dr.RI.Name, ident)
 		}
 		seenIdent[ident] = dr.RI.Name
-		g.byAddress[dr.Address] = &goResource{dr: dr, ident: ident, configName: ident + "Config", valueExprs: map[string]string{}}
+		bindingIdent, configIdent := ident, ident+"Config"
+		if g.sdkTargets != nil {
+			// The published SDK names a type after its own WIRE type's
+			// local part (aws_sqs_queue_policy -> sqs.QueuePolicy), not
+			// after this blueprint's own resource name, so the qualified
+			// identifier is derived from the resolved target rather than
+			// from ident above. ident itself still comes from the
+			// resource name and still guards collisions, because it is
+			// what the generated local variable is called.
+			t := g.sdkTargets[dr.RI.Type]
+			bindingIdent = t.Service + "." + t.TypeName
+			configIdent = bindingIdent + "Config"
+		}
+		g.byAddress[dr.Address] = &goResource{dr: dr, ident: bindingIdent, configName: configIdent, localIdent: ident, valueExprs: map[string]string{}}
 	}
 	return nil
 }
@@ -342,7 +393,7 @@ func (g *goGenerator) renderRef(to string) (string, error) {
 		return "", fmt.Errorf("$ref %q: %w", to, err)
 	}
 
-	expr := lowerFirst(g.byAddress[target.Address].ident)
+	expr := lowerFirst(g.byAddress[target.Address].localIdent)
 	for _, seg := range path {
 		expr += fmt.Sprintf(".Field(%q)", seg)
 	}
@@ -423,7 +474,7 @@ func (g *goGenerator) renderEmbeddedRefString(s string) (expr string, handled bo
 			return "", false, fmt.Errorf("embedded $ref %q: %w", addr, rerr)
 		}
 
-		refExpr := lowerFirst(g.byAddress[target.Address].ident)
+		refExpr := lowerFirst(g.byAddress[target.Address].localIdent)
 		for _, seg := range path {
 			refExpr += fmt.Sprintf(".Field(%q)", seg)
 		}
@@ -590,7 +641,7 @@ func renderGoBindings(pkgName, blueprintName string, resources []*goResource) st
 		// bypassing the wrapper function entirely -- still gets real
 		// provenance: sdk.Resource checks the binding for this field
 		// exactly when no PushBlueprintSource scope is open.
-		fmt.Fprintf(&b, "var %s = sdk.ResourceBinding{\n", gr.ident)
+		fmt.Fprintf(&b, "var %s = sdk.ResourceBinding{\n", gr.localIdent)
 		fmt.Fprintf(&b, "\tWireType: %q,\n", gr.dr.RI.Type)
 		b.WriteString("\tFields: sdk.FieldMap{\n")
 		for _, f := range gr.fields {
@@ -664,6 +715,14 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 		b.WriteString("\t\"fmt\"\n\n")
 	}
 	b.WriteString("\tsdk \"github.com/ubiquex/ubx-sdk-go/runtime\"\n")
+	// One import per distinct service package the published SDK lays
+	// this blueprint's resource types out in, sorted for determinism.
+	if g.sdk != nil {
+		for _, svc := range sdkServices(g.sdkTargets) {
+			modPath, _, _ := goModulePathAndVersion(g.sdk.Go)
+			b.WriteString(fmt.Sprintf("\t\"%s/%s/%s\"\n", modPath, providerRootFromSDKSpec(g.sdk), svc))
+		}
+	}
 	b.WriteString(")\n\n")
 
 	if hasOptions {
@@ -797,7 +856,7 @@ func renderGoFunction(pkgName, funcName, blueprintName string, params []Param, g
 			fmt.Fprintf(&b, "\tif %s {\n\t\t%s\n\t}\n", cond, call)
 			continue
 		}
-		varName := lowerFirst(gr.ident)
+		varName := lowerFirst(gr.localIdent)
 		call := fmt.Sprintf("sdk.Resource(%s, %s, %s{\n", gr.ident, gr.nameExpr, gr.configName)
 		for _, f := range gr.fields {
 			call += fmt.Sprintf("\t\t%s: %s,\n", f.goName, gr.valueExprs[f.goName])
@@ -855,15 +914,15 @@ func newGoForEach(g *goGenerator, allParams []Param, hasOptions bool) (*goForEac
 	}
 	valueIdent := paramIdent + "Value"
 	indexIdent := paramIdent + "Index"
-	accumIdent := lowerFirst(g.byAddress[fe.Address].ident) + "List"
+	accumIdent := lowerFirst(g.byAddress[fe.Address].localIdent) + "List"
 
 	used := map[string]string{}
 	for _, dr := range g.blueprint.Resources {
 		gr := g.byAddress[dr.Address]
-		used[gr.ident] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
+		used[gr.localIdent] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
 		used[gr.configName] = fmt.Sprintf("resource %s.%s's own Config struct", gr.dr.RI.Type, gr.dr.RI.Name)
 		if g.blueprint.Referenced[dr.Address] {
-			used[lowerFirst(gr.ident)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
+			used[lowerFirst(gr.localIdent)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
 		}
 	}
 	for _, p := range allParams {
@@ -901,7 +960,7 @@ func newGoForEach(g *goGenerator, allParams []Param, hasOptions bool) (*goForEac
 // this file's own established precedent of small, local, single-purpose
 // renderers over premature sharing).
 func outputReturnExpr(g *goGenerator, o decodedOutput) string {
-	expr := lowerFirst(g.byAddress[o.Target.Address].ident)
+	expr := lowerFirst(g.byAddress[o.Target.Address].localIdent)
 	for _, seg := range o.Path {
 		expr += fmt.Sprintf(".Field(%q)", seg)
 	}
@@ -925,10 +984,10 @@ func checkGoOutputIdentCollisions(g *goGenerator, allParams []Param, hasOptions 
 	used := map[string]string{}
 	for _, dr := range g.blueprint.Resources {
 		gr := g.byAddress[dr.Address]
-		used[gr.ident] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
+		used[gr.localIdent] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
 		used[gr.configName] = fmt.Sprintf("resource %s.%s's own Config struct", gr.dr.RI.Type, gr.dr.RI.Name)
 		if g.blueprint.Referenced[dr.Address] {
-			used[lowerFirst(gr.ident)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
+			used[lowerFirst(gr.localIdent)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
 		}
 	}
 	for _, p := range allParams {
@@ -1037,10 +1096,10 @@ func checkGoOptionIdentCollisions(g *goGenerator, allParams []Param, defaulted [
 	used := map[string]string{}
 	for _, dr := range g.blueprint.Resources {
 		gr := g.byAddress[dr.Address]
-		used[gr.ident] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
+		used[gr.localIdent] = fmt.Sprintf("resource %s.%s", gr.dr.RI.Type, gr.dr.RI.Name)
 		used[gr.configName] = fmt.Sprintf("resource %s.%s's own Config struct", gr.dr.RI.Type, gr.dr.RI.Name)
 		if g.blueprint.Referenced[dr.Address] {
-			used[lowerFirst(gr.ident)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
+			used[lowerFirst(gr.localIdent)] = fmt.Sprintf("resource %s.%s's own local variable", gr.dr.RI.Type, gr.dr.RI.Name)
 		}
 	}
 	for _, p := range allParams {

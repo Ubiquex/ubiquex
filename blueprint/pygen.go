@@ -51,6 +51,13 @@ func GeneratePython(blueprintName string, ubxfile *Ubxfile, intent *resolver.Int
 	}
 
 	g := &pyGenerator{blueprint: b, params: paramByName, byAddress: map[string]*pyResource{}}
+	if ubxfile.SDK.enabled() && ubxfile.SDK.Py != "" {
+		targets, err := resolveSDKTargets(ubxfile.SDK, b.wireTypes())
+		if err != nil {
+			return nil, err
+		}
+		g.sdk, g.sdkTargets = ubxfile.SDK, targets
+	}
 	if err := g.wrap(); err != nil {
 		return nil, err
 	}
@@ -58,8 +65,9 @@ func GeneratePython(blueprintName string, ubxfile *Ubxfile, intent *resolver.Int
 		return nil, err
 	}
 
-	files := map[string]string{
-		"py/bindings.py": renderPyBindings(blueprintName, g.ordered()),
+	files := map[string]string{}
+	if g.sdk == nil {
+		files["py/bindings.py"] = renderPyBindings(blueprintName, g.ordered())
 	}
 	fnSrc, err := renderPyFunction(funcName, blueprintName, ubxfile.Params, g)
 	if err != nil {
@@ -77,8 +85,12 @@ func GeneratePython(blueprintName string, ubxfile *Ubxfile, intent *resolver.Int
 // each field's own already-rendered Python value expression, keyed by
 // its snake_case idiomatic name.
 type pyResource struct {
-	dr         *decodedResource
-	ident      string // PascalCase binding/dataclass name, e.g. "ContainerRepo"
+	dr    *decodedResource
+	ident string // PascalCase binding/dataclass name, e.g. "ContainerRepo"
+	// localIdent is the local variable name, always derived from the
+	// resource name. Equal to ident except in sdk: mode, where ident
+	// becomes "<service>.<Type>" from the published SDK.
+	localIdent string
 	fields     []pyFieldEntry
 	valueExprs map[string]string // by idiomatic (snake_case) name
 
@@ -96,6 +108,10 @@ type pyFieldEntry struct {
 }
 
 type pyGenerator struct {
+	// sdk/sdkTargets: see goGenerator's own fields (blueprint/gogen.go).
+	sdk        *SDKSpec
+	sdkTargets map[string]sdkTarget
+
 	blueprint *decodedBlueprint
 	params    map[string]Param
 	byAddress map[string]*pyResource
@@ -140,7 +156,11 @@ func (g *pyGenerator) wrap() error {
 			return fmt.Errorf("blueprint: resource names %q and %q both derive the Python identifier %q -- rename one in resources.md", other, dr.RI.Name, ident)
 		}
 		seenIdent[ident] = dr.RI.Name
-		g.byAddress[dr.Address] = &pyResource{dr: dr, ident: ident, valueExprs: map[string]string{}}
+		bindingIdent := ident
+		if g.sdkTargets != nil {
+			bindingIdent = g.sdkTargets[dr.RI.Type].TypeName
+		}
+		g.byAddress[dr.Address] = &pyResource{dr: dr, ident: bindingIdent, localIdent: ident, valueExprs: map[string]string{}}
 	}
 	return nil
 }
@@ -517,7 +537,7 @@ func renderPyBindings(blueprintName string, resources []*pyResource) string {
 	b.WriteString("import ubx_sdk as sdk\n\n")
 
 	for _, pr := range resources {
-		fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %sConfig:\n", pr.ident)
+		fmt.Fprintf(&b, "@dataclasses.dataclass\nclass %sConfig:\n", pr.localIdent)
 		if len(pr.fields) == 0 {
 			b.WriteString("    pass\n\n")
 		} else {
@@ -527,7 +547,7 @@ func renderPyBindings(blueprintName string, resources []*pyResource) string {
 			b.WriteString("\n")
 		}
 
-		fmt.Fprintf(&b, "%s = sdk.ResourceBinding(\n", pr.ident)
+		fmt.Fprintf(&b, "%s = sdk.ResourceBinding(\n", pr.localIdent)
 		fmt.Fprintf(&b, "    wire_type=%s,\n", jsonStringLiteral(pr.dr.RI.Type))
 		b.WriteString("    fields={\n")
 		for _, f := range pr.fields {
@@ -580,12 +600,21 @@ func renderPyFunction(funcName, blueprintName string, params []Param, g *pyGener
 	}
 	b.WriteString("import ubx_sdk as sdk\n")
 
-	names := make([]string, 0, len(g.byAddress)*2)
-	for _, pr := range g.ordered() {
-		names = append(names, pr.ident, pr.ident+"Config")
-	}
-	if len(names) > 0 {
-		fmt.Fprintf(&b, "from bindings import %s\n", strings.Join(names, ", "))
+	if g.sdk != nil {
+		// Laid out per resource, like TypeScript's: the published wheel
+		// ships ubx/aws/sqs/queue.py, not a service-level module.
+		root := providerRootFromSDKSpec(g.sdk)
+		for _, t := range tsModulePaths(g.sdkTargets) {
+			fmt.Fprintf(&b, "from %s.%s.%s.%s import %s, %sConfig\n", g.sdk.Py, root, t.Service, t.LocalWire, t.TypeName, t.TypeName)
+		}
+	} else {
+		names := make([]string, 0, len(g.byAddress)*2)
+		for _, pr := range g.ordered() {
+			names = append(names, pr.localIdent, pr.localIdent+"Config")
+		}
+		if len(names) > 0 {
+			fmt.Fprintf(&b, "from bindings import %s\n", strings.Join(names, ", "))
+		}
 	}
 	b.WriteString("\n")
 

@@ -681,3 +681,20 @@ func identSources(resources []*decodedResource) (map[string]string, error) {
 	}
 	return basis, nil
 }
+
+// wireTypes returns every distinct provider wire type this blueprint's
+// resources use, sorted for determinism -- what sdkimport.go resolves
+// against a snapshot when the Ubxfile opts into importing a published
+// SDK.
+func (b *decodedBlueprint) wireTypes() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, dr := range b.Resources {
+		if !seen[dr.RI.Type] {
+			seen[dr.RI.Type] = true
+			out = append(out, dr.RI.Type)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
