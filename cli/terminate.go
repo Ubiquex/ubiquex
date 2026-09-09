@@ -115,7 +115,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 				Destroys:      args,
 			}
 
-			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("terminate: %w", err)}
 			}
@@ -164,7 +164,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 	cmd.Flags().StringVar(&out, "out", "", "additionally write the full resolved proposal here (the plan is always saved under .ubx/plans/ regardless)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "timeout for provider acquisition/schema fetch")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
-		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 	return cmd
 }

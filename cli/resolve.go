@@ -231,7 +231,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			}
 			defer closeLedger()
 
-			p, err := resolver.Resolve(ledger, providers, &intent, knownDependents)
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents))
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
@@ -265,7 +265,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 	cmd.Flags().StringVar(&out, "out", "", "write the resolved proposal here instead of stdout")
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for launching the provider and fetching its schema, and evaluating an SDK program -- one shared budget for the whole command, not per sub-operation")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
-		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable)")
+		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, or parse a .ubx.hcl blueprint-calling file, dispatched by extension, instead of reading an intent file (mutually exclusive with the positional argument)")
 	// --from-code is kept, hidden, as an alias for the positional form.
 	// It distinguishes nothing since UBI-224 removed the other authoring

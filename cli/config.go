@@ -53,6 +53,7 @@ type Config struct {
 	BitbucketServerURL     string                    `toml:"bitbucket_server_url" json:"bitbucket_server_url"`
 	BitbucketServerProject string                    `toml:"bitbucket_server_project" json:"bitbucket_server_project"`
 	TFDir                  string                    `toml:"tf_dir" json:"tf_dir"`
+	KnownDependents        []string                  `toml:"known_dependents" json:"known_dependents"`
 	K8sAudit               K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 	Ledger                 LedgerConfig              `toml:"ledger" json:"ledger"`
 	Intent                 IntentConfig              `toml:"intent" json:"intent"`

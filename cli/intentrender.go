@@ -286,3 +286,70 @@ func renderPinnedHeads(out io.Writer, st *styler, inputs []core.ResolutionInput)
 		fmt.Fprintln(out, st.Bold(fmt.Sprintf("pinned: %s @ %s", where, st.Hash(in.PinnedHead))))
 	}
 }
+
+// renderOrphanCheck surfaces a destroy's own cross_stack_orphan_check
+// evidence, at the two moments a human is deciding whether to destroy
+// something: the plan receipt, and the ship confirmation just above the
+// prompt.
+//
+// This evidence has existed since UBI-30 and was visible nowhere. The
+// resolver records "not_performed" precisely so the gap is never
+// silently indistinguishable from a real check (docs/resolver.md), and
+// the whole point of recording it is that a human reviewing and signing
+// a destroy sees it. Grepped before writing this: "not_performed"
+// appeared only in the resolver that writes it and in doc comments.
+// renderPinnedHeads above rendered cross_stack_pin entries and skipped
+// every other kind, `ubx terminate`'s receipt said nothing, and neither
+// did `ubx ship --confirm-terminate`'s confirmation. It reached the
+// proposal JSON and `ubx why --json` and stopped there, which inverted
+// the audience: an assistant reading raw JSON could see it and the
+// person signing could not. A gap recorded for a human's benefit and
+// shown only in JSON reads as diligence to whoever wrote it while
+// protecting nobody.
+//
+// checked_clear is rendered too, not just the warning. Showing only the
+// gap would leave a clean check and a version of ubx that does not
+// perform one looking identical from the output, which is the same
+// indistinguishability this is here to remove.
+func renderOrphanCheck(out io.Writer, st *styler, inputs []core.ResolutionInput) {
+	var unchecked []string
+	var cleared []string
+	var checkedDirs []string
+	seenDir := map[string]bool{}
+	for _, in := range inputs {
+		if in.Kind != "cross_stack_orphan_check" {
+			continue
+		}
+		switch in.Status {
+		case "not_performed":
+			unchecked = append(unchecked, in.Resource)
+		case "checked_clear":
+			cleared = append(cleared, in.Resource)
+			for _, dir := range in.CheckedLedgerDirs {
+				if !seenDir[dir] {
+					seenDir[dir] = true
+					checkedDirs = append(checkedDirs, dir)
+				}
+			}
+		}
+	}
+
+	if len(cleared) > 0 {
+		fmt.Fprintf(out, "%s no stack in %s references %s\n",
+			st.Green("cross-stack check:"), strings.Join(checkedDirs, ", "), joinAddresses(cleared))
+	}
+	if len(unchecked) > 0 {
+		fmt.Fprintf(out, "%s no dependent stacks were checked, so another stack may still reference %s -- set known_dependents in .ubx/config, or pass --known-dependent <ledger_dir>, to check before destroying\n",
+			st.Yellow("warning:"), joinAddresses(unchecked))
+	}
+}
+
+// joinAddresses renders a destroy list for one line of prose: every
+// address when there are few, a count plus the first two when there are
+// many, so a bulk terminate does not push the remedy off the screen.
+func joinAddresses(addrs []string) string {
+	if len(addrs) <= 3 {
+		return strings.Join(addrs, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(addrs[:2], ", "), len(addrs)-2)
+}

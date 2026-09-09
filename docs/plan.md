@@ -2,6 +2,23 @@
 
 ## Changelog
 
+- 2026-09-09 -- `cross_stack_orphan_check` is visible and configurable.
+  A destroy resolved with no neighbours named records
+  `status: "not_performed"`, deliberately, so the gap is never
+  indistinguishable from a real check (docs/resolver.md, UBI-30). That
+  record was rendered nowhere: `renderPinnedHeads` handled
+  `cross_stack_pin` and skipped every other kind, so the status reached
+  the proposal JSON and `ubx why --json` and stopped, which inverted the
+  audience it was written for. An assistant reading raw JSON could see
+  it; the person signing the destroy could not. `renderOrphanCheck` now
+  renders it in the plan receipt and again at the ship confirmation
+  above the prompt, `checked_clear` included so a clean check and a ubx
+  that performs none are not identical from the output. Separately, the
+  neighbour list is no longer flag-only: `.ubx/config`'s new top-level
+  `known_dependents` list is read by every command that resolves a
+  destroy, and `--known-dependent` adds to it rather than replacing it.
+  See docs/resolver.md's own 2026-09-09 amendment.
+
 - 2026-09-09 -- MCP `ledger_dir` now means what its own schema
   description always said. Three defects on one parameter, two of them
   reported from a real Claude Desktop session. (1) A `ledger_dir` that
