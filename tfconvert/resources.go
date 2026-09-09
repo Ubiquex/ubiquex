@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
-	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/blueprint/spec"
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
 
@@ -204,7 +204,7 @@ func (c *converter) checkCreateIfSource(name string) string {
 	if !ok {
 		return fmt.Sprintf("its own conditional-count source var.%s isn't declared in any variable {} block", name)
 	}
-	if typ != blueprint.ParamBool {
+	if typ != spec.ParamBool {
 		return fmt.Sprintf("its own conditional-count source var.%s is declared %q, not bool -- only a bool param converts to a conditional resource", name, typ)
 	}
 	return ""

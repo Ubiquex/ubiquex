@@ -6,7 +6,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
-	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/blueprint/spec"
 )
 
 // convertParams walks every `variable "X" { ... }` block -- direct 1:1
@@ -20,7 +20,7 @@ import (
 // resource attribute later referencing it becomes its own Question too,
 // via c.unsupportedParams -- see resources.go/expr.go).
 func (c *converter) convertParams() error {
-	c.paramType = map[string]blueprint.ParamType{}
+	c.paramType = map[string]spec.ParamType{}
 	c.unsupportedParams = map[string]bool{}
 
 	for _, vb := range c.mod.variables {
@@ -51,7 +51,7 @@ func (c *converter) convertParams() error {
 			}
 		}
 
-		p := blueprint.Param{Name: name, Type: typ}
+		p := spec.Param{Name: name, Type: typ}
 		defaultAttr, hasDefault := vb.Body.Attributes["default"]
 		switch {
 		case !hasDefault:
@@ -87,7 +87,7 @@ func (c *converter) convertParams() error {
 // wrapping one of the two list-eligible element types. Anything else
 // (map(...), object({...}), set(...), tuple([...]), list(bool),
 // list(any), optional(...)) returns ok=false, never a best-effort guess.
-func paramTypeFromExpr(expr hclsyntax.Expression) (blueprint.ParamType, bool) {
+func paramTypeFromExpr(expr hclsyntax.Expression) (spec.ParamType, bool) {
 	switch e := expr.(type) {
 	case *hclsyntax.ScopeTraversalExpr:
 		if len(e.Traversal) != 1 {
@@ -95,11 +95,11 @@ func paramTypeFromExpr(expr hclsyntax.Expression) (blueprint.ParamType, bool) {
 		}
 		switch e.Traversal.RootName() {
 		case "string":
-			return blueprint.ParamString, true
+			return spec.ParamString, true
 		case "number":
-			return blueprint.ParamNumber, true
+			return spec.ParamNumber, true
 		case "bool":
-			return blueprint.ParamBool, true
+			return spec.ParamBool, true
 		}
 		return "", false
 	case *hclsyntax.FunctionCallExpr:
@@ -112,9 +112,9 @@ func paramTypeFromExpr(expr hclsyntax.Expression) (blueprint.ParamType, bool) {
 		}
 		switch inner.Traversal.RootName() {
 		case "string":
-			return blueprint.ParamListString, true
+			return spec.ParamListString, true
 		case "number":
-			return blueprint.ParamListNumber, true
+			return spec.ParamListNumber, true
 		}
 		return "", false
 	default:
@@ -125,28 +125,28 @@ func paramTypeFromExpr(expr hclsyntax.Expression) (blueprint.ParamType, bool) {
 // scalarDefaultValue evaluates a variable's own default: expression --
 // always a plain literal in real Terraform (a variable's default: can't
 // reference another variable or call a function returning a
-// non-constant) -- into blueprint.Param.Default's own expected Go shape
+// non-constant) -- into spec.Param.Default's own expected Go shape
 // (string/int/bool, matching Type, per ubxfile.go's parseDefaultValue).
 // ok=false for anything that doesn't evaluate as a pure literal (a
 // defensive fallback -- declared required instead, never a guessed
 // value) or whose evaluated type doesn't match typ.
-func scalarDefaultValue(typ blueprint.ParamType, expr hclsyntax.Expression) (any, bool) {
+func scalarDefaultValue(typ spec.ParamType, expr hclsyntax.Expression) (any, bool) {
 	v, diags := expr.Value(nil)
 	if diags.HasErrors() || !v.IsWhollyKnown() || v.IsNull() {
 		return nil, false
 	}
 	switch typ {
-	case blueprint.ParamString:
+	case spec.ParamString:
 		if v.Type() != cty.String {
 			return nil, false
 		}
 		return v.AsString(), true
-	case blueprint.ParamBool:
+	case spec.ParamBool:
 		if v.Type() != cty.Bool {
 			return nil, false
 		}
 		return v.True(), true
-	case blueprint.ParamNumber:
+	case spec.ParamNumber:
 		if v.Type() != cty.Number {
 			return nil, false
 		}

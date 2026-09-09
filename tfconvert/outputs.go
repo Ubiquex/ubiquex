@@ -6,7 +6,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
-	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/blueprint/spec"
 )
 
 // convertOutputs walks every `output "X" { value = ... }` block --
@@ -65,7 +65,7 @@ func (c *converter) convertOutputs() {
 			c.addQuestion(fmt.Sprintf("output %q: %v -- this output was NOT carried over to the converted blueprint's outputs:", name, err))
 			continue
 		}
-		c.outputs = append(c.outputs, blueprint.Output{Name: name, Target: target})
+		c.outputs = append(c.outputs, spec.Output{Name: name, Target: target})
 	}
 }
 
