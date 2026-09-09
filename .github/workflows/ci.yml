@@ -100,17 +100,24 @@ jobs:
           # apt-get update fails the whole step when ANY configured
           # source fails. On 2026-09-09 the Chrome source served a
           # Packages.gz with a hash mismatch for hours, failing this
-          # step with exit 100 on every PR and on main, three reruns
-          # apart, with nothing about it related to bubblewrap.
+          # step with exit 100 on every PR and on main, across three
+          # reruns 20 minutes apart, with nothing about it related to
+          # bubblewrap.
           #
-          # Update only the sources this repo actually depends on, and
-          # let apt-get install be the real gate: if the archive index
-          # is genuinely unusable, the install below fails and the step
-          # fails with it. Better to be unable to install bubblewrap
-          # than to be unable to build because Chrome's mirror is
-          # having a bad afternoon.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-                     /etc/apt/sources.list.d/microsoft-prod.list
+          # Treat an update error as a warning and let apt-get install
+          # be the real gate: if the archive index is genuinely
+          # unusable, the install below fails and the step fails with
+          # it. Better to be unable to install bubblewrap than to be
+          # unable to build because Chrome's mirror is having a bad
+          # afternoon.
+          #
+          # Deleting the offending source list was tried first and is
+          # deliberately NOT here: the file is not at the obvious
+          # /etc/apt/sources.list.d/google-chrome.list on this image,
+          # so the rm silently did nothing while looking like it
+          # handled the case. Verified in a real run against the live
+          # outage, where the Chrome fetch still failed and this
+          # fallback is what carried the job green.
           if ! sudo apt-get update; then
             echo "apt-get update reported an error; continuing to the install, which is the real gate" >&2
           fi
