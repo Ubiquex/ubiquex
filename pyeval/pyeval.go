@@ -19,6 +19,7 @@ package pyeval
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/ubiquex/ubiquex/core"
 )
@@ -47,6 +48,18 @@ type ExtraDep struct {
 // deps is optional and empty for every caller except UBI-130's own
 // blueprint-dependency resolution.
 func Evaluate(ctx context.Context, entryFile string, deps ...ExtraDep) ([]byte, error) {
+	// A project's own virtualenv, if it has one, is mounted like any
+	// other dependency directory so that `pip install`-ed packages are
+	// importable (UBI-260, pyeval/venv.go). Appended AFTER the caller's
+	// own deps so a blueprint dependency resolved by ubx still takes
+	// precedence on PYTHONPATH over a same-named package that happens to
+	// be installed in the venv.
+	if abs, err := filepath.Abs(entryFile); err == nil {
+		if sp := venvSitePackages(filepath.Dir(abs)); sp != "" {
+			deps = append(deps, ExtraDep{HostDir: sp})
+		}
+	}
+
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
 		raw, err := runOnce(ctx, entryFile, deps)
 		if err != nil {

@@ -115,7 +115,16 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 	// by Deno's own config discovery, which walks up from the entry
 	// SCRIPT -- that worked only while the runner lived beside it in
 	// assetsDir, and the runner has moved (see writeRunnerScript).
-	args = append(args, "--import-map="+filepath.Join(assetsDir, "deno.json"))
+	// Merged with the project's own map rather than replacing it: a
+	// --import-map supplied here overrides the project's entirely, which
+	// made every published SDK specifier unresolvable (UBI-260,
+	// tseval/importmap.go).
+	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"))
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupMap()
+	args = append(args, "--import-map="+mapPath)
 	args = append(args, runnerPath)
 
 	cmd := exec.CommandContext(ctx, denoPath, args...)
