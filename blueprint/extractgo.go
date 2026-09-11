@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +95,11 @@ func ExtractGo(dir, name string) (*Schema, error) {
 		}
 	}
 
+	modulePath, err := goModulePath(dir)
+	if err != nil {
+		return nil, err
+	}
+
 	fn, err := findEntrypoint(pkg, dir)
 	if err != nil {
 		return nil, err
@@ -122,7 +128,8 @@ func ExtractGo(dir, name string) (*Schema, error) {
 		Name:          name,
 		Entrypoint: Entrypoint{
 			Language:    "go",
-			Package:     pkgName,
+			GoModule:    modulePath,
+			GoPackage:   pkgName,
 			Function:    fn.Name.Name,
 			ConfigType:  configTypeName,
 			OutputsType: outputsTypeName,
@@ -209,7 +216,7 @@ func extractParams(st *ast.StructType, typeName, dir string) ([]SchemaParam, err
 				return nil, fmt.Errorf("blueprint: extract %s: %s.%s and %s.%s both become the param name %q -- rename one", dir, typeName, other, typeName, ident.Name, wire)
 			}
 			seen[wire] = ident.Name
-			params = append(params, SchemaParam{Name: wire, Type: pt, Required: required})
+			params = append(params, SchemaParam{Name: wire, SourceName: ident.Name, Type: pt, Required: required})
 		}
 	}
 	return params, nil
@@ -253,7 +260,7 @@ func extractOutputs(fn *ast.FuncDecl, structs map[string]*ast.StructType, dir st
 				return "", nil, fmt.Errorf("blueprint: extract %s: %s.%s and %s.%s both become the output name %q -- rename one", dir, ident.Name, other, ident.Name, fieldIdent.Name, wire)
 			}
 			seen[wire] = fieldIdent.Name
-			outputs = append(outputs, SchemaOutput{Name: wire})
+			outputs = append(outputs, SchemaOutput{Name: wire, SourceName: fieldIdent.Name})
 		}
 	}
 	return ident.Name, outputs, nil
@@ -289,3 +296,27 @@ func exprString(e ast.Expr) string {
 // blueprintDirName is the name every other part of this package derives
 // a blueprint's own identity from.
 func blueprintDirName(dir string) string { return filepath.Base(dir) }
+
+// goModulePath reads the module directive from the blueprint's own
+// go.mod.
+//
+// Required, not optional. Without it a Go blueprint cannot be imported
+// by anything, so a schema claiming to describe how to call it would be
+// describing something uncallable. Read textually rather than through
+// golang.org/x/mod so this package keeps parsing declarations with the
+// standard library alone.
+func goModulePath(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return "", fmt.Errorf("blueprint: extract %s: no go.mod -- a Go blueprint needs one, since its module path is how a caller imports it", dir)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, found := strings.CutPrefix(line, "module"); found {
+			if path := strings.TrimSpace(rest); path != "" {
+				return path, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("blueprint: extract %s: go.mod has no module directive", dir)
+}

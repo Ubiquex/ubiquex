@@ -44,31 +44,64 @@ type Schema struct {
 	Derivation    Derivation     `json:"derivation"`
 }
 
-// Entrypoint names what to call and how, which is what the synthesized
-// calling program a blueprint_calls expansion builds needs to import.
+// Entrypoint names what to call and how to import it.
+//
+// The import specifier is a separate field per language rather than one
+// field meaning three different things. They are genuinely different
+// kinds of value: a TypeScript module specifier and a Python import
+// root are what a caller writes in an import statement, while a Go
+// package NAME is not importable at all, so one shared field would be
+// an import path in two languages and a symbol namespace in the third.
+// Exactly one of the three is set, chosen by Language.
 type Entrypoint struct {
 	// Language is "go", "ts" or "py". A blueprint is single-language:
 	// the multi-language build is gone with the Ubxfile, and comes back
 	// later as wrappers generated from this document if it comes back.
 	Language string `json:"language"`
-	// Package is the Go package name, the TS module specifier, or the
-	// Python import root.
-	Package string `json:"package"`
+
+	// GoModule is the module path from the blueprint's own go.mod, which
+	// is what a caller puts in a require directive and imports. GoPackage
+	// is the package clause, needed to qualify the config and outputs
+	// types at the call site.
+	GoModule  string `json:"go_module,omitempty"`
+	GoPackage string `json:"go_package,omitempty"`
+
+	// TSModule is the specifier a caller imports from.
+	TSModule string `json:"ts_module,omitempty"`
+
+	// PyModule is the import root a caller imports from.
+	PyModule string `json:"py_module,omitempty"`
+
 	// Function is the exported entrypoint.
 	Function string `json:"function"`
-	// ConfigType/OutputsType are the struct types the function takes and
+	// ConfigType/OutputsType are the types the function takes and
 	// returns. Recorded because a caller has to name them to construct a
 	// literal, and because the extractor found them by rule rather than
-	// by convention-of-naming, so they are not derivable from Function.
+	// by naming convention, so they are not derivable from Function.
+	// OutputsType is empty for a blueprint that returns nothing, which
+	// is legal and has no outputs.
 	ConfigType  string `json:"config_type"`
-	OutputsType string `json:"outputs_type"`
+	OutputsType string `json:"outputs_type,omitempty"`
 }
 
 // SchemaParam is one parameter, in declaration order.
 //
 // There is deliberately no Default field. See Defaults below.
 type SchemaParam struct {
+	// Name is the language-neutral snake_case name a caller binds an
+	// argument to, e.g. the HCL block's own `target_arn = "..."`.
 	Name string `json:"name"`
+	// SourceName is the identifier as written in the blueprint's own
+	// source, e.g. the Go field "TargetARN".
+	//
+	// Both are carried because neither derives the other. A caller that
+	// constructs a config literal, which blueprint_calls and the HCL
+	// block both must do, needs the exact identifier, and PascalCasing
+	// the snake_case name does not recover it for any name containing an
+	// acronym: TargetARN becomes target_arn becomes TargetArn, which
+	// does not compile. That breaks on ordinary AWS naming (ARN, ID,
+	// URL, KMS, HTTP), so it is the common case rather than an edge.
+	SourceName string `json:"source_name"`
 	// Type is the existing language-neutral vocabulary, unchanged from
 	// the Ubxfile's own params: types (blueprint/spec): string, number,
 	// bool, list(string), list(number), cross_ref. "number" means
@@ -79,10 +112,15 @@ type SchemaParam struct {
 	Required bool `json:"required"`
 }
 
-// SchemaOutput is one returned value. Only the name: every output is a
-// *sdk.Computed, so a type field would carry no information.
+// SchemaOutput is one returned value. No type field: every output is a
+// *sdk.Computed, so it would carry no information.
 type SchemaOutput struct {
+	// Name is the language-neutral snake_case name.
 	Name string `json:"name"`
+	// SourceName is the identifier as written, e.g. "QueueURL". Carried
+	// for the same reason as SchemaParam.SourceName: the snake_case name
+	// does not round-trip back to it.
+	SourceName string `json:"source_name"`
 }
 
 // Defaults records that default VALUES are not in this document, and

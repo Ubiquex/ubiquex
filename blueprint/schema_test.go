@@ -17,14 +17,15 @@ func sampleSchema() Schema {
 		SchemaVersion: SchemaVersion,
 		Name:          "ubx-aws-sqs",
 		Entrypoint: Entrypoint{
-			Language: "go", Package: "ubxawssqs", Function: "UbxAwsSqs",
+			Language: "go", GoModule: "github.com/ubx-blueprints/ubx-aws-sqs/go",
+			GoPackage: "ubxawssqs", Function: "UbxAwsSqs",
 			ConfigType: "Config", OutputsType: "Outputs",
 		},
 		Params: []SchemaParam{
-			{Name: "name", Type: spec.ParamString, Required: true},
-			{Name: "visibility_timeout", Type: spec.ParamNumber, Required: false},
+			{Name: "name", SourceName: "Name", Type: spec.ParamString, Required: true},
+			{Name: "visibility_timeout", SourceName: "VisibilityTimeout", Type: spec.ParamNumber, Required: false},
 		},
-		Outputs:    []SchemaOutput{{Name: "queue_url"}, {Name: "queue_arn"}},
+		Outputs:    []SchemaOutput{{Name: "queue_url", SourceName: "QueueURL"}, {Name: "queue_arn", SourceName: "QueueARN"}},
 		Defaults:   DefaultsNotDerivable,
 		Derivation: Derivation{Assumptions: []string{}},
 	}

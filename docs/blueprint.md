@@ -4576,20 +4576,20 @@ which is why deriving it now rather than deferring costs nothing extra.
   "name": "ubx-aws-sqs",
   "entrypoint": {
     "language": "go",
-    "package": "ubxawssqs",
+    "go_module": "github.com/ubx-blueprints/ubx-aws-sqs/go",
+    "go_package": "ubxawssqs",
     "function": "UbxAwsSqs",
     "config_type": "Config",
     "outputs_type": "Outputs"
   },
   "params": [
-    { "name": "name",                 "type": "string", "required": true },
-    { "name": "visibility_timeout",   "type": "number", "required": false },
-    { "name": "create_queue_policy",  "type": "bool",   "required": false }
+    { "name": "name",                "source_name": "Name",              "type": "string", "required": true },
+    { "name": "target_arn",          "source_name": "TargetARN",         "type": "string", "required": false },
+    { "name": "create_queue_policy", "source_name": "CreateQueuePolicy", "type": "bool",   "required": false }
   ],
   "outputs": [
-    { "name": "queue_url" },
-    { "name": "queue_arn" },
-    { "name": "queue_name" }
+    { "name": "queue_url",  "source_name": "QueueURL" },
+    { "name": "queue_name", "source_name": "QueueName" }
   ],
   "defaults": {
     "derivable": false,
@@ -4604,6 +4604,31 @@ which is why deriving it now rather than deferring costs nothing extra.
 **`params`** is ordered, in declaration order, because a derived
 per-language wrapper needs a stable order and Go's own field order is
 the only ordering any of the three languages agrees on.
+
+**`name` and `source_name`** are both carried because neither derives
+the other. `name` is the language-neutral snake_case name a caller binds
+an argument to. `source_name` is the identifier as written, and a caller
+that constructs a config literal, which `blueprint_calls` and the HCL
+block both must do, needs it exactly. PascalCasing the snake_case name
+does not recover it for any identifier containing an acronym:
+`TargetARN` becomes `target_arn` becomes `TargetArn`, which does not
+compile. AWS naming makes that the common case rather than an edge, so a
+schema carrying only the neutral name would break almost every real
+blueprint. Outputs carry both for the same reason.
+
+**The import specifier is one field per language**, and exactly one is
+set. `go_module` is the module path from the blueprint's own `go.mod`,
+which is what a caller requires and imports, and `go_package` is the
+package clause, needed to qualify the config and outputs types. A Go
+package NAME is not importable, so a single shared field would have been
+an import specifier in TypeScript and Python and a symbol namespace in
+Go. `go.mod` is required for a Go blueprint: without a module path
+nothing can import it, so a schema describing how to call it would be
+describing something uncallable.
+
+**`outputs_type`** is empty for a blueprint that returns nothing, which
+is legal and has no outputs. Requiring an `Outputs` struct would force
+every blueprint without outputs to invent an empty one.
 
 **`type`** is the existing language-neutral vocabulary, unchanged:
 `string`, `number`, `bool`, `list(string)`, `list(number)`, `cross_ref`.
