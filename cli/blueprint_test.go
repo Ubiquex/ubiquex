@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,4 +318,51 @@ func copyTree(t *testing.T, src, dest string) error {
 		}
 		return os.WriteFile(target, raw, 0o644)
 	})
+}
+
+// TestBlueprintBuild_CodeBlueprintSaysItNeedsNoBuild covers the exact
+// moment an author meets the two models: they have written a blueprint
+// as code, and reflexively run build.
+//
+// Before this, they got "open .../Ubxfile: no such file or directory",
+// which names a file they deliberately do not have and reads as a
+// missing-file bug rather than as a model difference. Found by walking
+// the real flow with the built binary rather than by reading the code.
+func TestBlueprintBuild_CodeBlueprintSaysItNeedsNoBuild(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/bp\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bp.go"), []byte("package bp\n\ntype Config struct{ Name string }\n\nfunc BP(cfg Config) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newBlueprintBuildCmd()
+	cmd.SetArgs([]string{dir})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("want a refusal: a blueprint that is code is not built")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "blueprint package") {
+		t.Errorf("the refusal has to name what to run instead, got: %s", msg)
+	}
+	if !strings.Contains(msg, "is not built") {
+		t.Errorf("the refusal has to say why, got: %s", msg)
+	}
+}
+
+// The unchanged case: a directory that is neither model still reports
+// the missing Ubxfile, since that genuinely is the problem there.
+func TestBlueprintBuild_EmptyDirStillReportsTheMissingUbxfile(t *testing.T) {
+	cmd := newBlueprintBuildCmd()
+	cmd.SetArgs([]string{t.TempDir()})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "Ubxfile") {
+		t.Errorf("want the missing-Ubxfile error, got: %v", err)
+	}
 }
