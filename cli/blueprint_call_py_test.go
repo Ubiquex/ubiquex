@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -66,7 +67,7 @@ func writeBlueprintPackagePy(t *testing.T, dir, name string) string {
 			t.Fatal(err)
 		}
 	}
-	if _, err := blueprint.Package(root, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := blueprint.Package(context.Background(), root, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("blueprint.Package: %v", err)
 	}
 	return root

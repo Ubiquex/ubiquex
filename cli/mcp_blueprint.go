@@ -219,6 +219,84 @@ func outputsToSpecs(outputs []blueprint.Output) []map[string]any {
 	return out
 }
 
+// describedParamsToSpecs renders a Description's own params, saying
+// explicitly when a default cannot be known rather than reporting a
+// null one.
+//
+// A schema-described blueprint carries no default VALUES: an optional
+// parameter's default lives in the function body, where no extractor
+// can read it (blueprint.Defaults). Reporting `"default": null` would
+// be indistinguishable from a parameter whose default genuinely is
+// null, and an agent reading this tool's output has no other source to
+// check against. So the absence is stated.
+func describedParamsToSpecs(d *blueprint.Description) []map[string]any {
+	out := make([]map[string]any, 0, len(d.Params))
+	for i, p := range d.Params {
+		entry := map[string]any{"name": p.Name, "type": string(p.Type), "required": p.Required}
+		if !p.Required {
+			if d.DefaultsKnown {
+				entry["default"] = p.Default
+			} else {
+				entry["default_known"] = false
+				entry["default_note"] = blueprint.DefaultsNotDerivable.Reason
+			}
+		}
+		// The identifier as written in the blueprint's own source, which
+		// a caller constructing a config literal needs exactly and
+		// cannot reconstruct from the name (blueprint.SchemaParam).
+		if d.Schema != nil && i < len(d.Schema.Params) {
+			entry["source_name"] = d.Schema.Params[i].SourceName
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// describedOutputsToSpecs renders a Description's own outputs. A
+// schema-described blueprint has no target to report: it resolves its
+// own outputs when it runs, rather than naming a pre-resolved resource
+// slug the way an Ubxfile does.
+func describedOutputsToSpecs(d *blueprint.Description) []map[string]any {
+	out := make([]map[string]any, 0, len(d.Outputs))
+	for i, o := range d.Outputs {
+		entry := map[string]any{"name": o.Name}
+		if o.Target != "" {
+			entry["target"] = o.Target
+		}
+		if d.Schema != nil && i < len(d.Schema.Outputs) {
+			entry["source_name"] = d.Schema.Outputs[i].SourceName
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// addDescription is the shared payload both list_blueprints and
+// describe_blueprint build, so the two never drift on how a blueprint
+// is reported.
+func addDescription(entry map[string]any, d *blueprint.Description) {
+	entry["name"] = d.Name
+	entry["lang"] = d.Lang
+	entry["described_by"] = d.Source
+	entry["params"] = describedParamsToSpecs(d)
+	entry["outputs"] = describedOutputsToSpecs(d)
+	if d.Schema != nil {
+		entry["entrypoint"] = map[string]any{
+			"language":     d.Schema.Entrypoint.Language,
+			"function":     d.Schema.Entrypoint.Function,
+			"config_type":  d.Schema.Entrypoint.ConfigType,
+			"outputs_type": d.Schema.Entrypoint.OutputsType,
+			"go_module":    d.Schema.Entrypoint.GoModule,
+			"go_package":   d.Schema.Entrypoint.GoPackage,
+			"ts_entry":     d.Schema.Entrypoint.TSEntry,
+			"py_module":    d.Schema.Entrypoint.PyModule,
+		}
+		if len(d.Schema.Derivation.Assumptions) > 0 {
+			entry["assumptions"] = d.Schema.Derivation.Assumptions
+		}
+	}
+}
+
 // --- draft_ubxfile ---
 
 type draftUbxfileInput struct {
@@ -390,13 +468,15 @@ type listBlueprintsInput struct {
 func registerListBlueprintsTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_blueprints",
-		Description: "Find blueprint source directories (a real Ubxfile) anywhere under root_dir. There is no " +
-			"registry to query yet (blueprint.Pull's own doc comment: Strata itself isn't built), so this reports " +
-			"what's real today -- Ubxfile-rooted directories found by walking the filesystem, each parsed far enough " +
-			"to report its own params and resource count. A directory whose Ubxfile fails to parse is still listed, " +
-			"with its own error, rather than silently skipped. Reach for this to answer \"what blueprints exist in " +
-			"this checkout\"; use describe_blueprint for one already-known ref (a git URL, an oci:// reference, a " +
-			"tarball) instead.",
+		Description: "Find blueprint source directories anywhere under root_dir. There is no registry to query yet " +
+			"(blueprint.Pull's own doc comment: Strata itself isn't built), so this reports what's real today -- " +
+			"directories rooted at a blueprint.schema.json or an Ubxfile, found by walking the filesystem, each read " +
+			"far enough to report its own params. Each entry says which of the two described it (described_by), " +
+			"since a schema-described blueprint is code and has no resource count, and reports default_known=false " +
+			"for an optional param whose default lives in the function body where nothing can read it. A directory " +
+			"whose Ubxfile fails to parse is still listed, with its own error, rather than silently skipped. Reach " +
+			"for this to answer \"what blueprints exist in this checkout\"; use describe_blueprint for one " +
+			"already-known ref (a git URL, an oci:// reference, a tarball) instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listBlueprintsInput) (*mcp.CallToolResult, any, error) {
 		root, err := mcpDir(in.RootDir)
 		if err != nil {
@@ -418,10 +498,22 @@ func registerListBlueprintsTool(server *mcp.Server) {
 			if d.Name() == "node_modules" || d.Name() == ".git" {
 				return filepath.SkipDir
 			}
-			if _, statErr := os.Stat(filepath.Join(path, blueprint.UbxfileName)); statErr != nil {
+			if !blueprint.IsBlueprintDir(path) {
 				return nil
 			}
 			entry := map[string]any{"dir": path}
+
+			// A schema-described blueprint is code, with no pre-resolved
+			// resources document to count, so it is described rather
+			// than validated: there is nothing to validate that reading
+			// the schema has not already done.
+			if d, derr := blueprint.Describe(path); derr == nil && d.Source == "schema" {
+				entry["valid"] = true
+				addDescription(entry, d)
+				found = append(found, entry)
+				return nil
+			}
+
 			ubxfile, draft, verr := blueprint.Validate(path)
 			if verr != nil {
 				entry["valid"] = false
@@ -432,6 +524,7 @@ func registerListBlueprintsTool(server *mcp.Server) {
 			entry["valid"] = true
 			entry["name"] = filepath.Base(path)
 			entry["lang"] = ubxfile.Lang
+			entry["described_by"] = blueprint.UbxfileName
 			entry["params"] = paramsToSpecs(ubxfile.Params)
 			entry["resource_count"] = len(draft.Resources)
 			found = append(found, entry)
@@ -456,8 +549,11 @@ func registerDescribeBlueprintTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "describe_blueprint",
 		Description: "Resolve one already-known blueprint reference (a local path, a tarball file, a git repo+ref, " +
-			"or an oci:// artifact) and report what it is -- name, declared params, resource count, outputs, and its " +
-			"own content hash if it was packaged (\"ubx blueprint package\"). Pulls into a throwaway scratch " +
+			"or an oci:// artifact) and report what it is -- name, params, outputs, its entrypoint when it is " +
+			"described by a derived schema, resource count when it is described by an Ubxfile, and its " +
+			"own content hash if it was packaged (\"ubx blueprint package\"). described_by says which of the two " +
+			"it read. An optional param reports default_known=false when its default lives in the function body " +
+			"rather than in a declaration, so a missing default is never mistaken for a null one. Pulls into a throwaway scratch " +
 			"directory, never the caller's own working tree, and cleans up afterward -- read-only, no lasting side " +
 			"effect. Reach for this before pulling a blueprint for real, to confirm it's the one you mean.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in describeBlueprintInput) (*mcp.CallToolResult, any, error) {
@@ -491,12 +587,22 @@ func registerDescribeBlueprintTool(server *mcp.Server) {
 		} else {
 			result["packaged"] = false
 		}
-		if ubxfile, draft, err := blueprint.Validate(dest); err == nil {
+		if d, derr := blueprint.Describe(dest); derr == nil && d.Source == "schema" {
+			// The packaged manifest's own name wins if there is one, since
+			// that is what the blueprint was published as.
+			packagedName, _ := result["name"].(string)
+			result["valid"] = true
+			addDescription(result, d)
+			if packagedName != "" {
+				result["name"] = packagedName
+			}
+		} else if ubxfile, draft, err := blueprint.Validate(dest); err == nil {
 			if result["name"] == nil {
 				result["name"] = filepath.Base(dest)
 			}
 			result["valid"] = true
 			result["lang"] = ubxfile.Lang
+			result["described_by"] = blueprint.UbxfileName
 			result["stack"] = draft.Stack
 			result["params"] = paramsToSpecs(ubxfile.Params)
 			result["outputs"] = outputsToSpecs(ubxfile.Outputs)
@@ -504,6 +610,9 @@ func registerDescribeBlueprintTool(server *mcp.Server) {
 		} else {
 			result["valid"] = false
 			result["validation_error"] = err.Error()
+			if derr != nil {
+				result["schema_error"] = derr.Error()
+			}
 		}
 		return nil, result, nil
 	})

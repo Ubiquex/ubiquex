@@ -347,9 +347,12 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		return nil, nil, fmt.Errorf("pull: %w", err)
 	}
 
-	ubxfile, err := ParseUbxfile(dest)
+	// Schema-first, Ubxfile as the fallback, the same precedence every
+	// other consumer uses (describe.go): where both exist the derived
+	// one is the one that cannot have gone stale.
+	desc, err := Describe(dest)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse Ubxfile: %w", err)
+		return nil, nil, fmt.Errorf("describe blueprint: %w", err)
 	}
 
 	// UBI-74 Slice 6: the provenance ref every resource this call
@@ -369,26 +372,42 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	}
 	blueprintRef := blueprintName + ":" + manifest.ContentHash
 
-	lang, err := pickCallLanguage(dest)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	args, err := resolveCallArgs(ubxfile.Params, call.Args)
+	args, err := resolveCallArgs(desc.Params, call.Args)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	summary := fmt.Sprintf("blueprint call: %s", call.Name)
 
-	var entry string
-	switch lang {
-	case "ts":
-		entry, err = writeTSCaller(scratch, dest, blueprintName, callingStack, summary, args)
-	case "py":
-		entry, err = writePyCaller(scratch, dest, blueprintName, callingStack, summary, args)
-	case "go":
-		entry, err = writeGoCaller(scratch, dest, blueprintName, callingStack, summary, args)
+	// A code-model blueprint has no built go/ts/py subdirectory to pick
+	// from: its own schema names the one language it is written in, and
+	// the entrypoint to call inside it.
+	var lang, entry string
+	if desc.Schema != nil {
+		lang = desc.Schema.Entrypoint.Language
+		switch lang {
+		case "ts":
+			entry, err = writeTSSchemaCaller(scratch, dest, callingStack, summary, desc.Schema, args)
+		case "py":
+			entry, err = writePySchemaCaller(scratch, dest, callingStack, summary, desc.Schema, args)
+		case "go":
+			entry, err = writeGoSchemaCaller(scratch, dest, callingStack, summary, desc.Schema, args)
+		default:
+			err = fmt.Errorf("blueprint schema names an unknown language %q", lang)
+		}
+	} else {
+		lang, err = pickCallLanguage(dest)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch lang {
+		case "ts":
+			entry, err = writeTSCaller(scratch, dest, blueprintName, callingStack, summary, args)
+		case "py":
+			entry, err = writePyCaller(scratch, dest, blueprintName, callingStack, summary, args)
+		case "go":
+			entry, err = writeGoCaller(scratch, dest, blueprintName, callingStack, summary, args)
+		}
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare %s caller: %w", lang, err)
@@ -451,7 +470,7 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		})
 	}
 
-	callOutputs, err := resolveCallOutputs(callingStack, ubxfile, result.Resources)
+	callOutputs, err := resolveCallOutputs(callingStack, desc, result.Resources)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve outputs: %w", err)
 	}

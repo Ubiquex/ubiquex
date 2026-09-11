@@ -156,7 +156,7 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 		moduleDir := parts[1]
 
 		root := filepath.Dir(moduleDir)
-		if _, err := os.Stat(filepath.Join(root, UbxfileName)); err != nil {
+		if !IsBlueprintDir(root) {
 			continue // an ordinary Go dependency, not a blueprint
 		}
 		name := filepath.Base(root)

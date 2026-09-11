@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -113,7 +112,7 @@ func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[st
 			continue // not inside a blueprint's own generated ts/ directory at all
 		}
 		root := filepath.Dir(fileDir)
-		if _, err := os.Stat(filepath.Join(root, UbxfileName)); err != nil {
+		if !IsBlueprintDir(root) {
 			continue // a ts/ directory that isn't actually a blueprint's own root -- an ordinary local import, not a blueprint
 		}
 		name := filepath.Base(root)

@@ -177,7 +177,7 @@ doesn't build anything itself.`,
 			if out == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint package: -o is required")}
 			}
-			manifest, err := blueprint.Package(args[0], out)
+			manifest, err := blueprint.Package(cmd.Context(), args[0], out)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}

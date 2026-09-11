@@ -28,9 +28,32 @@ const blueprintOutputRefPrefix = resolver.BlueprintOutputRefPrefix
 // information at all, see Output's own doc comment). Returns an empty,
 // non-nil map (never an error) when the blueprint declares no outputs --
 // the overwhelming common case, completely unaffected.
-func resolveCallOutputs(callingStack string, ubxfile *Ubxfile, resources []resolver.ResourceIntent) (map[string]string, error) {
-	out := make(map[string]string, len(ubxfile.Outputs))
-	if len(ubxfile.Outputs) == 0 {
+func resolveCallOutputs(callingStack string, desc *Description, resources []resolver.ResourceIntent) (map[string]string, error) {
+	out := make(map[string]string, len(desc.Outputs))
+	if len(desc.Outputs) == 0 {
+		return out, nil
+	}
+
+	// A schema-described blueprint is the one case this cannot resolve,
+	// and it is recorded rather than silently returning nothing.
+	//
+	// An Ubxfile declared each output as a "<resource-slug>.<attribute>"
+	// target, which is exactly the pair needed to build a real address.
+	// A blueprint that is code returns a Computed instead, and which
+	// attribute of which resource that Computed points at is only known
+	// inside the evaluation that produced it. The runtime does not
+	// report it back yet, so there is nothing here to resolve against.
+	//
+	// Each output is therefore registered with an empty address, which
+	// makes a reference to it fail at the reference itself, naming this
+	// reason (rewriteOutputRefsInValue). The alternative, omitting them,
+	// produces "no such blueprint call/output declared in this
+	// document" for an output that is genuinely declared, which sends
+	// whoever hits it looking in the wrong place entirely.
+	if desc.Schema != nil {
+		for _, o := range desc.Outputs {
+			out[o.Name] = ""
+		}
 		return out, nil
 	}
 
@@ -43,7 +66,7 @@ func resolveCallOutputs(callingStack string, ubxfile *Ubxfile, resources []resol
 		byName[ri.Name] = ri
 	}
 
-	for _, o := range ubxfile.Outputs {
+	for _, o := range desc.Outputs {
 		slug, attr, ok := strings.Cut(o.Target, ".")
 		if !ok {
 			return nil, fmt.Errorf("output %q: target %q must be \"<resource-slug>.<attribute>\"", o.Name, o.Target)
@@ -115,6 +138,9 @@ func rewriteOutputRefsInValue(v any, outputAddr map[string]string) (any, bool, e
 						real, found := outputAddr[key]
 						if !found {
 							return nil, false, fmt.Errorf("output reference %q: no such blueprint call/output declared in this document", to)
+						}
+						if real == "" {
+							return nil, false, fmt.Errorf("output reference %q: that blueprint is described by its own %s, and a schema-described blueprint's outputs are not addressable yet -- it returns a Computed rather than declaring a \"<resource-slug>.<attribute>\" target, and the runtime does not report back which attribute that Computed resolved to", to, SchemaFileName)
 						}
 						return map[string]any{"$ref": map[string]any{"to": real}}, true, nil
 					}

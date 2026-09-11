@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -75,7 +76,7 @@ func TestPackage_ProducesManifestAndTarball(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
 	out := filepath.Join(t.TempDir(), "ci-platform.tar.gz")
 
-	manifest, err := Package(dir, out)
+	manifest, err := Package(context.Background(), dir, out)
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestPackage_MissingUbxfile_Errors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err == nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err == nil {
 		t.Fatal("Package: want error for a directory with no Ubxfile, got nil")
 	}
 }
@@ -144,11 +145,11 @@ func TestPackage_DeterministicAcrossRuns(t *testing.T) {
 	out1 := filepath.Join(t.TempDir(), "a.tar.gz")
 	out2 := filepath.Join(t.TempDir(), "b.tar.gz")
 
-	m1, err := Package(dir, out1)
+	m1, err := Package(context.Background(), dir, out1)
 	if err != nil {
 		t.Fatalf("Package (1st): %v", err)
 	}
-	m2, err := Package(dir, out2)
+	m2, err := Package(context.Background(), dir, out2)
 	if err != nil {
 		t.Fatalf("Package (2nd): %v", err)
 	}
