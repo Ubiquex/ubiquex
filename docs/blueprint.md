@@ -4521,3 +4521,208 @@ them does not drag three language evaluators), `create_if`, the
 identifier collision fix, and the `$fn`/`cidrsubnet` marker support,
 which is a documented intent/v1 feature a hand-authored blueprint can
 still use.
+
+---
+
+# Blueprint schema (blueprints-as-code)
+
+Everything above this line describes the Ubxfile design, which is being
+replaced. A blueprint is becoming code: a single-language function using
+the published SDK, with no `resources:` document and no generated
+bindings. The reasoning is recorded in the decision below; this section
+defines the artifact that replaces the Ubxfile's machine-readable half.
+
+## Why the Ubxfile is going
+
+Every limit the first real published blueprint (`ubx-blueprints/ubx-aws-sqs`)
+hit was JSON not being a language, and each workaround was a marker,
+which is JSON growing a language feature badly:
+
+- **No dead-letter queue**, because `create_if` makes a resource
+  conditional and nothing may reference a conditional resource. In code
+  an `if` produces an ordinary variable.
+- **`fifo_queue` unshippable**, because a param has no null so an
+  optional is always sent, and SQS rejects `FifoQueue` outright rather
+  than defaulting it. In Go a `*bool` is nil.
+- **Callable once per stack**, because a resource name cannot
+  interpolate a param. In code the name is an argument.
+
+What the Ubxfile bought, a description a reader can trust without
+running anything, does not go away. It is derived instead of authored.
+
+## The schema is derived, never written
+
+`ubx blueprint package` extracts a schema from the blueprint's own
+function signature and writes it into the packaged directory, where the
+content hash covers it like any other file. Nobody edits it. If it is
+wrong, the function is wrong.
+
+It restores every consumer the Ubxfile served: the HCL `blueprint` block
+and `blueprint_calls` bind named arguments against it, `describe_blueprint`
+reports from it, `list_blueprints` uses its presence as the marker that a
+directory IS a blueprint, and `resolve`'s direct-call provenance walk
+uses the same marker in place of the Ubxfile it used to look for. It is
+also the artifact per-language wrappers would be generated from later,
+which is why deriving it now rather than deferring costs nothing extra.
+
+## Format
+
+`blueprint.schema.json`, at the blueprint root, canonical JSON
+(docs/schema.md's own rules) because it feeds a content hash.
+
+```json
+{
+  "schema_version": 1,
+  "name": "ubx-aws-sqs",
+  "entrypoint": {
+    "language": "go",
+    "package": "ubxawssqs",
+    "function": "UbxAwsSqs",
+    "config_type": "Config",
+    "outputs_type": "Outputs"
+  },
+  "params": [
+    { "name": "name",                 "type": "string", "required": true },
+    { "name": "visibility_timeout",   "type": "number", "required": false },
+    { "name": "create_queue_policy",  "type": "bool",   "required": false }
+  ],
+  "outputs": [
+    { "name": "queue_url" },
+    { "name": "queue_arn" },
+    { "name": "queue_name" }
+  ],
+  "defaults": {
+    "derivable": false,
+    "reason": "an optional parameter's default value lives in the function body, not in its signature, so no extractor can read it"
+  },
+  "derivation": {
+    "assumptions": []
+  }
+}
+```
+
+**`params`** is ordered, in declaration order, because a derived
+per-language wrapper needs a stable order and Go's own field order is
+the only ordering any of the three languages agrees on.
+
+**`type`** is the existing language-neutral vocabulary, unchanged:
+`string`, `number`, `bool`, `list(string)`, `list(number)`, `cross_ref`.
+`number` means **integer**. `secret` is deliberately not a param type
+yet: `SecretMarker` is exported in every runtime and could become one the
+moment a real blueprint needs it, which is this project's own "extend
+when something needs it, never speculatively" rule.
+
+**`defaults.derivable`** is always `false`, and it is in the document on
+purpose. Under the Ubxfile a default was declared (`retention: number,
+default 30`) and `describe_blueprint` reported it. Under the config
+struct the default lives in the body as `if cfg.Retention == nil`, where
+no extractor can see it. That is a real regression, accepted
+deliberately rather than paid for with a `Defaults()` convention the
+extractor would have to parse, which is exactly the pattern-matching the
+config struct was chosen to avoid. The field exists so a reader knows
+the absence is a decision and not a failed extraction, and so
+`describe_blueprint` can say "optional, default not derivable" rather
+than an ambiguous "optional".
+
+**`derivation.assumptions`** records anything the extractor asserted but
+could not verify. There is exactly one today, and only in TypeScript:
+`number` means integer in this vocabulary, while TS's own `number`
+admits fractions, so a TS-derived schema carries
+`"number params are integers; TypeScript's number type cannot express this"`.
+Go and Python state `int` outright and carry an empty list.
+
+## The Go authoring convention
+
+One sentence: **a non-pointer field is required, a pointer field is
+optional and is omitted entirely when nil.**
+
+```go
+// Config is the blueprint's parameters.
+type Config struct {
+	Name              string  // required
+	VisibilityTimeout *int    // optional
+	CreateQueuePolicy *bool   // optional
+}
+
+// Outputs is what the blueprint returns.
+type Outputs struct {
+	QueueURL  *sdk.Computed
+	QueueARN  *sdk.Computed
+	QueueName *sdk.Computed
+}
+
+func UbxAwsSqs(cfg Config) Outputs {
+	sdk.PushBlueprintSource("ubx-aws-sqs")
+	defer sdk.PopBlueprintSource()
+	// ...
+}
+```
+
+Functional options were the other candidate and were rejected on
+measurement. The generated `ubx-aws-sqs` is 97 lines, of which 54 are
+options machinery describing 8 parameters and 22 do the work. Written by
+hand under that convention an author reproduces all 54, and the
+extractor has to read three separate places including a defaults literal
+**inside the function body**. The config struct is 60 lines for the same
+blueprint and the extractor reads one type declaration.
+
+It also removes the asymmetry that made Go the awkward language. Under
+functional options Go scattered parameters across a signature, a set of
+`With*` functions and a body, with no recoverable ordering. Under a
+config struct all three languages put every parameter in one declaration
+in source order, so the Go extractor becomes the simplest rather than
+the hardest.
+
+Nil-omission is a runtime property, not a codegen one: `serializeConfig`
+skips a nil pointer field so an unset optional is omitted rather than
+sent as `null` (ubx-sdk-go#21). Without that the convention silently
+reintroduces the `fifo_queue` bug, since `null` is not omission and a
+provider may reject the attribute outright.
+
+## What the extractor enforces
+
+These are errors, not warnings, and each names the fix:
+
+1. Exactly one exported function taking exactly one struct parameter and
+   returning exactly one struct. More than one candidate is ambiguous
+   and is refused rather than guessed at.
+2. Every config field is exported, and its type is in the vocabulary
+   above or a pointer to one. An unrecognised type is refused, naming
+   the field and the accepted set.
+3. Every outputs field is `*sdk.Computed`.
+4. No field is a pointer-to-pointer, a slice of pointers, or a map. The
+   vocabulary has no representation for them, and silently flattening
+   would produce a schema that lies.
+5. Field names map to schema names by the existing snake_case rule, and
+   a collision after conversion is refused.
+
+## What the author writes besides the function
+
+A markdown file describing intent, beside the code. **Nothing in ubx
+parses it.** It is what an assistant reads to write or update the
+function, and what a human reads to decide whether to pull the blueprint
+at all. It is covered by the content hash because it is in the
+directory, so it cannot be swapped after packaging without changing the
+hash.
+
+That is the deliberate division: prose for people and models, schema for
+machines, and the schema derived from the code rather than from the
+prose, so the two cannot drift.
+
+## Inspect-without-execution
+
+The Ubxfile let a reader see every resource a blueprint could create
+without running it. The derived schema does not: it describes the
+interface, not the resource set.
+
+That property moves to the registry (Strata), which pulls a blueprint,
+runs it once in its own sandbox, and publishes the resources it actually
+creates alongside the author's prose. That is stronger than the Ubxfile
+was, because a derived description cannot lie where prose can, and the
+Ubxfile was a claim by the author rather than an observation.
+
+Until that exists the property is deferred, which is already the real
+situation for anyone pulling a blueprint from GitHub today. Worth being
+precise about what is lost in the meantime: `ubx blueprint pull` already
+executes blueprint code during `ExpandCalls`, so calling a blueprint has
+never been execution-free. Only description was.
