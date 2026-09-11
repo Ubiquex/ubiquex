@@ -237,8 +237,8 @@ func TestExtractGo_EntrypointCarriesModuleAndPackage(t *testing.T) {
 	if s.Entrypoint.GoPackage != "ubxawssqs" {
 		t.Errorf("go_package = %q", s.Entrypoint.GoPackage)
 	}
-	if s.Entrypoint.TSModule != "" || s.Entrypoint.PyModule != "" {
-		t.Errorf("only the language's own specifier is set, got ts=%q py=%q", s.Entrypoint.TSModule, s.Entrypoint.PyModule)
+	if s.Entrypoint.TSEntry != "" || s.Entrypoint.PyModule != "" {
+		t.Errorf("only the language's own specifier is set, got ts=%q py=%q", s.Entrypoint.TSEntry, s.Entrypoint.PyModule)
 	}
 }
 

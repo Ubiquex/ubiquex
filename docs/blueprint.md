@@ -4622,7 +4622,11 @@ which is what a caller requires and imports, and `go_package` is the
 package clause, needed to qualify the config and outputs types. A Go
 package NAME is not importable, so a single shared field would have been
 an import specifier in TypeScript and Python and a symbol namespace in
-Go. `go.mod` is required for a Go blueprint: without a module path
+Go. Writing the other two extractors showed the three are not even the
+same KIND of value, which is why the TypeScript field is `ts_entry`
+rather than `ts_module`: TypeScript resolves a relative specifier, so
+what a caller writes is the entry file's path relative to the blueprint
+root, while Python imports by module name and Go by module path. `go.mod` is required for a Go blueprint: without a module path
 nothing can import it, so a schema describing how to call it would be
 describing something uncallable.
 
@@ -4703,6 +4707,128 @@ skips a nil pointer field so an unset optional is omitted rather than
 sent as `null` (ubx-sdk-go#21). Without that the convention silently
 reintroduces the `fifo_queue` bug, since `null` is not omission and a
 provider may reject the attribute outright.
+
+## The TypeScript authoring convention
+
+The same sentence, spelled with `?`: **a property with no `?` is
+required, a property with `?` is optional.**
+
+```ts
+import { Computed, CrossMarker } from "@ubx/sdk";
+
+export interface Config {
+  name: string;                  // required
+  visibilityTimeout?: number;    // optional
+  createQueuePolicy?: boolean;   // optional
+  vpc: CrossMarker;              // required, cross-stack
+}
+
+export interface Outputs {
+  queueURL: Computed;
+  queueARN: Computed;
+}
+
+export function ubxAwsSqs(cfg: Config): Outputs {
+  // ...
+}
+```
+
+Read with `deno doc --json` (`tseval/declarations.go`), which is Deno's
+own documentation generator: it emits every exported symbol with its
+full type and it does not execute the module. Preferred to any amount of
+hand-written parsing because TypeScript's type syntax is large, and a
+hand-rolled reader of it is wrong in ways nobody notices until a
+blueprint's schema quietly disagrees with its own function.
+
+## The Python authoring convention
+
+The same sentence again, spelled with `Optional`: **a bare annotation is
+required, `Optional[X] = None` is optional.**
+
+```python
+from dataclasses import dataclass
+from typing import Optional
+import ubx_sdk as sdk
+
+
+@dataclass
+class Config:
+    name: str                                  # required
+    vpc: sdk.CrossMarker                       # required, cross-stack
+    visibility_timeout: Optional[int] = None   # optional
+    create_queue_policy: Optional[bool] = None # optional
+
+
+@dataclass
+class Outputs:
+    queue_url: sdk.Computed
+    queue_arn: sdk.Computed
+
+
+def ubx_aws_sqs(cfg: Config) -> Outputs:
+    ...
+```
+
+Read with CPython's own `ast` module, run on the pinned WASI interpreter
+the evaluator already pins (`pyeval/declarations.go`). `ast.parse`
+compiles to a syntax tree and stops: no module code runs, no decorator
+executes, nothing is imported. Python's grammar is significant
+whitespace, its annotations can be strings, and `from __future__ import
+annotations` makes them strings wholesale, so a hand-rolled reader would
+be wrong in exactly the cases a real blueprint hits.
+
+Two rules exist only in Python, because Python is the only one of the
+three that offers two independent signals where the others offer one:
+
+- **A default without `Optional` is refused.** `enabled: bool = True`
+  has a default and is not optional, and the two readings differ for
+  every consumer downstream. The fix is named in the refusal: make it
+  `Optional[bool] = None` and apply the default inside the function,
+  exactly as Go and TypeScript must, since no language's schema can
+  carry a default value.
+- **`Optional` without a default is refused.** A caller has to pass it
+  anyway, so calling it optional would be a lie.
+
+## What the three extractors cannot do equally
+
+Three findings, each from writing the extractor rather than from
+reviewing the format.
+
+**Python cannot interleave required and optional params; Go and
+TypeScript can.** A dataclass field with no default may not follow one
+with a default, so every required param has to come first. The schema
+preserves declaration order, so a Go blueprint that interleaves them has
+an order no Python blueprint can reproduce. This was found by writing a
+happy-path fixture that interleaved them: it extracted cleanly and was
+not a module Python could have imported, because `ast.parse` accepts
+what `@dataclass` later rejects. The extractor now refuses it, where the
+message can name the reason, rather than leaving it to a `TypeError` the
+first time anything imports the blueprint.
+
+**TypeScript needs its dependencies installed; Go and Python do
+not.** `deno doc` resolves the whole module graph and emits nothing at
+all if any import is unresolvable, including an import whose types the
+signature never mentions. The Go extractor reads an undownloaded tree
+with the standard library alone, and `ast.parse` resolves no imports at
+all, so a Python blueprint importing an uninstalled package still yields
+its schema. Only TypeScript requires `npm install` before its own
+signature can be read. The refusal says so explicitly, because an author
+otherwise sees a schema failure for what is a dependency problem.
+
+**TypeScript can verify where a type came from; Go cannot.** Deno tags
+every type reference with its resolution, so a `CrossMarker` imported
+from `@ubx/sdk` is distinguishable from a local interface that shares
+the name, and the TypeScript extractor checks it. The Go extractor
+matches on source spelling to avoid type-checking, so it cannot tell
+those apart. This is a difference in strictness, not in vocabulary: all
+three accept exactly the same set of well-formed blueprints.
+
+The extractors also differ in what they need present on the machine. Go
+needs nothing beyond ubx itself. TypeScript needs `deno` on PATH, and
+Python needs `wasmtime` plus the pinned 42MB CPython build. Neither is
+a new requirement: they are the same binaries the TypeScript and Python
+evaluators already require, so any blueprint that could be evaluated at
+all can be extracted.
 
 ## What the extractor enforces
 

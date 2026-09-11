@@ -66,10 +66,14 @@ type Entrypoint struct {
 	GoModule  string `json:"go_module,omitempty"`
 	GoPackage string `json:"go_package,omitempty"`
 
-	// TSModule is the specifier a caller imports from.
-	TSModule string `json:"ts_module,omitempty"`
+	// TSEntry is the entry file's own path relative to the blueprint
+	// root, which is what a TypeScript caller imports: TypeScript
+	// resolves a relative specifier, so there is no module name to name.
+	TSEntry string `json:"ts_entry,omitempty"`
 
-	// PyModule is the import root a caller imports from.
+	// PyModule is the module name a caller imports, which is the entry
+	// file's own basename without .py: Python imports by module name
+	// with the blueprint's directory on the path.
 	PyModule string `json:"py_module,omitempty"`
 
 	// Function is the exported entrypoint.
