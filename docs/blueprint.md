@@ -4860,6 +4860,69 @@ That is the deliberate division: prose for people and models, schema for
 machines, and the schema derived from the code rather than from the
 prose, so the two cannot drift.
 
+## What reads the schema
+
+`ubx blueprint package` is where a schema is derived and written, and
+every consumer that used to open the Ubxfile now reads whichever
+document a blueprint actually carries. One function decides that
+(`blueprint.Describe`), so the precedence cannot be decided differently
+in six places: **the schema wins where both exist**, because it is
+derived from the function and the Ubxfile is written by hand, so when
+they disagree the derived one is the one that cannot be stale.
+
+| consumer | before | now |
+| --- | --- | --- |
+| `package` | required an Ubxfile | derives and writes the schema for a code blueprint, re-deriving on every run |
+| `pull`, `verify` | Ubxfile as the marker | either marker |
+| `describe_blueprint` | params, outputs, resource count | adds the entrypoint, `source_name` per param, `described_by`, and `default_known: false` |
+| `list_blueprints` | Ubxfile-rooted directories | either marker, each entry saying which described it |
+| provenance walkers | Ubxfile as the blueprint-root marker | either marker |
+| the HCL `blueprint` block | positional args into a built package | a config literal built from the schema's own field identifiers |
+
+The schema is written **before** the manifest is built, so the content
+hash covers it like every other file: a schema outside the hash could be
+swapped after packaging. It is re-derived on every package rather than
+reused, since a schema that could be stale defeats the reason for
+deriving it.
+
+### Calling a blueprint that is code
+
+The three caller writers for the schema model are counterparts of the
+Ubxfile ones rather than adaptations, because almost nothing the old
+ones relied on survives: there are no `go/`, `ts/`, `py/`
+subdirectories, the blueprint's own root is the package, and the
+function and package names are the real ones the schema recorded rather
+than names derived from the blueprint's own name. Under the Ubxfile an
+author had no say in either.
+
+Two consequences are worth stating. Go arguments were positional with
+trailing functional options, which is why the old writer has to reorder
+them; a config literal has named fields, so that whole class of ordering
+bug is gone. And an un-given optional is omitted from the literal
+entirely in all three languages rather than passed as null or
+undefined, which is what `sdk.Ptr` and nil-omission exist for.
+
+`source_name` is what makes any of this possible: a config literal names
+fields by their real identifiers, and no case conversion of `target_arn`
+produces `TargetARN`.
+
+### The one thing that does not work yet
+
+**A schema-described blueprint's outputs are not addressable from HCL.**
+An Ubxfile declared each output as a `"<resource-slug>.<attribute>"`
+target, which is exactly the pair needed to build a real address. A
+blueprint that is code returns a `Computed`, and which attribute of
+which resource that `Computed` points at is known only inside the
+evaluation that produced it. The runtime does not report it back, so
+there is nothing to resolve against.
+
+Finishing this needs a runtime change: the evaluator has to return the
+resolved address of each output alongside the resources. Until then each
+output is registered with an empty address, so referencing one fails at
+the reference with that explanation, rather than reporting "no such
+blueprint call/output declared in this document" for an output that is
+genuinely declared.
+
 ## Inspect-without-execution
 
 The Ubxfile let a reader see every resource a blueprint could create

@@ -1,6 +1,7 @@
 package blueprint
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 func TestVerify_Success(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
-	packed, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz"))
+	packed, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz"))
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}
@@ -25,7 +26,7 @@ func TestVerify_Success(t *testing.T) {
 
 func TestVerify_TamperedFile_Fails(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -47,7 +48,7 @@ func TestVerify_TamperedFile_Fails(t *testing.T) {
 
 func TestVerify_MissingFile_Fails(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -69,7 +70,7 @@ func TestVerify_MissingFile_Fails(t *testing.T) {
 
 func TestVerify_ExtraFile_Fails(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -95,7 +96,7 @@ func TestVerify_NoManifest_Errors(t *testing.T) {
 
 func TestVerify_InvariantUnderRename(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 

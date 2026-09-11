@@ -50,7 +50,7 @@ func TestStripOCIScheme(t *testing.T) {
 func TestExtractTarGz_RoundTripsWithWriteTarGz(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "out.tar.gz")
-	if _, err := Package(dir, tarPath); err != nil {
+	if _, err := Package(context.Background(), dir, tarPath); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -186,7 +186,7 @@ func TestPushPullTarget_LocalOCIStoreRoundTrip(t *testing.T) {
 
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	pushManifest, err := Package(dir, tarPath)
+	pushManifest, err := Package(context.Background(), dir, tarPath)
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestMirrorRedistribution_ContentHashSurvivesToASecondLocation(t *testing.T)
 
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	originalManifest, err := Package(dir, tarPath)
+	originalManifest, err := Package(context.Background(), dir, tarPath)
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestPushToTarget_ManifestCarriesContentHashAnnotation(t *testing.T) {
 
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	pushManifest, err := Package(dir, tarPath)
+	pushManifest, err := Package(context.Background(), dir, tarPath)
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}

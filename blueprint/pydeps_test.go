@@ -60,7 +60,7 @@ def add_widget(name):
 	if err := os.WriteFile(filepath.Join(dir, "py", "widgetlib.py"), []byte(fn), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Package(dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 	return dir
@@ -241,7 +241,7 @@ func TestResolvePyDependencies_NameMismatch_Errors(t *testing.T) {
 
 func TestResolvePyDependencies_MissingPyPackage_Errors(t *testing.T) {
 	bpDir := writeSampleBuiltBlueprint(t) // go-only fixture (package_test.go), no py/
-	if _, err := Package(bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -274,7 +274,7 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 	// itself would (buildManifest+writeManifest, package.go's own Package
 	// does exactly this against "widget-lib", the directory's own
 	// basename).
-	if _, err := Package(bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 	gitCommitAll(t, repoDir, "add widget-lib blueprint")
@@ -429,7 +429,7 @@ func TestEvaluatePythonWithDeps_ProvenanceCompleted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Package(bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+	if _, err := Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 

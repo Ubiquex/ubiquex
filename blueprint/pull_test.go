@@ -282,7 +282,7 @@ func TestPull_BareTarballFile_ExtractsWithoutNetwork(t *testing.T) {
 
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	original, err := Package(dir, tarPath)
+	original, err := Package(context.Background(), dir, tarPath)
 	if err != nil {
 		t.Fatalf("Package: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestPull_BareTarballFile_ExtractsWithoutNetwork(t *testing.T) {
 func TestPull_BareTarballFile_RefPathFlagsRefused(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	if _, err := Package(dir, tarPath); err != nil {
+	if _, err := Package(context.Background(), dir, tarPath); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestPull_BareTarballFile_MissingUbxfile_Errors(t *testing.T) {
 func TestPull_BareTarballFile_TamperedContent_VerifyFails(t *testing.T) {
 	dir := writeSampleBuiltBlueprint(t)
 	tarPath := filepath.Join(t.TempDir(), "ci-platform-v1.tar.gz")
-	if _, err := Package(dir, tarPath); err != nil {
+	if _, err := Package(context.Background(), dir, tarPath); err != nil {
 		t.Fatalf("Package: %v", err)
 	}
 

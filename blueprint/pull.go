@@ -63,8 +63,8 @@ func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 			if err := extractTarGz(source, dest); err != nil {
 				return "", fmt.Errorf("blueprint pull: %s doesn't look like a real gzipped blueprint tarball: %w", source, err)
 			}
-			if _, err := os.Stat(filepath.Join(dest, UbxfileName)); err != nil {
-				return "", fmt.Errorf("blueprint pull: %s has no %s after extraction -- not a real blueprint tarball", source, UbxfileName)
+			if !IsBlueprintDir(dest) {
+				return "", fmt.Errorf("blueprint pull: %s has no %s after extraction -- not a real blueprint tarball", source, blueprintMarkers())
 			}
 			return dest, nil
 		}
@@ -100,8 +100,8 @@ func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 	if info, err := os.Stat(src); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("blueprint pull: %q not found (or not a directory) in %s@%s", path, source, refOrDefault(ref))
 	}
-	if _, err := os.Stat(filepath.Join(src, UbxfileName)); err != nil {
-		return "", fmt.Errorf("blueprint pull: %s at %s in %s@%s has no %s -- not a blueprint package", path, source, source, refOrDefault(ref), UbxfileName)
+	if !IsBlueprintDir(src) {
+		return "", fmt.Errorf("blueprint pull: %s at %s in %s@%s has no %s -- not a blueprint package", path, source, source, refOrDefault(ref), blueprintMarkers())
 	}
 
 	if err := copyDir(src, dest); err != nil {
