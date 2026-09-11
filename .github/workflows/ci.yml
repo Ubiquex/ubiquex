@@ -111,12 +111,13 @@ jobs:
           fi
           echo "go.mod and go.sum are tidy"
 
-      - name: Install bubblewrap and wasmtime
+      - name: Install bubblewrap, wasmtime and Deno
         # goeval's own real Linux sandbox is bubblewrap (docs/sdk.md's
         # own "Linux: namespaces (bwrap)" section); pyeval's own real
         # sandbox is wasmtime (docs/sdk.md's own "The Python evaluator:
-        # decided empirically" section, WASI via wasmtime). Neither
-        # ships on the runner by default -- caught live, not assumed,
+        # decided empirically" section, WASI via wasmtime); tseval's own
+        # evaluator is Deno. None of the three ships on the runner by
+        # default -- caught live, not assumed,
         # by this workflow's own first real PR run failing blueprint's
         # own real evaluator tests with "executable file not found in
         # $PATH" for exactly these two.
@@ -168,12 +169,27 @@ jobs:
           sudo apt-get install -y bubblewrap
           curl https://wasmtime.dev/install.sh -sSf | bash
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          # Deno was missing here until now, and nothing failed: every
+          # test needing it calls its own requireDeno, which SKIPS when
+          # it is absent rather than failing. So tseval's entire
+          # real-subprocess suite, the one whose own doc comment says
+          # its whole job is proving the real sandbox holds under a real
+          # deno subprocess, has never run in CI at all -- a green check
+          # that meant "not executed". Found while adding blueprint's
+          # own TypeScript extractor tests, which would have landed in
+          # the same hole.
+          curl -fsSL https://deno.land/install.sh | DENO_INSTALL="$HOME/.deno" sh -s -- --yes
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
           if ! command -v bwrap >/dev/null 2>&1; then
             echo "bubblewrap did not install correctly -- bwrap not on PATH" >&2
             exit 1
           fi
           if [ ! -x "$HOME/.wasmtime/bin/wasmtime" ]; then
             echo "wasmtime did not install correctly -- $HOME/.wasmtime/bin/wasmtime missing or not executable (wasmtime.dev/install.sh can fail this way while still exiting 0, confirmed live)" >&2
+            exit 1
+          fi
+          if [ ! -x "$HOME/.deno/bin/deno" ]; then
+            echo "deno did not install correctly -- $HOME/.deno/bin/deno missing or not executable" >&2
             exit 1
           fi
 
@@ -192,7 +208,21 @@ jobs:
         run: go build ./...
 
       - name: go test
-        run: go test ./...
+        # -v so a skipped suite is visible in the log. Every evaluator
+        # test skips rather than fails when its binary is absent (a
+        # deliberate choice, see tseval's own requireDeno), which is
+        # what let the whole TypeScript suite go unrun here unnoticed.
+        run: go test -v ./... 2>&1 | tee /tmp/test.log; exit "${PIPESTATUS[0]}"
+
+      - name: Report skipped tests
+        # Never fails the build: skipping is legitimate for a test gated
+        # on something this runner genuinely cannot provide. It is
+        # printed so that "nothing ran" can never again look identical
+        # to "everything passed".
+        if: always()
+        run: |
+          echo "Skipped tests in this run:"
+          grep -E "^(---|    ---) SKIP" /tmp/test.log || echo "  none"
 
       - name: Provider pins agree with what is committed and released
         # A snapshot travels through three places that can each move

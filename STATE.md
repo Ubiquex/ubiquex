@@ -7,6 +7,76 @@
 
 ## In flight
 
+**Blueprints as code: steps 1 to 4 done, step 5 is next (2026-09-11).**
+The Ubxfile is being replaced. A blueprint becomes ordinary code in one
+language, and the schema a caller needs is DERIVED from the function's
+own signature at package time into `blueprint.schema.json`, rather than
+declared. Agreed step order, with status:
+
+1. Runtime expressiveness, `sdk.Ptr`, nil-pointer omission -- DONE,
+   shipped as `ubx-sdk-go` **v0.4.0** and verified on the proxy.
+2. Schema format + Go authoring convention -- DONE (#125).
+3. Go extractor -- DONE (#125).
+4. TypeScript and Python extractors -- DONE, **PR #127 open, CI green**.
+5. Repoint `describe_blueprint`, `list_blueprints`, provenance and the
+   HCL `blueprint` block at the schema -- NOT STARTED. This is the next
+   piece of work.
+
+Nothing reads `blueprint.schema.json` yet, so the shipped commands still
+use the Ubxfile. Until step 5 lands, both models exist side by side and
+the Ubxfile is the one that is live.
+
+Open PRs from tonight: **#126** (sdk/go + sdk/py submodule bumps),
+**#127** (step 4), and **ubiquex-internals#9** (documents the mechanism,
+rule 10). All three green, none merged.
+
+Still to fold in when step 5 removes their owner: the four `resources.md`
+error messages at `gogen.go:233`, `tsgen.go:158`, `tsgen.go:821`,
+`pygen.go:156`.
+
+**What writing the extractors found, all three recorded in
+`docs/blueprint.md` and `ubiquex-internals`:** Python cannot interleave
+required and optional params where Go and TypeScript can, so a Go
+blueprint can have an order no Python blueprint reproduces; TypeScript
+needs its dependencies installed before its own signature can be read,
+where Go and Python do not; TypeScript can verify a type's provenance
+where Go cannot. The format also changed once: `Entrypoint.TSModule`
+became `TSEntry`, because what a TypeScript caller writes is a file
+path, not a module name.
+
+**CI was green for tests that never ran.** Deno was never installed in
+CI, and every test needing it SKIPS rather than fails when it is absent,
+so tseval's entire real-subprocess suite -- the tests whose own doc
+comment says their job is proving the sandbox holds under a real deno
+subprocess -- had never executed there. Fixed in #127: Deno is installed,
+`go test` runs with `-v`, and a step prints every skipped test so
+"nothing ran" can no longer look identical to "everything passed". The
+fix recovered 27 tseval tests plus the 29 new extractor tests.
+
+**Two traps hit tonight, both already named in CLAUDE.md.** A docs
+commit landed on a stale branch whose PR was already merged (rule 8's
+own second paragraph, caught by checking the real repo via `gh api`
+after the push reported success); and `git pull` in a repo checkout
+pulled a stale feature branch rather than `main`, because the checkout
+was never on `main` to begin with. Check `git status -sb` before
+committing in any repo this session did not itself check out.
+
+**UBI-253 is now five occurrences and blocked two PRs tonight.**
+Measurements: 1.01s, 2.17s, 0.86s, 0.457s, 0.52s against a 450ms bound.
+Two are within 70ms of the threshold, so the passing and failing
+populations overlap and no threshold separates them. Widening the margin
+is dead as an option. The fix is confined to `concurrency_test.go`:
+record per-node start and end times in the fake provider and assert two
+intervals overlap, which measures the property the test names and has no
+threshold to tune. Roughly 20 lines, no production code. Not done
+because it was never asked for; six reruns have been spent on it.
+
+**STATE.md is 3,100 lines**, against rule 3's own instruction that it
+holds only current state at a size a session can read without thinking
+about it. It is being appended to rather than rewritten. Compacting it,
+moving the closed arcs to `HISTORY.md`, is real and unclaimed work.
+
+
 **Release readiness, walked rather than read off the board (2026-09-09).**
 `main` is 85 commits past `v0.3.0`, the release users actually have.
 
@@ -37,8 +107,10 @@ Three real gaps, none of which were on the board:
    blocker, a loose end in the constitution.
 
 Cross-repo publish state is healthy, checked against the real registries
-rather than GitHub releases: Go proxy has `ubx-sdk-go` v0.3.0,
-PyPI has `ubx-sdk` 0.2.1, jsr has `@ubx/sdk` 0.1.2.
+rather than GitHub releases: Go proxy has `ubx-sdk-go` **v0.4.0** (cut
+2026-09-11, carrying nil-pointer omission and `sdk.Ptr`, verified at
+`cce61f8` via `@latest`), PyPI has `ubx-sdk` 0.2.1, jsr has `@ubx/sdk`
+0.1.2.
 
 One trap for whoever checks that next: **the Go proxy's `@v/list`
 endpoint is not authoritative.** It returned only v0.1.1/v0.1.2/v0.2.0
