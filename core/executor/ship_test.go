@@ -30,7 +30,83 @@ type fakeApplier struct {
 	createScripts  map[string][]applyStep   // keyed by a create's own "value" field -- no id exists yet at script time to key by, unlike scripts above
 	readsRemaining map[string]int           // UBI-44/42: id -> ReadResource calls remaining before it reports absent, for scriptDelayedAbsence
 	applyDelays    map[string]time.Duration // UBI-67: a create's own "value" field -> artificial delay, for scriptApplyDelay
+
+	// UBI-253: an apply barrier. Every create blocks inside
+	// ApplyResourceChange until barrierN of them are simultaneously in
+	// flight, which is a direct proof of overlap rather than an
+	// inference from elapsed time. See scriptApplyBarrier.
+	barrierN       int
+	barrierArrived int
+	barrierReady   chan struct{}
+	barrierTimeout time.Duration
 }
+
+// scriptApplyBarrier makes every subsequent create block inside
+// ApplyResourceChange until n of them are in flight at the same moment.
+//
+// This is how concurrency is asserted here, replacing a wall-clock
+// bound on the whole ship (UBI-253). The two are not equivalent. A
+// timing bound infers overlap from how long something took, so it
+// competes with every other thing the machine is doing, and its
+// passing and failing populations eventually overlap: UBI-253's five
+// real failures ranged from 0.457s to 2.17s against a 450ms bound, two
+// of them within 70ms of it, so no threshold separated a concurrent
+// run from a serial one any more.
+//
+// A barrier has no threshold to separate. n applies either are in
+// flight together or they are not: a serial scheduler runs the first
+// apply, which then waits for companions that by construction cannot
+// start, so it fails with that exact statement instead of with a
+// number that needs interpreting. A concurrent one releases as soon as
+// the nth arrives, which is also why this makes the test faster rather
+// than slower.
+func (f *fakeApplier) scriptApplyBarrier(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.barrierN = n
+	f.barrierArrived = 0
+	f.barrierReady = make(chan struct{})
+	f.barrierTimeout = defaultBarrierTimeout
+}
+
+// barrierWait is the arrival half of scriptApplyBarrier, called by a
+// create before it does anything else.
+//
+// The timeout exists only so a genuinely serial scheduler reports a
+// failure rather than hanging until the whole `go test` binary is
+// killed. It is not a timing assertion: it is never approached by a
+// passing run, which releases the instant the last arrival lands, and
+// no passing run gets closer to it as the machine gets busier.
+func (f *fakeApplier) barrierWait() error {
+	f.mu.Lock()
+	if f.barrierN == 0 {
+		f.mu.Unlock()
+		return nil
+	}
+	f.barrierArrived++
+	if f.barrierArrived == f.barrierN {
+		close(f.barrierReady)
+	}
+	ready, want, timeout := f.barrierReady, f.barrierN, f.barrierTimeout
+	f.mu.Unlock()
+
+	select {
+	case <-ready:
+		return nil
+	case <-time.After(timeout):
+		f.mu.Lock()
+		got := f.barrierArrived
+		f.mu.Unlock()
+		return fmt.Errorf("fake: apply barrier: only %d of %d applies were ever in flight at once -- independent nodes are not running concurrently", got, want)
+	}
+}
+
+// defaultBarrierTimeout is the give-up point for a scheduler that never
+// runs two nodes at once. Deliberately far larger than any real run
+// needs, because it is the failure path and nothing else. Overridable
+// on the fixture so the test that proves the barrier DETECTS a serial
+// scheduler does not have to wait it out.
+const defaultBarrierTimeout = 30 * time.Second
 
 type applyStep struct {
 	err                 error           // if set, ApplyResourceChange returns this error
@@ -109,6 +185,13 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 	// (a real gRPC ApplyResourceChange call) has exactly this shape --
 	// slow, but never holding any of ubx's own locks while slow.
 	if string(plannedState) != "null" {
+		// UBI-253: the barrier, like the delay below, is entered before
+		// any of this fixture's own lock is held, for the same reason:
+		// N concurrent creates have to genuinely overlap rather than
+		// serialize behind the bookkeeping mutex.
+		if err := f.barrierWait(); err != nil {
+			return nil, nil, err
+		}
 		var probe map[string]interface{}
 		if err := json.Unmarshal(plannedState, &probe); err == nil {
 			if v, _ := probe["value"].(string); v != "" {
