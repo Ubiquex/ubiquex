@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
 )
@@ -53,5 +57,63 @@ func TestStalePlanError_NamesTheCommandThatFixesIt(t *testing.T) {
 	msg := staleplanError(ledger, &core.Proposal{Parent: ""}).Error()
 	if !strings.Contains(msg, "Re-run `ubx plan`") {
 		t.Errorf("the one command that fixes this has to be named:\n%s", msg)
+	}
+}
+
+// TestConfirmAndAccept_StalePlanRefusedBeforeAnythingRenders covers
+// UBI-263's one real sharp edge.
+//
+// core.Accept's own parent check is the authority and is unchanged, but
+// it runs at the very end: after the ship header, after the orphan
+// check, and after a human has been asked to type "yes". A plan that
+// could not possibly ship still produced the full confirmation
+// ceremony, so a person could answer the question before being told the
+// answer could not be acted on.
+//
+// Asking the same question first costs one Head() read.
+func TestConfirmAndAccept_StalePlanRefusedBeforeAnythingRenders(t *testing.T) {
+	dir := t.TempDir()
+	ledger := core.Open(dir)
+
+	// A ledger with a real head, and a plan that predates it.
+	seed := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         "payments",
+		Kind:          core.KindChange,
+		Intent:        core.Intent{Summary: "the ledger moved"},
+		BlastRadius:   core.BlastRadius{Creates: 1},
+		Delta:         core.Delta{Creates: []json.RawMessage{json.RawMessage(`{"type":"fake_widget","name":"seed","op":"create","config":{"name":"seed"}}`)}},
+	}
+	if _, err := core.Accept(ledger, seed); err != nil {
+		t.Fatalf("seed the ledger: %v", err)
+	}
+
+	stale := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         "payments",
+		Kind:          core.KindChange,
+		Parent:        "", // resolved against the empty ledger, before seed
+		Intent:        core.Intent{Summary: "a plan that cannot ship"},
+		BlastRadius:   core.BlastRadius{Creates: 1},
+		Delta:         core.Delta{Creates: []json.RawMessage{json.RawMessage(`{"type":"fake_widget","name":"one","op":"create","config":{"name":"one"}}`)}},
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	// No --yes and no TTY: if the refusal did NOT come first, this would
+	// fail on the confirmation instead, which is the tell.
+	_, err := confirmAndAccept(cmd, ledger, newStyler(cmd), stale, false)
+	if err == nil {
+		t.Fatal("want a refusal for a plan the ledger has moved past")
+	}
+	if !strings.Contains(err.Error(), "no longer the head") {
+		t.Errorf("want the stale-plan refusal, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "interactive terminal") {
+		t.Error("the confirmation ran before the staleness check -- the refusal has to come first")
+	}
+	if out.Len() != 0 {
+		t.Errorf("nothing should render for a plan that cannot ship, got:\n%s", out.String())
 	}
 }

@@ -409,6 +409,24 @@ func renderShipConfirmSummary(out io.Writer, st *styler, p *core.Proposal, age s
 
 func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft *core.Proposal, yes bool) (*core.Proposal, error) {
 	out := cmd.OutOrStdout()
+
+	// The staleness check runs BEFORE anything is rendered (UBI-263).
+	//
+	// core.Accept refuses a plan whose recorded parent is no longer the
+	// head, correctly, but that happens at the very end: after the ship
+	// header, after the orphan check, after a human has been asked to
+	// type "yes". So a plan that cannot possibly ship still produced a
+	// full confirmation ceremony, and a person could answer the
+	// question before being told the answer could not be acted on.
+	//
+	// This is the same condition and the same message, asked first.
+	// core.Accept's own check stays exactly as it is: it is the
+	// authority, this is only an earlier, politer copy of the question,
+	// and a race between the two still lands there.
+	if head, err := ledger.Head(); err == nil && head != draft.Parent {
+		return nil, staleplanError(ledger, draft)
+	}
+
 	age := "unknown age"
 	if t, ok := parseResolvedAt(draft); ok {
 		age = humanAge(t)
