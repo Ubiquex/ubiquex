@@ -43,10 +43,14 @@ func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 	}
 
 	if strings.HasPrefix(source, "oci://") {
-		if ref != "" || path != "" {
-			return "", fmt.Errorf("blueprint pull: --ref/--path are git-specific and meaningless for an oci:// source -- drop them (the tag is already embedded in %s)", source)
+		if path != "" {
+			return "", fmt.Errorf("blueprint pull: --path is git-specific and meaningless for an oci:// source -- drop it (an artifact is the whole blueprint, there is no subdirectory to select)")
 		}
-		if err := pullOCI(ctx, source, dest); err != nil {
+		reference, err := ociReference(source, ref)
+		if err != nil {
+			return "", fmt.Errorf("blueprint pull: %w", err)
+		}
+		if err := pullOCI(ctx, reference, dest); err != nil {
 			return "", fmt.Errorf("blueprint pull: %w", err)
 		}
 		return dest, nil
@@ -177,4 +181,53 @@ func copyDir(src, dest string) error {
 		}
 		return os.WriteFile(target, raw, info.Mode().Perm())
 	})
+}
+
+// ociReference composes an oci:// source with a separately-supplied
+// version into one complete artifact reference (UBI-256).
+//
+// The version is the same idea for both source kinds: which version of
+// this blueprint. For git it is a ref; for OCI it is a tag, and a tag
+// is part of the reference rather than a parameter alongside it. So it
+// is composed in here, once, rather than by each medium that can supply
+// one.
+//
+// Before this, an oci:// source refused a version outright, because the
+// tag "is already embedded in the reference". That is true of a
+// reference that carries one, and it left the HCL blueprint block with
+// no working spelling at all: putting the tag in source produced a
+// blueprint name containing a colon, and supplying it as version
+// produced a git-specific refusal. Both are real reports from
+// publishing the first blueprint to a registry.
+//
+// Supplying it in BOTH places is refused rather than resolved by a
+// precedence rule. They can disagree, and silently picking a winner
+// would pull a version the author did not ask for, which is the worst
+// available outcome for something content-addressed.
+func ociReference(source, version string) (string, error) {
+	if version == "" {
+		return source, nil
+	}
+	if ociHasVersion(source) {
+		return "", fmt.Errorf("%s already names a version, and one was also given separately -- put it in exactly one place, since two can disagree", source)
+	}
+	if strings.HasPrefix(version, "sha256:") {
+		return source + "@" + version, nil
+	}
+	return source + ":" + version, nil
+}
+
+// ociHasVersion reports whether an oci:// reference already carries a
+// tag or a digest.
+//
+// The colon check deliberately looks only after the last slash: a
+// registry may carry a port ("oci://localhost:5000/repo"), and that
+// colon is part of the host, not a tag.
+func ociHasVersion(source string) bool {
+	rest := strings.TrimPrefix(source, "oci://")
+	if strings.Contains(rest, "@") {
+		return true
+	}
+	lastSlash := strings.LastIndex(rest, "/")
+	return strings.Contains(rest[lastSlash+1:], ":")
 }

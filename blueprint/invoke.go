@@ -322,7 +322,23 @@ func blueprintNameFromCall(call resolver.BlueprintCall) string {
 		return filepath.Base(call.Path)
 	}
 	trimmed := strings.TrimSuffix(strings.TrimSuffix(call.Blueprint, "/"), ".git")
-	return filepath.Base(trimmed)
+	base := filepath.Base(trimmed)
+	// An oci:// reference carries its version in the name itself
+	// ("repo:v0.1.0", or "repo@sha256:..."), and a version is not part
+	// of what the blueprint is CALLED. Leaving it attached produced a
+	// name containing a colon, which every identifier derivation then
+	// refused, so a published blueprint could be pulled successfully and
+	// still not be callable (UBI-256, found publishing the first real
+	// blueprint to a registry).
+	if strings.HasPrefix(call.Blueprint, "oci://") {
+		if at := strings.Index(base, "@"); at >= 0 {
+			base = base[:at]
+		}
+		if colon := strings.Index(base, ":"); colon >= 0 {
+			base = base[:colon]
+		}
+	}
+	return base
 }
 
 // invokeCall resolves, invokes, and returns the resources one
