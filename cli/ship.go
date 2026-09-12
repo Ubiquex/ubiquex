@@ -446,7 +446,43 @@ func confirmAndAccept(cmd *cobra.Command, ledger *core.Ledger, st *styler, draft
 			return nil, errShipDeclined
 		}
 	}
-	return core.Accept(ledger, draft)
+	accepted, err := core.Accept(ledger, draft)
+	if errors.Is(err, core.ErrParentMismatch) {
+		return nil, staleplanError(ledger, draft)
+	}
+	return accepted, err
+}
+
+// staleplanError turns a parent mismatch into the one thing the person
+// in front of it needs: what happened, and the single command that
+// fixes it (UBI-262).
+//
+// A saved plan records the ledger head it was resolved against. If the
+// ledger moves before the plan is shipped, accepting it would append
+// onto a parent that is no longer the head, and core.Accept refuses.
+// The refusal is correct and load-bearing: an append that ignored it
+// would break the ledger's own chain.
+//
+// What was wrong was only what the person was told. The raw error
+// names the mechanism ("accept: append: proposal parent does not match
+// ledger head"), prints an empty string for a plan built against an
+// empty ledger, prints a full 64-character head nobody can act on, and
+// never mentions `ubx plan`. Every other refusal on this path teaches:
+// shipping without a TTY names --yes, `ubx why` on an unknown address
+// names `ubx history`. This one did not.
+//
+// The realistic trigger is not a contrived sequence. It is a shared
+// stack: you plan, a teammate's PR-merge acceptance lands, you ship.
+func staleplanError(ledger *core.Ledger, draft *core.Proposal) error {
+	was := "an empty ledger"
+	if draft.Parent != "" {
+		was = "ledger head " + displayHash(draft.Parent, false)
+	}
+	now := "is now empty"
+	if head, err := ledger.Head(); err == nil && head != "" {
+		now = "is now at " + displayHash(head, false)
+	}
+	return fmt.Errorf("this plan was resolved against %s, and the ledger %s -- the ledger moved after `ubx plan` ran, so shipping this plan would append onto a position that is no longer the head. Re-run `ubx plan` to resolve against the current head, then ship that", was, now)
 }
 
 // parseResolvedAt is a small, never-fails helper over
