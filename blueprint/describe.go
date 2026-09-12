@@ -197,7 +197,7 @@ func Describe(dir string) (*Description, error) {
 		return nil, err
 	}
 	if ok {
-		return descriptionFromSchema(dir, schema), nil
+		return DescriptionFromSchema(dir, schema), nil
 	}
 
 	ubxfile, err := ParseUbxfile(dir)
@@ -217,7 +217,7 @@ func Describe(dir string) (*Description, error) {
 	}, nil
 }
 
-// descriptionFromSchema projects a derived schema onto the shape every
+// DescriptionFromSchema projects a derived schema onto the shape every
 // existing consumer already speaks.
 //
 // Param.Default stays nil throughout, which is the honest projection: a
@@ -232,7 +232,7 @@ func Describe(dir string) (*Description, error) {
 // resolves its own outputs when it runs, so there is nothing to record
 // and nothing that needs it. Only codegen reads Target, and codegen is
 // what this model removes.
-func descriptionFromSchema(dir string, s *Schema) *Description {
+func DescriptionFromSchema(dir string, s *Schema) *Description {
 	params := make([]Param, 0, len(s.Params))
 	for _, p := range s.Params {
 		params = append(params, Param{Name: p.Name, Type: p.Type, Required: p.Required})

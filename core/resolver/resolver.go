@@ -246,6 +246,24 @@ type IntentFile struct {
 	DataSources []DataSourceIntent `json:"data_sources,omitempty"`
 	Destroys    []string           `json:"destroys,omitempty"`
 
+	// BlueprintOutputs was added 2026-09-12 (docs/schema.md's own
+	// "Amendment: blueprint output addresses", UBI-261): output name ->
+	// the resolved "<stack>.<type>.<name>.<attr>" address that output's
+	// own Computed refers to, reported by a blueprint caller's own
+	// evaluation.
+	//
+	// It exists because that address is knowable only while a blueprint
+	// RUNS. An Ubxfile declared each output as a literal
+	// "<resource-slug>.<attribute>" target, readable without running
+	// anything; a blueprint that is code returns a Computed, and which
+	// attribute of which resource that points at can depend on the
+	// blueprint's own branching, so nothing outside the evaluation can
+	// derive it.
+	//
+	// Empty and omitted for every document except one a blueprint
+	// caller produced, which is every document a person ever writes.
+	BlueprintOutputs map[string]string `json:"blueprint_outputs,omitempty"`
+
 	// BlueprintCalls was added 2026-08-04 (UBI-74 Slice 5): one entry per
 	// blueprint invocation this document names -- a hand-written
 	// intent/v1 file's own explicit entry, the one real remaining

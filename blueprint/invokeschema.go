@@ -92,6 +92,21 @@ func writeGoSchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 	if len(fields) > 0 {
 		body = "\n" + strings.Join(fields, "\n") + "\n\t\t"
 	}
+
+	// The call's own result is captured and reported only when the
+	// blueprint declares outputs, so a blueprint without any compiles
+	// against an SDK older than the one that introduced
+	// BlueprintOutputs (UBI-261).
+	call := fmt.Sprintf("bp.%s(bp.%s{%s})", s.Entrypoint.Function, s.Entrypoint.ConfigType, body)
+	if len(s.Outputs) > 0 {
+		entries := make([]string, 0, len(s.Outputs))
+		for _, o := range s.Outputs {
+			entries = append(entries, fmt.Sprintf("\t\t\t%s: out.%s,", strconv.Quote(o.Name), o.SourceName))
+		}
+		call = fmt.Sprintf("out := %s\n\t\tsdk.BlueprintOutputs(map[string]*sdk.Computed{\n%s\n\t\t})",
+			call, strings.Join(entries, "\n"))
+	}
+
 	src := fmt.Sprintf(`package main
 
 import (
@@ -102,11 +117,10 @@ import (
 func main() {
 	sdk.Main(sdk.Stack(%s, func() {
 		sdk.Intent(sdk.IntentInfo{Summary: %s})
-		bp.%s(bp.%s{%s})
+		%s
 	}))
 }
-`, strconv.Quote(s.Entrypoint.GoModule), strconv.Quote(stackName), strconv.Quote(summary),
-		s.Entrypoint.Function, s.Entrypoint.ConfigType, body)
+`, strconv.Quote(s.Entrypoint.GoModule), strconv.Quote(stackName), strconv.Quote(summary), call)
 
 	entry := filepath.Join(entryDir, "main.go")
 	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
@@ -153,15 +167,27 @@ func writeTSSchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 	if len(fields) > 0 {
 		body = "\n" + strings.Join(fields, "\n") + "\n  "
 	}
+
+	call := fmt.Sprintf("%s({%s});", s.Entrypoint.Function, body)
+	if len(s.Outputs) > 0 {
+		sdkImports = "blueprintOutputs, " + sdkImports
+		entries := make([]string, 0, len(s.Outputs))
+		for _, o := range s.Outputs {
+			entries = append(entries, fmt.Sprintf("    %s: out.%s,", jsonStringLiteral(o.Name), o.SourceName))
+		}
+		call = fmt.Sprintf("const out = %s({%s});\n  blueprintOutputs({\n%s\n  });",
+			s.Entrypoint.Function, body, strings.Join(entries, "\n"))
+	}
+
 	src := fmt.Sprintf(`import { %s } from "@ubx/sdk";
 import { %s } from %s;
 
 stack(%s, () => {
   intent({ summary: %s });
-  %s({%s});
+  %s
 });
 `, sdkImports, s.Entrypoint.Function, jsonStringLiteral(absEntry),
-		jsonStringLiteral(stackName), jsonStringLiteral(summary), s.Entrypoint.Function, body)
+		jsonStringLiteral(stackName), jsonStringLiteral(summary), call)
 
 	entry := filepath.Join(scratch, "caller.ts")
 	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
@@ -198,19 +224,27 @@ func writePySchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 	if s.Entrypoint.ConfigType != "" {
 		imports += ", " + s.Entrypoint.ConfigType
 	}
+	call := fmt.Sprintf("%s(%s(%s))", s.Entrypoint.Function, s.Entrypoint.ConfigType, strings.Join(fields, ", "))
+	if len(s.Outputs) > 0 {
+		entries := make([]string, 0, len(s.Outputs))
+		for _, o := range s.Outputs {
+			entries = append(entries, fmt.Sprintf("        %s: out.%s,", jsonStringLiteral(o.Name), o.SourceName))
+		}
+		call = fmt.Sprintf("out = %s\n    sdk.blueprint_outputs({\n%s\n    })", call, strings.Join(entries, "\n"))
+	}
+
 	src := fmt.Sprintf(`import ubx_sdk as sdk
 from %s import %s
 
 
 def describe():
     sdk.intent(%s)
-    %s(%s(%s))
+    %s
 
 
 if __name__ == "__main__":
     sdk.run(%s, describe)
-`, s.Entrypoint.PyModule, imports, jsonStringLiteral(summary),
-		s.Entrypoint.Function, s.Entrypoint.ConfigType, strings.Join(fields, ", "),
+`, s.Entrypoint.PyModule, imports, jsonStringLiteral(summary), call,
 		jsonStringLiteral(stackName))
 
 	entry := filepath.Join(pyScratch, "_ubx_call_driver.py")

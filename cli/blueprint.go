@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +28,7 @@ func newBlueprintCmd() *cobra.Command {
 	cmd.AddCommand(newBlueprintPushCmd())
 	cmd.AddCommand(newBlueprintPullCmd())
 	cmd.AddCommand(newBlueprintVerifyCmd())
+	cmd.AddCommand(newBlueprintDescribeCmd())
 	return cmd
 }
 
@@ -328,3 +332,190 @@ func newBlueprintVerifyCmd() *cobra.Command {
 // deterministically, with no AI drafting step involved. See
 // docs/blueprint.md's own "The build pipeline" section for the full
 // token grammar.
+
+// newBlueprintDescribeCmd is `ubx blueprint describe` (UBI-261): read a
+// blueprint and report what it takes and returns, without building,
+// packaging, or running it.
+//
+// It exists because an author writing a blueprint as code had no way to
+// see the schema their own function produces. The schema is derived at
+// package time, so checking it meant packaging the blueprint, or asking
+// an assistant to call the describe_blueprint MCP tool. Needing an
+// assistant to read your own function's signature is the wrong shape,
+// and the MCP tool already proved the payload is worth having.
+//
+// Deliberately DERIVES rather than reading a written
+// blueprint.schema.json, for a directory that holds source: the point
+// is answering "what will this become", and reading a file that a
+// previous package wrote would answer "what did it become last time",
+// which is exactly the staleness the derived schema exists to prevent.
+func newBlueprintDescribeCmd() *cobra.Command {
+	var asJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "describe [dir]",
+		Short: "Report what a blueprint takes and returns, without building or running it",
+		Long: `Reads the blueprint in dir (default the current directory) and reports its parameters, its outputs,
+and, for a blueprint written as code, the entrypoint a caller invokes.
+
+For a blueprint that is code, the schema is DERIVED here from the function's own signature, the same derivation
+"ubx blueprint package" performs, rather than read back from a blueprint.schema.json a previous package wrote.
+That answers "what will this become", not "what did it become last time".
+
+An optional parameter of a code blueprint reports "default not derivable": its default lives in the function
+body, where reading it would mean running the code.`,
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint describe: %w", err)}
+			}
+
+			desc, err := describeBlueprintDir(cmd.Context(), absDir)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint describe: %w", err)}
+			}
+
+			out := cmd.OutOrStdout()
+			if asJSON {
+				if desc.Schema == nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint describe: %s is described by its own %s, which has no JSON form -- --json reports a derived schema", absDir, blueprint.UbxfileName)}
+				}
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(desc.Schema); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint describe: %w", err)}
+				}
+				return nil
+			}
+			renderBlueprintDescription(out, desc)
+			return nil
+		},
+	}
+
+	// No backticks in this description: cobra reads a backticked span as
+	// the flag's own value placeholder, so "`ubx blueprint package`"
+	// rendered as "--json ubx blueprint package" in --help. Caught by
+	// reading the real --help output while writing the user docs, which
+	// is what CLAUDE.md rule 5 asks for.
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the derived schema as JSON, exactly as ubx blueprint package would write it")
+	return cmd
+}
+
+// describeBlueprintDir derives a code blueprint's schema fresh, and
+// falls back to whatever an Ubxfile blueprint already declares.
+func describeBlueprintDir(ctx context.Context, absDir string) (*blueprint.Description, error) {
+	if _, err := os.Stat(filepath.Join(absDir, blueprint.UbxfileName)); err != nil {
+		if _, langErr := blueprint.DetectLanguage(absDir); langErr == nil {
+			schema, err := blueprint.Extract(ctx, absDir, filepath.Base(absDir))
+			if err != nil {
+				return nil, err
+			}
+			return blueprint.DescriptionFromSchema(absDir, schema), nil
+		}
+	}
+	return blueprint.Describe(absDir)
+}
+
+// renderBlueprintDescription prints the human form. Params and outputs
+// keep their declaration order, which is the schema's own and the
+// source's own.
+func renderBlueprintDescription(out io.Writer, d *blueprint.Description) {
+	fmt.Fprintf(out, "%s (%s, described by %s)\n", d.Name, d.Lang, d.Source)
+
+	if e := d.Schema; e != nil {
+		fmt.Fprintf(out, "\nentrypoint\n")
+		switch e.Entrypoint.Language {
+		case "go":
+			fmt.Fprintf(out, "  import   %s\n", e.Entrypoint.GoModule)
+			fmt.Fprintf(out, "  package  %s\n", e.Entrypoint.GoPackage)
+		case "ts":
+			fmt.Fprintf(out, "  entry    %s\n", e.Entrypoint.TSEntry)
+		case "py":
+			fmt.Fprintf(out, "  module   %s\n", e.Entrypoint.PyModule)
+		}
+		fmt.Fprintf(out, "  function %s(%s)", e.Entrypoint.Function, e.Entrypoint.ConfigType)
+		if e.Entrypoint.OutputsType != "" {
+			fmt.Fprintf(out, " %s", e.Entrypoint.OutputsType)
+		}
+		fmt.Fprintln(out)
+	}
+
+	fmt.Fprintf(out, "\nparams\n")
+	if len(d.Params) == 0 {
+		fmt.Fprintln(out, "  (none)")
+	}
+	for _, p := range d.Params {
+		required := "optional"
+		if p.Required {
+			required = "required"
+		}
+		fmt.Fprintf(out, "  %-24s %-14s %s", p.Name, p.Type, required)
+		switch {
+		case p.Required:
+		case d.DefaultsKnown:
+			fmt.Fprintf(out, ", default %v", p.Default)
+		default:
+			fmt.Fprintf(out, ", default not derivable")
+		}
+		if sn := sourceNameOfParam(d, p.Name); sn != "" && sn != p.Name {
+			fmt.Fprintf(out, "  [%s]", sn)
+		}
+		fmt.Fprintln(out)
+	}
+
+	fmt.Fprintf(out, "\noutputs\n")
+	if len(d.Outputs) == 0 {
+		fmt.Fprintln(out, "  (none)")
+	}
+	for _, o := range d.Outputs {
+		fmt.Fprintf(out, "  %-24s", o.Name)
+		if o.Target != "" {
+			fmt.Fprintf(out, " %s", o.Target)
+		}
+		if sn := sourceNameOfOutput(d, o.Name); sn != "" && sn != o.Name {
+			fmt.Fprintf(out, "  [%s]", sn)
+		}
+		fmt.Fprintln(out)
+	}
+
+	if d.Schema != nil && len(d.Schema.Derivation.Assumptions) > 0 {
+		fmt.Fprintf(out, "\nassumptions\n")
+		for _, a := range d.Schema.Derivation.Assumptions {
+			fmt.Fprintf(out, "  %s\n", a)
+		}
+	}
+}
+
+// sourceNameOfParam/sourceNameOfOutput surface the identifier as
+// written, which is what a caller constructing a config literal needs
+// and cannot reconstruct from the wire name.
+func sourceNameOfParam(d *blueprint.Description, name string) string {
+	if d.Schema == nil {
+		return ""
+	}
+	for _, p := range d.Schema.Params {
+		if p.Name == name {
+			return p.SourceName
+		}
+	}
+	return ""
+}
+
+func sourceNameOfOutput(d *blueprint.Description, name string) string {
+	if d.Schema == nil {
+		return ""
+	}
+	for _, o := range d.Schema.Outputs {
+		if o.Name == name {
+			return o.SourceName
+		}
+	}
+	return ""
+}
