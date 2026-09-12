@@ -399,7 +399,12 @@ body, where reading it would mean running the code.`,
 		},
 	}
 
-	cmd.Flags().BoolVar(&asJSON, "json", false, "print the derived schema as JSON, exactly as `ubx blueprint package` would write it")
+	// No backticks in this description: cobra reads a backticked span as
+	// the flag's own value placeholder, so "`ubx blueprint package`"
+	// rendered as "--json ubx blueprint package" in --help. Caught by
+	// reading the real --help output while writing the user docs, which
+	// is what CLAUDE.md rule 5 asks for.
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the derived schema as JSON, exactly as ubx blueprint package would write it")
 	return cmd
 }
 
