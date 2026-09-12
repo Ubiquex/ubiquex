@@ -4906,22 +4906,49 @@ undefined, which is what `sdk.Ptr` and nil-omission exist for.
 fields by their real identifiers, and no case conversion of `target_arn`
 produces `TargetARN`.
 
-### The one thing that does not work yet
+### How a code blueprint's outputs resolve (UBI-261)
 
-**A schema-described blueprint's outputs are not addressable from HCL.**
+The two models resolve outputs differently, and have to, because they
+know different things.
+
 An Ubxfile declared each output as a `"<resource-slug>.<attribute>"`
-target, which is exactly the pair needed to build a real address. A
-blueprint that is code returns a `Computed`, and which attribute of
-which resource that `Computed` points at is known only inside the
-evaluation that produced it. The runtime does not report it back, so
-there is nothing to resolve against.
+target, readable without running anything. A blueprint that is code
+returns a `Computed`, and which attribute of which resource that points
+at can depend on the blueprint's own branching, so nothing outside the
+evaluation can derive it. **The evaluation reports it instead**: the
+synthesized caller passes each returned output to the runtime's own
+`BlueprintOutputs`, and the evaluated document comes back carrying
+`blueprint_outputs`, output name to resolved address (`docs/schema.md`,
+"Amendment: blueprint output addresses").
 
-Finishing this needs a runtime change: the evaluator has to return the
-resolved address of each output alongside the resources. Until then each
-output is registered with an empty address, so referencing one fails at
-the reference with that explanation, rather than reporting "no such
-blueprint call/output declared in this document" for an output that is
-genuinely declared.
+The address arrives already fully qualified, because the blueprint
+evaluated inside the calling stack, so `resolveCallOutputs` has nothing
+left to re-qualify.
+
+Two consequences worth stating:
+
+- **A declared output the blueprint never sets is refused**, naming
+  which one. It cannot be referenced, and failing at the call says so
+  better than failing at whatever config happened to reference it.
+- **The caller only reports outputs when the blueprint declares any.**
+  A blueprint with no outputs produces a caller that never mentions
+  `BlueprintOutputs`, so it still compiles against an SDK older than the
+  one that introduced it. A blueprint WITH outputs needs
+  `ubx-sdk-go` v0.5.0 or later, and the matching TypeScript and Python
+  releases.
+
+### Seeing the schema without packaging
+
+`ubx blueprint describe [dir]` reports what a blueprint takes and
+returns, including the entrypoint and each param's own source
+identifier, without building, packaging or running it. `--json` prints
+the derived schema exactly as `package` would write it.
+
+For a directory that holds source it **derives** rather than reading
+back a `blueprint.schema.json` a previous package wrote. That is the
+point: the question an author is asking is "what will this become", and
+reading the written file would answer "what did it become last time",
+which is precisely the staleness deriving exists to prevent.
 
 ## Inspect-without-execution
 

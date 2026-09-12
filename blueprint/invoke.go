@@ -470,7 +470,7 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		})
 	}
 
-	callOutputs, err := resolveCallOutputs(callingStack, desc, result.Resources)
+	callOutputs, err := resolveCallOutputs(callingStack, desc, result.Resources, result.BlueprintOutputs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve outputs: %w", err)
 	}

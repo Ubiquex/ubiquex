@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ubiquex/ubiquex/blueprint"
 )
 
 // blueprintTestDraft is a pre-resolved intent/v1 document -- the SAME
@@ -364,5 +367,133 @@ func TestBlueprintBuild_EmptyDirStillReportsTheMissingUbxfile(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "Ubxfile") {
 		t.Errorf("want the missing-Ubxfile error, got: %v", err)
+	}
+}
+
+// blueprintDescribeFixture writes a code blueprint whose field names
+// are acronym-cased on purpose: the identifier is what a caller has to
+// type, and it is the thing the wire name cannot be converted back into.
+func blueprintDescribeFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module github.com/ubx-blueprints/demo\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := "package demo\n\ntype Config struct {\n\tName      string\n\tTargetARN *string\n}\n\ntype Outputs struct {\n\tQueueURL *sdk.Computed\n}\n\nfunc Demo(cfg Config) Outputs { return Outputs{} }\n"
+	if err := os.WriteFile(filepath.Join(dir, "demo.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// UBI-261: an author writing a blueprint as code had no way to see the
+// schema their own function produces without packaging it or asking an
+// assistant to call the MCP tool.
+func TestBlueprintDescribe_ReportsParamsOutputsAndEntrypoint(t *testing.T) {
+	dir := blueprintDescribeFixture(t)
+
+	var out bytes.Buffer
+	cmd := newBlueprintDescribeCmd()
+	cmd.SetArgs([]string{dir})
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"described by schema",
+		"github.com/ubx-blueprints/demo",
+		"Demo(Config) Outputs",
+		"name",
+		"target_arn",
+		"[TargetARN]",
+		"queue_url",
+		"[QueueURL]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output is missing %q:\n%s", want, got)
+		}
+	}
+	// The identifier is shown whenever it differs from the wire name at
+	// all, which for Go means always. Suppressing the "obvious" ones
+	// would mean deciding that Name is reconstructible from name, and
+	// that is exactly the per-language reconstruction rule source_name
+	// exists because it does not work: the same rule turns target_arn
+	// into TargetArn, which does not compile.
+	if !strings.Contains(got, "[Name]") {
+		t.Errorf("the identifier a caller has to type is always shown:\n%s", got)
+	}
+}
+
+// An optional param of a code blueprint has no derivable default, and
+// saying so is the point: "optional" alone is ambiguous with "optional,
+// defaults to null".
+func TestBlueprintDescribe_SaysADefaultIsNotDerivable(t *testing.T) {
+	var out bytes.Buffer
+	cmd := newBlueprintDescribeCmd()
+	cmd.SetArgs([]string{blueprintDescribeFixture(t)})
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "default not derivable") {
+		t.Errorf("an optional param has to say why it has no default:\n%s", out.String())
+	}
+}
+
+// describe DERIVES rather than reading back a blueprint.schema.json a
+// previous package wrote. Reading the file would answer "what did this
+// become last time", which is the staleness the derived schema exists
+// to prevent, and it would be silently wrong for an author who has just
+// edited their function.
+func TestBlueprintDescribe_DerivesRatherThanReadingAStaleSchema(t *testing.T) {
+	dir := blueprintDescribeFixture(t)
+	stale := `{"schema_version":1,"name":"demo","entrypoint":{"language":"go","function":"GoneAway","config_type":"Nope"},"params":[{"name":"invented","source_name":"Invented","type":"string","required":true}],"outputs":[],"defaults":{"derivable":false,"reason":"x"},"derivation":{"assumptions":[]}}`
+	if err := os.WriteFile(filepath.Join(dir, blueprint.SchemaFileName), []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	cmd := newBlueprintDescribeCmd()
+	cmd.SetArgs([]string{dir})
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "invented") || strings.Contains(got, "GoneAway") {
+		t.Errorf("a stale written schema was read back instead of deriving:\n%s", got)
+	}
+	if !strings.Contains(got, "target_arn") {
+		t.Errorf("the real signature was not derived:\n%s", got)
+	}
+}
+
+// An Ubxfile blueprint still describes, reporting its declared defaults
+// rather than "not derivable", since it genuinely has them.
+func TestBlueprintDescribe_UbxfileReportsItsDeclaredDefaults(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, blueprint.UbxfileName), []byte("lang: go\n\nparams:\n  name: string, required\n  tag: string, default \"prod\"\n\nresources: |\n  placeholder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	cmd := newBlueprintDescribeCmd()
+	cmd.SetArgs([]string{dir})
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "default prod") {
+		t.Errorf("an Ubxfile's declared default is real and has to be shown:\n%s", got)
+	}
+	if strings.Contains(got, "not derivable") {
+		t.Errorf("an Ubxfile blueprint's defaults are derivable:\n%s", got)
 	}
 }

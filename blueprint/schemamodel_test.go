@@ -307,38 +307,49 @@ func TestDetectLanguage_RefusesMixedSource(t *testing.T) {
 	}
 }
 
-// A schema-described blueprint's outputs cannot be addressed from HCL
-// yet, and the refusal has to say why rather than claiming the output
-// was never declared. This is the one part of step 5 that a runtime
-// change is needed to finish.
-func TestResolveCallOutputs_SchemaOutputsAreNotAddressableYet(t *testing.T) {
+// UBI-261: a schema-described blueprint's outputs resolve from what the
+// evaluation REPORTED, since nothing outside it can derive the address.
+func TestResolveCallOutputs_SchemaOutputsComeFromTheEvaluation(t *testing.T) {
 	desc := &Description{
 		Outputs: []Output{{Name: "widget_id"}},
 		Schema:  &Schema{SchemaVersion: SchemaVersion},
 		Source:  "schema",
 	}
-	addr, err := resolveCallOutputs("payments", desc, []resolver.ResourceIntent{{Type: "fake_widget", Name: "primary"}})
+	reported := map[string]string{"widget_id": "payments.fake_widget.primary.id"}
+	addr, err := resolveCallOutputs("payments", desc, []resolver.ResourceIntent{{Type: "fake_widget", Name: "primary"}}, reported)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok := addr["widget_id"]
-	if !ok {
-		t.Fatal("the output has to be registered, or a reference to it reports 'no such output' for one that is declared")
-	}
-	if got != "" {
-		t.Fatalf("addr = %q, want the empty sentinel", got)
+	if addr["widget_id"] != "payments.fake_widget.primary.id" {
+		t.Errorf("widget_id = %q", addr["widget_id"])
 	}
 
 	intent := &resolver.IntentFile{Resources: []resolver.ResourceIntent{{
 		Type: "fake_widget", Name: "consumer",
 		Config: json.RawMessage(`{"upstream":{"$ref":{"to":"` + blueprintOutputRefPrefix + `widget_id"}}}`),
 	}}}
-	err = rewriteBlueprintOutputRefs(intent, addr)
-	if err == nil {
-		t.Fatal("want a refusal when a schema-described blueprint's output is referenced")
+	if err := rewriteBlueprintOutputRefs(intent, addr); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "not addressable yet") {
-		t.Errorf("the refusal has to say why, got: %v", err)
+	if !strings.Contains(string(intent.Resources[0].Config), "payments.fake_widget.primary.id") {
+		t.Errorf("the reference was not rewritten: %s", intent.Resources[0].Config)
+	}
+}
+
+// A declared output the blueprint never set cannot be referenced, and
+// the refusal says so rather than reporting the output as undeclared.
+func TestResolveCallOutputs_SchemaOutputNeverSetIsRefused(t *testing.T) {
+	desc := &Description{
+		Outputs: []Output{{Name: "widget_id"}},
+		Schema:  &Schema{SchemaVersion: SchemaVersion},
+		Source:  "schema",
+	}
+	_, err := resolveCallOutputs("payments", desc, nil, map[string]string{})
+	if err == nil {
+		t.Fatal("want a refusal for a declared output the blueprint never set")
+	}
+	if !strings.Contains(err.Error(), "returned no value") {
+		t.Errorf("the refusal has to say what happened, got: %v", err)
 	}
 }
 
@@ -427,5 +438,66 @@ func TestExpandCalls_CodeBlueprint_RealGoEvaluation(t *testing.T) {
 	}
 	if !strings.HasPrefix(blueprintRef, "ubx-fake-widget:sha256:") {
 		t.Errorf("provenance ref = %q, want <name>:<content hash>", blueprintRef)
+	}
+}
+
+// TestExpandCalls_CodeBlueprintOutputsAreReferenceable is UBI-261's own
+// end-to-end proof: a resource the CALLER writes consumes an output a
+// code blueprint returned, resolved to a real address.
+//
+// This is the thing the schema model could not do. The address is
+// produced inside the blueprint's own evaluation, reported by the
+// synthesized caller through sdk.BlueprintOutputs, and substituted into
+// the referencing config here.
+func TestExpandCalls_CodeBlueprintOutputsAreReferenceable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiles and evaluates a real Go program")
+	}
+	dir := writeCodeBlueprint(t, t.TempDir(), "ubx-fake-widget")
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          "intent",
+		Stack:         "payments",
+		Intent:        core.Intent{Summary: "consume a blueprint's own output"},
+		Resources: []resolver.ResourceIntent{{
+			Type: "fake_widget", Name: "consumer", Op: "create",
+			Config: json.RawMessage(`{"name":"consumer","upstream":{"$ref":{"to":"` + blueprintOutputRefPrefix + `widget:widget_id"}}}`),
+		}},
+		BlueprintCalls: []resolver.BlueprintCall{{
+			Name:      "widget",
+			CallName:  "widget",
+			Blueprint: dir,
+			Args:      map[string]string{"name": "primary-widget"},
+		}},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	var consumer *resolver.ResourceIntent
+	for i := range intent.Resources {
+		if intent.Resources[i].Name == "consumer" {
+			consumer = &intent.Resources[i]
+		}
+	}
+	if consumer == nil {
+		t.Fatal("the caller's own resource vanished")
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(consumer.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	ref, ok := cfg["upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("upstream = %v, want a $ref object", cfg["upstream"])
+	}
+	inner, _ := ref["$ref"].(map[string]any)
+	to, _ := inner["to"].(string)
+	if to != "payments.fake_widget.primary.id" {
+		t.Errorf("resolved to %q, want the blueprint's own widget address", to)
 	}
 }

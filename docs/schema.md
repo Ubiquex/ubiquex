@@ -2301,6 +2301,47 @@ source, never ambiguously.
 `addressesOverChain`), `cli/restore.go` (new), `cli/history.go` (new),
 `cli/why.go`'s `renderIntentSource` gains the `case "restore":` above.
 
+### Amendment: blueprint output addresses -- one new optional intent field, additive (2026-09-12, UBI-261)
+
+An evaluated intent document may now carry **`blueprint_outputs`**, an
+object mapping an output name to the resolved
+`"<stack>.<type>.<name>.<attr>"` address that output refers to.
+
+```json
+"blueprint_outputs": {
+  "queue_url": "payments.aws_sqs_queue.orders.url",
+  "queue_arn": "payments.aws_sqs_queue.orders.arn"
+}
+```
+
+**Why it has to exist at all.** Under the Ubxfile, a blueprint declared
+each output as a literal `"<resource-slug>.<attribute>"` target, which
+could be read without running anything, and `resolveCallOutputs` built
+the real address from it. Under blueprints-as-code a blueprint returns a
+`Computed` instead, and which attribute of which resource that points at
+can depend on the blueprint's own branching. Nothing outside the
+evaluation can derive it: reading it from source would mean interpreting
+the function body, which is exactly what the derived schema exists to
+avoid. So the evaluation reports it.
+
+**Who writes it.** Only the synthesized caller program `ubx` builds to
+invoke a blueprint (`blueprint/invokeschema.go`), via each runtime's own
+`BlueprintOutputs`/`blueprintOutputs`/`blueprint_outputs`. No
+hand-written program has a reason to, and none of the three runtimes
+calls it on a program's behalf.
+
+**Additive, and omitted rather than empty.** A document produced by
+anything other than a blueprint caller does not carry the key at all, so
+every intent document written or produced before this amendment
+serializes byte-identically. It is ordinary hashed content and follows
+the same canonical-serialization rules as every other field: a map, so
+key order is canonicalized like any other object.
+
+**An output that is declared but never set** is not recorded, rather
+than recorded with an empty address. The caller refuses the call with a
+named error saying which output was never set, which is a better place
+to fail than at whatever config happened to reference it.
+
 ### Amendment: human-readable aliases for ledger heads -- workspace-local, not ledger content, no schema change (2026-09-01, UBI-228)
 
 This section's own founding text ("Notes," above) already anticipated this:

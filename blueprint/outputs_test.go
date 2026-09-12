@@ -22,7 +22,7 @@ func TestResolveCallOutputs_Basic(t *testing.T) {
 		{Type: "aws_ecr_repository", Name: "container-repo"},
 		{Type: "aws_sqs_queue", Name: "pipeline-events"},
 	}
-	out, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources)
+	out, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources, nil)
 	if err != nil {
 		t.Fatalf("resolveCallOutputs: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestResolveCallOutputs_Basic(t *testing.T) {
 }
 
 func TestResolveCallOutputs_NoOutputs_EmptyMap(t *testing.T) {
-	out, err := resolveCallOutputs("payments", &Description{Source: UbxfileName}, nil)
+	out, err := resolveCallOutputs("payments", &Description{Source: UbxfileName}, nil, nil)
 	if err != nil {
 		t.Fatalf("resolveCallOutputs: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestResolveCallOutputs_NoOutputs_EmptyMap(t *testing.T) {
 func TestResolveCallOutputs_UnknownSlug_Errors(t *testing.T) {
 	ubxfile := &Ubxfile{Outputs: []Output{{Name: "repo_arn", Target: "does-not-exist.arn"}}}
 	resources := []resolver.ResourceIntent{{Type: "aws_ecr_repository", Name: "container-repo"}}
-	_, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources)
+	_, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources, nil)
 	if err == nil || !strings.Contains(err.Error(), "no resource with slug") {
 		t.Fatalf("expected a no-such-slug error, got %v", err)
 	}
@@ -59,7 +59,7 @@ func TestResolveCallOutputs_AmbiguousSlug_Errors(t *testing.T) {
 		{Type: "aws_ecr_repository", Name: "thing"},
 		{Type: "aws_sqs_queue", Name: "thing"},
 	}
-	_, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources)
+	_, err := resolveCallOutputs("payments", &Description{Outputs: ubxfile.Outputs, Source: UbxfileName}, resources, nil)
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected an ambiguous-slug error, got %v", err)
 	}
