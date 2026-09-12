@@ -7,110 +7,89 @@
 
 ## In flight
 
-**Blueprints as code: all five steps done (2026-09-11).** The Ubxfile is
-replaced. A blueprint is ordinary code in one language, and the schema a
-caller needs is DERIVED from its own function signature at package time
-into `blueprint.schema.json` rather than declared.
+**v0.5.0 is released and verified (2026-09-12).** The delivery gap is
+closed: 28 commits that had accumulated on `main` are now in a binary a
+user can install.
 
-1. Runtime expressiveness, `sdk.Ptr`, nil-pointer omission -- DONE,
-   shipped as `ubx-sdk-go` **v0.4.0**, verified on the proxy.
-2. Schema format + Go authoring convention -- DONE (#125).
-3. Go extractor -- DONE (#125).
-4. TypeScript and Python extractors -- DONE (#127).
-5. Consumers repointed, and a code blueprint callable end to end --
-   **PR #129 open, CI green**.
+Verified as a user would get it, not from the workflow status:
+downloaded `ubx_0.5.0_darwin_arm64.tar.gz`, checked its SHA256 against
+`checksums.txt`, ran it. Then proved UBI-260's fix is in the binary
+rather than only in the version string by running the same TypeScript
+stack against both releases: v0.4.0 fails with "not a dependency and
+not in import map", v0.5.0 plans cleanly. UBI-260 closed on delivery.
 
-A Go blueprint written by hand now packages (deriving its schema),
-pulls, and is called through the real `goeval` sandbox, with nothing
-generated and no Ubxfile. `blueprint.Describe` is the single place the
-schema-beats-Ubxfile precedence lives.
+Release notes are written rather than goreleaser's generated commit
+list. The generated list is still what goreleaser produces by default,
+replaced afterwards with `gh release edit --notes-file`; making that
+the default would be a `.goreleaser.yaml` change nobody has made yet.
 
-**The one thing left in the arc, and it needs a runtime change.** A
-schema-described blueprint's outputs are not addressable from the HCL
-`blueprint` block. An Ubxfile declared each output as a
-`"<resource-slug>.<attribute>"` target; code returns a `Computed` whose
-resolved address is known only inside the evaluation that produced it,
-and the evaluator does not report it back. Finishing it means the
-evaluator returning each output's resolved address alongside the
-resources. Until then a reference fails at the reference naming that
-reason, rather than claiming the output was never declared. Not
-ticketed yet.
+**All three runtimes published and content-verified:** `ubx-sdk-go`
+v0.5.0 (proxy zip contains `BlueprintOutputs`, and a fresh module
+`go get`s it), `@ubx/sdk` 1.0.3 on npm (`dist/` contains
+`blueprintOutputs`), `ubx-sdk` 0.2.2 on PyPI (wheel contains
+`blueprint_outputs`). Version-bump PRs merged, so each repo's declared
+version matches its registry.
 
-Still to fold in when the Ubxfile itself is removed: the four
-`resources.md` error messages at `gogen.go:233`, `tsgen.go:158`,
-`tsgen.go:821`, `pygen.go:156`. Both models are still live: `build`
-and the Ubxfile path are untouched and still work.
+`sdk/ts`'s `runtime/deno.json` still says 0.1.2 and that is correct:
+npm is driven by `package.json`, and JSR is a separate, still-manual
+track its own `publish.yml` documents.
 
-**UBI-253 is fixed (#128, open, green).** The wall-clock bound is gone.
-Every create now blocks in the fake applier until the scheduler's own
-configured parallelism is in flight at once, which is overlap observed
-rather than inferred and has no threshold to tune. Two holes were found
-by probing rather than reading, both closed: sizing the barrier to
-`maxParallelShipNodes` meant a cap of 1 passed vacuously, and the
-barrier itself was unverified, so a test now pins the scheduler to one
-node and requires the ship to fail.
+**Blueprints as code is complete, all five steps plus UBI-261.** A
+blueprint is ordinary code in one language, its schema is derived from
+its own function signature, and its outputs reach a hand-written intent
+file. `ubx blueprint describe` reports what a blueprint takes without
+building, packaging or running it.
 
-**Open PRs from this session, all green, none merged:** ubiquex **#128**
-(UBI-253), **#129** (step 5), and **ubiquex-internals#10** (documents
-what reads the schema, rule 10).
+**Two traps for the next session, both cost real time here.**
 
-**What building the extractors found**, recorded in `docs/blueprint.md`
-and `ubiquex-internals`: Python cannot interleave required and optional
-params where Go and TypeScript can; TypeScript needs its dependencies
-installed before its signature can be read, where Go and Python do not;
-TypeScript can verify a type's provenance where Go cannot. One format
-change came out of it, `Entrypoint.TSModule` to `TSEntry`, because what
-a TypeScript caller writes is a file path, not a module name.
+The Go module proxy's `@latest` is cached and lagged. It reported
+v0.4.0 for a while after v0.5.0 was published and fetchable. Same class
+as the `@v/list` trap already recorded: query `@v/<version>.info`, or
+just `go get` it into a scratch module, which is the real test anyway.
 
-**CI was green for tests that never ran, now fixed.** Deno was never
-installed in CI, and every test needing it skips rather than fails when
-absent, so tseval's entire real-subprocess suite had never executed
-there. #127 installs Deno, runs `go test -v`, and prints every skipped
-test afterwards. That recovered 27 tseval tests plus 29 new extractor
-tests.
+npm and PyPI both take minutes to serve a freshly published version.
+Checking too early reports the old version and looks exactly like a
+failed publish. `ubx-sdk-typescript`'s own publish workflow has this
+bug: it polls ~100s and reports FAILURE for a publish that succeeded
+(ubx-sdk-typescript#26). A session checking PyPI in this state briefly
+concluded the publish had silently failed, which it had not.
 
-**The wasmtime installer flaked again** on #129's first run
-(`wasmtime.dev/install.sh` exiting 0 without installing). The existing
-guard caught it at the right step and a rerun was clean. Third
-recurrence of the same upstream bug; the guard is doing its job, so
-this is a note rather than an action.
+**Version-bump PRs opened by a publish workflow need their CI approved
+before they can merge.** They are opened by `github-actions[bot]`, so
+the required `test` check sits at `action_required` and the PR is
+BLOCKED forever with no checks reported. `gh api -X POST
+repos/<owner>/<repo>/actions/runs/<id>/approve` releases it.
 
-**Two traps hit this session, both already named in CLAUDE.md.** A docs
-commit landed on a stale branch whose PR was already merged (rule 8's
-second paragraph, caught by `gh api` after the push reported success);
-and `git pull` in a repo checkout pulled that stale branch rather than
-`main`, because the checkout was never on `main`. Check `git status -sb`
-before committing in any repo this session did not itself check out.
+**UBI-262 fixed, UBI-263 filed.** A plan built before the ledger moved
+failed at ship with `accept: append: proposal parent does not match
+ledger head` and no advice. It now says what happened and names
+`ubx plan` as the fix.
 
-**Docs debt, recorded as CLAUDE.md rule 5's own named exception
-(2026-09-11).** Blueprints-as-code is user-visible and
-`ubx-docs-users` documents none of it. Eight pages under
-`content/tutorial/blueprints/` and `content/concepts/` teach the
-Ubxfile model. None of them is WRONG: the Ubxfile path is untouched and
-still works, and both models are live. What is missing is that a
-blueprint can now be written as code at all, that `ubx blueprint
-package` derives its schema, and the changed `describe_blueprint` /
-`list_blueprints` payloads (`described_by`, `default_known`,
-`source_name`, `entrypoint`).
+The follow-on question, whether a plan can record an empty parent
+against a non-empty ledger, is **settled: it cannot.** `plan` records
+the real head, verified deliberately. What was actually seen was a
+leftover plan file from an empty-ledger plan whose ship had failed,
+re-selected as "the latest" because a later `plan` also failed. That
+shape is UBI-263, low priority.
 
-Deliberately not written yet, for a reason rather than for time: the
-model is half-transitioned. A code blueprint's outputs cannot be
-referenced from HCL (UBI-261), so documenting it now would teach a
-workflow that breaks at the step most authors reach second. The right
-order is UBI-261, then the docs, then deciding the Ubxfile's own
-removal.
+**Docs debt is paid.** `ubx-docs-users` has a "Writing a blueprint as
+code" tutorial alongside the Ubxfile one, and `describe` in the CLI
+reference. Every transcript is real output run against the exact source
+shown. The remaining Ubxfile pages are not wrong, since that path still
+works.
 
-**Found by walking the real flow with the built binary, not by reading
-code.** A hand-written Go blueprint packages, verifies and pulls
-correctly, with the schema derived and the hash covering it. Three
-rough edges came out of it, two fixed in the same pass (`build` on a
-code blueprint gave a bare "open .../Ubxfile: no such file or
-directory", and `package`'s own help still said the directory must
-already be built). The third is unfixed and is a real hole: **there is
-no CLI way to see a blueprint's derived schema.** An author must
-package it, or use the MCP tool. `ubx blueprint describe` does not
-exist, though `describe_blueprint` does as an MCP tool. Not ticketed,
-since it is a small new command rather than a defect.
+**What is left, walked rather than read off the board.** The core flow
+is sound end to end against `fakeprovider`: init, plan, ship, status,
+scan, why, history. Open and worth doing: UBI-257 (a blueprint's
+content hash never reaches a shipped plan), UBI-254 (the `blueprint`
+package is unimportable by any external module), UBI-252 (fixtures more
+permissive than the real APIs), UBI-255 (`go test` not hermetic),
+UBI-259, UBI-258 (now Ubxfile-only, since the code model resolves it),
+UBI-263.
+
+The Ubxfile's own removal stays deliberately undecided. Both models
+work, and `build`, `convert` and the three codegen backends are
+untouched.
 
 **STATE.md is 3,100 lines**, against rule 3's own instruction that it
 holds only current state at a size a session can read without thinking
