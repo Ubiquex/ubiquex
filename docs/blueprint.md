@@ -4860,6 +4860,53 @@ That is the deliberate division: prose for people and models, schema for
 machines, and the schema derived from the code rather than from the
 prose, so the two cannot drift.
 
+## Naming a version for an oci:// source (UBI-256)
+
+A blueprint pulled from a registry can name its version in either
+place, and the two compose in one function (`ociReference`,
+`blueprint/pull.go`) rather than in each medium that can supply one:
+
+```hcl
+blueprint "ubx_aws_sqs" "orders" {
+  source = "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs:v0.1.0"
+  name   = "demo-orders"
+}
+```
+
+```hcl
+blueprint "ubx_aws_sqs" "orders" {
+  source  = "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs"
+  version = "v0.1.0"
+  name    = "demo-orders"
+}
+```
+
+Both work, and a `sha256:` version joins with `@` rather than `:`,
+since a digest is not a tag.
+
+**Naming it in both places at once is refused**, rather than resolved
+by a precedence rule. The two can disagree, and silently picking a
+winner would pull a version the author did not ask for, which is the
+worst available outcome for something content-addressed.
+
+Neither spelling worked before. Putting the tag in `source` produced a
+blueprint name of `ubx-aws-sqs:v0.1.0`, and every identifier derivation
+refuses a colon, so the artifact pulled successfully and the call then
+failed on a name ubx had derived itself. Supplying it as `version`
+mapped onto `Ref`, which the OCI path refused as git-specific. The
+version is now stripped from a derived name, because a version is not
+part of what a blueprint is called.
+
+The intent was already written down: `hclstack/parse.go`'s own doc
+comment said `version` maps to "a git ref, or an oci:// tag when the
+source doesn't already carry one". Only the second half was never
+implemented. Found by publishing the first real blueprint to a
+registry, which is the delivery path an actual consumer uses.
+
+`--path` stays refused for an `oci://` source: an artifact is the whole
+blueprint, so there is no subdirectory to select. Only `--ref` changed
+meaning.
+
 ## What reads the schema
 
 `ubx blueprint package` is where a schema is derived and written, and

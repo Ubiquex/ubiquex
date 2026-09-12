@@ -88,6 +88,17 @@
 // the ticket, added here for parity with BlueprintCall's own real third
 // field) onto Path -- a git-hosted blueprint nested in a subdirectory
 // would otherwise be uncallable from this medium at all.
+//
+// The "or an oci:// tag" half of that sentence was the intent from the
+// start and was not implemented: Pull refused a ref for an oci://
+// source outright, so version was unusable there, and putting the tag
+// in source instead produced a blueprint name containing a colon that
+// every identifier derivation refused. Neither spelling worked, and a
+// blueprint published to a registry could be pulled successfully and
+// still not be callable. Pull now composes the two (blueprint/pull.go's
+// own ociReference), so both spellings work and supplying a version in
+// both places at once is refused rather than silently resolved
+// (UBI-256).
 package hclstack
 
 import (

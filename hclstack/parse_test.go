@@ -352,3 +352,75 @@ blueprint "postgres" "primary" {
 		t.Fatalf("expected an empty-stack error, got: %v", err)
 	}
 }
+
+// TestParseBytes_OCISourceBothSpellings pins UBI-256: a blueprint
+// published to a registry had no working spelling from .ubx.hcl. The
+// tag in `source` produced a blueprint name containing a colon that
+// every identifier derivation refused, and the tag in `version`
+// produced a git-specific refusal from the pull. Both were real reports
+// from publishing the first blueprint to a registry.
+//
+// This asserts only what this package owns, the parse. The composition
+// and the name derivation are blueprint's own (ociReference,
+// blueprintNameFromCall), tested there.
+func TestParseBytes_OCISourceBothSpellings(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantSource  string
+		wantVersion string
+	}{
+		{
+			name: "tag in source",
+			src: `
+stack = "platform"
+
+blueprint "ubx-aws-sqs" "orders" {
+  source = "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs:v0.1.0"
+  name   = "demo-orders"
+}
+`,
+			wantSource:  "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs:v0.1.0",
+			wantVersion: "",
+		},
+		{
+			name: "tag as version",
+			src: `
+stack = "platform"
+
+blueprint "ubx-aws-sqs" "orders" {
+  source  = "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs"
+  version = "v0.1.0"
+  name    = "demo-orders"
+}
+`,
+			wantSource:  "oci://ghcr.io/ubx-blueprints/ubx-aws-sqs",
+			wantVersion: "v0.1.0",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			intent, err := ParseBytes([]byte(c.src), "test.ubx.hcl")
+			if err != nil {
+				t.Fatalf("ParseBytes: %v", err)
+			}
+			if len(intent.BlueprintCalls) != 1 {
+				t.Fatalf("got %d calls, want 1", len(intent.BlueprintCalls))
+			}
+			call := intent.BlueprintCalls[0]
+			if call.Blueprint != c.wantSource {
+				t.Errorf("source = %q, want %q", call.Blueprint, c.wantSource)
+			}
+			if call.Ref != c.wantVersion {
+				t.Errorf("version = %q, want %q", call.Ref, c.wantVersion)
+			}
+			if call.Path != "" {
+				t.Errorf("path = %q, want empty -- an artifact is the whole blueprint", call.Path)
+			}
+			if call.Args["name"] != "demo-orders" {
+				t.Errorf("args = %v", call.Args)
+			}
+		})
+	}
+}
