@@ -88,7 +88,7 @@ and, if given, a provider -- written into the modern [thirdparty_providers]/[pro
 multi-provider stack uses (never the legacy singular [provider]/[provider_config] table, which --provider's own
 local-binary-path escape hatch still writes for local/dev use -- see --provider below). Everything else
 (github_repo, tf_dir, k8s_audit, ledger, intent) is left out of the default output entirely rather than shown
-commented -- see the full key reference at https://github.com/Ubiquex/ubiquex-docs, cli/config, or pass --full to
+commented -- see the full key reference at https://docs.ubiquex.io/cli-reference/config, or pass --full to
 get the old exhaustive, annotated file inline instead.
 
 If no provider is given by flag and this is a real terminal, a short prompt asks for one (registry source,

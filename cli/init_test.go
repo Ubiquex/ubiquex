@@ -615,3 +615,23 @@ func TestInit_TTYPrompt_UbxProviderGoesToProvidersTable(t *testing.T) {
 		t.Errorf("[providers] entry = %v, want source ubiquex/aws version 3.0.0", entry)
 	}
 }
+
+// TestInitHelp_PointsAtTheLiveDocsSite guards the one thing about a
+// help string that can rot without any code changing: the URL.
+//
+// ubx init's own generated config already pointed at docs.ubiquex.io
+// via docsConfigRef, and its --help text still pointed at
+// github.com/Ubiquex/ubiquex-docs, the retired Mintlify repo that
+// serves nothing and is archived. The constant was fixed and the prose
+// beside it was not. Found by reading real --help output while walking
+// the flow, which is the only way this class of rot surfaces.
+func TestInitHelp_PointsAtTheLiveDocsSite(t *testing.T) {
+	cmd := newInitCmd()
+	help := cmd.Long + " " + cmd.Short
+	if strings.Contains(help, "ubiquex-docs") {
+		t.Errorf("init's help points at the retired docs repo:\n%s", help)
+	}
+	if !strings.Contains(help, docsConfigRef) {
+		t.Errorf("init's help should hand the reader the URL that renders the page (%s):\n%s", docsConfigRef, help)
+	}
+}
