@@ -82,6 +82,36 @@ and `git pull` in a repo checkout pulled that stale branch rather than
 `main`, because the checkout was never on `main`. Check `git status -sb`
 before committing in any repo this session did not itself check out.
 
+**Docs debt, recorded as CLAUDE.md rule 5's own named exception
+(2026-09-11).** Blueprints-as-code is user-visible and
+`ubx-docs-users` documents none of it. Eight pages under
+`content/tutorial/blueprints/` and `content/concepts/` teach the
+Ubxfile model. None of them is WRONG: the Ubxfile path is untouched and
+still works, and both models are live. What is missing is that a
+blueprint can now be written as code at all, that `ubx blueprint
+package` derives its schema, and the changed `describe_blueprint` /
+`list_blueprints` payloads (`described_by`, `default_known`,
+`source_name`, `entrypoint`).
+
+Deliberately not written yet, for a reason rather than for time: the
+model is half-transitioned. A code blueprint's outputs cannot be
+referenced from HCL (UBI-261), so documenting it now would teach a
+workflow that breaks at the step most authors reach second. The right
+order is UBI-261, then the docs, then deciding the Ubxfile's own
+removal.
+
+**Found by walking the real flow with the built binary, not by reading
+code.** A hand-written Go blueprint packages, verifies and pulls
+correctly, with the schema derived and the hash covering it. Three
+rough edges came out of it, two fixed in the same pass (`build` on a
+code blueprint gave a bare "open .../Ubxfile: no such file or
+directory", and `package`'s own help still said the directory must
+already be built). The third is unfixed and is a real hole: **there is
+no CLI way to see a blueprint's derived schema.** An author must
+package it, or use the MCP tool. `ubx blueprint describe` does not
+exist, though `describe_blueprint` does as an MCP tool. Not ticketed,
+since it is a small new command rather than a defect.
+
 **STATE.md is 3,100 lines**, against rule 3's own instruction that it
 holds only current state at a size a session can read without thinking
 about it. It is being appended to rather than rewritten. Compacting it,

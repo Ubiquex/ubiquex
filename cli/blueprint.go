@@ -109,6 +109,18 @@ omitted entirely, since resources: is only ever parsed once regardless of how ma
 
 			ubxfile, draft, err := blueprint.Validate(absDir)
 			if err != nil {
+				// A blueprint that is CODE has no Ubxfile and needs no
+				// build: its own source is what runs, and its schema is
+				// derived by `package`. Without this an author who has
+				// just written one gets a bare "open .../Ubxfile: no such
+				// file or directory", which names a file they deliberately
+				// do not have, at exactly the moment they are learning
+				// that the two models differ.
+				if _, statErr := os.Stat(filepath.Join(absDir, blueprint.UbxfileName)); statErr != nil {
+					if lang, langErr := blueprint.DetectLanguage(absDir); langErr == nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %s holds %s source and no %s -- a blueprint written as code is not built, it IS the package; run `ubx blueprint package` to derive its schema and archive it", absDir, lang, blueprint.UbxfileName)}
+					}
+				}
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint build: %w", err)}
 			}
 
@@ -163,13 +175,18 @@ func newBlueprintPackageCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "package <dir>",
-		Short: "Package a built blueprint directory into a content-addressed tarball",
+		Short: "Package a blueprint directory into a content-addressed tarball",
 		Long: `Computes a content hash over every file in dir (the same canonical-hashing approach "ubx accept" already
 uses for a Proposal's own hash -- core/canonical.go), writes it into dir/blueprint.lock.json, and archives dir
 (including that manifest) into a gzipped tar at -o.
 
-dir must already be a built blueprint (an Ubxfile, plus whatever "ubx blueprint build" produced) -- package
-doesn't build anything itself.`,
+For a blueprint written as CODE, package is also where its schema is derived: the signature of its own
+entrypoint function is read (without running it) and written to blueprint.schema.json inside dir, before the
+hash is computed, so the hash covers it. The schema is re-derived on every package rather than reused, so it
+cannot disagree with the function it describes.
+
+For an Ubxfile blueprint, dir must already be built (an Ubxfile, plus whatever "ubx blueprint build"
+produced) -- package builds nothing itself.`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
