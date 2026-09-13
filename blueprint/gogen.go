@@ -38,7 +38,7 @@ func GenerateGo(blueprintName string, ubxfile *Ubxfile, intent *resolver.IntentF
 	if err != nil {
 		return nil, fmt.Errorf("blueprint: %w", err)
 	}
-	funcName, err := pascalCase(blueprintName)
+	funcName, err := pascalCaseAuthored(blueprintName)
 	if err != nil {
 		return nil, fmt.Errorf("blueprint: %w", err)
 	}
@@ -225,7 +225,7 @@ func (g *goGenerator) wrap() error {
 		return err
 	}
 	for _, dr := range g.blueprint.Resources {
-		ident, err := pascalCase(sources[dr.Address])
+		ident, err := pascalCaseAuthored(sources[dr.Address])
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}
@@ -263,7 +263,11 @@ func (g *goGenerator) render() error {
 		gr.nameExpr = nameExpr
 
 		for _, f := range dr.Fields {
-			goName, err := pascalCase(f.WireKey)
+			// The one place this package converts a provider's own WIRE
+			// name rather than an authored one, so it uses the strict
+			// converter and gives the same answer the published SDK's
+			// codegen gives (UBI-264).
+			goName, err := pascalCaseWire(f.WireKey)
 			if err != nil {
 				return fmt.Errorf("blueprint: resource %s.%s: config field %q: %w", dr.RI.Type, dr.RI.Name, f.WireKey, err)
 			}
@@ -1068,7 +1072,7 @@ func renderGoOptions(b *strings.Builder, defaulted []Param) error {
 		if err != nil {
 			return err
 		}
-		wname, err := pascalCase(p.Name)
+		wname, err := pascalCaseAuthored(p.Name)
 		if err != nil {
 			return err
 		}
@@ -1112,7 +1116,7 @@ func checkGoOptionIdentCollisions(g *goGenerator, allParams []Param, defaulted [
 
 	candidates := []string{"Option", "options", "cfg", "opts"}
 	for _, p := range defaulted {
-		wname, err := pascalCase(p.Name)
+		wname, err := pascalCaseAuthored(p.Name)
 		if err != nil {
 			return err
 		}

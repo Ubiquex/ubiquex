@@ -150,7 +150,7 @@ func (g *tsGenerator) wrap() error {
 		return err
 	}
 	for _, dr := range g.blueprint.Resources {
-		ident, err := pascalCase(sources[dr.Address])
+		ident, err := pascalCaseAuthored(sources[dr.Address])
 		if err != nil {
 			return fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}

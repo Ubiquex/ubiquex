@@ -681,7 +681,7 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 	if err != nil {
 		return "", err
 	}
-	funcName, err := pascalCase(blueprintName)
+	funcName, err := pascalCaseAuthored(blueprintName)
 	if err != nil {
 		return "", err
 	}
@@ -723,7 +723,7 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 		if !a.Given {
 			continue
 		}
-		wname, err := pascalCase(a.Param.Name)
+		wname, err := pascalCaseAuthored(a.Param.Name)
 		if err != nil {
 			return "", err
 		}

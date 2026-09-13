@@ -667,7 +667,7 @@ func identSources(resources []*decodedResource) (map[string]string, error) {
 			name = b
 		}
 		basis[dr.Address] = name
-		ident, err := pascalCase(name)
+		ident, err := pascalCaseAuthored(name)
 		if err != nil {
 			return nil, fmt.Errorf("blueprint: resource %s.%s: %w", dr.RI.Type, dr.RI.Name, err)
 		}
