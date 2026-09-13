@@ -79,6 +79,16 @@ bot-triggered CI run is approved: it sits at `action_required` with no
 checks reported, which reads as broken branch protection. `gh api -X
 POST repos/<owner>/<repo>/actions/runs/<id>/approve` releases it.
 
+**Docs debt, deliberate (UBI-265).** A Python code blueprint can now be
+declared as a `requirements.txt` dependency, and nothing in
+`ubx-docs-users` documents the Python blueprint calling path at all,
+including UBI-130's `<name> @ <url>` syntax that predates this. Not
+written this session on purpose: the same walkthrough showed the path
+does not stamp provenance for a code blueprint (the `push_blueprint_source`
+call comes from generated wrapper code a code blueprint has none of), so
+documenting the path now would commit to a shape that is under active
+question on UBI-265. Write the page once that is settled.
+
 ## Blocked
 
 Nothing currently blocked.

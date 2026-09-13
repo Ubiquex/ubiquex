@@ -485,3 +485,179 @@ if __name__ == "__main__":
 		t.Fatalf("after stamping, resource's own ref = %q, want the real resolved ref %q", got, ref)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Code blueprints as Python dependencies (UBI-265)
+// ---------------------------------------------------------------------
+
+// writeSamplePyCodeBlueprint writes a blueprint WRITTEN AS CODE: no
+// Ubxfile, no py/ subdirectory, no build step. Package derives its
+// schema from the function signature, exactly as `ubx blueprint package`
+// does, so the fixture is the real artifact rather than a hand-made
+// approximation of one.
+func writeSamplePyCodeBlueprint(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := `from dataclasses import dataclass
+
+import ubx_sdk as ubx
+from ubx_sdk import Computed, FieldSpec, ResourceBinding
+
+
+@dataclass
+class Config:
+    name: str
+
+
+@dataclass
+class Outputs:
+    queue_url: Computed
+
+
+WIDGET = ResourceBinding(
+    wire_type="fake_widget",
+    fields={"name": FieldSpec(wire_name="name")},
+)
+
+
+@dataclass
+class WidgetConfig:
+    name: str
+
+
+def widget_bp(cfg: Config) -> Outputs:
+    q = ubx.resource(WIDGET, "queue", WidgetConfig(name=cfg.name))
+    return Outputs(q.url)
+`
+	if err := os.WriteFile(filepath.Join(dir, "blueprint.py"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+		t.Fatalf("Package: %v", err)
+	}
+	return dir
+}
+
+// A code blueprint's source IS its package, so requiring a built py/
+// directory refused every one of them. The refusal named `ubx blueprint
+// build`, which correctly refuses a code blueprint in turn, so the two
+// messages pointed at each other and this path could never be satisfied.
+func TestResolvePyDependencies_CodeBlueprint_MountsItsOwnDirectory(t *testing.T) {
+	bpDir := writeSamplePyCodeBlueprint(t, "widget-bp")
+
+	progDir := t.TempDir()
+	writeRequirementsTxt(t, progDir, "widget-bp @ "+bpDir+"\n")
+
+	mounts, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	if err != nil {
+		t.Fatalf("ResolvePyDependencies: %v", err)
+	}
+	if len(mounts) != 1 {
+		t.Fatalf("got %d mounts, want 1", len(mounts))
+	}
+	m := mounts[0]
+
+	// The mount is the blueprint root itself, so the module named in the
+	// schema (entrypoint.py_module) is importable from it. That is the
+	// contract the schema already documents.
+	if _, err := os.Stat(filepath.Join(m.HostDir, "blueprint.py")); err != nil {
+		t.Errorf("HostDir %s is not the blueprint root: %v", m.HostDir, err)
+	}
+	if filepath.Base(m.HostDir) == "py" {
+		t.Errorf("HostDir = %s, a code blueprint has no py/ subdirectory", m.HostDir)
+	}
+	if !strings.Contains(m.Receipt, "verified: content hash sha256:") {
+		t.Errorf("Receipt = %q, missing a verified content hash", m.Receipt)
+	}
+	if !strings.HasPrefix(m.Ref, "widget-bp:sha256:") {
+		t.Errorf("Ref = %q, want the blueprint's own name and content hash", m.Ref)
+	}
+}
+
+// A blueprint is single-language, so a Go one named as a Python
+// dependency cannot work. Naming the language it IS written in is the
+// whole diagnosis: the usual cause is a requirements.txt entry pointing
+// at the wrong blueprint, which is only visible from the answer.
+func TestResolvePyDependencies_CodeBlueprintInAnotherLanguage_NamesIt(t *testing.T) {
+	bpDir := writeCodeBlueprint(t, t.TempDir(), "widget-bp") // Go (schemamodel_test.go)
+	if _, err := Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+		t.Fatalf("Package: %v", err)
+	}
+
+	progDir := t.TempDir()
+	writeRequirementsTxt(t, progDir, "widget-bp @ "+bpDir+"\n")
+
+	_, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	if err == nil {
+		t.Fatal("want a refusal for a Go blueprint named as a Python dependency")
+	}
+	if !strings.Contains(err.Error(), "is written in go") {
+		t.Fatalf("error does not name the language it is written in: %v", err)
+	}
+	if strings.Contains(err.Error(), "ubx blueprint build") {
+		t.Fatalf("error sends the reader to a command that refuses a code blueprint: %v", err)
+	}
+}
+
+// An Ubxfile blueprint that was never built for py keeps the original
+// refusal, which is correct for it: building IS the missing step.
+func TestResolvePyDependencies_UnbuiltUbxfileBlueprint_StillSaysBuildIt(t *testing.T) {
+	bpDir := writeSampleBuiltBlueprint(t) // go-only, no py/, no schema
+	if _, err := Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "out.tar.gz")); err != nil {
+		t.Fatalf("Package: %v", err)
+	}
+
+	progDir := t.TempDir()
+	writeRequirementsTxt(t, progDir, filepath.Base(bpDir)+" @ "+bpDir+"\n")
+
+	_, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	if err == nil || !strings.Contains(err.Error(), "ubx blueprint build") {
+		t.Fatalf("got %v, want the build-it refusal for an Ubxfile blueprint", err)
+	}
+}
+
+// The end-to-end proof that the mounted directory actually makes a code
+// blueprint importable: the driver's own plain `from blueprint import
+// ...` has to resolve inside the sandbox, against a blueprint that was
+// pulled and verified before the script ever ran.
+func TestEvaluatePythonWithDeps_CodeBlueprint_ImportsAndRuns(t *testing.T) {
+	requireWasmtimeForBlueprintTests(t)
+
+	bpDir := writeSamplePyCodeBlueprint(t, "widget-bp")
+
+	progDir := t.TempDir()
+	writeRequirementsTxt(t, progDir, "widget-bp @ "+bpDir+"\n")
+	driver := `import ubx_sdk as sdk
+from blueprint import Config, widget_bp
+
+
+def describe():
+    sdk.intent("a code blueprint pulled via requirements.txt")
+    widget_bp(Config(name="from-a-code-blueprint"))
+
+
+if __name__ == "__main__":
+    sdk.run("payments", describe)
+`
+	entryFile := filepath.Join(progDir, "main.py")
+	if err := os.WriteFile(entryFile, []byte(driver), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	canon, receipts, _, err := EvaluatePythonWithDeps(ctx, entryFile)
+	if err != nil {
+		t.Fatalf("EvaluatePythonWithDeps: %v", err)
+	}
+	if len(receipts) != 1 || !strings.Contains(receipts[0], "verified") {
+		t.Fatalf("receipts = %v, want exactly one verified receipt line", receipts)
+	}
+	if !strings.Contains(string(canon), "from-a-code-blueprint") {
+		t.Fatalf("the pulled code blueprint's own resource is missing:\n%s", canon)
+	}
+}
