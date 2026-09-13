@@ -79,31 +79,24 @@ bot-triggered CI run is approved: it sits at `action_required` with no
 checks reported, which reads as broken branch protection. `gh api -X
 POST repos/<owner>/<repo>/actions/runs/<id>/approve` releases it.
 
-**Docs debt, deliberate (UBI-265).** A Python code blueprint can now be
-declared as a `requirements.txt` dependency, and nothing in
-`ubx-docs-users` documents the Python blueprint calling path at all,
-including UBI-130's `<name> @ <url>` syntax that predates this. Not
-written this session on purpose: the same walkthrough showed the path
-does not stamp provenance for a code blueprint (the `push_blueprint_source`
-call comes from generated wrapper code a code blueprint has none of), so
-documenting the path now would commit to a shape that is under active
-question on UBI-265. Write the page once that is settled.
+**Docs debt (UBI-265), reason narrowed.** Nothing in `ubx-docs-users`
+documents the Python blueprint calling path at all, including UBI-130's
+`<name> @ <url>` syntax that predates this. The original reason for
+holding is gone: provenance for a code blueprint was the open question,
+and UBI-266 settled it. What still holds the page is UBI-265's own
+undecided part, what happens to a blueprint with third-party
+dependencies, since a page describing the calling path would have to
+either state that limitation or pretend it away. Writable as soon as
+that is decided, or sooner if it is written to name the limitation
+plainly.
 
-**Docs debt, deliberate (UBI-266).** `as-code.mdx` sends a code-blueprint
-author into `call-sdk.mdx`, which shows a real `ubx why` transcript with
-`source: blueprint ci-platform:sha256:...`. That page is written for the
-BUILT model, and until call-site attribution lands the transcript was
-simply not true for a blueprint written as code, which recorded no
-source at all. The fix makes it true rather than the docs wrong, so the
-page needs a short section saying a code blueprint carries provenance
-too with nothing to write for it.
-
-Not written yet on purpose: none of UBI-266 is merged, and the Go half
-reaches a user only once `ubx-sdk-go` is RELEASED with it, since a Go
-stack compiles against whatever its own go.mod names. Writing "this
-works" before that is the delivery-ahead-of-reality error rules 5 and 8
-exist to stop. Trigger: #151 and the three runtime PRs merged, and
-`ubx-sdk-go` released.
+**Docs debt (UBI-266), cleared.** `as-code.mdx` sent a code-blueprint
+author into `call-sdk.mdx`, whose `ubx why` transcript was true only for
+the BUILT model. Call-site attribution makes it true for both, and
+`ubx-docs-users#39` documents it: a provenance section on
+`as-code.mdx`, a note on `call-sdk.mdx`, and the tutorial's go.mod
+moved to `ubx-sdk-go` v0.6.0. Transcripts verified against a real
+hermetic plan/ship/why cycle. Merged 2026-09-13 at `1e28f80`.
 
 ## Blocked
 
