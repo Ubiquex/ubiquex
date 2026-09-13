@@ -156,10 +156,20 @@
 //	                             string-typed attribute never exercises encodePrimitiveValue's
 //	                             cty.Number branch at all), "list" (list of string), "map"
 //	                             (map of string; "tags"/"tags_all" already default to this
-//	                             without needing an entry here). Lets a test model e.g. a
+//	                             without needing an entry here), and "dynamic"
+//	                             (cty.DynamicPseudoType). Lets a test model e.g. a
 //	                             bool-typed attribute with its own real zero value (false),
 //	                             or a numeric attribute like message_retention_seconds, not
 //	                             just strings/maps.
+//
+//	                             "dynamic" is how a CloudFormation-derived schema declares a
+//	                             free-form JSON attribute: the schema states no shape and the
+//	                             value carries its own. It is 707 attributes across 482 of the
+//	                             1,724 AWS resources, every IAM policy document among them,
+//	                             and every one of them failed to ship until the encoder
+//	                             learned the type. Nothing here could express one, so the
+//	                             tests that fixed it proved the bytes without proving the
+//	                             path; this is what closes that.
 //	FAKEPROVIDER_COMPUTED_ATTRS  (UBI-63 session 3) comma-separated FAKEPROVIDER_ATTRS
 //	                             names (beyond "id", always Computed) to advertise as
 //	                             Computed rather than plain Optional -- models a real
@@ -1073,6 +1083,13 @@ func conformanceCtyType() cty.Type {
 			fields[name] = cty.List(cty.String)
 		case types[name] == "map":
 			fields[name] = cty.Map(cty.String)
+		case types[name] == "dynamic":
+			// A free-form JSON attribute, which is how a
+			// CloudFormation-derived schema declares one: the schema
+			// states no shape and the value carries its own. 707 such
+			// attributes across 482 AWS resources, every IAM policy
+			// document included.
+			fields[name] = cty.DynamicPseudoType
 		default:
 			fields[name] = cty.String
 		}
@@ -1175,6 +1192,8 @@ func conformanceSchemaAttributesV6() []*tfplugin6.Schema_Attribute {
 			a.Type = []byte(`["list","string"]`)
 		case types[name] == "map":
 			a.Type = []byte(`["map","string"]`)
+		case types[name] == "dynamic":
+			a.Type = []byte(`"dynamic"`)
 		}
 		if name == "id" || computed[name] {
 			a.Computed, a.Optional = true, false
@@ -1205,6 +1224,8 @@ func conformanceSchemaAttributesV5() []*tfplugin5.Schema_Attribute {
 			a.Type = []byte(`["list","string"]`)
 		case types[name] == "map":
 			a.Type = []byte(`["map","string"]`)
+		case types[name] == "dynamic":
+			a.Type = []byte(`"dynamic"`)
 		}
 		if name == "id" || computed[name] {
 			a.Computed, a.Optional = true, false
