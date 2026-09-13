@@ -519,6 +519,37 @@ produced that shape before: plan, resolve, accept and ship all handle
 it, ship reports "already fully shipped -- nothing to do" and exits 0,
 and `core.Validate` accepts it.
 
+A reference to an entry that gets dropped is resolved against the
+ledger rather than deferred, and its dependency edge is removed with it.
+
+`resolveRef` defers to a `$computed` marker whenever the target is in
+the batch and the attribute is schema-Computed, because for a resource
+being CREATED that attribute does not exist yet. A dropped entry is the
+opposite case: it already exists, nothing is touching it, and its
+computed attributes are recorded. Left deferred, the marker reached ship
+where `substituteComputed` looks the address up among this proposal's
+own apply results, found nothing, and returned
+`ErrDependencyNotApplied`; the edge, meanwhile, named a node the
+dependency walk had no entry for.
+
+There is no staleness risk by construction: an entry is dropped only
+because nothing about it changes, so the recorded value is exactly what
+the apply result would have been. A reference to a dependency that IS
+changing stays deferred, because there the apply result is the correct
+value and the ledger's is stale.
+
+This is why the drop decision is its own pass between value resolution
+and delta building rather than a check inside the delta loop: the answer
+is needed before any reference can be rewritten. The lookup requirement
+moved with the drop, decided explicitly rather than by placement, since
+a resource this has chosen not to touch should not fail a resolve for
+lacking a lookup it will never use.
+
+`ubx promote` passes the same flag. It re-derives an intent by running
+an SDK program, so its op is never a claim anyone made, and checking it
+against the target ledger meant every promotion after the first was
+refused.
+
 Two further consequences worth knowing. `ErrCreateTargetExists` was incidentally
 the only thing that surfaced "this address is already owned by something
 else" for a generated document, and that is now a visible modify with

@@ -1392,6 +1392,23 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 
 	var creates []json.RawMessage
 	var modifies []core.Modification
+	// Decide every modify before building any delta entry, because a
+	// reference to an entry that will be dropped has to be resolved
+	// against the ledger rather than deferred (UBI-267).
+	decisions, err := planModifies(l, batch, topoOrder, opts)
+	if err != nil {
+		return nil, err
+	}
+	dropped := make(map[string]bool, len(decisions))
+	for key, d := range decisions {
+		if d.dropped {
+			dropped[key] = true
+		}
+	}
+	if err := rewriteDroppedRefs(l, batch, topoOrder, dropped); err != nil {
+		return nil, err
+	}
+
 	for _, key := range topoOrder {
 		e := batch[key]
 		// A data source entry already produced its own real
@@ -1427,168 +1444,28 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			creates = append(creates, b)
 
 		case OpModify:
-			current, _, err := l.FoldState(e.addr)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
-			}
-			// UBI-85: a modify's own config is expected to reproduce every
-			// currently-recorded attribute unchanged unless the intent
-			// actually changes it (an intent provider's own system prompt
-			// now instructs this explicitly for a drafted modify) -- but an
-			// LLM's own compliance with that instruction isn't 100%
-			// reliable, confirmed LIVE: a real Claude response correctly
-			// detected and changed the one attribute that actually
-			// differed, but genuinely omitted an unrelated, schema-
-			// Computed "id" attribute from its own modify config anyway,
-			// despite the explicit instruction to reproduce it -- which
-			// DiffAttributes would otherwise read as "id: removed," a
-			// spurious diff entry, not the clean before/after diff this
-			// feature exists to produce. A schema-Computed attribute is
-			// never something a human OR a model is expected to set in the
-			// first place (a real provider computes it, nothing else may),
-			// so silently auto-filling one back in from the ledger's own
-			// current recorded value whenever a modify's resolved config
-			// omits it entirely is always safe -- it can never mask a
-			// genuine, intentional change, since there is no such thing as
-			// intentionally "changing" a computed attribute by naming a
-			// value for it. This is deterministic Go code guaranteeing
-			// what prompt-engineering alone can't fully guarantee, matching
-			// this project's own standing "the LLM reasons about intent,
-			// deterministic code guarantees mechanical correctness" split
-			// -- never applied to CREATE, which legitimately omits
-			// computed attributes since they don't exist yet, and never
-			// applied to a non-Computed attribute a modify's config omits,
-			// which stays exactly as drafted (an intentional decision, or
-			// the model's own responsibility per its own instructions --
-			// not this resolver's to silently second-guess).
-			//
-			// UBI-267 widens this from Computed-only to EVERY omitted
-			// attribute, for a generated document only.
-			//
-			// The Computed-only rule is right for a hand-written modify,
-			// where the author supplies a full desired end-state (this
-			// section's own contract, docs/resolver.md) and an omission
-			// really does mean remove. A describe-only program supplies
-			// no such thing: it emits what it sets and says nothing
-			// about the rest, so every attribute it does not mention
-			// became a Before-only path, which this codebase models as a
-			// deletion.
-			//
-			// Live, that read a create's own provider-filled defaults as
-			// removals. aws_sqs_queue's visibility_timeout,
-			// maximum_message_size and sqs_managed_sse_enabled are all
-			// Optional and NOT Computed in the CloudFormation-derived
-			// schema, so the narrow backfill correctly did not cover
-			// them, and an inferred modify from a blueprint that never
-			// mentioned them planned to strip all three.
-			//
-			// The sharper case is adoption, and it is what settled this.
-			// `ubx scan` folds live state into the ledger, so anything
-			// configured outside the program, by console or another
-			// tool, would become a Before-only path on the next inferred
-			// modify. An infrastructure tool silently reverting console
-			// changes is the opposite of what this one is for.
-			//
-			// The cost, chosen rather than missed: deleting a line from
-			// a program no longer removes that attribute, because an
-			// absence cannot mean both "I never set this" and "unset
-			// this" from a source that can only express one of them.
-			// Distinguishing the two needs the authored config folded
-			// across the proposal chain, recorded on UBI-267 as the
-			// refinement this defers.
-			for k, v := range currentAttrs(current) {
-				if _, present := e.resolvedConfig[k]; present {
-					continue
-				}
-				if opts.inferOp || e.provider.Schema.IsComputed(e.ri.Type, k) {
-					e.resolvedConfig[k] = v
-				}
-			}
-			resolvedBytes, err := json.Marshal(e.resolvedConfig)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
-			}
-			before, after, err := core.DiffAttributes(current, resolvedBytes)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
-			}
-			// UBI-88: current is full ledger state (every schema key
-			// present, possibly null); resolvedBytes is a partial drafted
-			// config that legitimately omits an attribute nobody touched.
-			// Without this, an attribute the ledger recorded as explicit
-			// null renders as "<attr>: null -> (absent)" -- representation
-			// noise, the SAME null<->absent equivalence class UBI-63 fixed
-			// for drift comparison, just never applied to a modify's own
-			// diff before now. Also strips the identical null<->zero-value/
-			// materialization noise `ubx status --drift` already never
-			// shows.
-			before, after = core.FilterNormalizationNoise(before, after, schemaComputedAdapter{schema: e.provider.Schema, typeName: e.ri.Type})
-			observedHash, err := core.ObservedHash(current)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
-			}
-			lookup, found, err := l.LastLookup(e.addr)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
-			}
-			if !found {
-				return nil, fmt.Errorf("%w: %s", ErrModifyTargetNoLookup, e.addr)
-			}
-			// A generated document that changes nothing about a
-			// resource says nothing about it, so it produces no entry.
-			//
-			// This is not cosmetic. An empty modify reaches the provider:
-			// shipModifyNode has no no-op branch, so it runs the full
-			// read/plan/apply path and CCAPI rejects an update with
-			// nothing to update, failing the whole ship and blocking
-			// every resource behind it. A proposal that says it will
-			// change two things and then changes none is also simply
-			// dishonest.
-			//
-			// Dropped at RESOLVE rather than skipped at ship, and the
-			// reason is structural rather than preference: a proposal
-			// records intent.sources identically for both authoring
-			// paths, "kind":"document" with a ref, so at ship time the
-			// executor cannot tell a generated document from an authored
-			// one. It would have to skip every empty modify, which would
-			// take away a hand-written file's ability to re-assert an
-			// unchanged config deliberately, or the proposal would have
-			// to carry a new field, which is hashed content and a
-			// docs/schema.md change. At resolve the distinction is
-			// already in hand.
-			//
-			// Only for a generated document. A hand-written modify keeps
-			// its empty entry, because there an author really did ask for
-			// it and re-asserting an unchanged config may be the point.
-			//
-			// The resolution input goes with it, and that is required
-			// rather than tidy: core.Validate enforces that every
-			// Delta.Modifies entry has a matching Resolution.Inputs
-			// entry, so dropping one without the other builds an invalid
-			// proposal.
-			//
-			// A document where EVERY resource is unchanged then resolves
-			// to a zero delta. Confirmed end to end before relying on it,
-			// since nothing had produced that shape before: plan,
-			// resolve, accept and ship all handle it, ship reporting
-			// "already fully shipped -- nothing to do" and exiting 0, and
-			// core.Validate accepts it.
-			if opts.inferOp && len(before) == 0 && len(after) == 0 {
+			// The decision, the diff and the live-state evidence were all
+			// computed in planModifies, before any reference to a dropped
+			// entry was rewritten. Recomputing them here would mean two
+			// places deciding the same thing from state one of them has
+			// since mutated (the backfill writes into resolvedConfig), so
+			// this consults rather than repeats.
+			d := decisions[key]
+			if d == nil || d.dropped {
 				continue
 			}
-
 			modifies = append(modifies, core.Modification{
 				Target:    e.addr,
-				Before:    before,
-				After:     after,
+				Before:    d.before,
+				After:     d.after,
 				DependsOn: dependsOn,
 				Provider:  &core.ProviderRef{Source: e.provider.Source, Version: e.provider.Version},
 			})
 			resolutionInputs = append(resolutionInputs, core.ResolutionInput{
 				Kind:         "live_state",
 				Resource:     e.addr.String(),
-				ObservedHash: observedHash,
-				Lookup:       lookup,
+				ObservedHash: d.observedHash,
+				Lookup:       d.lookup,
 			})
 		}
 	}
@@ -1643,4 +1520,231 @@ func currentAttrs(current json.RawMessage) map[string]interface{} {
 		return nil
 	}
 	return m
+}
+
+// modifyDecision is everything the delta loop needs about one modify,
+// computed before any reference to a dropped entry is rewritten.
+type modifyDecision struct {
+	before       map[string]json.RawMessage
+	after        map[string]json.RawMessage
+	observedHash string
+	lookup       json.RawMessage
+	dropped      bool
+}
+
+// planModifies decides, for every modify in the batch, what it changes
+// and whether it survives at all.
+//
+// Split out of the delta loop because the answer is needed EARLIER than
+// the delta: a reference to an entry that will be dropped has to be
+// resolved against the ledger instead of deferred to a ship-time
+// substitution that will never come (rewriteDroppedRefs, below). That
+// ordering is the whole reason this function exists, and computing the
+// same thing twice in two places, once here and once in the delta loop,
+// would be two answers waiting to diverge, since the backfill below
+// mutates resolvedConfig.
+//
+// The backfill (UBI-85, widened by UBI-267): a modify's own config is
+// expected to reproduce every currently-recorded attribute unchanged
+// unless the intent actually changes it, and neither an LLM-drafted
+// modify nor a describe-only program reliably does. A schema-Computed
+// attribute is never something anyone is expected to set, so restoring
+// one from the ledger can never mask an intentional change. For a
+// GENERATED document every omitted attribute is restored, not just the
+// computed ones, because such a program states what it sets and says
+// nothing about the rest: its silence is not a claim that anything
+// should go. A hand-written modify keeps the narrow rule, because there
+// the author supplies a full desired end-state and an omission really
+// does mean remove.
+func planModifies(l *core.Ledger, batch map[string]*batchEntry, topoOrder []string, opts resolveOptions) (map[string]*modifyDecision, error) {
+	decisions := make(map[string]*modifyDecision, len(topoOrder))
+	for _, key := range topoOrder {
+		e := batch[key]
+		if e.isDataSource() || e.ri.Op != OpModify {
+			continue
+		}
+
+		current, _, err := l.FoldState(e.addr)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		for k, v := range currentAttrs(current) {
+			if _, present := e.resolvedConfig[k]; present {
+				continue
+			}
+			if opts.inferOp || e.provider.Schema.IsComputed(e.ri.Type, k) {
+				e.resolvedConfig[k] = v
+			}
+		}
+
+		resolvedBytes, err := json.Marshal(e.resolvedConfig)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		before, after, err := core.DiffAttributes(current, resolvedBytes)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		// UBI-88: current is full ledger state (every schema key present,
+		// possibly null); resolvedBytes is a partial drafted config that
+		// legitimately omits an attribute nobody touched. Without this, an
+		// attribute the ledger recorded as explicit null renders as
+		// "<attr>: null -> (absent)" -- representation noise, the same
+		// null<->absent equivalence class drift comparison already
+		// collapses.
+		before, after = core.FilterNormalizationNoise(before, after, schemaComputedAdapter{schema: e.provider.Schema, typeName: e.ri.Type})
+
+		// A generated document that changes nothing about a resource says
+		// nothing about it, so it produces no entry (UBI-267). An empty
+		// modify is not cosmetic: shipModifyNode has no no-op branch, so
+		// it runs the full read/plan/apply path and a provider that
+		// rejects an update with nothing to update fails the whole ship.
+		//
+		// A hand-written modify keeps its empty entry, because there an
+		// author really did ask for it and re-asserting an unchanged
+		// config may be the point.
+		d := &modifyDecision{before: before, after: after}
+		d.dropped = opts.inferOp && len(before) == 0 && len(after) == 0
+		decisions[key] = d
+		if d.dropped {
+			// The lookup requirement goes with the drop, decided
+			// explicitly rather than by placement. It used to sit above
+			// the drop purely because that is where the code happened to
+			// be, so an unchanged resource with no recorded lookup failed
+			// the whole resolve. A resource this has chosen not to touch
+			// should not fail a resolve for lacking a lookup it will
+			// never use.
+			continue
+		}
+
+		observedHash, err := core.ObservedHash(current)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		lookup, found, err := l.LastLookup(e.addr)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", e.addr, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("%w: %s", ErrModifyTargetNoLookup, e.addr)
+		}
+		d.observedHash, d.lookup = observedHash, lookup
+	}
+	return decisions, nil
+}
+
+// rewriteDroppedRefs resolves, against the ledger, every deferred
+// $computed marker pointing at an entry this resolve has dropped, and
+// removes the matching dependency edge.
+//
+// resolveRef defers to a $computed marker whenever the target is in the
+// batch and the referenced attribute is schema-Computed, because for a
+// resource being CREATED that attribute does not exist yet. A dropped
+// entry is the opposite case: it already exists, it is not being
+// touched, and its computed attributes are recorded. The marker would
+// otherwise reach ship, where substituteComputed looks the address up
+// among this proposal's own apply results, finds nothing, and returns
+// ErrDependencyNotApplied.
+//
+// So the value is taken from FoldState, which is exactly what resolveRef
+// already does for a target outside the batch. There is no staleness
+// risk by construction: an entry is dropped only because nothing about
+// it changes, so the recorded value is what the apply result would have
+// been.
+//
+// The edge goes too. A dependency on something this proposal does not
+// carry is the dangling edge that panicked inside the ship-time
+// topological sort before it was made a refusal.
+func rewriteDroppedRefs(l *core.Ledger, batch map[string]*batchEntry, topoOrder []string, dropped map[string]bool) error {
+	if len(dropped) == 0 {
+		return nil
+	}
+	for _, key := range topoOrder {
+		if dropped[key] {
+			continue
+		}
+		e := batch[key]
+		if e.resolvedConfig != nil {
+			rewritten, err := resolveDroppedComputed(l, e.resolvedConfig, dropped)
+			if err != nil {
+				return fmt.Errorf("resolve %s: %w", e.addr, err)
+			}
+			m, ok := rewritten.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("resolve %s: internal: rewritten config is not an object", e.addr)
+			}
+			e.resolvedConfig = m
+		}
+		kept := e.rawEdges[:0]
+		for _, edge := range e.rawEdges {
+			if !dropped[edge] {
+				kept = append(kept, edge)
+			}
+		}
+		e.rawEdges = kept
+	}
+	return nil
+}
+
+// resolveDroppedComputed walks a resolved value and replaces every
+// $computed marker whose target was dropped with that target's own
+// recorded value.
+func resolveDroppedComputed(l *core.Ledger, v interface{}, dropped map[string]bool) (interface{}, error) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		if inner, ok := asMarker(t, markerComputed); ok {
+			from, _ := inner["from"].(string)
+			addrStr, attrPath, err := splitRefTarget(from)
+			if err != nil {
+				return nil, err
+			}
+			if !dropped[addrStr] {
+				return t, nil
+			}
+			addr, ok := core.ParseAddress(addrStr)
+			if !ok {
+				return nil, fmt.Errorf("%w: %q is not a valid address", ErrRefNotFound, addrStr)
+			}
+			state, found, err := l.FoldState(addr)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				return nil, fmt.Errorf("%w: %s", ErrRefNotFound, addr)
+			}
+			raw, ok, err := core.DotGet(state, attrPath)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("%w: %s.%s", ErrRefNotFound, addr, attrPath)
+			}
+			var decoded interface{}
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				return nil, err
+			}
+			return decoded, nil
+		}
+		out := make(map[string]interface{}, len(t))
+		for k, sub := range t {
+			val, err := resolveDroppedComputed(l, sub, dropped)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = val
+		}
+		return out, nil
+	case []interface{}:
+		out := make([]interface{}, 0, len(t))
+		for _, sub := range t {
+			val, err := resolveDroppedComputed(l, sub, dropped)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, val)
+		}
+		return out, nil
+	default:
+		return v, nil
+	}
 }

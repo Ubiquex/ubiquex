@@ -445,3 +445,56 @@ func TestWhy_RendersPromotionSource(t *testing.T) {
 		t.Errorf("expected why to render %q, got:\n%s", want, out)
 	}
 }
+
+// TestPromote_SDKAuthoredSource_TargetAlreadyHoldsTheAddress is
+// UBI-267's own promote leg. promote re-derives an intent by RUNNING an
+// SDK program, so every op it carries is hardcoded "create" and none of
+// them is a claim anyone made. Checking those against the target
+// ledger made promote carry the write-once bug on the one command whose
+// entire purpose is re-resolving an authoring source somewhere else:
+// promoting into a target that already held those addresses failed with
+// ErrCreateTargetExists, which is every promotion after the first.
+//
+// The same program, promoted into the same target twice. The second one
+// used to be refused.
+func TestPromote_SDKAuthoredSource_TargetAlreadyHoldsTheAddress(t *testing.T) {
+	requireDeno(t)
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	id := strings.Repeat("e", 64)
+	appendAcceptedProposal(t, sourceDir, id, "payments", []core.IntentSource{
+		{Kind: "document", Ref: sdkResolveTSEntryPath, ContentHash: sdkResolveTSContentHash},
+	})
+
+	// First promotion, then ship it so the target ledger really holds
+	// the address rather than merely having seen a plan.
+	firstOut, err := runUbx(t, env, "promote", id,
+		"--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx promote (first): %v\noutput: %s", err, firstOut)
+	}
+	firstHash := mustExtractPlanHash(t, targetDir, firstOut)
+	shipOut, err := runUbx(t, env, "ship", firstHash,
+		"--provider", fakeProviderBinary, "--ledger-dir", targetDir, "--yes")
+	if err != nil {
+		t.Fatalf("ubx ship (into the promotion target): %v\noutput: %s", err, shipOut)
+	}
+
+	// Second promotion of the same unchanged program into the same
+	// target. This is the one that was refused.
+	secondOut, err := runUbx(t, env, "promote", id,
+		"--ledger-dir", sourceDir, "--to", targetDir, "--provider", fakeProviderBinary, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("promoting into a target that already holds the address: %v\noutput: %s", err, secondOut)
+	}
+	if strings.Contains(secondOut, "already has") {
+		t.Fatalf("the second promotion was refused:\n%s", secondOut)
+	}
+	// Nothing changed, so it promotes to nothing rather than to a
+	// re-create.
+	if !strings.Contains(secondOut, "+0 ~0 -0") {
+		t.Errorf("an unchanged program promoted into an up-to-date target did not plan to do nothing:\n%s", secondOut)
+	}
+}
