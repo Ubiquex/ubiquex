@@ -14,7 +14,7 @@ import (
 // offers nothing like it, so these prove the counting against oras-go's
 // own real local OCI store rather than a fake.
 
-func TestPushToTarget_ReportsBytesAgainstTheTarballSize(t *testing.T) {
+func TestPushToTarget_ReportsBytesNeverExceedingTheTotal(t *testing.T) {
 	ctx := context.Background()
 
 	dir := writeSampleBuiltBlueprint(t)
@@ -50,16 +50,21 @@ func TestPushToTarget_ReportsBytesAgainstTheTarballSize(t *testing.T) {
 	if calls == 0 {
 		t.Fatal("progress was never reported")
 	}
-	// The total is known before anything moves: it is the tarball on
-	// disk.
-	if lastTotal != info.Size() {
-		t.Errorf("total = %d, want the tarball's own size %d", lastTotal, info.Size())
+	// A transfer moves the manifest and config blobs as well as the
+	// payload, so both numbers exceed the tarball. What matters is that
+	// they agree about what is being counted.
+	if lastTotal < info.Size() {
+		t.Errorf("total = %d, want at least the tarball's own size %d", lastTotal, info.Size())
 	}
-	// Everything the tarball contains has to have moved. More than the
-	// tarball is expected and correct: the manifest and config blobs go
-	// with it.
 	if lastMoved < info.Size() {
 		t.Errorf("moved = %d, want at least the tarball's own %d bytes", lastMoved, info.Size())
+	}
+	// The regression this guards: the total used to be the tarball's
+	// size alone while the counter counted every byte, so the running
+	// line read "748 B of 737 B" and the bar sat pinned at 100 percent
+	// before it had finished.
+	if lastMoved > lastTotal {
+		t.Errorf("moved %d exceeds the announced total %d, so the bar would read over 100%%", lastMoved, lastTotal)
 	}
 }
 

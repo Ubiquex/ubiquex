@@ -30,6 +30,7 @@ package blueprint
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -145,6 +146,38 @@ type countingStore struct {
 	// countFetch the source side (a push).
 	countPush  bool
 	countFetch bool
+
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// expect declares one descriptor's size as part of what this transfer
+// will move, the first time that descriptor is seen.
+//
+// The expected total is declared HERE, by the same wrapper that counts
+// the bytes, rather than from oras.CopyOptions.PreCopy. PreCopy looked
+// like the natural place and is wrong: it fires for the nodes oras
+// walks beneath the root, so on a push it announced the config and the
+// layer but never the manifest itself. The manifest's bytes were
+// counted anyway, and the running line read "748 B of 737 B" with the
+// bar pinned at 100 percent before it finished.
+//
+// Declaring it alongside the counting makes the two agree by
+// construction: whatever this wrapper counts, it has already counted
+// towards. Deduplicated by digest so a descriptor fetched twice cannot
+// inflate the denominator.
+func (s *countingStore) expect(desc ocispec.Descriptor) {
+	key := desc.Digest.String()
+	s.mu.Lock()
+	if s.seen == nil {
+		s.seen = map[string]bool{}
+	}
+	already := s.seen[key]
+	s.seen[key] = true
+	s.mu.Unlock()
+	if !already {
+		s.counter.addTotal(desc.Size)
+	}
 }
 
 // countableStore is the subset of a local file.Store this wraps.
@@ -156,6 +189,7 @@ type countableStore interface {
 
 func (s *countingStore) Push(ctx context.Context, expected ocispec.Descriptor, r io.Reader) error {
 	if s.countPush {
+		s.expect(expected)
 		r = &countingReader{r: r, c: s.counter}
 	}
 	return s.inner.Push(ctx, expected, r)
@@ -166,6 +200,7 @@ func (s *countingStore) Fetch(ctx context.Context, target ocispec.Descriptor) (i
 	if err != nil || !s.countFetch {
 		return rc, err
 	}
+	s.expect(target)
 	return &countingReadCloser{ReadCloser: rc, c: s.counter}, nil
 }
 
