@@ -29,6 +29,14 @@ import (
 // stack does.
 func writeReshipStack(t *testing.T, dir string, names ...string) string {
 	t.Helper()
+	return writeReshipStackWithValue(t, dir, "value", names...)
+}
+
+// writeReshipStackWithValue is writeReshipStack with the attribute
+// value under the test's control, so a re-plan can produce a real
+// change rather than an unchanged program.
+func writeReshipStackWithValue(t *testing.T, dir, value string, names ...string) string {
+	t.Helper()
 	stackDir := filepath.Join(dir, "stack")
 	if err := os.MkdirAll(stackDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -45,7 +53,7 @@ func writeReshipStack(t *testing.T, dir string, names ...string) string {
 		body.WriteString("\t\tsdk.Resource(\n")
 		body.WriteString("\t\t\tsdk.ResourceBinding{WireType: \"fake_widget\", Fields: sdk.FieldMap{\"Name\": {WireName: \"name\"}}},\n")
 		body.WriteString("\t\t\t\"" + n + "\",\n")
-		body.WriteString("\t\t\tstruct{ Name string }{\"" + n + "-value\"},\n")
+		body.WriteString("\t\t\tstruct{ Name string }{\"" + n + "-" + value + "\"},\n")
 		body.WriteString("\t\t)\n")
 	}
 
@@ -97,8 +105,12 @@ func TestPlan_SDKProgram_CanBeReplannedAfterShipping(t *testing.T) {
 	if strings.Contains(replanOut, "already has") {
 		t.Fatalf("the re-plan was refused:\n%s", replanOut)
 	}
-	if !strings.Contains(replanOut, "~1") {
-		t.Errorf("the already-shipped resource was not planned as a change:\n%s", replanOut)
+	// And it plans nothing, because nothing changed. An unchanged
+	// resource produces no entry at all rather than an empty modify:
+	// an empty modify reaches the provider, and CCAPI rejects an update
+	// with nothing to update (UBI-267).
+	if !strings.Contains(replanOut, "+0 ~0 -0") {
+		t.Errorf("an unchanged program did not plan to do nothing:\n%s", replanOut)
 	}
 }
 
@@ -133,12 +145,14 @@ func TestPlan_SDKProgram_PartiallyShippedStackCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completing a partially shipped stack from its own program: %v\noutput: %s", err, replanOut)
 	}
-	// One create for what never shipped, one change for what did.
-	if !strings.Contains(replanOut, "+1") || !strings.Contains(replanOut, "~1") {
-		t.Fatalf("want a mixed +1 ~1 plan, got:\n%s", replanOut)
-	}
+	// One create for what never shipped, and nothing for the DLQ, which
+	// shipped and has not changed. The whole point is that the create
+	// is no longer blocked behind the refusal.
 	if !strings.Contains(replanOut, "fake_widget.queue create") {
 		t.Errorf("the resource that never shipped was not planned as a create:\n%s", replanOut)
+	}
+	if !strings.Contains(replanOut, "+1 ~0 -0") {
+		t.Errorf("want one create and no changes, got:\n%s", replanOut)
 	}
 }
 
@@ -215,10 +229,18 @@ func TestPlan_SDKProgram_ReceiptSaysOmittedAttributesArePreserved(t *testing.T) 
 		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
 	}
 
-	replanOut, err := runUbx(t, env, "plan", "--from-code", entry,
+	// A program that actually changes something, so the plan really
+	// contains an inferred modify. An unchanged program produces no
+	// modify at all, and a note about what a change line does not mean
+	// would have nothing to attach to.
+	changed := writeReshipStackWithValue(t, dir, "changed", "queue")
+	replanOut, err := runUbx(t, env, "plan", "--from-code", changed,
 		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
 	if err != nil {
 		t.Fatalf("ubx plan (re-plan): %v\noutput: %s", err, replanOut)
+	}
+	if !strings.Contains(replanOut, "~1") {
+		t.Fatalf("test setup is wrong, this plan has no modify to annotate:\n%s", replanOut)
 	}
 	if !strings.Contains(replanOut, "preserved, not removed") {
 		t.Errorf("a plan containing an inferred modify does not say omitted attributes are preserved:\n%s", replanOut)

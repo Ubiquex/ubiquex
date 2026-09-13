@@ -1534,6 +1534,49 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			if !found {
 				return nil, fmt.Errorf("%w: %s", ErrModifyTargetNoLookup, e.addr)
 			}
+			// A generated document that changes nothing about a
+			// resource says nothing about it, so it produces no entry.
+			//
+			// This is not cosmetic. An empty modify reaches the provider:
+			// shipModifyNode has no no-op branch, so it runs the full
+			// read/plan/apply path and CCAPI rejects an update with
+			// nothing to update, failing the whole ship and blocking
+			// every resource behind it. A proposal that says it will
+			// change two things and then changes none is also simply
+			// dishonest.
+			//
+			// Dropped at RESOLVE rather than skipped at ship, and the
+			// reason is structural rather than preference: a proposal
+			// records intent.sources identically for both authoring
+			// paths, "kind":"document" with a ref, so at ship time the
+			// executor cannot tell a generated document from an authored
+			// one. It would have to skip every empty modify, which would
+			// take away a hand-written file's ability to re-assert an
+			// unchanged config deliberately, or the proposal would have
+			// to carry a new field, which is hashed content and a
+			// docs/schema.md change. At resolve the distinction is
+			// already in hand.
+			//
+			// Only for a generated document. A hand-written modify keeps
+			// its empty entry, because there an author really did ask for
+			// it and re-asserting an unchanged config may be the point.
+			//
+			// The resolution input goes with it, and that is required
+			// rather than tidy: core.Validate enforces that every
+			// Delta.Modifies entry has a matching Resolution.Inputs
+			// entry, so dropping one without the other builds an invalid
+			// proposal.
+			//
+			// A document where EVERY resource is unchanged then resolves
+			// to a zero delta. Confirmed end to end before relying on it,
+			// since nothing had produced that shape before: plan,
+			// resolve, accept and ship all handle it, ship reporting
+			// "already fully shipped -- nothing to do" and exiting 0, and
+			// core.Validate accepts it.
+			if opts.inferOp && len(before) == 0 && len(after) == 0 {
+				continue
+			}
+
 			modifies = append(modifies, core.Modification{
 				Target:    e.addr,
 				Before:    before,
