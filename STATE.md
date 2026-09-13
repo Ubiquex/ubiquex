@@ -90,13 +90,13 @@ either state that limitation or pretend it away. Writable as soon as
 that is decided, or sooner if it is written to name the limitation
 plainly.
 
-**Docs debt (UBI-266), addressed, pending merge.** `as-code.mdx` sent a
-code-blueprint author into `call-sdk.mdx`, whose `ubx why` transcript
-was true only for the BUILT model. Call-site attribution makes it true
-for both, and `ubx-docs-users#39` documents that: a provenance section
-on `as-code.mdx`, a note on `call-sdk.mdx`, and the tutorial's go.mod
+**Docs debt (UBI-266), cleared.** `as-code.mdx` sent a code-blueprint
+author into `call-sdk.mdx`, whose `ubx why` transcript was true only for
+the BUILT model. Call-site attribution makes it true for both, and
+`ubx-docs-users#39` documents it: a provenance section on
+`as-code.mdx`, a note on `call-sdk.mdx`, and the tutorial's go.mod
 moved to `ubx-sdk-go` v0.6.0. Transcripts verified against a real
-hermetic plan/ship/why cycle. Drop this entry when #39 merges.
+hermetic plan/ship/why cycle. Merged 2026-09-13 at `1e28f80`.
 
 ## Blocked
 
