@@ -117,7 +117,7 @@ func newAuthenticatedRepository(trimmedRef string) (*remote.Repository, error) {
 // pushing a directory that was never `package`d first (no
 // blueprint.lock.json inside the tarball) is a clear, named error, never
 // a silent push of un-verifiable content.
-func Push(ctx context.Context, tarballPath, ociRef string) (*Manifest, error) {
+func Push(ctx context.Context, tarballPath, ociRef string, opts ...TransferOption) (*Manifest, error) {
 	m, err := manifestFromTarball(tarballPath)
 	if err != nil {
 		return nil, fmt.Errorf("blueprint push: %w", err)
@@ -135,7 +135,7 @@ func Push(ctx context.Context, tarballPath, ociRef string) (*Manifest, error) {
 		return nil, fmt.Errorf("blueprint push: %s must include a tag (e.g. oci://ghcr.io/org/name:v1)", ociRef)
 	}
 
-	if err := pushToTarget(ctx, tarballPath, m, repo, repo.Reference.Reference); err != nil {
+	if err := pushToTarget(ctx, tarballPath, m, repo, repo.Reference.Reference, opts...); err != nil {
 		return nil, fmt.Errorf("blueprint push: %w", err)
 	}
 	return m, nil
@@ -149,12 +149,28 @@ func Push(ctx context.Context, tarballPath, ociRef string) (*Manifest, error) {
 // oras.PackManifest/fs.Tag/oras.Copy) get tested against oras-go's own
 // real local target implementations, never a hand-rolled fake standing
 // in for them.
-func pushToTarget(ctx context.Context, tarballPath string, m *Manifest, target oras.Target, tag string) error {
+func pushToTarget(ctx context.Context, tarballPath string, m *Manifest, target oras.Target, tag string, opts ...TransferOption) error {
 	fs, err := file.New(filepath.Dir(tarballPath))
 	if err != nil {
 		return fmt.Errorf("open %s as a file store: %w", filepath.Dir(tarballPath), err)
 	}
 	defer fs.Close()
+
+	// The bytes leave through the SOURCE store's Fetch, so that is what
+	// gets counted (transfer.go). The total is known before anything
+	// moves: it is the tarball on disk. The remote repository is never
+	// wrapped, deliberately.
+	o := applyTransferOptions(opts)
+	var src oras.Target = fs
+	var counter *byteCounter
+	if o.onProgress != nil {
+		var size int64
+		if info, statErr := os.Stat(tarballPath); statErr == nil {
+			size = info.Size()
+		}
+		counter = newByteCounter(size, o.onProgress)
+		src = &countingStore{inner: fs, counter: counter, countFetch: true}
+	}
 
 	fileDesc, err := fs.Add(ctx, filepath.Base(tarballPath), ociBlobMediaType, tarballPath)
 	if err != nil {
@@ -177,7 +193,7 @@ func pushToTarget(ctx context.Context, tarballPath string, m *Manifest, target o
 		return fmt.Errorf("tag manifest %s: %w", tag, err)
 	}
 
-	if _, err := oras.Copy(ctx, fs, tag, target, tag, oras.DefaultCopyOptions); err != nil {
+	if _, err := oras.Copy(ctx, src, tag, target, tag, oras.DefaultCopyOptions); err != nil {
 		return fmt.Errorf("copy %s to target: %w", tag, err)
 	}
 	return nil
@@ -189,7 +205,7 @@ func pushToTarget(ctx context.Context, tarballPath string, m *Manifest, target o
 // (blueprint.lock.json included) indistinguishable afterward from Pull's
 // own local/git branches' own output -- `ubx blueprint verify` needs zero
 // awareness of which of the three source types actually produced it.
-func pullOCI(ctx context.Context, ociRef, dest string) error {
+func pullOCI(ctx context.Context, ociRef, dest string, opts ...TransferOption) error {
 	trimmed, err := stripOCIScheme(ociRef)
 	if err != nil {
 		return err
@@ -201,7 +217,7 @@ func pullOCI(ctx context.Context, ociRef, dest string) error {
 	if repo.Reference.Reference == "" {
 		return fmt.Errorf("%s must include a tag (e.g. oci://ghcr.io/org/name:v1)", ociRef)
 	}
-	if err := pullFromTarget(ctx, repo, repo.Reference.Reference, dest); err != nil {
+	if err := pullFromTarget(ctx, repo, repo.Reference.Reference, dest, opts...); err != nil {
 		return fmt.Errorf("%s: %w", ociRef, err)
 	}
 	return nil
@@ -212,7 +228,7 @@ func pullOCI(ctx context.Context, ociRef, dest string) error {
 // copies tag's own manifest+blob from target into a throwaway local
 // file.Store, then extracts the one blob it finds there (the tarball) into
 // dest via extractTarGz.
-func pullFromTarget(ctx context.Context, target oras.ReadOnlyTarget, tag, dest string) error {
+func pullFromTarget(ctx context.Context, target oras.ReadOnlyTarget, tag, dest string, opts ...TransferOption) error {
 	fetchDir, err := os.MkdirTemp("", "ubx-blueprint-oci-pull-*")
 	if err != nil {
 		return err
@@ -225,7 +241,32 @@ func pullFromTarget(ctx context.Context, target oras.ReadOnlyTarget, tag, dest s
 	}
 	defer fs.Close()
 
-	if _, err := oras.Copy(ctx, target, tag, fs, tag, oras.DefaultCopyOptions); err != nil {
+	// The bytes arrive through the DESTINATION store's Push, so that is
+	// what gets counted (transfer.go). The remote repository, which is
+	// the source here, is never wrapped.
+	//
+	// The total is not known when the copy starts: a pull learns the
+	// layer's size from the manifest, which is itself the first thing
+	// fetched. PreCopy is where each descriptor's size becomes known, so
+	// the expected total is raised as descriptors are announced rather
+	// than guessed up front.
+	o := applyTransferOptions(opts)
+	copyOpts := oras.DefaultCopyOptions
+	var dst oras.Target = fs
+	if o.onProgress != nil {
+		counter := newByteCounter(0, o.onProgress)
+		dst = &countingStore{inner: fs, counter: counter, countPush: true}
+		prev := copyOpts.PreCopy
+		copyOpts.PreCopy = func(ctx context.Context, desc ocispec.Descriptor) error {
+			counter.addTotal(desc.Size)
+			if prev != nil {
+				return prev(ctx, desc)
+			}
+			return nil
+		}
+	}
+
+	if _, err := oras.Copy(ctx, target, tag, dst, tag, copyOpts); err != nil {
 		return fmt.Errorf("copy from target: %w", err)
 	}
 

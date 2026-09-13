@@ -37,7 +37,7 @@ import (
 //
 // dest must not already exist, or must be empty -- Pull never overwrites
 // existing content.
-func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
+func Pull(ctx context.Context, source, dest, ref, path string, opts ...TransferOption) (string, error) {
 	if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
 		return "", fmt.Errorf("blueprint pull: %s already exists and is not empty", dest)
 	}
@@ -50,8 +50,25 @@ func Pull(ctx context.Context, source, dest, ref, path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("blueprint pull: %w", err)
 		}
-		if err := pullOCI(ctx, reference, dest); err != nil {
+		if err := pullOCI(ctx, reference, dest, opts...); err != nil {
 			return "", fmt.Errorf("blueprint pull: %w", err)
+		}
+		// An OCI pull verifies on arrival, and the other sources do not.
+		//
+		// This is the one delivery path whose bytes crossed a network
+		// from a registry that anyone with push access can overwrite, and
+		// it is also the only one where the answer is free: the extracted
+		// tree carries its own blueprint.lock.json, so recomputing costs
+		// a walk of files already on disk.
+		//
+		// ORAS already verified the blob's own OCI digest in transit.
+		// That is TRANSPORT integrity: it proves the bytes arrived as the
+		// registry stored them, not that they are the bytes the blueprint
+		// was packaged from. The content hash is the application-level
+		// question, and it is the one a consumer would have run `ubx
+		// blueprint verify` by hand to answer.
+		if _, err := Verify(dest); err != nil {
+			return "", fmt.Errorf("blueprint pull: %s arrived but does not verify: %w", source, err)
 		}
 		return dest, nil
 	}
