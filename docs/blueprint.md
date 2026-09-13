@@ -4551,6 +4551,31 @@ which is JSON growing a language feature badly:
 What the Ubxfile bought, a description a reader can trust without
 running anything, does not go away. It is derived instead of authored.
 
+## Derivation must not depend on what happens to be on the machine
+
+A derived schema sits inside the packaged directory and is covered by
+the content hash. So **the same blueprint source has to derive the same
+bytes everywhere**, or the same blueprint hashes differently on two
+machines and `ubx blueprint verify` fails for no good reason.
+
+That rules out a whole class of otherwise attractive improvement: making
+derivation richer when some optional local artifact happens to be
+present. A cached provider snapshot is the obvious candidate, since it
+would let a binding cover every settable field a real schema has rather
+than only the ones a blueprint already mentions. Consulting one
+opportunistically would make the output depend on whether a cache was
+warm, which is a nondeterminism bug wearing a feature's clothes.
+
+If such an input is ever wanted, it has to be **explicit and recorded**:
+named in the blueprint's own source, so the derivation is a function of
+the blueprint alone and two machines reach the same answer or fail the
+same way.
+
+(Lifted from UBI-259, which proposed exactly that snapshot consultation
+for the Ubxfile model and identified this as the question to settle
+first. That ticket was closed as overtaken by blueprints-as-code, but
+the principle is general and applies to every extractor here.)
+
 ## The schema is derived, never written
 
 `ubx blueprint package` extracts a schema from the blueprint's own
