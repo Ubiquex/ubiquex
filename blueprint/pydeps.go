@@ -296,9 +296,9 @@ func finishPyDepMount(dep PyDependency, dir string, manifest *Manifest, fromCach
 		return PyDepMount{}, fmt.Errorf("declared name %q doesn't match the pulled blueprint's own declared name %q -- check the requirements.txt entry", dep.Name, manifest.Name)
 	}
 
-	pyDir := filepath.Join(dir, "py")
-	if info, err := os.Stat(pyDir); err != nil || !info.IsDir() {
-		return PyDepMount{}, fmt.Errorf("has no built py/ package -- the blueprint must be built with `ubx blueprint build` (lang: py or all) before it can be used as a Python dependency")
+	pyDir, err := pyMountDir(dir)
+	if err != nil {
+		return PyDepMount{}, err
 	}
 
 	cacheNote := ""
@@ -309,6 +309,63 @@ func finishPyDepMount(dep PyDependency, dir string, manifest *Manifest, fromCach
 		dep.Name, dep.URL, cacheNote, manifest.ContentHash, len(manifest.Files))
 
 	return PyDepMount{Dep: dep, HostDir: pyDir, Receipt: receipt, Ref: dep.Name + ":" + manifest.ContentHash}, nil
+}
+
+// pyMountDir picks the directory that goes on the guest's PYTHONPATH.
+//
+// Two blueprint models, two shapes on disk. An Ubxfile blueprint is
+// BUILT, and its build writes a Python package under py/. A blueprint
+// written as code is not built and has no py/ at all: its source IS the
+// package, so the directory itself is what goes on the path, and the
+// module a caller imports is the entry file's own basename. Schema's
+// own Entrypoint.PyModule records exactly that contract already.
+//
+// Requiring py/ for both refused every Python code blueprint, and sent
+// the reader to `ubx blueprint build`, which correctly refuses a code
+// blueprint in turn ("a blueprint written as code is not built, it IS
+// the package"). The two messages pointed at each other, leaving a
+// colocated copy as the only thing that worked and that records no
+// provenance at all (UBI-265).
+func pyMountDir(dir string) (string, error) {
+	pyDir := filepath.Join(dir, "py")
+	if info, err := os.Stat(pyDir); err == nil && info.IsDir() {
+		return pyDir, nil
+	}
+
+	schema, ok, err := ReadSchema(dir)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("has no built py/ package and no %s -- an Ubxfile blueprint must be built with `ubx blueprint build` (lang: py or all) before it can be used as a Python dependency", SchemaFileName)
+	}
+
+	// A blueprint written as code is single-language by construction
+	// (Entrypoint.Language's own doc comment). Naming the language it IS
+	// written in matters more than naming the one it is not: the usual
+	// cause is a requirements.txt entry pointing at the wrong blueprint,
+	// and that is only visible from the answer.
+	if lang := schema.Entrypoint.Language; lang != "py" {
+		if lang == "" {
+			return "", fmt.Errorf("has no built py/ package, and its %s names no language, so there is nothing to import from Python", SchemaFileName)
+		}
+		return "", fmt.Errorf("is written in %s, not py, so it cannot be used as a Python dependency -- a blueprint written as code is single-language", lang)
+	}
+
+	// The module a Python caller imports has to actually be there.
+	// Without this the failure surfaces inside the sandbox as a bare
+	// ModuleNotFoundError naming a module the caller never chose.
+	mod := schema.Entrypoint.PyModule
+	if mod == "" {
+		return "", fmt.Errorf("is written in py but its %s names no module to import (entrypoint.py_module is empty) -- re-run `ubx blueprint package` on it", SchemaFileName)
+	}
+	if _, err := os.Stat(filepath.Join(dir, mod+".py")); err != nil {
+		if _, perr := os.Stat(filepath.Join(dir, mod, "__init__.py")); perr != nil {
+			return "", fmt.Errorf("declares python module %q in its %s, but neither %s.py nor %s/__init__.py is present in the package", mod, SchemaFileName, mod, mod)
+		}
+	}
+
+	return dir, nil
 }
 
 // pyDepCacheDir returns the local cache directory for dep, keyed by its
