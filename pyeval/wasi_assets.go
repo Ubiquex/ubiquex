@@ -3,11 +3,13 @@ package pyeval
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // pythonWasiVersion/pythonWasiSDK/pythonWasiURL pin the exact,
@@ -59,13 +61,99 @@ func acquirePythonWasi(ctx context.Context) (string, error) {
 		return dir, nil
 	}
 
-	if err := downloadAndExtract(ctx, pythonWasiURL, dir); err != nil {
+	if err := downloadAndExtractWithRetry(ctx, pythonWasiURL, dir); err != nil {
 		return "", fmt.Errorf("acquire CPython-WASI build: %w", err)
 	}
 	if err := verifyPythonWasiDir(dir); err != nil {
 		return "", fmt.Errorf("acquired CPython-WASI build looks wrong: %w", err)
 	}
 	return dir, nil
+}
+
+// PrefetchInterpreter downloads and caches the pinned CPython-WASI build
+// without evaluating anything, and returns the directory holding it.
+//
+// It exists so CI can acquire this asset in a NAMED setup step, beside
+// bubblewrap and wasmtime, rather than having the first Python test that
+// happens to run pull 42MB from a third party mid-suite (UBI-255).
+//
+// On 2026-09-09 that release URL answered HTTP 500 and took main red as
+// eight failures across two packages, none of which mentioned a
+// download. ci.yml's own bubblewrap/wasmtime step already carries a
+// comment about this exact shape, an install failure surfacing as
+// "three unrelated-looking blueprint tests" three steps downstream, and
+// the fix there was to verify at the step that installs. This asset is
+// the third external dependency the suite needs and had none of that
+// treatment.
+//
+// Exported rather than duplicated in a shell script so the version, the
+// URL and the cache location stay in one place. A CI step that hardcoded
+// the URL would be a second copy of a pin, which is the drift this
+// project keeps paying for elsewhere.
+func PrefetchInterpreter(ctx context.Context) (string, error) {
+	return acquirePythonWasi(ctx)
+}
+
+// downloadRetrySchedule is the backoff between attempts at a transient
+// failure. Short and bounded: this is a large asset from a third party,
+// and the failure it exists for is a momentary 5xx, not an outage worth
+// waiting out.
+var downloadRetrySchedule = []time.Duration{time.Second, 3 * time.Second, 8 * time.Second}
+
+// downloadAndExtractWithRetry retries a TRANSIENT download failure.
+//
+// A single HTTP 500 used to fail the whole acquisition, and therefore
+// the whole test suite and any real `ubx plan` against a Python stack.
+// Retrying is not only a CI concern: a developer's first Python
+// evaluation hitting a momentary 5xx got the same hard failure.
+//
+// A 404 is deliberately NOT retried. That means the pinned version does
+// not exist at that URL, which is a wrong pin rather than a blip, and
+// retrying it three times only delays a clear answer.
+func downloadAndExtractWithRetry(ctx context.Context, url, dest string) error {
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = downloadAndExtract(ctx, url, dest)
+		if err == nil {
+			return nil
+		}
+		if attempt >= len(downloadRetrySchedule) || !isTransientDownloadFailure(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(downloadRetrySchedule[attempt]):
+		}
+	}
+}
+
+// isTransientDownloadFailure reports whether err is worth another
+// attempt: a 5xx, a 429, or a transport-level failure. Anything else,
+// including a 404, is answered the same way every time.
+func isTransientDownloadFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var status *downloadStatusError
+	if errors.As(err, &status) {
+		return status.code >= 500 || status.code == http.StatusTooManyRequests
+	}
+	// Not a status at all: a DNS failure, a reset connection, a timeout.
+	// Those are the transient ones by definition.
+	return true
+}
+
+// downloadStatusError carries the HTTP status so the retry decision can
+// be made on it rather than on the text of a formatted message.
+type downloadStatusError struct {
+	code   int
+	status string
+	url    string
+}
+
+func (e *downloadStatusError) Error() string {
+	return fmt.Sprintf("download %s: unexpected status %s", e.url, e.status)
 }
 
 func verifyPythonWasiDir(dir string) error {
@@ -102,7 +190,7 @@ func downloadAndExtract(ctx context.Context, url, dest string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: unexpected status %s", url, resp.Status)
+		return &downloadStatusError{code: resp.StatusCode, status: resp.Status, url: url}
 	}
 
 	zipFile, err := os.CreateTemp("", "ubx-python-wasi-*.zip")
