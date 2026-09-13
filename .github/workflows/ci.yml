@@ -167,7 +167,42 @@ jobs:
             echo "apt-get update reported an error; continuing to the install, which is the real gate" >&2
           fi
           sudo apt-get install -y bubblewrap
-          curl https://wasmtime.dev/install.sh -sSf | bash
+          # Pinned, not "latest". An evaluator's toolchain is part of
+          # what this repo's hermeticity claims were verified against,
+          # the same reasoning pyeval already applies to the CPython
+          # WASI build it pins (pyeval/wasi_assets.go): "an evaluator
+          # must never silently run against a different interpreter
+          # build than the one its own hermeticity claims were verified
+          # against". Floating to latest meant a wasmtime release could
+          # change what CI tested without any commit here saying so.
+          #
+          # It also removes the failure this pin was prompted by.
+          # install.sh resolves "latest" through an UNAUTHENTICATED
+          # api.github.com call and parses it with two seds:
+          #
+          #   sed 's/.*tag_name": *"//' | sed 's/".*//'
+          #
+          # A response without tag_name leaves the first sed matching
+          # nothing and the second stripping from the first quote, so a
+          # rate-limit body collapses to the single character "{". The
+          # installer then fetched
+          # ".../download/{/wasmtime-{-x86_64-linux.tar.xz" and failed.
+          # Confirmed by running a real rate-limit body through that
+          # exact pipeline, not inferred from the symptom. The limit is
+          # 60 requests per hour per IP and GitHub-hosted runners share
+          # IPs, so this recurs on a busy afternoon and is not a
+          # one-off. Passing --version skips get_latest_release
+          # entirely, so the API call is gone rather than merely more
+          # likely to succeed.
+          #
+          # Bumping this is a deliberate decision, like bumping a
+          # provider version in .ubx/config. Unlike the CPython pin
+          # there is no digest here: install.sh takes a version and not
+          # a checksum, so matching that would mean replacing the
+          # installer with a hand-rolled download, verify and extract.
+          # Worth doing, but as its own change rather than folded into
+          # a pin.
+          curl https://wasmtime.dev/install.sh -sSf | bash -s -- --version v48.0.2
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
           # Deno was missing here until now, and nothing failed: every
           # test needing it calls its own requireDeno, which SKIPS when
