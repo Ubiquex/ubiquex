@@ -118,6 +118,12 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			defer cancel()
 
 			var intent resolver.IntentFile
+			// UBI-267: whether this document was GENERATED rather than
+			// authored, which decides whether its op is a claim to check
+			// or a value to derive. Set only by the two branches that
+			// generate one; a hand-written intent file leaves it false
+			// and keeps today's strictness exactly.
+			var generated bool
 			switch {
 			case strings.HasSuffix(strings.ToLower(fromCode), ".ubx.hcl"):
 				// UBI-226: hclstack.Parse never evaluates anything -- a
@@ -134,6 +140,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 				}
 				intent = *parsed
+				generated = true
 			case fromCode != "":
 				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
@@ -181,6 +188,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 				}
+				generated = true
 			default:
 				data, err := os.ReadFile(args[0])
 				if err != nil {
@@ -225,7 +233,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			}
 			defer closeLedger()
 
-			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents))
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents), inferOpIfGenerated(generated)...)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 			}
@@ -428,4 +436,19 @@ func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, 
 		return nil, fmt.Errorf("close provider: %w", closeErr)
 	}
 	return []resolver.DeclaredProvider{{Source: *source, Version: *providerVersion, Schema: newSchemaInspector(schemas)}}, nil
+}
+
+// inferOpIfGenerated turns the generated/authored distinction into the
+// resolver option that expresses it, or nothing at all.
+//
+// A slice rather than a bool parameter on Resolve, so the resolver's own
+// default stays "check the declared op" and a caller has to say
+// otherwise. The two callers that say otherwise are the SDK-program and
+// .ubx.hcl branches of plan and resolve, which are the only places a
+// document is produced rather than read (UBI-267).
+func inferOpIfGenerated(generated bool) []resolver.ResolveOption {
+	if !generated {
+		return nil
+	}
+	return []resolver.ResolveOption{resolver.WithInferredOp()}
 }

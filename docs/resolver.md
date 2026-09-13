@@ -445,6 +445,41 @@ silently decides. Validated at resolve time: `op: "create"` requires the
 address to be absent from `FoldState`; `op: "modify"` requires it to be
 present. Either mismatch is a hard resolve-time error.
 
+### Amendment (2026-09-13, UBI-267): inferred for a GENERATED document
+
+The rule above is unchanged for a hand-written intent file and scoped to
+one for everything else.
+
+All three SDK runtimes hardcode `op: "create"`, with their own reason
+recorded: a hermetic, describe-only program cannot read ledger state, so
+it has no way to express modify intent. Checking that op against ledger
+presence therefore validated a claim nobody made, against a program that
+could not make a different one. The result was that an SDK-authored
+stack could be resolved exactly once: any second `ubx plan` after any
+successful ship was refused, which also made a partially shipped stack
+impossible to complete by re-running the program that made it. A code
+blueprint made it sharper still, since its author never sees an op at
+all and so cannot follow the error's own advice to change it.
+
+The check above exists to catch an AUTHORING MISTAKE. A generated
+document has no author of that field, so `resolver.WithInferredOp()`
+derives the op from ledger presence for the two authoring paths that
+generate one, an SDK program and a `.ubx.hcl` file. A hand-written
+intent file keeps exactly this section's strictness, both
+`ErrCreateTargetExists` and `ErrModifyTargetMissing` included, because
+there a human really did state an op and really can be wrong about it.
+
+Inference runs in both directions, so "inferred" means the op is a
+function of ledger presence rather than a rule pointed one way.
+
+Two consequences worth knowing. `ErrCreateTargetExists` was incidentally
+the only thing that surfaced "this address is already owned by something
+else" for a generated document, and that is now a visible modify with
+its attribute diff on the plan receipt rather than a refusal. And a
+re-plan of an unchanged program now renders every existing resource as a
+no-op modify rather than an empty plan, which is `OpModify`'s existing
+behaviour made common rather than anything new.
+
 `op: "modify"` supplies the resource's full desired end-state config (not
 a before/after diff the author computes by hand) — the resolver diffs it
 against the ledger's own `FoldState`-reconstructed current config via the
