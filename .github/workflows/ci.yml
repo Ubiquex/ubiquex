@@ -248,7 +248,20 @@ jobs:
         # test skips rather than fails when its binary is absent (a
         # deliberate choice, see tseval's own requireDeno), which is
         # what let the whole TypeScript suite go unrun here unnoticed.
-        run: go test -v ./... 2>&1 | tee /tmp/test.log; exit "${PIPESTATUS[0]}"
+        #
+        # -race because this project schedules real concurrent work:
+        # UBI-67's parallel ship scheduler runs independent nodes at
+        # once, and UBI-253 replaced a wall-clock concurrency assertion
+        # with a barrier that genuinely puts N applies in flight
+        # together. A data race there would be invisible to every other
+        # check here, and the whole suite is already race-clean, so this
+        # gate starts green rather than asking anyone to fix a backlog.
+        #
+        # Measured before adding rather than assumed: a full uncached
+        # -race run is about 66s locally against roughly 40s without,
+        # which is noise beside this job's own provider and evaluator
+        # setup steps.
+        run: go test -race -v ./... 2>&1 | tee /tmp/test.log; exit "${PIPESTATUS[0]}"
 
       - name: Report skipped tests
         # Never fails the build: skipping is legitimate for a test gated
