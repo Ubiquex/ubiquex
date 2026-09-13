@@ -51,13 +51,39 @@ func resolveCallOutputs(callingStack string, desc *Description, resources []reso
 	// The address arrives already fully qualified, since the blueprint
 	// evaluated inside the calling stack, so there is nothing to
 	// re-qualify here.
+	// An output the blueprint did not set on THIS call is recorded as
+	// absent rather than refused (UBI-258).
+	//
+	// This softens a rule UBI-261 shipped, deliberately. That rule
+	// refused any declared output with no reported address, and it was
+	// written when the only way that could happen was a blueprint
+	// forgetting to set one. A blueprint that is CODE has a second,
+	// legitimate way: an output produced by a resource it only creates
+	// on some branch.
+	//
+	//	if cfg.WithDeadLetterQueue != nil && *cfg.WithDeadLetterQueue {
+	//	    dlq := sdk.Resource(...)
+	//	    out.DeadLetterARN = dlq.Field("arn")
+	//	}
+	//
+	// Called without that flag, DeadLetterARN is genuinely nil and the
+	// blueprint is correct. The old rule failed the whole call, which
+	// made a conditional resource with an output impossible, and that
+	// is precisely the dead-letter queue UBI-258 records as designed
+	// then dropped.
+	//
+	// The protection it existed for is kept by moving it: an absent
+	// output is recorded as absent, and REFERENCING one fails, at the
+	// reference, naming the call and the output
+	// (rewriteOutputRefsInValue). Nothing silently gets nothing. A
+	// blueprint that genuinely forgot to set an output still fails, at
+	// the first place that depends on it, which is also where the
+	// person reading the error can see what they expected to be there.
 	if desc.Schema != nil {
 		for _, o := range desc.Outputs {
-			addr, ok := reported[o.Name]
-			if !ok || addr == "" {
-				return nil, fmt.Errorf("output %q: the blueprint returned no value for it -- every declared output has to be set to a real resource attribute by the time the function returns", o.Name)
-			}
-			out[o.Name] = addr
+			// The zero value is the sentinel: reported[] yields "" for a
+			// name the evaluation never reported.
+			out[o.Name] = reported[o.Name]
 		}
 		return out, nil
 	}
@@ -143,6 +169,15 @@ func rewriteOutputRefsInValue(v any, outputAddr map[string]string) (any, bool, e
 						real, found := outputAddr[key]
 						if !found {
 							return nil, false, fmt.Errorf("output reference %q: no such blueprint call/output declared in this document", to)
+						}
+						if real == "" {
+							// Declared, but the blueprint did not set it
+							// on this call (UBI-258). Distinguished from
+							// "no such output" above on purpose: the two
+							// send a reader to completely different
+							// places, and conflating them is what made
+							// the earlier version of this check unhelpful.
+							return nil, false, fmt.Errorf("output reference %q: that blueprint declares this output but did not set it on this call -- an output produced by a resource the blueprint creates only on some branch is absent when that branch did not run, so either pass whatever argument makes it exist or stop referencing it", to)
 						}
 						return map[string]any{"$ref": map[string]any{"to": real}}, true, nil
 					}
