@@ -338,3 +338,55 @@ func (s *safeWriter) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	return s.w.Write(p)
 }
+
+// TestNewProgressPrinter_UnverifiedCreateIsPrintedWithItsRecovery is
+// UBI-269's receipt half.
+//
+// The classification fix alone would have traded a confident wrong answer
+// for no answer at all. A create that lands in unknown_post_timeout has no
+// reconciliation to narrate, and the printer deliberately suppresses that
+// transition precisely because every other route into it IS narrated by
+// the reconcile_attempt events that follow. So the state that means "a
+// real resource may exist and nothing is recorded for it" would have
+// printed nothing but the provider's own error text, from which the
+// natural conclusion is that the create did not happen.
+//
+// This asserts the unverified line survives into the output, including the
+// recovery command, and that it is not overwritten by anything after it.
+func TestNewProgressPrinter_UnverifiedCreateIsPrintedWithItsRecovery(t *testing.T) {
+	var buf bytes.Buffer
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 0, nil)
+
+	addr := "payments.fake_widget.queue"
+	printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "in_flight"})
+	printer(executor.ProgressEvent{
+		Address: addr, Kind: "error",
+		Detail: "encode new state: unknown type tftypes.DynamicPseudoType",
+	})
+	printer(executor.ProgressEvent{
+		Address: addr, Kind: "unverified",
+		Detail: "this resource may exist: the create call was made and its outcome is unknown. " +
+			"Nothing is recorded for it, so a re-ship would create another. Check the provider, and if it is there, adopt it with:\n" +
+			"  ubx scan --stack payments --type fake_widget --name queue --lookup '<identifying attributes>'",
+	})
+	// The suppressed transition, emitted after the unverified line exactly
+	// as the executor emits it, to prove it does not erase the line.
+	printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "unknown_post_timeout"})
+	finish()
+
+	out := buf.String()
+	for _, want := range []string{
+		"may exist",
+		"a re-ship would create another",
+		"ubx scan --stack payments --type fake_widget --name queue",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("receipt is missing %q, so nothing tells the reader a resource may exist:\n%s", want, out)
+		}
+	}
+	// The provider's own error still shows: it says what went wrong, while
+	// the unverified line says what it means. Neither replaces the other.
+	if !strings.Contains(out, "encode new state") {
+		t.Fatalf("receipt lost the provider's own error:\n%s", out)
+	}
+}

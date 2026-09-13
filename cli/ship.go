@@ -1180,6 +1180,22 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 			errKey := fmt.Sprintf("%s#error#%d", ev.Address, len(order))
 			updateRow(errKey, ev.Address, kind, st.Yellow("!"), ev.Detail, "", true)
 
+		case "unverified":
+			// UBI-269: a create whose outcome is genuinely unknown. Its own
+			// permanent row, on the same never-reused-key discipline the
+			// "error" case above uses, because this must survive whatever
+			// redraws follow it.
+			//
+			// Loud on purpose, and distinct from the error line that
+			// precedes it. That line carries the provider's message, which
+			// says what went wrong; this one says what it means for the
+			// resource and what to do about it. Reading only the first, the
+			// natural conclusion is that the create did not happen, which
+			// is exactly the wrong one and exactly what UBI-269 is about.
+			stopTicker(ev.Address)
+			unvKey := fmt.Sprintf("%s#unverified#%d", ev.Address, len(order))
+			updateRow(unvKey, ev.Address, kind, st.Yellow("?"), st.Yellow(ev.Detail), "", true)
+
 		case "transition":
 			switch ev.State {
 			case "pending", "in_flight", "unknown_post_timeout":

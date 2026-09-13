@@ -39,6 +39,22 @@ type fakeApplier struct {
 	barrierArrived int
 	barrierReady   chan struct{}
 	barrierTimeout time.Duration
+
+	// UBI-269: how many times ApplyResourceChange was called per address.
+	// A terminal error no longer short-circuits to failed; it is
+	// reconciled like any other ambiguous result. Reconciliation only ever
+	// READS, so "terminal is never retried" must still hold, and after
+	// this change that is no longer implied by the resulting state. This
+	// counts the side-effecting call directly rather than inferring it.
+	applyCalls map[string]int
+}
+
+// applyCallsFor reports how many ApplyResourceChange calls this fixture
+// received carrying the given "id"/"value" key.
+func (f *fakeApplier) applyCallsFor(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.applyCalls[key]
 }
 
 // scriptApplyBarrier makes every subsequent create block inside
@@ -177,6 +193,11 @@ func (f *fakeApplier) PlanResourceChange(ctx context.Context, resourceSchema any
 }
 
 func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema any, typeName string, priorState, plannedState json.RawMessage, plannedPrivate []byte) (json.RawMessage, json.RawMessage, error) {
+	// Counted first, before any scripted delay/barrier/error path can
+	// return early, so the count is of calls RECEIVED rather than calls
+	// that got as far as doing something.
+	f.countApply(priorState, plannedState)
+
 	// UBI-67: an artificial, scripted delay -- deliberately BEFORE the
 	// lock below (and before any of this fake's own internal state is
 	// touched), so N concurrent creates each carrying their own delay
@@ -304,6 +325,26 @@ func (f *fakeApplier) ApplyResourceChange(ctx context.Context, resourceSchema an
 			if steps, ok := f.createScripts[v]; ok && len(steps) > 0 {
 				step := steps[0]
 				f.createScripts[v] = steps[1:]
+				// UBI-269: landsAs on a CREATE step means the resource is
+				// really created server-side and the call still returns an
+				// error, which is the exact shape of the real incident: CCAPI
+				// created the SQS queue, the provider then failed to encode
+				// its own response, and ubx saw only the diagnostic. The id
+				// is assigned here rather than below because the resource
+				// exists from the provider's point of view before the error
+				// is returned, and this fixture is standing in for the
+				// provider.
+				if step.landsAs != nil {
+					f.createCounter++
+					landedID := fmt.Sprintf("created-%d", f.createCounter)
+					var landed map[string]interface{}
+					if err := json.Unmarshal(step.landsAs, &landed); err == nil {
+						landed["id"] = landedID
+						if b, err := json.Marshal(landed); err == nil {
+							f.resources[landedID] = b
+						}
+					}
+				}
 				if step.err != nil {
 					return nil, nil, step.err
 				}
@@ -1017,9 +1058,31 @@ func TestShip_RetryableError_TriggersReconciliation_ResolvesFailed(t *testing.T)
 	}
 }
 
-func TestShip_TerminalError_FailsImmediately_NoReconciliation(t *testing.T) {
+// TestShip_TerminalError_IsVerifiedNotAssumed_AndNeverReApplied is the
+// UBI-269 rewrite of what was TestShip_TerminalError_FailsImmediately_
+// NoReconciliation.
+//
+// That test asserted the belief this change reverses: that a structured
+// ERROR diagnostic is the provider's own reliable report that nothing
+// happened, and so needs no read-back. It does not report that. It reports
+// that the operation did not complete, which is a different claim, and
+// believing the stronger one turned a created SQS queue into a resource
+// the ledger had never heard of.
+//
+// The property the old test was really protecting is still here and still
+// load-bearing: terminal means the apply is not re-issued. That is now
+// asserted directly, by counting ApplyResourceChange calls, rather than
+// inferred from the absence of reconciliation. Reconciliation only reads,
+// so it cannot violate it.
+//
+// The final state is unchanged at failed, which is the point: when the
+// provider really did reject the change, the read-back agrees and the
+// verdict is identical. All that is different is that it was earned.
+func TestShip_TerminalError_IsVerifiedNotAssumed_AndNeverReApplied(t *testing.T) {
 	l, fake, addr, p := singleResourceRevert(t)
 	fake.scriptApplyError(addr.String(), &TerminalError{Err: errors.New("invalid attribute value")})
+	// Live state stays at the drifted value: the change genuinely never
+	// landed, so an honest read-back must conclude failed.
 
 	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
 	if err != nil {
@@ -1029,11 +1092,38 @@ func TestShip_TerminalError_FailsImmediately_NoReconciliation(t *testing.T) {
 	if st, _ := ra.LastState(); st != core.ResourceFailed {
 		t.Fatalf("last state = %s, want failed", st)
 	}
-	if len(ra.Reconciliation) != 0 {
-		t.Fatalf("reconciliation = %+v, want none -- a terminal error must never be reconciled/retried within this attempt", ra.Reconciliation)
+	if len(ra.Reconciliation) == 0 {
+		t.Fatal("expected a read-back: a diagnostic says the operation did not complete, not that the resource is unchanged")
+	}
+	if n := fake.applyCallsFor(addr.String()); n != 1 {
+		t.Fatalf("ApplyResourceChange called %d times, want exactly 1 -- a terminal error must never be re-applied within this attempt", n)
 	}
 	if len(ra.Errors) != 1 || ra.Errors[0].Classification != core.ErrorTerminal {
-		t.Fatalf("errors = %+v, want exactly one terminal error", ra.Errors)
+		t.Fatalf("errors = %+v, want exactly one error still classified terminal -- the classification survives, only the conclusion drawn from it changed", ra.Errors)
+	}
+}
+
+// TestShip_TerminalError_ProviderAppliedItAnyway_RecordsApplied is the
+// case the old behaviour could not reach at all: the provider made the
+// change and then reported an error about it. Before UBI-269 this recorded
+// failed, permanently, against a resource that had really been modified.
+func TestShip_TerminalError_ProviderAppliedItAnyway_RecordsApplied(t *testing.T) {
+	l, fake, addr, p := singleResourceRevert(t)
+	// The change lands in the provider, and the call still returns a
+	// structured ERROR diagnostic. Exactly the shape of the real incident:
+	// the remote API did the work, and the provider failed afterwards.
+	fake.scriptApplyTimeoutButLanded(addr.String(), &TerminalError{Err: errors.New("encode new state: unknown type")}, fakeState(addr, "v1"))
+
+	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+	ra := sealed.Resources[0]
+	if st, _ := ra.LastState(); st != core.ResourceApplied {
+		t.Fatalf("last state = %s, want applied -- the change is live, whatever the diagnostic said about it", st)
+	}
+	if n := fake.applyCallsFor(addr.String()); n != 1 {
+		t.Fatalf("ApplyResourceChange called %d times, want exactly 1", n)
 	}
 }
 
@@ -1464,8 +1554,14 @@ func TestShip_ChangeProposal_DependentNeverAttemptedBeforeDependencyApplies(t *t
 	if primaryRA == nil || mirrorRA == nil {
 		t.Fatalf("expected resource_apply entries for both primary and mirror, got %+v", sealed.Resources)
 	}
-	if st, _ := primaryRA.LastState(); st != core.ResourceFailed {
-		t.Fatalf("primary state = %s, want failed", st)
+	// UBI-269: unknown_post_timeout rather than failed. The apply call was
+	// issued and came back with a diagnostic, which says the operation did
+	// not complete, not that nothing was created. This test's own subject
+	// is the gating below (a dependent is never attempted while its
+	// dependency has not APPLIED), and that is unaffected either way:
+	// unknown is not applied.
+	if st, _ := primaryRA.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("primary state = %s, want unknown_post_timeout", st)
 	}
 	for _, tr := range mirrorRA.Transitions {
 		if tr.State == core.ResourceInFlight {
@@ -1807,4 +1903,117 @@ func mustJSONString(t *testing.T, s string) string {
 		t.Fatalf("marshal embedded template string: %v", err)
 	}
 	return string(b)
+}
+
+// countApply records one ApplyResourceChange call against whichever key
+// identifies the resource in this fixture's own vocabulary: the "id" of the
+// prior state for a modify or destroy (which already exists), or the
+// "value" of the planned state for a create (which does not have an id
+// yet). Same keying the scripts/createScripts split already uses, so a
+// test can count calls with the same string it scripted with.
+func (f *fakeApplier) countApply(priorState, plannedState json.RawMessage) {
+	key := ""
+	var prior map[string]interface{}
+	if err := json.Unmarshal(priorState, &prior); err == nil {
+		key, _ = prior["id"].(string)
+	}
+	if key == "" {
+		var planned map[string]interface{}
+		if err := json.Unmarshal(plannedState, &planned); err == nil {
+			if v, ok := planned["value"].(string); ok {
+				key = v
+			}
+		}
+	}
+	if key == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.applyCalls == nil {
+		f.applyCalls = map[string]int{}
+	}
+	f.applyCalls[key]++
+}
+
+// scriptCreateFailureButLanded is scriptCreateFailure's own counterpart
+// for the failure mode UBI-269 exists for: the resource IS created
+// server-side and the call still returns err. scriptApplyTimeoutButLanded
+// already covers this for a modify, keyed by an id that exists; a create
+// has no id yet, so this is keyed by "value" like every other create
+// script.
+func (f *fakeApplier) scriptCreateFailureButLanded(value string, err error, landsAs json.RawMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createScripts == nil {
+		f.createScripts = map[string][]applyStep{}
+	}
+	f.createScripts[value] = append(f.createScripts[value], applyStep{err: err, landsAs: landsAs})
+}
+
+// TestShip_CreateLandedThenProviderErrored_RecordsUnknownAndSaysSo is the
+// hermetic repro of the incident this whole change comes from.
+//
+// A create reaches the remote API, the resource is really created, and the
+// provider then fails and returns a structured ERROR diagnostic. ubx never
+// sees the resource. Before this change it recorded `failed`, a definite
+// claim that nothing happened, and the resource existed in the cloud with
+// nothing in the ledger pointing at it: a silent orphan, and a re-ship
+// would have created a second one.
+//
+// Two things are asserted, and the second matters as much as the first. A
+// correct record nobody reads would have made the orphan quieter rather
+// than louder: every other route into unknown_post_timeout is narrated by
+// the reconcile_attempt events that follow it, and a create has no
+// reconciliation to narrate.
+func TestShip_CreateLandedThenProviderErrored_RecordsUnknownAndSaysSo(t *testing.T) {
+	l := core.Open(t.TempDir())
+	fake := newFakeApplier()
+	addr := core.Address{Stack: "payments", Type: "fake_widget", Name: "queue"}
+
+	create := changeCreateJSON(t, addr, `{"value":"q1"}`)
+	p := acceptChange(t, l, "payments", []json.RawMessage{create})
+
+	fake.scriptCreateFailureButLanded("q1",
+		&TerminalError{Err: errors.New("encode new state: unknown type tftypes.DynamicPseudoType")},
+		json.RawMessage(`{"value":"q1"}`))
+
+	var events []ProgressEvent
+	ctx := WithProgress(context.Background(), func(ev ProgressEvent) {
+		events = append(events, ev)
+	})
+
+	sealed, err := Ship(ctx, l, SingleApplierPool(fake, nil), "", p)
+	if err != nil {
+		t.Fatalf("ship: %v", err)
+	}
+
+	ra := sealed.Resources[0]
+	if st, _ := ra.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("state = %s, want unknown_post_timeout -- the create call was made and its effect is unknown, whatever the diagnostic said", st)
+	}
+
+	// The resource really is there. ubx cannot see it, which is exactly why
+	// it must not claim the opposite.
+	if len(fake.resources) != 1 {
+		t.Fatalf("fake.resources = %+v, want the one really-created resource", fake.resources)
+	}
+
+	var unverified *ProgressEvent
+	for i := range events {
+		if events[i].Kind == "unverified" {
+			unverified = &events[i]
+		}
+	}
+	if unverified == nil {
+		t.Fatal("no unverified event: a create whose outcome is unknown must say so, since nothing else in the receipt will")
+	}
+	if !strings.Contains(unverified.Detail, "ubx scan") {
+		t.Fatalf("unverified detail does not name the recovery: %q", unverified.Detail)
+	}
+	for _, want := range []string{addr.Stack, addr.Type, addr.Name} {
+		if !strings.Contains(unverified.Detail, want) {
+			t.Fatalf("unverified detail is missing %q, so the recovery command cannot be run as printed: %q", want, unverified.Detail)
+		}
+	}
 }
