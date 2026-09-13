@@ -89,7 +89,29 @@ func encodeDynamicValue(block Block, in json.RawMessage) ([]byte, error) {
 	if len(in) == 0 {
 		in = json.RawMessage("{}")
 	}
-	val, err := ctyjson.Unmarshal(in, ty)
+	// Through the same generic encoder the planned-state path uses,
+	// rather than ctyjson.Unmarshal, because ctyjson refuses a plain
+	// JSON value under a dynamic-typed attribute: it expects go-cty's
+	// own {"value":..,"type":..} wrapper and reports the first real key
+	// it finds as "invalid key ... in dynamically-typed value".
+	//
+	// This is the PRIOR state, so it is the path an update and a destroy
+	// take, where the planned-state path is the one a create takes. Both
+	// had to be fixed or a dynamic attribute would have gone from
+	// uncreatable to uncreatable-and-undeletable.
+	//
+	// It is NOT a drop-in for ctyjson here, which is worth stating
+	// because assuming it was is what broke first: the generic encoder
+	// also carries the config-authoring checks, and applying those to a
+	// recording of what already exists rejected states that were always
+	// legitimate. See encodeBlockValue's own priorState parameter.
+	var generic interface{}
+	dec := json.NewDecoder(bytes.NewReader(in))
+	dec.UseNumber()
+	if err := dec.Decode(&generic); err != nil {
+		return nil, fmt.Errorf("encode value: decode json: %w", err)
+	}
+	val, err := encodeBlockValue(block, generic, true)
 	if err != nil {
 		return nil, fmt.Errorf("encode value: %w", err)
 	}
@@ -175,7 +197,7 @@ func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, er
 			return nil, fmt.Errorf("encode value: decode json: %w", err)
 		}
 	}
-	val, err := encodeBlockValue(block, generic)
+	val, err := encodeBlockValue(block, generic, false)
 	if err != nil {
 		return nil, fmt.Errorf("encode value: %w", err)
 	}
@@ -208,7 +230,26 @@ func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, er
 // for one satisfied by a $computed marker -- that's a present key, just
 // not yet a concrete value, an entirely different, already-handled
 // case above).
-func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
+// priorState selects between the two things this encoder is asked to
+// build, which are not the same document.
+//
+// A CONFIG is authored, so it gets the authoring checks: a required
+// attribute that is absent is the author's mistake, and an absent
+// Computed attribute is a value the provider will decide, which reaches
+// the wire as unknown.
+//
+// A PRIOR STATE is a recording of what already exists. Neither check
+// belongs on it. An attribute can be legitimately absent from a state
+// written before the schema declared it required, and a prior state
+// must never carry an unknown at all, since nothing about an existing
+// resource is undecided.
+//
+// This distinction used to be implicit in WHICH encoder each path
+// called, and became load-bearing when the prior-state path moved here
+// to gain dynamic-attribute support. Caught by the existing alias
+// tests, which ship a resource whose prior state does not carry every
+// required attribute.
+func encodeBlockValue(block Block, generic interface{}, priorState bool) (cty.Value, error) {
 	m, _ := generic.(map[string]interface{})
 	vals := make(map[string]cty.Value, len(block.Attributes)+len(block.NestedBlocks))
 
@@ -239,9 +280,9 @@ func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 		switch {
 		case present && isComputedMarker(raw):
 			vals[a.Name] = cty.UnknownVal(aty)
-		case !present && a.Required:
+		case !present && a.Required && !priorState:
 			return cty.NilVal, fmt.Errorf("%w: %q", ErrRequiredAttributeMissing, a.Name)
-		case !present && a.Computed:
+		case !present && a.Computed && !priorState:
 			vals[a.Name] = cty.UnknownVal(aty)
 		case !present:
 			vals[a.Name] = cty.NullVal(aty)
@@ -256,7 +297,7 @@ func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 
 	for _, nb := range block.NestedBlocks {
 		raw, present := m[nb.TypeName]
-		val, err := encodeNestedBlockValue(nb, raw, present)
+		val, err := encodeNestedBlockValue(nb, raw, present, priorState)
 		if err != nil {
 			return cty.NilVal, fmt.Errorf("nested block %q: %w", nb.TypeName, err)
 		}
@@ -275,7 +316,7 @@ func encodeBlockValue(block Block, generic interface{}) (cty.Value, error) {
 // tfplugin's schema model) -- an absent nested block encodes exactly like
 // encodeDynamicValue's existing behavior (empty collection / null single),
 // never Unknown at the block level itself.
-func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.Value, error) {
+func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool, priorState bool) (cty.Value, error) {
 	inner, err := blockObjectType(nb.Block)
 	if err != nil {
 		return cty.NilVal, err
@@ -325,7 +366,7 @@ func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.
 		vals := make([]cty.Value, 0, len(arr))
 		for i, item := range arr {
 			im, _ := item.(map[string]interface{})
-			v, err := encodeBlockValue(nb.Block, im)
+			v, err := encodeBlockValue(nb.Block, im, priorState)
 			if err != nil {
 				return cty.NilVal, fmt.Errorf("[%d]: %w", i, err)
 			}
@@ -352,7 +393,7 @@ func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.
 		vals := make(map[string]cty.Value, len(m))
 		for k, item := range m {
 			im, _ := item.(map[string]interface{})
-			v, err := encodeBlockValue(nb.Block, im)
+			v, err := encodeBlockValue(nb.Block, im, priorState)
 			if err != nil {
 				return cty.NilVal, fmt.Errorf("%s: %w", k, err)
 			}
@@ -367,7 +408,7 @@ func encodeNestedBlockValue(nb NestedBlock, raw interface{}, present bool) (cty.
 			return cty.NullVal(inner), nil
 		}
 		m, _ := raw.(map[string]interface{})
-		return encodeBlockValue(nb.Block, m)
+		return encodeBlockValue(nb.Block, m, priorState)
 	}
 }
 
@@ -392,6 +433,20 @@ func encodeGenericValue(ty cty.Type, raw interface{}) (cty.Value, error) {
 		return cty.NullVal(ty), nil
 	}
 	switch {
+	case ty == cty.DynamicPseudoType:
+		// A free-form JSON attribute: the schema declares no shape, so
+		// the value carries its own. Every JSON-typed attribute in a
+		// CloudFormation-derived schema lands here, which is 707
+		// attributes across 482 of the 1,724 AWS resources, every IAM
+		// policy document among them.
+		//
+		// The type is inferred from the value rather than taken from the
+		// schema, because there is nothing to take. go-cty's msgpack
+		// encoder already knows how to put a concretely-typed value on
+		// the wire under a dynamic-typed slot: it writes the type
+		// alongside the value, which is exactly what a dynamic attribute
+		// means on the protocol.
+		return impliedDynamicValue(raw)
 	case ty.IsPrimitiveType():
 		return encodePrimitiveValue(ty, raw)
 	case ty.IsListType(), ty.IsSetType():
@@ -515,7 +570,21 @@ func decodeDynamicValue(block Block, msgpackBytes, jsonBytes []byte) (json.RawMe
 		if err != nil {
 			return nil, fmt.Errorf("decode value: msgpack: %w", err)
 		}
-		out, err := ctyjson.Marshal(val, ty)
+		// Marshalled against the value's OWN type, not the schema's.
+		//
+		// ctyjson.Marshal(val, ty) writes go-cty's type-tagged wrapper
+		// for anything sitting under a dynamic-typed slot, so a policy
+		// document came back as
+		// {"value":{...},"type":["object",{...}]} instead of the JSON
+		// the user wrote. That shape would then be what the ledger
+		// stored, what `ubx why` printed, and what the next plan
+		// compared against the user's own config, which would never
+		// match again.
+		//
+		// This is the quiet half of the same defect. The two encode
+		// paths fail loudly; this one succeeds and returns the wrong
+		// thing.
+		out, err := ctyjson.Marshal(val, val.Type())
 		if err != nil {
 			return nil, fmt.Errorf("decode value: %w", err)
 		}
@@ -525,4 +594,66 @@ func decodeDynamicValue(block Block, msgpackBytes, jsonBytes []byte) (json.RawMe
 		return json.RawMessage(jsonBytes), nil
 	}
 	return nil, nil
+}
+
+// impliedDynamicValue builds a concretely-typed cty.Value from a decoded
+// generic JSON value, for an attribute the schema declares as dynamic.
+//
+// Tuple and object rather than list and map, matching go-cty's own
+// ctyjson.ImpliedType: a JSON array of mixed element types has no list
+// type, and a JSON object's fields have no single element type. A
+// free-form JSON value is exactly where those mixtures turn up, so
+// choosing list/map would refuse values the attribute exists to carry.
+// An IAM policy statement, for one, is an array of objects whose
+// "Resource" is sometimes a string and sometimes an array of them.
+func impliedDynamicValue(raw interface{}) (cty.Value, error) {
+	switch v := raw.(type) {
+	case nil:
+		return cty.NullVal(cty.DynamicPseudoType), nil
+	case bool:
+		return cty.BoolVal(v), nil
+	case string:
+		return cty.StringVal(v), nil
+	case json.Number:
+		// Through cty's own parser, not float64: a JSON number decoded
+		// with UseNumber keeps its exact text, and cty.ParseNumberVal
+		// keeps that precision where a float64 round trip would quietly
+		// lose it.
+		n, err := cty.ParseNumberVal(v.String())
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("number %q: %w", v.String(), err)
+		}
+		return n, nil
+	case float64:
+		// Only reachable from a caller that decoded without UseNumber.
+		return cty.NumberFloatVal(v), nil
+	case []interface{}:
+		if len(v) == 0 {
+			return cty.EmptyTupleVal, nil
+		}
+		vals := make([]cty.Value, 0, len(v))
+		for i, item := range v {
+			val, err := impliedDynamicValue(item)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("[%d]: %w", i, err)
+			}
+			vals = append(vals, val)
+		}
+		return cty.TupleVal(vals), nil
+	case map[string]interface{}:
+		if len(v) == 0 {
+			return cty.EmptyObjectVal, nil
+		}
+		vals := make(map[string]cty.Value, len(v))
+		for k, item := range v {
+			val, err := impliedDynamicValue(item)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("%s: %w", k, err)
+			}
+			vals[k] = val
+		}
+		return cty.ObjectVal(vals), nil
+	default:
+		return cty.NilVal, fmt.Errorf("cannot represent %T as a dynamic value", raw)
+	}
 }
