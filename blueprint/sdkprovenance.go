@@ -28,6 +28,7 @@
 package blueprint
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -141,6 +142,22 @@ func pendingBlueprintNames(intent *resolver.IntentFile) map[string]bool {
 // one buildManifest/Package/Verify already use) -> full
 // "name:content_hash" ref.
 func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[string]string, error) {
+	roots, err := DiscoverGoBlueprintRoots(ctx, entryFile)
+	if err != nil {
+		return nil, err
+	}
+	return blueprintRefs(roots), nil
+}
+
+// DiscoverGoBlueprintRoots is the same walk, reporting every half of
+// what a blueprint root is: the import path a runtime recognizes a call
+// site by (UBI-266, callsite.go), and the content hash the stamping
+// pass completes a bare name with.
+//
+// Both consumers run per evaluation, one before and one after, so this
+// is deliberately callable once and shared rather than walking the
+// module graph twice.
+func DiscoverGoBlueprintRoots(ctx context.Context, entryFile string) ([]BlueprintRoot, error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, err
@@ -153,6 +170,24 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 	// state here, not an error; without this, `go list -m all` refuses
 	// outright ("updates to go.mod needed; to update it: go mod tidy")
 	// on exactly the same real fixture shape goeval already tolerates.
+	// GOFLAGS=-mod=mod lets `go list` reconcile a toolchain-version
+	// mismatch, and reconciling means WRITING BACK to the program's own
+	// go.mod. That is a file this process must never modify as a side
+	// effect of reading a program, the same rule goeval's own
+	// buildProgram states and satisfies by building from a copy.
+	//
+	// It was already true before UBI-266 and rarely visible, because
+	// discovery only ran for a program that had already produced a bare
+	// blueprint name. Call-site attribution runs it for every Go
+	// program, which turned a rare mutation into one on every `ubx
+	// resolve --from-code`, caught by this repository's own fixtures
+	// showing up modified in `git status`.
+	restore, err := preserveModuleFiles(goModuleRoot(entryDir))
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+
 	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Path}}|{{.Dir}}", "all")
 	cmd.Dir = entryDir
 	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
@@ -165,7 +200,8 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 		return nil, fmt.Errorf("go list -m all in %s: %w: %s", entryDir, err, stderr)
 	}
 
-	found := map[string]string{}
+	var roots []BlueprintRoot
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -175,23 +211,34 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 		if len(parts) != 2 || parts[1] == "" {
 			continue // the main module itself, or one with no resolved Dir (not yet downloaded) -- never a blueprint we can hash
 		}
-		moduleDir := parts[1]
+		modulePath, moduleDir := parts[0], parts[1]
 
 		root, ok := blueprintRootContaining(moduleDir)
 		if !ok {
 			continue // an ordinary Go dependency, not a blueprint
 		}
 		name := blueprintNameAt(root)
-		if _, already := found[name]; already {
+		if seen[name] {
 			continue // first match wins; a genuine ambiguity (two distinct blueprints sharing a bare name) is a real, separate problem this fix doesn't attempt to detect
 		}
+		seen[name] = true
 		manifest, err := buildManifest(root, name)
 		if err != nil {
 			return nil, fmt.Errorf("hash blueprint %q at %s: %w", name, root, err)
 		}
-		found[name] = name + ":" + manifest.ContentHash
+		// Match is the module's own import PATH, not its directory. A
+		// frame's fully-qualified function name carries the import path
+		// (github.com/ubx-blueprints/widget-bp.BuildWidget), and the
+		// compiled binary's own file paths are the build machine's, which
+		// this process cannot rely on being the same strings.
+		roots = append(roots, BlueprintRoot{
+			Match: modulePath,
+			Name:  name,
+			Dir:   root,
+			Ref:   name + ":" + manifest.ContentHash,
+		})
 	}
-	return found, nil
+	return roots, nil
 }
 
 // blueprintRootContaining maps a directory holding imported source to
@@ -260,4 +307,82 @@ func blueprintNameAt(root string) string {
 		return m.Name
 	}
 	return filepath.Base(root)
+}
+
+// goModuleRoot walks up from dir to the directory holding go.mod,
+// which is where `go list` writes, and which is NOT always the entry
+// file's own directory: a program in a subpackage has its module root
+// above it. Snapshotting the entry directory alone left this repo's own
+// goeval/testdata/go.mod modified in `git status` after running the
+// blueprint tests, which is how the gap surfaced.
+//
+// Falls back to dir when there is no go.mod anywhere above, which means
+// `go list` will fail for its own reasons and there was nothing to
+// preserve in the first place.
+func goModuleRoot(dir string) string {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
+}
+
+// preserveModuleFiles snapshots the go.mod and go.sum `go list` may
+// rewrite, and returns a function restoring them byte for byte.
+//
+// Copying the whole module to read it, the way a build does, would mean
+// duplicating a potentially large tree on every evaluation to protect
+// two files. Snapshotting exactly those two is the same guarantee for
+// the cost of two reads.
+//
+// A file absent before stays absent: `go list` can CREATE a go.sum, and
+// leaving one behind is the same unwanted mutation as changing one.
+func preserveModuleFiles(dir string) (func(), error) {
+	type snapshot struct {
+		path    string
+		data    []byte
+		mode    os.FileMode
+		existed bool
+	}
+	var snaps []snapshot
+	for _, name := range []string{"go.mod", "go.sum"} {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			snaps = append(snaps, snapshot{path: path})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		snaps = append(snaps, snapshot{path: path, data: data, mode: info.Mode(), existed: true})
+	}
+
+	return func() {
+		for _, s := range snaps {
+			if !s.existed {
+				// Only remove what `go list` itself created, never a file
+				// that appeared for some other reason: if it is not there,
+				// there is nothing to undo.
+				os.Remove(s.path)
+				continue
+			}
+			if current, err := os.ReadFile(s.path); err == nil && bytes.Equal(current, s.data) {
+				continue // unchanged, which is the common case
+			}
+			// A failure to restore is not worth failing an evaluation
+			// over, and there is nothing useful to do about it here: the
+			// file's own contents are what they are.
+			_ = os.WriteFile(s.path, s.data, s.mode)
+		}
+	}, nil
 }

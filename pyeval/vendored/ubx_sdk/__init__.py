@@ -528,10 +528,110 @@ def _current_blueprint_source(binding: ResourceBinding) -> str:
     nothing and the binding is the only signal left. Returns "" (no
     provenance) for an ordinary resource: no open scope, and a binding
     with no blueprint_name -- the overwhelming common case, completely
-    unaffected."""
+    unaffected.
+
+    UBI-266 adds a third signal between the two: the CALL SITE. A
+    blueprint written as code has no generated wrapper, so it never
+    pushes, and its bindings are ordinary provider bindings carrying no
+    blueprint_name. Both existing signals find nothing, and every
+    resource it created used to reach the ledger with no source at all.
+
+    It sits BELOW an open scope and ABOVE the binding. Below the scope
+    because a generated wrapper stating its own name is a direct claim,
+    not an inference. Above the binding because the two answer different
+    questions when they disagree: if blueprint A's code builds a
+    resource from blueprint B's exported binding, A is what produced it,
+    and the call site is the only signal that says so."""
     if _blueprint_source_stack:
         return _blueprint_source_stack[-1]
+    from_call_site = _call_site_blueprint()
+    if from_call_site:
+        return from_call_site
     return binding.blueprint_name
+
+
+# ---------------------------------------------------------------------
+# Call-site attribution (UBI-266)
+# ---------------------------------------------------------------------
+#
+# push_blueprint_source is called only by generated code, which an
+# Ubxfile blueprint's build produces and a blueprint written as code
+# does not have. A code blueprint is a plain hand-written function, and
+# the as-code model's whole point is that nothing is declared twice, so
+# nothing marked its resources.
+#
+# ubx discovers, before running the program, every blueprint whose code
+# it can reach, and writes the answer into a module the guest can
+# import. A module rather than an environment variable because the other
+# two evaluators scrub the environment deliberately and "no environment
+# leakage" is this project's own determinism rule; this keeps all three
+# languages on the same footing.
+#
+# Nothing here computes a content hash. This side reports a bare NAME
+# and the host completes it afterwards from the same discovery pass that
+# produced the roots.
+
+_UNLOADED = object()
+_blueprint_roots = _UNLOADED
+
+
+def _load_blueprint_roots() -> list:
+    """Reads the roots ubx wrote for this evaluation, if any.
+
+    A missing module is the normal case, not an error: it is what every
+    program not run under ubx sees, and what a stack importing no
+    blueprint gets. A malformed one is treated the same way. This
+    mechanism only ever ADDS provenance, so failing to read it must
+    degrade to the behaviour that existed before it rather than take
+    down an evaluation."""
+    try:
+        import _ubx_blueprint_roots  # type: ignore
+    except Exception:
+        return []
+    roots = getattr(_ubx_blueprint_roots, "ROOTS", None)
+    if not isinstance(roots, list):
+        return []
+    out = []
+    for r in roots:
+        if not isinstance(r, dict):
+            continue
+        match, name = r.get("match"), r.get("name")
+        if isinstance(match, str) and isinstance(name, str) and match and name:
+            out.append((match, name))
+    return out
+
+
+def _call_site_blueprint() -> str:
+    """Returns the name of the blueprint whose code is innermost on the
+    current call stack, or "" when the call came from no known
+    blueprint.
+
+    Innermost, not outermost: a blueprint calling another blueprint's
+    function puts both on the stack, and the resource belongs to
+    whichever one actually called resource().
+
+    Walks sys._getframe rather than inspect.stack(), which builds a
+    FrameInfo and reads source context for every frame. This runs once
+    per resource() call, and reading a file per frame inside a WASI
+    sandbox to answer a question about paths would be a real cost for
+    nothing."""
+    global _blueprint_roots
+    if _blueprint_roots is _UNLOADED:
+        _blueprint_roots = _load_blueprint_roots()
+    if not _blueprint_roots:
+        return ""
+
+    try:
+        frame = sys._getframe(1)
+    except Exception:
+        return ""
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        for match, name in _blueprint_roots:
+            if filename.startswith(match) and filename[len(match):len(match) + 1] in ("/", ""):
+                return name
+        frame = frame.f_back
+    return ""
 
 
 def blueprint_outputs(outputs: dict) -> None:

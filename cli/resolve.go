@@ -14,10 +14,8 @@ import (
 
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/goeval"
 	"github.com/ubiquex/ubiquex/hclstack"
 	"github.com/ubiquex/ubiquex/provider"
-	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // newResolveCmd is UBI-27's resolver CLI surface: a new verb, not a flag
@@ -173,19 +171,15 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				// separate discovery step at all). A no-op, and never
 				// spawns a subprocess, for any program that never imports a
 				// blueprint.
-				switch strings.ToLower(filepath.Ext(fromCode)) {
-				case ".go":
-					if err := blueprint.StampDirectCallProvenance(ctx, fromCode, &intent); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-					}
-				case ".ts":
-					if err := blueprint.StampDirectCallProvenanceTS(ctx, fromCode, &intent); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-					}
-				case ".py":
-					if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
-					}
+				//
+				// UBI-266 made all three the same shape. Each language's
+				// discovery now runs BEFORE evaluation, because a runtime
+				// cannot attribute a call to a blueprint it was never told
+				// about, and hands its result forward as blueprintRefs.
+				// So completion is one call for every language, rather
+				// than a second per-language discovery pass here.
+				if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 				}
 			default:
 				data, err := os.ReadFile(args[0])
@@ -299,13 +293,13 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, receipts []string, blueprintRefs map[string]string, err error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
-		canon, err := goeval.Evaluate(ctx, entryFile)
-		return canon, nil, nil, err
+		canon, refs, err := blueprint.EvaluateGoWithBlueprints(ctx, entryFile)
+		return canon, nil, refs, err
 	case ".py":
 		return blueprint.EvaluatePythonWithDeps(ctx, entryFile)
 	case ".ts":
-		canon, err := tseval.Evaluate(ctx, entryFile)
-		return canon, nil, nil, err
+		canon, refs, err := blueprint.EvaluateTSWithBlueprints(ctx, entryFile)
+		return canon, nil, refs, err
 	default:
 		return nil, nil, nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}

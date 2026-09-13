@@ -576,11 +576,119 @@ let blueprintSourceStack: string[] = [];
  * provenance) for an ordinary resource: no open scope, and a binding
  * with no blueprintName -- the overwhelming common case, completely
  * unaffected. */
+/** UBI-266 adds a third signal between the two: the CALL SITE. A
+ * blueprint written as code has no generated wrapper, so it never
+ * pushes, and its bindings are ordinary provider bindings carrying no
+ * blueprintName. Both existing signals find nothing, and every resource
+ * it created used to reach the ledger with no source at all.
+ *
+ * It sits BELOW an open scope and ABOVE the binding. Below the scope
+ * because a generated wrapper stating its own name is a direct claim,
+ * not an inference. Above the binding because the two answer different
+ * questions when they disagree: if blueprint A's code builds a resource
+ * from blueprint B's exported binding, A is what produced it, and the
+ * call site is the only signal that says so. */
 function currentBlueprintSource(binding: ResourceBinding<unknown, unknown>): string | undefined {
   if (blueprintSourceStack.length > 0) {
     return blueprintSourceStack[blueprintSourceStack.length - 1];
   }
+  const fromCallSite = callSiteBlueprint();
+  if (fromCallSite !== undefined) {
+    return fromCallSite;
+  }
   return binding.blueprintName;
+}
+
+// ---------------------------------------------------------------------
+// Call-site attribution (UBI-266)
+// ---------------------------------------------------------------------
+//
+// pushBlueprintSource is called only by generated code, which an
+// Ubxfile blueprint's build produces and a blueprint written as code
+// does not have. A code blueprint is a plain hand-written function, and
+// the as-code model's whole point is that nothing is declared twice, so
+// nothing marked its resources.
+//
+// ubx discovers, before running the program, every blueprint whose code
+// it can reach, and calls __setBlueprintRoots from the runner script it
+// already generates per evaluation. A generated runner rather than an
+// environment variable because the evaluator passes --deny-env on
+// purpose and "no environment leakage" is this project's own
+// determinism rule.
+//
+// Nothing here computes a content hash. This side reports a bare NAME
+// and the host completes it afterwards from the same discovery pass
+// that produced the roots.
+
+/** blueprintRoot is one blueprint this program can reach. match is a
+ * file:// URL prefix, compared against a stack frame's own source URL,
+ * because a TypeScript module's identity at runtime IS its URL. */
+interface BlueprintRoot {
+  readonly match: string;
+  readonly name: string;
+}
+
+let blueprintRoots: BlueprintRoot[] = [];
+
+/** __setBlueprintRoots is the channel ubx's own generated runner script
+ * uses, never API for a program to call. Double-underscored and absent
+ * from the documented surface for that reason. Called with nothing, or
+ * never called at all, leaves attribution off entirely, which is what
+ * an ordinary stack importing no blueprint gets. */
+export function __setBlueprintRoots(roots: readonly BlueprintRoot[]): void {
+  blueprintRoots = roots.filter((r) => r && r.match && r.name).map((r) => ({ match: r.match, name: r.name }));
+}
+
+/** callSiteBlueprint returns the name of the blueprint whose code is
+ * innermost on the current call stack, or undefined when the call did
+ * not come from inside any known blueprint.
+ *
+ * Innermost, not outermost: a blueprint calling another blueprint's
+ * function puts both on the stack, and the resource belongs to whichever
+ * one actually called resource().
+ *
+ * The stack is read from a thrown-away Error rather than from any Deno
+ * API, so this works identically under `deno run` and under any other
+ * runtime a program might be evaluated by. A frame line's shape differs
+ * between engines, so the URL is found by scanning rather than parsed
+ * positionally: anything that fails to yield a match simply yields no
+ * attribution, never an exception. */
+function callSiteBlueprint(): string | undefined {
+  if (blueprintRoots.length === 0) {
+    return undefined;
+  }
+  const stack = new Error().stack;
+  if (!stack) {
+    return undefined;
+  }
+  for (const line of stack.split("\n").slice(1)) {
+    const name = blueprintForFrame(line);
+    if (name !== undefined) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+/** blueprintForFrame reports which root, if any, owns one stack frame
+ * line.
+ *
+ * The character after the prefix matters. A bare startsWith would let
+ * root "file:///bp" claim a file in "file:///bp-other", a different
+ * directory that merely starts the same way, so the next character has
+ * to be a path separator. */
+function blueprintForFrame(frame: string): string | undefined {
+  for (const root of blueprintRoots) {
+    const at = frame.indexOf(root.match);
+    if (at === -1) {
+      continue;
+    }
+    const next = frame.charAt(at + root.match.length);
+    if (next === "/" || next === "") {
+      return root.name;
+    }
+  }
+  return undefined;
 }
 
 /** pushBlueprintSource marks every resource() call for the duration of

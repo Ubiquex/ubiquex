@@ -68,6 +68,8 @@ var evaluatorFlags = []string{
 // whether partial output on stdout means anything.
 const runnerTemplate = `import { installNondeterminismGuards } from %q;
 installNondeterminismGuards();
+import { __setBlueprintRoots } from %q;
+__setBlueprintRoots(%s);
 import def from %q;
 
 try {
@@ -85,7 +87,7 @@ try {
 // runOnce returns the program's stdout AND its stderr. stderr is
 // returned on success too, for the reason core/evaloutput.go records:
 // a program can write a diagnosis and still exit 0.
-func runOnce(ctx context.Context, entryFile string) (stdoutBytes, stderrBytes []byte, err error) {
+func runOnce(ctx context.Context, entryFile, blueprintRoots string) (stdoutBytes, stderrBytes []byte, err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("entry file: %w", err)
@@ -106,7 +108,7 @@ func runOnce(ctx context.Context, entryFile string) (stdoutBytes, stderrBytes []
 		return nil, nil, err
 	}
 
-	runnerPath, err := writeRunnerScript(filepath.Dir(absEntry), assetsDir, absEntry)
+	runnerPath, err := writeRunnerScript(filepath.Dir(absEntry), assetsDir, absEntry, blueprintRoots)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -193,7 +195,7 @@ func runOnce(ctx context.Context, entryFile string) (stdoutBytes, stderrBytes []
 // one evaluation. It is uniquely named, removed by the caller's defer
 // on every path, and never written anywhere but beside a file the
 // author already owns.
-func writeRunnerScript(dir, assetsDir, absEntryFile string) (string, error) {
+func writeRunnerScript(dir, assetsDir, absEntryFile, blueprintRoots string) (string, error) {
 	f, err := os.CreateTemp(dir, ".ubx-runner-*.ts")
 	if err != nil {
 		// Worth explaining rather than surfacing a bare EACCES: this is
@@ -211,7 +213,24 @@ func writeRunnerScript(dir, assetsDir, absEntryFile string) (string, error) {
 	defer f.Close()
 
 	guardsPath := filepath.Join(assetsDir, "evaluator", "guards.ts")
-	content := fmt.Sprintf(runnerTemplate, guardsPath, absEntryFile)
+	// UBI-266: hand the runtime the blueprint roots this program can
+	// reach, so resource() can attribute a call to the blueprint whose
+	// code made it (blueprint/callsite.go).
+	//
+	// The generated runner, not an environment variable: evaluatorFlags
+	// passes --deny-env deliberately and "no environment leakage" is
+	// this project's own determinism rule. The runner is already written
+	// fresh per evaluation, so it costs nothing new.
+	//
+	// The roots are imported from the SAME runtime path the merged
+	// import map points "@ubx/sdk" at, so the runner and the program
+	// share one module instance. Two instances would leave the setter
+	// writing to state the program's own resource() never reads.
+	if blueprintRoots == "" {
+		blueprintRoots = "[]"
+	}
+	runtimePath := filepath.Join(assetsDir, "runtime", "src", "index.ts")
+	content := fmt.Sprintf(runnerTemplate, guardsPath, runtimePath, blueprintRoots, absEntryFile)
 	if _, err := f.WriteString(content); err != nil {
 		return "", fmt.Errorf("write runner script: %w", err)
 	}

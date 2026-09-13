@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 
@@ -77,6 +78,18 @@ type denoInfoOutput struct {
 // buildManifest/Package/Verify already use) -> full "name:content_hash"
 // ref.
 func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[string]string, error) {
+	roots, err := DiscoverTSBlueprintRoots(ctx, entryFile)
+	if err != nil {
+		return nil, err
+	}
+	return blueprintRefs(roots), nil
+}
+
+// DiscoverTSBlueprintRoots is the same walk, reporting both halves a
+// blueprint root has: the module URL prefix a runtime recognizes a call
+// site by (UBI-266, callsite.go), and the content hash the stamping
+// pass completes a bare name with.
+func DiscoverTSBlueprintRoots(ctx context.Context, entryFile string) ([]BlueprintRoot, error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, err
@@ -102,7 +115,8 @@ func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[st
 		return nil, fmt.Errorf("parse deno info --json output: %w", err)
 	}
 
-	found := map[string]string{}
+	var roots []BlueprintRoot
+	seen := map[string]bool{}
 	for _, m := range info.Modules {
 		if m.Local == "" {
 			continue // an unresolved or remote (non-local) dependency -- never a blueprint we can hash
@@ -119,14 +133,26 @@ func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[st
 			continue // an ordinary local import, not a blueprint
 		}
 		name := blueprintNameAt(root)
-		if _, already := found[name]; already {
+		if seen[name] {
 			continue // first match wins; a genuine ambiguity (two distinct blueprints sharing a bare name) is a real, separate problem this fix doesn't attempt to detect
 		}
+		seen[name] = true
 		manifest, err := buildManifest(root, name)
 		if err != nil {
 			return nil, fmt.Errorf("hash blueprint %q at %s: %w", name, root, err)
 		}
-		found[name] = name + ":" + manifest.ContentHash
+		// Match is the root as a file URL, since a TypeScript module's
+		// identity at runtime IS its URL: that is what a stack frame
+		// carries, and what deno itself resolved this module to. Built
+		// with net/url rather than by string concatenation so a path
+		// needing percent-encoding produces the same spelling the
+		// runtime will see.
+		roots = append(roots, BlueprintRoot{
+			Match: (&url.URL{Scheme: "file", Path: root}).String(),
+			Name:  name,
+			Dir:   root,
+			Ref:   name + ":" + manifest.ContentHash,
+		})
 	}
-	return found, nil
+	return roots, nil
 }

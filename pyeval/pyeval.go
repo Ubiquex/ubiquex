@@ -48,6 +48,14 @@ type ExtraDep struct {
 // deps is optional and empty for every caller except UBI-130's own
 // blueprint-dependency resolution.
 func Evaluate(ctx context.Context, entryFile string, deps ...ExtraDep) ([]byte, error) {
+	return EvaluateWithBlueprintRoots(ctx, entryFile, nil, deps...)
+}
+
+// EvaluateWithBlueprintRoots is Evaluate with UBI-266's call-site
+// attribution enabled: roots names every blueprint whose code this
+// program can reach, by host directory. Nil disables it entirely, which
+// is what an ordinary stack importing no blueprint gets.
+func EvaluateWithBlueprintRoots(ctx context.Context, entryFile string, roots []BlueprintRoot, deps ...ExtraDep) ([]byte, error) {
 	// A project's own virtualenv, if it has one, is mounted like any
 	// other dependency directory so that `pip install`-ed packages are
 	// importable (UBI-260, pyeval/venv.go). Appended AFTER the caller's
@@ -61,7 +69,7 @@ func Evaluate(ctx context.Context, entryFile string, deps ...ExtraDep) ([]byte, 
 	}
 
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, errOut, err := runOnce(ctx, entryFile, deps)
+		raw, errOut, err := runOnce(ctx, entryFile, deps, roots)
 		if err != nil {
 			return nil, err
 		}

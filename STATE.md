@@ -89,6 +89,22 @@ call comes from generated wrapper code a code blueprint has none of), so
 documenting the path now would commit to a shape that is under active
 question on UBI-265. Write the page once that is settled.
 
+**Docs debt, deliberate (UBI-266).** `as-code.mdx` sends a code-blueprint
+author into `call-sdk.mdx`, which shows a real `ubx why` transcript with
+`source: blueprint ci-platform:sha256:...`. That page is written for the
+BUILT model, and until call-site attribution lands the transcript was
+simply not true for a blueprint written as code, which recorded no
+source at all. The fix makes it true rather than the docs wrong, so the
+page needs a short section saying a code blueprint carries provenance
+too with nothing to write for it.
+
+Not written yet on purpose: none of UBI-266 is merged, and the Go half
+reaches a user only once `ubx-sdk-go` is RELEASED with it, since a Go
+stack compiles against whatever its own go.mod names. Writing "this
+works" before that is the delivery-ahead-of-reality error rules 5 and 8
+exist to stop. Trigger: #151 and the three runtime PRs merged, and
+`ubx-sdk-go` released.
+
 ## Blocked
 
 Nothing currently blocked.
