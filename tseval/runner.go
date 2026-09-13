@@ -82,30 +82,33 @@ try {
 
 // runOnce spawns exactly one deno subprocess evaluating entryFile under
 // evaluatorFlags, returning its raw (uncanonicalized) stdout on success.
-func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
+// runOnce returns the program's stdout AND its stderr. stderr is
+// returned on success too, for the reason core/evaloutput.go records:
+// a program can write a diagnosis and still exit 0.
+func runOnce(ctx context.Context, entryFile string) (stdoutBytes, stderrBytes []byte, err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
-		return nil, fmt.Errorf("entry file: %w", err)
+		return nil, nil, fmt.Errorf("entry file: %w", err)
 	}
 	if info, err := os.Stat(absEntry); err != nil {
-		return nil, fmt.Errorf("entry file: %w", err)
+		return nil, nil, fmt.Errorf("entry file: %w", err)
 	} else if info.IsDir() {
-		return nil, fmt.Errorf("entry file: %s is a directory", absEntry)
+		return nil, nil, fmt.Errorf("entry file: %s is a directory", absEntry)
 	}
 
 	denoPath, err := exec.LookPath("deno")
 	if err != nil {
-		return nil, fmt.Errorf("deno not found in PATH -- the SDK evaluator requires Deno (https://deno.com), chosen empirically over Node/isolated-vm (docs/sdk.md's own \"hermetic evaluator\" section): %w", err)
+		return nil, nil, fmt.Errorf("deno not found in PATH -- the SDK evaluator requires Deno (https://deno.com), chosen empirically over Node/isolated-vm (docs/sdk.md's own \"hermetic evaluator\" section): %w", err)
 	}
 
 	assetsDir, err := extractAssets()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	runnerPath, err := writeRunnerScript(filepath.Dir(absEntry), assetsDir, absEntry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.Remove(runnerPath)
 
@@ -121,7 +124,7 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 	// tseval/importmap.go).
 	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer cleanupMap()
 	args = append(args, "--import-map="+mapPath)
@@ -134,11 +137,11 @@ func runOnce(ctx context.Context, entryFile string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return nil, fmt.Errorf("evaluate %s: %w\n%s", entryFile, err, msg)
+			return nil, nil, fmt.Errorf("evaluate %s: %w\n%s", entryFile, err, msg)
 		}
-		return nil, fmt.Errorf("evaluate %s: %w", entryFile, err)
+		return nil, nil, fmt.Errorf("evaluate %s: %w", entryFile, err)
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 // writeRunnerScript writes a fresh runner .ts file into dir (a unique

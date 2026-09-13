@@ -187,7 +187,7 @@ func Declarations(ctx context.Context, sourceFile string) (*PyModule, error) {
 	// validation. Both exist to police a program that RAN, and nothing
 	// here runs the subject. ast.parse of a fixed string is already
 	// deterministic.
-	raw, err := runOnce(ctx, entry, nil)
+	raw, _, err := runOnce(ctx, entry, nil)
 	if err != nil {
 		return nil, fmt.Errorf("read declarations of %s: %w", sourceFile, err)
 	}

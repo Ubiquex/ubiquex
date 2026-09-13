@@ -61,11 +61,17 @@ func Evaluate(ctx context.Context, entryFile string, deps ...ExtraDep) ([]byte, 
 	}
 
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, err := runOnce(ctx, entryFile, deps)
+		raw, errOut, err := runOnce(ctx, entryFile, deps)
 		if err != nil {
 			return nil, err
 		}
-		return core.CanonicalJSONBytes(raw)
+		canon, err := core.CanonicalJSONBytes(raw)
+		if err != nil {
+			// The program ran. Whatever is wrong, the program's own
+			// words beat the decoder's (core/evaloutput.go).
+			return nil, core.ExplainEvaluatorOutput(raw, errOut, core.HintPy, err)
+		}
+		return canon, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pyeval: %w", err)

@@ -49,11 +49,15 @@ func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 	defer cleanup()
 
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, err := runSandboxed(ctx, binaryPath)
+		raw, errOut, err := runSandboxed(ctx, binaryPath)
 		if err != nil {
 			return nil, err
 		}
-		return core.CanonicalJSONBytes(raw)
+		canon, err := core.CanonicalJSONBytes(raw)
+		if err != nil {
+			return nil, core.ExplainEvaluatorOutput(raw, errOut, core.HintGo, err)
+		}
+		return canon, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("goeval: %w", err)

@@ -49,11 +49,15 @@ import (
 // shape.
 func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, err := runOnce(ctx, entryFile)
+		raw, errOut, err := runOnce(ctx, entryFile)
 		if err != nil {
 			return nil, err
 		}
-		return core.CanonicalJSONBytes(raw)
+		canon, err := core.CanonicalJSONBytes(raw)
+		if err != nil {
+			return nil, core.ExplainEvaluatorOutput(raw, errOut, core.HintTS, err)
+		}
+		return canon, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tseval: %w", err)
