@@ -391,7 +391,7 @@ var fetchDynamicSchema = loadDynamicProviderSchema
 func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, providerPath, source, providerVersion *string) ([]resolver.DeclaredProvider, error) {
 	resolved := resolveProviderPrecedence(cfg)
 	if len(resolved) > 0 {
-		warnIfLegacyProviderFlagsGiven(cmd)
+		warnIfLegacyProviderFlagsGiven(cmd, cfg)
 		keys := make([]string, 0, len(resolved))
 		for k := range resolved {
 			keys = append(keys, k)

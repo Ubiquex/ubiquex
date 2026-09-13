@@ -264,7 +264,7 @@ consistency shows its own work instead of sitting silent.`,
 			// when a table AND the singular flags are both given.
 			var pool executor.ApplierPool
 			if hasProviderTable(cfg) {
-				warnIfLegacyProviderFlagsGiven(cmd)
+				warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				pp, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}

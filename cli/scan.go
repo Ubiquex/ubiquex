@@ -97,7 +97,7 @@ func newScanCmd() *cobra.Command {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all requires --tfstate")}
 				}
 				if len(cfg.ThirdpartyProviders) > 0 {
-					warnIfLegacyProviderFlagsGiven(cmd)
+					warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
@@ -129,7 +129,7 @@ func newScanCmd() *cobra.Command {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: %w", err)}
 				}
 				if len(cfg.ThirdpartyProviders) > 0 {
-					warnIfLegacyProviderFlagsGiven(cmd)
+					warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
@@ -191,7 +191,7 @@ func newScanCmd() *cobra.Command {
 				}
 				defer closeLedger()
 				if len(cfg.ThirdpartyProviders) > 0 {
-					warnIfLegacyProviderFlagsGiven(cmd)
+					warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				}
 				st := newStylerFull(cmd, fullHashes)
 				// UBI-165: a fleet-wide walk surfaces one issue/pull
@@ -264,7 +264,7 @@ func newScanCmd() *cobra.Command {
 			var checksum string
 
 			if hasProviderTable(cfg) {
-				warnIfLegacyProviderFlagsGiven(cmd)
+				warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				pool, perr := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if perr != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, perr)}

@@ -347,10 +347,20 @@ func applyProviderConfigDefault(cmd *cobra.Command, providerConfig *string, cfg 
 // being meaningful -- but a caller who still passes them (muscle memory,
 // a script written before this stack adopted the table) gets a warning,
 // not a silent override or a hard error. Config always wins; the flags
-// are simply ignored, loudly. Callers only reach this once they've
-// already confirmed cfg.ThirdpartyProviders is non-empty -- it doesn't re-check
-// that itself, so it can't be misused as the sole gate.
-func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
+// are simply ignored, loudly.
+//
+// The table is NAMED from cfg rather than hardcoded. The message used to
+// say [thirdparty_providers] unconditionally, while four of its seven call
+// sites (ship, status, resolve, and scan's own single-resource path) gate
+// on hasProviderTable/resolveProviderPrecedence, which is either table --
+// so a stack declaring only [providers] was told it declared a
+// [thirdparty_providers] table it does not have. That is worse than a
+// vague message: it sends a reader to look for a table that isn't there,
+// in a config where the two names mean genuinely different things
+// (Providers/ThirdpartyProviders' own doc comment above). This function's
+// own doc comment asserted the gate was ThirdpartyProviders-only, which
+// was never true of those four.
+func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command, cfg *Config) {
 	var given []string
 	for _, name := range []string{"provider", "source", "provider-version", "provider-config"} {
 		if cmd.Flags().Changed(name) {
@@ -361,8 +371,34 @@ func warnIfLegacyProviderFlagsGiven(cmd *cobra.Command) {
 		return
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"warning: %s ignored -- this stack declares a [thirdparty_providers] table in .ubx/config, which is the authority for a multi-provider stack\n",
-		strings.Join(given, ", "))
+		"warning: %s ignored -- this stack declares %s in .ubx/config, which is the authority for a multi-provider stack\n",
+		strings.Join(given, ", "), declaredProviderTables(cfg))
+}
+
+// declaredProviderTables names the provider table(s) this stack actually
+// declares, for a message that has to point somewhere real. Both, when
+// both are declared, since either one alone would be a half-truth about
+// where the authority lives.
+func declaredProviderTables(cfg *Config) string {
+	var tables []string
+	if cfg != nil && len(cfg.Providers) > 0 {
+		tables = append(tables, "a [providers] table")
+	}
+	if cfg != nil && len(cfg.ThirdpartyProviders) > 0 {
+		tables = append(tables, "a [thirdparty_providers] table")
+	}
+	switch len(tables) {
+	case 0:
+		// Unreachable through every current call site, which all gate on
+		// one table or the other being non-empty. Worded so that if a
+		// future caller does reach it, the message stays true rather than
+		// naming a table at random.
+		return "provider tables"
+	case 1:
+		return tables[0]
+	default:
+		return strings.Join(tables, " and ")
+	}
 }
 
 // applyGithubRepoDefault fills githubRepo from cfg if --github-repo

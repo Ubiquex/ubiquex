@@ -416,31 +416,83 @@ func TestWarnIfLegacyProviderFlagsGiven_NoneGiven_NoWarning(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.SetErr(&stderr)
 
-	warnIfLegacyProviderFlagsGiven(cmd)
+	warnIfLegacyProviderFlagsGiven(cmd, &Config{ThirdpartyProviders: map[string]string{"hashicorp/aws": "6.60.0"}})
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no warning when no legacy flag was given, got: %s", stderr.String())
 	}
 }
 
+// TestWarnIfLegacyProviderFlagsGiven_SourceGiven_WarnsNamingIt asserts the
+// warning names the table the stack ACTUALLY declares.
+//
+// The previous version of this test passed a cmd and no config at all, and
+// asserted the literal string "[thirdparty_providers]" -- so it could only
+// ever confirm that the hardcoded message was still hardcoded. A real
+// stack declaring only [providers] was told it had a
+// [thirdparty_providers] table, and this test had nothing to say about it,
+// because the case it got wrong was not representable in the test's own
+// inputs.
 func TestWarnIfLegacyProviderFlagsGiven_SourceGiven_WarnsNamingIt(t *testing.T) {
-	cmd := &cobra.Command{}
-	var providerPath, source, providerVersion, providerConfig string
-	cmd.Flags().StringVar(&providerPath, "provider", "", "")
-	cmd.Flags().StringVar(&source, "source", "", "")
-	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "")
-	cmd.Flags().StringVar(&providerConfig, "provider-config", "", "")
-	if err := cmd.Flags().Set("source", "hashicorp/aws"); err != nil {
-		t.Fatal(err)
-	}
-	var stderr bytes.Buffer
-	cmd.SetErr(&stderr)
+	for _, tc := range []struct {
+		name string
+		cfg  *Config
+		want []string
+		deny []string
+	}{
+		{
+			name: "thirdparty only",
+			cfg:  &Config{ThirdpartyProviders: map[string]string{"hashicorp/aws": "6.60.0"}},
+			want: []string{"[thirdparty_providers]"},
+			deny: []string{"[providers]"},
+		},
+		{
+			// The real bp2 shape: [providers.aws] with source+version, no
+			// [thirdparty_providers] anywhere in the file.
+			name: "providers only",
+			cfg:  &Config{Providers: map[string]map[string]any{"aws": {"source": "ubiquex/aws", "version": "4.0.0"}}},
+			want: []string{"[providers]"},
+			deny: []string{"[thirdparty_providers]"},
+		},
+		{
+			name: "both declared",
+			cfg: &Config{
+				Providers:           map[string]map[string]any{"aws": {"source": "ubiquex/aws", "version": "4.0.0"}},
+				ThirdpartyProviders: map[string]string{"hashicorp/helm": "3.0.2"},
+			},
+			want: []string{"[providers]", "[thirdparty_providers]"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &cobra.Command{}
+			var providerPath, source, providerVersion, providerConfig string
+			cmd.Flags().StringVar(&providerPath, "provider", "", "")
+			cmd.Flags().StringVar(&source, "source", "", "")
+			cmd.Flags().StringVar(&providerVersion, "provider-version", "", "")
+			cmd.Flags().StringVar(&providerConfig, "provider-config", "", "")
+			if err := cmd.Flags().Set("source", "hashicorp/aws"); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			cmd.SetErr(&stderr)
 
-	warnIfLegacyProviderFlagsGiven(cmd)
-	if !bytes.Contains(stderr.Bytes(), []byte("--source")) {
-		t.Fatalf("expected a warning naming --source, got: %s", stderr.String())
-	}
-	if !bytes.Contains(stderr.Bytes(), []byte("[thirdparty_providers]")) {
-		t.Fatalf("expected the warning to explain the [thirdparty_providers] table is the authority, got: %s", stderr.String())
+			warnIfLegacyProviderFlagsGiven(cmd, tc.cfg)
+			if !bytes.Contains(stderr.Bytes(), []byte("--source")) {
+				t.Fatalf("expected a warning naming --source, got: %s", stderr.String())
+			}
+			for _, want := range tc.want {
+				if !bytes.Contains(stderr.Bytes(), []byte(want)) {
+					t.Fatalf("expected the warning to name %s, got: %s", want, stderr.String())
+				}
+			}
+			// "[providers]" is a substring of "[thirdparty_providers]"
+			// nowhere (the names differ before the bracket), so a plain
+			// absence check is honest here.
+			for _, deny := range tc.deny {
+				if bytes.Contains(stderr.Bytes(), []byte(deny)) {
+					t.Fatalf("warning named %s, a table this stack does not declare: %s", deny, stderr.String())
+				}
+			}
+		})
 	}
 }
 
