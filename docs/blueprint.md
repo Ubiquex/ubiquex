@@ -5048,9 +5048,20 @@ left to re-qualify.
 
 Two consequences worth stating:
 
-- **A declared output the blueprint never sets is refused**, naming
-  which one. It cannot be referenced, and failing at the call says so
-  better than failing at whatever config happened to reference it.
+- **An output the blueprint does not set on a call is absent, not an
+  error.** That is how a conditional resource gets an output: a
+  dead-letter queue created only when asked for has an ARN only on the
+  calls that asked. Referencing an absent output fails at the
+  reference, naming the call and the output, so nothing silently gets
+  nothing, and a blueprint that genuinely forgot to set one still fails
+  at the first thing that depends on it.
+
+  This softened a rule shipped with UBI-261, which refused any unset
+  output. That rule was written when the only way an output could be
+  unset was a blueprint forgetting one, and a blueprint that is code
+  has a legitimate second way. Refusing made a conditional resource
+  with an output impossible, which is the dead-letter queue UBI-258
+  records as designed then dropped.
 - **The caller only reports outputs when the blueprint declares any.**
   A blueprint with no outputs produces a caller that never mentions
   `BlueprintOutputs`, so it still compiles against an SDK older than the

@@ -336,20 +336,75 @@ func TestResolveCallOutputs_SchemaOutputsComeFromTheEvaluation(t *testing.T) {
 	}
 }
 
-// A declared output the blueprint never set cannot be referenced, and
-// the refusal says so rather than reporting the output as undeclared.
-func TestResolveCallOutputs_SchemaOutputNeverSetIsRefused(t *testing.T) {
+// An output the blueprint did not set on this call is recorded as
+// ABSENT, not refused (UBI-258).
+//
+// UBI-261 refused it, and that was too broad. It was written when the
+// only way an output could be unset was a blueprint forgetting one. A
+// blueprint that is code has a legitimate second way: an output
+// produced by a resource it creates only on some branch. Refusing made
+// a conditional resource with an output impossible, which is exactly
+// the dead-letter queue UBI-258 records as designed then dropped.
+func TestResolveCallOutputs_SchemaOutputNeverSetIsRecordedAsAbsent(t *testing.T) {
 	desc := &Description{
-		Outputs: []Output{{Name: "widget_id"}},
+		Outputs: []Output{{Name: "widget_id"}, {Name: "dead_letter_arn"}},
 		Schema:  &Schema{SchemaVersion: SchemaVersion},
 		Source:  "schema",
 	}
-	_, err := resolveCallOutputs("payments", desc, nil, map[string]string{})
-	if err == nil {
-		t.Fatal("want a refusal for a declared output the blueprint never set")
+	reported := map[string]string{"widget_id": "payments.fake_widget.primary.id"}
+
+	addr, err := resolveCallOutputs("payments", desc, nil, reported)
+	if err != nil {
+		t.Fatalf("a conditional output is legal, not an error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "returned no value") {
-		t.Errorf("the refusal has to say what happened, got: %v", err)
+	if addr["widget_id"] != "payments.fake_widget.primary.id" {
+		t.Errorf("the output that WAS set should resolve: %v", addr)
+	}
+	got, present := addr["dead_letter_arn"]
+	if !present {
+		t.Fatal("the absent output has to be registered, or referencing it reports 'no such output' for one that is genuinely declared")
+	}
+	if got != "" {
+		t.Errorf("dead_letter_arn = %q, want the empty sentinel", got)
+	}
+}
+
+// The protection UBI-261's rule existed for is kept, by moving it to
+// the reference. Nothing silently gets nothing.
+func TestRewriteOutputRefs_ReferencingAnAbsentOutputIsRefused(t *testing.T) {
+	addr := map[string]string{"queue:dead_letter_arn": ""}
+	intent := &resolver.IntentFile{Resources: []resolver.ResourceIntent{{
+		Type: "fake_widget", Name: "alarm",
+		Config: json.RawMessage(`{"watches":{"$ref":{"to":"` + blueprintOutputRefPrefix + `queue:dead_letter_arn"}}}`),
+	}}}
+
+	err := rewriteBlueprintOutputRefs(intent, addr)
+	if err == nil {
+		t.Fatal("want a refusal: referencing an output the blueprint did not set cannot resolve to anything")
+	}
+	if !strings.Contains(err.Error(), "did not set it on this call") {
+		t.Errorf("the refusal has to distinguish absent-on-this-call from undeclared, got: %v", err)
+	}
+}
+
+// The two failure modes send a reader to completely different places,
+// so they must not collapse into one message.
+func TestRewriteOutputRefs_AbsentAndUndeclaredAreDifferentErrors(t *testing.T) {
+	mk := func(key string) *resolver.IntentFile {
+		return &resolver.IntentFile{Resources: []resolver.ResourceIntent{{
+			Type: "fake_widget", Name: "alarm",
+			Config: json.RawMessage(`{"watches":{"$ref":{"to":"` + blueprintOutputRefPrefix + key + `"}}}`),
+		}}}
+	}
+	addr := map[string]string{"queue:dead_letter_arn": ""}
+
+	absent := rewriteBlueprintOutputRefs(mk("queue:dead_letter_arn"), addr)
+	undeclared := rewriteBlueprintOutputRefs(mk("queue:no_such_output"), addr)
+	if absent == nil || undeclared == nil {
+		t.Fatal("both cases have to fail")
+	}
+	if absent.Error() == undeclared.Error() {
+		t.Errorf("both cases produced the same message, which sends the reader to the wrong place for one of them: %s", absent)
 	}
 }
 
