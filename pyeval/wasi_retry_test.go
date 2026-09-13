@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +31,14 @@ func fastRetries(t *testing.T) {
 	original := downloadRetrySchedule
 	downloadRetrySchedule = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	t.Cleanup(func() { downloadRetrySchedule = original })
+}
+
+// sha256Hex is what the acquisition compares against, computed here so
+// a test pins its own synthetic archive rather than the real release's
+// digest.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // zipWithInterpreter builds the archive shape the real release has, so a
@@ -69,7 +79,7 @@ func TestDownload_RetriesATransientServerError(t *testing.T) {
 	defer srv.Close()
 
 	dest := filepath.Join(t.TempDir(), "python-wasi")
-	if err := downloadAndExtractWithRetry(context.Background(), srv.URL, dest); err != nil {
+	if err := downloadAndExtractWithRetry(context.Background(), srv.URL, dest, sha256Hex(body)); err != nil {
 		t.Fatalf("a single 500 must not fail the acquisition: %v", err)
 	}
 	if got := attempts.Load(); got != 2 {
@@ -92,7 +102,7 @@ func TestDownload_DoesNotRetryA404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := downloadAndExtractWithRetry(context.Background(), srv.URL, filepath.Join(t.TempDir(), "d"))
+	err := downloadAndExtractWithRetry(context.Background(), srv.URL, filepath.Join(t.TempDir(), "d"), "unused")
 	if err == nil {
 		t.Fatal("want a failure for a URL that is not there")
 	}
@@ -113,7 +123,7 @@ func TestDownload_GivesUpOnASustainedOutage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := downloadAndExtractWithRetry(context.Background(), srv.URL, filepath.Join(t.TempDir(), "d"))
+	err := downloadAndExtractWithRetry(context.Background(), srv.URL, filepath.Join(t.TempDir(), "d"), "unused")
 	if err == nil {
 		t.Fatal("want a failure once the retries are exhausted")
 	}
