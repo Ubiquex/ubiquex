@@ -199,11 +199,12 @@ produced) -- package builds nothing itself.`,
 			if out == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint package: -o is required")}
 			}
-			manifest, err := blueprint.Package(cmd.Context(), args[0], out)
+			manifest, excluded, err := blueprint.PackageReportingExclusions(cmd.Context(), args[0], out)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			writeBlueprintReceipt(cmd.OutOrStdout(), newStyler(cmd), "packaged", manifest.Name, out, manifest.ContentHash, len(manifest.Files), "")
+			st := newStyler(cmd)
+			writeBlueprintReceipt(cmd.OutOrStdout(), st, "packaged", manifest.Name, out, manifest.ContentHash, len(manifest.Files), "", excludedDetail(st, excluded))
 			return nil
 		},
 	}
@@ -681,4 +682,21 @@ func pullProgressFor(source string, out io.Writer, st *styler, tty bool, width i
 		return nil
 	}
 	return newTransferBar(out, st, tty, width, "pulling "+source, time.Now())
+}
+
+// excludedDetail names the dependency directories package left out, or
+// returns empty when there were none.
+//
+// Said out loud rather than left to be noticed. These directories are
+// installed artifacts rather than authored content, and a blueprint's
+// content hash is its identity, so hashing them would make that
+// identity change on every reinstall. An author seeing a file count of
+// three needs to know whether that is right, and a silent exclusion is
+// exactly as confusing as a silent inclusion was.
+func excludedDetail(st *styler, excluded []string) string {
+	if len(excluded) == 0 {
+		return ""
+	}
+	return st.Dim("excluded ") + st.Yellow(strings.Join(excluded, ", ")) +
+		st.Dim(" (installed dependencies, never blueprint content)")
 }

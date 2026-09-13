@@ -28,9 +28,19 @@ import (
 // schema that could be stale would defeat the reason it is derived at
 // all.
 func Package(ctx context.Context, dir, outPath string) (*Manifest, error) {
+	m, _, err := PackageReportingExclusions(ctx, dir, outPath)
+	return m, err
+}
+
+// PackageReportingExclusions is Package plus the dependency directories
+// it left out, so the CLI receipt can name them. Naming them is the
+// point: an author who sees "excluded node_modules" knows why the file
+// count is three rather than thirteen thousand, where a silent
+// exclusion has to be discovered.
+func PackageReportingExclusions(ctx context.Context, dir, outPath string) (*Manifest, []string, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("blueprint package: %w", err)
+		return nil, nil, fmt.Errorf("blueprint package: %w", err)
 	}
 	name := filepath.Base(absDir)
 
@@ -48,24 +58,24 @@ func Package(ctx context.Context, dir, outPath string) (*Manifest, error) {
 		if _, langErr := DetectLanguage(absDir); langErr == nil {
 			schema, err := Extract(ctx, absDir, name)
 			if err != nil {
-				return nil, fmt.Errorf("blueprint package: %w", err)
+				return nil, nil, fmt.Errorf("blueprint package: %w", err)
 			}
 			if err := WriteSchema(absDir, schema); err != nil {
-				return nil, fmt.Errorf("blueprint package: %w", err)
+				return nil, nil, fmt.Errorf("blueprint package: %w", err)
 			}
 		}
 	}
 
 	if !IsBlueprintDir(absDir) {
-		return nil, fmt.Errorf("blueprint package: %s has no %s, and no .go/.ts/.py source to derive one from -- package a blueprint's own source directory, or a directory `ubx blueprint build` already produced", absDir, blueprintMarkers())
+		return nil, nil, fmt.Errorf("blueprint package: %s has no %s, and no .go/.ts/.py source to derive one from -- package a blueprint's own source directory, or a directory `ubx blueprint build` already produced", absDir, blueprintMarkers())
 	}
 
-	manifest, err := buildManifest(absDir, name)
+	manifest, excluded, err := buildManifestReportingExclusions(absDir, name)
 	if err != nil {
-		return nil, fmt.Errorf("blueprint package: %w", err)
+		return nil, nil, fmt.Errorf("blueprint package: %w", err)
 	}
 	if err := writeManifest(absDir, manifest); err != nil {
-		return nil, fmt.Errorf("blueprint package: %w", err)
+		return nil, nil, fmt.Errorf("blueprint package: %w", err)
 	}
 
 	rel := make([]string, 0, len(manifest.Files)+1)
@@ -76,9 +86,9 @@ func Package(ctx context.Context, dir, outPath string) (*Manifest, error) {
 	sort.Strings(rel)
 
 	if err := writeTarGz(absDir, rel, outPath); err != nil {
-		return nil, fmt.Errorf("blueprint package: %w", err)
+		return nil, nil, fmt.Errorf("blueprint package: %w", err)
 	}
-	return manifest, nil
+	return manifest, excluded, nil
 }
 
 // writeTarGz archives relFiles (paths relative to dir, already sorted --

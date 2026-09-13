@@ -237,3 +237,18 @@ class Outputs:
 def widget_bp(cfg: Config) -> Outputs:
     ...
 `
+
+// The exclusions are named rather than left to be noticed. A silent
+// exclusion is exactly as confusing as the silent inclusion was.
+func TestExcludedDetail_NamesWhatWasLeftOut(t *testing.T) {
+	got := excludedDetail(plainStyler(), []string{"node_modules", "vendor"})
+	if !strings.Contains(got, "excluded node_modules, vendor") {
+		t.Errorf("detail does not name the directories: %q", got)
+	}
+	if !strings.Contains(got, "installed dependencies") {
+		t.Errorf("detail does not say why: %q", got)
+	}
+	if excludedDetail(plainStyler(), nil) != "" {
+		t.Error("a package with nothing excluded still printed a line")
+	}
+}
