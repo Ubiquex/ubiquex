@@ -3,11 +3,13 @@ package pyeval
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -35,7 +37,7 @@ const runtimeGuestPath = "/ubxsdk"
 // returned on success too, not only on failure: a program can write a
 // diagnosis and still exit 0, and that diagnosis used to be discarded
 // exactly when it was the only thing available (core/evaloutput.go).
-func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) (stdoutBytes, stderrBytes []byte, err error) {
+func runOnce(ctx context.Context, entryFile string, deps []ExtraDep, roots []BlueprintRoot) (stdoutBytes, stderrBytes []byte, err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("entry file: %w", err)
@@ -78,6 +80,27 @@ func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) (stdoutByte
 		guest := fmt.Sprintf("/ubxdep%d", i)
 		depDirArgs = append(depDirArgs, "--dir", d.HostDir+"::"+guest)
 		pythonPath += ":" + guest
+	}
+
+	// UBI-266: hand the runtime the blueprint roots this program can
+	// reach, as GUEST paths, since that is what a frame's co_filename
+	// will be. Their own scratch directory with its own top-level
+	// preopen, following the same "one top-level preopen per real
+	// directory tree" rule every other mount here already follows.
+	//
+	// A mounted module rather than an environment variable: the Go and
+	// TypeScript evaluators scrub the environment deliberately and "no
+	// environment leakage" is this project's own determinism rule, so
+	// all three languages stay on the same footing. It also cannot be
+	// written into assetsDir, which is extracted once per process and
+	// shared by every evaluation in it.
+	rootsDir, cleanupRoots, err := writeBlueprintRootsModule(roots, entryDir, deps)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanupRoots()
+	if rootsDir != "" {
+		pythonPath += ":" + blueprintRootsGuestPath
 	}
 
 	args := []string{
@@ -124,6 +147,9 @@ func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) (stdoutByte
 		"--dir", assetsDir + "::" + runtimeGuestPath,
 	}
 	args = append(args, depDirArgs...)
+	if rootsDir != "" {
+		args = append(args, "--dir", rootsDir+"::"+blueprintRootsGuestPath)
+	}
 	args = append(args,
 		"--dir", entryDir+"::/prog",
 		filepath.Join(wasiDir, "python.wasm"),
@@ -171,3 +197,94 @@ var extractAssets = sync.OnceValues(func() (string, error) {
 
 	return dir, nil
 })
+
+// blueprintRootsGuestPath is where the generated roots module is
+// mounted. A top-level path of its own, distinct from /ubxdepN so a
+// program can never have a dependency shadow it.
+const blueprintRootsGuestPath = "/ubxroots"
+
+// BlueprintRoot names one blueprint whose code this program can reach,
+// by the HOST directory it occupies. Translating that to the guest path
+// the program will actually see is this package's own job, since this
+// package is what assigns every guest path in the first place.
+type BlueprintRoot struct {
+	HostDir string
+	Name    string
+}
+
+// writeBlueprintRootsModule writes the _ubx_blueprint_roots module the
+// runtime imports, returning its host directory and a cleanup. Returns
+// an empty directory, and mounts nothing, when there are no roots to
+// report: an ordinary stack importing no blueprint pays nothing.
+func writeBlueprintRootsModule(roots []BlueprintRoot, entryDir string, deps []ExtraDep) (string, func(), error) {
+	type entry struct {
+		Match string `json:"match"`
+		Name  string `json:"name"`
+	}
+	var entries []entry
+	for _, r := range roots {
+		guest, ok := guestPathFor(r.HostDir, entryDir, deps)
+		if !ok {
+			// A blueprint the program can reach on the host but that is
+			// not mounted into the sandbox cannot produce a frame, so
+			// there is nothing to match against. Skipping it is not a
+			// silent loss: the stamping pass still refuses a bare name it
+			// cannot resolve.
+			continue
+		}
+		entries = append(entries, entry{Match: guest, Name: r.Name})
+	}
+	if len(entries) == 0 {
+		return "", func() {}, nil
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Match != entries[j].Match {
+			return entries[i].Match < entries[j].Match
+		}
+		return entries[i].Name < entries[j].Name
+	})
+
+	// Canonical JSON inside a Python literal, which JSON already is.
+	// Sorted so two evaluations of the same program write byte-identical
+	// bytes, matching DoubleRun's own expectation that nothing about a
+	// run differs between its two passes.
+	payload, err := json.Marshal(entries)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("pyeval: encode blueprint roots: %w", err)
+	}
+
+	dir, err := os.MkdirTemp("", "ubx-pyroots-*")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("pyeval: create blueprint roots dir: %w", err)
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+	content := "# Written by ubx for one evaluation (UBI-266). Not API.\nROOTS = " + string(payload) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "_ubx_blueprint_roots.py"), []byte(content), 0o644); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("pyeval: write blueprint roots module: %w", err)
+	}
+	return dir, cleanup, nil
+}
+
+// guestPathFor translates a host directory into the path the guest will
+// see it at, which is the only form a frame's co_filename can take.
+//
+// Two shapes reach here, and both are this package's own doing: a
+// declared dependency, mounted at the /ubxdepN it was assigned in
+// order, and a blueprint sitting inside the program's own directory,
+// which arrives under /prog with the rest of it.
+func guestPathFor(hostDir, entryDir string, deps []ExtraDep) (string, bool) {
+	for i, d := range deps {
+		if d.HostDir == hostDir {
+			return fmt.Sprintf("/ubxdep%d", i), true
+		}
+	}
+	rel, err := filepath.Rel(entryDir, hostDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if rel == "." {
+		return "/prog", true
+	}
+	return "/prog/" + filepath.ToSlash(rel), true
+}

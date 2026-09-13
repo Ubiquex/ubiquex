@@ -421,15 +421,38 @@ func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	canon, err = pyeval.Evaluate(ctx, entryFile, pyEvalDeps(mounts)...)
-	if err != nil {
-		return nil, nil, nil, err
-	}
 	receipts = make([]string, len(mounts))
 	refs = map[string]string{}
+
+	// UBI-266: every blueprint whose code this program can reach, from
+	// both directions. A declared dependency is already resolved above,
+	// name and hash included. A blueprint sitting inside the program's
+	// own tree has no declaration anywhere, so it is found by walking.
+	var roots []pyeval.BlueprintRoot
 	for i, m := range mounts {
 		receipts[i] = m.Receipt
 		refs[m.Dep.Name] = m.Ref
+		roots = append(roots, pyeval.BlueprintRoot{HostDir: m.HostDir, Name: m.Dep.Name})
+	}
+	local, err := DiscoverPyBlueprintRoots(entryFile)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, r := range local {
+		if _, declared := refs[r.Name]; declared {
+			// A declared dependency wins over a copy of the same
+			// blueprint sitting in the tree: the declared one is what was
+			// pulled and verified, and it is the one actually on
+			// PYTHONPATH ahead of the program's own directory.
+			continue
+		}
+		refs[r.Name] = r.Ref
+		roots = append(roots, pyeval.BlueprintRoot{HostDir: r.Dir, Name: r.Name})
+	}
+
+	canon, err = pyeval.EvaluateWithBlueprintRoots(ctx, entryFile, roots, pyEvalDeps(mounts)...)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	return canon, receipts, refs, nil
 }

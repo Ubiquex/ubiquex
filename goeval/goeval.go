@@ -42,7 +42,28 @@ import (
 // if the two runs disagree; a structural-validation error if the result
 // doesn't match ubx:intent/v1's own real shape.
 func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
-	binaryPath, cleanup, err := buildProgram(ctx, entryFile)
+	return EvaluateWithBlueprintRoots(ctx, entryFile, "")
+}
+
+// blueprintRootsSymbol is the runtime variable the blueprint root
+// manifest is linked into. A string literal rather than a reference,
+// because this package cannot import the published runtime module: a
+// program brings its own version of it, and the two are deliberately
+// not coupled at compile time.
+//
+// A runtime that does not declare this variable is not an error. `go
+// build -ldflags -X` on an unknown symbol is silently ignored, so an
+// older SDK simply keeps the behaviour it always had, which is the
+// right failure mode for a mechanism that only ever ADDS provenance.
+const blueprintRootsSymbol = "github.com/ubiquex/ubx-sdk-go/runtime.blueprintRootsB64"
+
+// EvaluateWithBlueprintRoots is Evaluate with UBI-266's call-site
+// attribution enabled: blueprintRoots is the base64 manifest from
+// blueprint.EncodeBlueprintRootManifest, naming every blueprint whose
+// code this program can reach. Empty disables it entirely, which is
+// what an ordinary stack that imports no blueprint gets.
+func EvaluateWithBlueprintRoots(ctx context.Context, entryFile, blueprintRoots string) ([]byte, error) {
+	binaryPath, cleanup, err := buildProgram(ctx, entryFile, blueprintRoots)
 	if err != nil {
 		return nil, fmt.Errorf("goeval: %w", err)
 	}

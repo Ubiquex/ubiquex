@@ -48,8 +48,21 @@ import (
 // (validate.go) if the result doesn't match ubx:intent/v1's own real
 // shape.
 func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
+	return EvaluateWithBlueprintRoots(ctx, entryFile, "")
+}
+
+// EvaluateWithBlueprintRoots is Evaluate with UBI-266's call-site
+// attribution enabled: blueprintRoots is the JSON manifest from
+// blueprint.BlueprintRootManifest, naming every blueprint whose code
+// this program can reach. Empty disables it entirely, which is what an
+// ordinary stack importing no blueprint gets.
+//
+// The manifest is passed as JSON rather than base64, unlike Go's: it is
+// written into a generated TypeScript file as a literal, where JSON is
+// already valid syntax and nothing splits it on a space.
+func EvaluateWithBlueprintRoots(ctx context.Context, entryFile, blueprintRoots string) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, errOut, err := runOnce(ctx, entryFile)
+		raw, errOut, err := runOnce(ctx, entryFile, blueprintRoots)
 		if err != nil {
 			return nil, err
 		}

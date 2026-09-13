@@ -27,7 +27,7 @@ import (
 // same as sdk/conformance/programs/go's own real one) is the ordinary,
 // idiomatic way any Go project declares a dependency, and requiring one
 // here is not a burden, just how Go works.
-func buildProgram(ctx context.Context, entryFile string) (binaryPath string, cleanup func(), err error) {
+func buildProgram(ctx context.Context, entryFile, blueprintRoots string) (binaryPath string, cleanup func(), err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return "", nil, fmt.Errorf("entry file: %w", err)
@@ -83,7 +83,26 @@ func buildProgram(ctx context.Context, entryFile string) (binaryPath string, cle
 		return "", nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, goPath, "build", "-o", binPath, pkgArg)
+	args := []string{"build", "-o", binPath}
+	if blueprintRoots != "" {
+		// UBI-266: hand the runtime the blueprint roots this program can
+		// reach, so sdk.Resource() can attribute a call to the blueprint
+		// whose code made it (blueprint/callsite.go).
+		//
+		// A linker flag, not an environment variable: runSandboxed
+		// deliberately runs the program with an empty cmd.Env, and
+		// "no environment leakage" is this project's own determinism
+		// rule. -X writes a string into a package variable at link time,
+		// which is hermetic, needs no filesystem access from inside the
+		// sandbox, and is already part of the binary the sandbox runs.
+		//
+		// The value is base64, so it carries no space `go build` could
+		// split the -ldflags value on.
+		args = append(args, "-ldflags", "-X "+blueprintRootsSymbol+"="+blueprintRoots)
+	}
+	args = append(args, pkgArg)
+
+	cmd := exec.CommandContext(ctx, goPath, args...)
 	cmd.Dir = moduleCopy
 	// GOPROXY=off is this evaluator's own real analog of TS's --no-remote:
 	// a go.mod requiring anything beyond what a local `replace` (or the
