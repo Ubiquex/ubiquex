@@ -30,7 +30,7 @@ repository — none of these are stale claims).
 | 4 | Crash between the `in_flight` write and the call | `TestShip_CrashBetweenInFlightWriteAndCall_NeverLanded_RetriedAsFailed` | No (hermetic only) |
 | 5 | Crash between the call returning and the result being written | `TestShip_CrashBetweenCallAndResultWrite_AlreadyLanded_ResolvesApplied`, `TestShip_CrashAfterApplyLanded_PureDeletionRevert_ReconciliationResolvesApplied` | Yes — Section 2 (the centerpiece) |
 | 6a | Provider error taxonomy: retryable | `TestShip_RetryableError_TriggersReconciliation_ResolvesFailed` | No (hermetic only) |
-| 6b | Provider error taxonomy: terminal | `TestShip_TerminalError_FailsImmediately_NoReconciliation` | No (hermetic only; live-verified in an earlier session against fakeprovider's own subprocess, see STATE.md UBI-26 session 3) |
+| 6b | Provider error taxonomy: terminal | `TestShip_TerminalError_IsVerifiedNotAssumed_AndNeverReApplied`, `TestShip_TerminalError_ProviderAppliedItAnyway_RecordsApplied`, `TestShip_CreateLandedThenProviderErrored_RecordsUnknownAndSaysSo` | No (hermetic only; live-verified in an earlier session against fakeprovider's own subprocess, see STATE.md UBI-26 session 3) |
 | 7 | Stale detected mid-partial-apply | `TestShip_StaleDetectedMidPartialApply_HaltsRemainingResources` | Yes — Section 3 (single-resource variant: stale before the resource's own attempt, not mid-multi-resource-apply) |
 | 8 | Double `ship` invocation racing | `TestShip_ConcurrentInvocations_NeverCollideOnAttemptNumber` | No (hermetic only) |
 | 9 | Apply record corrupted/truncated on re-run | `TestShip_CorruptApplyRecord_RefusesToGuess` | No (hermetic only) |

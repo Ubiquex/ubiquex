@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/executor"
 	"github.com/ubiquex/ubiquex/provider"
 )
 
@@ -126,5 +127,69 @@ func TestDeriveLookup_DeclaredIdentityAbsentFromResult_YieldsNothing(t *testing.
 	result := json.RawMessage(`{"queue_name":"ubx-demo-queue"}`)
 	if got := core.DeriveLookupFromResult(result, []string{"queue_url"}); got != nil {
 		t.Fatalf("expected no lookup when the identity attribute is absent, got %s", got)
+	}
+}
+
+// UBI-270: the wiring is the fragile part, not the lookup itself.
+//
+// scan obtains an executor.Applier from the provider pool and asserts it
+// to core.StateReader, on the documented fact that both views are the same
+// stateReaderAdapter value. The identity map rides along on that value.
+// Nothing in the type system connects "the pool built this with an
+// identity map" to "the scan error can name the attributes", so these are
+// compile-time proofs that the seam holds.
+var (
+	_ core.StateReader               = stateReaderAdapter{}
+	_ executor.Applier               = stateReaderAdapter{}
+	_ core.ResourceIdentityPublisher = stateReaderAdapter{}
+)
+
+// TestStateReaderAdapter_IdentityAttributes covers the three real answers,
+// including the two that must stay "cannot say" rather than becoming an
+// assertion that a type has no identity.
+func TestStateReaderAdapter_IdentityAttributes(t *testing.T) {
+	withMap := stateReaderAdapter{identity: map[string][]string{
+		"aws_sqs_queue": {"queue_url"},
+		"empty_entry":   {},
+	}}
+
+	if attrs, ok := withMap.IdentityAttributes("aws_sqs_queue"); !ok || len(attrs) != 1 || attrs[0] != "queue_url" {
+		t.Fatalf("IdentityAttributes(aws_sqs_queue) = %v, %v; want [queue_url], true", attrs, ok)
+	}
+	if _, ok := withMap.IdentityAttributes("aws_s3_bucket"); ok {
+		t.Fatal("a type absent from the map must report cannot-say, not an answer")
+	}
+	if _, ok := withMap.IdentityAttributes("empty_entry"); ok {
+		t.Fatal("an empty attribute list must report cannot-say, not an answer")
+	}
+
+	// A Terraform-registry provider, and any snapshot cut before
+	// identity.json existed: no map at all, and the absent case has to
+	// survive that rather than panicking or claiming knowledge.
+	noMap := stateReaderAdapter{}
+	if _, ok := noMap.IdentityAttributes("aws_sqs_queue"); ok {
+		t.Fatal("a provider with no identity map must report cannot-say")
+	}
+}
+
+// TestNewApplierWithIdentity_CarriesTheMapToTheReadSide proves the value
+// the pool hands to scan really does answer, which is the whole point of
+// UBI-270: the map existed and was reachable only from the apply path.
+func TestNewApplierWithIdentity_CarriesTheMapToTheReadSide(t *testing.T) {
+	app := newApplierWithIdentity(nil, nil, "ubiquex/aws", map[string][]string{
+		"aws_sqs_queue": {"queue_url"},
+	})
+
+	// Exactly the assertion cli/scan.go performs on the pool's return.
+	sr, ok := app.(core.StateReader)
+	if !ok {
+		t.Fatal("the pool's Applier is not a StateReader, so scan cannot read at all")
+	}
+	pub, ok := sr.(core.ResourceIdentityPublisher)
+	if !ok {
+		t.Fatal("the reader scan uses cannot publish identity, so the map is loaded and unreachable again")
+	}
+	if attrs, known := pub.IdentityAttributes("aws_sqs_queue"); !known || attrs[0] != "queue_url" {
+		t.Fatalf("identity did not survive the trip to the read side: %v, %v", attrs, known)
 	}
 }

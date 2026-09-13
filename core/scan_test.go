@@ -191,7 +191,9 @@ func TestRunScan_ResourceUnreadable_TeachesKnownType(t *testing.T) {
 // schema doesn't recognize -- that's ErrUnknownResourceType instead,
 // tested elsewhere).
 func TestLookupHintText_HonestFallbackForUnknownType(t *testing.T) {
-	got := lookupHintText("hashicorp/aws", "aws_totally_unknown_type")
+	// A provider that publishes no identity map at all, which is every
+	// Terraform-registry provider: the fallback chain must still work.
+	got := lookupHintText(&fakeProvider{}, "hashicorp/aws", "aws_totally_unknown_type")
 	if !strings.Contains(got, "check aws_totally_unknown_type's provider schema") {
 		t.Errorf("expected the honest fallback wording, got: %v", got)
 	}
@@ -543,5 +545,141 @@ func TestVerifyDataSourceFreshness_InvalidAddressErrors(t *testing.T) {
 	err := VerifyDataSourceFreshness(context.Background(), fp, "", nil, proposal)
 	if err == nil {
 		t.Fatal("expected an error for a malformed Resource address, got nil")
+	}
+}
+
+// identityPublishingProvider is a fakeProvider that also implements
+// core.ResourceIdentityPublisher, standing in for a dynamic provider whose
+// schema snapshot ships an identity.json.
+type identityPublishingProvider struct {
+	fakeProvider
+	identity map[string][]string
+}
+
+func (p *identityPublishingProvider) IdentityAttributes(resourceType string) ([]string, bool) {
+	attrs, ok := p.identity[resourceType]
+	if !ok || len(attrs) == 0 {
+		return nil, false
+	}
+	return attrs, true
+}
+
+// TestLookupHintText_NamesThePublishedIdentity is UBI-270's core case.
+//
+// The real one: adopting an orphaned SQS queue needed --lookup, the
+// obvious guess {"id": ...} is wrong for that type, and ubx answered
+// "check aws_sqs_queue's provider schema for its required lookup fields"
+// while holding a map that said queue_url. The map was loaded in the same
+// process, by the same adapter, and used on the apply path to derive the
+// lookup key to record after a create. Nothing read it here.
+func TestLookupHintText_NamesThePublishedIdentity(t *testing.T) {
+	prov := &identityPublishingProvider{identity: map[string][]string{
+		"aws_sqs_queue": {"queue_url"},
+	}}
+
+	got := lookupHintText(prov, "ubiquex/aws", "aws_sqs_queue")
+
+	if !strings.Contains(got, "queue_url") {
+		t.Fatalf("the hint does not name the attribute the provider published: %v", got)
+	}
+	// Naming the attribute is not enough on its own: the reader is stuck on
+	// what to type, so the hint has to carry a runnable shape.
+	if !strings.Contains(got, `--lookup '{"queue_url":"<queue_url>"}'`) {
+		t.Fatalf("the hint does not give a runnable --lookup: %v", got)
+	}
+	if strings.Contains(got, "check aws_sqs_queue's provider schema") {
+		t.Fatalf("fell through to the generic fallback while the provider could answer: %v", got)
+	}
+}
+
+// TestLookupHintText_MultipleIdentityAttributes covers a type identified
+// by more than one attribute, since the prose and the JSON both have to
+// hold up.
+func TestLookupHintText_MultipleIdentityAttributes(t *testing.T) {
+	prov := &identityPublishingProvider{identity: map[string][]string{
+		"fake_thing": {"cluster", "name"},
+	}}
+	got := lookupHintText(prov, "ubiquex/fake", "fake_thing")
+	if !strings.Contains(got, `"cluster" and "name"`) {
+		t.Fatalf("prose does not read naturally for two attributes: %v", got)
+	}
+	if !strings.Contains(got, `--lookup '{"cluster":"<cluster>","name":"<name>"}'`) {
+		t.Fatalf("the runnable shape is wrong for two attributes: %v", got)
+	}
+}
+
+// TestLookupHintText_PublishedIdentityBeatsLookuphints pins the precedence
+// deliberately rather than leaving it to call order.
+//
+// aws_s3_bucket is one of core/lookuphints' three hand-curated entries. A
+// provider that publishes a real identity map knows more: the curated
+// table names the misleading attribute a user might have reached for,
+// while the map names the attributes that actually identify the resource,
+// and it covers every type rather than three.
+func TestLookupHintText_PublishedIdentityBeatsLookuphints(t *testing.T) {
+	prov := &identityPublishingProvider{identity: map[string][]string{
+		"aws_s3_bucket": {"bucket"},
+	}}
+	got := lookupHintText(prov, "hashicorp/aws", "aws_s3_bucket")
+	if !strings.Contains(got, `--lookup '{"bucket":"<bucket>"}'`) {
+		t.Fatalf("expected the published identity to win: %v", got)
+	}
+	if strings.Contains(got, `must include "id"`) {
+		t.Fatalf("lookuphints won over a provider that could answer directly: %v", got)
+	}
+}
+
+// TestLookupHintText_CannotSayFallsThrough covers the absent cases, which
+// have to stay real. A snapshot is allowed to publish no identity map at
+// all, and a map is allowed to omit a type. Neither means "this type has
+// no identity", so neither may produce an assertion about one.
+func TestLookupHintText_CannotSayFallsThrough(t *testing.T) {
+	t.Run("type missing from a published map", func(t *testing.T) {
+		prov := &identityPublishingProvider{identity: map[string][]string{
+			"aws_sqs_queue": {"queue_url"},
+		}}
+		got := lookupHintText(prov, "hashicorp/aws", "aws_s3_bucket")
+		// Falls through to lookuphints, which does know this one.
+		if !strings.Contains(got, `must include "id"`) {
+			t.Fatalf("expected the lookuphints answer for a type the map omits: %v", got)
+		}
+	})
+
+	t.Run("provider publishes nothing", func(t *testing.T) {
+		got := lookupHintText(&fakeProvider{}, "hashicorp/aws", "aws_s3_bucket")
+		if !strings.Contains(got, `must include "id"`) {
+			t.Fatalf("expected the lookuphints answer when nothing is published: %v", got)
+		}
+	})
+
+	t.Run("empty attribute list is not an answer", func(t *testing.T) {
+		prov := &identityPublishingProvider{identity: map[string][]string{
+			"aws_totally_unknown_type": {},
+		}}
+		got := lookupHintText(prov, "hashicorp/aws", "aws_totally_unknown_type")
+		if !strings.Contains(got, "check aws_totally_unknown_type's provider schema") {
+			t.Fatalf("an empty list must mean cannot-say, not an assertion: %v", got)
+		}
+	})
+}
+
+// TestRunScan_UnreadableResource_TeachesTheRealLookup runs the whole scan
+// path rather than the helper, so the hint is proven to actually reach the
+// error a user sees.
+func TestRunScan_UnreadableResource_TeachesTheRealLookup(t *testing.T) {
+	l := Open(t.TempDir())
+	prov := &identityPublishingProvider{identity: map[string][]string{
+		"aws_s3_bucket": {"bucket"},
+	}}
+
+	_, err := RunScan(context.Background(), prov, l, ScanRequest{
+		Address:      testAddr(),
+		CurrentState: json.RawMessage(`{"id":"wrong-shape"}`),
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unreadable resource")
+	}
+	if !strings.Contains(err.Error(), `--lookup '{"bucket":"<bucket>"}'`) {
+		t.Fatalf("the runnable lookup did not reach the user-facing error: %v", err)
 	}
 }

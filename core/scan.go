@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,33 @@ type StateReader interface {
 
 	// ReadResource fetches the live state of one resource instance.
 	ReadResource(ctx context.Context, resourceSchema any, typeName string, currentState json.RawMessage) (json.RawMessage, error)
+}
+
+// ResourceIdentityPublisher is an OPTIONAL StateReader capability: a
+// provider that can say which attributes identify one instance of a
+// resource type, rather than leaving a caller to guess.
+//
+// Optional because only some providers can answer. A dynamic provider's
+// schema snapshot publishes the map directly (ubx-schema-<provider>'s own
+// identity.json); a Terraform-registry provider has no equivalent, and a
+// snapshot published before the file existed legitimately says nothing.
+// A StateReader that cannot answer simply does not implement this, and
+// every caller must have a real absent case.
+//
+// UBI-270: the map this exposes was already being read, already correct,
+// and already in memory in the same process that refuses a scan for
+// having the wrong lookup. It was reachable from exactly one place, the
+// apply path, where it derives the lookup key to RECORD after a create
+// succeeds. So ubx would work out an `aws_sqs_queue` is identified by
+// "queue_url", write that down, and still answer "check the provider
+// schema for its required lookup fields" to someone who had to supply it
+// by hand. The gap was never the data. It was that the one moment a
+// human needs the answer is the one moment nothing consulted it.
+type ResourceIdentityPublisher interface {
+	// IdentityAttributes returns the attribute names that identify one
+	// instance of resourceType, and whether this provider can say at all.
+	// A false ok means "cannot say", never "this type has no identity".
+	IdentityAttributes(resourceType string) ([]string, bool)
 }
 
 // AttrComputedFlags is an OPTIONAL capability a StateReader's own opaque
@@ -398,7 +426,7 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 		return nil, "", nil, fmt.Errorf("read resource: %w", err)
 	}
 	if len(observed) == 0 || string(observed) == "null" {
-		return nil, "", nil, fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(providerSource, addr.Type))
+		return nil, "", nil, fmt.Errorf("%w: %s", ErrResourceUnreadable, lookupHintText(prov, providerSource, addr.Type))
 	}
 	hash, err = ObservedHash(observed)
 	if err != nil {
@@ -428,15 +456,62 @@ func readAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 // included," not "you're missing bucket/name" -- lookuphints.For's stored
 // value is the misleading natural-key attribute a user might have reached
 // for alone, not the field that's actually missing.
-func lookupHintText(providerSource, resourceType string) string {
+// UBI-270 amendment: the provider's own published identity map is
+// consulted FIRST, when it has one, and it answers a strictly better
+// question than lookuphints does. lookuphints is a hand-curated table of
+// three types, all keyed under "hashicorp/aws", and it names the
+// misleading attribute a user might have reached for rather than the one
+// that was missing. An identity map is generated per snapshot, covers
+// every type that provider has, and names the attributes directly.
+//
+// lookuphints is kept, not replaced, and still runs for a stack with no
+// snapshot to publish anything -- which is every Terraform-registry
+// provider, where its three verified entries are the only thing anyone
+// knows. Two overlapping tables would be a real problem if they could
+// disagree about the same resource; they cannot, because they apply to
+// disjoint kinds of provider.
+func lookupHintText(prov StateReader, providerSource, resourceType string) string {
 	// docs.ubiquex.io, not the retired ubiquex-docs repo this used to name
 	// -- see cli/init.go's own docsConfigRef for the same correction.
 	docsLink := "see https://docs.ubiquex.io/cli-reference/scan"
+
+	if pub, ok := prov.(ResourceIdentityPublisher); ok {
+		if attrs, known := pub.IdentityAttributes(resourceType); known && len(attrs) > 0 {
+			return fmt.Sprintf("%s is identified by %s -- pass --lookup '{%s}' (%s)",
+				resourceType, quotedList(attrs), exampleLookupJSON(attrs), docsLink)
+		}
+	}
+
 	if naturalKey, ok := lookuphints.For(providerSource, resourceType); ok {
 		return fmt.Sprintf("%s's lookup must include \"id\" -- %s alone is not enough (%s)",
 			resourceType, strings.Join(naturalKey, "/"), docsLink)
 	}
 	return fmt.Sprintf("check %s's provider schema for its required lookup fields (%s)", resourceType, docsLink)
+}
+
+// quotedList renders attribute names for prose: `"queue_url"`, or
+// `"bucket" and "region"`, or `"a", "b" and "c"`.
+func quotedList(attrs []string) string {
+	q := make([]string, len(attrs))
+	for i, a := range attrs {
+		q[i] = strconv.Quote(a)
+	}
+	if len(q) == 1 {
+		return q[0]
+	}
+	return strings.Join(q[:len(q)-1], ", ") + " and " + q[len(q)-1]
+}
+
+// exampleLookupJSON renders the body of a runnable --lookup argument, with
+// the values left as obvious placeholders. A copyable shape is the point:
+// knowing the attribute is called "queue_url" and knowing what to type are
+// not the same thing, and the second is what the reader is stuck on.
+func exampleLookupJSON(attrs []string) string {
+	parts := make([]string, len(attrs))
+	for i, a := range attrs {
+		parts[i] = fmt.Sprintf("%s:\"<%s>\"", strconv.Quote(a), a)
+	}
+	return strings.Join(parts, ",")
 }
 
 // GenerateProposal builds the adoption/drift_adopt proposal for a scan
