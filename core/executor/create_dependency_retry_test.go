@@ -11,6 +11,29 @@ import (
 	"github.com/ubiquex/ubiquex/core"
 )
 
+// UBI-269 note for every exhaustion case in this file.
+//
+// These tests are about the retry budget: how many times a create
+// referencing a not-yet-visible dependency is retried, and that the
+// backoff stops rather than running forever. That subject is unchanged,
+// and each one still asserts it through its own Reconciliation entry
+// count and error classification.
+//
+// What changed is the state a create settles into once the budget is
+// spent. It used to be `failed`, a definite claim that the resource does
+// not exist. ubx cannot support that claim: every one of these attempts
+// issued a real ApplyResourceChange call, and a diagnostic coming back
+// says the operation did not complete, not that it had no effect. A
+// create has no lookup key yet, so unlike a modify it cannot settle the
+// question with a read-back, and `unknown_post_timeout` is the honest
+// terminus.
+//
+// In these fixtures the resource genuinely was not created, so the old
+// expectation happened to be true. It was not knowable, which is the
+// whole point: the same code path, against a real cloud API that created
+// the resource and then failed, recorded the same confident `failed` and
+// produced a silent orphan.
+
 // TestShip_CreateFailsNotFoundReferencingShippedDependency_RetriesAndSucceeds
 // is UBI-92's own hermetic repro of the founder's live finding
 // (playground-14, pure-diagram 5-resource stack): a role ships
@@ -132,8 +155,8 @@ func TestShip_CreateFailsNotFoundReferencingShippedDependency_BudgetExhausted_Fa
 	if attach == nil {
 		t.Fatalf("attach resource missing from sealed apply record")
 	}
-	if st, _ := attach.LastState(); st != core.ResourceFailed {
-		t.Fatalf("attach last state = %s, want failed (retry budget exhausted, dependency never became visible)", st)
+	if st, _ := attach.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("attach last state = %s, want unknown_post_timeout (retry budget exhausted; the calls were made, so their effect is unknown)", st)
 	}
 	if len(attach.Errors) != 1 || attach.Errors[0].Classification != core.ErrorTerminal {
 		t.Fatalf("errors = %+v, want exactly one terminal error after the budget exhausts", attach.Errors)
@@ -149,7 +172,7 @@ func TestShip_CreateFailsNotFoundReferencingShippedDependency_BudgetExhausted_Fa
 // depends_on is empty) is never retried, regardless of how the error is
 // phrased -- a real, permanent "not found" failure (e.g. a truly invalid
 // reference to something outside this batch) must still fail fast, the
-// exact behavior TestShip_TerminalError_FailsImmediately_NoReconciliation
+// exact behavior TestShip_TerminalError_IsVerifiedNotAssumed_AndNeverReApplied
 // already established for terminal errors generally.
 func TestShip_CreateFailsNotFound_NoSameBatchDependency_FailsFastNoRetry(t *testing.T) {
 	l := core.Open(t.TempDir())
@@ -167,8 +190,8 @@ func TestShip_CreateFailsNotFound_NoSameBatchDependency_FailsFastNoRetry(t *test
 		t.Fatalf("ship: %v", err)
 	}
 	ra := sealed.Resources[0]
-	if st, _ := ra.LastState(); st != core.ResourceFailed {
-		t.Fatalf("last state = %s, want failed immediately", st)
+	if st, _ := ra.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("last state = %s, want unknown_post_timeout immediately, with no retry", st)
 	}
 	if len(ra.Reconciliation) != 0 {
 		t.Fatalf("reconciliation = %+v, want none -- no same-batch dependency, must never enter the retry loop", ra.Reconciliation)
@@ -212,8 +235,8 @@ func TestShip_CreateFailsPermanentError_WithShippedDependency_DoesNotRetry(t *te
 	if attach == nil {
 		t.Fatalf("attach resource missing from sealed apply record")
 	}
-	if st, _ := attach.LastState(); st != core.ResourceFailed {
-		t.Fatalf("last state = %s, want failed immediately", st)
+	if st, _ := attach.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("last state = %s, want unknown_post_timeout immediately, with no retry", st)
 	}
 	if len(attach.Reconciliation) != 0 {
 		t.Fatalf("reconciliation = %+v, want none -- a permanent, non-not-found error must never enter the retry loop even with a shipped dependency present", attach.Reconciliation)
@@ -262,8 +285,8 @@ func TestShip_CreateFailsNotFound_DifferentErrorSurfacesOnRetry_StopsEarly(t *te
 	if attach == nil {
 		t.Fatalf("attach resource missing from sealed apply record")
 	}
-	if st, _ := attach.LastState(); st != core.ResourceFailed {
-		t.Fatalf("last state = %s, want failed", st)
+	if st, _ := attach.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("last state = %s, want unknown_post_timeout", st)
 	}
 	if len(attach.Errors) != 1 || attach.Errors[0].Message != permanentErr.Error() {
 		t.Fatalf("errors = %+v, want the DIFFERENT permanent error surfaced, not the original not-found one", attach.Errors)
@@ -336,8 +359,8 @@ func TestShip_CreateFailsNotFound_ZeroProgressPastThreshold_BailsEarlyHonestly(t
 	if attach == nil {
 		t.Fatalf("attach resource missing from sealed apply record")
 	}
-	if st, _ := attach.LastState(); st != core.ResourceFailed {
-		t.Fatalf("last state = %s, want failed", st)
+	if st, _ := attach.LastState(); st != core.ResourceUnknownPostTimeout {
+		t.Fatalf("last state = %s, want unknown_post_timeout", st)
 	}
 	// 4ms threshold / 1ms steps: bails after the 4th attempt, well short
 	// of all 10 -- the whole point being it doesn't grind out the budget.

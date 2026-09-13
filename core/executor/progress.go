@@ -12,7 +12,17 @@ import "context"
 // somewhere to go without a breaking change.
 type ProgressEvent struct {
 	Address string
-	Kind    string // "transition" | "reconcile_attempt"
+	// Kind is "transition" | "reconcile_attempt" | "error" | "unverified".
+	//
+	// "unverified" (UBI-269) is emitted once, for a create whose apply
+	// failed in a way that leaves the resource's existence unknown, and
+	// which has no lookup key to reconcile with. It carries the whole
+	// explanation in Detail, including the recovery command, because it is
+	// the only thing that will say any of it: the transition into
+	// unknown_post_timeout is deliberately suppressed by the printer (it
+	// is normally narrated by the reconcile_attempt events that follow),
+	// and a create has no reconciliation to narrate.
+	Kind    string
 	State   string // ResourceState string, only for Kind == "transition"
 	Detail  string
 	Attempt int // 1-based, only for Kind == "reconcile_attempt"

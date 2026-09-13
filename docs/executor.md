@@ -252,13 +252,17 @@ one.
   reconciliation and the retry budget; they never immediately fail a
   resource.
 - **Terminal**: a real, structured diagnostic from the provider
-  (`ApplyResourceChange_Response.Diagnostics`, `Severity: ERROR`) — the
-  provider itself said no. Ends that resource's attempt at `failed`
-  immediately; no retry is attempted within the same `ship` invocation even
-  if retry budget remains (a provider that has already said "this attribute
-  is invalid" is not going to change its answer on an immediate retry with
-  the same input — retrying is a future-`ubx accept`-cycle concern, not a
-  `ship`-loop one).
+  (`ApplyResourceChange_Response.Diagnostics`, `Severity: ERROR`). No retry
+  is attempted within the same `ship` invocation even if retry budget
+  remains (a provider that has already said "this attribute is invalid" is
+  not going to change its answer on an immediate retry with the same input
+  — retrying is a future-`ubx accept`-cycle concern, not a `ship`-loop
+  one). It does **not** end the attempt at `failed`: a diagnostic says the
+  operation did not complete, which is not the same claim as "the resource
+  does not exist". Reality is asked, exactly as for a retryable error — see
+  the UBI-269 amendment below, which corrected this entry. It previously
+  read "the provider itself said no" and ended the attempt at `failed`
+  immediately.
 - **Stale** (a `VerifyFreshness` mismatch) is its own classification,
   distinct from both: it means reality changed, not that the provider
   rejected anything — see "Freshness," above.
@@ -2549,3 +2553,103 @@ mismatched literal reference resolve.
   `Apply`, and a `PlannedState`/`Config` top-level-null encoding fix found
   alongside it (session 5, its own addendum above); a live full-lifecycle
   finale on real AWS (see docs/reliability-report.md's own UBI-30 section).
+
+## Amendment (2026-09-14, UBI-269): a diagnostic is not a report about reality
+
+A create of an `aws_sqs_queue` reached AWS, took 63 seconds, and created the
+queue. The provider then failed to serialize its own response and returned
+an ERROR diagnostic. `ubx` recorded the resource as `failed`, a definite
+claim that the create did not happen, while the queue existed in the cloud
+with no address, no lookup and no state in the ledger. A re-ship would have
+created a second one.
+
+### What was wrong
+
+This document's error taxonomy said a structured ERROR diagnostic is "the
+provider itself said no", and ended the attempt at `failed` immediately.
+The only justification it ever offered was about **retry futility**: a
+provider that has already rejected an attribute will not change its answer
+on an immediate retry with the same input. That reasoning is sound, and it
+is entirely about repeating the call. The claim about reality rode in
+alongside it, unargued, because `failed` happened to mean both things.
+
+A diagnostic answers "did the operation complete". It does not answer "does
+the resource exist". Those come apart exactly when it matters most: when a
+provider has already changed the world and then fails.
+
+### What changed
+
+The classification survives and keeps its real job. A terminal error is
+still never re-applied within a `ship` invocation. What it no longer does
+is settle the question of what happened:
+
+- **`drift_revert` modify** and **change modify** record
+  `unknown_post_timeout` and run `reconcileLoop`, which reads the resource
+  back through its already-recorded lookup key. A genuinely rejected change
+  reads back unchanged and records `failed`, one read later than before. A
+  change that landed and then errored reads back changed and records
+  `applied`, an outcome that was previously unreachable.
+- **destroy** records `unknown_post_timeout` and runs
+  `reconcileDestroyLoop`, with `applyClaimedSuccess` false. This reverses
+  that branch's own prior reasoning, which held that UBI-44's asymmetry "is
+  specifically about trusting a rosy answer, not a downbeat one". UBI-44
+  found a provider reporting a destroy it never performed; the same
+  provider is equally able to report a failure for a destroy it did
+  perform. The read-back earns the verdict either way, which is what
+  UBI-44 actually established.
+- **create** records `unknown_post_timeout` and stops. It has no lookup key
+  yet, so unlike the others it cannot settle the question at all, and that
+  limitation is unchanged. What changed is that it no longer pretends to.
+
+Reconciliation only ever reads, so routing a terminal error through it does
+not resurrect the retry the classification exists to prevent. Tests assert
+the `ApplyResourceChange` call count directly rather than inferring it from
+the absence of reconciliation.
+
+### The cost, accepted deliberately
+
+A modify or destroy rejected for an ordinary reason (a typo'd attribute, a
+missing permission) now pays one read-back before recording `failed`. That
+is slower for the most common failure there is. It was accepted because the
+costs are asymmetric: being wrongly unsure costs a read, and being wrongly
+sure costs a duplicate resource or a silent orphan.
+
+### What was deliberately not attempted
+
+Deciding, from the diagnostic itself, whether a particular one is a safe
+definite negative. Some genuinely are — a validation rejection raised
+before the provider issued any remote call truly did nothing — but nothing
+in the wire shape distinguishes them. Severity, summary, detail and
+attribute path are all provider-authored text, and pattern-matching
+provider prose is the wrong mechanism for deciding whether a real cloud
+resource exists.
+
+The knowable version of that distinction is structural and lives in
+`provider/provider.go`: a failure to **encode** the request never reached
+the provider and is a real definite negative, while everything from the
+gRPC call onward is not. Those encode sites already return plain errors
+that classify as retryable, which is the safe direction, so tightening them
+would save a read-back rather than prevent a wrong record. Left undone on
+purpose.
+
+Also left undone: renaming `unknown_post_timeout`, whose semantics fit but
+whose name says timeout. It is a persisted string in hashed apply records,
+so renaming costs a migration or two spellings forever. Human-facing
+rendering can say "unverified" without changing what the ledger stores.
+
+### A create must say so out loud
+
+Fixing the record alone would have traded a confident wrong answer for no
+answer at all. Every other route into `unknown_post_timeout` is followed by
+`reconcile_attempt` events that narrate the verification, which is why
+`cli/ship.go`'s printer suppresses the transition itself. A create has no
+reconciliation to narrate, so it would have printed the provider's error
+and nothing else — and the natural conclusion from an error alone is that
+the create did not happen, which is the wrong one.
+
+A create left unverified now emits its own progress event (`Kind:
+"unverified"`) carrying the whole explanation: that the resource may exist,
+that nothing is recorded for it, that a re-ship would create another, and
+the `ubx scan --lookup` command that adopts it. It gets a permanent receipt
+line of its own, distinct from the error line above it: that line says what
+went wrong, this one says what it means.

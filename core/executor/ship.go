@@ -158,6 +158,61 @@ type TerminalError struct{ Err error }
 func (e *TerminalError) Error() string { return e.Err.Error() }
 func (e *TerminalError) Unwrap() error { return e.Err }
 
+// applyErrorClassification classifies an error returned by
+// Applier.ApplyResourceChange for the RECORD. It decides whether the
+// attempt is worth repeating, and deliberately says nothing about whether
+// the attempt had an effect (UBI-269).
+//
+// Those were one decision until this change, and conflating them turned a
+// real, created SQS queue into a resource the ledger had never heard of.
+// The provider created the queue, failed to serialize its own response,
+// and returned an ERROR diagnostic. ubx read the diagnostic as proof
+// nothing had happened and recorded a definite failure, so a re-ship would
+// have created a second queue.
+//
+// A diagnostic answers "did the operation complete". It does not answer
+// "does the resource exist". The taxonomy in docs/executor.md called a
+// diagnostic "the provider itself said no" and ended the attempt at
+// `failed` immediately, but the only justification it ever offered was
+// about RETRY futility: a provider that has already said "this attribute
+// is invalid" will not change its answer on an immediate retry with the
+// same input. That reasoning is sound, and it is entirely about repeating
+// the call. The claim about reality rode in alongside it, unargued,
+// because ResourceFailed happened to mean both things.
+//
+// So the classification stays, and it keeps its real job: a terminal error
+// is not retried within this ship invocation. What changes is that callers
+// no longer treat it as a definite negative. Every one of them now records
+// ResourceUnknownPostTimeout and asks reality, exactly as they already did
+// for an ambiguous RPC. Reconciliation reads, it never re-applies, so
+// routing a terminal error through it does not resurrect the retry this
+// classification exists to prevent.
+//
+// Deliberately NOT attempted: deciding from the diagnostic itself whether
+// a particular one is a safe definite negative. Some genuinely are (a
+// validation rejection raised before the provider issued any remote call
+// truly did nothing), but nothing in the wire shape distinguishes them --
+// severity, summary, detail and attribute path are all provider-authored
+// text, and pattern-matching provider prose is the wrong mechanism for
+// deciding whether a real cloud resource exists. The costs are asymmetric:
+// being wrongly unsure costs one read-back, and being wrongly sure costs a
+// duplicate resource or a silent orphan.
+//
+// The genuinely knowable version of that distinction is structural and
+// lives one layer up, in provider/provider.go: a failure to ENCODE the
+// request never reached the provider and is a real definite negative,
+// while everything from the gRPC call onward is not. Those encode sites
+// already return plain errors that land here as retryable, which is the
+// safe direction, so tightening them is a separate, optional improvement
+// that saves a read-back rather than preventing a wrong record.
+func applyErrorClassification(err error) core.ErrorClassification {
+	var terminal *TerminalError
+	if errors.As(err, &terminal) {
+		return core.ErrorTerminal
+	}
+	return core.ErrorRetryable
+}
+
 var (
 	// ErrUnsupportedKind means Ship was asked to execute a proposal kind
 	// other than drift_revert or change -- v1's only two shippable kinds
@@ -597,21 +652,15 @@ func shipDriftRevert(ctx context.Context, l *core.Ledger, app Applier, providerS
 			continue
 		}
 
-		var terminal *TerminalError
-		if errors.As(applyErr, &terminal) {
-			rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
-			rcd.transition(ctx, ra, core.ResourceFailed, "")
-			rcd.tally(core.ResourceFailed)
-			if err := rcd.persist(); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		// Retryable/ambiguous: the RPC didn't resolve into a clear answer
-		// (docs/executor.md -- ResourceUnknownPostTimeout, reality is asked,
-		// not assumed).
-		rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+		// Any failed apply, whether the provider answered with a structured
+		// diagnostic or the RPC never resolved at all, leaves reality
+		// unknown: docs/executor.md's ResourceUnknownPostTimeout, reality
+		// is asked, not assumed. The classification still distinguishes the
+		// two in the record, and still means "do not retry this within the
+		// invocation" for a terminal one -- see applyErrorClassification
+		// for why that is no longer the same statement as "it did not
+		// happen" (UBI-269).
+		rcd.recordErr(ctx, ra, applyErr.Error(), applyErrorClassification(applyErr))
 		rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
 		if err := rcd.persist(); err != nil {
 			return nil, err
@@ -2018,28 +2067,41 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 		return rcd.persist()
 	}
 
-	var terminal *TerminalError
-	if errors.As(applyErr, &terminal) {
-		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		rcd.transition(ctx, ra, core.ResourceFailed, "")
-		rcd.tally(core.ResourceFailed)
-		return rcd.persist()
-	}
-
-	// Retryable/ambiguous: unlike a modify (which can reconcile-by-query
-	// against the resource's own already-known lookup key), a create that
-	// fails ambiguously has no identity to look anything up by yet -- the
-	// resource may or may not exist in the real provider. This is a real,
-	// named v1 limitation, not silently swept: it's left unknown_post_timeout
-	// and NOT retried automatically within this invocation; a human must
-	// resolve it (e.g. a real `aws` CLI check for whatever identity the
-	// provider might have assigned) before the next `ubx ship` can safely
-	// proceed past it. core/resolver's own $computed dependents downstream
-	// of this resource stay correctly blocked (shipChange's own
-	// missing-dependency check) until that happens.
-	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	// Unlike a modify (which can reconcile-by-query against the resource's
+	// own already-known lookup key), a create that fails has no identity to
+	// look anything up by yet -- the resource may or may not exist in the
+	// real provider. This is a real, named v1 limitation, not silently
+	// swept: it's left unknown_post_timeout and NOT retried automatically
+	// within this invocation; a human must resolve it before the next
+	// `ubx ship` can safely proceed past it. core/resolver's own $computed
+	// dependents downstream of this resource stay correctly blocked
+	// (shipChange's own missing-dependency check) until that happens.
+	//
+	// UBI-269: this now covers a structured ERROR diagnostic too, which
+	// used to short-circuit to failed above. The create is the path where
+	// that mattered most, for the same reason the limitation above exists:
+	// with no lookup key recorded, a wrongly-definite failure does not just
+	// mis-record the resource, it removes it from ubx's world entirely, and
+	// the next ship creates a second one.
+	rcd.recordErr(ctx, ra, applyErr.Error(), applyErrorClassification(applyErr))
 	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
 	rcd.tally(core.ResourceStillUnknown)
+
+	// Said out loud, because nothing else will say it. Every other path
+	// into unknown_post_timeout is followed by reconcile_attempt events
+	// that narrate the verification, which is why cli/ship.go's printer
+	// suppresses the transition itself. A create has no reconciliation to
+	// narrate, so without this the receipt shows the provider's error and
+	// then nothing: no statement that a resource may exist, and no way to
+	// know the recovery exists. A silent orphan is what UBI-269 is about,
+	// and a correct record nobody reads would only have made it quieter.
+	emitProgress(ctx, ProgressEvent{
+		Address: ra.Address.String(),
+		Kind:    "unverified",
+		Detail: fmt.Sprintf(
+			"this resource may exist: the create call was made and its outcome is unknown. Nothing is recorded for it, so a re-ship would create another. Check the provider, and if it is there, adopt it with:\n  ubx scan --stack %s --type %s --name %s --lookup '<identifying attributes>'",
+			ra.Address.Stack, ra.Address.Type, ra.Address.Name),
+	})
 	return rcd.persist()
 }
 
@@ -2176,15 +2238,14 @@ func shipModifyNode(ctx context.Context, app Applier, providerSource string, pro
 		return rcd.persist()
 	}
 
-	var terminal *TerminalError
-	if errors.As(applyErr, &terminal) {
-		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		rcd.transition(ctx, ra, core.ResourceFailed, "")
-		rcd.tally(core.ResourceFailed)
-		return rcd.persist()
-	}
-
-	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	// A diagnostic and a dead RPC both leave reality unknown, and a modify
+	// can settle it: reconcileLoop reads the resource back through its own
+	// already-recorded lookup key and compares against the target. A
+	// provider that rejected the change reads back unchanged and records
+	// failed, one read later than before. A provider that applied it and
+	// then failed to tell us reads back changed and records applied, which
+	// is the outcome that used to be unreachable (UBI-269).
+	rcd.recordErr(ctx, ra, applyErr.Error(), applyErrorClassification(applyErr))
 	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
 	if err := rcd.persist(); err != nil {
 		return err
@@ -2421,21 +2482,23 @@ func shipDestroyNode(ctx context.Context, app Applier, providerSource string, pr
 		return rcd.persist()
 	}
 
-	var terminal *TerminalError
-	if errors.As(applyErr, &terminal) {
-		// A real, structured ERROR diagnostic is the provider's own honest
-		// negative answer -- this document's error taxonomy already trusts
-		// it without a read-back (docs/executor.md's UBI-44 amendment: the
-		// asymmetry is specifically about trusting a rosy answer, not a
-		// downbeat one). No reconciliation needed here.
-		rcd.recordErr(ctx, ra, terminal.Error(), core.ErrorTerminal)
-		rcd.transition(ctx, ra, core.ResourceFailed, "")
-		rcd.tally(core.ResourceFailed)
-		return rcd.persist()
-	}
-
-	// Retryable/ambiguous: the RPC didn't resolve into a clear answer.
-	rcd.recordErr(ctx, ra, applyErr.Error(), core.ErrorRetryable)
+	// This branch used to short-circuit a structured ERROR diagnostic
+	// straight to failed, on the stated reasoning that "a real, structured
+	// ERROR diagnostic is the provider's own honest negative answer" and
+	// that UBI-44's asymmetry "is specifically about trusting a rosy
+	// answer, not a downbeat one". UBI-269 reverses that: a downbeat answer
+	// is no more a report about reality than a rosy one. UBI-44 found a
+	// provider reporting a destroy it never performed; the same provider
+	// is equally capable of reporting a failure for a destroy it did
+	// perform, or of failing after the delete call landed. The read-back
+	// earns the verdict either way, which is what UBI-44 actually
+	// established.
+	//
+	// applyClaimedSuccess is false here, unchanged: the provider did not
+	// claim success, so a resource that reads back absent is an ordinary
+	// destroy that landed despite the error, not the active lie UBI-44
+	// records separately.
+	rcd.recordErr(ctx, ra, applyErr.Error(), applyErrorClassification(applyErr))
 	rcd.transition(ctx, ra, core.ResourceUnknownPostTimeout, "")
 	if err := rcd.persist(); err != nil {
 		return err
