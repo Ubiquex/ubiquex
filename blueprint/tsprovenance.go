@@ -39,7 +39,7 @@ func StampDirectCallProvenanceTS(ctx context.Context, entryFile string, intent *
 		return fmt.Errorf("blueprint: resolve direct-call provenance: %w", err)
 	}
 
-	hint := fmt.Sprintf("no import in %s's own module graph (deno info) resolves to a real blueprint directory (an Ubxfile-bearing parent of a ts/ directory) with that name -- this works for a blueprint imported via a relative or absolute local file path (the pattern every direct-SDK-import example in this project uses today); a blueprint referenced only through a remote/bare specifier (jsr:, npm:, an import-map entry with no local file behind it) isn't supported yet", entryFile)
+	hint := fmt.Sprintf("no import in %s's own module graph (deno info) sits inside a blueprint this can hash. A blueprint is found by walking that graph and checking whether each local file's own ts/ directory has a blueprint root above it, so a blueprint reached only through a remote or bare specifier (jsr:, npm:, an import-map entry with no local file behind it) has nothing on disk to hash", entryFile)
 	return applyBlueprintRefs(intent, found, hint)
 }
 
@@ -115,7 +115,7 @@ func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[st
 		if !IsBlueprintDir(root) {
 			continue // a ts/ directory that isn't actually a blueprint's own root -- an ordinary local import, not a blueprint
 		}
-		name := filepath.Base(root)
+		name := blueprintNameAt(root)
 		if _, already := found[name]; already {
 			continue // first match wins; a genuine ambiguity (two distinct blueprints sharing a bare name) is a real, separate problem this fix doesn't attempt to detect
 		}
