@@ -150,29 +150,52 @@ func Push(ctx context.Context, tarballPath, ociRef string, opts ...TransferOptio
 // real local target implementations, never a hand-rolled fake standing
 // in for them.
 func pushToTarget(ctx context.Context, tarballPath string, m *Manifest, target oras.Target, tag string, opts ...TransferOption) error {
-	fs, err := file.New(filepath.Dir(tarballPath))
+	// Absolute before anything else, because a relative path would
+	// otherwise have its directory component applied TWICE.
+	//
+	// file.New roots the store at a directory, and file.Store.Add
+	// resolves a relative path argument against that same root
+	// (its own absPath). Passing Dir(p) to one and p to the other means
+	// the directory is consumed once by each: from a/b, pushing
+	// "../x.tar.gz" built a store at "a" and then looked for
+	// "a/../x.tar.gz", one level above the file.
+	//
+	// It only ever appeared to work by coincidence, and the coincidence
+	// is narrow. A bare filename has no directory component to double.
+	// "../sib/x" doubles to "../sib/../sib/x", which path cleaning
+	// collapses back to the right answer. Nothing else survives:
+	// "sub/x" doubles to "sub/sub/x", "../x" to "../../x", and
+	// "../../sub/x" cleans to "../../../sub/x", each landing somewhere
+	// the file is not.
+	//
+	// An absolute path is returned by absPath unchanged, so making it
+	// absolute here removes the ambiguity rather than compensating for
+	// it.
+	absTarball, err := filepath.Abs(tarballPath)
 	if err != nil {
-		return fmt.Errorf("open %s as a file store: %w", filepath.Dir(tarballPath), err)
+		return fmt.Errorf("resolve %s: %w", tarballPath, err)
+	}
+
+	fs, err := file.New(filepath.Dir(absTarball))
+	if err != nil {
+		return fmt.Errorf("open %s as a file store: %w", filepath.Dir(absTarball), err)
 	}
 	defer fs.Close()
 
 	// The bytes leave through the SOURCE store's Fetch, so that is what
-	// gets counted (transfer.go). The total is known before anything
-	// moves: it is the tarball on disk. The remote repository is never
+	// gets counted (transfer.go). The remote repository is never
 	// wrapped, deliberately.
+	//
+	// The expected total is declared by the same wrapper that counts the
+	// bytes (countingStore.expect), so the two cannot disagree about
+	// what is being measured.
 	o := applyTransferOptions(opts)
 	var src oras.Target = fs
-	var counter *byteCounter
 	if o.onProgress != nil {
-		var size int64
-		if info, statErr := os.Stat(tarballPath); statErr == nil {
-			size = info.Size()
-		}
-		counter = newByteCounter(size, o.onProgress)
-		src = &countingStore{inner: fs, counter: counter, countFetch: true}
+		src = &countingStore{inner: fs, counter: newByteCounter(0, o.onProgress), countFetch: true}
 	}
 
-	fileDesc, err := fs.Add(ctx, filepath.Base(tarballPath), ociBlobMediaType, tarballPath)
+	fileDesc, err := fs.Add(ctx, filepath.Base(absTarball), ociBlobMediaType, absTarball)
 	if err != nil {
 		return fmt.Errorf("add %s as a blob: %w", tarballPath, err)
 	}
@@ -247,26 +270,16 @@ func pullFromTarget(ctx context.Context, target oras.ReadOnlyTarget, tag, dest s
 	//
 	// The total is not known when the copy starts: a pull learns the
 	// layer's size from the manifest, which is itself the first thing
-	// fetched. PreCopy is where each descriptor's size becomes known, so
-	// the expected total is raised as descriptors are announced rather
-	// than guessed up front.
+	// fetched. It is declared by the same wrapper that counts the bytes
+	// (countingStore.expect), so the two cannot disagree about what is
+	// being measured.
 	o := applyTransferOptions(opts)
-	copyOpts := oras.DefaultCopyOptions
 	var dst oras.Target = fs
 	if o.onProgress != nil {
-		counter := newByteCounter(0, o.onProgress)
-		dst = &countingStore{inner: fs, counter: counter, countPush: true}
-		prev := copyOpts.PreCopy
-		copyOpts.PreCopy = func(ctx context.Context, desc ocispec.Descriptor) error {
-			counter.addTotal(desc.Size)
-			if prev != nil {
-				return prev(ctx, desc)
-			}
-			return nil
-		}
+		dst = &countingStore{inner: fs, counter: newByteCounter(0, o.onProgress), countPush: true}
 	}
 
-	if _, err := oras.Copy(ctx, target, tag, dst, tag, copyOpts); err != nil {
+	if _, err := oras.Copy(ctx, target, tag, dst, tag, oras.DefaultCopyOptions); err != nil {
 		return fmt.Errorf("copy from target: %w", err)
 	}
 
