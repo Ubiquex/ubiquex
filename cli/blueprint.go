@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -202,7 +203,7 @@ produced) -- package builds nothing itself.`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "packaged %q -> %s (%d file(s), content hash %s)\n", manifest.Name, out, len(manifest.Files), manifest.ContentHash)
+			writeBlueprintReceipt(cmd.OutOrStdout(), newStyler(cmd), "packaged", manifest.Name, out, manifest.ContentHash, len(manifest.Files), "")
 			return nil
 		},
 	}
@@ -240,11 +241,21 @@ unpackaged directory isn't supported; package it first.`,
 			if to == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint push: --to is required")}
 			}
-			manifest, err := blueprint.Push(cmd.Context(), args[0], to)
+			out := cmd.OutOrStdout()
+			st := newStyler(cmd)
+			// Push is always a transfer, so it always gets a bar.
+			// isTerminal, not colorEnabled: NO_COLOR means render without
+			// color, not render without progress. Conflating them would
+			// silently take the bar away from anyone who sets it.
+			bar := newTransferBar(out, st, isTerminal(out), terminalWidth(out),
+				"pushing "+filepath.Base(args[0]), time.Now())
+
+			manifest, err := blueprint.Push(cmd.Context(), args[0], to, blueprint.WithProgress(bar.Update))
 			if err != nil {
+				bar.Fail(time.Now())
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "pushed %q -> %s (%d file(s), content hash %s)\n", manifest.Name, to, len(manifest.Files), manifest.ContentHash)
+			writeBlueprintReceipt(out, st, "pushed", manifest.Name, to, manifest.ContentHash, len(manifest.Files), "", bar.Done(time.Now()))
 			return nil
 		},
 	}
@@ -284,11 +295,48 @@ dest must not already exist, or must be empty -- pull never overwrites existing 
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dest, err := blueprint.Pull(cmd.Context(), args[0], args[1], ref, path)
+			out := cmd.OutOrStdout()
+			st := newStyler(cmd)
+
+			// A bar only where bytes actually cross a network. An OCI
+			// pull does; a local directory copy and a bare tarball
+			// extraction do not, and a bar that fills instantly is noise
+			// pretending to be feedback. A git clone transfers too, but
+			// see pullProgressFor's own comment for why it gets none.
+			var opts []blueprint.TransferOption
+			bar := pullProgressFor(args[0], out, st, isTerminal(out), terminalWidth(out))
+			if bar != nil {
+				opts = append(opts, blueprint.WithProgress(bar.Update))
+			}
+
+			dest, err := blueprint.Pull(cmd.Context(), args[0], args[1], ref, path, opts...)
 			if err != nil {
+				if bar != nil {
+					bar.Fail(time.Now())
+				}
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "pulled %s -> %s\n", args[0], dest)
+			transferred := ""
+			if bar != nil {
+				transferred = bar.Done(time.Now())
+			}
+
+			// An OCI pull verified the content hash on arrival (Pull's
+			// own oci:// branch refuses a mismatch), so the receipt says
+			// so. Reading the manifest back is a read of a file already
+			// on disk, not a second verification.
+			var hash string
+			var files int
+			if isOCISource(args[0]) {
+				if m, mErr := blueprint.Verify(dest); mErr == nil {
+					hash, files = m.ContentHash, len(m.Files)
+				}
+			}
+			note := ""
+			if hash != "" {
+				note = "verified"
+			}
+			writeBlueprintReceipt(out, st, "pulled", args[0], dest, hash, files, note, transferred)
 			return nil
 		},
 	}
@@ -316,7 +364,7 @@ func newBlueprintVerifyCmd() *cobra.Command {
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "verified %q: content hash %s matches (%d file(s))\n", manifest.Name, manifest.ContentHash, len(manifest.Files))
+			writeBlueprintReceipt(cmd.OutOrStdout(), newStyler(cmd), "verified", manifest.Name, "", manifest.ContentHash, len(manifest.Files), "matches")
 			return nil
 		},
 	}
@@ -394,7 +442,7 @@ body, where reading it would mean running the code.`,
 				}
 				return nil
 			}
-			renderBlueprintDescription(out, desc)
+			renderBlueprintDescription(out, newStyler(cmd), desc)
 			return nil
 		},
 	}
@@ -423,74 +471,114 @@ func describeBlueprintDir(ctx context.Context, absDir string) (*blueprint.Descri
 	return blueprint.Describe(absDir)
 }
 
-// renderBlueprintDescription prints the human form. Params and outputs
-// keep their declaration order, which is the schema's own and the
-// source's own.
-func renderBlueprintDescription(out io.Writer, d *blueprint.Description) {
-	fmt.Fprintf(out, "%s (%s, described by %s)\n", d.Name, d.Lang, d.Source)
+// renderBlueprintDescription prints the human form, in the shape every
+// read command already uses (cli/readview.go): a "Title  subject ·
+// facts" header, then "▸ " sections. describe answers a question about
+// one thing, the same as `ubx why` does, and it used to answer it in a
+// format of its own.
+//
+// Params and outputs keep their declaration order, which is the
+// schema's own and the source's own.
+func renderBlueprintDescription(out io.Writer, st *styler, d *blueprint.Description) {
+	fmt.Fprintln(out, readHeader(st, "Blueprint", st.Blue(d.Name), d.Lang, "described by "+d.Source))
 
 	if e := d.Schema; e != nil {
-		fmt.Fprintf(out, "\nentrypoint\n")
+		fmt.Fprintf(out, "\n%s\n", readGroup(st, "entrypoint"))
 		switch e.Entrypoint.Language {
 		case "go":
-			fmt.Fprintf(out, "  import   %s\n", e.Entrypoint.GoModule)
-			fmt.Fprintf(out, "  package  %s\n", e.Entrypoint.GoPackage)
+			fmt.Fprintf(out, "    %s %s\n", st.Dim("import  "), e.Entrypoint.GoModule)
+			fmt.Fprintf(out, "    %s %s\n", st.Dim("package "), e.Entrypoint.GoPackage)
 		case "ts":
-			fmt.Fprintf(out, "  entry    %s\n", e.Entrypoint.TSEntry)
+			fmt.Fprintf(out, "    %s %s\n", st.Dim("entry   "), e.Entrypoint.TSEntry)
 		case "py":
-			fmt.Fprintf(out, "  module   %s\n", e.Entrypoint.PyModule)
+			fmt.Fprintf(out, "    %s %s\n", st.Dim("module  "), e.Entrypoint.PyModule)
 		}
-		fmt.Fprintf(out, "  function %s(%s)", e.Entrypoint.Function, e.Entrypoint.ConfigType)
+		sig := fmt.Sprintf("%s(%s)", e.Entrypoint.Function, st.Dim(e.Entrypoint.ConfigType))
 		if e.Entrypoint.OutputsType != "" {
-			fmt.Fprintf(out, " %s", e.Entrypoint.OutputsType)
+			sig += " " + st.Dim(e.Entrypoint.OutputsType)
 		}
-		fmt.Fprintln(out)
+		fmt.Fprintf(out, "    %s %s\n", st.Dim("function"), sig)
 	}
 
-	fmt.Fprintf(out, "\nparams\n")
+	fmt.Fprintf(out, "\n%s\n", readGroup(st, "params", countOf(len(d.Params))))
 	if len(d.Params) == 0 {
-		fmt.Fprintln(out, "  (none)")
+		fmt.Fprintf(out, "    %s\n", st.Dim("(none)"))
 	}
 	for _, p := range d.Params {
-		required := "optional"
-		if p.Required {
-			required = "required"
-		}
-		fmt.Fprintf(out, "  %-24s %-14s %s", p.Name, p.Type, required)
+		fmt.Fprintf(out, "    %s %s %s", padStyled(st.Yellow(p.Name), 24), st.Dim(padPlain(string(p.Type), 14)), requiredWord(st, p.Required))
 		switch {
 		case p.Required:
 		case d.DefaultsKnown:
-			fmt.Fprintf(out, ", default %v", p.Default)
+			fmt.Fprintf(out, "%s %s", st.Dim(", default"), st.Red(fmt.Sprintf("%v", p.Default)))
 		default:
-			fmt.Fprintf(out, ", default not derivable")
+			fmt.Fprint(out, st.Dim(", default not derivable"))
 		}
 		if sn := sourceNameOfParam(d, p.Name); sn != "" && sn != p.Name {
-			fmt.Fprintf(out, "  [%s]", sn)
+			fmt.Fprintf(out, "  %s", st.Dim("["+sn+"]"))
 		}
 		fmt.Fprintln(out)
 	}
 
-	fmt.Fprintf(out, "\noutputs\n")
+	fmt.Fprintf(out, "\n%s\n", readGroup(st, "outputs", countOf(len(d.Outputs))))
 	if len(d.Outputs) == 0 {
-		fmt.Fprintln(out, "  (none)")
+		fmt.Fprintf(out, "    %s\n", st.Dim("(none)"))
 	}
 	for _, o := range d.Outputs {
-		fmt.Fprintf(out, "  %-24s", o.Name)
+		fmt.Fprintf(out, "    %s", padStyled(st.Yellow(o.Name), 24))
 		if o.Target != "" {
-			fmt.Fprintf(out, " %s", o.Target)
+			fmt.Fprintf(out, " %s", st.Dim(o.Target))
 		}
 		if sn := sourceNameOfOutput(d, o.Name); sn != "" && sn != o.Name {
-			fmt.Fprintf(out, "  [%s]", sn)
+			fmt.Fprintf(out, "  %s", st.Dim("["+sn+"]"))
 		}
 		fmt.Fprintln(out)
 	}
 
 	if d.Schema != nil && len(d.Schema.Derivation.Assumptions) > 0 {
-		fmt.Fprintf(out, "\nassumptions\n")
+		fmt.Fprintf(out, "\n%s\n", readGroup(st, "assumptions", countOf(len(d.Schema.Derivation.Assumptions))))
 		for _, a := range d.Schema.Derivation.Assumptions {
-			fmt.Fprintf(out, "  %s\n", a)
+			fmt.Fprintf(out, "    %s\n", a)
 		}
 	}
+}
+
+// requiredWord renders a param's own requiredness. Green for required,
+// which is the palette's "this is what you must supply"; dim for
+// optional, which is structure rather than an instruction.
+func requiredWord(st *styler, required bool) string {
+	if required {
+		return st.Green("required")
+	}
+	return st.Dim("optional")
+}
+
+// countOf renders a section's own item count for the header's dim
+// trailer. Empty for zero: "params · 0" reads as a fact worth noting,
+// and the "(none)" line beneath already says it better.
+func countOf(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// padPlain and padStyled pad to a column width. padStyled exists
+// because %-24s counts ANSI escape bytes as characters, so a colored
+// name pads to the wrong visible width and every column after it walks
+// left as color is switched on.
+func padPlain(s string, width int) string {
+	if len(s) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(s))
+}
+
+func padStyled(s string, width int) string {
+	visible := len(stripANSI(s))
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
 }
 
 // sourceNameOfParam/sourceNameOfOutput surface the identifier as
@@ -518,4 +606,79 @@ func sourceNameOfOutput(d *blueprint.Description, name string) string {
 		}
 	}
 	return ""
+}
+
+// writeBlueprintReceipt is the one shape package, push, pull and verify
+// all report in: a single line naming what happened, with the detail
+// indented beneath it.
+//
+// The detail was inside parentheses on the same line before, which put
+// the two things a reader actually wants, the content hash and the file
+// count, at the far end of the longest line on screen, after a
+// destination path that can be an arbitrarily long registry reference.
+// Indenting it makes the hash start at a fixed column regardless.
+//
+// note, when set, is the word that qualifies the hash: "matches" for a
+// verify, "verified" for a pull that checked on arrival. Empty for a
+// receipt that is simply reporting the hash it produced.
+func writeBlueprintReceipt(out io.Writer, st *styler, verb, name, dest, contentHash string, files int, note string, details ...string) {
+	line := st.Green(verb)
+	if name != "" {
+		line += " " + st.Blue(name)
+	}
+	if dest != "" {
+		line += " " + st.Dim("->") + " " + dest
+	}
+	fmt.Fprintln(out, line)
+
+	// A transfer summary, when there was one, comes first: it describes
+	// what just happened, and the hash describes what arrived.
+	for _, d := range details {
+		if d != "" {
+			fmt.Fprintf(out, "    %s\n", d)
+		}
+	}
+
+	if contentHash == "" {
+		return
+	}
+	// Full, never displayHash's own 12-char truncation. Every other
+	// surface shortens a hash because it is an identifier being
+	// referred to, and a short prefix is enough to recognise or to pass
+	// back as an argument. This one is the value a consumer compares
+	// against, by eye or by script, and a truncated hash cannot be
+	// compared at all.
+	detail := st.Dim("content hash") + " " + st.Yellow(contentHash)
+	if note != "" {
+		detail += " " + st.Green(note)
+	}
+	if files > 0 {
+		detail += " " + st.Dim(fmt.Sprintf("· %d file(s)", files))
+	}
+	fmt.Fprintf(out, "    %s\n", detail)
+}
+
+// isOCISource reports whether a pull source is an OCI artifact
+// reference, which is the one source Pull verifies on arrival.
+func isOCISource(source string) bool { return strings.HasPrefix(source, "oci://") }
+
+// pullProgressFor builds a bar for a pull source that really transfers,
+// and returns nil for one that does not.
+//
+// OCI is the only source with a bar. A local directory or a bare
+// tarball never leaves the machine, so there is nothing to watch.
+//
+// A git clone genuinely transfers and still gets none, which is a
+// deliberate omission rather than an oversight. This pulls git by
+// running `git clone --quiet` as a subprocess, and git does not report
+// bytes: `--progress` emits object counts and compression phases on
+// stderr as free text, in stages whose relative durations are not
+// knowable ahead of time. Turning that into a byte bar would mean
+// parsing an unstable human-readable stream and inventing a
+// denominator, which is the kind of approximation worth refusing.
+func pullProgressFor(source string, out io.Writer, st *styler, tty bool, width int) *transferBar {
+	if !isOCISource(source) {
+		return nil
+	}
+	return newTransferBar(out, st, tty, width, "pulling "+source, time.Now())
 }
