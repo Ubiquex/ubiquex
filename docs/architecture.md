@@ -203,6 +203,50 @@ documented ~15-minute upper bound, but far from instant — which is why
 outcome (a narrow correlation window can't rule out "the event just
 hasn't propagated yet" the way a wide one that still finds nothing can).
 
+## Fixtures are generous, and each generosity is a blind spot (UBI-252)
+
+Four times, a hermetic fixture accepted something the real API rejects,
+and the resulting blind spot was shaped exactly like the fixture's
+generosity: an `ubx init --region` that no dynamic provider could
+accept, a lookup-key derivation that left 10% of AWS types with no key
+and 53% with an unusable one, an out-of-band deletion invisible on every
+AWS resource, and a spurious stale-observation on an ordinary modify.
+
+Each fake was written to make the code under test succeed, which is the
+natural thing to do for a happy path. The result is a fixture that
+accepts a **superset** of what the real API accepts, and every place the
+superset is strictly larger is invisible precisely because the tests
+pass.
+
+`fakeprovider`'s `strict-v6` mode models the narrowness instead: an
+empty provider block, no `id` on any resource, and one resource with no
+required attribute either. Measured against the real AWS snapshot ubx
+ships, **0 of 1687** dynamic-provider resource types declare an `id`,
+86% declare at least one required attribute, and 36% declare a `name`.
+The permissive `fake_widget` has an `id` and a required `name`, which
+puts it in the 0% bucket for the first.
+
+Reach for `strict-v6` in any test whose subject reads a schema. The
+permissive `ok-v6` stays the default for everything else, deliberately:
+converting its 204 call sites across 71 test files would cost far more
+than the discoveries are worth, and most of those tests are not about
+schema narrowness at all.
+
+**What this does not do.** It does not prevent the fifth instance.
+Knowing which dimension a fake is generous in comes only from contact
+with the real API, and nothing in a fixture will tell you that CCAPI
+signals not-found with a 400 until someone calls it and sees a 400. What
+`strict-v6` buys is that each such discovery, once made, becomes
+permanent and cheap to encode. Judge it by that rather than by whether a
+fifth instance appears.
+
+One trap for anyone extending this. `fakeprovider` speaks **tfplugin6**,
+the Terraform provider protocol, while the snapshot those percentages
+come from is the **ubx dynamic-provider** shape built from
+CloudFormation. The `id` question has a different answer in each world,
+so a figure measured against one artifact will disagree with the other
+and neither is wrong.
+
 ## Why the evaluators embed a vendored copy (UBI-254)
 
 `tseval` and `pyeval` embed their runtime assets from
