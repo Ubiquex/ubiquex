@@ -190,6 +190,14 @@ var (
 	// resolver bug or a tampered proposal), not something to guess past.
 	ErrDependencyNotApplied = errors.New("ship: a $computed marker's dependency has not applied")
 
+	// ErrDanglingDependency means a delta entry's own depends_on names an
+	// address this proposal carries no entry for. Reached as a nil map
+	// lookup dereferenced inside a topological sort before this existed,
+	// which is the wrong failure for it whatever the cause: a panic names
+	// a line in the sort and tells a reader nothing about which resource
+	// or which dependency.
+	ErrDanglingDependency = errors.New("ship: a dependency names an address this proposal does not carry")
+
 	// ErrMalformedComputedMarker means a $computed marker's "from" pointer
 	// isn't a well-formed "<stack>.<type>.<name>.<path>" address.
 	ErrMalformedComputedMarker = errors.New("ship: malformed $computed marker")
@@ -1024,6 +1032,21 @@ func changeNodesOf(p *core.Proposal) ([]*changeNode, error) {
 	}
 
 	sort.Strings(keys)
+
+	// Every edge has to name a node this proposal actually carries,
+	// which is topoSortAddresses' own documented contract. Checked here
+	// rather than trusted, because the cost of being wrong was a nil map
+	// lookup dereferenced inside the closure below: byAddr[key] returns
+	// a nil *changeNode for an absent key and .dependsOn panics on it.
+	//
+	// A panic is the wrong failure for this whatever the cause. It names
+	// a line in a topological sort, tells a reader nothing about which
+	// resource or which dependency, and is indistinguishable from a real
+	// bug in the sort itself.
+	if err := validateChangeEdges(byAddr); err != nil {
+		return nil, err
+	}
+
 	topoOrder, err := topoSortAddresses(keys, func(key string) []string { return byAddr[key].dependsOn })
 	if err != nil {
 		return nil, err
@@ -2597,3 +2620,46 @@ func recordError(ctx context.Context, ra *core.ResourceApply, message string, cl
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// validateChangeEdges refuses a proposal whose dependency edges name an
+// address the proposal does not carry.
+//
+// One real way to reach this: an unchanged dependency that produces no
+// delta entry, while a dependent still carries the edge and the
+// $computed marker pointing at it (UBI-267). There may be others, and
+// the point of this check is that any of them gets a sentence naming
+// the resource and the dependency instead of a stack trace.
+func validateChangeEdges(byAddr map[string]*changeNode) error {
+	keys := make([]string, 0, len(byAddr))
+	for k := range byAddr {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		for _, dep := range byAddr[k].dependsOn {
+			if _, ok := byAddr[dep]; !ok {
+				return fmt.Errorf("%w: %s depends on %s, which this proposal does not create, change or terminate",
+					ErrDanglingDependency, k, dep)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateChangeGraph reports whether p's own delta forms a shippable
+// dependency graph, without launching anything or touching a ledger.
+//
+// Exported for one caller: `ubx ship`'s own preflight, which runs it
+// BEFORE the signing moment. A graph this cannot build is a proposal
+// that cannot ship, and discovering that after acceptance leaves an
+// accepted-but-unshippable record in an append-only ledger that nothing
+// can retract. That is the same ordering already fixed once for the
+// provider route (cli/ship.go's own preflightProviderRoute), applied to
+// the other thing ship needs before it can do anything.
+func ValidateChangeGraph(p *core.Proposal) error {
+	if p == nil || p.Kind != core.KindChange {
+		return nil
+	}
+	_, err := changeNodesOf(p)
+	return err
+}
