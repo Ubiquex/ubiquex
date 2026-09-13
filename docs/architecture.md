@@ -234,10 +234,35 @@ Three things changed:
   the pin misses the cache automatically and no key has to be
   remembered.
 
+**The archive's SHA256 is pinned and verified**, hashed while streaming
+so the bytes checked are the bytes written. Before that, acquisition
+verified shape and not content: `verifyPythonWasiDir` checked that
+`python.wasm` and `lib/` exist, so a truncated, corrupted or
+substituted archive containing those two entries passed. This was the
+one ubx-side acquisition path with no content check at all, while the
+three ubx-published paths already verify a real SHA256.
+
+A cache hit is verified too, not only a download. The extracted tree
+records which archive produced it, and a tree with no marker, or one
+from a different pin, is re-acquired rather than trusted. That matters
+because the CI cache above would otherwise reuse an unverified extract
+on every run under a key that keeps matching. It does not detect a tree
+corrupted AFTER extraction, since the marker records the archive's
+digest rather than the tree's, and hashing 42MB of stdlib per
+evaluation is not worth its cost for a case that is local tampering
+with a cache directory.
+
+What the pin establishes is integrity, not publisher authenticity. It
+catches corruption, truncation and substitution; it does not prove who
+published the release, since anyone with push access to the upstream
+repository can publish a matching pair. That is the same bounded
+position `provider/acquireschema.go` already states for ubx's own
+artifacts.
+
 **This does not make `go test ./...` hermetic, and the ticket's title
 asks for that.** A cold cache still reaches the network. What is fixed
-is the flakiness and, more importantly, the failure mode: an outage now
-fails at the step that caused it, with a message that says so.
+is the flakiness, the failure mode, and now the integrity of what
+arrives.
 
 Closing it properly means either mirroring the asset somewhere this
 project controls, which costs a real artifact to host and rotate, or
