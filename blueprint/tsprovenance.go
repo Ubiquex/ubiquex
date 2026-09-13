@@ -39,7 +39,7 @@ func StampDirectCallProvenanceTS(ctx context.Context, entryFile string, intent *
 		return fmt.Errorf("blueprint: resolve direct-call provenance: %w", err)
 	}
 
-	hint := fmt.Sprintf("no import in %s's own module graph (deno info) sits inside a blueprint this can hash. A blueprint is found by walking that graph and checking whether each local file's own ts/ directory has a blueprint root above it, so a blueprint reached only through a remote or bare specifier (jsr:, npm:, an import-map entry with no local file behind it) has nothing on disk to hash", entryFile)
+	hint := fmt.Sprintf("no import in %s's own module graph (deno info) sits inside a blueprint this can hash. A blueprint is found by walking that graph and checking whether each local file's own directory, or its parent, is a blueprint root, so a blueprint reached only through a remote or bare specifier (jsr:, npm:, an import-map entry with no local file behind it) has nothing on disk to hash", entryFile)
 	return applyBlueprintRefs(intent, found, hint)
 }
 
@@ -107,13 +107,16 @@ func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[st
 		if m.Local == "" {
 			continue // an unresolved or remote (non-local) dependency -- never a blueprint we can hash
 		}
-		fileDir := filepath.Dir(m.Local)
-		if filepath.Base(fileDir) != "ts" {
-			continue // not inside a blueprint's own generated ts/ directory at all
-		}
-		root := filepath.Dir(fileDir)
-		if !IsBlueprintDir(root) {
-			continue // a ts/ directory that isn't actually a blueprint's own root -- an ordinary local import, not a blueprint
+		// Was: require the file's directory to be named exactly "ts",
+		// then look at its parent. That is the BUILT model's own shape
+		// and only that one, so a blueprint written as code, whose entry
+		// sits at the blueprint root itself, was never discovered.
+		// blueprintRootContaining (sdkprovenance.go) covers both, and the
+		// marker test it ends in is what rules out an ordinary local
+		// import either way.
+		root, ok := blueprintRootContaining(filepath.Dir(m.Local))
+		if !ok {
+			continue // an ordinary local import, not a blueprint
 		}
 		name := blueprintNameAt(root)
 		if _, already := found[name]; already {
