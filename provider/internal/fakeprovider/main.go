@@ -10,6 +10,17 @@
 // provider.WithEnv):
 //
 //	ok-v6               valid v6 handshake, serves a real schema + ReadResource over gRPC
+//	strict-v6           ok-v6's wire behaviour, with a schema modelling what a REAL
+//	                    provider narrowly declares rather than what is convenient to
+//	                    test against: an empty provider block, no "id" on any resource,
+//	                    and one resource with no required attribute either. Reach for
+//	                    this in any test whose subject READS a schema (codegen, lookup
+//	                    derivation, provider config), where the permissive fixture's
+//	                    generosity is a blind spot exactly its own shape (UBI-252).
+//	                    Its apply path is deliberately not wired up: the fixture's
+//	                    encode/decode is bound to one cty type across 204 call sites,
+//	                    and refactoring that to test the fixture's own echo behaviour
+//	                    would be a large change for something that is not ubx's code.
 //	ok-v5               valid v5 handshake, serves a real schema + ReadResource over gRPC
 //	conformance-v6      valid v6 handshake, serves a schema/ReadResource shaped by the
 //	                    FAKEPROVIDER_RESOURCE_TYPE/FAKEPROVIDER_ATTRS env vars below —
@@ -187,6 +198,13 @@ func main() {
 	switch mode {
 	case "ok-v6":
 		serveV6()
+	case "strict-v6":
+		// UBI-252. Everything else about the v6 server is shared: the
+		// ONLY difference is the schema it serves, so a path that works
+		// here and not there is a real narrowness problem rather than a
+		// second fixture behaving differently for unrelated reasons.
+		strictSchema = true
+		serveV6()
 	case "ok-v5":
 		serveV5()
 	case "conformance-v6":
@@ -292,7 +310,85 @@ type fakeProviderServerV6 struct {
 	tfplugin6.UnimplementedProviderServer
 }
 
+// strictSchema selects the strict-v6 schema (UBI-252). Set once in
+// main before any request is served, never mutated afterwards.
+var strictSchema bool
+
+// strictProviderSchema is what a REAL provider looks like where the
+// permissive fixture is generous, and it exists because four separate
+// bugs reached a real cloud account through exactly those gaps
+// (UBI-252).
+//
+// The permissive fixture was written to make the code under test
+// succeed, which is the natural thing to do for a happy path, and the
+// result is a fixture that accepts a superset of what a real API
+// accepts. Every place the superset is strictly larger is a blind spot,
+// and it is invisible precisely because the tests pass.
+//
+// Three narrownesses are modelled here, each one an instance that
+// already cost a real bug:
+//
+//   - An EMPTY provider block. ubx-provider-dynamic declares one and its
+//     ConfigureProvider is a no-op. The permissive fixture declares an
+//     optional "region", which let `ubx init --region` write a
+//     provider_configs entry no dynamic provider can accept: it planned
+//     clean and failed at ship.
+//
+//   - No "id" attribute. Measured against the real AWS snapshot ubx
+//     ships, 0 of 1687 dynamic-provider resource types declare one, and
+//     the permissive fixture's fake_widget does. That hid the
+//     lookup-key derivation: 10% of AWS types recorded no lookup key at
+//     all and 53% recorded one that could not re-find the resource,
+//     leaving them undeletable and outside drift detection.
+//
+//   - strict_opaque has no required attribute either. 14% of real types
+//     have none, and that is the case where DeriveLookupFromResult has
+//     nothing at all to work with. A fixture where every resource has
+//     both an id and a required name can never reach it.
+//
+// This is deliberately NOT a general guarantee that fixtures match
+// reality. Knowing which dimension a fake is generous in comes only
+// from contact with the real API. What this buys is that each such
+// discovery becomes permanent and cheap to encode, rather than a
+// one-off fix that the next fixture repeats.
+var strictProviderSchema = &tfplugin6.GetProviderSchema_Response{
+	// Empty, not absent: a real dynamic provider serves a provider block
+	// with no attributes in it, which is a different thing from serving
+	// no block at all.
+	Provider: &tfplugin6.Schema{
+		Block: &tfplugin6.Schema_Block{},
+	},
+	ResourceSchemas: map[string]*tfplugin6.Schema{
+		// A resource with no "id", whose own identifier lives under a
+		// provider-specific name, which is the ordinary real shape.
+		"strict_widget": {
+			Version: 1,
+			Block: &tfplugin6.Schema_Block{
+				Attributes: []*tfplugin6.Schema_Attribute{
+					{Name: "arn", Type: []byte(`"string"`), Computed: true},
+					{Name: "name", Type: []byte(`"string"`), Required: true},
+				},
+			},
+		},
+		// No "id" AND no required attribute: the case with nothing to
+		// derive a lookup key from at all.
+		"strict_opaque": {
+			Version: 1,
+			Block: &tfplugin6.Schema_Block{
+				Attributes: []*tfplugin6.Schema_Attribute{
+					{Name: "arn", Type: []byte(`"string"`), Computed: true},
+					{Name: "note", Type: []byte(`"string"`), Optional: true},
+				},
+			},
+		},
+	},
+	DataSourceSchemas: map[string]*tfplugin6.Schema{},
+}
+
 func (s *fakeProviderServerV6) GetProviderSchema(context.Context, *tfplugin6.GetProviderSchema_Request) (*tfplugin6.GetProviderSchema_Response, error) {
+	if strictSchema {
+		return strictProviderSchema, nil
+	}
 	return &tfplugin6.GetProviderSchema_Response{
 		Provider: &tfplugin6.Schema{
 			Block: &tfplugin6.Schema_Block{
