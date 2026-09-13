@@ -512,6 +512,15 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 			}, nil
 		}
 	}
+	if detail := malformedPriorStateDetail(req.PriorState.GetMsgpack(), fakeWidgetType, "id"); detail != "" {
+		return &tfplugin6.ApplyResourceChange_Response{
+			Diagnostics: []*tfplugin6.Diagnostic{{
+				Severity: tfplugin6.Diagnostic_ERROR,
+				Summary:  "malformed PriorState",
+				Detail:   detail,
+			}},
+		}, nil
+	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// A destroy (UBI-30, docs/executor.md's own amendment): PlannedState
 		// is the literal null ubx's own executor sends for "destroy this."
@@ -678,6 +687,15 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 				}},
 			}, nil
 		}
+	}
+	if detail := malformedPriorStateDetail(req.PriorState.GetMsgpack(), fakeWidgetType, "id"); detail != "" {
+		return &tfplugin5.ApplyResourceChange_Response{
+			Diagnostics: []*tfplugin5.Diagnostic{{
+				Severity: tfplugin5.Diagnostic_ERROR,
+				Summary:  "malformed PriorState",
+				Detail:   detail,
+			}},
+		}, nil
 	}
 	if id, ok, isDestroy := destroyRequestID(req.PriorState.GetMsgpack(), req.PlannedState.GetMsgpack()); isDestroy {
 		// See fakeProviderServerV6.ApplyResourceChange's matching comment
@@ -1286,6 +1304,15 @@ func (s *fakeConformanceServerV6) ReadResource(_ context.Context, req *tfplugin6
 // drift detection (adopt/mutate/scan-diff), a create-path fixture is this
 // addition's only new use.
 func (s *fakeConformanceServerV6) ApplyResourceChange(_ context.Context, req *tfplugin6.ApplyResourceChange_Request) (*tfplugin6.ApplyResourceChange_Response, error) {
+	if detail := malformedPriorStateDetail(req.PriorState.GetMsgpack(), conformanceCtyType(), "id"); detail != "" {
+		return &tfplugin6.ApplyResourceChange_Response{
+			Diagnostics: []*tfplugin6.Diagnostic{{
+				Severity: tfplugin6.Diagnostic_ERROR,
+				Summary:  "malformed PriorState",
+				Detail:   detail,
+			}},
+		}, nil
+	}
 	out, err := echoConformanceState(req.PlannedState.GetMsgpack())
 	if err != nil {
 		return nil, err
@@ -1365,4 +1392,46 @@ func serveConformanceV5() {
 		fmt.Fprintf(os.Stderr, "fakeprovider: serve: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// malformedPriorStateDetail reports why a PriorState cannot belong to
+// the apply it arrived with, or "" when it is fine.
+//
+// UBI-267, and the reason this exists at all: ubx sends the literal JSON
+// null as a create's PriorState to mean "this does not exist yet". An
+// encoder bug turned that into an object whose attributes were all null,
+// which is a different claim: a resource that exists and is empty. This
+// fixture accepted it happily across an entire session of green
+// conformance runs while the real CCAPI provider took its update branch
+// and failed with "primary identifier attribute is not set".
+//
+// A fixture that accepts what the real provider refuses is worth less
+// than no fixture, because it turns a broken build into a passing one.
+// That is UBI-252's lesson (a documented flow that could not actually
+// run) in a new place, with a cost now paid: five failed ships before
+// the encoding was suspected at all.
+//
+// The rule mirrors what CCAPI actually does rather than inventing one. A
+// non-null prior state means update, and an update needs an identifier.
+// A prior state carrying none is not an update, so it is a create whose
+// null was mangled on the way here.
+func malformedPriorStateDetail(priorMsgpackBytes []byte, ty cty.Type, idAttr string) string {
+	if len(priorMsgpackBytes) == 0 {
+		return ""
+	}
+	prior, err := ctymsgpack.Unmarshal(priorMsgpackBytes, ty)
+	if err != nil || prior.IsNull() || !prior.Type().IsObjectType() {
+		return ""
+	}
+	if !prior.Type().HasAttribute(idAttr) {
+		return ""
+	}
+	id := prior.GetAttr(idAttr)
+	if id.IsKnown() && !id.IsNull() {
+		return "" // a real update, carrying a real identifier
+	}
+	return fmt.Sprintf(
+		"fakeprovider: PriorState is a non-null object whose %q is not set, so this is neither a create nor an update. "+
+			"A create must send a top-level null PriorState; an object of nulls claims the resource exists and is empty, "+
+			"which a real provider takes as an update and rejects for want of an identifier (UBI-267)", idAttr)
 }

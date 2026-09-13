@@ -82,36 +82,56 @@ func blockObjectType(b Block) (cty.Type, error) {
 // the schema's optional/computed semantics — into the cty-msgpack bytes a
 // real provider binary expects for a DynamicValue payload.
 func encodeDynamicValue(block Block, in json.RawMessage) ([]byte, error) {
+	return encodeValueForWire(block, in, true)
+}
+
+// encodeValueForWire is the one implementation both of those names call.
+//
+// They were two implementations until UBI-267, and the cost of that
+// arrived exactly where you would expect: a top-level JSON null has to
+// reach the wire as a genuine cty.NullVal(ty) rather than an object
+// whose attributes all happen to be null, one of them had the guard for
+// that, and the other did not. A create passes the literal "null" as its
+// PriorState to mean "this does not exist yet"; encoded as an object of
+// nulls, a real provider reads it as a resource that exists, takes its
+// update branch, and fails for want of an identifier the object does not
+// carry.
+//
+// The original reason for two functions is gone rather than ignored.
+// They split (UBI-27) because planned state and config need a
+// schema-Computed attribute the config never set to reach the wire as
+// Unknown, while a prior state needs it Null, and that distinction now
+// lives in encodeBlockValue's own priorState parameter. What was left
+// were two shells differing in one boolean and one guard, which is the
+// shape that lets a subtle property hold in one place and not the other.
+//
+// priorState selects between the two documents, and encodeBlockValue's
+// own doc comment has the account of why they are not the same thing.
+func encodeValueForWire(block Block, in json.RawMessage, priorState bool) ([]byte, error) {
 	ty, err := blockObjectType(block)
 	if err != nil {
 		return nil, err
 	}
-	if len(in) == 0 {
-		in = json.RawMessage("{}")
+
+	// A literal top-level JSON null, whichever direction it came from.
+	// For a planned state it is core/executor's own destroy signal; for
+	// a prior state it is a create saying the resource does not exist
+	// yet. Both need a real cty.NullVal(ty), and the per-attribute path
+	// below cannot produce one: it always builds an object, even from a
+	// nil generic.
+	if bytes.Equal(bytes.TrimSpace(in), []byte("null")) {
+		return ctymsgpack.Marshal(cty.NullVal(ty), ty)
 	}
-	// Through the same generic encoder the planned-state path uses,
-	// rather than ctyjson.Unmarshal, because ctyjson refuses a plain
-	// JSON value under a dynamic-typed attribute: it expects go-cty's
-	// own {"value":..,"type":..} wrapper and reports the first real key
-	// it finds as "invalid key ... in dynamically-typed value".
-	//
-	// This is the PRIOR state, so it is the path an update and a destroy
-	// take, where the planned-state path is the one a create takes. Both
-	// had to be fixed or a dynamic attribute would have gone from
-	// uncreatable to uncreatable-and-undeletable.
-	//
-	// It is NOT a drop-in for ctyjson here, which is worth stating
-	// because assuming it was is what broke first: the generic encoder
-	// also carries the config-authoring checks, and applying those to a
-	// recording of what already exists rejected states that were always
-	// legitimate. See encodeBlockValue's own priorState parameter.
+
 	var generic interface{}
-	dec := json.NewDecoder(bytes.NewReader(in))
-	dec.UseNumber()
-	if err := dec.Decode(&generic); err != nil {
-		return nil, fmt.Errorf("encode value: decode json: %w", err)
+	if len(in) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(in))
+		dec.UseNumber()
+		if err := dec.Decode(&generic); err != nil {
+			return nil, fmt.Errorf("encode value: decode json: %w", err)
+		}
 	}
-	val, err := encodeBlockValue(block, generic, true)
+	val, err := encodeBlockValue(block, generic, priorState)
 	if err != nil {
 		return nil, fmt.Errorf("encode value: %w", err)
 	}
@@ -171,41 +191,7 @@ func isComputedMarker(v interface{}) bool {
 // non-marker value decodes exactly like ctyjson.Unmarshal would; a present
 // null stays null; only an ABSENT-and-Computed attribute differs).
 func encodeUnknownAwareDynamicValue(block Block, in json.RawMessage) ([]byte, error) {
-	ty, err := blockObjectType(block)
-	if err != nil {
-		return nil, err
-	}
-	// A literal top-level JSON null -- core/executor's own destroy signal
-	// (docs/executor.md's UBI-30 amendment: PlannedState/Config "null"
-	// means destroy this) -- must reach the wire as a genuine
-	// cty.NullVal(ty), not as an object whose individual attributes happen
-	// to be null/unknown. Found empirically (UBI-30's own live AWS
-	// finale): the per-attribute path below has no way to produce a real
-	// top-level null (it always builds an ObjectVal, even from a nil
-	// generic), which both breaks a genuine Plan/Apply round trip for a
-	// destroy (decodeDynamicValue's ctyjson.Marshal rejects an object
-	// carrying Unknown attributes) and sends a real provider something
-	// other than the actual destroy signal it expects.
-	if bytes.Equal(bytes.TrimSpace(in), []byte("null")) {
-		return ctymsgpack.Marshal(cty.NullVal(ty), ty)
-	}
-	var generic interface{}
-	if len(in) > 0 {
-		dec := json.NewDecoder(bytes.NewReader(in))
-		dec.UseNumber()
-		if err := dec.Decode(&generic); err != nil {
-			return nil, fmt.Errorf("encode value: decode json: %w", err)
-		}
-	}
-	val, err := encodeBlockValue(block, generic, false)
-	if err != nil {
-		return nil, fmt.Errorf("encode value: %w", err)
-	}
-	out, err := ctymsgpack.Marshal(val, ty)
-	if err != nil {
-		return nil, fmt.Errorf("encode value: msgpack: %w", err)
-	}
-	return out, nil
+	return encodeValueForWire(block, in, false)
 }
 
 // encodeBlockValue builds one object-typed cty.Value for block, driven by
