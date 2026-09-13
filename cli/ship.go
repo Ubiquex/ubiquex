@@ -189,6 +189,20 @@ consistency shows its own work instead of sitting silent.`,
 						return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", perr)}
 					}
 				}
+				// The same window, for the same reason. A proposal whose
+				// delta cannot form a dependency graph cannot ship, and
+				// executor.Ship discovers that only after the signing
+				// moment below has already appended it to an append-only
+				// ledger. Found when a dangling dependency panicked
+				// there, leaving an accepted proposal that could never be
+				// shipped and could never be retracted (UBI-267).
+				//
+				// Pure: it decodes the delta and orders it, launching
+				// nothing and touching no ledger, so running it twice
+				// costs nothing and refusing here changes no state.
+				if gerr := executor.ValidateChangeGraph(draft); gerr != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", gerr)}
+				}
 				accepted, cerr := confirmAndAccept(cmd, ledger, st, draft, yes)
 				if errors.Is(cerr, errShipDeclined) {
 					return nil
