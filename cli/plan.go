@@ -327,7 +327,8 @@ propose-time PR trailer hash, etc.).`,
 			}
 
 			st := newStylerFull(cmd, fullHashes)
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults)
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults,
+				omittedAttributesNote(generated, len(p.Delta.Modifies)))
 			// UBI-49 polish: the hash IS the reference (docs/cli-output-
 			// spec.md principle 3) -- the plan file's own path on disk is
 			// an implementation detail nothing downstream ever needs (not
@@ -453,7 +454,10 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 // neither ever populates Intent.Assumptions/Defaults with real AI content
 // (no LLM in either path) -- there's nothing for false to ever collapse
 // there, so neither needs its own --show-defaults/--hide-defaults flags.
-func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool) {
+// notes are extra lines rendered under the delta block, for something
+// true about the whole plan rather than about one resource. Variadic so
+// the three other callers stay untouched.
+func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool, notes ...string) {
 	// UBI-251: the summary sentence is back, under the header, but only
 	// where it carries authored or AI-derived content. v2 removed it as
 	// noise against a case where it paraphrased the resource list;
@@ -472,6 +476,12 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	renderDestroys(out, st, p.Delta.Destroys, "  ", true)
 	if len(p.Delta.Creates) > 0 || len(p.Delta.Modifies) > 0 || len(p.Delta.Destroys) > 0 {
 		fmt.Fprintln(out)
+	}
+	for _, n := range notes {
+		if n != "" {
+			fmt.Fprintln(out, st.Dim("  "+n))
+			fmt.Fprintln(out)
+		}
 	}
 
 	// docs/cli-output-spec.md §v2: every summary line bold, with one
@@ -877,4 +887,21 @@ func sdkEntryFile(path string, allowHCL bool) bool {
 		return true
 	}
 	return false
+}
+
+// omittedAttributesNote says what a change line does NOT mean, for a
+// plan built from a program rather than an authored document.
+//
+// A program states what it sets and nothing about the rest, so an
+// attribute it never mentions is left as recorded rather than removed
+// (UBI-267, core/resolver's own backfill). That is the safe reading and
+// not the obvious one: every other modify in this tool comes from a
+// document whose author supplied a full desired end-state, where an
+// omission really does mean remove. Without the line, a reader has to
+// infer the difference from an absence.
+func omittedAttributesNote(generated bool, modifies int) string {
+	if !generated || modifies == 0 {
+		return ""
+	}
+	return "attributes this program does not set are preserved, not removed: a change line shows only what it names"
 }

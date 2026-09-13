@@ -184,3 +184,86 @@ func TestPlan_HandWrittenIntent_KeepsTheExplicitOpCheck(t *testing.T) {
 		t.Fatalf("refused for the wrong reason: %v\n%s", err, out)
 	}
 }
+
+// A plan built from a program says what a change line does NOT mean.
+// Every other modify in this tool comes from a document whose author
+// supplied a full desired end-state, where an omission means remove, so
+// without the line a reader has to infer the difference from an absence
+// (UBI-267).
+func TestPlan_SDKProgram_ReceiptSaysOmittedAttributesArePreserved(t *testing.T) {
+	requireHermeticSandbox(t)
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	entry := writeReshipStack(t, dir, "queue")
+
+	planOut, err := runUbx(t, env, "plan", "--from-code", entry,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
+	}
+	// Nothing exists yet, so this plan is all creates and the note would
+	// be answering a question nobody asked.
+	if strings.Contains(planOut, "preserved, not removed") {
+		t.Errorf("a create-only plan carries the modify note:\n%s", planOut)
+	}
+
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
+	if shipOut, err := runUbx(t, env, "ship", hash,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes"); err != nil {
+		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
+	}
+
+	replanOut, err := runUbx(t, env, "plan", "--from-code", entry,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx plan (re-plan): %v\noutput: %s", err, replanOut)
+	}
+	if !strings.Contains(replanOut, "preserved, not removed") {
+		t.Errorf("a plan containing an inferred modify does not say omitted attributes are preserved:\n%s", replanOut)
+	}
+}
+
+// A hand-written intent file gets no such note, because there an
+// omission really does mean remove.
+func TestPlan_HandWrittenIntent_HasNoPreservedNote(t *testing.T) {
+	requireHermeticSandbox(t)
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	entry := writeReshipStack(t, dir, "queue")
+
+	planOut, err := runUbx(t, env, "plan", "--from-code", entry,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx plan: %v\noutput: %s", err, planOut)
+	}
+	hash := mustExtractPlanHash(t, ledgerDir, planOut)
+	if shipOut, err := runUbx(t, env, "ship", hash,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--yes"); err != nil {
+		t.Fatalf("ubx ship: %v\noutput: %s", err, shipOut)
+	}
+
+	intentPath := filepath.Join(dir, "modify.json")
+	writeIntentFile(t, intentPath, map[string]interface{}{
+		"schema_version": 1,
+		"kind":           "ubx:intent/v1",
+		"stack":          "payments",
+		"intent":         map[string]interface{}{"summary": "hand-written modify"},
+		"resources": []map[string]interface{}{
+			{"type": "fake_widget", "name": "queue", "op": "modify",
+				"config": map[string]interface{}{"name": "queue-changed"}},
+		},
+	})
+
+	out, err := runUbx(t, env, "plan", intentPath,
+		"--provider", fakeProviderBinary, "--ledger-dir", ledgerDir)
+	if err != nil {
+		t.Fatalf("ubx plan (hand-written modify): %v\noutput: %s", err, out)
+	}
+	if strings.Contains(out, "preserved, not removed") {
+		t.Errorf("a hand-written modify carries the generated-document note:\n%s", out)
+	}
+}

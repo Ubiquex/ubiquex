@@ -472,7 +472,29 @@ there a human really did state an op and really can be wrong about it.
 Inference runs in both directions, so "inferred" means the op is a
 function of ledger presence rather than a rule pointed one way.
 
-Two consequences worth knowing. `ErrCreateTargetExists` was incidentally
+An inferred modify also PRESERVES every attribute the generated document
+does not mention, where a hand-written modify treats an omission as a
+removal. That follows from the same distinction: a describe-only program
+states what it sets and says nothing about the rest, so its silence is
+not a claim that anything should go. Without it, a create's own
+provider-filled defaults became Before-only paths, which this codebase
+models as deletions, and an inferred modify planned to strip settings
+the author never touched.
+
+Adoption is what settled it rather than defaults. `ubx scan` folds live
+state into the ledger, so an attribute changed in a console would
+otherwise be reverted by the next inferred modify, which is the opposite
+of what a tool that records reality is for.
+
+The cost is chosen rather than missed: deleting a line from a program no
+longer removes that attribute, because an absence cannot mean both "I
+never set this" and "unset this" from a source that can only express
+one. Distinguishing them needs the authored config folded across the
+proposal chain, recorded on UBI-267 as the deferred refinement. A plan
+built from a program says so on its own receipt rather than leaving a
+reader to infer it.
+
+Two further consequences worth knowing. `ErrCreateTargetExists` was incidentally
 the only thing that surfaced "this address is already owned by something
 else" for a generated document, and that is now a visible modify with
 its attribute diff on the plan receipt rather than a refusal. And a

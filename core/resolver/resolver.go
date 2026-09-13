@@ -1461,17 +1461,47 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 			// which stays exactly as drafted (an intentional decision, or
 			// the model's own responsibility per its own instructions --
 			// not this resolver's to silently second-guess).
-			if len(current) > 0 {
-				var currentMap map[string]interface{}
-				if err := json.Unmarshal(current, &currentMap); err == nil {
-					for k, v := range currentMap {
-						if _, present := e.resolvedConfig[k]; present {
-							continue
-						}
-						if e.provider.Schema.IsComputed(e.ri.Type, k) {
-							e.resolvedConfig[k] = v
-						}
-					}
+			//
+			// UBI-267 widens this from Computed-only to EVERY omitted
+			// attribute, for a generated document only.
+			//
+			// The Computed-only rule is right for a hand-written modify,
+			// where the author supplies a full desired end-state (this
+			// section's own contract, docs/resolver.md) and an omission
+			// really does mean remove. A describe-only program supplies
+			// no such thing: it emits what it sets and says nothing
+			// about the rest, so every attribute it does not mention
+			// became a Before-only path, which this codebase models as a
+			// deletion.
+			//
+			// Live, that read a create's own provider-filled defaults as
+			// removals. aws_sqs_queue's visibility_timeout,
+			// maximum_message_size and sqs_managed_sse_enabled are all
+			// Optional and NOT Computed in the CloudFormation-derived
+			// schema, so the narrow backfill correctly did not cover
+			// them, and an inferred modify from a blueprint that never
+			// mentioned them planned to strip all three.
+			//
+			// The sharper case is adoption, and it is what settled this.
+			// `ubx scan` folds live state into the ledger, so anything
+			// configured outside the program, by console or another
+			// tool, would become a Before-only path on the next inferred
+			// modify. An infrastructure tool silently reverting console
+			// changes is the opposite of what this one is for.
+			//
+			// The cost, chosen rather than missed: deleting a line from
+			// a program no longer removes that attribute, because an
+			// absence cannot mean both "I never set this" and "unset
+			// this" from a source that can only express one of them.
+			// Distinguishing the two needs the authored config folded
+			// across the proposal chain, recorded on UBI-267 as the
+			// refinement this defers.
+			for k, v := range currentAttrs(current) {
+				if _, present := e.resolvedConfig[k]; present {
+					continue
+				}
+				if opts.inferOp || e.provider.Schema.IsComputed(e.ri.Type, k) {
+					e.resolvedConfig[k] = v
 				}
 			}
 			resolvedBytes, err := json.Marshal(e.resolvedConfig)
@@ -1554,4 +1584,20 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		},
 		Status: core.StatusDraft,
 	}, nil
+}
+
+// currentAttrs decodes a ledger-recorded state into its attribute map,
+// or nothing at all if it is empty or unreadable. Unreadable is not an
+// error here on purpose: this feeds a backfill whose whole job is to
+// avoid inventing a removal, and failing to read the current state is
+// not evidence that anything should be removed.
+func currentAttrs(current json.RawMessage) map[string]interface{} {
+	if len(current) == 0 {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(current, &m); err != nil {
+		return nil
+	}
+	return m
 }
