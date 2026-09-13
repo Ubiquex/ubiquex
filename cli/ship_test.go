@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -115,5 +116,122 @@ func TestConfirmAndAccept_StalePlanRefusedBeforeAnythingRenders(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("nothing should render for a plan that cannot ship, got:\n%s", out.String())
+	}
+}
+
+// TestPruneUnshippablePlans covers UBI-263: a plan the ledger has moved
+// past can never ship, and nothing removed it.
+//
+// It sat in .ubx/plans/ and was re-selected as "the latest" by every
+// subsequent bare `ubx ship`, each of which refused it again. That is
+// what made a session believe every plan was stale by construction,
+// which they are not.
+func TestPruneUnshippablePlans(t *testing.T) {
+	dir := t.TempDir()
+	ledger := core.Open(dir)
+
+	// Move the ledger, so anything resolved against the empty ledger is
+	// now unshippable.
+	seed := &core.Proposal{
+		SchemaVersion: core.SchemaVersion,
+		Stack:         "payments",
+		Kind:          core.KindChange,
+		Intent:        core.Intent{Summary: "the ledger moved"},
+		BlastRadius:   core.BlastRadius{Creates: 1},
+		Delta:         core.Delta{Creates: []json.RawMessage{json.RawMessage(`{"type":"fake_widget","name":"seed","op":"create","config":{"name":"seed"}}`)}},
+	}
+	accepted, err := core.Accept(ledger, seed)
+	if err != nil {
+		t.Fatalf("seed the ledger: %v", err)
+	}
+	head := accepted.ID
+
+	write := func(hash, stack, parent string) {
+		t.Helper()
+		p := &core.Proposal{SchemaVersion: core.SchemaVersion, Stack: stack, Parent: parent, Kind: core.KindChange}
+		data, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writePlanFile(dir, hash, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("stale", "payments", "")       // resolved before the move: unshippable
+	write("fresh", "payments", head)     // resolved against the current head: fine
+	write("otherstack", "billing", "")   // another stack entirely: not ours to judge
+	write("thenewone", "payments", head) // the plan just written
+
+	n, err := pruneUnshippablePlans(dir, ledger, "payments", "thenewone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("pruned %d, want 1", n)
+	}
+
+	for _, c := range []struct {
+		hash string
+		want bool
+	}{
+		{"stale", false},
+		{"fresh", true},
+		{"otherstack", true},
+		{"thenewone", true},
+	} {
+		_, err := readPlanFile(dir, c.hash)
+		got := err == nil
+		if got != c.want {
+			switch c.hash {
+			case "stale":
+				t.Errorf("the unshippable plan survived, which is the whole defect")
+			case "otherstack":
+				t.Errorf("another stack's plan was pruned: it is resolved against a different ledger head and says nothing about this one")
+			default:
+				t.Errorf("%s: present = %v, want %v", c.hash, got, c.want)
+			}
+		}
+	}
+}
+
+// The plan just written is skipped explicitly rather than by matching
+// its parent against a freshly read head, since reading the head twice
+// invites a race that would delete the very plan being reported.
+func TestPruneUnshippablePlans_NeverPrunesTheOneJustWritten(t *testing.T) {
+	dir := t.TempDir()
+	ledger := core.Open(dir)
+
+	p := &core.Proposal{SchemaVersion: core.SchemaVersion, Stack: "payments", Parent: "a-head-that-is-not-current", Kind: core.KindChange}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writePlanFile(dir, "justwritten", data); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pruneUnshippablePlans(dir, ledger, "payments", "justwritten"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPlanFile(dir, "justwritten"); err != nil {
+		t.Error("the plan just written was pruned, so `ubx plan` would report a plan that no longer exists")
+	}
+}
+
+// An unreadable plan is left alone: it may be mid-write by a concurrent
+// `ubx plan`, and deleting a file that cannot be parsed is not tidiness.
+func TestPruneUnshippablePlans_LeavesUnreadableFilesAlone(t *testing.T) {
+	dir := t.TempDir()
+	ledger := core.Open(dir)
+
+	if _, err := writePlanFile(dir, "garbage", []byte("{not json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pruneUnshippablePlans(dir, ledger, "payments", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(planFilePath(dir, "garbage")); err != nil {
+		t.Error("an unparseable plan was deleted; it may simply be mid-write")
 	}
 }

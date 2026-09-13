@@ -294,6 +294,24 @@ propose-time PR trailer hash, etc.).`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
+			// UBI-263: a plan the ledger has moved past can never ship,
+			// and nothing used to remove it. It sat in .ubx/plans/ and
+			// was re-selected as "the latest" by every bare `ubx ship`
+			// until some later `ubx plan` happened to succeed, which is
+			// exactly the sequence that made a session believe every
+			// plan was stale by construction.
+			//
+			// Pruned here rather than at ship time on purpose: writing a
+			// fresh plan is the moment the old one provably became
+			// unusable, and doing it here means the bad state never
+			// exists rather than being detected later. Never fails the
+			// command: tidiness, not correctness, matching how ship
+			// treats its own consumed-plan prune.
+			if n, perr := pruneUnshippablePlans(ledgerDir, ledger, intent.Stack, hash); perr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: plan: could not prune superseded plan file(s): %v\n", perr)
+			} else if n > 0 {
+				fmt.Fprintf(outWriter, "pruned %d superseded plan(s) the ledger has moved past\n", n)
+			}
 			if out != "" {
 				if err := os.WriteFile(out, data, 0o644); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
@@ -531,6 +549,66 @@ func writePlanFile(ledgerDir, hash string, data []byte) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// pruneUnshippablePlans removes plans for this stack that the ledger has
+// already moved past, and returns how many it removed (UBI-263).
+//
+// A plan records the ledger head it was resolved against, and
+// core.Accept refuses to append it onto any other head. Once the ledger
+// moves, such a plan can NEVER ship: no retry, no flag, nothing brings
+// it back. It used to stay on disk anyway and be re-selected as "the
+// latest" by every subsequent bare `ubx ship`, each of which refused it
+// again.
+//
+// keepHash is the plan just written, which is skipped explicitly rather
+// than relying on its parent matching: it was resolved moments ago
+// against this same head, but reading the head twice invites a race
+// that would delete the very plan being reported.
+//
+// Only this stack's plans are considered. Another stack's plans are
+// resolved against another ledger head entirely and say nothing about
+// this one.
+func pruneUnshippablePlans(ledgerDir string, ledger *core.Ledger, stack, keepHash string) (int, error) {
+	head, err := ledger.Head()
+	if err != nil {
+		return 0, err
+	}
+
+	dir := filepath.Join(ledgerDir, ".ubx", "plans")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	pruned := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		hash := strings.TrimSuffix(e.Name(), ".json")
+		if hash == keepHash {
+			continue
+		}
+		p, err := readPlanFile(ledgerDir, hash)
+		if err != nil {
+			// An unreadable plan is left alone deliberately. It may be
+			// mid-write by a concurrent `ubx plan`, and deleting a file
+			// we cannot parse is not tidiness.
+			continue
+		}
+		if p.Stack != stack || p.Parent == head {
+			continue
+		}
+		if err := os.Remove(planFilePath(ledgerDir, hash)); err != nil && !os.IsNotExist(err) {
+			return pruned, err
+		}
+		pruned++
+	}
+	return pruned, nil
 }
 
 // readPlanFile reads back a plan `ubx plan` saved, for `ubx ship <hash>`'s
