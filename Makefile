@@ -1,4 +1,4 @@
-.PHONY: build install submodules vendor-assets
+.PHONY: build install submodules vendor-assets python-wasi
 
 # build and install both print `ubx version` immediately after rebuilding
 # (UBI-63 session 4): a real live finding was a founder re-test that
@@ -46,6 +46,17 @@ vendor-assets: submodules
 	cp sdk/ts/runtime/src/index.ts tseval/vendored/runtime/src/index.ts
 	cp sdk/py/ubx_sdk/__init__.py pyeval/vendored/ubx_sdk/__init__.py
 	@echo "re-synced the vendored evaluator assets from sdk/ts and sdk/py"
+
+# python-wasi downloads and caches the pinned CPython-WASI build the
+# Python evaluator needs (UBI-255).
+#
+# Running it is optional locally, since pyeval acquires the asset on
+# first use anyway. It exists so CI can do that acquisition in a named
+# step: an outage at the third-party release URL then fails there,
+# honestly, instead of surfacing as a scatter of unrelated-looking test
+# failures in whichever packages happen to evaluate Python.
+python-wasi:
+	go run ./internal/tools/prefetchpython
 
 build: submodules
 	go build -o ./ubx ./cmd/ubx

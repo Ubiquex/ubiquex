@@ -203,6 +203,49 @@ documented ~15-minute upper bound, but far from instant — which is why
 outcome (a narrow correlation window can't rule out "the event just
 hasn't propagated yet" the way a wide one that still finds nothing can).
 
+## The CPython-WASI build is a third party's uptime (UBI-255)
+
+`pyeval` needs a 42MB CPython-WASI build that is not embedded in the
+`ubx` binary, because growing every install by 42MB regardless of
+whether its user ever touches a Python SDK program is a real, avoidable
+cost. It is downloaded once from a pinned third-party GitHub release and
+cached under `~/.ubx/python-wasi/<version>/`.
+
+On 2026-09-09 that URL answered HTTP 500 and took `main` red as **eight
+failures across two packages**, none of which mentioned a download.
+`ci.yml`'s bubblewrap and wasmtime step already documents closing that
+exact shape for its own two binaries: verify at the step that installs,
+so an outage is one honest failure rather than a scatter of
+unrelated-looking ones. This asset was the third external dependency the
+suite needs and had none of that treatment.
+
+Three things changed:
+
+- **A transient failure is retried** (`downloadAndExtractWithRetry`). A
+  single 5xx or 429 no longer fails the acquisition, and this helps a
+  developer's first Python evaluation as much as it helps CI. A **404 is
+  not retried**: that means the pinned version does not exist at that
+  URL, which is a wrong pin rather than a blip.
+- **CI acquires it in a named step**, via `make python-wasi`, which
+  calls `pyeval.PrefetchInterpreter` rather than curling the URL, so the
+  version, the URL and the cache location stay in one place. A CI step
+  with its own hardcoded URL would be a second copy of a pin.
+- **CI caches it**, keyed on `pyeval/wasi_assets.go` itself, so bumping
+  the pin misses the cache automatically and no key has to be
+  remembered.
+
+**This does not make `go test ./...` hermetic, and the ticket's title
+asks for that.** A cold cache still reaches the network. What is fixed
+is the flakiness and, more importantly, the failure mode: an outage now
+fails at the step that caused it, with a message that says so.
+
+Closing it properly means either mirroring the asset somewhere this
+project controls, which costs a real artifact to host and rotate, or
+skipping the Python tests when the asset is absent, which silently drops
+coverage for a language runtime this project ships on exactly the runs
+where nobody notices. Mirroring is the honest answer if this recurs; the
+gate is not, which is why it was not taken.
+
 ## Fixtures are generous, and each generosity is a blind spot (UBI-252)
 
 Four times, a hermetic fixture accepted something the real API rejects,

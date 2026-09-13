@@ -204,6 +204,42 @@ jobs:
         # never a container-level privilege escalation.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      - name: Cache the pinned CPython-WASI build
+        # Keyed on wasi_assets.go itself, which is where the version and
+        # URL are pinned, so bumping the pin misses the cache
+        # automatically and nothing has to remember to change a key.
+        # Deliberately not a second copy of the version number: that
+        # would be a pin in two places, which is the drift this repo
+        # keeps paying for.
+        uses: actions/cache@v4
+        with:
+          path: ~/.ubx/python-wasi
+          key: python-wasi-${{ runner.os }}-${{ hashFiles('pyeval/wasi_assets.go') }}
+
+      - name: Acquire the CPython-WASI build
+        # UBI-255. pyeval needs a 42MB CPython build from a third-party
+        # GitHub release, and before this it was fetched by whichever
+        # Python test happened to run first, mid-suite, with no retry.
+        #
+        # On 2026-09-09 that URL answered HTTP 500 and took main red as
+        # EIGHT failures across two packages, none of which mentioned a
+        # download. That is the identical confusion the bubblewrap and
+        # wasmtime step above already documents closing for its own two
+        # binaries: verify at the step that installs, so an outage is one
+        # honest failure rather than a scatter of unrelated-looking ones.
+        #
+        # This calls pyeval's own acquisition (which now retries a
+        # transient 5xx) rather than curling the URL, so the version and
+        # the URL stay in exactly one place.
+        run: |
+          set -euo pipefail
+          dir="$(go run ./internal/tools/prefetchpython)"
+          echo "CPython-WASI build ready at $dir"
+          if [ ! -f "$dir/python.wasm" ] || [ ! -d "$dir/lib" ]; then
+            echo "the acquisition reported success but the build is not there -- python.wasm or lib/ is missing from $dir" >&2
+            exit 1
+          fi
+
       - name: go build
         run: go build ./...
 
