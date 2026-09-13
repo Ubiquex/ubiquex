@@ -683,3 +683,52 @@ func TestRunScan_UnreadableResource_TeachesTheRealLookup(t *testing.T) {
 		t.Fatalf("the runnable lookup did not reach the user-facing error: %v", err)
 	}
 }
+
+// ownershipFake answers core.AttrOwnership for a fixed set of
+// provider-owned attribute names.
+type ownershipFake struct{ owned map[string]bool }
+
+func (f ownershipFake) IsAttrProviderOwned(attrName string) bool { return f.owned[attrName] }
+
+// TestFilterNormalizationNoise_OptionalComputedStillReportsDrift is
+// UBI-268's reason for splitting one predicate into two.
+//
+// A null-to-value transition is uninteresting only when nobody could have
+// set the attribute: the provider owns it outright, so the value appearing
+// is it materializing its own. That is Computed AND NOT Optional.
+//
+// For an Optional+Computed attribute a user COULD have set it, so a value
+// appearing where the ledger recorded none is exactly the drift they would
+// want reported. The two were one predicate until now, which was harmless
+// only because the CloudFormation source emitted no Optional+Computed
+// attributes at all. Fixing that puts roughly 8,000 AWS attributes in the
+// second category at once, and without this split every one of them would
+// have silently stopped reporting this kind of drift.
+func TestFilterNormalizationNoise_OptionalComputedStillReportsDrift(t *testing.T) {
+	before := map[string]json.RawMessage{"visibility_timeout": json.RawMessage(`null`)}
+	after := map[string]json.RawMessage{"visibility_timeout": json.RawMessage(`300`)}
+
+	t.Run("provider-owned outright is materialization", func(t *testing.T) {
+		// Computed and not Optional: the region-after-create shape UBI-63
+		// built this filter for. Nobody could have set it, so nothing to
+		// report.
+		fb, fa := FilterNormalizationNoise(before, after,
+			ownershipFake{owned: map[string]bool{"visibility_timeout": true}})
+		if len(fb) != 0 || len(fa) != 0 {
+			t.Fatalf("expected the transition to be filtered as materialization, got before=%v after=%v", fb, fa)
+		}
+	})
+
+	t.Run("optional and computed is real drift", func(t *testing.T) {
+		// Optional+Computed answers false here. Someone could have set
+		// this out of band, and this is the only signal that they did.
+		fb, fa := FilterNormalizationNoise(before, after,
+			ownershipFake{owned: map[string]bool{}})
+		if len(fb) == 0 || len(fa) == 0 {
+			t.Fatal("an attribute a user could have set must still report drift when a value appears where the ledger recorded none")
+		}
+		if string(fa["visibility_timeout"]) != "300" {
+			t.Fatalf("the reported drift lost its value: %v", fa)
+		}
+	})
+}

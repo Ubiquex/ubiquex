@@ -755,7 +755,7 @@ deliberately — not an oversight, see below:
   at test time on both sides — the same posture `sdk/conformance`'s own
   golden fixture already holds). Self-contained: no subprocess, no real
   provider binary — `diagram.Parse`'s own type inference only ever calls
-  `SchemaInspector.HasType` (never `IsComputed`/`IsSensitive`, which only
+  `SchemaInspector.HasType` (never `IsComputed`/`IsProviderOwned`/`IsSensitive`, which only
   matter once a resource's own config VALUES get resolved, and a diagram
   never authors any), so a tiny hermetic fake schema suffices.
 - **Render direction** (the identical topology, shipped for real through

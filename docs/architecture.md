@@ -3390,7 +3390,7 @@ does NOT route through `declaredProvidersForInference`'s own
 `providerPool`-based mechanism, despite the two being conceptually
 identical — `declaredProvidersForInference`'s own `resourceTypeSchemaInspector`
 wraps `StateReader.Schema`'s opaque `map[string]any`, a real, deliberate
-stub whose `IsComputed`/`IsSensitive` are always false because
+stub whose `IsComputed`/`IsProviderOwned`/`IsSensitive` are always false because
 `InferProvider` (its only real caller there) never calls either.
 Confirmed live, not assumed, this session: routing `ubx resolve` through
 that same shared helper regressed a real required-attribute-missing

@@ -16,9 +16,18 @@ import (
 // core/resolver's own rules against a schema shape it never has to trust
 // blindly. Keys are "<type>.<attrPath>".
 type fakeSchema struct {
-	types     map[string]bool
-	computed  map[string]bool
-	sensitive map[string]bool
+	types map[string]bool
+	// computed is "the provider MAY supply this" -- Computed, whether or
+	// not also Optional. Every existing test sets only this, and for those
+	// the attribute is Computed-only, so IsProviderOwned agrees with it.
+	computed map[string]bool
+	// alsoOptional marks a computed attribute as ALSO Optional (UBI-268),
+	// the "a user may set it, the provider fills it in otherwise"
+	// combination. IsComputed still answers true; IsProviderOwned answers
+	// false, because a user could have set it. Opt-in, so no existing test
+	// changes meaning.
+	alsoOptional map[string]bool
+	sensitive    map[string]bool
 	// badKeys is UnknownConfigKeys' own opt-in fake (UBI-66): typeName ->
 	// {bad config key -> suggestion to report}. A type/key never listed
 	// here is never flagged -- deliberately, so every pre-existing test
@@ -46,6 +55,7 @@ func newFakeSchema() *fakeSchema {
 			"aws_vpc":         true,
 			"aws_db_instance": true,
 		},
+		alsoOptional: map[string]bool{},
 		computed: map[string]bool{
 			"aws_vpc.id":               true,
 			"aws_db_instance.id":       true,
@@ -58,8 +68,11 @@ func newFakeSchema() *fakeSchema {
 	}
 }
 
-func (f *fakeSchema) HasType(t string) bool           { return f.types[t] }
-func (f *fakeSchema) IsComputed(t, path string) bool  { return f.computed[t+"."+path] }
+func (f *fakeSchema) HasType(t string) bool          { return f.types[t] }
+func (f *fakeSchema) IsComputed(t, path string) bool { return f.computed[t+"."+path] }
+func (f *fakeSchema) IsProviderOwned(t, path string) bool {
+	return f.computed[t+"."+path] && !f.alsoOptional[t+"."+path]
+}
 func (f *fakeSchema) IsSensitive(t, path string) bool { return f.sensitive[t+"."+path] }
 
 func (f *fakeSchema) UnknownConfigKeys(t string, config map[string]interface{}) []ConfigKeyIssue {
@@ -1062,5 +1075,58 @@ func TestResolve_PresentRequiredAttribute_NoRefusal(t *testing.T) {
 
 	if _, err := Resolve(l, singleProvider(schema), intent, nil); err != nil {
 		t.Fatalf("resolve: %v", err)
+	}
+}
+
+// TestResolve_Modify_OmittedOptionalComputedAttribute_StillPreserved is
+// the other half of UBI-268's predicate split.
+//
+// The split narrows ONE of the two questions this package asks the schema.
+// The drift filter now asks "could a user have set this at all", so an
+// Optional+Computed attribute stops being treated as materialization. The
+// backfill keeps asking "may the provider supply this", and for that
+// question Optional+Computed still answers yes: omitting it means leave it
+// alone, not remove it.
+//
+// Getting this wrong is the destructive direction, and it is the live
+// incident UBI-268 came from. An aws_sqs_queue's visibility_timeout is set
+// by AWS at creation. A modify that does not mention it planned to remove
+// it, which would have stripped a real setting from a live queue. Narrowing
+// the wrong predicate here would reintroduce exactly that.
+func TestResolve_Modify_OmittedOptionalComputedAttribute_StillPreserved(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_db_instance", Name: "db"}
+	seedLedger(t, l, addr, `{"id":"db-1","instance_class":"db.t3.medium","backup_window":"03:00-04:00"}`)
+
+	schema := newFakeSchema()
+	// Optional+Computed: AWS fills this in if you do not set it, and you
+	// may set it. IsComputed says yes, IsProviderOwned says no.
+	schema.computed["aws_db_instance.backup_window"] = true
+	schema.alsoOptional["aws_db_instance.backup_window"] = true
+
+	if !schema.IsComputed("aws_db_instance", "backup_window") {
+		t.Fatal("fixture is wrong: an Optional+Computed attribute is still Computed")
+	}
+	if schema.IsProviderOwned("aws_db_instance", "backup_window") {
+		t.Fatal("fixture is wrong: an Optional+Computed attribute is not provider-owned outright")
+	}
+
+	intent := intentFile("payments",
+		ri("aws_db_instance", "db", OpModify, `{"instance_class":"db.t3.large"}`),
+	)
+
+	p, err := Resolve(l, singleProvider(schema), intent, nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	mod := p.Delta.Modifies[0]
+	if _, ok := mod.Before["backup_window"]; ok {
+		t.Fatalf("an omitted Optional+Computed attribute must never be planned for removal, got Before=%+v", mod.Before)
+	}
+	if _, ok := mod.After["backup_window"]; ok {
+		t.Fatalf("an omitted Optional+Computed attribute must not appear as newly-set either, got After=%+v", mod.After)
+	}
+	if string(mod.After["instance_class"]) != `"db.t3.large"` {
+		t.Fatalf("the real change was lost: %+v", mod)
 	}
 }

@@ -93,23 +93,46 @@ type ResourceIdentityPublisher interface {
 	IdentityAttributes(resourceType string) ([]string, bool)
 }
 
-// AttrComputedFlags is an OPTIONAL capability a StateReader's own opaque
+// AttrOwnership is an OPTIONAL capability a StateReader's own opaque
 // resourceSchema handle (the same `any` Schema() returns and ReadResource
 // receives back) may additionally satisfy, so RunScan's drift verdict can
-// tell a Computed attribute's null<->materialized-value transition (the
-// provider filling in something ubx never told it to be -- e.g. a region
-// only known after real creation) apart from an ordinary attribute simply
-// changing (UBI-63 session 3: the founder's own live repro against a real
-// AWS role reads region back as null immediately after create, then a
-// real value on the very next scan -- never a divergence from what ubx
-// told the world to be, since ubx was never in a position to know it).
+// tell a provider-owned attribute's null<->materialized-value transition
+// (the provider filling in something ubx never told it to be -- e.g. a
+// region only known after real creation) apart from an ordinary attribute
+// simply changing (UBI-63 session 3: the founder's own live repro against
+// a real AWS role reads region back as null immediately after create,
+// then a real value on the very next scan -- never a divergence from what
+// ubx told the world to be, since ubx was never in a position to know it).
 // core still never inspects the schema's concrete type -- it only ever
 // asks this one yes/no question through a type assertion on the same
 // `any` it already treated as opaque. A StateReader whose handle doesn't
-// implement this (the assertion fails) simply gets no Computed-wildcard
-// normalization, identical to before this existed.
-type AttrComputedFlags interface {
-	IsAttrComputed(attrName string) bool
+// implement this (the assertion fails) simply gets no normalization,
+// identical to before this existed.
+//
+// UBI-268: this asks "does the provider own this value outright", NOT
+// "is it Computed". Those were the same predicate until this change, and
+// they are about to stop being the same thing.
+//
+// Computed alone has two meanings in tfplugin. Computed-and-not-Optional
+// is a value the provider decides and a user cannot set. Optional-and-
+// Computed is a value a user MAY set and the provider fills in when they
+// do not. Only the first makes a null-to-value transition uninteresting:
+// nobody could have set it, so the value appearing is the provider
+// materializing its own. For the second, a value appearing where the
+// ledger recorded none is exactly the drift a user would want reported,
+// because someone could have set it, and someone may have.
+//
+// The distinction has been invisible because the CloudFormation source
+// emits no Optional+Computed attributes at all (zero of 15,967). Fixing
+// that lands ~8,000 AWS attributes in the second category at once, and
+// without this split they would all silently stop reporting drift. Two
+// consumers were asking different questions through one predicate; this
+// is the one that wanted the narrow answer.
+type AttrOwnership interface {
+	// IsAttrProviderOwned reports whether the provider alone decides
+	// attrName's value: Computed and NOT Optional. An Optional+Computed
+	// attribute answers false here, because a user could have set it.
+	IsAttrProviderOwned(attrName string) bool
 }
 
 // ScanOutcome classifies what a scan found for one resource address.
@@ -163,7 +186,7 @@ type ScanResult struct {
 	// RunScan's own verdict already applies, instead of recomputing a raw,
 	// unfiltered DiffAttributes that re-surfaces noise RunScan already
 	// determined wasn't real drift. core never inspects it beyond that one
-	// type assertion (AttrComputedFlags) -- still opaque, still no import
+	// type assertion (AttrOwnership) -- still opaque, still no import
 	// of package provider.
 	ResourceSchema any
 }
@@ -290,10 +313,10 @@ func RunScan(ctx context.Context, prov StateReader, l *Ledger, req ScanRequest) 
 //
 // resourceSchema is the same opaque handle ScanResult.ResourceSchema
 // carries; a StateReader whose handle doesn't implement
-// AttrComputedFlags simply never satisfies the Computed-wildcard half,
+// AttrOwnership simply never satisfies the Computed-wildcard half,
 // leaving the zero-value equivalence as the only normalization applied.
 func FilterNormalizationNoise(before, after map[string]json.RawMessage, resourceSchema any) (filteredBefore, filteredAfter map[string]json.RawMessage) {
-	computed, _ := resourceSchema.(AttrComputedFlags)
+	owned, _ := resourceSchema.(AttrOwnership)
 	keys := make(map[string]struct{}, len(before)+len(after))
 	for k := range before {
 		keys[k] = struct{}{}
@@ -304,7 +327,7 @@ func FilterNormalizationNoise(before, after map[string]json.RawMessage, resource
 	filteredBefore = make(map[string]json.RawMessage, len(before))
 	filteredAfter = make(map[string]json.RawMessage, len(after))
 	for key := range keys {
-		if isNormalizationExplained(key, before, after, computed) {
+		if isNormalizationExplained(key, before, after, owned) {
 			continue
 		}
 		if v, ok := before[key]; ok {
@@ -317,7 +340,7 @@ func FilterNormalizationNoise(before, after map[string]json.RawMessage, resource
 	return filteredBefore, filteredAfter
 }
 
-func isNormalizationExplained(key string, before, after map[string]json.RawMessage, computed AttrComputedFlags) bool {
+func isNormalizationExplained(key string, before, after map[string]json.RawMessage, owned AttrOwnership) bool {
 	bRaw, bHas := before[key]
 	aRaw, aHas := after[key]
 	topAttr := key
@@ -345,7 +368,7 @@ func isNormalizationExplained(key string, before, after map[string]json.RawMessa
 		if aHas {
 			present = aRaw
 		}
-		if computed != nil && computed.IsAttrComputed(topAttr) {
+		if owned != nil && owned.IsAttrProviderOwned(topAttr) {
 			return true // materialization: a Computed attribute's null baseline resolving is expected
 		}
 		return isJSONNull(present) || isZeroishLiteral(present)
@@ -355,7 +378,7 @@ func isNormalizationExplained(key string, before, after map[string]json.RawMessa
 	if !bNull && !aNull {
 		return false // both sides hold a real, differing value
 	}
-	if computed != nil && computed.IsAttrComputed(topAttr) {
+	if owned != nil && owned.IsAttrProviderOwned(topAttr) {
 		return true // materialization: a Computed attribute's null baseline resolving is expected
 	}
 	nonNull := aRaw
@@ -404,7 +427,7 @@ func ReadAndFingerprint(ctx context.Context, prov StateReader, addr Address, pro
 // hint (see lookupHintText); it never affects the read itself and may be
 // empty. resourceSchema is the same opaque handle passed into
 // ReadResource, returned back out so RunScan can type-assert it against
-// AttrComputedFlags (UBI-63 session 3) without a second Schema() round
+// AttrOwnership (UBI-63 session 3) without a second Schema() round
 // trip -- ReadAndFingerprint's own exported signature is unchanged, so
 // core/executor's five call sites (a different concern, verifying
 // freshness before an apply, not classifying a drift verdict) need no
