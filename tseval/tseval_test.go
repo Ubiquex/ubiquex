@@ -284,3 +284,55 @@ export default stack("payments", () => {
 		}
 	}
 }
+
+// TestEvaluate_SilentZeroExit_ReportsWhatHappened is tseval's half of
+// the core/evaloutput.go regression: a module that defines a stack and
+// never exports it as its default exits 0 having written nothing, and
+// used to report only the decoder's own EOF.
+func TestEvaluate_SilentZeroExit_ReportsWhatHappened(t *testing.T) {
+	requireDeno(t)
+	_, err := Evaluate(evalCtx(t), "testdata/silent_exit.ts")
+	if err == nil {
+		t.Fatal("Evaluate accepted a program that wrote no intent document")
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, "exited successfully but wrote no intent document") {
+		t.Fatalf("error does not say what happened: %s", msg)
+	}
+	// This fixture exits early rather than failing to export, so the
+	// hint is a guess and has to read like one.
+	if !strings.Contains(msg, "This usually means") {
+		t.Fatalf("hint is stated as a diagnosis rather than a likely cause: %s", msg)
+	}
+	if !strings.Contains(msg, "a diagnosis written by a program that then exited 0") {
+		t.Fatalf("stderr was discarded on a zero exit: %s", msg)
+	}
+	if strings.Contains(msg, "decode json") {
+		t.Fatalf("error still leads the reader to the decoder: %s", msg)
+	}
+}
+
+// TestEvaluate_StrayStdout_ShowsWhatItWrote covers the other half of
+// core/evaloutput.go, and the likeliest way a TypeScript stack breaks:
+// a console.log writes to the same stream as the intent document, so
+// the document no longer parses. The program exits 0, so its own
+// output used to be discarded entirely.
+func TestEvaluate_StrayStdout_ShowsWhatItWrote(t *testing.T) {
+	requireDeno(t)
+	_, err := Evaluate(evalCtx(t), "testdata/stray_stdout.ts")
+	if err == nil {
+		t.Fatal("Evaluate accepted output with a stray log line in front of it")
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, "not a valid intent document") {
+		t.Fatalf("error does not say what happened: %s", msg)
+	}
+	if !strings.Contains(msg, "debugging this, remove later") {
+		t.Fatalf("error does not show the stdout that broke it: %s", msg)
+	}
+	if !strings.Contains(msg, "and a line on stderr too") {
+		t.Fatalf("stderr was discarded on a zero exit: %s", msg)
+	}
+}

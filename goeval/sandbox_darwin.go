@@ -42,23 +42,26 @@ const sandboxProfileTemplate = `(version 1)
 // -- verified empirically to hold even against a subprocess the
 // sandboxed binary itself spawns (macOS sandbox profiles apply to the
 // whole descendant process tree by default).
-func runSandboxed(ctx context.Context, binaryPath string) ([]byte, error) {
+// runSandboxed returns the program's stdout AND its stderr. stderr is
+// returned on success too, for the reason core/evaloutput.go records:
+// a program can write a diagnosis and still exit 0.
+func runSandboxed(ctx context.Context, binaryPath string) (stdoutBytes, stderrBytes []byte, err error) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
-		return nil, fmt.Errorf("sandbox-exec not found in PATH -- required to run a Go SDK program hermetically on macOS: %w", err)
+		return nil, nil, fmt.Errorf("sandbox-exec not found in PATH -- required to run a Go SDK program hermetically on macOS: %w", err)
 	}
 
 	profileFile, err := os.CreateTemp("", "ubx-goeval-profile-*.sb")
 	if err != nil {
-		return nil, fmt.Errorf("write sandbox profile: %w", err)
+		return nil, nil, fmt.Errorf("write sandbox profile: %w", err)
 	}
 	defer os.Remove(profileFile.Name())
 	profile := fmt.Sprintf(sandboxProfileTemplate, filepath.Dir(binaryPath))
 	if _, err := profileFile.WriteString(profile); err != nil {
 		profileFile.Close()
-		return nil, fmt.Errorf("write sandbox profile: %w", err)
+		return nil, nil, fmt.Errorf("write sandbox profile: %w", err)
 	}
 	if err := profileFile.Close(); err != nil {
-		return nil, fmt.Errorf("write sandbox profile: %w", err)
+		return nil, nil, fmt.Errorf("write sandbox profile: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, "sandbox-exec", "-f", profileFile.Name(), binaryPath)
@@ -73,9 +76,9 @@ func runSandboxed(ctx context.Context, binaryPath string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return nil, fmt.Errorf("run: %w\n%s", err, msg)
+			return nil, nil, fmt.Errorf("run: %w\n%s", err, msg)
 		}
-		return nil, fmt.Errorf("run: %w", err)
+		return nil, nil, fmt.Errorf("run: %w", err)
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }

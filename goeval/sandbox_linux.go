@@ -26,10 +26,13 @@ import (
 // with CGO_ENABLED=0, producing a fully static binary with zero dynamic-
 // library reads at run time, so the ONLY path this sandbox needs to
 // expose at all is the binary's own directory.
-func runSandboxed(ctx context.Context, binaryPath string) ([]byte, error) {
+// runSandboxed returns the program's stdout AND its stderr. stderr is
+// returned on success too, for the reason core/evaloutput.go records:
+// a program can write a diagnosis and still exit 0.
+func runSandboxed(ctx context.Context, binaryPath string) (stdoutBytes, stderrBytes []byte, err error) {
 	bwrapPath, err := exec.LookPath("bwrap")
 	if err != nil {
-		return nil, fmt.Errorf("bubblewrap (bwrap) not found in PATH -- required to run a Go SDK program hermetically on Linux; refusing to evaluate unsandboxed rather than silently degrading (docs/sdk.md's own \"The Go evaluator: decided empirically\"): %w", err)
+		return nil, nil, fmt.Errorf("bubblewrap (bwrap) not found in PATH -- required to run a Go SDK program hermetically on Linux; refusing to evaluate unsandboxed rather than silently degrading (docs/sdk.md's own \"The Go evaluator: decided empirically\"): %w", err)
 	}
 
 	binDir := filepath.Dir(binaryPath)
@@ -51,9 +54,9 @@ func runSandboxed(ctx context.Context, binaryPath string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return nil, fmt.Errorf("run: %w\n%s", err, msg)
+			return nil, nil, fmt.Errorf("run: %w\n%s", err, msg)
 		}
-		return nil, fmt.Errorf("run: %w", err)
+		return nil, nil, fmt.Errorf("run: %w", err)
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }

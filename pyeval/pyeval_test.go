@@ -171,3 +171,30 @@ func TestEvaluate_MissingEntryFile_ClearError(t *testing.T) {
 		t.Fatal("Evaluate: got nil error for a nonexistent entry file")
 	}
 }
+
+// TestEvaluate_SilentZeroExit_ReportsWhatHappened is the regression for
+// core/evaloutput.go: a program exiting 0 with no output used to report
+// "pyeval: decode json: EOF", which names the decoder and says nothing
+// about the program. Its stderr was discarded because stderr was only
+// ever surfaced on a NONZERO exit.
+func TestEvaluate_SilentZeroExit_ReportsWhatHappened(t *testing.T) {
+	requireWasmtime(t)
+	_, err := Evaluate(evalCtx(t), "testdata/silent_exit/main.py")
+	if err == nil {
+		t.Fatal("Evaluate accepted a program that wrote no intent document")
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, "exited successfully but wrote no intent document") {
+		t.Fatalf("error does not say what happened: %s", msg)
+	}
+	if !strings.Contains(msg, "ubx.run(name, fn) was never called") {
+		t.Fatalf("error does not name the call that was missing: %s", msg)
+	}
+	if !strings.Contains(msg, "a diagnosis written by a program that then exited 0") {
+		t.Fatalf("stderr was discarded on a zero exit: %s", msg)
+	}
+	if strings.Contains(msg, "decode json") {
+		t.Fatalf("error still leads the reader to the decoder: %s", msg)
+	}
+}

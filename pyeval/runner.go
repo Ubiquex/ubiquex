@@ -31,32 +31,36 @@ const runtimeGuestPath = "/ubxsdk"
 // PYTHONHASHSEED is passed explicitly, for determinism -- wasmtime
 // forwards zero host env vars otherwise (confirmed empirically), so
 // there is nothing else to scrub.
-func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) ([]byte, error) {
+// runOnce returns the program's stdout AND its stderr. stderr is
+// returned on success too, not only on failure: a program can write a
+// diagnosis and still exit 0, and that diagnosis used to be discarded
+// exactly when it was the only thing available (core/evaloutput.go).
+func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) (stdoutBytes, stderrBytes []byte, err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
-		return nil, fmt.Errorf("entry file: %w", err)
+		return nil, nil, fmt.Errorf("entry file: %w", err)
 	}
 	info, err := os.Stat(absEntry)
 	if err != nil {
-		return nil, fmt.Errorf("entry file: %w", err)
+		return nil, nil, fmt.Errorf("entry file: %w", err)
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("entry file: %s is a directory", absEntry)
+		return nil, nil, fmt.Errorf("entry file: %s is a directory", absEntry)
 	}
 
 	wasmtimePath, err := exec.LookPath("wasmtime")
 	if err != nil {
-		return nil, fmt.Errorf("wasmtime not found in PATH -- the Python SDK evaluator requires wasmtime (https://wasmtime.dev), chosen empirically over subprocess+sandbox-exec/bwrap (docs/sdk.md's own \"The Python evaluator: decided empirically\" section): %w", err)
+		return nil, nil, fmt.Errorf("wasmtime not found in PATH -- the Python SDK evaluator requires wasmtime (https://wasmtime.dev), chosen empirically over subprocess+sandbox-exec/bwrap (docs/sdk.md's own \"The Python evaluator: decided empirically\" section): %w", err)
 	}
 
 	wasiDir, err := acquirePythonWasi(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	assetsDir, err := extractAssets()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	entryDir := filepath.Dir(absEntry)
@@ -137,11 +141,11 @@ func runOnce(ctx context.Context, entryFile string, deps []ExtraDep) ([]byte, er
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return nil, fmt.Errorf("evaluate %s: %w\n%s", entryFile, err, msg)
+			return nil, nil, fmt.Errorf("evaluate %s: %w\n%s", entryFile, err, msg)
 		}
-		return nil, fmt.Errorf("evaluate %s: %w", entryFile, err)
+		return nil, nil, fmt.Errorf("evaluate %s: %w", entryFile, err)
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 // extractAssets writes the embedded ubx_sdk runtime source

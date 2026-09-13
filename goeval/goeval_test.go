@@ -197,3 +197,29 @@ func TestEvaluate_MissingGoMod_ClearError(t *testing.T) {
 		t.Fatal("Evaluate: got nil error for an entry path with no go.mod above it")
 	}
 }
+
+// TestEvaluate_SilentZeroExit_ReportsWhatHappened is goeval's half of
+// the core/evaloutput.go regression: a main() that builds a stack
+// definition and never passes it to sdk.Main exits 0 having written
+// nothing, and used to report only the decoder's own EOF.
+func TestEvaluate_SilentZeroExit_ReportsWhatHappened(t *testing.T) {
+	requireSandbox(t)
+	_, err := Evaluate(evalCtx(t), "testdata/silent_exit/main.go")
+	if err == nil {
+		t.Fatal("Evaluate accepted a program that wrote no intent document")
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, "exited successfully but wrote no intent document") {
+		t.Fatalf("error does not say what happened: %s", msg)
+	}
+	if !strings.Contains(msg, "never passed to sdk.Main") {
+		t.Fatalf("error does not name the call that was missing: %s", msg)
+	}
+	if !strings.Contains(msg, "a diagnosis written by a program that then exited 0") {
+		t.Fatalf("stderr was discarded on a zero exit: %s", msg)
+	}
+	if strings.Contains(msg, "decode json") {
+		t.Fatalf("error still leads the reader to the decoder: %s", msg)
+	}
+}
