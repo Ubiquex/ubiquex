@@ -494,6 +494,31 @@ proposal chain, recorded on UBI-267 as the deferred refinement. A plan
 built from a program says so on its own receipt rather than leaving a
 reader to infer it.
 
+An inferred modify that changes nothing produces NO ENTRY, where a
+hand-written one keeps its empty entry. That is not cosmetic:
+`shipModifyNode` has no no-op branch, so an empty modify runs the full
+read/plan/apply path, and a provider that rejects an update with nothing
+to update fails the whole ship and blocks every resource behind it.
+
+Dropped at resolve rather than skipped at ship, for a structural reason
+rather than a preference. A proposal records `intent.sources` identically
+for both authoring paths, so at ship time the executor cannot tell a
+generated document from an authored one; it would have to skip every
+empty modify, taking away a hand-written file's ability to re-assert an
+unchanged config deliberately, or the proposal would have to carry a new
+field, which is hashed content and a change to this constitution. At
+resolve the distinction is already in hand.
+
+The matching `resolution.inputs` entry is dropped with it, which
+`core.Validate` requires rather than merely prefers: every
+`Delta.Modifies` entry must have a matching `Resolution.Inputs` entry.
+
+A document where every resource is unchanged therefore resolves to a
+zero delta. Confirmed end to end before relying on it, since nothing had
+produced that shape before: plan, resolve, accept and ship all handle
+it, ship reports "already fully shipped -- nothing to do" and exits 0,
+and `core.Validate` accepts it.
+
 Two further consequences worth knowing. `ErrCreateTargetExists` was incidentally
 the only thing that surfaced "this address is already owned by something
 else" for a generated document, and that is now a visible modify with
