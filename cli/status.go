@@ -197,7 +197,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 			// every declared provider if at least one entry actually
 			// needs it) rather than always paying for it up front.
 			if len(cfg.ThirdpartyProviders) > 0 || len(cfg.Providers) > 0 {
-				warnIfLegacyProviderFlagsGiven(cmd)
+				warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				pool, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("status: %w", err)}
