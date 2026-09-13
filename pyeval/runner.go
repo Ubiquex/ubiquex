@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-
-	pyassets "github.com/ubiquex/ubiquex/sdk/py"
 )
 
 // runtimeGuestPath is the fixed guest path ubx_sdk's own runtime source
@@ -154,7 +153,7 @@ var extractAssets = sync.OnceValues(func() (string, error) {
 		return "", fmt.Errorf("pyeval: create assets dir: %w", err)
 	}
 
-	data, err := pyassets.Assets.ReadFile("ubx_sdk/__init__.py")
+	data, err := fs.ReadFile(assets, "ubx_sdk/__init__.py")
 	if err != nil {
 		return "", fmt.Errorf("pyeval: read embedded ubx_sdk/__init__.py: %w", err)
 	}

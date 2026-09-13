@@ -203,6 +203,51 @@ documented ~15-minute upper bound, but far from instant — which is why
 outcome (a narrow correlation window can't rule out "the event just
 hasn't propagated yet" the way a wide one that still finds nothing can).
 
+## Why the evaluators embed a vendored copy (UBI-254)
+
+`tseval` and `pyeval` embed their runtime assets from
+`tseval/vendored/` and `pyeval/vendored/`, copies of files that really
+live in `ubx-sdk-typescript` and `ubx-sdk-python` and are checked out
+here as the `sdk/ts` and `sdk/py` submodules.
+
+They used to import those submodules' own Go packages directly, and
+that worked from a working tree and nowhere else. **The Go module proxy
+zips a repository without submodule contents**, so every published
+version of this module was missing `sdk/ts` and `sdk/py` entirely, and
+`github.com/ubiquex/ubiquex/blueprint` could not be built by any
+consumer outside this repository:
+
+```
+module github.com/ubiquex/ubiquex@latest found (v0.5.0), but does not
+contain package github.com/ubiquex/ubiquex/sdk/py
+```
+
+`core/resolver` and `blueprint/spec` built fine, so the split was
+exactly "anything reaching an evaluator". The failure is invisible from
+a working tree by construction, which is why it survived until someone
+tried to import the module.
+
+**The submodule is the source.** Never edit a vendored copy: change the
+file in its own repository and run `make vendor-assets`.
+`tseval/vendored_test.go` and `pyeval/vendored_test.go` byte-compare the
+two and fail if they disagree, running for real in CI, which checks out
+submodules, and skipping only when the submodule is genuinely absent.
+Those tests were written and proven to fail before anything was
+vendored, because a second copy of the same content is only defensible
+while something enforces that they agree.
+
+`sdk/go` is unaffected and always was: it carries its own `go.mod`, so
+Go treats it as a nested module and excludes it from this module
+regardless, and nothing imports `ubiquex/sdk/go` as a Go package.
+
+The alternative was publishing `ubx-sdk-typescript` and
+`ubx-sdk-python` as real Go modules, which removes the duplication
+entirely and is arguably more principled, since `ubx-sdk-go` already
+works that way. It was rejected because it makes a TypeScript package
+and a Python package answer to Go's release model forever. The Go embed
+file is already the odd thing living in those repositories, and that
+option doubles down on it rather than containing it.
+
 ## Decision loop (UBI-11)
 
 M3-4's "decision loop" (docs/plan.md) turns a detected drift (UBI-7/UBI-10)

@@ -2,11 +2,10 @@ package tseval
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
-
-	tsassets "github.com/ubiquex/ubiquex/sdk/ts"
 )
 
 // embeddedFiles are exactly the files sdk/ts/embed.go's own //go:embed
@@ -36,7 +35,7 @@ var extractAssets = sync.OnceValues(func() (string, error) {
 	}
 
 	for _, name := range embeddedFiles {
-		data, err := tsassets.Assets.ReadFile(name)
+		data, err := fs.ReadFile(assets, name)
 		if err != nil {
 			return "", fmt.Errorf("tseval: read embedded %s: %w", name, err)
 		}

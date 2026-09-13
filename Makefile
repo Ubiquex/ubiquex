@@ -1,4 +1,4 @@
-.PHONY: build install submodules
+.PHONY: build install submodules vendor-assets
 
 # build and install both print `ubx version` immediately after rebuilding
 # (UBI-63 session 4): a real live finding was a founder re-test that
@@ -29,6 +29,23 @@
 # so the fix is automatic, not a remembered extra step.
 submodules:
 	git submodule update --init --recursive
+
+# vendor-assets re-copies the three files tseval/pyeval embed out of the
+# sdk/ts and sdk/py submodules (UBI-254).
+#
+# The copies exist because the Go module proxy zips a repository WITHOUT
+# submodule contents, so github.com/ubiquex/ubiquex/blueprint could not
+# be imported by anyone outside this repository at all: the packages it
+# needs were absent from every published version.
+#
+# The submodule is the source. Never edit a vendored copy: run this,
+# which is what tseval/pyeval's own drift tests tell you to do when they
+# catch a divergence.
+vendor-assets: submodules
+	cp sdk/ts/evaluator/guards.ts tseval/vendored/evaluator/guards.ts
+	cp sdk/ts/runtime/src/index.ts tseval/vendored/runtime/src/index.ts
+	cp sdk/py/ubx_sdk/__init__.py pyeval/vendored/ubx_sdk/__init__.py
+	@echo "re-synced the vendored evaluator assets from sdk/ts and sdk/py"
 
 build: submodules
 	go build -o ./ubx ./cmd/ubx
