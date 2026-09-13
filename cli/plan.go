@@ -170,6 +170,12 @@ propose-time PR trailer hash, etc.).`,
 
 			var intent resolver.IntentFile
 			var sourceLabel string
+			// UBI-267: whether this document was GENERATED rather than
+			// authored, which decides whether its op is a claim to check
+			// or a value to derive. Set only by the two branches that
+			// generate one; a hand-written intent file leaves it false
+			// and keeps today's strictness exactly.
+			var generated bool
 			switch {
 			case isHCLStackFile(fromCode):
 				// A .ubx.hcl file is parsed, never evaluated: no code runs,
@@ -187,6 +193,7 @@ propose-time PR trailer hash, etc.).`,
 				}
 				intent = *parsed
 				sourceLabel = fromCode
+				generated = true
 			case fromCode != "":
 				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
@@ -236,6 +243,7 @@ propose-time PR trailer hash, etc.).`,
 					}
 				}
 				sourceLabel = fromCode
+				generated = true
 			default:
 				data, err := os.ReadFile(args[0])
 				if err != nil {
@@ -275,7 +283,7 @@ propose-time PR trailer hash, etc.).`,
 			}
 			defer closeLedger()
 
-			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents))
+			p, err := resolver.Resolve(ledger, providers, &intent, knownDependentsFor(cfg, knownDependents), inferOpIfGenerated(generated)...)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}

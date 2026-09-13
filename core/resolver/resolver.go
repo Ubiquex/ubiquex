@@ -1060,7 +1060,62 @@ func (c *dataSourceReadCache) get(ctx context.Context, reader core.StateReader, 
 // multi-provider stacks" input: every provider a stack declares, each
 // paired with its own SchemaInspector. A single-provider stack is simply
 // a one-element slice -- there is no separate code path for it anymore.
-func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string) (*core.Proposal, error) {
+// ResolveOption configures one Resolve call. Variadic so every caller
+// that wants today's behaviour keeps compiling and keeps behaving
+// identically.
+type ResolveOption func(*resolveOptions)
+
+type resolveOptions struct {
+	inferOp bool
+}
+
+// WithInferredOp derives each resource's op from whether the ledger
+// already has its address, instead of checking the declared op against
+// it (UBI-267).
+//
+// For a GENERATED document only. All three SDK runtimes hardcode
+// op "create", with the reason recorded in sdk/go/runtime: a hermetic,
+// describe-only program cannot read ledger state, so it has no way to
+// express modify intent. The check it then fails is documented in
+// docs/resolver.md as existing to catch an AUTHORING MISTAKE:
+//
+//	"modify intent whose target isn't in the ledger" is only a catchable
+//	authoring mistake if op is a real, separately-stated claim the
+//	resolver can check against reality
+//
+// Both are sound alone and contradictory together. The check validates a
+// claim nobody made, against a program that cannot make a different one,
+// and the result was that an SDK-authored stack could be resolved
+// exactly once: any second plan after any successful ship was refused,
+// which also made a partially shipped stack impossible to complete by
+// re-running its own program.
+//
+// This does not weaken that check, it scopes it to the documents it was
+// written for. A hand-written intent file keeps exactly today's
+// strictness, ErrCreateTargetExists and ErrModifyTargetMissing included,
+// because there a human really did state an op and really can be wrong
+// about it.
+//
+// Inference runs in both directions, so "inferred" means the op is a
+// function of ledger presence rather than a guess pointed one way. Today
+// no generator emits modify, but a generated modify against an absent
+// address is the same non-claim as a generated create against a present
+// one.
+func WithInferredOp() ResolveOption {
+	return func(o *resolveOptions) { o.inferOp = true }
+}
+
+func applyResolveOptions(opts []ResolveOption) resolveOptions {
+	var o resolveOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
+func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, opts ...ResolveOption) (*core.Proposal, error) {
 	resolvedAt := time.Now().UTC().Format(time.RFC3339)
 	var resolved *core.Proposal
 	// dsCache is scoped to exactly this one Resolve call -- created
@@ -1076,7 +1131,7 @@ func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, k
 	// keep DoubleRun from misfiring on them.
 	dsCache := newDataSourceReadCache()
 	_, err := core.DoubleRun(func() ([]byte, error) {
-		p, err := resolveOnce(l, providers, intent, knownDependents, resolvedAt, dsCache)
+		p, err := resolveOnce(l, providers, intent, knownDependents, resolvedAt, dsCache, applyResolveOptions(opts))
 		if err != nil {
 			return nil, err
 		}
@@ -1093,7 +1148,7 @@ func Resolve(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, k
 	return resolved, nil
 }
 
-func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string, dsCache *dataSourceReadCache) (*core.Proposal, error) {
+func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFile, knownDependents []string, resolvedAt string, dsCache *dataSourceReadCache, opts resolveOptions) (*core.Proposal, error) {
 	if intent.Kind != IntentFileKind {
 		return nil, fmt.Errorf("%w: got %q", ErrUnknownIntentKind, intent.Kind)
 	}
@@ -1121,6 +1176,16 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 		_, found, err := l.FoldState(addr)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", addr, err)
+		}
+		// The op a generated document carries is not a claim anyone
+		// made, so it is derived rather than checked (WithInferredOp).
+		// A hand-written file keeps both errors exactly as before.
+		if opts.inferOp {
+			if found {
+				ri.Op = OpModify
+			} else {
+				ri.Op = OpCreate
+			}
 		}
 		switch ri.Op {
 		case OpCreate:
