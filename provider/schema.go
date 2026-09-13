@@ -132,21 +132,24 @@ type NestedBlock struct {
 	MaxItems int64
 }
 
-// IsAttrComputed reports whether attrName is a top-level attribute of s's
-// own Block, and marked Computed there -- satisfies core.AttrComputedFlags
+// IsAttrProviderOwned reports whether attrName is a top-level attribute of
+// s's own Block whose value the provider decides outright: Computed and
+// NOT Optional. An Optional+Computed attribute answers false, because a
+// user could have set it -- see core.AttrOwnership for why that
+// distinction is load-bearing (UBI-268). Satisfies core.AttrOwnership
 // (UBI-63 session 3) through plain structural typing: core.RunScan already
 // threads this same *Schema through as an opaque `any` (core deliberately
 // never imports this package, see core/scan.go's own StateReader doc
 // comment), so adding this method lets that opaque handle answer core's
 // one real question -- "is this attribute the provider's to decide, not
 // mine?" -- without core ever needing to know Schema's concrete shape.
-func (s *Schema) IsAttrComputed(attrName string) bool {
+func (s *Schema) IsAttrProviderOwned(attrName string) bool {
 	if s == nil {
 		return false
 	}
 	for _, a := range s.Block.Attributes {
 		if a.Name == attrName {
-			return a.Computed
+			return a.Computed && !a.Optional
 		}
 	}
 	return false

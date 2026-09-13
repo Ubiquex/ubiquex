@@ -31,7 +31,20 @@ const IntentFileKind = "ubx:intent/v1"
 // fake.
 type SchemaInspector interface {
 	HasType(typeName string) bool
+
+	// IsComputed reports whether the provider MAY supply this attribute's
+	// value: Computed, whether or not it is also Optional. This is the
+	// question "should an omitted attribute be preserved rather than
+	// removed", and both flavours answer yes.
 	IsComputed(typeName, attrPath string) bool
+
+	// IsProviderOwned reports whether the provider decides this
+	// attribute's value outright: Computed and NOT Optional. This is the
+	// narrower question "could a user have set this at all", and only
+	// Computed-without-Optional answers no (UBI-268). Every
+	// IsProviderOwned is also an IsComputed; the reverse does not hold.
+	IsProviderOwned(typeName, attrPath string) bool
+
 	IsSensitive(typeName, attrPath string) bool
 
 	// UnknownConfigKeys reports every config key -- checked recursively
@@ -129,19 +142,36 @@ type DeclaredProvider struct {
 	ProviderConfig json.RawMessage
 }
 
-// schemaComputedAdapter curries a SchemaInspector to one resource type,
-// adapting it to core.FilterNormalizationNoise's own AttrComputedFlags
-// (single-arg IsAttrComputed(attrName)) via a plain duck-typed method --
-// core.FilterNormalizationNoise takes resourceSchema as `any` and type-
+// schemaOwnershipAdapter curries a SchemaInspector to one resource type,
+// adapting it to core.FilterNormalizationNoise's own AttrOwnership
+// (single-arg IsAttrProviderOwned(attrName)) via a plain duck-typed method
+// -- core.FilterNormalizationNoise takes resourceSchema as `any` and type-
 // asserts it itself, so this package never needs to import core's
 // interface to satisfy it (UBI-88).
-type schemaComputedAdapter struct {
+//
+// UBI-268: this delegates to IsProviderOwned, NOT IsComputed, and the
+// difference is the whole point. This package asks the schema two
+// different questions and used to send both through IsComputed:
+//
+//   - planModifies' backfill asks "if a document omits this attribute,
+//     should the omission be read as 'leave it alone' rather than
+//     'remove it'?" That is true for anything the provider may supply,
+//     Optional+Computed included, so it keeps IsComputed.
+//   - this adapter asks "is a null-to-value transition here uninteresting
+//     because nobody could have set it?" That is true only when the
+//     provider owns the value outright. For an Optional+Computed
+//     attribute a user COULD have set it, so a value appearing where the
+//     ledger recorded none is real drift and must still be reported.
+//
+// One predicate answering both was harmless only while no provider
+// emitted Optional+Computed at all.
+type schemaOwnershipAdapter struct {
 	schema   SchemaInspector
 	typeName string
 }
 
-func (a schemaComputedAdapter) IsAttrComputed(attrName string) bool {
-	return a.schema.IsComputed(a.typeName, attrName)
+func (a schemaOwnershipAdapter) IsAttrProviderOwned(attrName string) bool {
+	return a.schema.IsProviderOwned(a.typeName, attrName)
 }
 
 // ProviderHint is ResourceIntent's own narrow escape hatch (docs/schema.md's
@@ -1592,7 +1622,7 @@ func planModifies(l *core.Ledger, batch map[string]*batchEntry, topoOrder []stri
 		// "<attr>: null -> (absent)" -- representation noise, the same
 		// null<->absent equivalence class drift comparison already
 		// collapses.
-		before, after = core.FilterNormalizationNoise(before, after, schemaComputedAdapter{schema: e.provider.Schema, typeName: e.ri.Type})
+		before, after = core.FilterNormalizationNoise(before, after, schemaOwnershipAdapter{schema: e.provider.Schema, typeName: e.ri.Type})
 
 		// A generated document that changes nothing about a resource says
 		// nothing about it, so it produces no entry (UBI-267). An empty

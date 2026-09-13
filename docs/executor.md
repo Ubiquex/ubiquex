@@ -1216,7 +1216,7 @@ narrower `resolver.SchemaInspector` adapter alongside the existing
 concrete `*provider.Schema` boxed as `any`), not the concrete
 `*provider.Schemas` the existing adapter needs and a pool-launched
 `Applier` never hands back. Implements only `HasType` for real (a map
-lookup); `IsComputed`/`IsSensitive` are harmless always-false stubs,
+lookup); `IsComputed`/`IsProviderOwned`/`IsSensitive` are harmless always-false stubs,
 confirmed sufficient by reading `InferProvider`'s own body — it never
 calls either. This is what lets `declaredProvidersForInference`
 (`cli/providerpool.go`) reuse the SAME already-launched pool entries for

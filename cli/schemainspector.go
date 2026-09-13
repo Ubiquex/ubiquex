@@ -34,6 +34,18 @@ func (s schemaInspectorAdapter) IsComputed(typeName, attrPath string) bool {
 	return ok && a.Computed
 }
 
+// IsProviderOwned is IsComputed's narrower sibling (UBI-268): Computed AND
+// NOT Optional, the attributes a user could not have set even if they
+// wanted to. See resolver.SchemaInspector for which question each answers.
+func (s schemaInspectorAdapter) IsProviderOwned(typeName, attrPath string) bool {
+	rs, ok := s.schemas.Resources[typeName]
+	if !ok {
+		return false
+	}
+	a, ok := attributeAt(rs.Block, attrPath)
+	return ok && a.Computed && !a.Optional
+}
+
 func (s schemaInspectorAdapter) IsSensitive(typeName, attrPath string) bool {
 	rs, ok := s.schemas.Resources[typeName]
 	if !ok {
@@ -94,9 +106,9 @@ func (s schemaInspectorAdapter) MissingRequiredKeys(typeName string, config map[
 // concrete *provider.Schemas schemaInspectorAdapter needs, which a
 // providerPool-launched Applier never hands back (UBI-43 session 5,
 // cli/status.go's own multi-provider fleet-grouping). HasType is a plain
-// map lookup; IsComputed/IsSensitive are harmless always-false stubs,
-// since resolver.InferProvider -- the only caller this adapter is ever
-// used for -- calls HasType alone, never the other two. Reusing the
+// map lookup; IsComputed/IsProviderOwned/IsSensitive are harmless
+// always-false stubs, since resolver.InferProvider -- the only caller this
+// adapter is ever used for -- calls HasType alone, never the others. Reusing the
 // already-launched pool entry this way avoids launching a second copy of
 // every declared provider just to answer "who owns this type."
 type resourceTypeSchemaInspector struct {
@@ -108,7 +120,8 @@ func (s resourceTypeSchemaInspector) HasType(typeName string) bool {
 	return ok
 }
 
-func (s resourceTypeSchemaInspector) IsComputed(typeName, attrPath string) bool { return false }
+func (s resourceTypeSchemaInspector) IsComputed(typeName, attrPath string) bool      { return false }
+func (s resourceTypeSchemaInspector) IsProviderOwned(typeName, attrPath string) bool { return false }
 
 func (s resourceTypeSchemaInspector) IsSensitive(typeName, attrPath string) bool { return false }
 

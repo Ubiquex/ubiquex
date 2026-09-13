@@ -144,6 +144,7 @@ same shape, not a new pattern:
 type SchemaInspector interface {
     HasType(typeName string) bool
     IsComputed(typeName, attrPath string) bool
+    IsProviderOwned(typeName, attrPath string) bool
     IsSensitive(typeName, attrPath string) bool
     UnknownConfigKeys(typeName string, config map[string]interface{}) []ConfigKeyIssue
 }
@@ -1120,3 +1121,48 @@ config-returning signature) this CLI wiring drives.
   discovery" and docs/executor.md's equivalent note for the full design —
   this was a discovery-layer gap, not a resolver one, so nothing in this
   document's own contract changed.
+
+## Amendment (2026-09-14, UBI-268): `IsComputed` and `IsProviderOwned` are different questions
+
+`SchemaInspector` gains `IsProviderOwned`, and the two Computed-shaped
+questions this package asks are separated.
+
+Computed has two meanings in tfplugin, and they had never come apart in
+practice:
+
+- **Computed and not Optional.** The provider decides the value and a user
+  cannot set it. An `id`, an `arn`, a region only known after creation.
+- **Optional and Computed.** A user MAY set the value, and the provider
+  fills it in when they do not. An `aws_sqs_queue`'s `visibility_timeout`.
+
+`core/resolver` asks about Computed in two places, for genuinely different
+reasons:
+
+| call site | question | correct answer for Optional+Computed |
+|---|---|---|
+| `planModifies` backfill | if a document omits this, is that "leave it alone" rather than "remove it"? | **yes**, the provider may supply it |
+| `schemaOwnershipAdapter` (feeding `core.FilterNormalizationNoise`) | is a null-to-value transition uninteresting because nobody could have set it? | **no**, a user could have, so it is real drift |
+
+Both went through `IsComputed`, which answered the first question. That was
+harmless for exactly as long as no provider emitted the combination at all.
+
+The CloudFormation source emits none: zero Optional+Computed attributes
+across 15,967 (UBI-268's own finding). Fixing that puts roughly 8,000 AWS
+attributes into the second category in a single change, and without this
+split every one of them would silently stop reporting a value appearing
+where the ledger recorded none. That is a drift miss on 8,000 attributes,
+introduced by a change meant to improve accuracy.
+
+So the split lands first and separately, before the schema rule that makes
+it matter.
+
+`core.AttrComputedFlags` is renamed `core.AttrOwnership`, and its method
+`IsAttrComputed` becomes `IsAttrProviderOwned`, because the name stated a
+mechanism while the caller wanted a question. `provider.Schema`'s matching
+method now returns `Computed && !Optional`.
+
+The backfill is deliberately untouched. Narrowing THAT predicate is the
+destructive direction: it is the live incident this came from, where a
+modify that never mentioned `visibility_timeout` planned to remove it from
+a real queue. Both directions are covered by tests that fail when the wrong
+predicate is narrowed.
