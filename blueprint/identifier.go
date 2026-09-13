@@ -6,18 +6,48 @@ import (
 	"strings"
 )
 
-// splitIdentifierParts splits a hyphen/underscore-separated lowercase
-// name into its component parts (e.g. "ci-artifacts" -> ["ci",
+// This file converts names into Go/TS/Python identifiers, and there are
+// two genuinely different jobs here rather than one with an
+// inconsistency (UBI-264).
+//
+//   - An AUTHORED NAME is chosen by a person: a blueprint's own name
+//     ("ubx-aws-sqs"), a resource slug ("pipeline-events"), a param
+//     name ("retention_days"). Hyphens are ordinary and common in these,
+//     and every one of them appears hyphenated in this repository's own
+//     real fixtures.
+//
+//   - A WIRE NAME is chosen by a provider ("message_retention_seconds").
+//     No real provider schema this project has generated against
+//     contains a hyphen, and sdk/codegen/templates/go's own
+//     splitWireName refuses one outright.
+//
+// Both used to go through one function called pascalCase, which
+// accepted hyphens because the authored-name job needs it. Compared
+// against sdk codegen's own pascalCase that read as two implementations
+// of one thing disagreeing about what is legal, and it was filed as a
+// divergence. It is not. They do different jobs, and the fix is to name
+// them for those jobs rather than to make either match the other:
+// making this one strict breaks every hyphenated resource slug, and
+// making codegen's lenient removes a real check for input no provider
+// produces.
+//
+// The two overlap on wire names, which this package converts in exactly
+// one place (gogen.go's own config FieldMap). That call uses
+// pascalCaseWire, so the one reachable path where leniency would have
+// differed from codegen's answer now gives codegen's answer.
+
+// splitAuthoredNameParts splits a hyphen/underscore-separated lowercase
+// AUTHORED name into its component parts (e.g. "ci-artifacts" -> ["ci",
 // "artifacts"], "message_retention_seconds" -> ["message", "retention",
-// "seconds"]) -- shared by resource names (hyphenated, as an intent
-// provider draft's own ResourceIntent.Name convention) and provider wire
-// field names (underscored) alike, since neither alphabet can ever
-// collide with the other's own separator. Mirrors
-// sdk/codegen/templates/go's own splitWireName discipline (never a
-// best-effort coercion -- reject anything outside lowercase ascii +
-// digits, don't guess), broadened to accept "-" as a second separator
-// this package's own dir/resource names actually use.
-func splitIdentifierParts(name string) ([]string, error) {
+// "seconds"]).
+//
+// Hyphen and underscore are both separators here deliberately: a
+// blueprint name and a resource slug are hyphenated by convention,
+// a param name is underscored, and neither alphabet can collide with
+// the other's separator. Mirrors sdk/codegen/templates/go's own
+// splitWireName discipline otherwise (never a best-effort coercion --
+// reject anything outside lowercase ascii + digits, don't guess).
+func splitAuthoredNameParts(name string) ([]string, error) {
 	if name == "" {
 		return nil, fmt.Errorf("empty name")
 	}
@@ -35,10 +65,14 @@ func splitIdentifierParts(name string) ([]string, error) {
 	return fields, nil
 }
 
-// pascalCase converts a hyphen/underscore-separated lowercase name into
-// Go's own exported identifier casing ("ci-artifacts" -> "CiArtifacts").
-func pascalCase(name string) (string, error) {
-	parts, err := splitIdentifierParts(name)
+// pascalCaseAuthored converts an AUTHORED name into Go's own exported
+// identifier casing ("ci-artifacts" -> "CiArtifacts").
+//
+// Use this for anything a person named: a blueprint, a resource, a
+// param. For a provider's own wire name use pascalCaseWire, which
+// refuses a hyphen the way codegen does.
+func pascalCaseAuthored(name string) (string, error) {
+	parts, err := splitAuthoredNameParts(name)
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +89,7 @@ func pascalCase(name string) (string, error) {
 // used for the generated function's own parameter names and the local
 // variables holding each resource's *Computed handle.
 func camelCase(name string) (string, error) {
-	p, err := pascalCase(name)
+	p, err := pascalCaseAuthored(name)
 	if err != nil {
 		return "", err
 	}
@@ -108,8 +142,8 @@ var repeatedSeparator = regexp.MustCompile(`[-_]{2,}`)
 // IDENTIFIER (its Go/TS/Python binding/config type name, derived via
 // pascalCase below) has no reason to vary per iteration the way its own
 // RUNTIME name does -- every instance shares the SAME binding -- but
-// pascalCase (via splitIdentifierParts) rejects "{"/"}" outright, so an
-// ordinary resource's "just pascalCase(RI.Name) directly" derivation
+// pascalCase (via splitAuthoredNameParts) rejects "{"/"}" outright, so an
+// ordinary resource's "just pascalCaseAuthored(RI.Name) directly" derivation
 // would hard-fail on a for_each resource's own templated Name. An
 // ordinary (non-for_each) resource never calls this at all -- its own
 // ident derivation is completely unaffected, byte-identical to every
@@ -130,7 +164,7 @@ func forEachIdentifierBasis(name string) (string, error) {
 // are conventionally one bare lowercase word ("ci-platform" ->
 // "ciplatform").
 func packageIdent(name string) (string, error) {
-	parts, err := splitIdentifierParts(name)
+	parts, err := splitAuthoredNameParts(name)
 	if err != nil {
 		return "", fmt.Errorf("blueprint name %q: %w", name, err)
 	}
@@ -185,7 +219,7 @@ func tsReservedIdent(name string) bool {
 // pythonKeywords is the lowercase-only subset of Python 3's reserved-word
 // set (keyword.kwlist) that a real, lowercase-ascii-only wire/resource
 // name could ever actually collide with -- capitalized reserved words
-// (False/None/True) can never match, since splitIdentifierParts only
+// (False/None/True) can never match, since splitAuthoredNameParts only
 // ever accepts lowercase ascii + digits (matching
 // sdk/codegen/templates/py/py.go's own pythonKeywords, independently
 // reimplemented here for the same package-boundary reason every other
@@ -211,7 +245,7 @@ var pythonKeywords = map[string]bool{
 // convention for exactly this collision (matching
 // sdk/codegen/templates/py's own pythonIdentifier precedent).
 func pythonIdentifier(name string) (string, error) {
-	parts, err := splitIdentifierParts(name)
+	parts, err := splitAuthoredNameParts(name)
 	if err != nil {
 		return "", err
 	}
@@ -220,4 +254,48 @@ func pythonIdentifier(name string) (string, error) {
 		return joined + "_", nil
 	}
 	return joined, nil
+}
+
+// pascalCaseWire converts a provider's own WIRE name into exported
+// identifier casing, refusing a hyphen (UBI-264).
+//
+// Same answer as sdk/codegen/templates/go's own pascalCase for every
+// input either accepts, and the same refusal for a hyphen. That
+// matters because a blueprint's generated bindings and the published
+// per-provider SDK describe the same provider fields, so the two have
+// to agree about what a field is called and about what is a legal
+// field name at all.
+//
+// Underscore only, and the reason is worth keeping: no real provider
+// schema this project has generated against contains a hyphen in a
+// field name, so accepting one would mean inventing an identifier for
+// input that cannot occur, and doing it differently from the SDK a
+// caller imports alongside.
+func pascalCaseWire(wireName string) (string, error) {
+	if wireName == "" {
+		return "", fmt.Errorf("empty wire name")
+	}
+	parts := make([]string, 0, 4)
+	for _, p := range strings.Split(wireName, "_") {
+		if p == "" {
+			// A leading, trailing or doubled underscore is tolerated
+			// rather than fatal, matching splitWireName exactly.
+			continue
+		}
+		for _, r := range p {
+			if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') {
+				return "", fmt.Errorf("wire name %q: unsupported character %q (only lowercase ascii + digits + underscore seen in any real provider schema this project has generated against)", wireName, r)
+			}
+		}
+		parts = append(parts, p)
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("wire name %q has no identifier characters", wireName)
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String(), nil
 }

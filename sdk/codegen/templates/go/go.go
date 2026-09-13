@@ -950,6 +950,22 @@ var goReservedPackageNames = map[string]bool{
 // including the "never a best-effort coercion" refusal on anything
 // outside plain ASCII snake_case (docs/sdk.md's own row 5).
 func pascalCase(wireName string) (string, error) {
+	return PascalCaseWireName(wireName)
+}
+
+// PascalCaseWireName is the canonical provider-wire-name conversion,
+// exported so another package can assert it agrees rather than
+// reimplementing it (UBI-264).
+//
+// blueprint/ converts wire names too, in one place: a blueprint's own
+// generated bindings and the published per-provider SDK describe the
+// same provider fields, so the two must give one provider field one Go
+// name, and must agree on what is a legal field name at all. That is
+// asserted against this function directly (blueprint's own
+// identifier_jobs_test.go) rather than against a transcribed list of
+// expected values, since a transcription drifts in exactly the way the
+// two functions would.
+func PascalCaseWireName(wireName string) (string, error) {
 	parts, err := splitWireName(wireName)
 	if err != nil {
 		return "", err

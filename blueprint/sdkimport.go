@@ -226,7 +226,7 @@ func cfnCandidates(provider, cfnType string) (wireNames []string, t sdkTarget, o
 	}
 	service := strings.ToLower(parts[1])
 	local := snakeCase(parts[2])
-	typeName, err := pascalCase(local)
+	typeName, err := pascalCaseAuthored(local)
 	if err != nil {
 		return nil, sdkTarget{}, false
 	}

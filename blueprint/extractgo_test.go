@@ -211,7 +211,7 @@ func Run(cfg Config) Outputs { return Outputs{} }
 		}
 		// The property that matters: the conversion is one-way, so the
 		// source name has to be carried rather than recomputed.
-		if back, _ := pascalCase(w.name); back == w.source {
+		if back, _ := pascalCaseAuthored(w.name); back == w.source {
 			t.Errorf("%s round-trips to %s, so this test no longer proves why SourceName exists", w.name, w.source)
 		}
 	}
