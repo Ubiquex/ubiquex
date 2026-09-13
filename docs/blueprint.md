@@ -1854,7 +1854,8 @@ cannot compute one for itself.
 
 **Outside the evaluated program**, after it returns
 (`blueprint/sdkprovenance.go`, new — `StampDirectCallProvenance`, called
-from `cli/resolve.go`'s own `--from-code` handling, Go entries only): a
+from `cli/resolve.go`'s AND `cli/plan.go`'s own `--from-code` handling,
+Go entries only — see "Both verbs stamp, and both refuse" below): a
 fast-path check first — if no resource carries an incomplete blueprint
 source, this is a no-op, `go list` never runs, an ordinary Go SDK program
 pays nothing extra. Otherwise, walks the entry program's own real Go
@@ -4859,6 +4860,54 @@ hash.
 That is the deliberate division: prose for people and models, schema for
 machines, and the schema derived from the code rather than from the
 prose, so the two cannot drift.
+
+## Both verbs stamp, and both refuse (UBI-257)
+
+`ubx plan` never stamped direct-call provenance, in any language. Only
+`ubx resolve` did. So a resource built by importing a blueprint's
+package directly recorded a bare name through the verb most people run,
+and the ledger could say WHICH blueprint produced a resource but never
+WHICH BYTES. Two versions of a blueprint were indistinguishable after
+the fact, which is the question a ledger exists to answer, and the hash
+is what a blueprint gives up full language power to buy.
+
+Both verbs now stamp, and both **refuse** a blueprint they cannot hash
+rather than falling back to a bare name.
+
+The fallback was the tempting option and it is the worst of the three.
+It makes tamper-evidence optional, and once it is optional nothing
+downstream can distinguish a blueprint whose hash was skipped from one
+that never had a hash, so every bare ref becomes unfalsifiable.
+Refusing is a real behaviour change on the common path, not a pure bug
+fix, and it is deliberate.
+
+### A blueprint's name comes from the blueprint, not its directory
+
+Discovery used to key its results on the directory basename on the
+consumer's disk. The ref it had to match against carries the name baked
+into the blueprint's own generated code at BUILD time. `ubx blueprint
+pull <source> <dest>` lets a consumer choose that directory freely, so
+pulling into any directory not named exactly after the blueprint made
+the two disagree and the hash was silently never attached.
+
+It also meant a blueprint's recorded identity depended on where someone
+put it: the same verified bytes produced `bp:sha256:...` or
+`bp-renamed:sha256:...` according to the directory alone.
+
+`blueprint.lock.json` records the build-time name and travels with the
+bytes, so that is what `blueprintNameAt` reads, falling back to the
+basename only for an unpackaged working directory that has no lock file
+yet.
+
+### The refusal names what it found
+
+The old message asserted the layout was wrong ("an Ubxfile-bearing
+parent of a go.mod'd package"). The layout was usually correct and only
+the name differed, so it sent whoever hit it to inspect a structure with
+nothing wrong with it. The refusal now describes how discovery works and
+lists the blueprints it did find, which is usually the whole diagnosis:
+a near-miss is visible immediately, and "no blueprint was found at all"
+says something quite different from a list of two with other names.
 
 ## Naming a version for an oci:// source (UBI-256)
 

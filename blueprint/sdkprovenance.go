@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ubiquex/ubiquex/core/resolver"
@@ -56,7 +57,7 @@ func StampDirectCallProvenance(ctx context.Context, entryFile string, intent *re
 		return fmt.Errorf("blueprint: resolve direct-call provenance: %w", err)
 	}
 
-	hint := fmt.Sprintf("no imported Go module in %s resolves to a real blueprint directory (an Ubxfile-bearing parent of a go.mod'd package) with that name -- this works for a blueprint imported via a local directory or a local `replace` directive (the pattern every direct-SDK-import example in this project uses today); a blueprint distributed as a standalone published Go module with no adjacent Ubxfile/blueprint.lock.json isn't supported yet", entryFile)
+	hint := fmt.Sprintf("no imported Go module in %s sits inside a blueprint this can hash. A blueprint is found by walking %s's own module graph (`go list -m all`) and checking whether each module's parent directory is a blueprint root", entryFile, entryFile)
 	return applyBlueprintRefs(intent, found, hint)
 }
 
@@ -80,13 +81,35 @@ func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]string, no
 			}
 			ref, ok := found[s.Ref]
 			if !ok {
-				return fmt.Errorf("blueprint: resolve direct-call provenance: %s.%s.%s names blueprint %q, but %s",
-					intent.Stack, ri.Type, ri.Name, s.Ref, notFoundHint)
+				return fmt.Errorf("blueprint: resolve direct-call provenance: %s.%s.%s names blueprint %q, but %s.%s",
+					intent.Stack, ri.Type, ri.Name, s.Ref, notFoundHint, discoveredSuffix(found))
 			}
 			s.Ref = ref
 		}
 	}
 	return nil
+}
+
+// discoveredSuffix reports what discovery DID find, which is usually
+// the whole diagnosis (UBI-257).
+//
+// The old message asserted the layout was wrong ("an Ubxfile-bearing
+// parent of a go.mod'd package"), and the layout was usually correct:
+// the real cause was a name mismatch, and the message sent whoever hit
+// it to inspect a structure that had nothing wrong with it. Naming what
+// was found instead lets a reader see a near-miss immediately, and an
+// empty list says something quite different from a list of two
+// blueprints with other names.
+func discoveredSuffix(found map[string]string) string {
+	if len(found) == 0 {
+		return " No blueprint was found at all, so either none is imported or none of the imported ones is a blueprint this can reach on disk"
+	}
+	names := make([]string, 0, len(found))
+	for n := range found {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Sprintf(" The blueprints it did find are: %s. A blueprint calls itself whatever its own blueprint.lock.json records, which is not necessarily the directory it sits in", strings.Join(names, ", "))
 }
 
 // pendingBlueprintNames collects every distinct bare (incomplete) "kind":
@@ -159,7 +182,7 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 		if !IsBlueprintDir(root) {
 			continue // an ordinary Go dependency, not a blueprint
 		}
-		name := filepath.Base(root)
+		name := blueprintNameAt(root)
 		if _, already := found[name]; already {
 			continue // first match wins; a genuine ambiguity (two distinct blueprints sharing a bare name) is a real, separate problem this fix doesn't attempt to detect
 		}
@@ -170,4 +193,33 @@ func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[stri
 		found[name] = name + ":" + manifest.ContentHash
 	}
 	return found, nil
+}
+
+// blueprintNameAt returns the name a blueprint at root calls ITSELF,
+// preferring what it recorded when it was packaged over the directory
+// it happens to sit in now (UBI-257).
+//
+// The two can differ, and when they do, provenance discovery silently
+// finds nothing. A resource's blueprint source carries the name baked
+// into the blueprint's own generated code at BUILD time
+// (sdk.PushBlueprintSource("<name>")), while discovery used to key its
+// results on the directory basename on the CONSUMER's disk at resolve
+// time. `ubx blueprint pull <source> <dest>` lets a consumer choose
+// that directory freely, so pulling into any directory not named
+// exactly after the blueprint made the two disagree and the hash never
+// got attached.
+//
+// It also meant a blueprint's recorded identity depended on where
+// someone put it: the same verified bytes produced "bp:sha256:..." or
+// "bp-renamed:sha256:..." according to the directory alone.
+//
+// blueprint.lock.json records the build-time name and travels with the
+// bytes, so it is the right source. Falling back to the basename keeps
+// an unpackaged working directory (no lock file yet) working exactly as
+// before.
+func blueprintNameAt(root string) string {
+	if m, err := readManifest(root); err == nil && m.Name != "" {
+		return m.Name
+	}
+	return filepath.Base(root)
 }

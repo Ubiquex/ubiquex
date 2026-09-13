@@ -188,13 +188,7 @@ propose-time PR trailer hash, etc.).`,
 				intent = *parsed
 				sourceLabel = fromCode
 			case fromCode != "":
-				// blueprintRefs (UBI-126) is deliberately unused here --
-				// `ubx plan --from-code` has never wired blueprint
-				// direct-call provenance stamping in for ANY language (a
-				// real, pre-existing gap distinct from this ticket's own
-				// scope, predating it for Go too); not fixed in this
-				// session, named rather than silently perpetuated further.
-				canon, receipts, _, err := evaluateSDKProgram(ctx, fromCode)
+				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}
@@ -208,6 +202,38 @@ propose-time PR trailer hash, etc.).`,
 				}
 				if err := json.Unmarshal(canon, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse evaluated intent: %w", err)}
+				}
+				// UBI-257: the same direct-call provenance stamping
+				// cli/resolve.go has always done, which plan never wired
+				// in for any language.
+				//
+				// Without it, a resource built by importing a blueprint's
+				// package directly recorded a bare name and no content
+				// hash, so the ledger could say WHICH blueprint but never
+				// WHICH BYTES, and two versions of a blueprint were
+				// indistinguishable after the fact. That is the question a
+				// ledger exists to answer, and the hash is the thing a
+				// blueprint gives up full language power to buy.
+				//
+				// plan and resolve now agree: both stamp, and both refuse
+				// a blueprint they cannot hash rather than falling back to
+				// a bare name. A fallback would make the tamper-evidence
+				// optional, and collecting it only sometimes is worse than
+				// either alternative, since nothing downstream can tell a
+				// missing hash from a blueprint that never had one.
+				switch strings.ToLower(filepath.Ext(fromCode)) {
+				case ".go":
+					if err := blueprint.StampDirectCallProvenance(ctx, fromCode, &intent); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+					}
+				case ".ts":
+					if err := blueprint.StampDirectCallProvenanceTS(ctx, fromCode, &intent); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+					}
+				case ".py":
+					if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
+						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+					}
 				}
 				sourceLabel = fromCode
 			default:
