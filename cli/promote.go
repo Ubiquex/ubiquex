@@ -209,7 +209,17 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			// target ledger, so a destroy in it orphans whoever depends
 			// on the TARGET stack. The source environment's own
 			// neighbours are the wrong list to check here.
-			np, err := resolver.Resolve(targetLedger, providers, intent, knownDependentsFor(targetCfg, knownDependents))
+			// Always a generated document: this re-derives the intent by
+			// RUNNING the source proposal's own authoring program, and the
+			// extension check above refuses anything but .go/.ts/.py. So
+			// the op it carries is never a claim anyone made, and checking
+			// it against the target ledger made promote carry the
+			// write-once bug on the one command whose entire purpose is
+			// re-resolving an authoring source somewhere else (UBI-267):
+			// promoting into a target that already held those addresses
+			// failed with ErrCreateTargetExists, which is every promotion
+			// after the first.
+			np, err := resolver.Resolve(targetLedger, providers, intent, knownDependentsFor(targetCfg, knownDependents), resolver.WithInferredOp())
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}
 			}
