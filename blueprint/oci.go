@@ -365,7 +365,28 @@ func extractTarGz(tarGzPath, destDir string) error {
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
-	cleanDest := filepath.Clean(destDir)
+
+	// ABSOLUTE, not filepath.Clean. The containment test below compares
+	// the destination against each entry's resolved path, and a
+	// comparison between two paths only means anything if neither can be
+	// rewritten into a different spelling of itself.
+	//
+	// Clean(".") is ".", and filepath.Join(".", "x") is "x": Join cleans
+	// its result, which drops the "." entirely. So for a destination of
+	// "." the destination stopped being a textual prefix of its own
+	// entries, and every legitimate file was reported as escaping. Same
+	// for "" and "./", which also clean to ".".
+	//
+	// Made absolute rather than special-cased. A special case for "."
+	// would be the loosening instinct this kind of bug invites, and it
+	// would leave the comparison resting on a representation that can
+	// still be rewritten. An absolute path has one spelling, so there is
+	// no case to make an exception for, and the check below gets
+	// strictly stronger rather than more permissive.
+	absDest, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("resolve destination %s: %w", destDir, err)
+	}
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -384,8 +405,31 @@ func extractTarGz(tarGzPath, destDir string) error {
 			// result afterward regardless.
 			continue
 		}
-		target := filepath.Join(cleanDest, hdr.Name)
-		if target != cleanDest && !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) {
+		// Two checks, and the first one is the idiom the other two tar
+		// extractors in this codebase already use (provider/
+		// acquireschema.go, provider/acquiredynamicprovider.go): judge
+		// the ENTRY NAME on its own, with no reference to the
+		// destination at all. A check that never looks at the
+		// destination cannot be broken by how the destination is
+		// spelled, which is exactly what went wrong here.
+		//
+		// It also rejects an absolute entry name rather than relocating
+		// it. filepath.Join would neutralise the leading separator and
+		// quietly place "/etc/passwd" at <dest>/etc/passwd; writeTarGz
+		// never emits such a name, so a tarball carrying one is foreign
+		// or tampered and saying so is better than silently accepting a
+		// rewritten version of it.
+		cleaned := filepath.Clean(hdr.Name)
+		if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("tar entry %q escapes the destination directory", hdr.Name)
+		}
+
+		// The containment check stays as well. It is redundant against
+		// the check above for every case either can reach today, and
+		// redundancy is the right posture for the one guard standing
+		// between a downloaded archive and the filesystem.
+		target := filepath.Join(absDest, cleaned)
+		if target != absDest && !strings.HasPrefix(target, absDest+string(os.PathSeparator)) {
 			return fmt.Errorf("tar entry %q escapes the destination directory", hdr.Name)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
