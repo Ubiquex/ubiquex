@@ -511,7 +511,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&stack, "stack", "", "stack name the resource(s) belong to (required unless --all, where it defaults to the state file's own basename; falls back to .ubx/config's own stack key otherwise)")
 	cmd.Flags().StringVar(&resourceType, "type", "", "resource type, e.g. aws_s3_bucket -- pass both --type and --name to scan one resource, or neither to walk every resource this stack's ledger already tracks")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name within the stack -- pass both --type and --name to scan one resource, or neither to walk every resource this stack's ledger already tracks")
-	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider (e.g. {\"id\":\"...\"})")
+	cmd.Flags().StringVar(&lookup, "lookup", "{}", "JSON object identifying the resource to the provider -- the attributes vary by resource type and are frequently not \"id\" (an aws_sqs_queue is identified by queue_url); if the shape is wrong, the error names what this provider expects")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (e.g. {\"region\":\"us-east-1\"})")
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout (single-resource mode only; use --out-dir with --all)")

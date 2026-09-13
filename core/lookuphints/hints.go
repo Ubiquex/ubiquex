@@ -5,9 +5,23 @@
 // Package lookuphints is UBI-20 workstream 3's shipped teaching-error
 // data: for a handful of resource types, the natural-key attribute
 // name(s) (Terraform's own attribute, e.g. "bucket"/"name") that read
-// back null when supplied alone, without "id" -- see cli/lookup.mdx in
-// ubiquex-docs for the full human-readable table this is generated
-// alongside. Keyed by (provider source, type), not type alone (UBI-21,
+// back null when supplied alone, without "id".
+//
+// This used to cite "cli/lookup.mdx in ubiquex-docs" for a human-readable
+// table. No such page exists, in the live docs site or in the retired
+// one that sentence named. Removed rather than repointed: the live
+// equivalent, docs.ubiquex.io/cli-reference/scan, documents the flag but
+// publishes no per-type table, and citing it as though it did would
+// repeat the same mistake more quietly (UBI-270).
+//
+// UBI-270 also narrowed what this package is FOR. A dynamic provider's
+// schema snapshot publishes its own identity map, covering every resource
+// type it has, and core.lookupHintText prefers it. This table still runs
+// for a provider with no snapshot to publish one, which is every
+// Terraform-registry provider, where its few empirically-verified entries
+// remain the only thing anyone knows.
+//
+// Keyed by (provider source, type), not type alone (UBI-21,
 // docs/architecture.md -- GCP support), the same reasoning
 // conformance.Registry's own keying follows. This package has zero
 // runtime dependency on conformance -- that package is explicitly
@@ -34,8 +48,9 @@ func init() {
 // provider source, known to read back null when supplied alone in
 // --lookup (without "id"), and whether any are known at all. A false ok
 // means "id" alone is the verified shape, or that source is unrecognized
-// -- not that this type was never checked -- see cli/lookup.mdx for what
-// "verified" means here. An empty source (e.g. a scan via a raw
+// -- not that this type was never checked. "Verified" means checked live
+// against the real provider (conformance/lookuphints_live_test.go), not
+// inferred from documentation. An empty source (e.g. a scan via a raw
 // --provider path, with no known registry source) always returns false --
 // see core.ScanRequest.ProviderSource's own doc comment for why that's an
 // accepted narrowing, not a bug.

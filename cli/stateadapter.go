@@ -211,3 +211,28 @@ func newApplier(p provider.Provider, salt []byte, source string) executor.Applie
 func newApplierWithIdentity(p provider.Provider, salt []byte, source string, identity map[string][]string) executor.Applier {
 	return stateReaderAdapter{p: p, salt: salt, source: source, identity: identity}
 }
+
+// IdentityAttributes implements core.ResourceIdentityPublisher (UBI-270).
+//
+// The map was already here, already correct, and already consulted on the
+// way OUT: ApplyResourceChange uses it to derive the lookup key to record
+// after a create succeeds. It was unreachable on the way IN, so a scan
+// that needed the same answer from a human got "check the provider schema
+// for its required lookup fields" while this adapter could have named the
+// attributes exactly. This is the whole fix: one method, no new data, no
+// new acquisition, no new parsing.
+//
+// The nil/absent case is real and must stay real. identity is nil for a
+// Terraform-registry provider (no snapshot exists to publish one) and for
+// any snapshot cut before identity.json existed, and a missing entry for
+// one type means the same thing. All three report "cannot say" rather than
+// "this type has no identity", which is what lets core fall through to
+// lookuphints and then to an honest generic answer instead of asserting
+// something false.
+func (a stateReaderAdapter) IdentityAttributes(resourceType string) ([]string, bool) {
+	attrs, ok := a.identity[resourceType]
+	if !ok || len(attrs) == 0 {
+		return nil, false
+	}
+	return attrs, true
+}

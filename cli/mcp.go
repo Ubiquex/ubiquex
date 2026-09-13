@@ -488,7 +488,7 @@ type scanToolInput struct {
 	Stack           string `json:"stack" jsonschema:"stack name the resource belongs to"`
 	Type            string `json:"type" jsonschema:"resource type, e.g. aws_s3_bucket, google_pubsub_topic, kubernetes_secret_v1, helm_release"`
 	Name            string `json:"name" jsonschema:"resource name within the stack"`
-	Lookup          string `json:"lookup" jsonschema:"JSON object identifying the resource to the provider, e.g. {\"id\":\"my-bucket\"} -- see the ubx docs' lookup conventions page for per-type shapes"`
+	Lookup          string `json:"lookup" jsonschema:"JSON object identifying the resource to the provider. The shape is PER RESOURCE TYPE and is often not \"id\": an aws_sqs_queue is identified by queue_url. Guessing wrong is the common failure; the error names the attributes this provider expects, so read it rather than trying another guess."`
 	ProviderPath    string `json:"provider_path,omitempty" jsonschema:"path to a provider binary already on disk (mutually exclusive with source)"`
 	Source          string `json:"source,omitempty" jsonschema:"provider registry source, e.g. hashicorp/aws (mutually exclusive with provider_path; requires provider_version)"`
 	ProviderVersion string `json:"provider_version,omitempty" jsonschema:"explicit provider version to acquire, e.g. 6.54.0 (required with source; no \"latest\" resolution)"`
