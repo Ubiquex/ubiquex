@@ -475,21 +475,50 @@ func TestShipDestroy_LyingApplySuccess_NeverResolvesDestroyed(t *testing.T) {
 // or lying tail, never by the common case. TestShipDestroy_CleanApply
 // already asserts the exact reconciliation shape; this test asserts the
 // same thing framed explicitly around the new universal path's own cost.
+//
+// The reconciliation COUNT is the proof, and it is a strict one, not an
+// approximation of the wall-clock check it replaces.
+// reconcileDestroyLoop's own time.Sleep sits at the END of its loop body,
+// and every path that resolves returns before reaching it. The precheck
+// contributes one entry and each loop attempt contributes one, so exactly
+// two entries means the loop returned on its first iteration, which is
+// before any sleep exists to be taken. Two entries therefore IMPLIES zero
+// backoff. Nothing about elapsed time adds to that.
+//
+// This used to also assert `elapsed > 100*time.Millisecond` and fail.
+// That gate measured the machine rather than the code: it tripped on a
+// loaded CI runner while the loop did exactly the right work, reproduced
+// locally at 101ms and 116ms with reconciliation=2, and failed on main at
+// 0.16s, which cannot even contain the schedule's first two backoffs
+// (50ms + 200ms).
+//
+// The deciding fault was not the flakiness. It was that the gate ran
+// FIRST and used Fatalf, so it aborted before the count assertion that
+// would have said whether anything was actually wrong. A timing gate that
+// destroys the evidence needed to diagnose it is worse than no gate: the
+// CI log for the 395ms failure cannot tell anyone whether a real extra
+// retry happened, and the answer had to be reconstructed by reproducing
+// it. Same shape as UBI-253, which replaced an elapsed-time inference
+// about concurrency with a barrier that proves overlap directly.
+//
+// The gate was also unsound in the other direction, which only became
+// visible while removing it. Forcing a genuine extra retry here (one
+// delayed-absence read, so the loop really does take the schedule's first
+// 50ms backoff) completes in ~90ms and would have PASSED the 100ms gate.
+// The count assertion fails it, naming the "still present after a
+// reported successful destroy -- retrying" entry. So the timer produced
+// false failures on a busy runner AND would have missed the real
+// regression it was written to catch.
 func TestShipDestroy_CleanApply_NoUnnecessaryRetries(t *testing.T) {
 	l, fake, _, p := singleResourceDestroy(t)
 
-	start := time.Now()
 	sealed, err := Ship(context.Background(), l, SingleApplierPool(fake, nil), "", p)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("ship: %v", err)
 	}
-	if elapsed > 100*time.Millisecond {
-		t.Fatalf("ship took %s -- the honest, synchronously-consistent case must resolve on the very first read-back, no backoff sleep", elapsed)
-	}
 	ra := sealed.Resources[0]
 	if len(ra.Reconciliation) != 2 {
-		t.Fatalf("reconciliation = %+v, want exactly 2 entries (present_matches precheck, destroyed confirmation) -- no extra retries", ra.Reconciliation)
+		t.Fatalf("reconciliation = %+v, want exactly 2 entries (present_matches precheck, destroyed confirmation) -- no extra retries, and no backoff sleep, since the loop can only sleep after an attempt that did not resolve", ra.Reconciliation)
 	}
 }
 
