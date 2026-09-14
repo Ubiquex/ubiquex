@@ -192,6 +192,12 @@ type PyDepMount struct {
 	Dep     PyDependency
 	HostDir string // <cache-or-source-dir>/py -- the blueprint's own built Python package
 	Receipt string
+
+	// ContentHash is the verified content hash this dependency resolved
+	// to, "sha256:<hex>" -- the same value Ref embeds, kept separately
+	// so the lock file records an identity rather than parsing one back
+	// out of a composite string.
+	ContentHash string
 	// Ref is UBI-126's own real, complete "<name>:<content_hash>" ref for
 	// this dependency -- already known for free at this point (Verify,
 	// above, already computed it to establish trust before ever mounting
@@ -216,20 +222,128 @@ type PyDepMount struct {
 // cli/plan.go) prints every one of these to its own command output
 // BEFORE resolving, so a reviewer can always see that pulling a
 // blueprint dependency was part of planning.
-func ResolvePyDependencies(ctx context.Context, entryFile string) ([]PyDepMount, error) {
-	deps, err := ParsePyDependencies(filepath.Dir(entryFile))
+// notes are receipt lines that belong to the resolution as a whole
+// rather than to any one dependency (a supersession, a pruned lock
+// entry). Returned separately rather than as a mount carrying only a
+// Receipt: a mount is also a PYTHONPATH root and a provenance ref, and a
+// half-populated one would add an empty root and an empty-named ref
+// downstream.
+func ResolvePyDependencies(ctx context.Context, entryFile string) (mounts []PyDepMount, notes []string, err error) {
+	fromRequirements, err := ParsePyDependencies(filepath.Dir(entryFile))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	mounts := make([]PyDepMount, 0, len(deps))
+
+	// .ubx/config's own [blueprints] table joins requirements.txt here,
+	// and wins on a name collision. See mergeDeclaredBlueprints for why
+	// both exist and why the table is the path forward.
+	policy := lockPolicyFrom(ctx)
+	deps, superseded := mergeDeclaredBlueprints(policy.Declared, fromRequirements)
+
+	lock, err := loadLockForPolicy(policy)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	mounts = make([]PyDepMount, 0, len(deps))
 	for _, dep := range deps {
-		m, err := resolveOnePyDependency(ctx, dep)
+		locked, hasLock := lock.Entry(policy.Stack, dep.Name)
+
+		// The locked hash is used as the cache key, so a locked stack
+		// resolves content-addressed rather than by declaration string.
+		// Only when the source still matches: a changed declaration must
+		// reach CheckLocked's own "the declaration changed" message
+		// rather than being silently served the old content from cache.
+		expect := ""
+		if hasLock && locked.Source == dep.URL && policy.Mode != LockUpdate {
+			expect = locked.ContentHash
+		}
+
+		m, err := resolveOnePyDependency(ctx, dep, expect)
 		if err != nil {
-			return nil, fmt.Errorf("blueprint dependency %q (%s @ %s): %w", dep.Name, dep.Name, dep.URL, err)
+			return nil, nil, fmt.Errorf("blueprint dependency %q (%s @ %s): %w", dep.Name, dep.Name, dep.URL, err)
+		}
+
+		if err := applyLockPolicy(policy, lock, dep, m, hasLock, locked); err != nil {
+			return nil, nil, err
 		}
 		mounts = append(mounts, m)
 	}
-	return mounts, nil
+
+	notes, err = finishLockPolicy(policy, lock, deps, superseded)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mounts, notes, nil
+}
+
+// loadLockForPolicy reads the lock file when the policy involves one.
+// LockOff gets an empty lock rather than a nil one, so every lookup
+// below is a plain miss and needs no special case.
+func loadLockForPolicy(p LockPolicy) (*StackLock, error) {
+	if p.Mode == LockOff {
+		return &StackLock{Stacks: map[string]map[string]LockEntry{}}, nil
+	}
+	return LoadStackLock(p.LedgerDir)
+}
+
+// applyLockPolicy is the per-dependency half: verify against the lock,
+// or record, according to mode.
+func applyLockPolicy(p LockPolicy, lock *StackLock, dep PyDependency, m PyDepMount, hasLock bool, locked LockEntry) error {
+	hash := m.ContentHash
+	switch p.Mode {
+	case LockOff:
+		return nil
+
+	case LockUpdate:
+		lock.Set(p.Stack, dep.Name, LockEntry{Source: dep.URL, ContentHash: hash})
+		return nil
+
+	case LockVerify, LockWrite:
+		// No lock file at all means the stack has not adopted the pin;
+		// see StackLock.Existed. LockWrite still records, which is how
+		// the file comes to exist.
+		if !lock.Existed() && p.Mode == LockVerify {
+			return nil
+		}
+		if hasLock {
+			return CheckLocked(p.Stack, dep.Name, locked, dep.URL, hash)
+		}
+		// Declared and not locked. LockWrite fills it in, which is how a
+		// lock file comes to exist at all. LockVerify refuses, because
+		// accepting an unlocked dependency silently would make the
+		// verify mode mean nothing on exactly the stack that has never
+		// been planned.
+		if p.Mode == LockWrite {
+			lock.Set(p.Stack, dep.Name, LockEntry{Source: dep.URL, ContentHash: hash})
+			return nil
+		}
+		return fmt.Errorf("%w: %q in stack %q resolved to %s, and %s has no entry for it -- run `ubx plan` to record it",
+			ErrLockMissingEntry, dep.Name, p.Stack, hash, StackLockFileName)
+	}
+	return nil
+}
+
+// finishLockPolicy is the whole-invocation half: prune entries for
+// blueprints no longer declared, write the file when the mode writes,
+// and add the receipt lines that make both visible.
+func finishLockPolicy(p LockPolicy, lock *StackLock, deps []PyDependency, superseded []string) ([]string, error) {
+	var notes []string
+	for _, name := range superseded {
+		notes = append(notes, fmt.Sprintf("note: %q is declared in both .ubx/config's [blueprints] table and requirements.txt -- the table wins", name))
+	}
+	if p.Mode != LockWrite && p.Mode != LockUpdate {
+		return notes, nil
+	}
+
+	declared := make(map[string]string, len(deps))
+	for _, d := range deps {
+		declared[d.Name] = d.URL
+	}
+	for _, name := range lock.Prune(p.Stack, declared) {
+		notes = append(notes, fmt.Sprintf("dropped %s from %s: stack %q no longer declares it", name, StackLockFileName, p.Stack))
+	}
+	return notes, lock.Save(p.LedgerDir)
 }
 
 // resolveOnePyDependency pulls+verifies (or reuses a cache hit for) one
@@ -240,12 +354,18 @@ func ResolvePyDependencies(ctx context.Context, entryFile string) ([]PyDepMount,
 // ever pulling, so the cache is keyed by the declared spec itself
 // (name+URL, hashed) rather than a pre-known content hash; Verify (run on
 // every hit, cached or fresh) is what actually establishes trust.
-func resolveOnePyDependency(ctx context.Context, dep PyDependency) (PyDepMount, error) {
+func resolveOnePyDependency(ctx context.Context, dep PyDependency, lockedHash string) (PyDepMount, error) {
 	if dep.isLocalSource() {
 		return resolveLocalPyDependency(ctx, dep)
 	}
 
+	// A locked hash makes the cache content-addressed; without one the
+	// spec-keyed cache is unchanged from before this existed, so an
+	// unlocked stack behaves exactly as it did.
 	cacheDir, err := pyDepCacheDir(dep)
+	if lockedHash != "" {
+		cacheDir, err = blueprintCacheDirByHash(lockedHash)
+	}
 	if err != nil {
 		return PyDepMount{}, err
 	}
@@ -308,7 +428,7 @@ func finishPyDepMount(dep PyDependency, dir string, manifest *Manifest, fromCach
 	receipt := fmt.Sprintf("pulled %s @ %s%s, verified: content hash %s matches (%d file(s))",
 		dep.Name, dep.URL, cacheNote, manifest.ContentHash, len(manifest.Files))
 
-	return PyDepMount{Dep: dep, HostDir: pyDir, Receipt: receipt, Ref: dep.Name + ":" + manifest.ContentHash}, nil
+	return PyDepMount{Dep: dep, HostDir: pyDir, Receipt: receipt, ContentHash: manifest.ContentHash, Ref: dep.Name + ":" + manifest.ContentHash}, nil
 }
 
 // pyMountDir picks the directory that goes on the guest's PYTHONPATH.
@@ -372,6 +492,37 @@ func pyMountDir(dir string) (string, error) {
 // own declared spec (name+URL, hashed) -- ~/.ubx/blueprints/by-spec/<hex>,
 // the same "~/.ubx/<kind>/..." cache-root convention provider/cache.go's
 // own defaultCacheRoot (~/.ubx/providers) already established.
+// blueprintCacheDirByHash is the content-addressed cache directory for a
+// blueprint whose content hash is already known from the lock file.
+//
+// pyDepCacheDir's own doc comment below explains why the spec-keyed
+// cache exists: "a blueprint has no registry-signed version to trust
+// before ever pulling, so the cache is keyed by the declared spec
+// itself". The lock file IS that pre-known hash, so wherever one exists
+// the reason no longer holds.
+//
+// It matters for correctness, not just tidiness. A spec-keyed hit is
+// keyed on the declaration STRING, and re-verifies the cached directory
+// against its own manifest, which is self-consistency and never a
+// re-check against the registry. So a mutable tag repointed upstream
+// left every warm machine on the old content indefinitely while a cold
+// machine silently got the new content, and both verified. Keyed by
+// hash, a cache hit means "this is the content the lock names", which is
+// the question actually being asked.
+//
+// Two stacks pinning the same content through different tags also share
+// one entry, which the spec-keyed layout could not do.
+func blueprintCacheDirByHash(contentHash string) (string, error) {
+	root, err := defaultBlueprintCacheRoot()
+	if err != nil {
+		return "", err
+	}
+	// The hash is "sha256:<hex>"; ":" is legal in a path segment on the
+	// platforms ubx targets, but avoiding it costs nothing and keeps the
+	// directory copy-pasteable on any of them.
+	return filepath.Join(root, "by-hash", strings.ReplaceAll(contentHash, ":", "-")), nil
+}
+
 func pyDepCacheDir(dep PyDependency) (string, error) {
 	root, err := defaultBlueprintCacheRoot()
 	if err != nil {
@@ -417,11 +568,11 @@ func pyEvalDeps(mounts []PyDepMount) []pyeval.ExtraDep {
 // when entryFile has no requirements.txt at all -- the common case pays
 // nothing extra to build or consult this map.
 func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte, receipts []string, refs map[string]string, err error) {
-	mounts, err := ResolvePyDependencies(ctx, entryFile)
+	mounts, notes, err := ResolvePyDependencies(ctx, entryFile)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	receipts = make([]string, len(mounts))
+	receipts = make([]string, 0, len(mounts)+len(notes))
 	refs = map[string]string{}
 
 	// UBI-266: every blueprint whose code this program can reach, from
@@ -429,11 +580,15 @@ func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte
 	// name and hash included. A blueprint sitting inside the program's
 	// own tree has no declaration anywhere, so it is found by walking.
 	var roots []pyeval.BlueprintRoot
-	for i, m := range mounts {
-		receipts[i] = m.Receipt
+	for _, m := range mounts {
+		receipts = append(receipts, m.Receipt)
 		refs[m.Dep.Name] = m.Ref
 		roots = append(roots, pyeval.BlueprintRoot{HostDir: m.HostDir, Name: m.Dep.Name})
 	}
+	// Whole-resolution notes print alongside the per-dependency
+	// receipts, after them, so the list reads as "here is what was
+	// pulled, and here is what else changed".
+	receipts = append(receipts, notes...)
 	local, err := DiscoverPyBlueprintRoots(entryFile)
 	if err != nil {
 		return nil, nil, nil, err

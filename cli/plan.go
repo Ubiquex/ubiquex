@@ -50,6 +50,7 @@ func newPlanCmd() *cobra.Command {
 		timeout          time.Duration
 		knownDependents  []string
 		fromCode         string
+		updateLock       bool
 		fullHashes       bool
 		showDefaultsFlag bool
 		hideDefaultsFlag bool
@@ -165,6 +166,31 @@ propose-time PR trailer hash, etc.).`,
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
+
+			// The lock policy has to be in place BEFORE anything
+			// evaluates, because the pull it governs happens during
+			// evaluation.
+			//
+			// That forces the lock's stack key to come from .ubx/config
+			// rather than from the document: an SDK program's own stack
+			// name is inside the program, and is therefore not known
+			// until after the evaluation this policy is meant to govern.
+			// Keying on the config's stack pairs the lock with the file
+			// the [blueprints] declaration itself lives in, which is the
+			// coherent reading, but it does mean a document declaring a
+			// different stack name records its blueprints under the
+			// config's. Same two-sources-of-truth shape #174 is about,
+			// and named here rather than discovered later.
+			lockMode := blueprint.LockWrite
+			if updateLock {
+				lockMode = blueprint.LockUpdate
+			}
+			ctx = blueprint.WithLockPolicy(ctx, blueprint.LockPolicy{
+				LedgerDir: ledgerDir,
+				Stack:     stackForLock(cmd, cfg),
+				Declared:  cfg.Blueprints,
+				Mode:      lockMode,
+			})
 
 			outWriter := cmd.OutOrStdout()
 
@@ -357,6 +383,7 @@ propose-time PR trailer hash, etc.).`,
 	cmd.Flags().DurationVar(&timeout, "timeout", 120*time.Second, "timeout for provider/schema acquisition and SDK program evaluation -- one shared budget for the whole command")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil,
 		"ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
+	cmd.Flags().BoolVar(&updateLock, "update-lock", false, "record whatever each declared blueprint resolves to in .ubx/blueprints.lock, instead of refusing when it disagrees with what is locked -- the explicit way past a mismatch")
 	cmd.Flags().StringVar(&fromCode, "from-code", "", "evaluate a TypeScript (@ubx/sdk), Go (ubx-sdk-go), or Python (ubx_sdk) SDK program, dispatched by extension, instead of reading an intent file")
 	// --from-code is kept, hidden, as an alias for the positional form.
 	// It distinguishes nothing since UBI-224 removed the other authoring
@@ -904,4 +931,25 @@ func omittedAttributesNote(generated bool, modifies int) string {
 		return ""
 	}
 	return "attributes this program does not set are preserved, not removed: a change line shows only what it names"
+}
+
+// stackForLock picks the stack name .ubx/blueprints.lock keys on.
+//
+// The --stack flag if given, else .ubx/config's own stack key. NOT the
+// resolved document's stack, which is not knowable in time: an SDK
+// program declares its stack inside the program, and the lock has to be
+// in place before that program runs, because the pull it governs happens
+// during the run.
+//
+// "" is a legitimate answer for a stack that declares no blueprints, and
+// costs nothing: the lock is only consulted for declared dependencies,
+// and a stack with none never reaches it.
+func stackForLock(cmd *cobra.Command, cfg *Config) string {
+	if v, err := cmd.Flags().GetString("stack"); err == nil && v != "" {
+		return v
+	}
+	if cfg != nil {
+		return cfg.Stack
+	}
+	return ""
 }

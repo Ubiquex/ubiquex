@@ -206,7 +206,7 @@ func TestResolvePyDependencies_LocalPath_MountsAndVerifies(t *testing.T) {
 	progDir := t.TempDir()
 	writeRequirementsTxt(t, progDir, "widget-lib @ "+bpDir+"\n")
 
-	mounts, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	mounts, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
 	if err != nil {
 		t.Fatalf("ResolvePyDependencies: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestResolvePyDependencies_NameMismatch_Errors(t *testing.T) {
 	// silent accept of whatever got pulled.
 	writeRequirementsTxt(t, progDir, "totally-different-name @ "+bpDir+"\n")
 
-	if _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py")); err == nil {
+	if _, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py")); err == nil {
 		t.Fatal("want an error when requirements.txt's declared name doesn't match the pulled blueprint's own name")
 	}
 }
@@ -248,7 +248,7 @@ func TestResolvePyDependencies_MissingPyPackage_Errors(t *testing.T) {
 	progDir := t.TempDir()
 	writeRequirementsTxt(t, progDir, filepath.Base(bpDir)+" @ "+bpDir+"\n")
 
-	_, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	_, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
 	if err == nil || !strings.Contains(err.Error(), "no built py/ package") {
 		t.Fatalf("ResolvePyDependencies: got %v, want a \"no built py/ package\" error", err)
 	}
@@ -292,7 +292,7 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 	writeRequirementsTxt(t, progDir, "widget-lib @ git+file://"+repoDir+"@v1#subdirectory=blueprints/widget-lib\n")
 	entryFile := filepath.Join(progDir, "main.py")
 
-	first, err := ResolvePyDependencies(context.Background(), entryFile)
+	first, _, err := ResolvePyDependencies(context.Background(), entryFile)
 	if err != nil {
 		t.Fatalf("first ResolvePyDependencies: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	second, err := ResolvePyDependencies(context.Background(), entryFile)
+	second, _, err := ResolvePyDependencies(context.Background(), entryFile)
 	if err != nil {
 		t.Fatalf("second ResolvePyDependencies (source removed): %v", err)
 	}
@@ -551,7 +551,7 @@ func TestResolvePyDependencies_CodeBlueprint_MountsItsOwnDirectory(t *testing.T)
 	progDir := t.TempDir()
 	writeRequirementsTxt(t, progDir, "widget-bp @ "+bpDir+"\n")
 
-	mounts, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	mounts, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
 	if err != nil {
 		t.Fatalf("ResolvePyDependencies: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestResolvePyDependencies_CodeBlueprintInAnotherLanguage_NamesIt(t *testing
 	progDir := t.TempDir()
 	writeRequirementsTxt(t, progDir, "widget-bp @ "+bpDir+"\n")
 
-	_, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	_, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
 	if err == nil {
 		t.Fatal("want a refusal for a Go blueprint named as a Python dependency")
 	}
@@ -613,7 +613,7 @@ func TestResolvePyDependencies_UnbuiltUbxfileBlueprint_StillSaysBuildIt(t *testi
 	progDir := t.TempDir()
 	writeRequirementsTxt(t, progDir, filepath.Base(bpDir)+" @ "+bpDir+"\n")
 
-	_, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
+	_, _, err := ResolvePyDependencies(context.Background(), filepath.Join(progDir, "main.py"))
 	if err == nil || !strings.Contains(err.Error(), "ubx blueprint build") {
 		t.Fatalf("got %v, want the build-it refusal for an Ubxfile blueprint", err)
 	}

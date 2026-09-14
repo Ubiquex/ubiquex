@@ -40,10 +40,24 @@ type Config struct {
 		Source  string `toml:"source" json:"source"`
 		Version string `toml:"version" json:"version"`
 	} `toml:"provider" json:"provider"`
-	ProviderConfig         map[string]any            `toml:"provider_config" json:"provider_config"`
-	Providers              map[string]map[string]any `toml:"providers" json:"providers"`
-	ThirdpartyProviders    map[string]string         `toml:"thirdparty_providers" json:"thirdparty_providers"`
-	ProviderConfigs        map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
+	ProviderConfig      map[string]any            `toml:"provider_config" json:"provider_config"`
+	Providers           map[string]map[string]any `toml:"providers" json:"providers"`
+	ThirdpartyProviders map[string]string         `toml:"thirdparty_providers" json:"thirdparty_providers"`
+	ProviderConfigs     map[string]map[string]any `toml:"provider_configs" json:"provider_configs"`
+	// Blueprints is .ubx/config's own [blueprints] table: blueprint name
+	// -> source, in any of the four forms `ubx blueprint pull` already
+	// accepts (oci://, git+<transport>:// with an optional @ref and
+	// #subdirectory=, file://, or a bare local path).
+	//
+	// The SINGLE declaration site, deliberately. A code-local
+	// declaration would mean two parsers and a precedence rule, and a
+	// static scan could not see a declaration inside a conditional
+	// anyway. requirements.txt stays supported because removing it would
+	// break every stack UBI-130 already serves, but it is Python-only
+	// and this table wins on a name collision (blueprint's own
+	// mergeDeclaredBlueprints, which reports the supersession rather
+	// than applying it quietly).
+	Blueprints             map[string]string         `toml:"blueprints" json:"blueprints"`
 	DynamicProviders       map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
 	DynamicProviderGroups  map[string]map[string]any `toml:"dynamic_provider_groups" json:"dynamic_provider_groups"`
 	Stack                  string                    `toml:"stack" json:"stack"`
