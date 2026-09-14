@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -584,19 +585,27 @@ func countOf(n int) string {
 // because %-24s counts ANSI escape bytes as characters, so a colored
 // name pads to the wrong visible width and every column after it walks
 // left as color is switched on.
+//
+// Both count RUNES, not bytes. A truncated hash ends in "…", which is
+// three bytes and one column, so byte-counting padded every such cell
+// two columns short and bent the whole table (found rendering `ubx
+// blueprint list`).
 func padPlain(s string, width int) string {
-	if len(s) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(s))
+	return padStyled(s, width)
 }
 
 func padStyled(s string, width int) string {
-	visible := len(stripANSI(s))
+	visible := cellWidth(s)
 	if visible >= width {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visible)
+}
+
+// cellWidth is how many terminal columns a possibly-styled string
+// occupies: escape sequences are free, and a multi-byte rune is one.
+func cellWidth(s string) int {
+	return utf8.RuneCountInString(stripANSI(s))
 }
 
 // sourceNameOfParam/sourceNameOfOutput surface the identifier as
