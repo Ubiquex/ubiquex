@@ -646,7 +646,23 @@ func resolveBareShipTarget(cmd *cobra.Command, ledgerDir, stack string) (string,
 			}
 		}
 		if len(forStack) == 0 {
-			return "", fmt.Errorf("no unshipped plans for stack %q in .ubx/plans/", stack)
+			// Naming the stacks that DO have plans, because the common
+			// way to reach this is not an empty plan store but a stack
+			// name mismatch, and the bare message reads as "nothing was
+			// saved" when the truth is "something was saved under a
+			// different name".
+			//
+			// The two names come from different places and nothing
+			// reconciles them. `ubx plan` files a plan under the STACK
+			// THE DOCUMENT DECLARES (intent.Stack, which for a .ubx.hcl
+			// file is its own `stack = "..."` attribute). Bare `ubx ship`
+			// looks it up by the stack .ubx/config declares
+			// (applyStackDefault). Those agreeing is a convention, not
+			// something enforced, and when they disagree a perfectly
+			// shippable plan is invisible with no hint that it exists.
+			// Found with five shippable plans on disk and this error
+			// reporting none of them.
+			return "", fmt.Errorf("no unshipped plans for stack %q in .ubx/plans/%s", stack, otherStacksNote(candidates, stack))
 		}
 		return reportLatest(out, forStack), nil
 	}
@@ -1373,4 +1389,34 @@ func writeUnverifiedBlock(out io.Writer, st *styler, ev executor.ProgressEvent) 
 		}
 		fmt.Fprintf(out, "    %s\n", line)
 	}
+}
+
+// otherStacksNote lists the stacks that DO have plans, for the case where
+// the requested one has none. Empty when there is nothing useful to add,
+// so the message stays short in the genuinely-empty case.
+//
+// The --stack flag is named rather than a config edit, because it is the
+// one-command way to act on this without changing anything durable, and
+// because the mismatch is as often a wrong config as a wrong document.
+func otherStacksNote(candidates []planCandidate, want string) string {
+	seen := map[string]bool{}
+	var others []string
+	for _, c := range candidates {
+		if c.P.Stack == want || c.P.Stack == "" || seen[c.P.Stack] {
+			continue
+		}
+		seen[c.P.Stack] = true
+		others = append(others, c.P.Stack)
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	sort.Strings(others)
+
+	quoted := make([]string, len(others))
+	for i, o := range others {
+		quoted[i] = strconv.Quote(o)
+	}
+	return fmt.Sprintf(" -- %d plan(s) here belong to %s instead; a plan is filed under the stack its own document declares, and this lookup uses .ubx/config's stack. Pass --stack %s to ship one of those",
+		len(candidates), strings.Join(quoted, ", "), quoted[0])
 }
