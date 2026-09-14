@@ -47,6 +47,35 @@ const denoLockFileName = "deno.lock"
 // which is the ordinary case for a built blueprint: its generated code
 // imports "@ubx/sdk" and nothing else.
 func tsBlueprintImports(dir, name string) (map[string]string, error) {
+	// Both declaration formats, one boundary. A blueprint authored with
+	// npm tooling has a package.json and no deno.json, and reading only
+	// the latter made the refusal inconsistent rather than narrow.
+	fromDeno, err := tsDenoConfigImports(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	fromNPM, err := tsPackageJSONImports(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(fromDeno) == 0 && len(fromNPM) == 0 {
+		return nil, nil
+	}
+	merged := make(map[string]string, len(fromDeno)+len(fromNPM))
+	for k, v := range fromNPM {
+		merged[k] = v
+	}
+	// deno.json wins a collision: it is the format Deno itself prefers,
+	// and a blueprint carrying both has usually adopted it over the
+	// package.json that came first.
+	for k, v := range fromDeno {
+		merged[k] = v
+	}
+	return merged, nil
+}
+
+// tsDenoConfigImports reads dir's own deno.json imports.
+func tsDenoConfigImports(dir, name string) (map[string]string, error) {
 	configPath := ""
 	for _, candidate := range []string{"deno.json", "deno.jsonc"} {
 		p := filepath.Join(dir, candidate)
@@ -136,4 +165,159 @@ func remoteSpecifierRefusal(name, configPath, dir string, remote []string) strin
 		b.WriteString("  This blueprint ships no " + denoLockFileName + ", so even if ubx did fetch, the content hash would cover the names and not the bytes that ran.")
 	}
 	return b.String()
+}
+
+// packageJSONFileName is npm's own manifest, which a TypeScript
+// blueprint authored with npm tooling has instead of a deno.json.
+const packageJSONFileName = "package.json"
+
+// tsPackageJSONImports reads dir's own package.json dependencies.
+//
+// This exists because the first version of this file read deno.json and
+// nothing else, which made the boundary inconsistent rather than narrow:
+// a deno.json registry specifier was refused loudly and a package.json
+// one fell through to Deno, failing later with a message about
+// node_modules that names neither the blueprint nor the reason. That is
+// the worse half, since a blueprint authored with npm tooling has a
+// package.json and no deno.json, which is the common case.
+//
+// The boundary is relative-file versus registry, not which file
+// declared it. A `file:` dependency names a path exactly as a deno.json
+// relative target does, so it belongs on the resolvable side.
+//
+// It is not the same KIND of path, though, and that is the wrinkle:
+//
+//   - A deno.json target names a FILE ("./helper.ts").
+//   - An npm file: target names a PACKAGE DIRECTORY ("file:../vendored"),
+//     whose entry point comes from that package's own main or exports.
+//     An import map cannot express "the package at this directory":
+//     mapping a specifier to a directory URL fails with
+//     ERR_UNSUPPORTED_DIR_IMPORT. So honouring one means resolving its
+//     entry point here.
+//   - And an npm file: target usually points OUTSIDE the declaring
+//     package, which is the whole reason to use one. Packaging walks the
+//     blueprint directory only, so that target never travelled and the
+//     pulled blueprint carries a dangling reference.
+//
+// So a file: dependency is honoured only where it can actually work:
+// inside the blueprint, with an entry point simple enough to resolve
+// without reimplementing npm. Everything else is refused, each with the
+// reason that applies to it.
+func tsPackageJSONImports(dir, name string) (map[string]string, error) {
+	path := filepath.Join(dir, packageJSONFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", packageJSONFileName, err)
+	}
+	var doc struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s in blueprint %q: %w", packageJSONFileName, name, err)
+	}
+	if len(doc.Dependencies) == 0 {
+		return nil, nil
+	}
+
+	out := map[string]string{}
+	var remote, escaped, unresolvable []string
+	for specifier, spec := range doc.Dependencies {
+		local, ok := strings.CutPrefix(spec, "file:")
+		if !ok {
+			remote = append(remote, specifier+" -> "+spec)
+			continue
+		}
+
+		target := local
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(dir, target)
+		}
+		target = filepath.Clean(target)
+
+		if !withinDir(dir, target) {
+			escaped = append(escaped, specifier+" -> "+spec)
+			continue
+		}
+		entry, err := npmPackageEntry(target)
+		if err != nil {
+			unresolvable = append(unresolvable, specifier+" -> "+spec+" ("+err.Error()+")")
+			continue
+		}
+		out[specifier] = "file://" + filepath.ToSlash(entry)
+	}
+
+	if len(remote) > 0 {
+		sort.Strings(remote)
+		return nil, fmt.Errorf("%s", remoteSpecifierRefusal(name, path, dir, remote))
+	}
+	if len(escaped) > 0 {
+		sort.Strings(escaped)
+		return nil, fmt.Errorf("blueprint %q declares %d file: dependency(ies) pointing outside the blueprint:\n    %s\n  declared in %s\n  Packaging walks the blueprint directory only, so those targets never travelled: the pulled blueprint carries a reference to something that is not there. A blueprint's dependencies have to live inside it to survive being published",
+			name, len(escaped), strings.Join(escaped, "\n    "), packageJSONFileName)
+	}
+	if len(unresolvable) > 0 {
+		sort.Strings(unresolvable)
+		return nil, fmt.Errorf("blueprint %q declares %d file: dependency(ies) whose entry point ubx cannot resolve:\n    %s\n  declared in %s\n  An import map entry has to name a FILE, and npm resolves a package directory through its own rules. ubx handles a plain \"main\" or an index file and deliberately does not reimplement conditional or subpath \"exports\", which would be a second, subtly different npm resolver",
+			name, len(unresolvable), strings.Join(unresolvable, "\n    "), packageJSONFileName)
+	}
+	return out, nil
+}
+
+// withinDir reports whether target is inside root.
+func withinDir(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// npmPackageEntry resolves a package directory's entry file, for the
+// subset of npm's rules that has one obvious answer.
+//
+// "exports" is refused rather than guessed. It supports conditional
+// resolution and subpath patterns, and a partial implementation would
+// resolve some packages to the wrong file rather than failing, which is
+// worse than not resolving them at all.
+func npmPackageEntry(pkgDir string) (string, error) {
+	info, err := os.Stat(pkgDir)
+	if err != nil {
+		return "", fmt.Errorf("no such directory")
+	}
+	if !info.IsDir() {
+		// npm also accepts a .tgz, which is an archive rather than a
+		// tree and would have to be extracted somewhere first.
+		return "", fmt.Errorf("names a file rather than a package directory")
+	}
+
+	data, err := os.ReadFile(filepath.Join(pkgDir, packageJSONFileName))
+	if err != nil {
+		return "", fmt.Errorf("no package.json in it")
+	}
+	var doc struct {
+		Main    string          `json:"main"`
+		Exports json.RawMessage `json:"exports"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("its package.json does not parse")
+	}
+	if len(doc.Exports) > 0 {
+		return "", fmt.Errorf("uses an \"exports\" map")
+	}
+
+	candidates := []string{doc.Main}
+	candidates = append(candidates, "index.js", "index.mjs", "index.ts")
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		entry := filepath.Join(pkgDir, c)
+		if st, err := os.Stat(entry); err == nil && !st.IsDir() {
+			return entry, nil
+		}
+	}
+	return "", fmt.Errorf("no \"main\" and no index file")
 }
