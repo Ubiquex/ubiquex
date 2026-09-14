@@ -124,12 +124,24 @@ func runOnce(ctx context.Context, entryFile, blueprintRoots string, blueprintImp
 	// --import-map supplied here overrides the project's entirely, which
 	// made every published SDK specifier unresolvable (UBI-260,
 	// tseval/importmap.go).
-	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"), blueprintImports)
+	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"), blueprintImports, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer cleanupMap()
 	args = append(args, "--import-map="+mapPath)
+
+	// Named explicitly so deno writes to a copy rather than to the
+	// author's own deno.lock, which it otherwise updates as a side effect
+	// of evaluating (tseval/lock.go). Reading a stack should not leave a
+	// git diff behind.
+	lockPath, cleanupLock, err := writeThrowawayLock(filepath.Dir(absEntry))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanupLock()
+	args = append(args, "--lock="+lockPath)
+
 	args = append(args, runnerPath)
 
 	cmd := exec.CommandContext(ctx, denoPath, args...)

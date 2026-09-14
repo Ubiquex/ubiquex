@@ -14,8 +14,19 @@ func writeTSBlueprintConfig(t *testing.T, dir, contents string) {
 	}
 }
 
-// TestTSBlueprintImports_RelativeTargets is the fix: a blueprint's own
-// deno.json travels in the content store and is now read.
+// writeDenoLock gives a blueprint the pin that lets its npm dependencies
+// be fetched. Contents do not matter to tsBlueprintImports, which only
+// asks whether the blueprint pins at all; the lock's actual entries are
+// enforced by deno in the prefetch pass (tslock.go).
+func writeDenoLock(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, denoLockFileName), []byte(`{"version":"5"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTSBlueprintImports_RelativeTargets is the original fix: a
+// blueprint's own deno.json travels in the content store and is read.
 //
 // Targets come back absolute, because a scope entry is applied to
 // modules anywhere and a relative path would resolve against whoever is
@@ -33,9 +44,14 @@ func TestTSBlueprintImports_RelativeTargets(t *testing.T) {
 		"deep":   "file://" + filepath.ToSlash(filepath.Join(dir, "lib", "deep.ts")),
 	}
 	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("imports[%q] = %q, want %q", k, got[k], v)
+		if got.Imports[k] != v {
+			t.Errorf("imports[%q] = %q, want %q", k, got.Imports[k], v)
 		}
+	}
+	// Nothing here resolves through a registry, so evaluation must not be
+	// made to pay for a fetch pass it does not need.
+	if got.NeedsPrefetch {
+		t.Error("purely local imports must not request a prefetch")
 	}
 }
 
@@ -47,78 +63,149 @@ func TestTSBlueprintImports_NoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != nil {
-		t.Fatalf("expected no imports for a blueprint with no deno.json, got %v", got)
+	if len(got.Imports) != 0 || got.NeedsPrefetch {
+		t.Fatalf("expected no imports for a blueprint with no deno.json, got %+v", got)
 	}
 }
 
-// TestTSBlueprintImports_RemoteIsRefused pins the boundary this change
-// deliberately stops at.
+// TestTSBlueprintImports_NPMNeedsALock is the boundary: pinned graphs may
+// fetch, unpinned ones refuse.
 //
-// Honouring a registry specifier would mean `ubx plan` fetching during
-// evaluation, which GOPROXY=off already answers "no" to for Go.
-// Refusing loudly, naming the blueprint and the decision, beats letting
-// Deno fail later with a message about node_modules that names neither.
-func TestTSBlueprintImports_RemoteIsRefused(t *testing.T) {
-	for _, target := range []string{
-		"jsr:@ubx/sdk-aws@1.2.0",
-		"npm:left-pad@1.3.0",
-		"https://deno.land/x/thing/mod.ts",
-	} {
-		t.Run(target, func(t *testing.T) {
-			dir := t.TempDir()
-			writeTSBlueprintConfig(t, dir, `{"imports":{"dep":"`+target+`"}}`)
+// The property that matters is whether the graph is pinned, and a lock is
+// the only evidence of it. Specifier kind was always a proxy: a registry
+// specifier with a lock is pinned and the same specifier without one is
+// not, and the proxy cannot tell those apart.
+func TestTSBlueprintImports_NPMNeedsALock(t *testing.T) {
+	t.Run("with a lock it resolves and asks for a prefetch", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTSBlueprintConfig(t, dir, `{"imports":{"dep":"npm:left-pad@1.3.0"}}`)
+		writeDenoLock(t, dir)
 
-			_, err := tsBlueprintImports(dir, "widget-bp")
-			if err == nil {
-				t.Fatalf("expected a refusal for %q", target)
+		got, err := tsBlueprintImports(dir, "bp")
+		if err != nil {
+			t.Fatalf("a pinned npm dependency must resolve: %v", err)
+		}
+		if got.Imports["dep"] != "npm:left-pad@1.3.0" {
+			t.Errorf("an npm specifier goes into the map verbatim, got %q", got.Imports["dep"])
+		}
+		// Without this the evaluation would reach a registry itself,
+		// unverified, which is the whole thing the lock is here to prevent.
+		if !got.NeedsPrefetch {
+			t.Error("an npm dependency must request the fetch-and-verify pass")
+		}
+	})
+
+	t.Run("without a lock it is refused, naming the remedy", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTSBlueprintConfig(t, dir, `{"imports":{"dep":"npm:left-pad@1.3.0"}}`)
+
+		_, err := tsBlueprintImports(dir, "widget-bp")
+		if err == nil {
+			t.Fatal("an unpinned npm dependency must be refused")
+		}
+		msg := err.Error()
+		for _, want := range []string{"widget-bp", "npm:left-pad@1.3.0", denoLockFileName, "ubx blueprint package"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("refusal does not name %q: %s", want, msg)
 			}
-			msg := err.Error()
-			for _, want := range []string{"widget-bp", target, "deno.json", "UBI-274"} {
-				if !strings.Contains(msg, want) {
-					t.Errorf("refusal does not name %q: %s", want, msg)
-				}
-			}
-		})
+		}
+		// The author reached for npm and has no reason to know what a
+		// deno.lock is, so the message must name a command rather than a
+		// concept.
+		if !strings.Contains(msg, "deno install") {
+			t.Errorf("refusal must name the by-hand command: %s", msg)
+		}
+		// npm's own lockfile is the obvious thing to reach for and does
+		// not work, so the message says so rather than letting them try.
+		if !strings.Contains(msg, "package-lock.json") {
+			t.Errorf("refusal should rule out package-lock.json: %s", msg)
+		}
+	})
+}
+
+// TestTSBlueprintImports_JSRIsRefusedEvenWithALock is the limit worth
+// knowing about, and the reason it gets its own test.
+//
+// The evaluator runs deno with --no-remote, which closes the dynamic
+// import("https://...") gap. It does not block npm, but it does block
+// jsr, because resolving a JSR package fetches
+// https://jsr.io/<pkg>/meta.json. Verified against a fully warm cache, so
+// this is a resolution-time rule rather than a caching artifact. A lock
+// does not help, because the failure is not about pinning at all.
+//
+// This matters more than it looks: the published Ubiquex TypeScript SDK
+// lives on JSR, so "registry dependencies now work" is false for exactly
+// the registry an author is most likely to reach for.
+func TestTSBlueprintImports_JSRIsRefusedEvenWithALock(t *testing.T) {
+	dir := t.TempDir()
+	writeTSBlueprintConfig(t, dir, `{"imports":{"dep":"jsr:@ubx/sdk-aws@1.2.0"}}`)
+	writeDenoLock(t, dir)
+
+	_, err := tsBlueprintImports(dir, "widget-bp")
+	if err == nil {
+		t.Fatal("a jsr dependency must be refused even from a blueprint that pins it")
+	}
+	msg := err.Error()
+	for _, want := range []string{"widget-bp", "jsr:@ubx/sdk-aws@1.2.0", "--no-remote", "UBI-274"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal does not name %q: %s", want, msg)
+		}
+	}
+	// It must NOT suggest committing a lock. This blueprint has one, and
+	// sending the author to add what they already have would waste their
+	// time on the wrong problem.
+	if strings.Contains(msg, "deno install") {
+		t.Errorf("a jsr refusal must not suggest locking, which cannot fix it: %s", msg)
 	}
 }
 
-// TestTSBlueprintImports_RefusalReportsTheLock: whether the blueprint
-// pins its dependencies changes what the right answer to the open
-// question is, so the refusal says which case this is rather than
-// leaving whoever reads it to go and look.
-func TestTSBlueprintImports_RefusalReportsTheLock(t *testing.T) {
-	withLock := t.TempDir()
-	writeTSBlueprintConfig(t, withLock, `{"imports":{"dep":"jsr:@scope/dep@1.0.0"}}`)
-	if err := os.WriteFile(filepath.Join(withLock, denoLockFileName), []byte(`{"version":"4"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := tsBlueprintImports(withLock, "bp")
-	if err == nil || !strings.Contains(err.Error(), "does ship a deno.lock") {
-		t.Fatalf("a blueprint that pins its graph should be reported as such: %v", err)
-	}
+// TestTSBlueprintImports_WebURLIsRefused: a direct http(s) or VCS target
+// is neither pinnable by a lock nor loadable under --no-remote.
+func TestTSBlueprintImports_WebURLIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeTSBlueprintConfig(t, dir, `{"imports":{"dep":"https://deno.land/x/thing/mod.ts"}}`)
+	writeDenoLock(t, dir)
 
-	without := t.TempDir()
-	writeTSBlueprintConfig(t, without, `{"imports":{"dep":"jsr:@scope/dep@1.0.0"}}`)
-	_, err = tsBlueprintImports(without, "bp")
-	if err == nil || !strings.Contains(err.Error(), "ships no deno.lock") {
-		t.Fatalf("a blueprint that does not pin should be reported as such: %v", err)
+	_, err := tsBlueprintImports(dir, "bp")
+	if err == nil {
+		t.Fatal("a direct https import must be refused")
+	}
+	if !strings.Contains(err.Error(), "--no-remote") {
+		t.Errorf("refusal should name the flag that blocks it: %s", err)
 	}
 }
 
-// TestTSBlueprintImports_RelativeSurvivesAlongsideRemote: the refusal is
-// all-or-nothing on purpose. Silently dropping the registry entries and
-// resolving the rest would produce a blueprint that half works, failing
-// later at the first import of the dropped one.
-func TestTSBlueprintImports_RelativeSurvivesAlongsideRemote(t *testing.T) {
+// TestTSBlueprintImports_NodeBuiltinPassesThrough: "node:fs" is a builtin,
+// not a fetch, and classifying it as remote would refuse a blueprint that
+// does nothing requiring network at all.
+func TestTSBlueprintImports_NodeBuiltinPassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	writeTSBlueprintConfig(t, dir, `{"imports":{"fs":"node:fs"}}`)
+
+	got, err := tsBlueprintImports(dir, "bp")
+	if err != nil {
+		t.Fatalf("a node: builtin is not a registry dependency: %v", err)
+	}
+	if got.Imports["fs"] != "node:fs" {
+		t.Errorf("a node: specifier must pass through untouched, got %q", got.Imports["fs"])
+	}
+	if got.NeedsPrefetch {
+		t.Error("a builtin must not trigger a fetch pass")
+	}
+}
+
+// TestTSBlueprintImports_RefusalIsAllOrNothing: silently dropping the
+// refused entries and resolving the rest would produce a blueprint that
+// half works, failing later at the first import of the dropped one.
+func TestTSBlueprintImports_RefusalIsAllOrNothing(t *testing.T) {
 	dir := t.TempDir()
 	writeTSBlueprintConfig(t, dir, `{"imports":{"local":"./a.ts","remote":"npm:x@1"}}`)
 	got, err := tsBlueprintImports(dir, "bp")
 	if err == nil {
-		t.Fatal("a config mixing local and registry targets must be refused, not partly honoured")
+		t.Fatal("a config mixing local and unpinned registry targets must be refused, not partly honoured")
 	}
-	if got != nil {
-		t.Fatalf("no imports should be returned alongside a refusal, got %v", got)
+	if len(got.Imports) != 0 {
+		t.Fatalf("no imports should be returned alongside a refusal, got %v", got.Imports)
 	}
 }
 
@@ -141,32 +228,71 @@ func writeNPMPackage(t *testing.T, dir, name, main string) {
 	}
 }
 
-// TestTSBlueprintImports_PackageJSONRegistryIsRefused is the half the
-// first version missed.
+// TestTSBlueprintImports_PackageJSONRangeBecomesAnNPMSpecifier is the
+// half the first version of this file missed entirely.
 //
 // A blueprint authored with npm tooling has a package.json and no
-// deno.json, which is the common case, and it fell through to Deno's own
-// resolution and failed later with a message about node_modules naming
-// neither the blueprint nor the reason. Refusing one format loudly and
-// the other silently is an inconsistent boundary, not a narrow one.
-func TestTSBlueprintImports_PackageJSONRegistryIsRefused(t *testing.T) {
+// deno.json, which is the COMMON case. Its dependencies are bare semver
+// ranges, and an import map entry needs a specifier, so the range is
+// turned into one. The range is kept rather than resolved here, because
+// the lock is what pins it: resolving it in ubx would be a second,
+// subtly different resolver disagreeing with the one that fetches.
+func TestTSBlueprintImports_PackageJSONRangeBecomesAnNPMSpecifier(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"dependencies":{"left-pad":"^1.3.0"}}`)
+	writeDenoLock(t, dir)
+
+	got, err := tsBlueprintImports(dir, "ts-bp")
+	if err != nil {
+		t.Fatalf("a pinned package.json dependency must resolve: %v", err)
+	}
+	if got.Imports["left-pad"] != "npm:left-pad@^1.3.0" {
+		t.Errorf("imports[left-pad] = %q, want the synthesized npm specifier", got.Imports["left-pad"])
+	}
+	if !got.NeedsPrefetch {
+		t.Error("a package.json registry dependency must request the fetch pass")
+	}
+}
+
+// TestTSBlueprintImports_PackageJSONUnpinnedIsRefused: the boundary is
+// the same whichever format declared the dependency. Refusing one format
+// and honouring the other would be an inconsistent boundary, which is
+// the exact mistake this file made once already.
+func TestTSBlueprintImports_PackageJSONUnpinnedIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	writePackageJSON(t, dir, `{"dependencies":{"left-pad":"1.3.0"}}`)
 
 	_, err := tsBlueprintImports(dir, "ts-bp")
 	if err == nil {
-		t.Fatal("a registry dependency in package.json must be refused")
+		t.Fatal("an unpinned package.json dependency must be refused")
 	}
-	for _, want := range []string{"ts-bp", "left-pad", packageJSONFileName, "UBI-274"} {
+	for _, want := range []string{"ts-bp", "left-pad", denoLockFileName} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal does not name %q: %s", want, err)
 		}
 	}
 }
 
-// TestTSBlueprintImports_FileDependencyInsideResolves: the boundary is
-// relative-file versus registry, not which format declared it. A file:
-// dependency names a path exactly as a deno.json relative target does.
+// TestTSBlueprintImports_NPMAliasPassesThrough: npm's own alias form
+// already IS a specifier, so synthesizing one from it would produce
+// "npm:foo@npm:bar@1.0.0".
+func TestTSBlueprintImports_NPMAliasPassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"dependencies":{"foo":"npm:bar@1.0.0"}}`)
+	writeDenoLock(t, dir)
+
+	got, err := tsBlueprintImports(dir, "ts-bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Imports["foo"] != "npm:bar@1.0.0" {
+		t.Errorf("an alias must pass through, got %q", got.Imports["foo"])
+	}
+}
+
+// TestTSBlueprintImports_FileDependencyInsideResolves: a file: dependency
+// names a path exactly as a deno.json relative target does, so it is
+// local and needs no lock and no fetch.
 func TestTSBlueprintImports_FileDependencyInsideResolves(t *testing.T) {
 	dir := t.TempDir()
 	writeNPMPackage(t, filepath.Join(dir, "deps", "helper"), "helper", "entry.js")
@@ -177,8 +303,13 @@ func TestTSBlueprintImports_FileDependencyInsideResolves(t *testing.T) {
 		t.Fatalf("a file: dependency inside the blueprint must resolve: %v", err)
 	}
 	want := "file://" + filepath.ToSlash(filepath.Join(dir, "deps", "helper", "entry.js"))
-	if got["helper"] != want {
-		t.Fatalf("imports[helper] = %q, want the package's own entry FILE %q", got["helper"], want)
+	if got.Imports["helper"] != want {
+		t.Fatalf("imports[helper] = %q, want the package's own entry FILE %q", got.Imports["helper"], want)
+	}
+	// A vendored dependency is already present, so requiring a lock for
+	// it would refuse a blueprint that needs no network whatsoever.
+	if got.NeedsPrefetch {
+		t.Error("a file: dependency must not trigger a fetch pass")
 	}
 }
 
@@ -207,9 +338,9 @@ func TestTSBlueprintImports_FileDependencyOutsideIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "never travelled") {
 		t.Errorf("refusal should say the target did not travel, got: %s", err)
 	}
-	// And it must NOT be reported as a registry dependency, which would
-	// send the reader to the wrong question entirely.
-	if strings.Contains(err.Error(), "resolve from a registry") {
+	// And it must NOT be reported as an unpinned registry dependency,
+	// which would send the reader after a lock that cannot help.
+	if strings.Contains(err.Error(), denoLockFileName) {
 		t.Errorf("an outside file: is not a registry dependency: %s", err)
 	}
 }
@@ -252,18 +383,52 @@ func TestTSBlueprintImports_BothFormatsMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(got["shared"], "viadeno.ts") {
-		t.Errorf("deno.json should win a collision, got %q", got["shared"])
+	if !strings.HasSuffix(got.Imports["shared"], "viadeno.ts") {
+		t.Errorf("deno.json should win a collision, got %q", got.Imports["shared"])
 	}
-	if got["onlynpm"] == "" || got["onlydeno"] == "" {
-		t.Errorf("entries unique to each format must both survive: %v", got)
+	if got.Imports["onlynpm"] == "" || got.Imports["onlydeno"] == "" {
+		t.Errorf("entries unique to each format must both survive: %v", got.Imports)
 	}
 }
 
 // TestTSBlueprintImports_NoPackageJSON keeps the common case free.
 func TestTSBlueprintImports_NoPackageJSON(t *testing.T) {
 	got, err := tsBlueprintImports(t.TempDir(), "ts-bp")
-	if err != nil || got != nil {
-		t.Fatalf("a blueprint with neither config should resolve nothing: %v, %v", got, err)
+	if err != nil || len(got.Imports) != 0 {
+		t.Fatalf("a blueprint with neither config should resolve nothing: %+v, %v", got, err)
 	}
+}
+
+// TestTSDeclaresNPMDeps decides whether `ubx blueprint package` makes a
+// network call, so what it says yes to is worth pinning directly.
+func TestTSDeclaresNPMDeps(t *testing.T) {
+	t.Run("a vendored blueprint needs no network", func(t *testing.T) {
+		dir := t.TempDir()
+		writeNPMPackage(t, filepath.Join(dir, "deps", "helper"), "helper", "entry.js")
+		writePackageJSON(t, dir, `{"dependencies":{"helper":"file:./deps/helper"}}`)
+		if err := os.WriteFile(filepath.Join(dir, "bp.ts"), []byte("export const x = 1;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if tsDeclaresNPMDeps(dir) {
+			t.Error("a file: dependency must not make packaging reach the network")
+		}
+	})
+
+	t.Run("a blueprint generated by ubx needs no network", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "bp.ts"), []byte("export const x = 1;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if tsDeclaresNPMDeps(dir) {
+			t.Error("a blueprint with no declaration at all must not reach the network")
+		}
+	})
+
+	t.Run("an npm dependency does", func(t *testing.T) {
+		dir := t.TempDir()
+		writePackageJSON(t, dir, `{"dependencies":{"left-pad":"1.3.0"}}`)
+		if !tsDeclaresNPMDeps(dir) {
+			t.Error("an npm dependency is exactly what the lock is generated for")
+		}
+	})
 }

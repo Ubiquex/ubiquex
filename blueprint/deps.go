@@ -171,11 +171,19 @@ func ResolveTSDependencies(ctx context.Context, entryFile string) ([]TSDepMount,
 		if err != nil {
 			return nil, nil, err
 		}
+		// Fetch-and-verify before evaluation, never during it. deno takes
+		// one --lock per invocation, so the blueprint's own lock can only
+		// be enforced in an invocation of its own (tslock.go).
+		if own.NeedsPrefetch {
+			if err := prefetchTSBlueprintDeps(ctx, r.Dir, r.Dep.Name); err != nil {
+				return nil, nil, err
+			}
+		}
 		mounts = append(mounts, TSDepMount{
 			ResolvedDep: r,
 			Specifier:   r.Dep.Name,
 			EntryFile:   entry,
-			Imports:     own,
+			Imports:     own.Imports,
 		})
 	}
 	return mounts, notes, nil
