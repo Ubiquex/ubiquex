@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -161,7 +163,7 @@ func TestEmptyCacheNoteNamesWhatFillsIt(t *testing.T) {
 	var buf bytes.Buffer
 	writeEmptyCacheNote(&buf, &styler{})
 	out := buf.String()
-	for _, want := range []string{"ubx plan", "[blueprints]", ".ubx/config.hcl"} {
+	for _, want := range []string{"ubx plan", "blueprints = {", ".ubx/config.hcl"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("empty-cache note does not name %q:\n%s", want, out)
 		}
@@ -236,5 +238,39 @@ func TestRenderSource_SchemeColour(t *testing.T) {
 	// path is the whole value and the whole point.
 	if got := renderSource(st, "/local/bp", 0); got != "/local/bp" {
 		t.Errorf("a local path should render unstyled, got %q", got)
+	}
+}
+
+// TestEmptyCacheExampleActuallyParses feeds the printed snippet to the
+// REAL config parser.
+//
+// The first version printed a TOML-style "[blueprints]" header under a
+// sentence naming .ubx/config.hcl. Both formats are supported, by
+// extension, so the snippet was valid syntax for a file it did not name
+// and invalid for the one it did: copying it produced "Argument or block
+// definition required". A worked example that does not work is worse
+// than none, because it gets followed.
+//
+// Asserting against the parser rather than against a string literal is
+// the point. A literal would only prove the note still says what it said
+// when it was wrong.
+func TestEmptyCacheExampleActuallyParses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.hcl")
+	snippet := strings.Join(emptyCacheExample, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(snippet), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tree, err := parseGenericFile(path)
+	if err != nil {
+		t.Fatalf("the snippet ubx prints does not parse as %s:\n%s\n%v", filepath.Base(path), snippet, err)
+	}
+	cfg, err := decodeGenericIntoConfig(tree)
+	if err != nil {
+		t.Fatalf("the snippet parses but does not decode: %v", err)
+	}
+	if got := cfg.Blueprints["ci-platform"]; got != "oci://ghcr.io/acme/ci-platform:v1" {
+		t.Fatalf("the snippet must declare the blueprint it appears to, got %q from %v", got, cfg.Blueprints)
 	}
 }

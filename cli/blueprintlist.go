@@ -363,11 +363,28 @@ func elideMiddle(s string, width int) string {
 // something in it. The cache is never filled by hand, so a note that
 // only said it was empty would leave them looking for a command that
 // does not exist.
+//
+// The snippet is real HCL, and that is not a detail. The first version
+// printed a TOML-style "[blueprints]" header, which .ubx/config.hcl does
+// not parse: copying it produced "Argument or block definition
+// required". A worked example that does not work is worse than no
+// example, because it is followed.
 func writeEmptyCacheNote(out io.Writer, st *styler) {
 	fmt.Fprintf(out, "%s\n", st.Dim("no blueprints cached yet."))
 	fmt.Fprintf(out, "\n%s\n", "Declare one in .ubx/config.hcl and `ubx plan` pulls, verifies and caches it:")
-	fmt.Fprintf(out, "\n  %s\n", st.Dim("[blueprints]"))
-	fmt.Fprintf(out, "  %s\n", st.Dim(`ci-platform = "oci://ghcr.io/acme/ci-platform:v1"`))
+	for _, line := range emptyCacheExample {
+		fmt.Fprintf(out, "  %s\n", st.Dim(line))
+	}
+}
+
+// emptyCacheExample is the snippet writeEmptyCacheNote prints, kept as
+// data so a test can feed it to the real config parser rather than
+// eyeballing it.
+var emptyCacheExample = []string{
+	"",
+	"blueprints = {",
+	`  ci-platform = "oci://ghcr.io/acme/ci-platform:v1"`,
+	"}",
 }
 
 // lastUsedAge renders an index entry's RFC3339 timestamp through the
