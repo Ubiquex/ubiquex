@@ -61,8 +61,21 @@ func Evaluate(ctx context.Context, entryFile string) ([]byte, error) {
 // written into a generated TypeScript file as a literal, where JSON is
 // already valid syntax and nothing splits it on a space.
 func EvaluateWithBlueprintRoots(ctx context.Context, entryFile, blueprintRoots string) ([]byte, error) {
+	return EvaluateWithBlueprints(ctx, entryFile, blueprintRoots, nil)
+}
+
+// EvaluateWithBlueprints is EvaluateWithBlueprintRoots plus the import
+// map entries a stack's own declared blueprints contribute, so a program
+// imports one by a bare specifier instead of a relative path into a
+// directory it pulled by hand.
+//
+// An explicit parameter rather than ambient context, matching
+// blueprintRoots beside it: this package threads what an evaluation
+// needs through its own signatures, and one convention is easier to
+// follow than two.
+func EvaluateWithBlueprints(ctx context.Context, entryFile, blueprintRoots string, blueprintImports map[string]string) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
-		raw, errOut, err := runOnce(ctx, entryFile, blueprintRoots)
+		raw, errOut, err := runOnce(ctx, entryFile, blueprintRoots, blueprintImports)
 		if err != nil {
 			return nil, err
 		}

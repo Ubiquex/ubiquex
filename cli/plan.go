@@ -254,19 +254,14 @@ propose-time PR trailer hash, etc.).`,
 				// optional, and collecting it only sometimes is worse than
 				// either alternative, since nothing downstream can tell a
 				// missing hash from a blueprint that never had one.
-				switch strings.ToLower(filepath.Ext(fromCode)) {
-				case ".go":
-					if err := blueprint.StampDirectCallProvenance(ctx, fromCode, &intent); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
-					}
-				case ".ts":
-					if err := blueprint.StampDirectCallProvenanceTS(ctx, fromCode, &intent); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
-					}
-				case ".py":
-					if err := blueprint.StampDirectCallProvenancePy(&intent, blueprintRefs); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
-					}
+				// One stamping pass, from the refs the evaluation
+				// already produced. Go and TS used to re-run discovery
+				// here, which cannot see a DECLARED blueprint: that one
+				// is resolved before the program runs and never appears
+				// in the program's own module graph.
+				lang := strings.TrimPrefix(strings.ToLower(filepath.Ext(fromCode)), ".")
+				if err := blueprint.StampDirectCallProvenanceRefs(&intent, blueprintRefs, lang); err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}
 				sourceLabel = fromCode
 				generated = true

@@ -105,13 +105,25 @@ func absolutizeRelative(target, configDir string) string {
 // project's own entries, relative ones made absolute, with the embedded
 // runtime's "@ubx/sdk" layered over the top. Returns the path to write
 // and a cleanup func.
-func writeMergedImportMap(entryDir, runtimePath string) (string, func(), error) {
+// extra holds blueprint specifiers, layered between the project's own
+// entries and "@ubx/sdk".
+//
+// Above the project's, because a stack declaring a blueprint in
+// .ubx/config has said which one it wants, and a stale relative alias
+// left in a deno.json should not quietly win over it. Below "@ubx/sdk",
+// which stays absolute for the reason it always has: the runtime is
+// embedded in this binary so evaluation works offline and against the
+// runtime this binary shipped with.
+func writeMergedImportMap(entryDir, runtimePath string, extra map[string]string) (string, func(), error) {
 	imports := map[string]string{}
 	if configPath := findDenoConfig(entryDir); configPath != "" {
 		configDir := filepath.Dir(configPath)
 		for specifier, target := range projectImports(configPath) {
 			imports[specifier] = absolutizeRelative(target, configDir)
 		}
+	}
+	for specifier, target := range extra {
+		imports[specifier] = absolutizeRelative(target, entryDir)
 	}
 	imports["@ubx/sdk"] = runtimePath
 

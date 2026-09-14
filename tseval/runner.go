@@ -87,7 +87,7 @@ try {
 // runOnce returns the program's stdout AND its stderr. stderr is
 // returned on success too, for the reason core/evaloutput.go records:
 // a program can write a diagnosis and still exit 0.
-func runOnce(ctx context.Context, entryFile, blueprintRoots string) (stdoutBytes, stderrBytes []byte, err error) {
+func runOnce(ctx context.Context, entryFile, blueprintRoots string, blueprintImports map[string]string) (stdoutBytes, stderrBytes []byte, err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("entry file: %w", err)
@@ -124,7 +124,7 @@ func runOnce(ctx context.Context, entryFile, blueprintRoots string) (stdoutBytes
 	// --import-map supplied here overrides the project's entirely, which
 	// made every published SDK specifier unresolvable (UBI-260,
 	// tseval/importmap.go).
-	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"))
+	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absEntry), filepath.Join(assetsDir, "runtime", "src", "index.ts"), blueprintImports)
 	if err != nil {
 		return nil, nil, err
 	}

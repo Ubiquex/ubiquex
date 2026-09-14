@@ -19,7 +19,7 @@ func TestWriteMergedImportMap_KeepsTheProjectsOwnEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts")
+	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestWriteMergedImportMap_RuntimeWinsOverAProjectRemap(t *testing.T) {
 		[]byte(`{"imports":{"@ubx/sdk":"jsr:@ubx/sdk@0.0.1"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts")
+	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestWriteMergedImportMap_RelativeTargetsBecomeAbsolute(t *testing.T) {
 		[]byte(`{"imports":{"vendored/":"./vendor/sdk/","one":"./vendor/one.ts"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts")
+	path, cleanup, err := writeMergedImportMap(dir, "/assets/runtime/src/index.ts", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestWriteMergedImportMap_SchemedTargetsAreUntouched(t *testing.T) {
 		[]byte(`{"imports":{"a":"npm:pkg@1","b":"jsr:@s/p@2","c":"https://example.com/m.ts"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	path, cleanup, err := writeMergedImportMap(dir, "/rt.ts")
+	path, cleanup, err := writeMergedImportMap(dir, "/rt.ts", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestWriteMergedImportMap_SchemedTargetsAreUntouched(t *testing.T) {
 // imports nothing but the runtime and relative paths, and it must keep
 // working exactly as before.
 func TestWriteMergedImportMap_NoProjectConfig(t *testing.T) {
-	path, cleanup, err := writeMergedImportMap(t.TempDir(), "/rt.ts")
+	path, cleanup, err := writeMergedImportMap(t.TempDir(), "/rt.ts", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
