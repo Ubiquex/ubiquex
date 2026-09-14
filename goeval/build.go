@@ -102,6 +102,14 @@ func buildProgram(ctx context.Context, entryFile, blueprintRoots string) (binary
 	}
 	args = append(args, pkgArg)
 
+	// Carry the program's own workspace through the copy, if it has one.
+	// See workspace.go for the two ways a monorepo failed without this.
+	workPath, err := writeBuildWorkspace(buildDir, moduleRoot, moduleCopy)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+
 	cmd := exec.CommandContext(ctx, goPath, args...)
 	cmd.Dir = moduleCopy
 	// GOPROXY=off is this evaluator's own real analog of TS's --no-remote:
@@ -121,7 +129,18 @@ func buildProgram(ctx context.Context, entryFile, blueprintRoots string) (binary
 	// purely local, network-free bookkeeping step. Without this, a
 	// hermetic evaluation could spuriously fail for a program author who
 	// simply hasn't run `go mod tidy` on the exact machine `ubx` runs on.
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off", "GOFLAGS=-mod=mod")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off")
+	if workPath != "" {
+		// -mod is illegal in workspace mode ("-mod may only be set to
+		// readonly or vendor when in workspace mode"), and unnecessary
+		// there: the reconciliation it exists for is what a workspace's
+		// own go directive already does. GOWORK names the synthesized
+		// file explicitly rather than relying on upward discovery, since
+		// the build directory is not inside the author's tree.
+		cmd.Env = append(cmd.Env, "GOWORK="+workPath)
+	} else {
+		cmd.Env = append(cmd.Env, "GOFLAGS=-mod=mod")
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if runErr := cmd.Run(); runErr != nil {
