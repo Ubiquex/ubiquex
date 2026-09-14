@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // tslock.go is the two ends of the npm boundary tsdeps.go describes:
@@ -128,6 +130,12 @@ func tsDeclaresNPMDeps(dir string) bool {
 		return false
 	}
 	for _, d := range append(fromDeno, fromNPM...) {
+		// The runtime never comes from a registry, so declaring it alone
+		// must not make packaging reach the network. Every npm-authored
+		// blueprint declares it.
+		if d.Specifier == tseval.RuntimeSpecifier {
+			continue
+		}
 		if d.Kind == tsImportNPM {
 			return true
 		}

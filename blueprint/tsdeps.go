@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 // tsdeps.go reads a TypeScript blueprint's OWN dependency declaration.
@@ -130,6 +132,18 @@ func tsBlueprintImports(dir, name string) (tsResolvedImports, error) {
 	out := tsResolvedImports{Imports: map[string]string{}}
 	var jsr, web, unpinned []string
 	for _, d := range declared {
+		// The runtime is never resolved for a blueprint, whatever its own
+		// declaration says. tseval maps it to the embedded copy inside the
+		// blueprint's own scope, and it has to be the ONLY instance in the
+		// evaluation (tseval/importmap.go).
+		//
+		// Silently rather than as a refusal: declaring it is correct and
+		// necessary. An npm-authored blueprint cannot install or
+		// type-check without it in package.json, so refusing would refuse
+		// every correctly authored blueprint.
+		if d.Specifier == tseval.RuntimeSpecifier {
+			continue
+		}
 		switch d.Kind {
 		case tsImportLocal:
 			out.Imports[d.Specifier] = d.Target

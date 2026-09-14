@@ -31,6 +31,15 @@ import (
 // A project remapping it is therefore overridden rather than honored,
 // deliberately.
 
+// RuntimeSpecifier is the bare name every program imports the embedded
+// runtime by.
+//
+// Exported because it is a boundary rather than a detail: the blueprint
+// package has to know which specifier it must NOT resolve for itself
+// (blueprint/tsdeps.go), and the two agreeing by coincidence is how the
+// duplicate-runtime bug happened in the first place.
+const RuntimeSpecifier = "@ubx/sdk"
+
 // denoConfigNames is the discovery order Deno itself uses.
 var denoConfigNames = []string{"deno.json", "deno.jsonc"}
 
@@ -160,16 +169,37 @@ func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintIm
 	scopes := map[string]map[string]string{}
 	for _, bp := range blueprints {
 		imports[bp.Specifier] = absolutizeRelative(bp.EntryFile, entryDir)
-		if len(bp.Imports) == 0 {
+		if bp.Dir == "" {
 			continue
 		}
 		// A scope prefix is a directory URL and must end in "/", or it
 		// matches nothing.
 		prefix := (&url.URL{Scheme: "file", Path: ensureTrailingSlash(bp.Dir)}).String()
-		scoped := make(map[string]string, len(bp.Imports))
+		scoped := make(map[string]string, len(bp.Imports)+1)
 		for specifier, target := range bp.Imports {
 			scoped[specifier] = target
 		}
+		// The runtime is pinned INSIDE the scope, not left to the top
+		// level, because a scope is consulted first and because the
+		// blueprint may have a copy of the real package sitting in its own
+		// node_modules.
+		//
+		// There must be exactly one runtime instance in an evaluation. The
+		// collector that resource() writes into is module state, so a
+		// second instance is a second collector, and a blueprint holding
+		// one fails with the runtime's own message about there being no
+		// active stack:
+		//
+		//	Error: resource() called outside of an active stack() evaluation.
+		//	  at requireCollector (.../node_modules/.deno/@ubx+sdk@1.0.3/...)
+		//	  at tsBp (.../deps/sha256/.../blueprint.ts)
+		//
+		// The published package cannot serve here even setting that aside:
+		// it does not export __setBlueprintRoots, the channel the runner
+		// uses to attribute resources to the blueprint that produced them.
+		// A blueprint on its own copy of the runtime could not take part in
+		// provenance at all.
+		scoped[RuntimeSpecifier] = runtimePath
 		scopes[prefix] = scoped
 	}
 	// extra sits above the project's own and below "@ubx/sdk". It carries
@@ -181,7 +211,7 @@ func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintIm
 	for specifier, target := range extra {
 		imports[specifier] = target
 	}
-	imports["@ubx/sdk"] = runtimePath
+	imports[RuntimeSpecifier] = runtimePath
 
 	doc := struct {
 		Imports map[string]string            `json:"imports"`

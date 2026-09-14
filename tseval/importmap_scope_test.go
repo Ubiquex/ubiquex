@@ -76,10 +76,27 @@ func TestWriteMergedImportMap_BlueprintScope(t *testing.T) {
 	}
 }
 
-// TestWriteMergedImportMap_NoScopesWhenNothingDeclares keeps the common
-// case clean: a built blueprint declares no imports of its own, and the
-// map should not grow an empty scopes object for it.
-func TestWriteMergedImportMap_NoScopesWhenNothingDeclares(t *testing.T) {
+// TestWriteMergedImportMap_RuntimeIsPinnedInEveryBlueprintScope is the
+// one-runtime-instance invariant.
+//
+// This test used to assert the opposite, that a blueprint declaring no
+// imports grows no scope at all, on the reasoning that an empty scope is
+// clutter. That was right about the clutter and wrong about what a scope
+// is for here. The runtime is not one of a blueprint's imports to be
+// resolved, it is the single instance every module in the evaluation has
+// to share, and pinning it per blueprint is what makes that true no
+// matter what else is reachable from the blueprint's own directory.
+//
+// The collector resource() writes into is module state, so a second
+// instance is a second collector with no active stack behind it. A
+// blueprint that had its own copy failed with the runtime's own message:
+//
+//	Error: resource() called outside of an active stack() evaluation.
+//
+// So it is pinned for every blueprint with a directory, whether or not it
+// declares anything today, because "declares nothing" is a fact about
+// this version of a blueprint and the invariant is not.
+func TestWriteMergedImportMap_RuntimeIsPinnedInEveryBlueprintScope(t *testing.T) {
 	path, cleanup, err := writeMergedImportMap(t.TempDir(), "/rt/index.ts", []BlueprintImport{{
 		Specifier: "built-bp",
 		EntryFile: "/bp/ts/built.ts",
@@ -94,7 +111,22 @@ func TestWriteMergedImportMap_NoScopesWhenNothingDeclares(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "scopes") {
-		t.Fatalf("no blueprint declared imports, so the map should carry no scopes: %s", data)
+	var doc struct {
+		Imports map[string]string            `json:"imports"`
+		Scopes  map[string]map[string]string `json:"scopes"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	scope, ok := doc.Scopes["file:///bp/"]
+	if !ok {
+		t.Fatalf("a blueprint with a directory must get a scope: %s", data)
+	}
+	if scope[RuntimeSpecifier] != "/rt/index.ts" {
+		t.Errorf("scope[%s] = %q, want the embedded runtime", RuntimeSpecifier, scope[RuntimeSpecifier])
+	}
+	// And the top level still carries it, for the consumer's own modules.
+	if doc.Imports[RuntimeSpecifier] != "/rt/index.ts" {
+		t.Errorf("imports[%s] = %q, want the embedded runtime", RuntimeSpecifier, doc.Imports[RuntimeSpecifier])
 	}
 }
