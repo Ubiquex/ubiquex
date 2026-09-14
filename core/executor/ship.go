@@ -2095,11 +2095,28 @@ func shipCreate(ctx context.Context, app Applier, providerConfig json.RawMessage
 	// then nothing: no statement that a resource may exist, and no way to
 	// know the recovery exists. A silent orphan is what UBI-269 is about,
 	// and a correct record nobody reads would only have made it quieter.
+	//
+	// Written as a block, with the command on its own line. cli/ship.go
+	// prints this outside its one-row-per-write region precisely so the
+	// command survives intact: the first real failure this path handled
+	// truncated it mid-sentence, which is the one way this message can
+	// fail completely. A message that says something is wrong and then
+	// withholds the fix is worse than silence, because it costs the
+	// reader's attention and returns nothing for it.
 	emitProgress(ctx, ProgressEvent{
 		Address: ra.Address.String(),
 		Kind:    "unverified",
-		Detail: fmt.Sprintf(
-			"this resource may exist: the create call was made and its outcome is unknown. Nothing is recorded for it, so a re-ship would create another. Check the provider, and if it is there, adopt it with:\n  ubx scan --stack %s --type %s --name %s --lookup '<identifying attributes>'",
+		Detail: fmt.Sprintf(`The create call was made and its outcome is unknown, so this resource
+may exist in the provider. Nothing is recorded for it, which means a
+re-ship would try to create it again.
+
+Check the provider. If it is not there, re-ship normally. If it is,
+adopt it and no second create happens:
+
+  ubx scan --stack %s --type %s --name %s --lookup '<identifying attributes>'
+
+The identifying attributes vary by resource type. If the shape is wrong,
+the error names what this provider expects.`,
 			ra.Address.Stack, ra.Address.Type, ra.Address.Name),
 	})
 	return rcd.persist()
