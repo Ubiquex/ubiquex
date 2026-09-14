@@ -346,7 +346,7 @@ one chain per stack, so there is no "every stack" to enumerate there -- --stack 
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"} (only used with --drift)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the fleet walk (only used with --drift)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
-	cmd.Flags().BoolVar(&all, "all", false, "with --drift, also show each clean resource's own line (hidden by default, UBI-71); no effect without --drift or with --json")
+	cmd.Flags().BoolVar(&all, "all", false, "with --drift, also show each clean resource's own line (hidden by default); no effect without --drift or with --json")
 
 	return cmd
 }

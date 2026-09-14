@@ -373,9 +373,9 @@ func parseParamSpec(name, spec string) (Param, error) {
 func parseDefaultValue(typ ParamType, text string) (any, error) {
 	switch typ {
 	case ParamListString, ParamListNumber:
-		return nil, fmt.Errorf("list-typed params don't support a default value yet -- declare it \"required\" instead (UBI-129: a list param is always consumed by exactly one for_each resource, which has no notion of an un-given default)")
+		return nil, fmt.Errorf("list-typed params don't support a default value yet -- declare it \"required\" instead (a list param is always consumed by exactly one for_each resource, which has no notion of an un-given default)")
 	case ParamCrossRef:
-		return nil, fmt.Errorf("cross_ref params don't support a default value -- declare it \"required\" instead (UBI-134: there is no sensible default cross-stack address)")
+		return nil, fmt.Errorf("cross_ref params don't support a default value -- declare it \"required\" instead (there is no sensible default cross-stack address)")
 	case ParamNumber:
 		n, err := strconv.Atoi(text)
 		if err != nil {

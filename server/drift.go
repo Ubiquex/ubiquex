@@ -91,7 +91,7 @@ func (s *Server) driftWatchOnce(ctx context.Context) {
 			continue
 		}
 		if len(stacks) == 0 {
-			slog.Warn("ubx server: drift watch: skipping repository -- no .ubx/config found anywhere in its own checkout, so it declares no stack to check (UBI-167)",
+			slog.Warn("ubx server: drift watch: skipping repository -- no .ubx/config found anywhere in its own checkout, so it declares no stack to check",
 				"repo", target.label)
 			continue
 		}

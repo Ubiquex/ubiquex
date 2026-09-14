@@ -559,6 +559,6 @@ func StampDirectCallProvenancePy(intent *resolver.IntentFile, refs map[string]st
 	if len(pendingBlueprintNames(intent)) == 0 {
 		return nil
 	}
-	hint := "no requirements.txt entry (the \"<name> @ <url>\" syntax, UBI-130) declares a blueprint dependency with that name -- this works for a blueprint declared that way (local, git, or OCI source, all uniformly); a blueprint whose py/ package is imported via a bare colocated copy with no requirements.txt entry isn't supported yet"
+	hint := "no requirements.txt entry (the \"<name> @ <url>\" syntax) declares a blueprint dependency with that name -- this works for a blueprint declared that way (local, git, or OCI source, all uniformly); a blueprint whose py/ package is imported via a bare colocated copy with no requirements.txt entry isn't supported yet"
 	return applyBlueprintRefs(intent, refs, hint)
 }

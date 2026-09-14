@@ -340,7 +340,12 @@ export default stack("demo", () => {
 		t.Fatalf("a registry specifier must be refused, not fetched:\n%s", out)
 	}
 	msg := out + err.Error()
-	for _, want := range []string{"tsbp", "jsr:@ubx/sdk-aws@1.2.0", "--no-remote", "UBI-274"} {
+	// No ticket id: a Linear identifier means nothing outside this org and
+	// does not belong in CLI output.
+	if strings.Contains(msg, "UBI-") {
+		t.Fatalf("CLI output must not cite a ticket id:\n%s", msg)
+	}
+	for _, want := range []string{"tsbp", "jsr:@ubx/sdk-aws@1.2.0", "--no-remote"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("refusal does not name %q:\n%s", want, msg)
 		}
@@ -389,12 +394,20 @@ func TestTranslator_TSNPMDependencyPinnedAndFetched(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// An npm author's own declaration: a bare semver range, no deno.json,
-	// no deno.lock. left-pad is chosen for having no dependencies of its
-	// own, so the test fetches one package rather than a graph.
-	write("package.json", `{"name":"npmbp","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}}`)
+	// An npm author's own declaration: bare semver ranges, no deno.json,
+	// no deno.lock.
+	//
+	// TWO dependencies, imported two different ways, deliberately.
+	// left-pad is imported bare and has no dependencies of its own.
+	// date-fns is imported by a SUBPATH, which is how a generated SDK is
+	// normally used and is the shape a bare-specifier-only import map
+	// silently fails to cover: the first version of this test used
+	// left-pad alone and passed while `@ubx/sdk-aws/aws/sqs/queue` failed
+	// in the field with the very error this change set exists to remove.
+	write("package.json", `{"name":"npmbp","version":"1.0.0","dependencies":{"left-pad":"1.3.0","date-fns":"3.6.0"}}`)
 	write("blueprint.ts", `import { resource } from "@ubx/sdk";
 import leftPad from "left-pad";
+import { addDays } from "date-fns/addDays";
 
 export interface Config { name: string }
 
@@ -402,7 +415,7 @@ export function npmbp(c: Config) {
   resource(
     { wireType: "fake_widget", fields: { name: "name" } },
     c.name,
-    { name: leftPad("w", 3, "-") },
+    { name: leftPad("w", 3, "-") + "/" + addDays(new Date(Date.UTC(2020, 0, 1)), 3).toISOString().slice(0, 10) },
   );
 }
 `)
@@ -475,10 +488,13 @@ export default stack("demo", () => {
 	if err != nil {
 		t.Fatalf("a pinned npm dependency must resolve and run: %v\n%s", err, out)
 	}
-	// left-pad("w", 3, "-") is "--w". Asserting the VALUE proves the real
-	// package ran, where asserting a successful exit would not.
-	if !strings.Contains(out, "--w") {
-		t.Fatalf("the npm dependency did not actually execute:\n%s", out)
+	// Asserting the VALUES proves both real packages ran, where asserting
+	// a successful exit would not. left-pad("w", 3, "-") is "--w", and
+	// addDays(2020-01-01, 3) is 2020-01-04. The input is built with
+	// Date.UTC rather than a local-time constructor, or the assertion
+	// would pass or fail by the machine's timezone.
+	if !strings.Contains(out, "--w/2020-01-04") {
+		t.Fatalf("the npm dependencies did not both execute (bare and subpath):\n%s", out)
 	}
 
 	// And evaluation left the author's own deno.lock alone.

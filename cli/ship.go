@@ -343,8 +343,8 @@ consistency shows its own work instead of sitting silent.`,
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider, e.g. {\"region\":\"us-east-1\"}")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "overall timeout for the ship run")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
-	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required for inline local-tier acceptance of any plan with blast_radius.destroys > 0 (docs/schema.md); unused when <hash> is already an accepted proposal, since that confirmation already happened at its own accept time -- --confirm-terminate is the identical flag under \"ubx terminate\"'s own human-facing name (UBI-77), either spelling satisfies the other")
-	cmd.Flags().BoolVar(&confirmTerminate, "confirm-terminate", false, "alias for --confirm-destroys (UBI-77) -- the name \"ubx terminate\"'s own \"next:\" hint shows, since that's the verb a human actually typed; sets the identical requirement, either flag satisfies both")
+	cmd.Flags().BoolVar(&confirmDestroys, "confirm-destroys", false, "required for inline local-tier acceptance of any plan with blast_radius.destroys > 0 (docs/schema.md); unused when <hash> is already an accepted proposal, since that confirmation already happened at its own accept time -- --confirm-terminate is the identical flag under \"ubx terminate\"'s own human-facing name, either spelling satisfies the other")
+	cmd.Flags().BoolVar(&confirmTerminate, "confirm-terminate", false, "alias for --confirm-destroys -- the name \"ubx terminate\"'s own \"next:\" hint shows, since that's the verb a human actually typed; sets the identical requirement, either flag satisfies both")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the interactive \"type yes\" confirmation for inline local-tier acceptance (for CI/scripts) -- the receipt still renders; required on a non-TTY, which never prompts")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 

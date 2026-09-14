@@ -258,7 +258,7 @@ func writeBlueprintRootsModule(roots []BlueprintRoot, entryDir string, deps []Ex
 		return "", func() {}, fmt.Errorf("pyeval: create blueprint roots dir: %w", err)
 	}
 	cleanup := func() { os.RemoveAll(dir) }
-	content := "# Written by ubx for one evaluation (UBI-266). Not API.\nROOTS = " + string(payload) + "\n"
+	content := "# Written by ubx for one evaluation. Not API.\nROOTS = " + string(payload) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "_ubx_blueprint_roots.py"), []byte(content), 0o644); err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("pyeval: write blueprint roots module: %w", err)

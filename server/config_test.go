@@ -312,7 +312,10 @@ repos:
 	if err == nil {
 		t.Fatal("Load should reject a repos entry still declaring ledger_dir (UBI-167)")
 	}
-	if !strings.Contains(err.Error(), "ledger_dir") || !strings.Contains(err.Error(), "UBI-167") {
+	if strings.Contains(err.Error(), "UBI-") {
+		t.Errorf("a config error must not cite a ticket id: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ledger_dir") || !strings.Contains(err.Error(), "auto-discovered") {
 		t.Errorf("err = %v, want a real, named refusal mentioning ledger_dir and UBI-167", err)
 	}
 }
@@ -338,7 +341,7 @@ func TestLoad_RepoFlagLedgerDirSuffixRejected(t *testing.T) {
 			t.Errorf("--repo %q should be rejected (UBI-167), got no error", raw)
 			continue
 		}
-		if !strings.Contains(err.Error(), "UBI-167") {
+		if !strings.Contains(err.Error(), "auto-discovered") {
 			t.Errorf("--repo %q: err = %v, want a real, named UBI-167 refusal", raw, err)
 		}
 	}

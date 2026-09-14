@@ -160,7 +160,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own document source (%q) has an unrecognized extension %q -- expected .go, .ts, or .py", p.ID, authSource.Ref, ext)}
 				}
 			case core.SourceKindDialogue:
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own authoring source is a captured \"ubx chat\" dialogue (%s) -- chat was removed as an authoring medium (UBI-224), and promote no longer re-resolves a dialogue source; \"ubx why %s\" still explains it", p.ID, authSource.Ref, p.ID)}
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own authoring source is a captured \"ubx chat\" dialogue (%s) -- chat was removed as an authoring medium, and promote no longer re-resolves a dialogue source; \"ubx why %s\" still explains it", p.ID, authSource.Ref, p.ID)}
 			default:
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("%s's own authoring source has an unrecognized kind %q", p.ID, authSource.Kind)}
 			}

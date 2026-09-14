@@ -134,7 +134,7 @@ func (s *Server) handlePullRequestOpenedBitbucketServer(ctx context.Context, bod
 
 	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing pr:opened event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pr:opened event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
@@ -169,7 +169,7 @@ func (s *Server) handlePullRequestSourceUpdatedBitbucketServer(ctx context.Conte
 
 	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing pr:from_ref_updated event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pr:from_ref_updated event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
@@ -211,7 +211,7 @@ func (s *Server) handlePullRequestMergedBitbucketServer(ctx context.Context, bod
 
 	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing pr:merged event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pr:merged event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}
@@ -231,7 +231,7 @@ func (s *Server) handlePullRequestMergedBitbucketServer(ctx context.Context, bod
 // refuseAmbiguousStackBitbucketServer is refuseAmbiguousStackGitHub's
 // own Bitbucket Server counterpart.
 func (s *Server) refuseAmbiguousStackBitbucketServer(ctx context.Context, api *bbserver.Client, id prIdentityBitbucketServer, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack",
 		"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "event", event, "error", err)
 	return postOrEditCommentBitbucketServer(ctx, api, id.projectKey, id.repositorySlug, id.prID, s.cfg.BitbucketServerBotName, "plan",
 		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
@@ -298,7 +298,7 @@ func (s *Server) handlePullRequestCommentBitbucketServer(ctx context.Context, bo
 
 	candidates := s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing pr:comment:added event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pr:comment:added event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID, "verb", verb)
 		return nil
 	}
@@ -407,7 +407,7 @@ func (s *Server) handlePullRequestApprovedBitbucketServer(ctx context.Context, b
 	// refuseAmbiguousStackGitHub's own doc comment explains for
 	// GitHub's own approval flow.
 	if len(s.matchingRepoConfigsBitbucketServer(id.projectKey, id.repositorySlug)) == 0 {
-		slog.Error("ubx server: refusing pr:reviewer:approved event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pr:reviewer:approved event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketserver", "repo", id.projectKey+"/"+id.repositorySlug, "pr", id.prID)
 		return nil
 	}

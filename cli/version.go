@@ -147,7 +147,7 @@ func checkBuildFreshness() error {
 		return nil
 	}
 	return fmt.Errorf(
-		"ubx was built from commit %s, but this checkout's current HEAD is %s -- rebuild (`make build`) before running generation. A stale binary here previously ran a full multi-provider regeneration silently emitting the wrong codegen output for every data source (UBI-186 follow-up) before anyone noticed",
+		"ubx was built from commit %s, but this checkout's current HEAD is %s -- rebuild (`make build`) before running generation. A stale binary here previously ran a full multi-provider regeneration silently emitting the wrong codegen output for every data source before anyone noticed",
 		built, head,
 	)
 }

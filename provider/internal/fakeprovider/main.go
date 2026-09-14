@@ -507,7 +507,7 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 				Diagnostics: []*tfplugin6.Diagnostic{{
 					Severity: tfplugin6.Diagnostic_ERROR,
 					Summary:  "NoSuchEntity",
-					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found (UBI-92 fail-create-not-found)", name),
+					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found", name),
 				}},
 			}, nil
 		}
@@ -539,7 +539,7 @@ func (s *fakeProviderServerV6) ApplyResourceChange(ctx context.Context, req *tfp
 				Diagnostics: []*tfplugin6.Diagnostic{{
 					Severity: tfplugin6.Diagnostic_ERROR,
 					Summary:  "destroy called without PlannedPrivate",
-					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call (UBI-30) -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
+					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
 				}},
 			}, nil
 		}
@@ -683,7 +683,7 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 				Diagnostics: []*tfplugin5.Diagnostic{{
 					Severity: tfplugin5.Diagnostic_ERROR,
 					Summary:  "NoSuchEntity",
-					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found (UBI-92 fail-create-not-found)", name),
+					Detail:   fmt.Sprintf("fakeprovider: simulated eventual-consistency lag -- the resource with name %q cannot be found", name),
 				}},
 			}, nil
 		}
@@ -707,7 +707,7 @@ func (s *fakeProviderServerV5) ApplyResourceChange(ctx context.Context, req *tfp
 				Diagnostics: []*tfplugin5.Diagnostic{{
 					Severity: tfplugin5.Diagnostic_ERROR,
 					Summary:  "destroy called without PlannedPrivate",
-					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call (UBI-30) -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
+					Detail:   "fakeprovider: a real destroy requires a prior PlanResourceChange call -- this fixture refuses to silently no-op the way a real provider's own shim was found to",
 				}},
 			}, nil
 		}
@@ -1433,5 +1433,5 @@ func malformedPriorStateDetail(priorMsgpackBytes []byte, ty cty.Type, idAttr str
 	return fmt.Sprintf(
 		"fakeprovider: PriorState is a non-null object whose %q is not set, so this is neither a create nor an update. "+
 			"A create must send a top-level null PriorState; an object of nulls claims the resource exists and is empty, "+
-			"which a real provider takes as an update and rejects for want of an identifier (UBI-267)", idAttr)
+			"which a real provider takes as an update and rejects for want of an identifier", idAttr)
 }

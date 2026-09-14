@@ -1781,7 +1781,7 @@ func reconcileSameBatchEffects(ctx context.Context, l *core.Ledger, pool Applier
 			continue
 		}
 		reconcileProposal.Intent.Summary = fmt.Sprintf(
-			"%s's own real, same-batch side effect from shipping %s (post-chain re-observation, UBI-63)",
+			"%s's own real, same-batch side effect from shipping %s (post-chain re-observation)",
 			n.addr, p.ID)
 		_, _ = core.Accept(l, reconcileProposal)
 	}
@@ -1890,7 +1890,7 @@ func retryCreateOnDependencyNotVisible(ctx context.Context, app Applier, addr co
 	rcd.mutate(ra, func(ra *core.ResourceApply) {
 		ra.Reconciliation = append(ra.Reconciliation, core.ReconciliationAttempt{
 			At: nowRFC3339(), Outcome: "inconclusive",
-			Detail: "references a same-batch dependency that just shipped -- retrying to allow for real propagation lag (AWS IAM's own well-documented eventual-consistency window, UBI-92): " + terminal.Error(),
+			Detail: "references a same-batch dependency that just shipped -- retrying to allow for real propagation lag (AWS IAM's own well-documented eventual-consistency window): " + terminal.Error(),
 		})
 	})
 
