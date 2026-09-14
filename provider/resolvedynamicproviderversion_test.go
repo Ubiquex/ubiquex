@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,4 +142,158 @@ func TestResolveDynamicProviderBinaryVersion_NewNameWinsOverLegacy(t *testing.T)
 	if got != "1.0.13" {
 		t.Fatalf("version = %q, want 1.0.13 (new name must win over the legacy mirror)", got)
 	}
+}
+
+// TestNewestCompatibleVersion covers the selection rule without a
+// network. The cases are the real ones: every published schema snapshot's
+// own stamped floor at the time this was written, against the real
+// release list.
+func TestNewestCompatibleVersion(t *testing.T) {
+	// The real ubx-provider-dynamic release history, newest first, as
+	// GitHub returns it.
+	rels := []githubRelease{
+		{TagName: "v1.3.1"}, {TagName: "v1.3.0"}, {TagName: "v1.2.1"},
+		{TagName: "v1.2.0"}, {TagName: "v1.1.0"}, {TagName: "v1.0.13"},
+		{TagName: "v1.0.10"}, {TagName: "v1.0.4"},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		floor string
+		want  string
+	}{
+		// The incident: an encoder fix released as 1.3.1 could not reach
+		// a snapshot stamped 1.3.0.
+		{"aws", "1.3.0", "1.3.1"},
+		// The five stamped a full minor back. A major.minor bound would
+		// have left every one of these stuck, since no 1.2.x newer than
+		// 1.2.1 exists and 1.2.1 predates the fix.
+		{"azure", "1.2.0", "1.3.1"},
+		{"datadog", "1.2.0", "1.3.1"},
+		{"github", "1.2.0", "1.3.1"},
+		{"google", "1.2.0", "1.3.1"},
+		{"kubernetes", "1.2.0", "1.3.1"},
+		// Sixteen releases behind, and still served by the same major.
+		{"cloudflare", "1.0.10", "1.3.1"},
+		{"digitalocean", "1.0.4", "1.3.1"},
+		// Already newest: no change, and never a downgrade.
+		{"already newest", "1.3.1", "1.3.1"},
+		// A floor ahead of everything published (a snapshot cut from an
+		// unreleased build) keeps itself rather than silently downgrading.
+		{"floor ahead of the list", "1.9.0", "1.9.0"},
+		// Unparseable floors are returned untouched: guessing is worse
+		// than the status quo.
+		{"not semver", "dev", "dev"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := newestCompatibleVersion(tc.floor, rels); got != tc.want {
+				t.Fatalf("newestCompatibleVersion(%q) = %q, want %q", tc.floor, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewestCompatibleVersion_NeverCrossesAMajor is the bound itself.
+// schema_format is the real compatibility contract and a major bump is
+// where this resolution stops guessing.
+func TestNewestCompatibleVersion_NeverCrossesAMajor(t *testing.T) {
+	rels := []githubRelease{{TagName: "v2.0.0"}, {TagName: "v1.3.1"}, {TagName: "v1.3.0"}}
+	if got := newestCompatibleVersion("1.3.0", rels); got != "1.3.1" {
+		t.Fatalf("got %q, want 1.3.1 -- a 2.x release must never serve a 1.x snapshot", got)
+	}
+}
+
+// TestNewestCompatibleVersion_SkipsPreReleases: a snapshot stamped 1.3.0
+// must not silently start running a release candidate. Same exclusion
+// provider/versions.go already applies when picking a registry provider.
+func TestNewestCompatibleVersion_SkipsPreReleases(t *testing.T) {
+	rels := []githubRelease{{TagName: "v1.4.0-rc1"}, {TagName: "v1.3.1"}}
+	if got := newestCompatibleVersion("1.3.0", rels); got != "1.3.1" {
+		t.Fatalf("got %q, want 1.3.1 -- a pre-release is not something to be upgraded into silently", got)
+	}
+}
+
+// TestResolveNewestCompatible_ServerAndFallbacks covers the half that
+// talks to GitHub: that it uses what it finds, and that every way of
+// failing to find anything lands back on the floor rather than on an
+// error.
+//
+// Degrading silently is deliberate. Acquiring the stamped version is
+// exactly what happened before this resolution existed and is known to
+// work, so being offline, rate-limited, or pointed at a GitHub outage
+// must never turn a working run into a failing one.
+func TestResolveNewestCompatible_ServerAndFallbacks(t *testing.T) {
+	t.Run("uses the newest release sharing the major", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "/releases") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"tag_name":"v1.3.1"},{"tag_name":"v1.3.0"}]`)
+		}))
+		defer srv.Close()
+
+		got := ResolveNewestCompatibleDynamicProviderBinary(context.Background(), "1.3.0",
+			WithDynamicProviderBinaryAPIBase(srv.URL))
+		if got != "1.3.1" {
+			t.Fatalf("got %q, want 1.3.1", got)
+		}
+	})
+
+	t.Run("server error degrades to the floor", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden) // a rate limit looks like this
+		}))
+		defer srv.Close()
+
+		got := ResolveNewestCompatibleDynamicProviderBinary(context.Background(), "1.3.0",
+			WithDynamicProviderBinaryAPIBase(srv.URL))
+		if got != "1.3.0" {
+			t.Fatalf("got %q, want the floor 1.3.0 -- a failure to find something better must not become a failure to run", got)
+		}
+	})
+
+	t.Run("unreachable host degrades to the floor", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		base := srv.URL
+		srv.Close() // nothing is listening now: the offline case
+
+		got := ResolveNewestCompatibleDynamicProviderBinary(context.Background(), "1.3.0",
+			WithDynamicProviderBinaryAPIBase(base))
+		if got != "1.3.0" {
+			t.Fatalf("got %q, want the floor 1.3.0 when offline", got)
+		}
+	})
+
+	t.Run("garbage body degrades to the floor", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `not json`)
+		}))
+		defer srv.Close()
+
+		got := ResolveNewestCompatibleDynamicProviderBinary(context.Background(), "1.3.0",
+			WithDynamicProviderBinaryAPIBase(srv.URL))
+		if got != "1.3.0" {
+			t.Fatalf("got %q, want the floor 1.3.0", got)
+		}
+	})
+
+	t.Run("the exact escape hatch never asks at all", func(t *testing.T) {
+		asked := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			asked = true
+			_, _ = io.WriteString(w, `[{"tag_name":"v1.3.1"}]`)
+		}))
+		defer srv.Close()
+
+		t.Setenv(exactDynamicProviderBinaryEnv, "1")
+		got := ResolveNewestCompatibleDynamicProviderBinary(context.Background(), "1.3.0",
+			WithDynamicProviderBinaryAPIBase(srv.URL))
+		if got != "1.3.0" {
+			t.Fatalf("got %q, want the stamped 1.3.0 exactly", got)
+		}
+		if asked {
+			t.Fatal("the exact pin made a network request, so it is not usable offline for a byte-identical rebuild")
+		}
+	})
 }

@@ -70,3 +70,36 @@ func fetchRelease(ctx context.Context, httpClient *http.Client, apiBase, owner, 
 	}
 	return &rel, nil
 }
+
+// listReleases returns every published release for owner/repo, newest
+// first (GitHub's own ordering), paging once at the API's maximum page
+// size. One page of 100 is deliberate rather than a full pager: this is
+// used to find the newest binary compatible with a snapshot's own stamped
+// floor, and a floor more than 100 releases behind the head is a far
+// bigger problem than picking the wrong one of them.
+func listReleases(ctx context.Context, httpClient *http.Client, apiBase, owner, repo string) ([]githubRelease, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100", apiBase, owner, repo)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("github: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("github: request %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("github: %s: unexpected status %d: %s", url, resp.StatusCode, body)
+	}
+
+	var out []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("github: decode %s: %w", url, err)
+	}
+	return out, nil
+}

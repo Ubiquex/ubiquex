@@ -1,10 +1,15 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // snapshotManifestFields is the minimal, real subset of manifest.json
@@ -122,4 +127,103 @@ func ResolveDynamicProviderBinaryVersion(schemaDir string) (string, error) {
 	fmt.Fprintf(os.Stderr, "ubx: %s@%s has no real generated_by_binary_version or min_binary_version (published before UBI-194) -- falling back to bootstrap ubx-provider-dynamic version %s for schema_format %d; this fallback is removed automatically once %s regenerates and republishes past it\n",
 		man.Provider, man.Version, fallback, man.SchemaFormat, man.Provider)
 	return fallback, nil
+}
+
+// exactDynamicProviderBinaryEnv pins acquisition to a snapshot's own
+// stamped version exactly, disabling the floor resolution below. For a
+// caller who needs a byte-identical rebuild of an older run rather than
+// the newest compatible binary.
+const exactDynamicProviderBinaryEnv = "UBX_PROVIDER_DYNAMIC_EXACT"
+
+// ResolveNewestCompatibleDynamicProviderBinary turns a snapshot's own
+// stamped version into the version to actually acquire: the newest
+// published ubx-provider-dynamic release sharing its MAJOR, or floor
+// itself when nothing newer qualifies (UBI-268 follow-up).
+//
+// The stamp is a FLOOR, and the field says so about itself. It records
+// which binary CUT the snapshot, "a version known to work, not the lowest
+// one that would" (see snapshotManifestFields above, and the UBI-249
+// rename that replaced the misleading min_binary_version name for exactly
+// this reason). Acquiring it EXACTLY read the field as a pin, which is the
+// one thing it documents itself not to be.
+//
+// Reading it as a pin had a cost that took two incidents to see. A real
+// encoder bug made every DynamicPseudoType attribute unencodable, which
+// reached a founder's stack as a create that succeeded in AWS and then
+// failed returning "unknown type tftypes.DynamicPseudoType". It was fixed
+// and released as 1.3.1 within the hour, and then could not reach anyone:
+//
+//	aws         stamped 1.3.0
+//	azure       stamped 1.2.0
+//	datadog     stamped 1.2.0
+//	github      stamped 1.2.0
+//	google      stamped 1.2.0
+//	kubernetes  stamped 1.2.0
+//	cloudflare  stamped 1.0.10
+//	digitalocean stamped 1.0.4
+//
+// All eight pinned a binary predating the fix, and the bug was in code
+// every source shares (internal/schema's own translator emits
+// DynamicPseudoType; internal/wire is imported by the Smithy, OpenAPI and
+// CloudFormation servers alike). Under an exact pin, shipping a provider
+// patch means regenerating and re-releasing eight repos, each then owing a
+// schema version bump for a change that touched no schema. A one-line
+// bugfix became an eight-repo migration, and the workaround for the one
+// stack that hit it was an ambient-binary env var nobody would find.
+//
+// Bounded at the MAJOR rather than the minor because the minor bound
+// helps only whichever provider happens to be stamped at the newest
+// minor, leaving the same trap for every other one: no 1.2.x patch
+// exists, so seven of the eight above would still be stuck. The real
+// compatibility contract is schema_format, which is 3 for all eight, and
+// which this resolution does not cross.
+//
+// Degrades to floor on ANY failure, deliberately and silently. Offline, a
+// rate limit, a GitHub outage: acquiring the stamped version is exactly
+// what happened before this existed and is known to work, so a failure to
+// find something better must never become a failure to run at all.
+func ResolveNewestCompatibleDynamicProviderBinary(ctx context.Context, floor string, opts ...AcquireDynamicProviderBinaryOption) string {
+	if floor == "" || os.Getenv(exactDynamicProviderBinaryEnv) != "" {
+		return floor
+	}
+
+	cfg := acquireDynamicProviderBinaryConfig{httpClient: http.DefaultClient, apiBase: githubAPIBase}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	rels, err := listReleases(ctx, cfg.httpClient, cfg.apiBase, dynamicProviderBinaryOwner, dynamicProviderBinaryRepo)
+	if err != nil {
+		return floor
+	}
+	return newestCompatibleVersion(floor, rels)
+}
+
+// newestCompatibleVersion is the pure selection half, so the rule is
+// testable without a network.
+//
+// Pre-releases are excluded: a snapshot stamped 1.3.0 must not silently
+// start running 1.4.0-rc1. semver.Prerelease is the same exclusion
+// provider/versions.go already applies when picking a registry provider
+// version, not a new convention.
+func newestCompatibleVersion(floor string, rels []githubRelease) string {
+	fv := "v" + strings.TrimPrefix(floor, "v")
+	if !semver.IsValid(fv) {
+		return floor
+	}
+
+	best := fv
+	for _, r := range rels {
+		v := "v" + strings.TrimPrefix(r.TagName, "v")
+		if !semver.IsValid(v) || semver.Prerelease(v) != "" {
+			continue
+		}
+		if semver.Major(v) != semver.Major(fv) {
+			continue
+		}
+		if semver.Compare(v, best) > 0 {
+			best = v
+		}
+	}
+	return strings.TrimPrefix(best, "v")
 }
