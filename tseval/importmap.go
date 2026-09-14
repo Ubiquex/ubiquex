@@ -149,7 +149,7 @@ type BlueprintImport struct {
 // Deno gives a better answer here and it is worth taking from the start,
 // rather than shipping the flat version and retrofitting scopes once
 // someone hits the collision.
-func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintImport) (string, func(), error) {
+func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintImport, extra map[string]string) (string, func(), error) {
 	imports := map[string]string{}
 	if configPath := findDenoConfig(entryDir); configPath != "" {
 		configDir := filepath.Dir(configPath)
@@ -171,6 +171,15 @@ func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintIm
 			scoped[specifier] = target
 		}
 		scopes[prefix] = scoped
+	}
+	// extra sits above the project's own and below "@ubx/sdk". It carries
+	// entries the CALLER resolved rather than any file declared, which is
+	// how a blueprint's own npm dependencies reach schema derivation: the
+	// blueprint's package.json is not discoverable from here, because
+	// deno doc runs with ubx's own working directory rather than the
+	// blueprint's.
+	for specifier, target := range extra {
+		imports[specifier] = target
 	}
 	imports["@ubx/sdk"] = runtimePath
 

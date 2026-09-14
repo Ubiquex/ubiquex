@@ -46,6 +46,26 @@ import (
 // blueprint's own `import { Computed } from "@ubx/sdk"` is unresolvable
 // and deno doc refuses to emit anything at all.
 func Declarations(ctx context.Context, files ...string) ([]byte, error) {
+	return DeclarationsWithImports(ctx, nil, files...)
+}
+
+// DeclarationsWithImports is Declarations with extra import-map entries
+// the caller resolved itself.
+//
+// It exists for a blueprint authored with npm tooling. Its dependencies
+// are declared in a package.json, and deno doc runs with ubx's own
+// working directory rather than the blueprint's, so deno never discovers
+// that file and every bare specifier in the blueprint is unresolvable.
+// deno doc emits nothing at all when any import fails to resolve, so the
+// schema could not be derived.
+//
+// Passing the entries instead of changing the working directory is
+// deliberate. With the blueprint dir as cwd, deno enters package.json
+// workspace mode and then demands a node_modules tree ("Deno expects the
+// node_modules/ directory to be up to date"), which deno doc has no flag
+// to opt out of. An npm: import-map entry resolves from deno's own cache
+// and needs no node_modules at all.
+func DeclarationsWithImports(ctx context.Context, extra map[string]string, files ...string) ([]byte, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no files to read declarations from")
 	}
@@ -73,7 +93,7 @@ func Declarations(ctx context.Context, files ...string) ([]byte, error) {
 		return nil, err
 	}
 
-	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absFiles[0]), filepath.Join(assetsDir, "runtime", "src", "index.ts"), nil)
+	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absFiles[0]), filepath.Join(assetsDir, "runtime", "src", "index.ts"), nil, extra)
 	if err != nil {
 		return nil, err
 	}

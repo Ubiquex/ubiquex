@@ -26,7 +26,7 @@ func TestWriteMergedImportMap_BlueprintScope(t *testing.T) {
 		EntryFile: bpDir + "/blueprint.ts",
 		Dir:       bpDir,
 		Imports:   map[string]string{"helper": "file://" + bpDir + "/helper.ts"},
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestWriteMergedImportMap_NoScopesWhenNothingDeclares(t *testing.T) {
 		Specifier: "built-bp",
 		EntryFile: "/bp/ts/built.ts",
 		Dir:       "/bp",
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

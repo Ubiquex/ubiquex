@@ -151,7 +151,17 @@ func ExtractTS(ctx context.Context, dir, name string) (*Schema, error) {
 		return nil, err
 	}
 
-	raw, err := tseval.Declarations(ctx, files...)
+	// The blueprint's OWN declared imports go into deno doc's import map.
+	// deno doc runs with ubx's working directory rather than the
+	// blueprint's, so it never discovers the blueprint's package.json, and
+	// it emits nothing at all when any import fails to resolve. Errors are
+	// swallowed here on purpose: refusing to derive a schema is this
+	// function's own job to report, and tsBlueprintImports' refusals are
+	// about EVALUATING the blueprint, which is a later and better-placed
+	// question than reading its signature.
+	own, _ := tsBlueprintImports(dir, name)
+
+	raw, err := tseval.DeclarationsWithImports(ctx, own.Imports, files...)
 	if err != nil {
 		return nil, fmt.Errorf("blueprint: extract %s: %w", dir, err)
 	}

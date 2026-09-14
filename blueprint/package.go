@@ -44,6 +44,21 @@ func PackageReportingExclusions(ctx context.Context, dir, outPath string) (*Mani
 	}
 	name := filepath.Base(absDir)
 
+	// A TypeScript blueprint's npm lock is generated FIRST, ahead of
+	// schema derivation, because derivation reads the blueprint's source
+	// through `deno doc` and every import has to resolve for that to emit
+	// anything at all. An npm-authored blueprint's dependencies are not
+	// resolvable until they have been installed, so a lock generated
+	// after derivation would arrive after the step that needed it. Found
+	// by packaging one (blueprint_translator_test.go).
+	//
+	// This is also the one thing in packaging that reaches the network,
+	// and only for a blueprint that declares npm dependencies. See
+	// tslock.go for why packaging is where this belongs at all.
+	if _, err := GenerateTSLock(ctx, absDir); err != nil {
+		return nil, nil, fmt.Errorf("blueprint package: %w", err)
+	}
+
 	// An Ubxfile blueprint keeps describing itself the way it always
 	// did; only a code blueprint gets a derived schema.
 	//

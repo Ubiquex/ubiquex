@@ -192,7 +192,13 @@ hash is computed, so the hash covers it. The schema is re-derived on every packa
 cannot disagree with the function it describes.
 
 For an Ubxfile blueprint, dir must already be built (an Ubxfile, plus whatever "ubx blueprint build"
-produced) -- package builds nothing itself.`,
+produced) -- package builds nothing itself.
+
+NETWORK: for a TypeScript blueprint that declares npm dependencies, package resolves them and writes a
+deno.lock into dir before hashing, so the lock travels with the blueprint and pins what a consumer will
+fetch. That step needs network access and deno on PATH. Every other blueprint packages offline, exactly
+as before: a blueprint with no npm dependencies, which includes every blueprint ubx itself generates,
+makes no network call at all.`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -200,12 +206,22 @@ produced) -- package builds nothing itself.`,
 			if out == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("blueprint package: -o is required")}
 			}
+			// Packaging reaches the network for a TypeScript blueprint
+			// with npm dependencies, to generate the deno.lock that pins
+			// them for whoever consumes it (blueprint/tslock.go). Said
+			// before the call rather than after, because the pause is the
+			// first thing the author notices.
+			st := newStyler(cmd)
+			fetching := blueprint.NeedsNetworkToPackage(args[0])
+			if fetching {
+				fmt.Fprintf(cmd.OutOrStdout(), "    %s\n",
+					st.Dim("resolving npm dependencies to generate ")+st.Yellow("deno.lock")+st.Dim(" (needs network)"))
+			}
 			manifest, excluded, err := blueprint.PackageReportingExclusions(cmd.Context(), args[0], out)
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: err}
 			}
-			st := newStyler(cmd)
-			writeBlueprintReceipt(cmd.OutOrStdout(), st, "packaged", manifest.Name, out, manifest.ContentHash, len(manifest.Files), "", excludedDetail(st, excluded))
+			writeBlueprintReceipt(cmd.OutOrStdout(), st, "packaged", manifest.Name, out, manifest.ContentHash, len(manifest.Files), "", excludedDetail(st, excluded), lockDetail(st, fetching))
 			return nil
 		},
 	}
@@ -694,6 +710,17 @@ func pullProgressFor(source string, out io.Writer, st *styler, tty bool, width i
 // identity change on every reinstall. An author seeing a file count of
 // three needs to know whether that is right, and a silent exclusion is
 // exactly as confusing as a silent inclusion was.
+// lockDetail names the generated lock in the receipt. An author whose
+// packaging step just made a network call and wrote a file they did not
+// author should be told which file, since it is the one they now have to
+// commit.
+func lockDetail(st *styler, generated bool) string {
+	if !generated {
+		return ""
+	}
+	return st.Dim("generated ") + st.Yellow("deno.lock") + st.Dim(" (pins this blueprint's npm dependencies for consumers -- commit it)")
+}
+
 func excludedDetail(st *styler, excluded []string) string {
 	if len(excluded) == 0 {
 		return ""
