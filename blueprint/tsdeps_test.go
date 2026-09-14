@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ubiquex/ubiquex/tseval"
 )
 
 func writeTSBlueprintConfig(t *testing.T, dir, contents string) {
@@ -531,5 +533,65 @@ func TestTSBlueprintImports_LocalPrefixMappingKeepsItsSlash(t *testing.T) {
 	want := "file://" + filepath.ToSlash(filepath.Join(dir, "lib")) + "/"
 	if got.Imports["lib/"] != want {
 		t.Fatalf("imports[lib/] = %q, want %q -- a prefix mapping that loses its slash matches only the bare specifier", got.Imports["lib/"], want)
+	}
+}
+
+// TestTSBlueprintImports_RuntimeIsNeverResolved is the duplicate-runtime
+// bug, at the place that caused it.
+//
+// An npm-authored blueprint MUST declare @ubx/sdk in its package.json: it
+// cannot install or type-check without it. ubx was turning that
+// declaration into an npm: entry in the blueprint's own scope, which
+// beats the top-level entry pointing at the embedded runtime. The
+// blueprint then ran against a second copy of the runtime, with a second
+// collector, and failed on its first resource():
+//
+//	Error: resource() called outside of an active stack() evaluation.
+//
+// Skipped silently rather than refused, because declaring it is correct.
+// Refusing would refuse every correctly authored blueprint.
+func TestTSBlueprintImports_RuntimeIsNeverResolved(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"dependencies":{"@ubx/sdk":"1.0.3","left-pad":"1.3.0"}}`)
+	writeDenoLock(t, dir)
+
+	got, err := tsBlueprintImports(dir, "bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Imports[tseval.RuntimeSpecifier]; ok {
+		t.Errorf("the runtime must not be resolved for a blueprint, got %q", got.Imports[tseval.RuntimeSpecifier])
+	}
+	if _, ok := got.Imports[tseval.RuntimeSpecifier+"/"]; ok {
+		t.Error("nor its subpath prefix")
+	}
+	// Its neighbours are unaffected: this is one specifier, not a mode.
+	if got.Imports["left-pad"] != "npm:left-pad@1.3.0" {
+		t.Errorf("other dependencies must still resolve, got %q", got.Imports["left-pad"])
+	}
+	if !got.NeedsPrefetch {
+		t.Error("a real npm dependency alongside it must still request the fetch pass")
+	}
+}
+
+// TestTSBlueprintImports_RuntimeAloneNeedsNothing: every npm-authored
+// blueprint declares the runtime, and a blueprint that declares ONLY the
+// runtime needs no lock, no mirror and no network. Making it pay for any
+// of those would tax the most ordinary blueprint there is.
+func TestTSBlueprintImports_RuntimeAloneNeedsNothing(t *testing.T) {
+	dir := t.TempDir()
+	writePackageJSON(t, dir, `{"dependencies":{"@ubx/sdk":"1.0.3"}}`)
+
+	// No deno.lock on purpose: if the runtime counted as a registry
+	// dependency this would be refused as unpinned.
+	got, err := tsBlueprintImports(dir, "bp")
+	if err != nil {
+		t.Fatalf("a blueprint declaring only the runtime must not be refused: %v", err)
+	}
+	if got.NeedsPrefetch {
+		t.Error("declaring only the runtime must not trigger a fetch pass")
+	}
+	if tsDeclaresNPMDeps(dir) {
+		t.Error("declaring only the runtime must not make packaging reach the network")
 	}
 }

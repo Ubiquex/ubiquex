@@ -513,3 +513,104 @@ export default stack("demo", () => {
 		t.Fatalf("evaluation rewrote the author's deno.lock:\n before: %q\n after:  %q", consumerLockBefore, string(after))
 	}
 }
+
+// TestTranslator_BlueprintSharesTheOneRuntime is the duplicate-runtime
+// failure, end to end through a real evaluation.
+//
+// An npm-authored blueprint declares @ubx/sdk in its package.json,
+// because it cannot install or type-check without it. Once its
+// dependencies are materialised, that declaration put a real copy of the
+// published runtime next to the blueprint, and the blueprint ran against
+// that instead of the embedded one. Two module instances, two collectors,
+// and the blueprint's had no active stack behind it:
+//
+//	Error: resource() called outside of an active stack() evaluation.
+//	  at requireCollector (.../node_modules/.deno/@ubx+sdk@1.0.3/...)
+//	  at dupbp (.../deps/sha256/.../blueprint.ts)
+//	  at Object.evaluate (.../ubx-tseval-*/runtime/src/index.ts)
+//
+// Both runtimes are visible in that one trace, which is what the test is
+// really about: the blueprint has to reach the SAME instance the stack is
+// evaluating in, not merely a working one.
+//
+// Two mechanisms hold the invariant and either alone is sufficient, so
+// this test fails only when BOTH are removed. Verified all three ways.
+// The individual halves have their own unit tests, in
+// blueprint/tsdeps_test.go and tseval/importmap_scope_test.go, since a
+// test that passes when half the fix is gone would not be much of a
+// test.
+//
+// The assertion is on provenance rather than on the plan succeeding. The
+// published runtime does not export __setBlueprintRoots, the channel the
+// runner uses to attribute resources, so a blueprint on its own copy
+// could not carry a blueprint source even if the collector were shared.
+// Checking the source line proves the right instance was reached.
+func TestTranslator_BlueprintSharesTheOneRuntime(t *testing.T) {
+	requireNPMLive(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+
+	bpDir := filepath.Join(dir, "sharedrt")
+	if err := os.MkdirAll(bpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(f, c string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bpDir, f), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The runtime declared alongside a real dependency, which is what an
+	// npm author's package.json looks like. The second dependency matters:
+	// it is what causes the dependencies to be materialised at all, and so
+	// what puts a copy of the runtime on disk beside the blueprint.
+	write("package.json", `{"name":"sharedrt","version":"1.0.0","dependencies":{"@ubx/sdk":"1.0.3","left-pad":"1.3.0"}}`)
+	write("blueprint.ts", `import { resource } from "@ubx/sdk";
+import leftPad from "left-pad";
+
+export interface Config { name: string }
+
+export function sharedrt(c: Config) {
+  resource(
+    { wireType: "fake_widget", fields: { name: "name" } },
+    c.name,
+    { name: leftPad("w", 3, "-") },
+  );
+}
+`)
+	if _, err := blueprint.Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatalf("package: %v", err)
+	}
+
+	stackDir := filepath.Join(dir, "stack")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The consumer has a package.json too, which is what puts deno into
+	// node_modules resolution for the whole graph.
+	if err := os.WriteFile(filepath.Join(stackDir, "package.json"),
+		[]byte(`{"name":"stack","version":"1.0.0","dependencies":{"@ubx/sdk":"1.0.3"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "stack.ts"), []byte(`import { intent, stack } from "@ubx/sdk";
+import { sharedrt } from "sharedrt";
+
+export default stack("demo", () => {
+  intent({ summary: "consumer" });
+  sharedrt({ name: "w1" });
+});
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStackConfigWithBlueprints(t, ledgerDir, "demo", map[string]string{"sharedrt": bpDir})
+
+	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6", "DENO_DIR=" + filepath.Join(t.TempDir(), "cold")}, "plan", filepath.Join(stackDir, "stack.ts"),
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--timeout", "180s",
+	)
+	if err != nil {
+		t.Fatalf("a blueprint declaring the runtime must share the one instance: %v\n%s", err, out)
+	}
+	assertBlueprintProvenance(t, ledgerDir, "sharedrt")
+}
