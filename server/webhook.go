@@ -95,7 +95,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 
 	candidates := s.matchingRepoConfigsGitHub(owner, repo)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing pull_request event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pull_request event -- repository not in Config.Repos allowlist",
 			"platform", "github", "repo", owner+"/"+repo, "action", action, "pr", prNumber)
 		return nil
 	}
@@ -157,7 +157,7 @@ func (s *Server) handlePullRequestEvent(ctx context.Context, e *ghapi.PullReques
 // repository itself (add or disambiguate its own .ubx/config), not in
 // ubx server's config, so the comment says that.
 func (s *Server) refuseAmbiguousStackGitHub(ctx context.Context, api *ghub.Client, owner, repo string, prNumber int, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack",
 		"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "event", event, "error", err)
 	return postOrEditComment(ctx, api, owner, repo, prNumber, s.botLogin, "plan",
 		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
@@ -198,7 +198,7 @@ func (s *Server) handleIssueCommentEvent(ctx context.Context, e *ghapi.IssueComm
 
 	candidates := s.matchingRepoConfigsGitHub(owner, repo)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing issue_comment event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing issue_comment event -- repository not in Config.Repos allowlist",
 			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber, "verb", verb)
 		return nil
 	}
@@ -292,7 +292,7 @@ func (s *Server) handlePullRequestReviewEvent(ctx context.Context, e *ghapi.Pull
 	// do), so only the allowlist membership check applies here, not
 	// the multi-stack resolution over auto-discovered stacks.
 	if len(s.matchingRepoConfigsGitHub(owner, repo)) == 0 {
-		slog.Error("ubx server: refusing pull_request_review event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pull_request_review event -- repository not in Config.Repos allowlist",
 			"platform", "github", "repo", owner+"/"+repo, "pr", prNumber)
 		return nil
 	}

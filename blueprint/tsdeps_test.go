@@ -88,6 +88,10 @@ func TestTSBlueprintImports_NPMNeedsALock(t *testing.T) {
 		if got.Imports["dep"] != "npm:left-pad@1.3.0" {
 			t.Errorf("an npm specifier goes into the map verbatim, got %q", got.Imports["dep"])
 		}
+		// And the subpath prefix, without which "dep/thing" is unmatched.
+		if got.Imports["dep/"] != "npm:/left-pad@1.3.0/" {
+			t.Errorf("imports[dep/] = %q, want the npm prefix form", got.Imports["dep/"])
+		}
 		// Without this the evaluation would reach a registry itself,
 		// unverified, which is the whole thing the lock is here to prevent.
 		if !got.NeedsPrefetch {
@@ -146,7 +150,13 @@ func TestTSBlueprintImports_JSRIsRefusedEvenWithALock(t *testing.T) {
 		t.Fatal("a jsr dependency must be refused even from a blueprint that pins it")
 	}
 	msg := err.Error()
-	for _, want := range []string{"widget-bp", "jsr:@ubx/sdk-aws@1.2.0", "--no-remote", "UBI-274"} {
+	// No ticket id: a Linear identifier means nothing to anyone outside
+	// this org and does not belong in CLI output. The fact belongs, the
+	// citation does not.
+	if strings.Contains(msg, "UBI-") {
+		t.Errorf("refusal must not cite a ticket id: %s", msg)
+	}
+	for _, want := range []string{"widget-bp", "jsr:@ubx/sdk-aws@1.2.0", "--no-remote"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal does not name %q: %s", want, msg)
 		}
@@ -431,4 +441,95 @@ func TestTSDeclaresNPMDeps(t *testing.T) {
 			t.Error("an npm dependency is exactly what the lock is generated for")
 		}
 	})
+}
+
+// TestTSBlueprintImports_NPMSubpathsResolve is a regression test for a
+// bug the first fixture could not have caught.
+//
+// An import map matches a bare specifier EXACTLY. Mapping only
+// "@ubx/sdk-aws" leaves "@ubx/sdk-aws/aws/sqs/queue" unmatched, so deno
+// falls through to package.json resolution and demands a node_modules
+// tree that is not there:
+//
+//	Could not resolve "@ubx/sdk-aws/aws/sqs/queue", but found it in a
+//	package.json. Deno expects the node_modules/ directory to be up to
+//	date.
+//
+// Which is the ORIGINAL error this whole change set exists to remove, so
+// it looked like the fetch pass was not running at all.
+//
+// It was missed because the fixture imported left-pad, a package with no
+// subpaths: the one shape that cannot show this. Importing a package by
+// a subpath is the normal way to use a generated SDK, so this is the
+// common case rather than an edge.
+func TestTSBlueprintImports_NPMSubpathsResolve(t *testing.T) {
+	t.Run("from package.json", func(t *testing.T) {
+		dir := t.TempDir()
+		writePackageJSON(t, dir, `{"dependencies":{"@ubx/sdk-aws":"^1.2.0"}}`)
+		writeDenoLock(t, dir)
+
+		got, err := tsBlueprintImports(dir, "bp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Imports["@ubx/sdk-aws"] != "npm:@ubx/sdk-aws@^1.2.0" {
+			t.Errorf("bare specifier = %q", got.Imports["@ubx/sdk-aws"])
+		}
+		if got.Imports["@ubx/sdk-aws/"] != "npm:/@ubx/sdk-aws@^1.2.0/" {
+			t.Fatalf("subpath prefix = %q, want \"npm:/@ubx/sdk-aws@^1.2.0/\"", got.Imports["@ubx/sdk-aws/"])
+		}
+	})
+
+	t.Run("from deno.json", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTSBlueprintConfig(t, dir, `{"imports":{"pkg":"npm:date-fns@3.6.0"}}`)
+		writeDenoLock(t, dir)
+
+		got, err := tsBlueprintImports(dir, "bp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Imports["pkg/"] != "npm:/date-fns@3.6.0/" {
+			t.Errorf("subpath prefix = %q", got.Imports["pkg/"])
+		}
+	})
+}
+
+// TestNPMPrefixTarget pins the exact spelling, because it is easy to get
+// subtly wrong and deno rejects the whole import map rather than ignoring
+// a bad entry. The leading slash after the scheme is required.
+func TestNPMPrefixTarget(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"npm:date-fns@3.6.0", "npm:/date-fns@3.6.0/"},
+		{"npm:@scope/pkg@^1.0.0", "npm:/@scope/pkg@^1.0.0/"},
+		// Already a prefix form: nothing emits this, but a hand-written
+		// deno.json legitimately could, and doubling the slash or the
+		// suffix would produce an entry that matches nothing.
+		{"npm:/date-fns@3.6.0/", "npm:/date-fns@3.6.0/"},
+		// Not npm, so there is no prefix form to emit.
+		{"jsr:@std/encoding@1", ""},
+		{"file:///x/y.ts", ""},
+		{"npm:", ""},
+	} {
+		if got := npmPrefixTarget(tc.in); got != tc.want {
+			t.Errorf("npmPrefixTarget(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestTSBlueprintImports_LocalPrefixMappingKeepsItsSlash is the same
+// class of bug one type over: a trailing slash makes an import-map entry
+// a PREFIX mapping, and filepath.Clean eats it.
+func TestTSBlueprintImports_LocalPrefixMappingKeepsItsSlash(t *testing.T) {
+	dir := t.TempDir()
+	writeTSBlueprintConfig(t, dir, `{"imports":{"lib/":"./lib/"}}`)
+
+	got, err := tsBlueprintImports(dir, "bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "file://" + filepath.ToSlash(filepath.Join(dir, "lib")) + "/"
+	if got.Imports["lib/"] != want {
+		t.Fatalf("imports[lib/] = %q, want %q -- a prefix mapping that loses its slash matches only the bare specifier", got.Imports["lib/"], want)
+	}
 }

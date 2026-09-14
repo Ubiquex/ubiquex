@@ -139,7 +139,7 @@ func (s *Server) handlePullRequestCreatedAzureDevOps(ctx context.Context, resour
 
 	candidates := s.matchingRepoConfigsAzureDevOps(id.project, id.repositoryID)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing git.pullrequest.created event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing git.pullrequest.created event -- repository not in Config.Repos allowlist",
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID)
 		return nil
 	}
@@ -181,7 +181,7 @@ func (s *Server) handlePullRequestUpdatedAzureDevOps(ctx context.Context, resour
 
 	candidates := s.matchingRepoConfigsAzureDevOps(id.project, id.repositoryID)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing git.pullrequest.updated event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing git.pullrequest.updated event -- repository not in Config.Repos allowlist",
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "notification", notification)
 		return nil
 	}
@@ -241,7 +241,7 @@ func (s *Server) handlePullRequestMergedAzureDevOps(ctx context.Context, resourc
 
 	candidates := s.matchingRepoConfigsAzureDevOps(id.project, id.repositoryID)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing git.pullrequest.merged event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing git.pullrequest.merged event -- repository not in Config.Repos allowlist",
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID)
 		return nil
 	}
@@ -261,7 +261,7 @@ func (s *Server) handlePullRequestMergedAzureDevOps(ctx context.Context, resourc
 // refuseAmbiguousStackAzureDevOps is refuseAmbiguousStackGitHub's own
 // Azure DevOps counterpart.
 func (s *Server) refuseAmbiguousStackAzureDevOps(ctx context.Context, api *adevops.Client, id prIdentityAzureDevOps, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack",
 		"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "event", event, "error", err)
 	return postOrEditCommentAzureDevOps(ctx, api, id.project, id.repositoryID, id.prID, s.cfg.AzureDevOpsBotDisplayName, "plan",
 		fmt.Sprintf("`ubx server` could not resolve this PR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
@@ -330,7 +330,7 @@ func (s *Server) handlePullRequestCommentAzureDevOps(ctx context.Context, resour
 
 	candidates := s.matchingRepoConfigsAzureDevOps(id.project, id.repositoryID)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing ms.vss-code.git-pullrequest-comment-event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing ms.vss-code.git-pullrequest-comment-event -- repository not in Config.Repos allowlist",
 			"platform", "azuredevops", "repo", id.project+"/"+id.repositoryID, "pr", id.prID, "verb", verb)
 		return nil
 	}

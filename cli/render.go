@@ -72,7 +72,7 @@ func newRenderCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift and --sync-overrides are mutually exclusive")}
 			}
 			if (fromDrift != "" || syncOverrides) && !md {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift/--sync-overrides require --md (UBI-86 Part 2)")}
+				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift/--sync-overrides require --md")}
 			}
 			if (fromDrift != "" || syncOverrides) && check {
 				return &ExitCodeError{Code: 2, Err: errors.New("render: --check has no meaning together with --from-drift/--sync-overrides")}
@@ -167,7 +167,7 @@ func newRenderCmd() *cobra.Command {
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack to render -- required (a render always covers exactly one stack)")
 	cmd.Flags().StringVar(&out, "out", "", "write the rendered file here instead of stdout")
 	cmd.Flags().BoolVar(&check, "check", false, "don't write -- byte-compare the freshly emitted render against --out's own current content, exiting 1 on any difference (requires --out)")
-	cmd.Flags().BoolVar(&md, "md", false, "emit a readable markdown current-state document instead of the default D2 diagram (UBI-86, docs/render-md.md)")
+	cmd.Flags().BoolVar(&md, "md", false, "emit a readable markdown current-state document instead of the default D2 diagram")
 	cmd.Flags().StringVar(&fromDrift, "from-drift", "", "generate a single override statement for one drifted resource's own address, in the calling stack's own SDK language (requires --md; mutually exclusive with --sync-overrides)")
 	cmd.Flags().BoolVar(&syncOverrides, "sync-overrides", false, "walk the whole stack's drift and generate an override statement for every drifted resource, in the calling stack's own SDK language (requires --md; mechanical, zero AI)")
 	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source; only used with --from-drift/--sync-overrides)")

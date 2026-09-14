@@ -175,7 +175,7 @@ func resolveHeadOrAlias(ledgerDir, stack, arg string) (resolvedHash, resolvedSta
 func newAliasCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alias",
-		Short: "Human-readable names for ledger heads (UBI-228) -- assign, resolve, list, remove",
+		Short: "Human-readable names for ledger heads: assign, resolve, list, remove",
 	}
 	cmd.AddCommand(newAliasSetCmd())
 	cmd.AddCommand(newAliasResolveCmd())

@@ -90,7 +90,7 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 	// at all would otherwise surface first.
 	candidates := s.matchingRepoConfigsGitLab(project)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing merge_request event -- project not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing merge_request event -- project not in Config.Repos allowlist",
 			"platform", "gitlab", "repo", project, "action", action, "mr", mrIID)
 		return nil
 	}
@@ -177,7 +177,7 @@ func (s *Server) handleMergeEvent(ctx context.Context, e *glapi.MergeEvent) erro
 // refuseAmbiguousStackGitLab is refuseAmbiguousStackGitHub's own
 // GitLab counterpart.
 func (s *Server) refuseAmbiguousStackGitLab(ctx context.Context, api *glab.Client, project string, mrIID int64, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack",
 		"platform", "gitlab", "repo", project, "mr", mrIID, "event", event, "error", err)
 	return postOrEditCommentGitLab(ctx, api, project, mrIID, s.cfg.GitLabBotUsername, "plan",
 		fmt.Sprintf("`ubx server` could not resolve this MR to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
@@ -208,7 +208,7 @@ func (s *Server) handleMergeCommentEvent(ctx context.Context, e *glapi.MergeComm
 
 	candidates := s.matchingRepoConfigsGitLab(project)
 	if len(candidates) == 0 {
-		slog.Error("ubx server: refusing note event -- project not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing note event -- project not in Config.Repos allowlist",
 			"platform", "gitlab", "repo", project, "mr", mrIID, "verb", verb)
 		return nil
 	}

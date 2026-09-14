@@ -15,7 +15,7 @@ func newServerCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "server",
-		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (UBI-28/UBI-170: GitHub, GitLab, Azure DevOps, Bitbucket Server, Bitbucket Cloud)",
+		Short: "Run ubx server: a self-hosted automation daemon for plan/accept/ship/drift-watch (GitHub, GitLab, Azure DevOps, Bitbucket Server, Bitbucket Cloud)",
 		Long: `ubx server turns the same real plan/accept/ship/status --drift flow into a continuously-running
 daemon, reacting to webhook events instead of a human or a CI job invoking each command by hand.
 

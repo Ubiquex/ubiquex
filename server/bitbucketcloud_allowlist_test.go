@@ -61,8 +61,10 @@ func TestBitbucketCloud_UnlistedRepoRefusedAndLogged(t *testing.T) {
 			if !strings.Contains(out, "allowlist") || !strings.Contains(out, "acme/infra") {
 				t.Errorf("log output = %q, want a real, loud refusal naming the repo and the allowlist", out)
 			}
-			if !strings.Contains(out, "UBI-166") {
-				t.Errorf("log output = %q, want the refusal attributed to UBI-166", out)
+			// A Linear ticket id means nothing to the operator reading
+			// this log and does not belong in it.
+			if strings.Contains(out, "UBI-") {
+				t.Errorf("log output = %q, must not cite a ticket id", out)
 			}
 		})
 	}

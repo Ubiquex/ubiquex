@@ -124,7 +124,7 @@ func ResolveDynamicProviderBinaryVersion(schemaDir string) (string, error) {
 		return "", fmt.Errorf("%w: %s@%s (schema_format %d) has no real generated_by_binary_version (nor the pre-rename min_binary_version) and no bootstrap fallback is registered for that schema_format -- regenerate and republish this snapshot with a real ubx-provider-dynamic release",
 			ErrDynamicProviderBinaryAssetMissing, man.Provider, man.Version, man.SchemaFormat)
 	}
-	fmt.Fprintf(os.Stderr, "ubx: %s@%s has no real generated_by_binary_version or min_binary_version (published before UBI-194) -- falling back to bootstrap ubx-provider-dynamic version %s for schema_format %d; this fallback is removed automatically once %s regenerates and republishes past it\n",
+	fmt.Fprintf(os.Stderr, "ubx: %s@%s has no real generated_by_binary_version or min_binary_version (published before ubx recorded either) -- falling back to bootstrap ubx-provider-dynamic version %s for schema_format %d; this fallback is removed automatically once %s regenerates and republishes past it\n",
 		man.Provider, man.Version, fallback, man.SchemaFormat, man.Provider)
 	return fallback, nil
 }

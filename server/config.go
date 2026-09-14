@@ -533,7 +533,7 @@ func rejectLedgerDirKeys(data []byte, yamlPath string) error {
 	}
 	for i, r := range probe.Repos {
 		if r.LedgerDir != nil {
-			return fmt.Errorf("config file %s: repos[%d] declares ledger_dir %q, which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so remove the key; repos entries carry repository identity only", yamlPath, i, *r.LedgerDir)
+			return fmt.Errorf("config file %s: repos[%d] declares ledger_dir %q, which ubx server no longer accepts -- a stack's location is auto-discovered from the repository's own .ubx/config now, so remove the key; repos entries carry repository identity only", yamlPath, i, *r.LedgerDir)
 		}
 	}
 	return nil
@@ -853,7 +853,7 @@ func parseRepoFlags(raw []string) ([]RepoConfig, error) {
 // is precisely the outcome UBI-166 exists to prevent.
 func rejectLedgerDirSuffix(full, rest string) error {
 	if _, ledgerDir, found := cutFirst(rest, ':'); found {
-		return fmt.Errorf("--repo %q carries a ledger_dir suffix (%q), which ubx server no longer accepts (UBI-167) -- a stack's location is auto-discovered from the repository's own .ubx/config now, so pass repository identity alone", full, ledgerDir)
+		return fmt.Errorf("--repo %q carries a ledger_dir suffix (%q), which ubx server no longer accepts -- a stack's location is auto-discovered from the repository's own .ubx/config now, so pass repository identity alone", full, ledgerDir)
 	}
 	return nil
 }

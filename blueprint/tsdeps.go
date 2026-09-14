@@ -139,6 +139,22 @@ func tsBlueprintImports(dir, name string) (tsResolvedImports, error) {
 				continue
 			}
 			out.Imports[d.Specifier] = d.Target
+			// A package's SUBPATHS need an entry of their own. An import
+			// map matches a bare specifier exactly, so mapping only
+			// "@ubx/sdk-aws" leaves "@ubx/sdk-aws/aws/sqs/queue"
+			// unmatched: deno falls back to package.json resolution and
+			// demands a node_modules tree that is not there.
+			//
+			//	Could not resolve "@ubx/sdk-aws/aws/sqs/queue", but found
+			//	it in a package.json. Deno expects the node_modules/
+			//	directory to be up to date.
+			//
+			// Missed because the first fixture imported left-pad, which
+			// has no subpaths, so the whole mechanism was exercised
+			// against the one shape that cannot show this.
+			if prefix := npmPrefixTarget(d.Target); prefix != "" {
+				out.Imports[d.Specifier+"/"] = prefix
+			}
 			out.NeedsPrefetch = true
 		case tsImportJSR:
 			jsr = append(jsr, d.Specifier+" -> "+d.Target+" (in "+d.Declared+")")
@@ -180,7 +196,7 @@ func jsrRefusal(name string, jsr []string) string {
 	b.WriteString("  This is a limit of the evaluator rather than of the blueprint. Evaluation runs deno with --no-remote,\n")
 	b.WriteString("  and resolving a JSR package fetches https://jsr.io/<pkg>/meta.json, which that flag blocks even when the\n")
 	b.WriteString("  package is already cached. --no-remote is what closes the dynamic import(\"https://...\") gap, so it is not\n")
-	b.WriteString("  something to narrow casually (UBI-274).\n")
+	b.WriteString("  something to narrow casually.\n")
 	b.WriteString("  npm: dependencies DO work, from a blueprint that ships a " + denoLockFileName + ". Publishing the same code to\n")
 	b.WriteString("  npm, or vendoring it into the blueprint, are the two paths that work today.")
 	return b.String()
@@ -203,7 +219,7 @@ func unpinnedNPMRefusal(name string, unpinned []string) string {
 	b.WriteString("  that pins the blueprint itself. Without one, the hash would cover the names and not the bytes that ran.\n")
 	b.WriteString("  `ubx blueprint package` generates this lock, so re-packaging the blueprint is the fix. To do it by hand:\n")
 	fmt.Fprintf(&b, "  run `deno install` in the blueprint and commit the %s it writes.\n", denoLockFileName)
-	b.WriteString("  npm's own package-lock.json does not serve here: deno does not read it (UBI-274).")
+	b.WriteString("  npm's own package-lock.json does not serve here: deno does not read it.")
 	return b.String()
 }
 
@@ -304,8 +320,18 @@ func tsDenoConfigImports(dir string) ([]tsDeclaredImport, error) {
 			if !filepath.IsAbs(abs) {
 				abs = filepath.Join(dir, abs)
 			}
+			abs = filepath.ToSlash(filepath.Clean(abs))
+			// A trailing slash makes an import-map entry a PREFIX mapping,
+			// which is how a blueprint maps a whole directory ("lib/":
+			// "./lib/"). filepath.Clean eats it, turning a prefix mapping
+			// into an exact one that matches only the bare specifier. Same
+			// class of bug as the npm subpath one above, and the consumer's
+			// own map already handles it (tseval/importmap.go).
+			if strings.HasSuffix(target, "/") && !strings.HasSuffix(abs, "/") {
+				abs += "/"
+			}
 			d.Kind = tsImportLocal
-			d.Target = "file://" + filepath.ToSlash(filepath.Clean(abs))
+			d.Target = "file://" + abs
 		}
 		out = append(out, d)
 	}
@@ -432,6 +458,28 @@ func npmSpecifierFor(name, spec string) (tsImportKind, string) {
 	default:
 		return tsImportNPM, "npm:" + name + "@" + spec
 	}
+}
+
+// npmPrefixTarget turns an npm specifier into the prefix form an import
+// map needs for that package's subpaths.
+//
+//	npm:date-fns@3.6.0  ->  npm:/date-fns@3.6.0/
+//
+// The leading slash after the scheme is required and is easy to miss:
+// "npm:date-fns@3.6.0/" is not a valid prefix target, and deno rejects
+// the map rather than silently ignoring the entry.
+//
+// Returns "" for anything that is not an npm specifier, so a caller can
+// skip the entry rather than emit a broken one.
+func npmPrefixTarget(target string) string {
+	rest, ok := strings.CutPrefix(target, "npm:")
+	if !ok || rest == "" {
+		return ""
+	}
+	// Already a prefix form, which nothing emits today but a hand-written
+	// deno.json legitimately could.
+	rest = strings.TrimPrefix(rest, "/")
+	return "npm:/" + strings.TrimSuffix(rest, "/") + "/"
 }
 
 // withinDir reports whether target is inside root.

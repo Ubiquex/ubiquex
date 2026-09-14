@@ -222,6 +222,6 @@ func classifyDestroyOutcome(source, version, typeName string, rec *core.ApplyRec
 	return &Finding{
 		Source: source, Version: version, Type: typeName, Verb: "destroy",
 		Class: FindingDestroyLie, Tier: TierLive, Confidence: Confirmed,
-		Detail: "ApplyResourceChange reported a clean destroy success, but a real post-destroy read-back (core/executor's own universal reconcileDestroyLoop) proved the resource was still present after the full retry budget -- the same shape UBI-44 found live against google_pubsub_topic",
+		Detail: "ApplyResourceChange reported a clean destroy success, but a real post-destroy read-back (core/executor's own universal reconcileDestroyLoop) proved the resource was still present after the full retry budget -- the same shape found live against google_pubsub_topic",
 	}
 }

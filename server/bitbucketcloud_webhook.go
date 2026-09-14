@@ -143,7 +143,7 @@ func (s *Server) handlePullRequestPlanBitbucketCloud(ctx context.Context, e *bit
 		return fmt.Errorf("%s event carries no real repository full_name", eventKey)
 	}
 	if len(s.matchingRepoConfigsBitbucketCloud(workspace, repoSlug)) == 0 {
-		slog.Error("ubx server: refusing "+eventKey+" event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing "+eventKey+" event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketcloud", "repo", workspace+"/"+repoSlug, "pr", e.PullRequest.ID)
 		return nil
 	}
@@ -178,7 +178,7 @@ func (s *Server) handlePullRequestMergedBitbucketCloud(ctx context.Context, e *b
 		return fmt.Errorf("pullrequest:fulfilled event carries no real repository full_name")
 	}
 	if len(s.matchingRepoConfigsBitbucketCloud(workspace, repoSlug)) == 0 {
-		slog.Error("ubx server: refusing pullrequest:fulfilled event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pullrequest:fulfilled event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketcloud", "repo", workspace+"/"+repoSlug, "pr", e.PullRequest.ID)
 		return nil
 	}
@@ -204,7 +204,7 @@ func (s *Server) handlePullRequestMergedBitbucketCloud(ctx context.Context, e *b
 // refuseAmbiguousStackBitbucketCloud is refuseAmbiguousStackGitHub's own
 // Bitbucket Cloud counterpart.
 func (s *Server) refuseAmbiguousStackBitbucketCloud(ctx context.Context, api *bbcloud.Client, workspace, repoSlug string, prID int64, event string, err error) error {
-	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack (UBI-167)",
+	slog.Error("ubx server: refusing event -- cannot resolve to exactly one discovered stack",
 		"platform", "bitbucketcloud", "repo", workspace+"/"+repoSlug, "pr", prID, "event", event, "error", err)
 	return postOrEditCommentBitbucketCloud(ctx, api, workspace, repoSlug, prID, s.cfg.BitbucketCloudBotAccountID, "plan",
 		fmt.Sprintf("`ubx server` could not resolve this pull request to exactly one stack: %s. Fix this repository's own `.ubx/config` layout, or run `ubx plan`/`ubx ship` locally instead.", err))
@@ -231,7 +231,7 @@ func (s *Server) handlePullRequestCommentBitbucketCloud(ctx context.Context, e *
 		return fmt.Errorf("pullrequest:comment_created event carries no real repository full_name")
 	}
 	if len(s.matchingRepoConfigsBitbucketCloud(workspace, repoSlug)) == 0 {
-		slog.Error("ubx server: refusing pullrequest:comment_created event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pullrequest:comment_created event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketcloud", "repo", workspace+"/"+repoSlug, "pr", e.PullRequest.ID, "verb", verb)
 		return nil
 	}
@@ -331,7 +331,7 @@ func (s *Server) handlePullRequestApprovedBitbucketCloud(ctx context.Context, e 
 	// membership check applies here, the same real scoping
 	// refuseAmbiguousStackGitHub's own doc comment explains.
 	if len(s.matchingRepoConfigsBitbucketCloud(workspace, repoSlug)) == 0 {
-		slog.Error("ubx server: refusing pullrequest:approved event -- repository not in Config.Repos allowlist (UBI-166)",
+		slog.Error("ubx server: refusing pullrequest:approved event -- repository not in Config.Repos allowlist",
 			"platform", "bitbucketcloud", "repo", workspace+"/"+repoSlug, "pr", e.PullRequest.ID)
 		return nil
 	}

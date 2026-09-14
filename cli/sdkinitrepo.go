@@ -67,7 +67,7 @@ not scaffold.`,
 	cmd.Flags().StringVar(&shortName, "short-name", "", `the real, published SDK repo's own short name (e.g. "digitalocean") -- matches [dynamic_providers.<name>] in ubiquex's own sdk/providers/.ubx/config`)
 	cmd.Flags().StringVar(&providerDisplay, "provider-display", "", `the real, human display name (e.g. "DigitalOcean")`)
 	cmd.Flags().StringVar(&sourceNote, "source-note", "", "one real, honest sentence describing this provider's own schema source and format (e.g. \"OpenAPI-sourced via `ubx-provider-dynamic`\") -- a deliberate, per-provider judgment call, not inferred from the name")
-	cmd.Flags().StringVar(&schemaPinVersion, "schema-pin-version", "", `the [dynamic_providers.<short-name>] entry's own real, current pinned "version" value in sdk/providers/.ubx/config -- baked into the generated publish.yml's own docs-artifact step (UBI-240); onboard-provider's own hop 5 always switches to this pinned shape before this command runs, so the real value is already known, never guessed here`)
+	cmd.Flags().StringVar(&schemaPinVersion, "schema-pin-version", "", `the [dynamic_providers.<short-name>] entry's own real, current pinned "version" value in sdk/providers/.ubx/config -- baked into the generated publish.yml's own docs-artifact step; onboard-provider's own hop 5 always switches to this pinned shape before this command runs, so the real value is already known, never guessed here`)
 	for _, name := range []string{"out", "short-name", "provider-display", "source-note", "schema-pin-version"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
 			panic(err)
