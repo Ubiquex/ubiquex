@@ -50,9 +50,29 @@ func writeCodeBlueprint(t *testing.T, parent, name string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The BLOCK form, which is what `go mod tidy` writes and therefore
+	// what a real hand-written blueprint has.
+	//
+	// This fixture used the single-line form, and that is the entire
+	// reason calling a Go code blueprint was broken while every test
+	// passed: the go.mod parser was a line scanner built for
+	// GenerateGo's emitted single-line require, and the fixture was
+	// written to match the parser rather than to match what an author's
+	// toolchain produces. A generated blueprint's go.mod really does
+	// only ever have one single-line require, so the scanner was a
+	// correct description of the generated shape and a wrong description
+	// of the code-model shape it was later pointed at.
+	//
+	// Kept as a block deliberately, with a second require, so this stays
+	// the shape a person actually has rather than the shape the
+	// implementation finds convenient.
 	goMod := "module github.com/ubx-blueprints/" + name + "\n\ngo 1.23\n\n" +
-		"require github.com/ubiquex/ubx-sdk-go v0.0.0\n\n" +
-		"replace github.com/ubiquex/ubx-sdk-go => " + sdkGoRootForSchemaTests(t) + "\n"
+		"require (\n" +
+		"\tgithub.com/ubiquex/ubx-sdk-go v0.0.0\n" +
+		")\n\n" +
+		"replace (\n" +
+		"\tgithub.com/ubiquex/ubx-sdk-go => " + sdkGoRootForSchemaTests(t) + "\n" +
+		")\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
