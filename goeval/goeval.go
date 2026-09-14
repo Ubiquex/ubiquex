@@ -63,7 +63,22 @@ const blueprintRootsSymbol = "github.com/ubiquex/ubx-sdk-go/runtime.blueprintRoo
 // code this program can reach. Empty disables it entirely, which is
 // what an ordinary stack that imports no blueprint gets.
 func EvaluateWithBlueprintRoots(ctx context.Context, entryFile, blueprintRoots string) ([]byte, error) {
-	binaryPath, cleanup, err := buildProgram(ctx, entryFile, blueprintRoots)
+	return EvaluateWithBlueprints(ctx, entryFile, blueprintRoots, nil)
+}
+
+// EvaluateWithBlueprints is EvaluateWithBlueprintRoots plus the module
+// directories a stack's own declared blueprints contribute to the build
+// workspace, so a program imports one by its module path instead of
+// wiring a require and replace into its own go.mod by hand.
+//
+// They become `use` entries, not `replace` ones. A replace only
+// redirects a module something already requires, and a stack that
+// declares a blueprint in .ubx/config has no require for it; a workspace
+// module is importable without one. The workspace is the file
+// writeBuildWorkspace already synthesizes in the build directory, so the
+// author's go.mod is never touched.
+func EvaluateWithBlueprints(ctx context.Context, entryFile, blueprintRoots string, blueprintDirs []string) ([]byte, error) {
+	binaryPath, cleanup, err := buildProgram(ctx, entryFile, blueprintRoots, blueprintDirs)
 	if err != nil {
 		return nil, fmt.Errorf("goeval: %w", err)
 	}

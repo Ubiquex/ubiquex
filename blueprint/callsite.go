@@ -40,10 +40,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"path/filepath"
 	"sort"
 
 	"github.com/ubiquex/ubiquex/core"
+	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
 	"github.com/ubiquex/ubiquex/tseval"
 )
@@ -139,49 +141,114 @@ func blueprintRefs(roots []BlueprintRoot) map[string]string {
 // It has to: the runtime cannot attribute a call to a blueprint it was
 // never told about. The same discovery result serves both ends, so the
 // module graph is still walked exactly once per evaluation.
-func EvaluateGoWithBlueprints(ctx context.Context, entryFile string) ([]byte, map[string]string, error) {
+func EvaluateGoWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]string, error) {
+	// Declared blueprints first: they are fetched, verified and mounted
+	// before the program runs, exactly as Python's have been. Their roots
+	// join the discovered ones, so a resource created inside a declared
+	// blueprint is attributed the same way one inside an imported
+	// directory already was.
+	declared, notes, err := ResolveGoDependencies(ctx, entryFile)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var useDirs []string
+	declaredRoots := make([]BlueprintRoot, 0, len(declared))
+	receipts := make([]string, 0, len(declared)+len(notes))
+	for _, d := range declared {
+		useDirs = append(useDirs, d.Dir)
+		receipts = append(receipts, d.Receipt)
+		declaredRoots = append(declaredRoots, BlueprintRoot{
+			Match: d.ModulePath,
+			Name:  d.Dep.Name,
+			Dir:   d.Dir,
+			Ref:   d.Ref,
+		})
+	}
+	receipts = append(receipts, notes...)
+
 	roots, err := DiscoverGoBlueprintRoots(ctx, entryFile)
 	if err != nil {
 		// Discovery failing is not a reason to refuse to evaluate. A
 		// program with no blueprint in sight still has a `go list` that
 		// can fail for its own unrelated reasons, and the stamping pass
 		// below is what refuses when a name genuinely cannot be resolved.
-		canon, evalErr := goeval.Evaluate(ctx, entryFile)
-		return canon, nil, evalErr
+		canon, evalErr := goeval.EvaluateWithBlueprints(ctx, entryFile, mustEncodeRoots(declaredRoots), useDirs)
+		return canon, receipts, blueprintRefs(declaredRoots), evalErr
 	}
+	roots = append(roots, declaredRoots...)
 
 	encoded, err := EncodeBlueprintRootManifest(roots)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	canon, err := goeval.EvaluateWithBlueprintRoots(ctx, entryFile, encoded)
+	canon, err := goeval.EvaluateWithBlueprints(ctx, entryFile, encoded, useDirs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return canon, blueprintRefs(roots), nil
+	return canon, receipts, blueprintRefs(roots), nil
+}
+
+// mustEncodeRoots encodes a manifest for the degraded path, where
+// discovery already failed and an encoding error would replace one
+// unhelpful outcome with another. An empty manifest disables attribution,
+// which is what that path produced before declared blueprints existed.
+func mustEncodeRoots(roots []BlueprintRoot) string {
+	if len(roots) == 0 {
+		return ""
+	}
+	encoded, err := EncodeBlueprintRootManifest(roots)
+	if err != nil {
+		return ""
+	}
+	return encoded
 }
 
 // EvaluateTSWithBlueprints is EvaluateGoWithBlueprints' TypeScript
 // sibling, the same sequence against the same contract: discover, hand
 // the roots to the runtime, evaluate, complete the bare names.
-func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, map[string]string, error) {
+func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]string, error) {
+	declared, notes, err := ResolveTSDependencies(ctx, entryFile)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	imports := map[string]string{}
+	declaredRoots := make([]BlueprintRoot, 0, len(declared))
+	receipts := make([]string, 0, len(declared)+len(notes))
+	for _, d := range declared {
+		imports[d.Specifier] = d.EntryFile
+		receipts = append(receipts, d.Receipt)
+		// Match is the blueprint ROOT's URL, not the entry file's: a
+		// blueprint of several modules has frames from all of them, and
+		// the root is the prefix they share. Same value
+		// DiscoverTSBlueprintRoots builds for an imported directory.
+		declaredRoots = append(declaredRoots, BlueprintRoot{
+			Match: (&url.URL{Scheme: "file", Path: d.Dir}).String(),
+			Name:  d.Dep.Name,
+			Dir:   d.Dir,
+			Ref:   d.Ref,
+		})
+	}
+	receipts = append(receipts, notes...)
+
 	roots, err := DiscoverTSBlueprintRoots(ctx, entryFile)
 	if err != nil {
-		canon, evalErr := tseval.Evaluate(ctx, entryFile)
-		return canon, nil, evalErr
+		manifest, _ := BlueprintRootManifest(declaredRoots)
+		canon, evalErr := tseval.EvaluateWithBlueprints(ctx, entryFile, string(manifest), imports)
+		return canon, receipts, blueprintRefs(declaredRoots), evalErr
 	}
+	roots = append(roots, declaredRoots...)
 
 	manifest, err := BlueprintRootManifest(roots)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	canon, err := tseval.EvaluateWithBlueprintRoots(ctx, entryFile, string(manifest))
+	canon, err := tseval.EvaluateWithBlueprints(ctx, entryFile, string(manifest), imports)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return canon, blueprintRefs(roots), nil
+	return canon, receipts, blueprintRefs(roots), nil
 }
 
 // DiscoverPyBlueprintRoots finds blueprints sitting inside the entry
@@ -252,4 +319,31 @@ func DiscoverPyBlueprintRoots(entryFile string) ([]BlueprintRoot, error) {
 		return nil, err
 	}
 	return roots, nil
+}
+
+// StampDirectCallProvenanceRefs completes every pending blueprint source
+// from an already-computed ref map, for any language.
+//
+// The Go and TypeScript paths used to re-run discovery here, which was
+// correct while discovery was the only way a blueprint could be reached.
+// It is not any more: a declared blueprint is resolved before the
+// program runs and never appears in the program's own module graph, so a
+// second discovery pass cannot see it and refuses a name the evaluation
+// already resolved.
+//
+// EvaluateGoWithBlueprints and EvaluateTSWithBlueprints already return
+// the merged map, declared and discovered together, so stamping from it
+// is both correct and one pass rather than two.
+func StampDirectCallProvenanceRefs(intent *resolver.IntentFile, refs map[string]string, lang string) error {
+	if len(pendingBlueprintNames(intent)) == 0 {
+		return nil
+	}
+	hint := "no blueprint of that name was declared in .ubx/config's [blueprints] table, and none was found in this program's own imports"
+	switch lang {
+	case "go":
+		hint += " (an imported Go module whose directory, or its parent, is a blueprint root)"
+	case "ts":
+		hint += " (an imported file inside a blueprint directory)"
+	}
+	return applyBlueprintRefs(intent, refs, hint)
 }

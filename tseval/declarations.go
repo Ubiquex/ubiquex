@@ -73,7 +73,7 @@ func Declarations(ctx context.Context, files ...string) ([]byte, error) {
 		return nil, err
 	}
 
-	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absFiles[0]), filepath.Join(assetsDir, "runtime", "src", "index.ts"))
+	mapPath, cleanupMap, err := writeMergedImportMap(filepath.Dir(absFiles[0]), filepath.Join(assetsDir, "runtime", "src", "index.ts"), nil)
 	if err != nil {
 		return nil, err
 	}

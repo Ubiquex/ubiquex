@@ -91,9 +91,9 @@ func findWorkspace(moduleRoot string) string {
 //
 // Returns the written path, or "" when the program is not in a
 // workspace at all, in which case nothing changes about the build.
-func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string) (string, error) {
+func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string, blueprintDirs []string) (string, error) {
 	workPath := findWorkspace(moduleRoot)
-	if workPath == "" {
+	if workPath == "" && len(blueprintDirs) == 0 {
 		return "", nil
 	}
 	// The copy's use entry is written with symlinks resolved.
@@ -110,68 +110,106 @@ func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string) (string, error
 		copyPath = resolved
 	}
 
-	data, err := os.ReadFile(workPath)
-	if err != nil {
-		// A GOWORK pointing at a file that is not there is the author's
-		// own misconfiguration, and reporting it is better than building
-		// something that silently ignores it.
-		return "", fmt.Errorf("read %s: %w", workPath, err)
-	}
-	wf, err := modfile.ParseWork(workPath, data, nil)
-	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", workPath, err)
-	}
-	workDir := filepath.Dir(workPath)
-
 	// Syntax must be non-nil: modfile builds the file through it, and
 	// AddGoStmt dereferences it immediately.
 	out := &modfile.WorkFile{Syntax: &modfile.FileSyntax{}}
-	if wf.Go != nil {
-		if err := out.AddGoStmt(wf.Go.Version); err != nil {
-			return "", err
-		}
-	}
 
 	absModuleRoot, err := filepath.Abs(moduleRoot)
 	if err != nil {
 		return "", err
 	}
 	sawModule := false
-	for _, u := range wf.Use {
-		abs := u.Path
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(workDir, abs)
+
+	// A program with no workspace of its own still gets one when it
+	// declares blueprints, because a workspace is how a blueprint
+	// becomes importable without touching the author's go.mod. Its only
+	// members are the module copy and the blueprints.
+	if workPath != "" {
+		data, err := os.ReadFile(workPath)
+		if err != nil {
+			// A GOWORK pointing at a file that is not there is the
+			// author's own misconfiguration, and reporting it is better
+			// than building something that silently ignores it.
+			return "", fmt.Errorf("read %s: %w", workPath, err)
 		}
-		abs = filepath.Clean(abs)
-		// The module being evaluated is the one that moved.
-		if abs == absModuleRoot {
-			abs = copyPath
-			sawModule = true
+		wf, err := modfile.ParseWork(workPath, data, nil)
+		if err != nil {
+			return "", fmt.Errorf("parse %s: %w", workPath, err)
 		}
-		if err := out.AddUse(filepath.ToSlash(abs), u.ModulePath); err != nil {
-			return "", err
+		workDir := filepath.Dir(workPath)
+
+		if wf.Go != nil {
+			if err := out.AddGoStmt(wf.Go.Version); err != nil {
+				return "", err
+			}
+		}
+		for _, u := range wf.Use {
+			abs := u.Path
+			if !filepath.IsAbs(abs) {
+				abs = filepath.Join(workDir, abs)
+			}
+			abs = filepath.Clean(abs)
+			// The module being evaluated is the one that moved.
+			if abs == absModuleRoot {
+				abs = copyPath
+				sawModule = true
+			}
+			if err := out.AddUse(filepath.ToSlash(abs), u.ModulePath); err != nil {
+				return "", err
+			}
+		}
+		for _, r := range wf.Replace {
+			newPath := r.New.Path
+			// A filesystem replace target resolved relative to the
+			// original workspace directory, which the build directory is
+			// not. Same rewrite rewriteLocalReplaces performs for a
+			// go.mod.
+			if r.New.Version == "" && isLocalReplacePath(newPath) {
+				if !filepath.IsAbs(newPath) {
+					newPath = filepath.Join(workDir, newPath)
+				}
+				newPath = filepath.ToSlash(filepath.Clean(newPath))
+			}
+			if err := out.AddReplace(r.Old.Path, r.Old.Version, newPath, r.New.Version); err != nil {
+				return "", err
+			}
 		}
 	}
+
+	// A synthesized workspace needs a go directive of its own. Without
+	// one it implicitly requires go 1.18 and then refuses every module
+	// that asks for more ("module . listed in go.work file requires go
+	// >= 1.23, but go.work implicitly requires go 1.18"). The module's
+	// own directive is the right floor: it is what the program was
+	// written against, and a workspace cannot sensibly demand less.
+	if out.Go == nil {
+		if v := goDirectiveOf(filepath.Join(moduleCopy, "go.mod")); v != "" {
+			if err := out.AddGoStmt(v); err != nil {
+				return "", err
+			}
+		}
+	}
+
 	// A workspace that does not list this module is legal (GOWORK can
-	// name any file). The copy still has to be usable, so add it.
+	// name any file), and a synthesized one has not listed it yet. The
+	// copy has to be usable either way.
 	if !sawModule {
 		if err := out.AddUse(filepath.ToSlash(copyPath), ""); err != nil {
 			return "", err
 		}
 	}
 
-	for _, r := range wf.Replace {
-		newPath := r.New.Path
-		// A filesystem replace target resolved relative to the original
-		// workspace directory, which the build directory is not. Same
-		// rewrite rewriteLocalReplaces performs for a go.mod.
-		if r.New.Version == "" && isLocalReplacePath(newPath) {
-			if !filepath.IsAbs(newPath) {
-				newPath = filepath.Join(workDir, newPath)
-			}
-			newPath = filepath.ToSlash(filepath.Clean(newPath))
+	// Blueprints last, so a program's own workspace members keep
+	// precedence in the file's reading order.
+	for _, dir := range blueprintDirs {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", err
 		}
-		if err := out.AddReplace(r.Old.Path, r.Old.Version, newPath, r.New.Version); err != nil {
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if err := out.AddUse(filepath.ToSlash(abs), ""); err != nil {
 			return "", err
 		}
 	}
@@ -189,4 +227,20 @@ func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string) (string, error
 // with "./", "../", or is absolute.
 func isLocalReplacePath(p string) bool {
 	return strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../") || filepath.IsAbs(p)
+}
+
+// goDirectiveOf reads a go.mod's own go version, or "" when it has none
+// or cannot be read. Never fatal: a missing directive only means the
+// synthesized workspace does not get one either, which is the state
+// before this existed.
+func goDirectiveOf(goModPath string) string {
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return ""
+	}
+	f, err := modfile.Parse(goModPath, data, nil)
+	if err != nil || f.Go == nil {
+		return ""
+	}
+	return f.Go.Version
 }

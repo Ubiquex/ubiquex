@@ -379,7 +379,7 @@ func TestEvaluateGoWithBlueprints_AttributesByCallSite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	canon, refs, err := EvaluateGoWithBlueprints(ctx, entry)
+	canon, _, refs, err := EvaluateGoWithBlueprints(ctx, entry)
 	if err != nil {
 		t.Fatalf("EvaluateGoWithBlueprints: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestEvaluateGoWithBlueprints_OrdinaryStackIsUnchanged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	canon, refs, err := EvaluateGoWithBlueprints(ctx, "../goeval/testdata/happy/main.go")
+	canon, _, refs, err := EvaluateGoWithBlueprints(ctx, "../goeval/testdata/happy/main.go")
 	if err != nil {
 		t.Fatalf("EvaluateGoWithBlueprints: %v", err)
 	}
@@ -497,7 +497,7 @@ export default sdk.stack("payments", () => {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	canon, refs, err := EvaluateTSWithBlueprints(ctx, entry)
+	canon, _, refs, err := EvaluateTSWithBlueprints(ctx, entry)
 	if err != nil {
 		t.Fatalf("EvaluateTSWithBlueprints: %v", err)
 	}

@@ -27,7 +27,7 @@ import (
 // same as sdk/conformance/programs/go's own real one) is the ordinary,
 // idiomatic way any Go project declares a dependency, and requiring one
 // here is not a burden, just how Go works.
-func buildProgram(ctx context.Context, entryFile, blueprintRoots string) (binaryPath string, cleanup func(), err error) {
+func buildProgram(ctx context.Context, entryFile, blueprintRoots string, blueprintDirs []string) (binaryPath string, cleanup func(), err error) {
 	absEntry, err := filepath.Abs(entryFile)
 	if err != nil {
 		return "", nil, fmt.Errorf("entry file: %w", err)
@@ -104,7 +104,7 @@ func buildProgram(ctx context.Context, entryFile, blueprintRoots string) (binary
 
 	// Carry the program's own workspace through the copy, if it has one.
 	// See workspace.go for the two ways a monorepo failed without this.
-	workPath, err := writeBuildWorkspace(buildDir, moduleRoot, moduleCopy)
+	workPath, err := writeBuildWorkspace(buildDir, moduleRoot, moduleCopy, blueprintDirs)
 	if err != nil {
 		cleanup()
 		return "", nil, err

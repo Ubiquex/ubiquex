@@ -318,13 +318,11 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, receipts []string, blueprintRefs map[string]string, err error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
-		canon, refs, err := blueprint.EvaluateGoWithBlueprints(ctx, entryFile)
-		return canon, nil, refs, err
+		return blueprint.EvaluateGoWithBlueprints(ctx, entryFile)
 	case ".py":
 		return blueprint.EvaluatePythonWithDeps(ctx, entryFile)
 	case ".ts":
-		canon, refs, err := blueprint.EvaluateTSWithBlueprints(ctx, entryFile)
-		return canon, nil, refs, err
+		return blueprint.EvaluateTSWithBlueprints(ctx, entryFile)
 	default:
 		return nil, nil, nil, fmt.Errorf("--from-code: unrecognized entry file extension %q (%s) -- expected .ts, .go, or .py", filepath.Ext(entryFile), entryFile)
 	}
