@@ -134,7 +134,12 @@ This is a deliberate split between identity and download mechanism:
   provider version is part of what was reviewed and hashed into the
   ledger (see `resolution.inputs`); silently resolving "latest" at
   acquisition time would make that reviewed version meaningless. Every
-  acquisition names an exact version.
+  acquisition names an exact version. This governs the *reviewed* inputs:
+  a registry provider's own version, and a dynamic provider's schema
+  snapshot version. It does **not** govern which `ubx-provider-dynamic`
+  build serves an already-pinned snapshot — see the UBI-268 follow-up
+  amendment below, which deliberately reads that one stamp as a floor,
+  and says why that is not the same thing.
 - **`UBX_PROVIDER_MIRROR`** (a local directory) is checked first, before
   any network call, preserving the plain "download it yourself, hand ubx
   the binary" workflow used before this existed — a mirror hit is trusted
@@ -4163,3 +4168,78 @@ recognized as a real risk rather than rediscovered from scratch.
   (trust core never paywalled); Nexus owns coordination (approval routing, watchers,
   RBAC/SSO, UI, managed LLM).
 - Secrets rule: ledger stores references only, never material.
+
+## Amendment (2026-09-14, UBI-268 follow-up): the binary stamp is a floor, not a pin
+
+A published schema snapshot records `generated_by_binary_version`: which
+`ubx-provider-dynamic` build cut it. `ubx` acquired exactly that version.
+It now acquires the newest published release sharing that version's
+**major**, falling back to the stamped version itself whenever anything
+goes wrong.
+
+### Why the exact reading was wrong
+
+The field documents itself as a floor. Its own doc comment says it records
+which binary cut the snapshot, "a version known to work, not the lowest one
+that would", and the UBI-249 rename from `min_binary_version` happened
+precisely because the old name promised a floor the field never computed.
+Acquiring it exactly read it as a pin, which is the one thing it says it is
+not.
+
+The cost took two incidents to see. A real encoder bug made every
+`DynamicPseudoType` attribute unencodable, surfacing as a create that
+succeeded in AWS and then failed returning `unknown type
+tftypes.DynamicPseudoType`. It was fixed and released as 1.3.1 within the
+hour, and could then reach nobody:
+
+| snapshot | stamped binary |
+|---|---|
+| aws | 1.3.0 |
+| azure, datadog, github, google, kubernetes | 1.2.0 |
+| cloudflare | 1.0.10 |
+| digitalocean | 1.0.4 |
+
+All eight pinned a build predating the fix, and the bug was in code every
+source shares. Under an exact pin, shipping a provider patch means
+regenerating and re-releasing eight repos, each then owing a schema version
+bump for a change that touched no schema. A one-line bugfix became an
+eight-repo migration, and the only workaround for the stack that hit it was
+an ambient-binary environment variable nobody would find.
+
+### Why the bound is the major
+
+`schema_format` is the real compatibility contract, and all eight published
+snapshots are at 3. A major bump is where this resolution stops guessing.
+
+Bounding at the minor instead was considered and rejected: it would have
+helped only whichever provider happened to be stamped at the newest minor
+and left the identical trap for the other seven, since no 1.2.x patch
+exists. Pre-releases are excluded, the same exclusion registry provider
+selection already applies.
+
+### This is not "latest" resolution, and it does cost something
+
+The pinned, reviewed, hashed input is the **schema snapshot version**, and
+it is unchanged: `[providers.aws] version = "4.0.0"` still resolves to
+exactly 4.0.0. What moves is which build of the server process reads that
+snapshot, which was never a reviewed input and never appeared in
+`resolution.inputs` as a version.
+
+It is not nothing, though, and the honest statement is that reproducibility
+is weaker than it was: two runs against the same pinned snapshot can now use
+different binaries, and a different binary can in principle produce a
+different reading. Three things bound that. The binary's own SHA-256 is
+still recorded in `resolution.inputs[].provider_checksum`, so what actually
+ran is always recoverable after the fact rather than inferred. The bound
+never crosses a major. And `UBX_PROVIDER_DYNAMIC_EXACT` restores exact
+acquisition for anyone who needs a byte-identical rebuild of an older run.
+
+The trade was made knowingly: a fix that cannot reach any user is a worse
+property than a rebuild that needs an environment variable to be exact.
+
+### Failure is never an error
+
+Any failure to list releases (offline, rate-limited, a GitHub outage,
+an unparseable response) silently returns the stamped version. Acquiring
+that is exactly what happened before this existed and is known to work, so
+a failure to find something better must never become a failure to run.

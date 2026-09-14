@@ -489,10 +489,17 @@ func acquirePinnedSchemaAndBinary(ctx context.Context, name string, params map[s
 		return binPath, env, snapshotDir, nil
 	}
 
-	binVersion, err := provider.ResolveDynamicProviderBinaryVersion(schemaResult.Path)
+	binFloor, err := provider.ResolveDynamicProviderBinaryVersion(schemaResult.Path)
 	if err != nil {
 		return "", nil, "", fmt.Errorf("resolve ubx-provider-dynamic version for %q: %w", name, err)
 	}
+	// The snapshot's stamp is a floor, not a pin: the newest release
+	// sharing its major serves it, and that is what carries a provider
+	// bugfix to a snapshot cut before the fix existed. See
+	// provider.ResolveNewestCompatibleDynamicProviderBinary for why the
+	// exact reading cost two incidents, and for the escape hatch that
+	// restores it.
+	binVersion := provider.ResolveNewestCompatibleDynamicProviderBinary(ctx, binFloor)
 	binResult, err := provider.AcquireDynamicProviderBinary(ctx, binVersion)
 	if err != nil {
 		return "", nil, "", fmt.Errorf("acquire ubx-provider-dynamic@%s for %q: %w", binVersion, name, err)
