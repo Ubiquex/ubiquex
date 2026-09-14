@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/mod/modfile"
+
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 	"github.com/ubiquex/ubiquex/goeval"
@@ -690,11 +692,8 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 	if err != nil {
 		return "", err
 	}
-	blueprintGoMod, err := os.ReadFile(filepath.Join(blueprintGoDir, "go.mod"))
-	if err != nil {
-		return "", fmt.Errorf("read blueprint go.mod: %w", err)
-	}
-	sdkGoRequire, err := extractRequireLine(string(blueprintGoMod), "github.com/ubiquex/ubx-sdk-go")
+	sdkGoRequire, sdkGoReplace, err := goModDirectives(
+		filepath.Join(blueprintGoDir, "go.mod"), "github.com/ubiquex/ubx-sdk-go")
 	if err != nil {
 		return "", err
 	}
@@ -739,26 +738,9 @@ func writeGoCaller(scratch, blueprintDir, blueprintName, stackName, summary stri
 		return "", err
 	}
 
-	// sdkGoReplace mirrors sdkGoRequire's own "reuse whatever the
-	// blueprint's own go.mod already declares, verbatim" reasoning,
-	// extended to an OPTIONAL replace directive: a real, published
-	// blueprint's own go.mod never has one (Slice 1's own established
-	// convention -- v0.0.0 resolves from the real module proxy/cache,
-	// no override needed), so this stays "" and the synthesized caller's
-	// own behavior is completely unchanged from before this line existed.
-	// A hermetically-tested blueprint fixture that DOES carry a local
-	// `replace github.com/ubiquex/ubx-sdk-go => ...` (every real test
-	// fixture in this codebase that builds a callable blueprint already
-	// adds one, so its own package compiles against local sdk/go
-	// unpublished changes) needs the synthesized caller to resolve the
-	// IDENTICAL sdk-go copy, not silently fall back to a stale published
-	// version -- without this, any real sdk/go runtime change (UBI-126's
-	// own new PushBlueprintSource/PopBlueprintSource, say) would compile
-	// fine against a direct-import caller (which already carries its own
-	// local replace) but fail this synthesized-caller path specifically,
-	// with a confusing "undefined: sdk.X" error pointing at generated
-	// code that never changed.
-	sdkGoReplace := extractReplaceLine(string(blueprintGoMod), "github.com/ubiquex/ubx-sdk-go")
+	// sdkGoReplace comes from goModDirectives above and is normally "".
+	// See its own doc comment for when a fixture carries one and why the
+	// synthesized caller has to honour it.
 	if sdkGoReplace != "" {
 		sdkGoReplace += "\n"
 	}
@@ -791,36 +773,77 @@ func main() {
 	return entry, nil
 }
 
-// extractRequireLine returns the single top-level "require <modulePath>
-// <version>" line from goMod's own text, verbatim -- goeval's own doc
-// comment names this as the ordinary, idiomatic way any Go program
-// declares its ubx-sdk-go dependency; GenerateGo's own emitted go.mod
-// (files["go/go.mod"]) only ever has exactly one require, never a
-// parenthesized multi-require block, so a single-line scan suffices.
-func extractRequireLine(goMod, modulePath string) (string, error) {
-	prefix := "require " + modulePath + " "
-	for _, line := range strings.Split(goMod, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			return trimmed, nil
-		}
+// goModDirectives reads modulePath's own require and replace directives
+// out of a real go.mod, using the same parser the Go toolchain itself
+// uses.
+//
+// UBI-252-shaped (a fixture more convenient than real output): these were
+// two hand-rolled line scanners looking for `require <path> ` and
+// `replace <path> ` at the start of a trimmed line. That is a complete
+// description of what GenerateGo emits, and its own doc comment said so:
+// a generated blueprint's go.mod "only ever has exactly one require,
+// never a parenthesized multi-require block, so a single-line scan
+// suffices". True, and verified again while replacing this.
+//
+// It stopped being true the moment a go.mod stopped being generated. A
+// CODE blueprint's go.mod is written by a person and run through
+// `go mod tidy`, which emits a parenthesized block:
+//
+//	require (
+//		github.com/ubiquex/ubx-sdk-go v0.6.0
+//		github.com/google/uuid v1.6.0
+//	)
+//
+// The scanner found nothing there and reported "go.mod has no require
+// line", which is a true statement about a file that does require the
+// module, so calling a Go code blueprint failed outright. Every test
+// passed, because every fixture wrote the single-line form the scanner
+// was built for.
+//
+// Parsed properly rather than taught about blocks, because a hand-written
+// go.mod may legally contain anything the format allows (indirect
+// comments, retract, exclude, multiple blocks, line continuations) and
+// teaching a string scanner one more shape just relocates the same bug.
+func goModDirectives(goModPath string, modulePath string) (require, replace string, err error) {
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read %s: %w", goModPath, err)
 	}
-	return "", fmt.Errorf("go.mod has no require line for %s", modulePath)
-}
+	f, err := modfile.Parse(goModPath, data, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("parse %s: %w", goModPath, err)
+	}
 
-// extractReplaceLine is extractRequireLine's own optional sibling: a
-// "replace <modulePath> => ..." line, verbatim, or "" if goMod has none
-// -- a real, published blueprint's own go.mod never does (see
-// writeGoCaller's own doc comment on sdkGoReplace for why this matters
-// only for hermetically-tested fixtures that DO carry one), so unlike
-// extractRequireLine, absence is never an error here.
-func extractReplaceLine(goMod, modulePath string) string {
-	prefix := "replace " + modulePath + " "
-	for _, line := range strings.Split(goMod, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			return trimmed
+	for _, r := range f.Require {
+		if r.Mod.Path == modulePath {
+			require = fmt.Sprintf("require %s %s", r.Mod.Path, r.Mod.Version)
+			break
 		}
 	}
-	return ""
+	if require == "" {
+		// Names the file, because the reader's own directory is the
+		// obvious guess and the wrong one: this is the BLUEPRINT's
+		// go.mod, and an HCL stack calling a Go blueprint has no go.mod
+		// of its own and needs none.
+		return "", "", fmt.Errorf("%s does not require %s -- this is the blueprint's own go.mod, and a blueprint written in Go must declare the ubx Go SDK it is written against", goModPath, modulePath)
+	}
+
+	// A replace is optional and normally absent: a published blueprint
+	// resolves the SDK from the real module proxy. A hermetically-tested
+	// fixture carries one so the synthesized caller resolves the
+	// IDENTICAL local sdk/go copy rather than silently falling back to a
+	// stale published version, which would compile fine on the
+	// direct-import path and fail only here.
+	for _, r := range f.Replace {
+		if r.Old.Path != modulePath {
+			continue
+		}
+		if r.New.Version != "" {
+			replace = fmt.Sprintf("replace %s => %s %s", r.Old.Path, r.New.Path, r.New.Version)
+		} else {
+			replace = fmt.Sprintf("replace %s => %s", r.Old.Path, r.New.Path)
+		}
+		break
+	}
+	return require, replace, nil
 }

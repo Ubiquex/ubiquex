@@ -51,18 +51,17 @@ func writeGoSchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 	if err != nil {
 		return "", err
 	}
-	blueprintGoMod, err := os.ReadFile(filepath.Join(absBlueprint, "go.mod"))
-	if err != nil {
-		return "", fmt.Errorf("read blueprint go.mod: %w", err)
-	}
-	sdkGoRequire, err := extractRequireLine(string(blueprintGoMod), "github.com/ubiquex/ubx-sdk-go")
+	// The blueprint's OWN go.mod, not the calling stack's. A stack that
+	// calls a Go blueprint from .ubx.hcl has no go.mod and needs none:
+	// the caller written below is a complete, self-contained module
+	// synthesized in scratch. goModDirectives names the file it read for
+	// exactly this reason, since the reader's own directory is the
+	// obvious wrong guess when this fails.
+	sdkGoRequire, sdkGoReplace, err := goModDirectives(
+		filepath.Join(absBlueprint, "go.mod"), "github.com/ubiquex/ubx-sdk-go")
 	if err != nil {
 		return "", err
 	}
-	// Same reasoning as invoke.go's own: a test fixture carrying a local
-	// replace has to resolve the identical sdk/go copy rather than
-	// silently falling back to a published one.
-	sdkGoReplace := extractReplaceLine(string(blueprintGoMod), "github.com/ubiquex/ubx-sdk-go")
 	if sdkGoReplace != "" {
 		sdkGoReplace += "\n"
 	}
