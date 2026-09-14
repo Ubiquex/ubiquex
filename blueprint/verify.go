@@ -76,5 +76,31 @@ func diffFiles(declared, recomputed map[string]string) string {
 	if b.Len() == 0 {
 		return "  (every declared file's own content hash still matches -- the mismatch is in the manifest's declared name)\n"
 	}
+	if _, added := recomputed[npmLockFileName]; added {
+		if _, declaredIt := declared[npmLockFileName]; !declaredIt {
+			b.WriteString(npmInstallHint)
+		}
+	}
 	return b.String()
 }
+
+// npmLockFileName is npm's own lock, and the one file that turns an
+// ordinary command into a failed verification.
+const npmLockFileName = "package-lock.json"
+
+// npmInstallHint names the cause of by far the most likely way to reach
+// this message.
+//
+// Installing a TypeScript blueprint's dependencies is a reasonable thing
+// to do in its directory, and `npm install` is the reflex. It writes a
+// package-lock.json, which is an ordinary file and therefore part of the
+// content, so it changes the hash. `deno install` writes only a
+// deno.lock and a node_modules, and node_modules is excluded from the
+// manifest, so it leaves the hash alone.
+//
+// Without this, the message names a file the author did not knowingly
+// create and leaves them to work out which command created it.
+const npmInstallHint = "  package-lock.json is written by `npm install`, and it is an ordinary file, so it becomes part of the\n" +
+	"  blueprint's content and changes its hash. `deno install` is the command that does not: it writes a\n" +
+	"  deno.lock and a node_modules, and node_modules is excluded from the manifest. Delete package-lock.json\n" +
+	"  to restore the hash, or re-run `ubx blueprint package` to adopt it.\n"

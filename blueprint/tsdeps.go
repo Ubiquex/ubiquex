@@ -219,7 +219,10 @@ func unpinnedNPMRefusal(name string, unpinned []string) string {
 	b.WriteString("  that pins the blueprint itself. Without one, the hash would cover the names and not the bytes that ran.\n")
 	b.WriteString("  `ubx blueprint package` generates this lock, so re-packaging the blueprint is the fix. To do it by hand:\n")
 	fmt.Fprintf(&b, "  run `deno install` in the blueprint and commit the %s it writes.\n", denoLockFileName)
-	b.WriteString("  npm's own package-lock.json does not serve here: deno does not read it.")
+	b.WriteString("  Use `deno install` rather than `npm install`, for two reasons. deno does not read npm's own\n")
+	b.WriteString("  package-lock.json, so it pins nothing here. And `npm install` WRITES one, which is an ordinary file\n")
+	b.WriteString("  and so becomes part of the blueprint's content and changes its hash; node_modules is excluded from\n")
+	b.WriteString("  the manifest, but package-lock.json is not.")
 	return b.String()
 }
 
