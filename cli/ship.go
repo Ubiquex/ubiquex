@@ -888,6 +888,12 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 	seenAddr := map[string]bool{}
 	spin := map[string]int{}
 
+	// unverified holds UBI-269's own "this resource may exist" events
+	// until finish(), which prints them outside the one-row-per-write
+	// region. See the "unverified" case in fn for why they cannot go
+	// through updateRow.
+	var unverified []executor.ProgressEvent
+
 	// UBI-84 (third finding): the max address length across the WHOLE
 	// batch, computed once, up front -- the full set of resources this
 	// run will ever process is already known (kinds, addressOpKinds' own
@@ -1181,20 +1187,23 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 			updateRow(errKey, ev.Address, kind, st.Yellow("!"), ev.Detail, "", true)
 
 		case "unverified":
-			// UBI-269: a create whose outcome is genuinely unknown. Its own
-			// permanent row, on the same never-reused-key discipline the
-			// "error" case above uses, because this must survive whatever
-			// redraws follow it.
+			// UBI-269: a create whose outcome is genuinely unknown.
 			//
-			// Loud on purpose, and distinct from the error line that
-			// precedes it. That line carries the provider's message, which
-			// says what went wrong; this one says what it means for the
-			// resource and what to do about it. Reading only the first, the
-			// natural conclusion is that the create did not happen, which
-			// is exactly the wrong one and exactly what UBI-269 is about.
+			// Deliberately NOT rendered through updateRow. Every row this
+			// printer draws is truncated to a single physical terminal row
+			// (UBI-93, and for a load-bearing reason: a wrapped row breaks
+			// the cursor arithmetic every redraw depends on and produces
+			// garbled interleaved text). This message's whole purpose is
+			// to carry a command the reader is supposed to run, and a
+			// command cut off mid-flight is worse than no message at all:
+			// it says something is wrong, then withholds the fix. Found
+			// live, on the first real failure this path ever handled.
+			//
+			// So it is held here and printed by finish(), after the
+			// row-tracked region is sealed and the cursor math no longer
+			// applies, where it can take as many lines as it needs.
 			stopTicker(ev.Address)
-			unvKey := fmt.Sprintf("%s#unverified#%d", ev.Address, len(order))
-			updateRow(unvKey, ev.Address, kind, st.Yellow("?"), st.Yellow(ev.Detail), "", true)
+			unverified = append(unverified, ev)
 
 		case "transition":
 			switch ev.State {
@@ -1263,6 +1272,10 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 			cursorRow++
 			sealed = true
 		}
+		for _, ev := range unverified {
+			writeUnverifiedBlock(out, st, ev)
+		}
+		unverified = nil
 	}
 
 	return fn, finish
@@ -1338,4 +1351,26 @@ type shipJSON struct {
 	Format         int               `json:"format"`
 	AlreadyApplied bool              `json:"already_applied,omitempty"`
 	ApplyRecord    *core.ApplyRecord `json:"apply_record,omitempty"`
+}
+
+// writeUnverifiedBlock renders one create whose outcome is unknown
+// (UBI-269), as a free-standing block rather than a progress row.
+//
+// Every line of ev.Detail is printed, indented, and the block is preceded
+// by a blank line so it reads as its own thing rather than as more
+// progress output. Nothing here is truncated: the executor put a runnable
+// command in this message, and the reader needs all of it. A terminal may
+// still soft-wrap a long command, which is fine and is what a terminal
+// does to any pasted command line; what must not happen is ubx cutting it
+// off itself.
+func writeUnverifiedBlock(out io.Writer, st *styler, ev executor.ProgressEvent) {
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  %s %s\n", st.Yellow("?"), st.Yellow(ev.Address+" may exist"))
+	for _, line := range strings.Split(strings.TrimRight(ev.Detail, "\n"), "\n") {
+		if line == "" {
+			fmt.Fprintln(out)
+			continue
+		}
+		fmt.Fprintf(out, "    %s\n", line)
+	}
 }

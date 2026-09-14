@@ -355,7 +355,15 @@ func (s *safeWriter) Write(p []byte) (int, error) {
 // recovery command, and that it is not overwritten by anything after it.
 func TestNewProgressPrinter_UnverifiedCreateIsPrintedWithItsRecovery(t *testing.T) {
 	var buf bytes.Buffer
-	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 0, nil)
+	// A REAL terminal width, not 0.
+	//
+	// This test passed while the live receipt truncated the command
+	// mid-sentence, because it used termWidth 0, which disables row
+	// truncation entirely (see maxRowTextWidth). So it exercised the one
+	// configuration where the bug could not happen. 80 columns is an
+	// ordinary terminal and is narrower than the message, which is the
+	// point: the block must survive a width it does not fit in.
+	printer, finish := newProgressPrinter(&buf, plainStyler(), true, 80, nil)
 
 	addr := "payments.fake_widget.queue"
 	printer(executor.ProgressEvent{Address: addr, Kind: "transition", State: "in_flight"})
@@ -363,11 +371,21 @@ func TestNewProgressPrinter_UnverifiedCreateIsPrintedWithItsRecovery(t *testing.
 		Address: addr, Kind: "error",
 		Detail: "encode new state: unknown type tftypes.DynamicPseudoType",
 	})
+	// The same block shape shipCreate emits, including the blank lines
+	// and the command on its own line.
 	printer(executor.ProgressEvent{
 		Address: addr, Kind: "unverified",
-		Detail: "this resource may exist: the create call was made and its outcome is unknown. " +
-			"Nothing is recorded for it, so a re-ship would create another. Check the provider, and if it is there, adopt it with:\n" +
-			"  ubx scan --stack payments --type fake_widget --name queue --lookup '<identifying attributes>'",
+		Detail: `The create call was made and its outcome is unknown, so this resource
+may exist in the provider. Nothing is recorded for it, which means a
+re-ship would try to create it again.
+
+Check the provider. If it is not there, re-ship normally. If it is,
+adopt it and no second create happens:
+
+  ubx scan --stack payments --type fake_widget --name queue --lookup '<identifying attributes>'
+
+The identifying attributes vary by resource type. If the shape is wrong,
+the error names what this provider expects.`,
 	})
 	// The suppressed transition, emitted after the unverified line exactly
 	// as the executor emits it, to prove it does not erase the line.
@@ -377,12 +395,22 @@ func TestNewProgressPrinter_UnverifiedCreateIsPrintedWithItsRecovery(t *testing.
 	out := buf.String()
 	for _, want := range []string{
 		"may exist",
-		"a re-ship would create another",
-		"ubx scan --stack payments --type fake_widget --name queue",
+		"re-ship would try to create it again",
+		// The whole command, including the flag that carries the part a
+		// reader cannot guess. This is the assertion that failed live:
+		// the row was cut to one terminal width and the command died
+		// somewhere in the middle.
+		"ubx scan --stack payments --type fake_widget --name queue --lookup '<identifying attributes>'",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("receipt is missing %q, so nothing tells the reader a resource may exist:\n%s", want, out)
+			t.Fatalf("receipt is missing %q, so nothing tells the reader a resource may exist or what to run:\n%s", want, out)
 		}
+	}
+	// No truncation marker anywhere in the block. The printer uses "…"
+	// when it cuts a row, so its presence means this went through the
+	// one-row path again.
+	if strings.Contains(out, "…") {
+		t.Fatalf("the unverified block was truncated, so it went through the row path rather than around it:\n%s", out)
 	}
 	// The provider's own error still shows: it says what went wrong, while
 	// the unverified line says what it means. Neither replaces the other.
