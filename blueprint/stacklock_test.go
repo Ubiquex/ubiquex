@@ -195,24 +195,26 @@ func TestStackLock_Prune(t *testing.T) {
 	}
 }
 
-func TestBlueprintCacheDirByHash(t *testing.T) {
-	a, err := blueprintCacheDirByHash("sha256:abc")
+func TestBlueprintContentDir(t *testing.T) {
+	a, err := BlueprintContentDir("sha256:abc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := blueprintCacheDirByHash("sha256:def")
+	b, err := BlueprintContentDir("sha256:def")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a == b {
-		t.Fatal("different content must not share a cache directory")
+		t.Fatal("different content must not share a directory")
 	}
-	if strings.Contains(filepath.Base(a), ":") {
-		t.Fatalf("the directory name should avoid %q for portability: %s", ":", a)
+	// The scheme is a directory level, so the leaf is bare hex and a
+	// second algorithm would be a sibling rather than a rename.
+	if filepath.Base(a) != "abc" || filepath.Base(filepath.Dir(a)) != "sha256" {
+		t.Fatalf("layout should be sha256/<hex>, got %s", a)
 	}
 	// Two stacks pinning the same content through different tags share
-	// one entry, which the spec-keyed layout could not do.
-	again, _ := blueprintCacheDirByHash("sha256:abc")
+	// one directory, which a declaration-keyed layout could not do.
+	again, _ := BlueprintContentDir("sha256:abc")
 	if again != a {
 		t.Fatal("the same content hash must map to the same directory")
 	}

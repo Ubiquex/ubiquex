@@ -30,6 +30,7 @@ func newBlueprintCmd() *cobra.Command {
 	cmd.AddCommand(newBlueprintPullCmd())
 	cmd.AddCommand(newBlueprintVerifyCmd())
 	cmd.AddCommand(newBlueprintDescribeCmd())
+	cmd.AddCommand(newBlueprintListCmd())
 	return cmd
 }
 

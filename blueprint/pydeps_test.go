@@ -254,6 +254,26 @@ func TestResolvePyDependencies_MissingPyPackage_Errors(t *testing.T) {
 	}
 }
 
+// TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval proves
+// what a warm cache is actually worth: a resolve that never touches the
+// source again.
+//
+// It used to prove that of any second resolve, because the cache was
+// keyed on the declaration string. That cache was unsound in a way this
+// test could not see: one slot per mutable name, and a hit verified the
+// directory against its own manifest, which always succeeds, so a
+// repointed tag left this machine on the old content indefinitely while
+// a machine pulling for the first time got the new content. Both
+// verified.
+//
+// Storage is content-addressed now, so the question "do I already have
+// this" is only answerable when something names the content, and the
+// stack lock is what names it. So the property moves rather than
+// disappearing: a LOCKED dependency resolves with the source gone, and
+// an unlocked one has nothing to look up and must ask.
+//
+// Asserting both halves, because the second is the accepted cost and a
+// test that only covered the first would hide it.
 func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -303,6 +323,22 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 		t.Errorf("first resolve's own Receipt = %q, should be a fresh pull, not a cache hit", first[0].Receipt)
 	}
 
+	// Lock what the first resolve found, which is what `ubx plan` does.
+	ledgerDir := t.TempDir()
+	lock := &StackLock{Stacks: map[string]map[string]LockEntry{}}
+	lock.Set("demo", "widget-lib", LockEntry{
+		Source:      first[0].Dep.URL,
+		ContentHash: first[0].ContentHash,
+	})
+	if err := lock.Save(ledgerDir); err != nil {
+		t.Fatal(err)
+	}
+	locked := WithLockPolicy(context.Background(), LockPolicy{
+		LedgerDir: ledgerDir,
+		Stack:     "demo",
+		Mode:      LockVerify,
+	})
+
 	// Remove the real source entirely -- a second resolve that still
 	// succeeds proves the cache hit genuinely never touches git/network
 	// again, not just that the receipt SAYS "(cached)".
@@ -310,9 +346,9 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	second, _, err := ResolvePyDependencies(context.Background(), entryFile)
+	second, _, err := ResolvePyDependencies(locked, entryFile)
 	if err != nil {
-		t.Fatalf("second ResolvePyDependencies (source removed): %v", err)
+		t.Fatalf("second ResolvePyDependencies (locked, source removed): %v", err)
 	}
 	if !strings.Contains(second[0].Receipt, "(cached)") {
 		t.Errorf("second resolve's own Receipt = %q, want a \"(cached)\" hit", second[0].Receipt)
@@ -322,6 +358,13 @@ func TestResolvePyDependencies_Git_CachesAndSurvivesSourceRemoval(t *testing.T) 
 	}
 	if first[0].Dep.Name != second[0].Dep.Name {
 		t.Errorf("Dep.Name changed across a cache hit")
+	}
+
+	// The accepted cost, asserted rather than left implicit: without a
+	// lock entry there is nothing to look the content up by, so the
+	// source has to be asked, and it is gone.
+	if _, _, err := ResolvePyDependencies(context.Background(), entryFile); err == nil {
+		t.Error("an UNLOCKED dependency must not resolve from cache -- a tag cannot be resolved without asking, and caching a mutable pointer locally is the unsoundness this replaces")
 	}
 }
 

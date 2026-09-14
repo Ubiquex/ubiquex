@@ -33,8 +33,6 @@ package blueprint
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -359,37 +357,11 @@ func resolveOnePyDependency(ctx context.Context, dep PyDependency, lockedHash st
 		return resolveLocalPyDependency(ctx, dep)
 	}
 
-	// A locked hash makes the cache content-addressed; without one the
-	// spec-keyed cache is unchanged from before this existed, so an
-	// unlocked stack behaves exactly as it did.
-	cacheDir, err := pyDepCacheDir(dep)
-	if lockedHash != "" {
-		cacheDir, err = blueprintCacheDirByHash(lockedHash)
-	}
+	dir, manifest, fromCache, err := fetchIntoContentStore(ctx, dep, lockedHash)
 	if err != nil {
 		return PyDepMount{}, err
 	}
-
-	fromCache := true
-	manifest, verr := Verify(cacheDir)
-	if verr != nil {
-		fromCache = false
-		if err := os.RemoveAll(cacheDir); err != nil {
-			return PyDepMount{}, err
-		}
-		if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
-			return PyDepMount{}, err
-		}
-		if _, err := Pull(ctx, dep.Source, cacheDir, dep.Ref, dep.Path); err != nil {
-			return PyDepMount{}, fmt.Errorf("pull: %w", err)
-		}
-		manifest, err = Verify(cacheDir)
-		if err != nil {
-			return PyDepMount{}, fmt.Errorf("verify: %w", err)
-		}
-	}
-
-	return finishPyDepMount(dep, cacheDir, manifest, fromCache)
+	return finishPyDepMount(dep, dir, manifest, fromCache)
 }
 
 // resolveLocalPyDependency pulls dep fresh into a throwaway scratch
@@ -486,50 +458,6 @@ func pyMountDir(dir string) (string, error) {
 	}
 
 	return dir, nil
-}
-
-// pyDepCacheDir returns the local cache directory for dep, keyed by its
-// own declared spec (name+URL, hashed) -- ~/.ubx/blueprints/by-spec/<hex>,
-// the same "~/.ubx/<kind>/..." cache-root convention provider/cache.go's
-// own defaultCacheRoot (~/.ubx/providers) already established.
-// blueprintCacheDirByHash is the content-addressed cache directory for a
-// blueprint whose content hash is already known from the lock file.
-//
-// pyDepCacheDir's own doc comment below explains why the spec-keyed
-// cache exists: "a blueprint has no registry-signed version to trust
-// before ever pulling, so the cache is keyed by the declared spec
-// itself". The lock file IS that pre-known hash, so wherever one exists
-// the reason no longer holds.
-//
-// It matters for correctness, not just tidiness. A spec-keyed hit is
-// keyed on the declaration STRING, and re-verifies the cached directory
-// against its own manifest, which is self-consistency and never a
-// re-check against the registry. So a mutable tag repointed upstream
-// left every warm machine on the old content indefinitely while a cold
-// machine silently got the new content, and both verified. Keyed by
-// hash, a cache hit means "this is the content the lock names", which is
-// the question actually being asked.
-//
-// Two stacks pinning the same content through different tags also share
-// one entry, which the spec-keyed layout could not do.
-func blueprintCacheDirByHash(contentHash string) (string, error) {
-	root, err := defaultBlueprintCacheRoot()
-	if err != nil {
-		return "", err
-	}
-	// The hash is "sha256:<hex>"; ":" is legal in a path segment on the
-	// platforms ubx targets, but avoiding it costs nothing and keeps the
-	// directory copy-pasteable on any of them.
-	return filepath.Join(root, "by-hash", strings.ReplaceAll(contentHash, ":", "-")), nil
-}
-
-func pyDepCacheDir(dep PyDependency) (string, error) {
-	root, err := defaultBlueprintCacheRoot()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(dep.Name + "@" + dep.URL))
-	return filepath.Join(root, "by-spec", hex.EncodeToString(sum[:])), nil
 }
 
 func defaultBlueprintCacheRoot() (string, error) {
