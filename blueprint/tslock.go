@@ -44,18 +44,27 @@ import (
 // narrowly as it can be: a blueprint with no npm dependencies, which is
 // every blueprint ubx itself generates, packages exactly as it did.
 //
-// # What the fetch pass is for, and what it is not for
+// # What the pass is for
 //
-// It is not what makes a blueprint's npm dependencies AVAILABLE. deno
-// fetches them itself during evaluation regardless, because --no-remote
-// does not block npm. Verified by removing this pass and evaluating
-// against a cold cache: the blueprint ran fine.
+// Two things, and they are worth separating.
 //
-// What it buys is that those bytes are checked against the blueprint's
-// OWN lock before anything runs. Without it, evaluation would take
-// whatever the registry served and record it in a throwaway lock, and the
-// blueprint's lock would be decorative. So the test that matters is the
-// refusal of tampered bytes, not the success of honest ones
+// It makes the dependencies RESOLVABLE, which the first version did not.
+// That version fetched into deno's global cache and stopped, which works
+// only while the consumer's own project has no package.json. One
+// anywhere deno discovers from the module graph root puts the whole
+// graph into node_modules resolution, and there the global cache is not
+// consulted at all:
+//
+//	Could not find "@ubx/sdk-aws" in a node_modules folder.
+//
+// A consumer with a package.json is the documented setup, so that fired
+// for the ordinary case and not for the fixture, which had none.
+//
+// And it makes them VERIFIED, which is the part no other step provides.
+// The bytes are checked against the blueprint's own lock before anything
+// runs. Without that, evaluation would take whatever the registry served
+// and the blueprint's lock would be decorative. So the test that matters
+// is the refusal of tampered bytes, not the success of honest ones
 // (tslock_test.go).
 //
 // # Why it has to be a separate invocation
@@ -67,24 +76,28 @@ import (
 //   - With --frozen, deno refuses. --frozen validates the lock's own
 //     workspace section against the workspace actually being evaluated,
 //     and the blueprint's lock describes the blueprint's workspace.
-//   - Without --frozen, it runs, and deno REWRITES the lock file. That
-//     file lives in the content store, so writing to it would mutate
-//     content-addressed storage and break its own hash.
+//   - Without --frozen, it runs, and deno REWRITES the lock file, which
+//     for a mirror is a symlink straight into the content store.
 //
-// So fetch-and-verify is a separate invocation with its own lock, in a
-// scratch directory ubx owns, and evaluation is a second invocation that
-// finds the packages already in deno's cache. This is the same split ubx
-// already uses one level up, where pulling and verifying a blueprint is
-// a distinct step from using it.
+// So this is a separate invocation with its own lock, against the
+// blueprint's own workspace, and evaluation is a second one. The same
+// split ubx already uses one level up, where pulling and verifying a
+// blueprint is a distinct step from using it.
 //
 // # The limit, stated plainly
 //
-// The BLUEPRINT's half becomes pinned. Evaluation still reaches the
-// network for the CONSUMER's own dependencies, which are the consumer's
-// business and are governed by the consumer's own lock exactly as before.
-// deno resolves a workspace's npm dependencies eagerly regardless of what
-// the entry file imports, so this cannot be narrowed by touching fewer
-// things. The boundary is not that evaluation becomes network-free.
+// The BLUEPRINT's half becomes pinned, and once its mirror exists,
+// available offline. Evaluation still reaches the network for the
+// CONSUMER's own dependencies, which are the consumer's business and are
+// governed by the consumer's own lock exactly as before. The boundary is
+// not that evaluation becomes network-free.
+//
+// The rejected alternative was --node-modules-dir=none on the evaluator,
+// which would also have fixed the resolution failure. It was measured
+// rather than argued: it makes a consumer holding a populated
+// node_modules re-download those packages, and makes planning fail
+// outright when they are offline. Materialising the blueprint's own
+// dependencies costs a directory of symlinks and takes neither.
 
 // denoBinary finds deno, with an error naming why it is needed here
 // rather than the bare exec.LookPath one.
@@ -172,62 +185,202 @@ func GenerateTSLock(ctx context.Context, dir string) (bool, error) {
 	return true, nil
 }
 
-// prefetchTSBlueprintDeps is the fetch-and-verify pass: it downloads a
-// blueprint's npm dependencies into deno's cache, with integrity
-// enforced by the blueprint's OWN lock, before anything evaluates.
+// depsDirName is the sibling tree holding materialised dependencies,
+// laid out by content hash exactly as the store is so the two line up by
+// eye: <root>/sha256/<hex> is the blueprint, <root>/deps/sha256/<hex> is
+// what it needs to run.
+const depsDirName = "deps"
+
+// BlueprintDepsDir is where this content's materialised dependencies
+// live.
+func BlueprintDepsDir(contentHash string) (string, error) {
+	root, err := defaultBlueprintCacheRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, depsDirName, contentStoreDirName, hashHex(contentHash)), nil
+}
+
+// materializeBlueprintDeps prepares a blueprint to be evaluated and
+// returns the directory to evaluate it FROM.
 //
-// The scratch workspace is rebuilt from the blueprint's own declaration
-// files rather than pointing deno at the content store directly, for two
-// reasons that both matter. The content store is content-addressed, so
-// deno rewriting a lock inside it would break the hash that identifies
-// it. And --frozen only passes in a workspace the lock actually
-// describes, which is the blueprint's own and not the consumer's.
-func prefetchTSBlueprintDeps(ctx context.Context, dir, name string) error {
-	lock := tsBlueprintLockPath(dir)
+// # Why a mirror instead of the store itself
+//
+// deno resolves a bare npm specifier through Node resolution, walking up
+// from the importing file, so a blueprint's dependencies have to be in a
+// node_modules ADJACENT to it. Putting one inside the content store
+// would work: node_modules is excluded from the manifest, so the content
+// hash is unaffected and `ubx blueprint verify` still passes.
+//
+// It is still the wrong place. The store is immutable by design and a
+// great deal rests on that, and two concurrent plans would both run
+// `deno install` inside the same store directory with nothing arbitrating
+// it. A directory of symlinks costs almost nothing and keeps the
+// property.
+//
+// So the mirror is: one symlink per store entry, plus a real
+// node_modules, in a sibling tree. Verified that deno does NOT resolve
+// the symlinks and walk up from the store instead, which would have
+// defeated the whole arrangement.
+//
+// # Why this is not just the old prefetch
+//
+// The previous version fetched into deno's global cache and stopped
+// there. That works only when the CONSUMER's project has no package.json,
+// because a package.json anywhere deno discovers from the module graph
+// root puts the whole graph into node_modules resolution, and in that
+// mode the global cache is not consulted at all:
+//
+//	Could not find "@ubx/sdk-aws" in a node_modules folder.
+//
+// The consumer having a package.json is the documented setup, so this
+// fired for the ordinary case and not for the test fixture, which had
+// none. Materialising node_modules covers both modes: the import map's
+// own npm: entries still serve a consumer with no package.json, and the
+// two coexist.
+//
+// Returns the store directory unchanged when the blueprint has no
+// registry dependencies, which is every blueprint ubx itself generates.
+func materializeBlueprintDeps(ctx context.Context, storeDir, contentHash, name string) (string, error) {
+	lock := tsBlueprintLockPath(storeDir)
 	if lock == "" {
 		// tsBlueprintImports refuses before this is reached, so arriving
 		// here means the two disagree.
-		return fmt.Errorf("blueprint %q: no %s to fetch against", name, denoLockFileName)
+		return "", fmt.Errorf("blueprint %q: no %s to fetch against", name, denoLockFileName)
 	}
 
-	deno, err := denoBinary("fetching a blueprint's npm dependencies")
+	evalDir, err := BlueprintDepsDir(contentHash)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+	// Keyed by content hash, so an existing mirror is by definition a
+	// mirror of exactly this content. Reusing it keeps repeat plans
+	// offline as well as fast.
+	//
+	// Intact, though, not merely present. A blueprint declared from a
+	// LOCAL path is staged into a temp directory that is removed when the
+	// command exits, so its mirror's symlinks dangle from the next run
+	// onward while the content hash stays identical. Checking only for
+	// node_modules would hand back a directory whose every source file
+	// had vanished. Found by running it twice.
+	if mirrorIntact(evalDir, storeDir) {
+		return evalDir, nil
+	}
+	// Stale rather than absent. Removing it is safe: everything here is
+	// derived, and the store it mirrors is untouched.
+	if err := os.RemoveAll(evalDir); err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
 	}
 
-	scratch, err := os.MkdirTemp("", "ubx-blueprint-deps-*")
+	deno, err := denoBinary("preparing a blueprint's npm dependencies")
 	if err != nil {
-		return fmt.Errorf("blueprint %q: %w", name, err)
-	}
-	defer os.RemoveAll(scratch)
-
-	// Only the declaration travels into the scratch workspace. The
-	// blueprint's SOURCE is deliberately absent: this pass resolves
-	// dependencies, and copying the code in would make deno type-check
-	// and graph it for no benefit.
-	copied := false
-	for _, f := range []string{"deno.json", "deno.jsonc", packageJSONFileName, denoLockFileName} {
-		src := filepath.Join(dir, f)
-		data, err := os.ReadFile(src)
-		if err != nil {
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(scratch, f), data, 0o644); err != nil {
-			return fmt.Errorf("blueprint %q: %w", name, err)
-		}
-		copied = true
-	}
-	if !copied {
-		return fmt.Errorf("blueprint %q: no declaration files to fetch against", name)
+		return "", err
 	}
 
-	cmd := exec.CommandContext(ctx, deno, "install", "--frozen", "--node-modules-dir=none")
-	cmd.Dir = scratch
+	root, err := defaultBlueprintCacheRoot()
+	if err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+	// Built in staging and renamed into place, so a killed process leaves
+	// nothing half-prepared and two concurrent plans cannot interleave
+	// inside one directory. Same shape fetchIntoContentStore uses, and
+	// same reason.
+	staging, err := os.MkdirTemp(root, ".deps-*")
+	if err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+	defer os.RemoveAll(staging)
+
+	if err := mirrorInto(staging, storeDir); err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+
+	// --frozen, and deliberately NOT --node-modules-dir=none: the
+	// node_modules tree is the whole point here. --frozen is what keeps
+	// this a verification rather than a fetch, enforcing the blueprint's
+	// own lock, and it also leaves the lock unwritten, which matters
+	// because the lock in this mirror is a symlink INTO the store.
+	cmd := exec.CommandContext(ctx, deno, "install", "--frozen")
+	cmd.Dir = staging
 	var out strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s", prefetchFailure(name, err, strings.TrimSpace(out.String())))
+		return "", fmt.Errorf("%s", prefetchFailure(name, err, strings.TrimSpace(out.String())))
+	}
+
+	if err := os.MkdirAll(filepath.Dir(evalDir), 0o755); err != nil {
+		return "", fmt.Errorf("blueprint %q: %w", name, err)
+	}
+	if err := os.Rename(staging, evalDir); err != nil {
+		// Already present is the ordinary race: another plan prepared the
+		// same content hash first, and by construction its mirror is of
+		// the same bytes. Reuse it.
+		if _, statErr := os.Stat(evalDir); statErr != nil {
+			return "", fmt.Errorf("blueprint %q: %w", name, err)
+		}
+	}
+	return evalDir, nil
+}
+
+// nodeModulesDirName is npm's own name for it, and the marker that a
+// mirror is complete.
+const nodeModulesDirName = "node_modules"
+
+// mirrorIntact reports whether evalDir is a usable mirror of storeDir:
+// it has the materialised dependencies, and every file it claims to
+// expose actually resolves.
+//
+// os.Stat rather than os.Lstat, deliberately: the question is whether
+// the symlink still leads somewhere, not whether the symlink exists.
+func mirrorIntact(evalDir, storeDir string) bool {
+	if info, err := os.Stat(filepath.Join(evalDir, nodeModulesDirName)); err != nil || !info.IsDir() {
+		return false
+	}
+	entries, err := os.ReadDir(storeDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name() == nodeModulesDirName {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(evalDir, e.Name())); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// mirrorInto symlinks every entry of src into dst.
+//
+// Symlinks rather than copies: a blueprint is small, but the store is
+// content-addressed and copying its bytes into a second tree would make
+// two answers to "what is this content" where the design has exactly
+// one. Absolute targets, so the mirror survives being renamed from
+// staging into place.
+//
+// node_modules is skipped if the store somehow has one, since this is
+// the tree that owns that directory.
+func mirrorInto(dst, src string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	absSrc, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == nodeModulesDirName {
+			continue
+		}
+		if err := os.Symlink(filepath.Join(absSrc, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
 }

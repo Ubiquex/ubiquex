@@ -146,6 +146,18 @@ type TSDepMount struct {
 	// Imports is the blueprint's OWN declared imports, absolutised, to
 	// be applied in a scope covering only this blueprint's directory.
 	Imports map[string]string
+
+	// EvalDir is the directory the blueprint is evaluated FROM, which is
+	// its content-store directory unless it has npm dependencies, in
+	// which case it is the mirror holding their node_modules
+	// (tslock.go).
+	//
+	// A separate field rather than reassigning ResolvedDep.Dir: that one
+	// means "the verified content", and the lock, the receipts and the
+	// provenance ref all rest on it meaning exactly that. This one means
+	// "where the module graph is rooted", which is the same directory
+	// only when nothing had to be materialised.
+	EvalDir string
 }
 
 // ResolveTSDependencies resolves every declared blueprint and reports
@@ -174,9 +186,19 @@ func ResolveTSDependencies(ctx context.Context, entryFile string) ([]TSDepMount,
 		// Fetch-and-verify before evaluation, never during it. deno takes
 		// one --lock per invocation, so the blueprint's own lock can only
 		// be enforced in an invocation of its own (tslock.go).
+		evalDir := r.Dir
 		if own.NeedsPrefetch {
-			if err := prefetchTSBlueprintDeps(ctx, r.Dir, r.Dep.Name); err != nil {
+			mirror, err := materializeBlueprintDeps(ctx, r.Dir, r.ContentHash, r.Dep.Name)
+			if err != nil {
 				return nil, nil, err
+			}
+			// Evaluate from the mirror, so the entry file has the
+			// blueprint's node_modules beside it. Pointing at the store
+			// would put the module graph one directory away from its own
+			// dependencies, which is the bug this fixes.
+			evalDir = mirror
+			if rel, err := filepath.Rel(r.Dir, entry); err == nil {
+				entry = filepath.Join(mirror, rel)
 			}
 		}
 		mounts = append(mounts, TSDepMount{
@@ -184,6 +206,7 @@ func ResolveTSDependencies(ctx context.Context, entryFile string) ([]TSDepMount,
 			Specifier:   r.Dep.Name,
 			EntryFile:   entry,
 			Imports:     own.Imports,
+			EvalDir:     evalDir,
 		})
 	}
 	return mounts, notes, nil

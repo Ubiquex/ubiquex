@@ -109,3 +109,59 @@ func TestVerify_InvariantUnderRename(t *testing.T) {
 		t.Fatalf("Verify after rename: %v (content hash should be invariant under which directory the blueprint lives in)", err)
 	}
 }
+
+// TestVerify_NamesTheNpmInstallCause: installing a TypeScript
+// blueprint's dependencies in its own directory is a reasonable thing to
+// do, and `npm install` is the reflex. It writes a package-lock.json,
+// which is an ordinary file and so becomes part of the content and
+// changes the hash.
+//
+// Without naming the cause, the message reports a file the author did
+// not knowingly create and leaves them to work out which command created
+// it. Worth a test because the tolerance is asymmetric and invisible:
+// node_modules is excluded and package-lock.json is not.
+func TestVerify_NamesTheNpmInstallCause(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "blueprint.ts"), []byte("export const x = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := buildManifest(dir, "bp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err != nil {
+		t.Fatalf("a freshly packaged blueprint must verify: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Verify(dir)
+	if err == nil {
+		t.Fatal("an added package-lock.json changes the content and must fail verification")
+	}
+	msg := err.Error()
+	for _, want := range []string{"npm install", "deno install", "node_modules"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal should name %q so the author knows what did this: %s", want, msg)
+		}
+	}
+
+	// node_modules is the asymmetry worth pinning: same directory, same
+	// kind of command, opposite outcome.
+	if err := os.Remove(filepath.Join(dir, "package-lock.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "left-pad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "left-pad", "index.js"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err != nil {
+		t.Fatalf("node_modules is excluded from the manifest and must not affect the hash: %v", err)
+	}
+}

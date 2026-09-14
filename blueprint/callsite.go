@@ -219,7 +219,7 @@ func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []
 		imports = append(imports, tseval.BlueprintImport{
 			Specifier: d.Specifier,
 			EntryFile: d.EntryFile,
-			Dir:       d.Dir,
+			Dir:       d.EvalDir,
 			Imports:   d.Imports,
 		})
 		receipts = append(receipts, d.Receipt)
@@ -227,10 +227,14 @@ func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []
 		// blueprint of several modules has frames from all of them, and
 		// the root is the prefix they share. Same value
 		// DiscoverTSBlueprintRoots builds for an imported directory.
+		// EvalDir, not Dir: provenance matches on where the FRAMES come
+		// from, and they come from wherever the module graph was rooted.
+		// The ref still carries the content hash, so what is attributed
+		// is unchanged; only the prefix used to recognise it moves.
 		declaredRoots = append(declaredRoots, BlueprintRoot{
-			Match: (&url.URL{Scheme: "file", Path: d.Dir}).String(),
+			Match: (&url.URL{Scheme: "file", Path: d.EvalDir}).String(),
 			Name:  d.Dep.Name,
-			Dir:   d.Dir,
+			Dir:   d.EvalDir,
 			Ref:   d.Ref,
 		})
 	}

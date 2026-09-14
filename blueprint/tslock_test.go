@@ -127,20 +127,17 @@ func TestGenerateTSLock_NoNPMDepsMakesNoNetworkCall(t *testing.T) {
 	})
 }
 
-// TestPrefetchTSBlueprintDeps_EnforcesTheLock is what the fetch pass
-// exists for, and it is worth being precise about why.
+// TestMaterializeBlueprintDeps_EnforcesTheLock is what the pass exists
+// for, and it is worth being precise about why.
 //
-// The pass is NOT what makes the dependency available. Verified by
-// removing it and evaluating against a cold cache: deno fetches npm
-// packages itself during evaluation and the blueprint runs fine, because
-// --no-remote does not block npm. What the pass buys is that those bytes
-// are checked against the blueprint's OWN lock before anything runs.
-// Without it, evaluation would fetch whatever the registry served and
-// record it in a throwaway lock, so the blueprint's lock would be
+// It is not only about making the dependency available. What it buys on
+// top of that is that the bytes are checked against the blueprint's OWN
+// lock before anything runs. Without that, evaluation would take
+// whatever the registry served and the blueprint's lock would be
 // decorative.
 //
 // So the property to pin is the refusal, not the success.
-func TestPrefetchTSBlueprintDeps_EnforcesTheLock(t *testing.T) {
+func TestMaterializeBlueprintDeps_EnforcesTheLock(t *testing.T) {
 	requireNPMLive(t)
 	dir := t.TempDir()
 	t.Setenv("DENO_DIR", t.TempDir())
@@ -156,10 +153,27 @@ func TestPrefetchTSBlueprintDeps_EnforcesTheLock(t *testing.T) {
 	}
 
 	// An honest lock fetches cleanly, against a cache that has never seen
-	// the package.
+	// the package, and produces a mirror with a node_modules in it.
 	t.Setenv("DENO_DIR", t.TempDir())
-	if err := prefetchTSBlueprintDeps(context.Background(), dir, "bp"); err != nil {
+	t.Setenv("HOME", t.TempDir())
+	evalDir, err := materializeBlueprintDeps(context.Background(), dir, "sha256:"+strings.Repeat("a", 64), "bp")
+	if err != nil {
 		t.Fatalf("an honest lock must fetch: %v", err)
+	}
+	if evalDir == dir {
+		t.Fatal("a blueprint with npm dependencies must be evaluated from a mirror, not from the store")
+	}
+	if info, err := os.Stat(filepath.Join(evalDir, nodeModulesDirName)); err != nil || !info.IsDir() {
+		t.Fatalf("the mirror must carry a node_modules: %v", err)
+	}
+	// The store is untouched. That property is load-bearing for the
+	// content-addressed layout, so it is asserted rather than assumed.
+	if _, err := os.Stat(filepath.Join(dir, nodeModulesDirName)); !os.IsNotExist(err) {
+		t.Error("the content store must not gain a node_modules")
+	}
+	// And the blueprint's own files are reachable through the mirror.
+	if _, err := os.Stat(filepath.Join(evalDir, "blueprint.ts")); err != nil {
+		t.Errorf("the mirror must expose the blueprint's own source: %v", err)
 	}
 
 	// A tampered one does not. This is the whole mechanism: the lock is
@@ -172,7 +186,8 @@ func TestPrefetchTSBlueprintDeps_EnforcesTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("DENO_DIR", t.TempDir())
-	err = prefetchTSBlueprintDeps(context.Background(), dir, "bp")
+	t.Setenv("HOME", t.TempDir())
+	_, err = materializeBlueprintDeps(context.Background(), dir, "sha256:"+strings.Repeat("b", 64), "bp")
 	if err == nil {
 		t.Fatal("bytes that do not match the blueprint's lock must be refused")
 	}
@@ -204,4 +219,90 @@ func replaceIntegrity(lock string) string {
 		return lock
 	}
 	return lock[:start] + strings.Repeat("A", end) + lock[start+end:]
+}
+
+// TestMirrorIntact is the reuse gate, tested directly because the
+// end-to-end path does not currently exercise it.
+//
+// A mirror is a directory of symlinks into wherever the blueprint was
+// staged. For a blueprint declared from a LOCAL path that is a temp
+// directory, and today those are never cleaned up, so the links happen
+// to stay valid and a presence-only check happens to pass. That is luck,
+// not design: the OS clears that tree, and cleaning it up is an obvious
+// future fix which would silently turn every reused mirror into a
+// directory of dangling links pointing at nothing.
+//
+// The gate asks whether the mirror still resolves, not whether it
+// exists.
+func TestMirrorIntact(t *testing.T) {
+	store := t.TempDir()
+	for _, f := range []string{"blueprint.ts", "package.json"} {
+		if err := os.WriteFile(filepath.Join(store, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mirror := t.TempDir()
+	if err := mirrorInto(mirror, store); err != nil {
+		t.Fatal(err)
+	}
+
+	// No node_modules yet: not a usable mirror, whatever else is true.
+	if mirrorIntact(mirror, store) {
+		t.Error("a mirror without node_modules is not ready to evaluate from")
+	}
+	if err := os.Mkdir(filepath.Join(mirror, nodeModulesDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !mirrorIntact(mirror, store) {
+		t.Fatal("a complete mirror must be reusable")
+	}
+
+	// The staging directory goes away. Every symlink still EXISTS; none
+	// of them leads anywhere.
+	if err := os.RemoveAll(store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(mirror, "blueprint.ts")); err != nil {
+		t.Fatalf("test bug: the symlink should still be present: %v", err)
+	}
+	if mirrorIntact(mirror, "") {
+		t.Error("a mirror of a source that is gone must not be reused")
+	}
+}
+
+// TestMirrorInto_LeavesTheSourceAlone: the content store is immutable by
+// design and a great deal rests on that, which is the whole reason the
+// dependencies are materialised beside it rather than in it.
+func TestMirrorInto_LeavesTheSourceAlone(t *testing.T) {
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, "blueprint.ts"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirror := t.TempDir()
+	if err := mirrorInto(mirror, store); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mirror, nodeModulesDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadDir(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("the store gained entries: %d -> %d", len(before), len(after))
+	}
+	// Symlinks, not copies: the store is the one answer to "what is this
+	// content", and a second full copy would make two.
+	info, err := os.Lstat(filepath.Join(mirror, "blueprint.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("mirror entries should be symlinks rather than copies")
+	}
 }
