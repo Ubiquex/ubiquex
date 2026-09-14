@@ -143,6 +143,9 @@ type TSDepMount struct {
 	Specifier string
 	// EntryFile is the absolute path the import map points at.
 	EntryFile string
+	// Imports is the blueprint's OWN declared imports, absolutised, to
+	// be applied in a scope covering only this blueprint's directory.
+	Imports map[string]string
 }
 
 // ResolveTSDependencies resolves every declared blueprint and reports
@@ -164,7 +167,16 @@ func ResolveTSDependencies(ctx context.Context, entryFile string) ([]TSDepMount,
 		if err != nil {
 			return nil, nil, fmt.Errorf("blueprint dependency %q: %w", r.Dep.Name, err)
 		}
-		mounts = append(mounts, TSDepMount{ResolvedDep: r, Specifier: r.Dep.Name, EntryFile: entry})
+		own, err := tsBlueprintImports(r.Dir, r.Dep.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		mounts = append(mounts, TSDepMount{
+			ResolvedDep: r,
+			Specifier:   r.Dep.Name,
+			EntryFile:   entry,
+			Imports:     own,
+		})
 	}
 	return mounts, notes, nil
 }

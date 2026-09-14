@@ -73,7 +73,7 @@ func EvaluateWithBlueprintRoots(ctx context.Context, entryFile, blueprintRoots s
 // blueprintRoots beside it: this package threads what an evaluation
 // needs through its own signatures, and one convention is easier to
 // follow than two.
-func EvaluateWithBlueprints(ctx context.Context, entryFile, blueprintRoots string, blueprintImports map[string]string) ([]byte, error) {
+func EvaluateWithBlueprints(ctx context.Context, entryFile, blueprintRoots string, blueprintImports []BlueprintImport) ([]byte, error) {
 	rawCanon, err := core.DoubleRun(func() ([]byte, error) {
 		raw, errOut, err := runOnce(ctx, entryFile, blueprintRoots, blueprintImports)
 		if err != nil {
