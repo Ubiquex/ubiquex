@@ -374,7 +374,8 @@ var knownTopLevelKeys = map[string]bool{
 	"provider": true, "provider_config": true,
 	"providers": true, "thirdparty_providers": true, "provider_configs": true,
 	"dynamic_providers": true, "dynamic_provider_groups": true,
-	"k8s_audit": true, "ledger": true, "root": true,
+	"blueprints": true,
+	"k8s_audit":  true, "ledger": true, "root": true,
 	"intent": true, "known_dependents": true,
 }
 var knownProviderKeys = map[string]bool{"path": true, "source": true, "version": true}

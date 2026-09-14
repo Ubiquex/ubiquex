@@ -117,6 +117,23 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 
+			// Verify, never write. `ubx resolve` writes nothing today
+			// and this is not the change that should make it start: it
+			// prints a draft proposal and is reached by scripts that do
+			// not expect a working-tree mutation. `ubx plan` owns the
+			// writing, and already writes to .ubx/plans/.
+			//
+			// A stack whose lock has no entry for a declared blueprint
+			// is refused here rather than accepted, so "resolve passes"
+			// cannot mean less than "plan would pass". See
+			// stackForLock (plan.go) for why the key comes from config.
+			ctx = blueprint.WithLockPolicy(ctx, blueprint.LockPolicy{
+				LedgerDir: ledgerDir,
+				Stack:     stackForLock(cmd, cfg),
+				Declared:  cfg.Blueprints,
+				Mode:      blueprint.LockVerify,
+			})
+
 			var intent resolver.IntentFile
 			// UBI-267: whether this document was GENERATED rather than
 			// authored, which decides whether its op is a claim to check
