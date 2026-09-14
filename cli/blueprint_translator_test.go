@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -189,4 +190,153 @@ export default stack("platform", () => {
 	}
 
 	assertBlueprintProvenance(t, ledgerDir, "widgetplatform")
+}
+
+// writeTSCodeBlueprintWithOwnDep writes a TypeScript code blueprint that
+// imports something by a bare specifier its OWN deno.json declares.
+func writeTSCodeBlueprintWithOwnDep(t *testing.T, parent, name, label string) string {
+	t.Helper()
+	dir := filepath.Join(parent, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(f, c string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("deno.json", `{"imports":{"helper":"./helper.ts"}}`)
+	write("helper.ts", "export const label = () => "+strconv.Quote(label)+";\n")
+	write("blueprint.ts", `import { resource } from "@ubx/sdk";
+import { label } from "helper";
+
+export interface Config { name: string }
+
+export function `+name+`(c: Config) {
+  resource(
+    { wireType: "fake_widget", fields: { name: "name" } },
+    c.name,
+    { name: label() },
+  );
+}
+`)
+	if _, err := blueprint.Package(context.Background(), dir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatalf("package %s: %v", name, err)
+	}
+	return dir
+}
+
+// TestTranslator_TSBlueprintOwnDependency is UBI-274's TypeScript fix.
+//
+// A blueprint's own deno.json travels in the content store, verified and
+// hashed, and was ignored, so a blueprint importing anything by a bare
+// specifier could not run. That covers effectively every real blueprint,
+// since generated bindings are how you author one.
+//
+// The test also pins the property scopes buy, which is the part worth
+// protecting: consumer and blueprint declare the SAME specifier pointing
+// at different files, and each resolves its own. Python cannot do this,
+// because PYTHONPATH is one flat search order and one side loses.
+func TestTranslator_TSBlueprintOwnDependency(t *testing.T) {
+	requireDeno(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+
+	bpDir := writeTSCodeBlueprintWithOwnDep(t, dir, "tsbp", "the BLUEPRINT's helper")
+
+	stackDir := filepath.Join(dir, "stack")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(f, c string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(stackDir, f), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The consumer declares the same specifier, pointing somewhere else.
+	write("deno.json", `{"imports":{"helper":"./dep.ts"}}`)
+	write("dep.ts", `export const label = () => "the CONSUMER's helper";`+"\n")
+	write("stack.ts", `import { intent, stack, resource } from "@ubx/sdk";
+import { tsbp } from "tsbp";
+import { label } from "helper";
+
+export default stack("demo", () => {
+  intent({ summary: "consumer" });
+  resource({ wireType: "fake_widget", fields: { name: "name" } }, "consumer-side", { name: label() });
+  tsbp({ name: "blueprint-side" });
+});
+`)
+
+	writeStackConfigWithBlueprints(t, ledgerDir, "demo", map[string]string{"tsbp": bpDir})
+
+	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "plan", filepath.Join(stackDir, "stack.ts"),
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--timeout", "180s",
+	)
+	if err != nil {
+		t.Fatalf("a blueprint importing its own declared dependency must evaluate: %v\n%s", err, out)
+	}
+
+	// Each side resolved ITS OWN "helper". One flat namespace would have
+	// given both the same answer.
+	if !strings.Contains(out, "the BLUEPRINT's helper") {
+		t.Fatalf("the blueprint's own dependency did not resolve:\n%s", out)
+	}
+	if !strings.Contains(out, "the CONSUMER's helper") {
+		t.Fatalf("the consumer's own dependency was displaced by the blueprint's:\n%s", out)
+	}
+}
+
+// TestTranslator_TSRegistrySpecifierIsRefused pins the boundary: a
+// blueprint declaring a registry dependency is refused with a message
+// naming it, rather than reaching the network or failing later inside
+// Deno with a message about node_modules that names neither the
+// blueprint nor the reason.
+func TestTranslator_TSRegistrySpecifierIsRefused(t *testing.T) {
+	requireDeno(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+
+	bpDir := writeTSCodeBlueprintWithOwnDep(t, dir, "tsbp", "unused")
+	if err := os.WriteFile(filepath.Join(bpDir, "deno.json"),
+		[]byte(`{"imports":{"helper":"./helper.ts","sdkaws":"jsr:@ubx/sdk-aws@1.2.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blueprint.Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatal(err)
+	}
+
+	stackDir := filepath.Join(dir, "stack")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, "stack.ts"), []byte(`import { intent, stack } from "@ubx/sdk";
+import { tsbp } from "tsbp";
+
+export default stack("demo", () => {
+  intent({ summary: "consumer" });
+  tsbp({ name: "w1" });
+});
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStackConfigWithBlueprints(t, ledgerDir, "demo", map[string]string{"tsbp": bpDir})
+
+	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6"}, "plan", filepath.Join(stackDir, "stack.ts"),
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--timeout", "180s",
+	)
+	if err == nil {
+		t.Fatalf("a registry specifier must be refused, not fetched:\n%s", out)
+	}
+	msg := out + err.Error()
+	for _, want := range []string{"tsbp", "jsr:@ubx/sdk-aws@1.2.0", "GOPROXY=off", "UBI-274"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("refusal does not name %q:\n%s", want, msg)
+		}
+	}
 }

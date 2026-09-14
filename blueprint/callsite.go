@@ -212,11 +212,16 @@ func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	imports := map[string]string{}
+	imports := make([]tseval.BlueprintImport, 0, len(declared))
 	declaredRoots := make([]BlueprintRoot, 0, len(declared))
 	receipts := make([]string, 0, len(declared)+len(notes))
 	for _, d := range declared {
-		imports[d.Specifier] = d.EntryFile
+		imports = append(imports, tseval.BlueprintImport{
+			Specifier: d.Specifier,
+			EntryFile: d.EntryFile,
+			Dir:       d.Dir,
+			Imports:   d.Imports,
+		})
 		receipts = append(receipts, d.Receipt)
 		// Match is the blueprint ROOT's URL, not the entry file's: a
 		// blueprint of several modules has frames from all of them, and

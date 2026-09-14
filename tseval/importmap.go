@@ -3,6 +3,7 @@ package tseval
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,16 +106,50 @@ func absolutizeRelative(target, configDir string) string {
 // project's own entries, relative ones made absolute, with the embedded
 // runtime's "@ubx/sdk" layered over the top. Returns the path to write
 // and a cleanup func.
-// extra holds blueprint specifiers, layered between the project's own
-// entries and "@ubx/sdk".
+// BlueprintImport is one declared blueprint's contribution to the map.
+type BlueprintImport struct {
+	// Specifier is the bare name the CONSUMER imports, and EntryFile is
+	// the file it resolves to.
+	Specifier string
+	EntryFile string
+
+	// Dir is the blueprint's own root, used as a scope prefix.
+	Dir string
+
+	// Imports is the blueprint's OWN import map, from its own deno.json,
+	// with every target already absolute. Applied only to modules under
+	// Dir, so it cannot reach the consumer's code.
+	Imports map[string]string
+}
+
+// writeMergedImportMap builds the import map for one evaluation: the
+// project's own entries, relative ones made absolute, blueprint
+// specifiers layered over those, and the embedded runtime's "@ubx/sdk"
+// over the top.
 //
-// Above the project's, because a stack declaring a blueprint in
-// .ubx/config has said which one it wants, and a stale relative alias
-// left in a deno.json should not quietly win over it. Below "@ubx/sdk",
-// which stays absolute for the reason it always has: the runtime is
-// embedded in this binary so evaluation works offline and against the
-// runtime this binary shipped with.
-func writeMergedImportMap(entryDir, runtimePath string, extra map[string]string) (string, func(), error) {
+// Blueprint specifiers sit above the project's, because a stack
+// declaring a blueprint in .ubx/config has said which one it wants, and
+// a stale relative alias left in a deno.json should not quietly win over
+// it. "@ubx/sdk" stays absolute and last for the reason it always has:
+// the runtime is embedded in this binary so evaluation works offline and
+// against the runtime this binary shipped with.
+//
+// A blueprint's OWN imports go in a SCOPE rather than the top level.
+//
+// Scopes are what make a blueprint's dependency graph its own. A top
+// level map is one namespace shared by everything evaluated, so a
+// blueprint and the stack calling it would have to agree on every
+// specifier they both use, and whichever ubx merged last would silently
+// win for both. Scoped to the blueprint's own directory, each side
+// resolves its own, and a version disagreement stops being a conflict at
+// all.
+//
+// Python cannot do this: PYTHONPATH is one flat search order, so a
+// blueprint and its consumer necessarily share it and one of them loses.
+// Deno gives a better answer here and it is worth taking from the start,
+// rather than shipping the flat version and retrofitting scopes once
+// someone hits the collision.
+func writeMergedImportMap(entryDir, runtimePath string, blueprints []BlueprintImport) (string, func(), error) {
 	imports := map[string]string{}
 	if configPath := findDenoConfig(entryDir); configPath != "" {
 		configDir := filepath.Dir(configPath)
@@ -122,14 +157,29 @@ func writeMergedImportMap(entryDir, runtimePath string, extra map[string]string)
 			imports[specifier] = absolutizeRelative(target, configDir)
 		}
 	}
-	for specifier, target := range extra {
-		imports[specifier] = absolutizeRelative(target, entryDir)
+	scopes := map[string]map[string]string{}
+	for _, bp := range blueprints {
+		imports[bp.Specifier] = absolutizeRelative(bp.EntryFile, entryDir)
+		if len(bp.Imports) == 0 {
+			continue
+		}
+		// A scope prefix is a directory URL and must end in "/", or it
+		// matches nothing.
+		prefix := (&url.URL{Scheme: "file", Path: ensureTrailingSlash(bp.Dir)}).String()
+		scoped := make(map[string]string, len(bp.Imports))
+		for specifier, target := range bp.Imports {
+			scoped[specifier] = target
+		}
+		scopes[prefix] = scoped
 	}
 	imports["@ubx/sdk"] = runtimePath
 
-	data, err := json.Marshal(struct {
-		Imports map[string]string `json:"imports"`
-	}{Imports: imports})
+	doc := struct {
+		Imports map[string]string            `json:"imports"`
+		Scopes  map[string]map[string]string `json:"scopes,omitempty"`
+	}{Imports: imports, Scopes: scopes}
+
+	data, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("tseval: build import map: %w", err)
 	}
@@ -150,4 +200,14 @@ func writeMergedImportMap(entryDir, runtimePath string, extra map[string]string)
 		return "", nil, fmt.Errorf("tseval: build import map: %w", err)
 	}
 	return path, cleanup, nil
+}
+
+// ensureTrailingSlash makes a directory path usable as a scope prefix.
+// Deno matches a scope by string prefix against a module's URL, so
+// "file:///a/bp" would also match "file:///a/bpother/x.ts".
+func ensureTrailingSlash(dir string) string {
+	if strings.HasSuffix(dir, "/") {
+		return dir
+	}
+	return dir + "/"
 }
