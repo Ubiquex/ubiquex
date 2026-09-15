@@ -245,6 +245,16 @@ func ResolveGoDependencies(ctx context.Context, entryFile string) ([]GoDepMount,
 		if err != nil {
 			return nil, nil, fmt.Errorf("blueprint dependency %q: %w", r.Dep.Name, err)
 		}
+		// Refuse an unpinned blueprint before fetching anything, and
+		// fetch a pinned one before evaluation reaches it. The evaluator
+		// builds with GOPROXY=off, so the modules have to be on disk
+		// already (godeps.go).
+		if err := checkGoBlueprintPinned(dir, r.Dep.Name); err != nil {
+			return nil, nil, err
+		}
+		if err := prefetchGoBlueprintDeps(ctx, dir, r.Dep.Name); err != nil {
+			return nil, nil, err
+		}
 		mounts = append(mounts, GoDepMount{ResolvedDep: r, ModulePath: modPath, Dir: dir})
 	}
 	return mounts, notes, nil
