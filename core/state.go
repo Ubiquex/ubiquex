@@ -326,6 +326,31 @@ func (l *Ledger) FoldSources(addr Address) (sources []IntentSource, found bool, 
 	return sources, found, err
 }
 
+// FoldSourcesAt is FoldSources as of an earlier head, standing in the same
+// relation to it that FoldStateAt does to FoldState, and for the same
+// caller: UBI-227's restore rebuilds a target address's config as it
+// existed at an earlier head, and has to rebuild its provenance from that
+// same head or lose it.
+//
+// Losing it is not hypothetical. Until this existed, restore emitted every
+// reconstructed resource with no sources at all. A restore's modifies go
+// through the resolver, which sets Provider unconditionally, so the fold
+// read them as a hand-written re-declaration and CLEARED the blueprint
+// provenance of every resource a restore touched. Its creates dropped it
+// the same way, by carrying no sources key.
+//
+// So the one command whose purpose is putting a stack back the way it was
+// silently destroyed the record of what had declared it. Invisible until
+// UBI-284 gave a destroy somewhere to lose provenance from.
+func (l *Ledger) FoldSourcesAt(headID string, addr Address) (sources []IntentSource, found bool, err error) {
+	chain, err := l.ChainFrom(headID)
+	if err != nil {
+		return nil, false, fmt.Errorf("fold sources: %w", err)
+	}
+	_, sources, found, ferr := l.foldStateOverChain(chain, addr)
+	return sources, found, ferr
+}
+
 // FoldStateAt is FoldState's own real implementation, generalized to fold
 // over the chain as of headID rather than always the current Head() --
 // UBI-227's own restore reconstructs a target address's config as it
