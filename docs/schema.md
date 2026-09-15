@@ -2630,4 +2630,97 @@ to read on that signal is UBI-285's own decision, not taken here.
 built from the ledger's folded state rather than from an intent, so there
 is no source in hand to record, and recovering one means a chain walk
 plus a decision about which of several references produced a resource.
-That is UBI-284.
+That is UBI-284, and it is the amendment immediately below.
+
+### Amendment: destroy provenance (2026-09-15, UBI-284)
+
+**New, optional, additive field**: `DestroyEntry.sources []IntentSource`,
+the same shape creates have recorded since 2026-08-05 and modifies since
+the amendment above. It completes the set: every delta shape now records
+what declared the resource it touches.
+
+It matters most here. After a destroy ships the resource is gone, and this
+entry is the ledger's last word on it.
+
+#### Recovered, not carried
+
+Unlike a create or a modify, a destroy has no intent to copy from. `ubx
+resolve` is handed an address string and nothing else, and
+`core/resolver/destroys.go` builds the entry from `Ledger.FoldState`
+alone. So the provenance comes back out of the chain, via
+`Ledger.FoldSources`.
+
+That is the same fold, not a second walk. A resource's state and its
+provenance are two readings of one traversal, which is what makes the
+recorded pair checkable: the sources on a destroy entry are the sources of
+the operation that produced the state on that same entry.
+
+#### Which version, decided
+
+For a resource created by a blueprint at v1 and re-declared by the same
+blueprint at v2, this records **v2**.
+
+Not a preference between candidates. `DestroyEntry.state` is the folded
+*final* state rather than the state the resource was created with, and
+`sources` is folded the same way for the same reason. What is being
+destroyed is what v2 described. The earlier references remain in the
+chain, which is where a history belongs; this field is not one.
+
+#### An observation is not a re-declaration
+
+Folding provenance from whichever operation last changed state would be
+wrong, and the case that shows it is ordinary rather than exotic.
+
+`core/scan.go` builds a `drift_adopt` saying the cloud changed and the
+ledger should record it. It folds into state immediately on acceptance.
+It says nothing about what declares the resource, and a fold that took
+provenance from it would silently record "nothing declares this any more"
+every time a blueprint-managed resource drifted and was adopted.
+
+A hand-written modify is the opposite and must clear provenance:
+re-stating a declaration to nothing is a decision, re-stating nothing at
+all is not.
+
+So the fold replaces provenance only for an entry that re-states the
+declaration, and passes it through otherwise.
+
+#### That distinction is an inference, recorded here because it is one
+
+Nothing in this schema says "this entry re-states a declaration". The
+alternatives were a second hashed-content field on the heels of the one
+above, or reading `Proposal.kind`, which puts the signal on the proposal
+rather than the entry and quietly mis-sorts any kind added later.
+
+`Modification.provider` is read instead. That is not a coincidence: a
+record-only modify has nothing to apply and therefore no provider to apply
+it with, so `core/scan.go` leaves it nil at both its construction sites
+while `core/resolver` sets it unconditionally. A test enumerates every
+construction site so a new producer that sets neither fails rather than
+folding on the wrong side.
+
+The gap this seems to leave is empty rather than merely unlikely, and the
+argument is load-bearing enough to state here. `provider` is itself
+additive (UBI-43, 2026-07-18), so a modify resolved before it existed
+reads as record-only. That would matter only if such a modify could appear
+where provenance exists to clear. It cannot: resource-level `sources`
+arrived 2026-08-05, eighteen days later, so a create can only carry
+provenance if it was written after that date; the fold ignores every
+modify preceding the create that seeds it; and the ledger is append-only,
+so chain order is write order. Any modify whose classification could
+change an answer sits after a create written after 2026-08-05, hence after
+2026-07-18, hence carries `provider`.
+
+If `sources` is ever back-filled onto older creates, that argument lapses
+and this needs a real field.
+
+#### No `schema_version` bump
+
+Purely additive, on an already-pinned shape, by the same rule the
+amendment above sets out. A `DestroyEntry` carrying no sources marshals to
+byte-identical canonical content, and `deltaSortKey`'s own ordering of the
+destroys array reads only the fields it read before, so two proposals
+differing solely in provenance still canonicalize identically.
+
+The forward-compatibility consequence is the same one stated above, and is
+no longer silent: UBI-285 makes a binary that cannot fully read a ledger
+say so before `ubx verify`'s result is believed.
