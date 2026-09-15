@@ -296,6 +296,13 @@ func WithLockPolicy(ctx context.Context, p LockPolicy) context.Context {
 }
 
 // lockPolicyFrom returns ctx's own policy, or a LockOff zero value.
+// LockPolicyFrom is lockPolicyFrom for a caller outside this package
+// that needs to adjust one field and put it back, which the CLI does for
+// an HCL document's own stack (cli/plan.go).
+func LockPolicyFrom(ctx context.Context) LockPolicy {
+	return lockPolicyFrom(ctx)
+}
+
 func lockPolicyFrom(ctx context.Context) LockPolicy {
 	p, _ := ctx.Value(lockPolicyKey{}).(LockPolicy)
 	return p

@@ -429,3 +429,34 @@ func NeedsNetworkToPackage(dir string) bool {
 	}
 	return tsDeclaresNPMDeps(dir)
 }
+
+// installBlueprintDepsInPlace materialises a blueprint's npm
+// dependencies inside the blueprint directory itself.
+//
+// For a blueprint pulled into a throwaway directory, which is what a
+// LOCAL HCL call gets: there is no content hash to key a mirror on, and
+// the directory is gone when the command exits, so the reasons the
+// mirror exists do not apply. The store's immutability is not at stake
+// because this is not the store, and no second plan will reuse it
+// because there is nothing to reuse.
+//
+// --frozen still, so this stays a verification against the blueprint's
+// own lock rather than a fetch of whatever resolves today.
+func installBlueprintDepsInPlace(ctx context.Context, dir, name string) error {
+	if tsBlueprintLockPath(dir) == "" {
+		return fmt.Errorf("blueprint %q: no %s to fetch against", name, denoLockFileName)
+	}
+	deno, err := denoBinary("preparing a blueprint's npm dependencies")
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, deno, "install", "--frozen")
+	cmd.Dir = dir
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s", prefetchFailure(name, err, strings.TrimSpace(out.String())))
+	}
+	return nil
+}

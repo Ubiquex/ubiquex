@@ -466,7 +466,7 @@ func TestExpandCalls_CodeBlueprint_RealGoEvaluation(t *testing.T) {
 			},
 		}},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("expand a code blueprint's own call: %v", err)
 	}
 
@@ -549,7 +549,7 @@ func TestExpandCalls_CodeBlueprintOutputsAreReferenceable(t *testing.T) {
 			Args:      map[string]string{"name": "primary-widget"},
 		}},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("expand: %v", err)
 	}
 

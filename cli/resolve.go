@@ -156,6 +156,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
 				}
+				ctx = relockForHCLStack(ctx, stackForLock(cmd, cfg), parsed)
 				intent = *parsed
 				generated = true
 			case fromCode != "":
@@ -225,8 +226,12 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 			// produced them, before Resolve ever sees the document -- see
 			// resolver.IntentFile.BlueprintCalls's own doc comment for why
 			// this is the one shared splice point.
-			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
+			callReceipts, err := blueprint.ExpandCalls(ctx, &intent)
+			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("resolve: %w", err)}
+			}
+			for _, r := range callReceipts {
+				fmt.Fprintln(cmd.OutOrStdout(), r)
 			}
 
 			// UBI-86 Part 2: applied immediately after ExpandCalls (so an

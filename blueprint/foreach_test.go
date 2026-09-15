@@ -715,7 +715,7 @@ func TestExpandCalls_ForEach_CommaSeparatedListArg(t *testing.T) {
 			},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.BlueprintCalls) != 0 {
