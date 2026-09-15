@@ -1,0 +1,154 @@
+name: red-main-watch
+
+# Third watch in this repo, same shape as the other two, different
+# question. coverage-watch asks "has the schema grown past what the
+# corpus covers". orphan-branch-watch asks "is there real work nobody
+# asked main to absorb". This asks "is any main failing its own CI while
+# nobody is looking at it".
+#
+# The gap it closes is narrow and was real. On 2026-09-15 two pull
+# requests merged cleanly and left main unable to compile its tests: one
+# added a test calling a function with its then-current signature, the
+# other changed that signature and updated every call site that existed
+# on its own branch. Textually disjoint, semantically conflicting, so git
+# merged them without a conflict and both PRs were green against their
+# own bases.
+#
+# CI on main caught it immediately and correctly. It then sat red for
+# hours, because a red main is only visible to someone who goes and looks
+# at it, and nothing gave anyone a reason to.
+#
+# Branch protection with required checks does not prevent this shape: it
+# gates each PR against its own base, which is exactly where both PRs
+# were green. A merge queue is the thing that would, by testing the
+# combination before it lands. This watch is the backstop for as long as
+# there is no queue, and it stays useful afterwards for every other way
+# main can go red without a merge doing it.
+#
+# It covers every repository in the org, not this one, because a red main
+# is silent everywhere and most of the eighteen repos this one
+# coordinates are regenerated rather than read.
+
+on:
+  schedule:
+    # Daily rather than weekly, unlike the other two watches. Their
+    # questions have answers that change over days; this one is about
+    # something that should be fixed the same day it appears, and a
+    # weekly cadence would mean a main could be red for six days before
+    # anything said so.
+    - cron: "0 7 * * *" # 07:00 UTC, ahead of both weekly watches so a red main is known before anyone reads their reports
+  workflow_dispatch: {}
+  # Every merge to main here, so this repository's own regression is
+  # reported in minutes rather than the next morning. Other repos are
+  # covered by the daily sweep: this workflow cannot run on their pushes.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+env:
+  RED_MAIN_ISSUE_LABEL: red-main
+
+jobs:
+  red-main-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Is any main failing its own CI
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          # On a push, only this repository: the merge that just landed
+          # is the thing being asked about, and sweeping the org on every
+          # merge would spend twenty-nine API round trips to answer a
+          # question about one of them. The daily run has no --repo and
+          # covers everything.
+          scope=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            scope="--repo ${{ github.event.repository.name }}"
+          fi
+          python3 scripts/red_main_check.py $scope \
+            > "${{ runner.temp }}/red-main-report.txt" 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat "${{ runner.temp }}/red-main-report.txt"
+          set -e
+
+      # Provisioned by the workflow rather than assumed to exist.
+      # `gh issue create --label` fails outright on a label the
+      # repository does not have, so a watch that only ever fires during
+      # a real incident would discover the gap at the worst moment.
+      # orphan-branch-watch's own lost-merge label does not exist in this
+      # repository today, which is exactly that latent failure sitting
+      # unfired.
+      - name: Make sure the label exists
+        if: steps.check.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "$RED_MAIN_ISSUE_LABEL" \
+            --description "main is failing its own CI" \
+            --color B60205 \
+            --force
+
+      - name: Open or update the standing issue
+        if: steps.check.outputs.exit_code == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            echo "**A repository's \`main\` is failing its own CI.**"
+            echo
+            echo "Fix it or revert it. A red \`main\` means every branch cut from it starts red, and the next person to see a failure cannot tell whether they caused it."
+            echo
+            echo "Full workflow run: $run_url"
+            echo
+            echo '```'
+            cat "${{ runner.temp }}/red-main-report.txt"
+            echo '```'
+          } > "${{ runner.temp }}/red-main-body.md"
+
+          # One standing issue, updated rather than duplicated, the same
+          # convention coverage-watch and orphan-branch-watch already use:
+          # a daily run opening a new issue every day would bury the
+          # original under its own repetitions.
+          existing="$(gh issue list --label "$RED_MAIN_ISSUE_LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "${{ runner.temp }}/red-main-body.md"
+          else
+            gh issue create \
+              --title "A repository's main is failing CI" \
+              --label "$RED_MAIN_ISSUE_LABEL" \
+              --body-file "${{ runner.temp }}/red-main-body.md"
+          fi
+          exit 1
+
+      - name: Close the standing issue once every main is green
+        if: steps.check.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --label "$RED_MAIN_ISSUE_LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "Every \`main\` is green again."
+          fi
+
+      - name: Fail the run when the check could not answer
+        if: steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '1'
+        run: |
+          echo "red_main_check.py could not complete; see the log above."
+          exit 1
