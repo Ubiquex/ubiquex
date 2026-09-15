@@ -550,10 +550,7 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 				kept = append(kept, s)
 			}
 		}
-		result.Resources[i].Sources = append(kept, core.IntentSource{
-			Kind: "blueprint",
-			Ref:  blueprintRef,
-		})
+		result.Resources[i].Sources = append(kept, blueprintSource(blueprintRef, call, r))
 	}
 
 	callOutputs, err := resolveCallOutputs(callingStack, desc, result.Resources, result.BlueprintOutputs)
@@ -930,4 +927,36 @@ func sortedResolvedNames(resolved map[string]ResolvedDep) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// blueprintSource builds the provenance entry every resource a blueprint
+// call produces gets stamped with.
+//
+// Ref says which BYTES produced the resource. The declaration fields say
+// what ASKED for those bytes, which a content hash cannot be reversed
+// into and which nothing in the ledger recorded before UBI-282.
+//
+// The two call shapes carry it differently, which is the whole reason
+// this is a function rather than a literal:
+//
+//   - A DECLARED blueprint arrives already resolved against .ubx/config's
+//     own blueprints table, so r.Dep holds the table's own verbatim entry
+//     plus the three arguments Pull derived from it.
+//   - A DIRECT call names its source inline, so there is no table entry
+//     and no single verbatim string: the author wrote blueprint/ref/path
+//     as three separate fields and that IS the declaration.
+//
+// Declaration is therefore populated only in the first case. It means
+// "the blueprints table said exactly this", and inventing one for a
+// direct call by echoing call.Blueprint would make a reconciliation think
+// a table entry existed where none ever did.
+func blueprintSource(ref string, call resolver.BlueprintCall, r ResolvedDep) core.IntentSource {
+	s := core.IntentSource{Kind: "blueprint", Ref: ref}
+	if r.Dep.URL != "" {
+		s.Declaration = r.Dep.URL
+		s.DeclaredSource, s.DeclaredRev, s.DeclaredPath = r.Dep.Source, r.Dep.Ref, r.Dep.Path
+		return s
+	}
+	s.DeclaredSource, s.DeclaredRev, s.DeclaredPath = call.Blueprint, call.Ref, call.Path
+	return s
 }

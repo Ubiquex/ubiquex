@@ -168,6 +168,46 @@ type IntentSource struct {
 	// half of why's own "promoted from staging/8f3c…" rendering.
 	Base string `json:"base,omitempty"`
 
+	// The following four are populated only for Kind == "blueprint"
+	// (UBI-282): what was declared, as against Ref above, which is what
+	// it resolved to.
+	//
+	// Ref answers "which bytes produced this resource". Until these
+	// existed, nothing in the ledger answered "which tag, URL or path
+	// asked for those bytes", and a content hash is not reversible into
+	// one. The two places that knew were ~/.ubx/blueprints/index.json, a
+	// machine-local cache that accumulates every source ever observed to
+	// produce a hash and so is not even a function, and
+	// .ubx/blueprints.lock, which holds only the CURRENT mapping, making
+	// the provenance of an older head a git-history question and
+	// unanswerable at all for a ledger read without its repository.
+	//
+	// So this is recorded in the ledger rather than derived: permanent,
+	// hashed, and signed with the proposal that used it.
+	//
+	// Declaration is the declared source verbatim, exactly as written.
+	// The rest are what blueprint.Pull derives from it. Both, rather
+	// than either, and for different reasons: .ubx/config's own
+	// blueprints table is map[name]string, so the verbatim form IS the
+	// table's own unit and is what any reconciliation writes back, while
+	// the derived triple pins how ubx UNDERSTOOD that string at the time.
+	// A later revision of the URL parsing would otherwise silently change
+	// what an old declaration means, which is the same reasoning that
+	// puts resolved_at inside hashed content rather than recomputing it.
+	//
+	// DeclaredRev is the git ref (branch, tag or commit). Not "ref",
+	// because Ref above already means something else entirely here, and
+	// two fields called ref on one struct meaning the content hash and
+	// the git branch would be a trap rather than a shorthand.
+	//
+	// All empty for a source form that has no such part: an oci://
+	// reference embeds its own tag and sets neither rev nor path, and a
+	// local path has neither.
+	Declaration    string `json:"declaration,omitempty"`
+	DeclaredSource string `json:"declared_source,omitempty"`
+	DeclaredRev    string `json:"declared_rev,omitempty"`
+	DeclaredPath   string `json:"declared_path,omitempty"`
+
 	// The following are populated only for Kind == "cloudtrail" or
 	// "gcp_audit". ActorARN carries the GCP caller's principal email for
 	// "gcp_audit" sources, not literally an ARN -- reusing the same field
