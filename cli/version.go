@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime/debug"
 	"strings"
@@ -101,6 +102,70 @@ var currentGitHEAD = func() string {
 		return ""
 	}
 	return head[:7]
+}
+
+// binaryIsAncestorOfHEAD reports whether the commit this binary was
+// built from is strictly an ancestor of the checkout's HEAD: older, on
+// the same line of history, rather than merely different.
+//
+// A package var for the same reason currentGitHEAD is one: so the tests
+// never depend on a real checkout's real history.
+var binaryIsAncestorOfHEAD = func(built string) bool {
+	// --is-ancestor exits 0 for a commit and itself, so equality is
+	// filtered by the caller. It also exits non-zero for a commit this
+	// repository has never seen, which is what makes the unrelated case
+	// fall through to silence rather than needing its own probe.
+	return exec.Command("git", "merge-base", "--is-ancestor", built, "HEAD").Run() == nil
+}
+
+// warnIfBinaryOlderThanCheckout prints one line when this binary is
+// older than the checkout it is being run from.
+//
+// # Why a warning here and a refusal in sdk gen
+//
+// checkBuildFreshness refuses on ANY difference between the built commit
+// and HEAD, which is right for `ubx sdk gen`: rare, expensive, and once
+// observed regenerating every provider's data sources with the wrong
+// binding type from a stale binary.
+//
+// Applied to every command that rule is unusable. It would fire the
+// moment anyone commits, so during ordinary development it is wrong on
+// nearly every invocation, and a warning that is usually noise is one
+// people learn to skip. That would leave us worse off than silence,
+// because the rare real case would scroll past with the rest.
+//
+// So three states rather than two:
+//
+//   - EQUAL: silent. Nothing to say.
+//   - UNRELATED: silent. A binary built from a branch that was squashed
+//     and deleted has a commit this repository has never seen, which is
+//     ordinary and is not staleness.
+//   - STRICTLY BEHIND: warn. This is the case that cost real time twice,
+//     where a stale binary and a broken build look identical and the
+//     output is plausible either way.
+//
+// # What it cannot do
+//
+// It only helps while you are standing in the repository the binary was
+// built from. A stale copy earlier on your PATH, run from anywhere else,
+// is invisible to this and to anything else the binary could do about
+// it.
+func warnIfBinaryOlderThanCheckout(w io.Writer) {
+	if Version != "dev" {
+		return
+	}
+	built := buildInfoRevision()
+	if built == "" {
+		return
+	}
+	head := currentGitHEAD()
+	if head == "" || built == head {
+		return
+	}
+	if !binaryIsAncestorOfHEAD(built) {
+		return
+	}
+	fmt.Fprintf(w, "warning: this ubx was built from %s, and the checkout you are in is now at %s. Rebuild (`make build`) if you meant to run your own changes.\n", built, head)
 }
 
 // checkBuildFreshness is UBI-186 follow-up's own real, live-found fix:
