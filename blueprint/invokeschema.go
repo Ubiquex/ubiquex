@@ -178,10 +178,22 @@ func writeTSSchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 			s.Entrypoint.Function, body, strings.Join(entries, "\n"))
 	}
 
+	// `export default`, not a bare `stack(...)`. The evaluator's runner
+	// imports this file's DEFAULT export and calls evaluate() on it
+	// (tseval/runner.go), so a caller that only calls stack() at top
+	// level is not a program the evaluator can run:
+	//
+	//	error: Uncaught SyntaxError: The requested module '.../caller.ts'
+	//	does not provide an export named 'default'
+	//
+	// Which means a TypeScript blueprint written as CODE could not be
+	// called from HCL at all, with or without dependencies. The Ubxfile
+	// path next door (writeTSCaller, invoke.go) has always written the
+	// export; this one never did, and no test reached it.
 	src := fmt.Sprintf(`import { %s } from "@ubx/sdk";
 import { %s } from %s;
 
-stack(%s, () => {
+export default stack(%s, () => {
   intent({ summary: %s });
   %s
 });
