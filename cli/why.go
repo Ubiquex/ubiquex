@@ -636,6 +636,7 @@ func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent s
 		} else {
 			fmt.Fprintf(out, "%s%s blueprint %s:sha256:%s\n", indent, label, name, st.Hash(hash))
 		}
+		writeBlueprintDeclaration(out, indent, s)
 		fmt.Fprintf(out, "%s  (this resource's own creation is signed by the CALLING stack's own acceptance below; "+
 			"the blueprint's own authorship has no separate signing ceremony in this build yet)\n", indent)
 	default:
@@ -716,4 +717,62 @@ func transitionViews(ts []core.Transition) []transitionView {
 		})
 	}
 	return out
+}
+
+// writeBlueprintDeclaration renders what ASKED for a blueprint, beneath
+// the ref naming which bytes it resolved to (UBI-282).
+//
+// The ref alone answers the wrong half of the question. Someone running
+// `ubx why` months later wants to know which tag or path produced this,
+// and a content hash cannot be reversed into one. A declaration recorded
+// in the ledger and never shown would be a record for a machine rather
+// than for a person, which is not what this command is for.
+//
+// The parsed rev and path are printed even though the verbatim
+// declaration usually contains them. That redundancy is the point: it
+// shows how ubx UNDERSTOOD the string, which is exactly why both forms
+// are stored, and a disagreement between the two lines is worth seeing
+// rather than hiding.
+func writeBlueprintDeclaration(out io.Writer, indent string, s core.IntentSource) {
+	switch {
+	case s.Declaration != "":
+		fmt.Fprintf(out, "%s  declared as %s%s\n", indent, s.Declaration, declaredParts(s))
+	case s.DeclaredSource != "":
+		// No blueprints table entry: the call named its source inline, so
+		// there is no verbatim declaration to quote. Said differently
+		// rather than dressed up as one, since a reconciliation that
+		// treated this as a table entry would be wrong.
+		fmt.Fprintf(out, "%s  called directly: %s%s\n", indent, s.DeclaredSource, declaredParts(s))
+	default:
+		// Every proposal resolved before UBI-282. Named rather than left
+		// blank: "nothing recorded this" and "this had no declaration"
+		// are different answers, and silence reads as the second.
+		fmt.Fprintf(out, "%s  (no declaration recorded -- resolved before ubx recorded one)\n", indent)
+	}
+}
+
+// declaredParts renders the derived rev/path clause, empty when the
+// source form has neither -- an oci:// reference embeds its own tag, and
+// a local path has nothing to embed.
+//
+// Suppressed per part when the verbatim declaration already says it
+// literally. Printing "git+https://x/y.git#ref=v2.1.0&path=ci at v2.1.0,
+// path ci" spends a line repeating the line above it, and a reader
+// reasonably takes that for a bug rather than for corroboration.
+//
+// The point of storing both forms survives the trim: the clause still
+// appears wherever the parse is NOT evident from the string, which is
+// exactly where a reader cannot check it themselves and where a future
+// change to the URL parsing would show up.
+func declaredParts(s core.IntentSource) string {
+	var b strings.Builder
+	if s.DeclaredRev != "" && !strings.Contains(s.Declaration, s.DeclaredRev) {
+		fmt.Fprintf(&b, " at %s", s.DeclaredRev)
+	}
+	if s.DeclaredPath != "" && s.DeclaredPath != "." && !strings.Contains(s.Declaration, s.DeclaredPath) {
+		fmt.Fprintf(&b, ", path %s", s.DeclaredPath)
+	}
+	// A leading ", path ..." with no "at ..." before it reads as a
+	// fragment; make it a clause of its own.
+	return strings.TrimPrefix(b.String(), ",")
 }

@@ -2724,3 +2724,102 @@ differing solely in provenance still canonicalize identically.
 The forward-compatibility consequence is the same one stated above, and is
 no longer silent: UBI-285 makes a binary that cannot fully read a ledger
 say so before `ubx verify`'s result is believed.
+
+### Amendment: blueprint declarations (2026-09-16, UBI-282)
+
+**Four new, optional, additive fields** on `IntentSource`, populated only
+for `kind: "blueprint"`: `declaration`, `declared_source`,
+`declared_rev`, `declared_path`.
+
+`ref` has always answered *which bytes* produced a resource
+(`"<name>:sha256:<hex>"`). Nothing answered *what asked for those bytes*,
+and a content hash is not reversible into a tag, a URL or a path.
+
+The two places that knew were both outside the ledger. `~/.ubx/
+blueprints/index.json` is a machine-local cache that accumulates every
+source ever observed to produce a given hash, so it is not even a
+function of it. `.ubx/blueprints.lock` holds only the *current* mapping,
+which makes the declaration behind an older head a git-history question
+and unanswerable at all for a ledger read without its repository.
+
+So the declaration is recorded in the ledger beside the ref: permanent,
+hashed, and signed with the proposal that used it. The lock keeps its own
+job as the input pin for a fresh clone. These are not alternatives. One
+records what was asked for at the time; the other pins what a future
+resolution should fetch.
+
+#### Both the verbatim form and the parse
+
+`declaration` is the declared source exactly as written. The other three
+are what `blueprint.Pull` derived from it.
+
+Both, rather than either. `.ubx/config`'s own blueprints table is
+`map[name]string`, so the verbatim string *is* the table's own unit and
+is what any reconciliation of that table writes back. The derived triple
+pins how ubx **understood** that string at the time: a later revision of
+the URL parsing would otherwise silently change what an old declaration
+means. That is the same reasoning that puts `resolved_at` inside hashed
+content rather than recomputing it on read.
+
+`declared_rev`, not `declared_ref`, because `ref` already means the
+content-hash reference on this struct. Two fields named `ref` on one
+struct, one meaning a content hash and the other a git branch, is a trap
+rather than a shorthand.
+
+#### Declared and called directly are different, and stay different
+
+`declaration` is populated only when the blueprints table declared the
+blueprint. A call that names its source inline has no table entry, so it
+records the derived triple and leaves `declaration` empty.
+
+Echoing the call's own source into `declaration` would be the easy
+mistake and would make a future table reconciliation believe an entry
+existed where none ever did.
+
+#### No `schema_version` bump, and one correction to how that was justified
+
+Purely additive with `omitempty`, so a source carrying none produces
+byte-identical canonical content and nothing stored is revalued.
+
+The forward-compatibility consequence needs stating precisely, because
+this ticket's own original cost analysis got it wrong. It reasoned that
+`Delta.Creates` is `[]json.RawMessage` and preserves bytes verbatim, so a
+field added inside `sources` could not break a chain. That was true when
+creates were the only carrier. Three typed fields now hold
+`[]IntentSource`: `Intent.Sources`, `Modification.Sources` (UBI-281) and
+`DestroyEntry.Sources` (UBI-284). Creates remain immune; the other two
+are not.
+
+So a binary predating these fields, reading a ledger whose modify or
+destroy carries a blueprint declaration, drops them and reports the chain
+as broken. Verified against the real binary, which now names the field it
+could not read before the verdict rather than leaving a bare `BROKEN`.
+That is UBI-285, and it is why that one landed first.
+
+#### Rendered, not merely recorded
+
+`ubx why` prints the declaration beneath the ref, including an explicit
+line for a proposal resolved before these fields existed. A declaration
+recorded and never shown would be a record for a machine rather than for
+a person, and `ubx why` is the command whose entire purpose is answering
+where a resource came from.
+
+The parsed rev and path are suppressed where the verbatim declaration
+already states them literally, and shown where it does not. The
+redundancy is worth a line only where a reader could not otherwise check
+the parse themselves.
+
+#### Out of scope, deliberately
+
+Reconciling the whole blueprints table against an earlier head. That is
+a consumer of this data and is separate work: a stack declares several
+blueprints, and restoring to an earlier head has to reconcile entries
+that moved, entries the head used and the table no longer has, and
+entries the table has that the head never used.
+
+Arguments are also out of scope, and not because they were forgotten.
+`ExpandCalls` expands calls into resources and clears `blueprint_calls`,
+so a resolved proposal records the expanded result and never the argument
+that produced it. Recovering an argument from the ledger is unavailable
+in either language, which is a separate finding and not one more
+declaration field can address.
