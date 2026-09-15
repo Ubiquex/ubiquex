@@ -2,6 +2,7 @@ package goeval
 
 import (
 	"context"
+	"golang.org/x/mod/modfile"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,5 +169,90 @@ func TestFindWorkspace_GoworkOff(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 	if got := findWorkspace(dir); got != "" {
 		t.Fatalf("GOWORK=off must disable workspace mode, got %q", got)
+	}
+}
+
+// TestWriteBuildWorkspace_GoDirectiveTakesTheHighestMember is the bug a
+// declared blueprint exposed in this file's own first version.
+//
+// The workspace's go directive used to come from the program's own
+// go.mod, on the reasoning that a workspace cannot demand less than what
+// the program was written against. True, and not the whole rule: Go also
+// refuses a workspace that lists a module wanting MORE than the
+// workspace declares.
+//
+//	go: module .../blueprint listed in go.work file requires
+//	go >= 1.26.3, but go.work lists go 1.23
+//
+// A blueprint is published independently of the stacks that call it, so
+// being built against a newer toolchain is ordinary rather than an edge.
+func TestWriteBuildWorkspace_GoDirectiveTakesTheHighestMember(t *testing.T) {
+	writeMod := func(dir, mod, goVersion string) string {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "module " + mod + "\n"
+		if goVersion != "" {
+			body += "\ngo " + goVersion + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	root := t.TempDir()
+	build := filepath.Join(root, "build")
+	if err := os.MkdirAll(build, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	moduleRoot := writeMod(filepath.Join(root, "stack"), "example.com/stack", "1.23")
+	moduleCopy := writeMod(filepath.Join(build, "stack"), "example.com/stack", "1.23")
+	newer := writeMod(filepath.Join(root, "bp-newer"), "example.com/newer", "1.26.3")
+	older := writeMod(filepath.Join(root, "bp-older"), "example.com/older", "1.21")
+
+	t.Setenv("GOWORK", "off")
+	dest, err := writeBuildWorkspace(build, moduleRoot, moduleCopy, []string{newer, older})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := modfile.ParseWork(dest, data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wf.Go == nil {
+		t.Fatalf("the workspace needs a go directive, or it implicitly requires 1.18:\n%s", data)
+	}
+	if wf.Go.Version != "1.26.3" {
+		t.Fatalf("go directive = %q, want 1.26.3, the highest any member asks for:\n%s", wf.Go.Version, data)
+	}
+}
+
+// TestHighestGoDirective_ComparesAsVersionsNotStrings: string ordering
+// puts "1.9" above "1.23", which would synthesize a workspace that
+// refuses the very module it was built for.
+func TestHighestGoDirective_ComparesAsVersionsNotStrings(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, v string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("module example.com/m\n\ngo "+v+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if got := highestGoDirective(nil, []string{write("a", "1.9"), write("b", "1.23")}); got != "1.23" {
+		t.Errorf("got %q, want 1.23: 1.23 is newer than 1.9 despite sorting before it", got)
+	}
+	// A go.mod with no directive, or one that is not there at all, is not
+	// an error and must not become the answer.
+	missing := filepath.Join(dir, "absent", "go.mod")
+	if got := highestGoDirective(nil, []string{missing}); got != "" {
+		t.Errorf("got %q, want no directive at all", got)
 	}
 }

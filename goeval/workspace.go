@@ -2,6 +2,7 @@ package goeval
 
 import (
 	"fmt"
+	"go/version"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,25 +177,40 @@ func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string, blueprintDirs 
 		}
 	}
 
-	// A synthesized workspace needs a go directive of its own. Without
-	// one it implicitly requires go 1.18 and then refuses every module
-	// that asks for more ("module . listed in go.work file requires go
-	// >= 1.23, but go.work implicitly requires go 1.18"). The module's
-	// own directive is the right floor: it is what the program was
-	// written against, and a workspace cannot sensibly demand less.
-	if out.Go == nil {
-		if v := goDirectiveOf(filepath.Join(moduleCopy, "go.mod")); v != "" {
-			if err := out.AddGoStmt(v); err != nil {
-				return "", err
-			}
-		}
-	}
-
 	// A workspace that does not list this module is legal (GOWORK can
 	// name any file), and a synthesized one has not listed it yet. The
 	// copy has to be usable either way.
 	if !sawModule {
 		if err := out.AddUse(filepath.ToSlash(copyPath), ""); err != nil {
+			return "", err
+		}
+	}
+
+	// A workspace's go directive has to be at least the HIGHEST any of its
+	// members asks for, not the program's own.
+	//
+	// Without any directive it implicitly requires go 1.18 and refuses
+	// every module that asks for more ("module . listed in go.work file
+	// requires go >= 1.23, but go.work implicitly requires go 1.18"). The
+	// first version of this used the program's own directive, on the
+	// reasoning that a workspace cannot sensibly demand less than what
+	// the program was written against. That was right while the program
+	// was the only member, and became wrong the moment a blueprint
+	// joined: a blueprint built against a newer Go is refused by the same
+	// rule, one version number later.
+	//
+	//	go: module .../blueprint listed in go.work file requires
+	//	go >= 1.26.3, but go.work lists go 1.23
+	//
+	// A blueprint is published independently and may well be built
+	// against a newer toolchain than the stack calling it, so this is the
+	// ordinary case rather than an edge. Found by declaring one.
+	members := []string{filepath.Join(moduleCopy, "go.mod")}
+	for _, dir := range blueprintDirs {
+		members = append(members, filepath.Join(dir, "go.mod"))
+	}
+	if v := highestGoDirective(out.Go, members); v != "" {
+		if err := out.AddGoStmt(v); err != nil {
 			return "", err
 		}
 	}
@@ -227,6 +243,30 @@ func writeBuildWorkspace(buildDir, moduleRoot, moduleCopy string, blueprintDirs 
 // with "./", "../", or is absolute.
 func isLocalReplacePath(p string) bool {
 	return strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../") || filepath.IsAbs(p)
+}
+
+// highestGoDirective returns the highest go version among an existing
+// workspace directive and every listed go.mod, or "" when none of them
+// declares one.
+//
+// Compared with go/version rather than string ordering, which would put
+// "1.9" above "1.23" and produce a workspace that refuses the module it
+// was built for.
+func highestGoDirective(existing *modfile.Go, goMods []string) string {
+	best := ""
+	if existing != nil {
+		best = existing.Version
+	}
+	for _, path := range goMods {
+		v := goDirectiveOf(path)
+		if v == "" {
+			continue
+		}
+		if best == "" || version.Compare("go"+v, "go"+best) > 0 {
+			best = v
+		}
+	}
+	return best
 }
 
 // goDirectiveOf reads a go.mod's own go version, or "" when it has none
