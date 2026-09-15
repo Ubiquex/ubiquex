@@ -1035,10 +1035,6 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 		reacquire()
 	}
 
-	renderElapsed := func(d time.Duration) string {
-		return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
-	}
-
 	renderContent := func(address string, kind resourceOpKind, glyph, text, elapsed string) string {
 		// UBI-93: truncate BEFORE padding -- padding a truncated string
 		// back out to progressLineWidth would silently re-introduce the
@@ -1331,6 +1327,47 @@ func reportAlreadyApplied(out io.Writer, ledger *core.Ledger, p *core.Proposal, 
 // each line (docs/cli-output-spec.md: green = confirmations, red =
 // destroys/failures) -- the underlying "<state>: <address>" wording is
 // unchanged, so an existing substring assertion still finds it.
+// renderElapsed is the one spelling of a duration in ship's output.
+//
+// Package-level rather than a closure inside the progress printer,
+// because the closing summary's total has to be comparable to the
+// per-resource durations above it by construction. Two formatters would
+// eventually disagree, and the whole point of printing the total is that
+// a reader can hold it against the rows.
+func renderElapsed(d time.Duration) string {
+	return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// shipTotalElapsed renders how long the whole ship took, from the sealed
+// record's own timestamps.
+//
+// From the RECORD rather than a stopwatch in the CLI, so the number on
+// screen and the number in the ledger cannot disagree, and so `--json`
+// consumers are reading the same thing rather than a second measurement
+// of it.
+//
+// Returns "" when the summary is absent, either timestamp is missing or
+// unparseable, or the result would be negative. A summary with no total
+// has lost a detail; a summary with a wrong one is worse.
+func shipTotalElapsed(sum *core.ApplySummary) string {
+	if sum == nil {
+		return ""
+	}
+	started, err := time.Parse(time.RFC3339, sum.StartedAt)
+	if err != nil {
+		return ""
+	}
+	finished, err := time.Parse(time.RFC3339, sum.FinishedAt)
+	if err != nil {
+		return ""
+	}
+	d := finished.Sub(started)
+	if d < 0 {
+		return ""
+	}
+	return renderElapsed(d)
+}
+
 func printShipReport(out io.Writer, st *styler, rec *core.ApplyRecord) {
 	// UBI-84: no per-resource repeat block here -- UBI-83's own in-place
 	// row already showed every resource's own final state ("✓ <address>:
@@ -1349,13 +1386,29 @@ func printShipReport(out io.Writer, st *styler, rec *core.ApplyRecord) {
 	// e.g. forceDim's own metadata use). "shipped"/"outcome: shipped,"
 	// never "applied" (UBI-79) -- displayOutcome only ever touches this
 	// rendered text, never rec.Summary.Outcome's own stored/hashed value.
+	// The total is here because the per-resource durations above cannot
+	// answer the question a reader most often brings to them: did these
+	// run at the same time or one after the other.
+	//
+	// Each row shows that resource's OWN duration, measured from its
+	// first progress event, which only fires once the scheduler starts it
+	// and therefore only once its dependencies have applied. So two
+	// resources that each took a minute render identically whether they
+	// ran together or in sequence, and nothing else in the output
+	// distinguished them. Measured: an independent pair and a dependent
+	// pair with the same per-resource times differ only in the total,
+	// which was the one number not on screen.
+	total := ""
+	if e := shipTotalElapsed(rec.Summary); e != "" {
+		total = " " + st.Dim("· total "+e)
+	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s), %s, %s, %s -- outcome: %s",
+	fmt.Fprintln(out, st.forceBold(fmt.Sprintf("%d resource(s), %s, %s, %s -- outcome: %s%s",
 		len(rec.Resources),
 		st.Green(fmt.Sprintf("%d shipped", rec.Summary.ResourcesApplied)),
 		st.Red(fmt.Sprintf("%d failed", rec.Summary.ResourcesFailed)),
 		st.Dim(fmt.Sprintf("%d still unknown", rec.Summary.ResourcesStillUnknown)),
-		displayOutcome(rec.Summary.Outcome))))
+		displayOutcome(rec.Summary.Outcome), total)))
 }
 
 // shipJSON is `ubx ship --json`'s payload -- format:1, the same contract
