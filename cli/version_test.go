@@ -226,3 +226,107 @@ func TestCheckBuildFreshness_NoGitRepo_SkipsSilently(t *testing.T) {
 		t.Fatalf("expected no error when the current HEAD can't be determined, got: %v", err)
 	}
 }
+
+// TestWarnIfBinaryOlderThanCheckout is the three states, and the two
+// silent ones are the point.
+//
+// checkBuildFreshness refuses on ANY difference, which is right for the
+// one rare, expensive command it guards and unusable everywhere else: it
+// would fire the moment anyone commits, and a warning that is usually
+// noise is one people learn to skip. That would leave the rare real case
+// scrolling past with the rest.
+func TestWarnIfBinaryOlderThanCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		version    string
+		built      string
+		head       string
+		isAncestor bool
+		wantWarn   bool
+	}{
+		{
+			name: "strictly behind: the case that cost time twice",
+			// A binary built before commits that have since landed, run
+			// in the checkout that contains them. A stale binary and a
+			// broken build look identical here, and the output is
+			// plausible either way.
+			version: "dev", built: "aaaaaaa", head: "bbbbbbb", isAncestor: true, wantWarn: true,
+		},
+		{
+			name:    "equal: nothing to say",
+			version: "dev", built: "aaaaaaa", head: "aaaaaaa", isAncestor: true, wantWarn: false,
+		},
+		{
+			// A branch that was squashed and deleted leaves a binary
+			// whose commit this repository has never seen. Ordinary, and
+			// not staleness.
+			name:    "unrelated: a commit this repo has never seen",
+			version: "dev", built: "aaaaaaa", head: "bbbbbbb", isAncestor: false, wantWarn: false,
+		},
+		{
+			// A released build was never built against anyone's checkout
+			// and has nothing to compare against.
+			name:    "a released build says nothing",
+			version: "0.6.0", built: "aaaaaaa", head: "bbbbbbb", isAncestor: true, wantWarn: false,
+		},
+		{
+			name:    "outside a git checkout",
+			version: "dev", built: "aaaaaaa", head: "", isAncestor: true, wantWarn: false,
+		},
+		{
+			name:    "no VCS stamp at all",
+			version: "dev", built: "", head: "bbbbbbb", isAncestor: true, wantWarn: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer swapFreshnessProbes(tc.version, tc.built, tc.head, tc.isAncestor)()
+
+			var buf bytes.Buffer
+			warnIfBinaryOlderThanCheckout(&buf)
+
+			if got := buf.Len() > 0; got != tc.wantWarn {
+				t.Fatalf("warned = %v, want %v (output %q)", got, tc.wantWarn, buf.String())
+			}
+			if !tc.wantWarn {
+				return
+			}
+			// Both commits, or the reader cannot tell which way round it
+			// is or what to compare against.
+			for _, want := range []string{tc.built, tc.head, "make build"} {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("the warning does not name %q: %q", want, buf.String())
+				}
+			}
+		})
+	}
+}
+
+// TestWarnIfBinaryOlderThanCheckout_AsksGitOnlyWhenItHasTo: the ancestry
+// probe is a subprocess, and the equal case is by far the most common
+// one, so it must not pay for it.
+func TestWarnIfBinaryOlderThanCheckout_AsksGitOnlyWhenItHasTo(t *testing.T) {
+	calls := 0
+	defer swapFreshnessProbes("dev", "aaaaaaa", "aaaaaaa", true)()
+	restore := binaryIsAncestorOfHEAD
+	binaryIsAncestorOfHEAD = func(string) bool { calls++; return true }
+	defer func() { binaryIsAncestorOfHEAD = restore }()
+
+	var buf bytes.Buffer
+	warnIfBinaryOlderThanCheckout(&buf)
+	if calls != 0 {
+		t.Errorf("an equal commit must not shell out to git, got %d call(s)", calls)
+	}
+}
+
+// swapFreshnessProbes replaces the three package vars the check reads and
+// returns a func restoring them, so no test depends on a real checkout.
+func swapFreshnessProbes(version, built, head string, isAncestor bool) func() {
+	oldVersion, oldBuilt, oldHead, oldAnc := Version, buildInfoRevision, currentGitHEAD, binaryIsAncestorOfHEAD
+	Version = version
+	buildInfoRevision = func() string { return built }
+	currentGitHEAD = func() string { return head }
+	binaryIsAncestorOfHEAD = func(string) bool { return isAncestor }
+	return func() {
+		Version, buildInfoRevision, currentGitHEAD, binaryIsAncestorOfHEAD = oldVersion, oldBuilt, oldHead, oldAnc
+	}
+}

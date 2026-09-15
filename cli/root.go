@@ -10,6 +10,18 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "ubx",
 		Short: "ubx — the Ubiquex infrastructure change management CLI",
+		// One place rather than per-command, since the question "is this
+		// binary older than the checkout I am in" has the same answer for
+		// all of them, and a check that has to be remembered at each call
+		// site is one that will be missed at some of them: the hard
+		// refusal it complements sits at exactly one, and the two
+		// incidents since both landed on commands it does not cover.
+		//
+		// To STDERR, deliberately: several commands emit JSON on stdout
+		// and a warning there would corrupt it for anything parsing it.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+			warnIfBinaryOlderThanCheckout(cmd.ErrOrStderr())
+		},
 	}
 
 	root.AddCommand(newVersionCmd())
