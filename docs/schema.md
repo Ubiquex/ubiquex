@@ -2571,3 +2571,63 @@ entries — not an in-place edit of this section.
   silently mishandling them; a follow-up to give every medium's
   `document`/`dialogue` ref a portable convention is recommended, not
   built this session.
+
+### Amendment: modify provenance (2026-09-15, UBI-281)
+
+**New, optional, additive field**: `Modification.sources []IntentSource`,
+the same shape and the same `IntentSource` family a create already
+records.
+
+Until this, provenance lived only on creates. `Delta.Creates`' own IR
+resource nodes carry `sources`; `Modification` had no such field, and the
+resolver populated it only when building a create node. So a resource
+created by a blueprint at v1 and modified by the same blueprint at v2
+carried exactly one recorded reference, on the create, naming v1. Every
+later change was anonymous, and nothing in the ledger said the v2 change
+came from a blueprint at all.
+
+The resolver populates it from the same `e.ri.Sources` the create branch
+reads, in the same `resolveOnce` loop. Nothing new is computed: the
+source was already in hand at that point and was simply not recorded.
+
+#### No `schema_version` bump
+
+Purely additive, on an already-pinned shape, exactly as
+`Modification.depends_on` and `Modification.provider` were before it. A
+`Modification` carrying no sources marshals to byte-identical canonical
+content, so every proposal resolved before this field existed hashes
+exactly as it did. Verified against real ledgers written by the previous
+binary: `chain: intact`.
+
+Nothing about `Proposal`'s ratified hashed-content shape, domain prefix,
+or canonicalization rules changes.
+
+#### Forward compatibility, stated rather than assumed
+
+This field is hashed content on a **typed** shape, and that has a
+consequence worth writing down here because the last two additive fields
+had it and did not.
+
+`ubx verify` recomputes the chain by re-hashing the *deserialised*
+proposal. `encoding/json` silently drops any field the reading structs do
+not know. `Delta.Creates` is `[]json.RawMessage` and is therefore immune;
+`Modification` is typed and is not.
+
+So a binary predating this field, reading a ledger containing one, drops
+it, recomputes a different hash, and reports the chain as **broken**.
+`Modification.provider` (UBI-43) already had this property and it was
+never recorded. It is recorded now, and tracked as UBI-285.
+
+A `schema_version` gate would not detect this, since an additive field
+deliberately does not bump the version. A strict decode
+(`json.Decoder.DisallowUnknownFields`) names the real condition exactly:
+`unknown field "sources"`. Whether to warn, decline to verify, or refuse
+to read on that signal is UBI-285's own decision, not taken here.
+
+#### Not in this amendment
+
+`DestroyEntry` is unchanged and still records no provenance. A destroy is
+built from the ledger's folded state rather than from an intent, so there
+is no source in hand to record, and recovering one means a chain walk
+plus a decision about which of several references produced a resource.
+That is UBI-284.
