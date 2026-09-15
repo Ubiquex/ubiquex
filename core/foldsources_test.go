@@ -466,3 +466,40 @@ neither will be folded as record-only. If that is right, add the file to
 recordOnly above with the reason. If it is not, set Provider.`, strings.Join(bare, "\n  "))
 	}
 }
+
+// TestFoldSourcesAt_ReadsTheEarlierHead is the property restore depends
+// on: provenance as of a past head, not as of now.
+//
+// Without it, restore could only have asked for current provenance, which
+// for a resource whose declaration has since moved is the wrong answer,
+// and for one since destroyed is no answer at all.
+func TestFoldSourcesAt_ReadsTheEarlierHead(t *testing.T) {
+	l := Open(t.TempDir())
+	addr := Address{Stack: "s", Type: "aws_sqs_queue", Name: "q"}
+	seed := adoptWithSourcesForTest(t, l, addr, json.RawMessage(`{"id":"q-1","retention":86400}`), bpSource("queue:sha256:v1"))
+
+	shipDeclaredModifyForTest(t, l, addr,
+		map[string]json.RawMessage{"retention": json.RawMessage(`86400`)},
+		map[string]json.RawMessage{"retention": json.RawMessage(`259200`)},
+		bpSource("queue:sha256:v2"))
+
+	// Now: v2.
+	now, found, err := l.FoldSources(addr)
+	if err != nil || !found {
+		t.Fatalf("fold sources: found=%v err=%v", found, err)
+	}
+	if ref := onlyRef(t, now); ref != "queue:sha256:v2" {
+		t.Fatalf("current provenance = %q, want v2", ref)
+	}
+
+	// As of the seed head: v1, which is what a restore to that head has
+	// to record, so the provenance it writes describes the same moment as
+	// the config it writes.
+	then, found, err := l.FoldSourcesAt(seed.ID, addr)
+	if err != nil || !found {
+		t.Fatalf("fold sources at: found=%v err=%v", found, err)
+	}
+	if ref := onlyRef(t, then); ref != "queue:sha256:v1" {
+		t.Fatalf("provenance at the earlier head = %q, want v1", ref)
+	}
+}

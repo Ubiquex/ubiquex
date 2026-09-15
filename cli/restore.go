@@ -204,6 +204,22 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %s: %w", e.Address, err)}
 				}
 
+				// Provenance comes from the SAME head the config does, by
+				// the same fold. Restoring a resource's shape without its
+				// provenance would say the resource was declared by nothing,
+				// which is a claim rather than an absence: the fold treats a
+				// re-declaration naming no blueprint as a decision to stop
+				// being blueprint-managed.
+				//
+				// Until this call existed, that is exactly what a restore
+				// did, to every resource it touched, silently. Unlike the
+				// config it rebuilds, provenance a restore blanks cannot be
+				// recovered afterwards from anything.
+				historicalSources, _, err := ledger.FoldSourcesAt(targetHead, e.Address)
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %s: %w", e.Address, err)}
+				}
+
 				var historicalMap map[string]interface{}
 				if err := json.Unmarshal(historical, &historicalMap); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("restore: %s: decode historical state: %w", e.Address, err)}
@@ -277,18 +293,20 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 						continue
 					}
 					resources = append(resources, resolver.ResourceIntent{
-						Type:   e.Address.Type,
-						Name:   e.Address.Name,
-						Op:     resolver.OpModify,
-						Config: configBytes,
+						Type:    e.Address.Type,
+						Name:    e.Address.Name,
+						Op:      resolver.OpModify,
+						Config:  configBytes,
+						Sources: historicalSources,
 					})
 					continue
 				}
 				resources = append(resources, resolver.ResourceIntent{
-					Type:   e.Address.Type,
-					Name:   e.Address.Name,
-					Op:     resolver.OpCreate,
-					Config: configBytes,
+					Type:    e.Address.Type,
+					Name:    e.Address.Name,
+					Op:      resolver.OpCreate,
+					Config:  configBytes,
+					Sources: historicalSources,
 				})
 			}
 
