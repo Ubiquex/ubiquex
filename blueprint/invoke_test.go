@@ -649,3 +649,86 @@ func TestExpandCalls_ArgOrderBug_GoFallback_RequiredAfterDefaulted(t *testing.T)
 	}
 	assertArgOrderBugResourceCorrect(t, intent, 2592000, 10)
 }
+
+// TestExpandCalls_TSCodeBlueprint is the case that had no test and had
+// never worked.
+//
+// Two blueprint models reach HCL by two different caller writers.
+// writeTSCaller handles a blueprint BUILT from an Ubxfile, and every
+// TypeScript test above goes through it. writeTSSchemaCaller handles a
+// blueprint written as CODE, and nothing reached it, so nobody noticed
+// it emitted a bare `stack(...)` where the evaluator's runner imports
+// the file's DEFAULT export:
+//
+//	error: Uncaught SyntaxError: The requested module '.../caller.ts'
+//	does not provide an export named 'default'
+//
+// So a TypeScript blueprint written as code could not be called from an
+// HCL stack at all, dependencies or no dependencies. Reproduced on a
+// clean tree before fixing it.
+func TestExpandCalls_TSCodeBlueprint(t *testing.T) {
+	requireDenoToolchain(t)
+
+	dir := t.TempDir()
+	// A blueprint written as CODE: source plus a derived schema, and no
+	// Ubxfile anywhere. That is what sends invokeCall down the schema
+	// caller rather than the Ubxfile one.
+	if err := os.WriteFile(filepath.Join(dir, "blueprint.ts"), []byte(`import { resource } from "@ubx/sdk";
+
+export interface Config { queueName: string }
+
+export function widget(c: Config) {
+  resource(
+    { wireType: "fake_widget", fields: { name: "name" } },
+    c.queueName,
+    { name: c.queueName },
+  );
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Package(context.Background(), dir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatalf("package: %v", err)
+	}
+
+	intent := &resolver.IntentFile{
+		SchemaVersion: 1,
+		Kind:          resolver.IntentFileKind,
+		Stack:         "payments",
+		BlueprintCalls: []resolver.BlueprintCall{
+			{Name: "widget call", Blueprint: dir, Args: map[string]string{"queue_name": "payments-notifications"}},
+		},
+	}
+	if err := ExpandCalls(context.Background(), intent); err != nil {
+		t.Fatalf("ExpandCalls: %v", err)
+	}
+	if len(intent.Resources) != 1 {
+		t.Fatalf("expected exactly 1 resource, got %d: %+v", len(intent.Resources), intent.Resources)
+	}
+	if got := intent.Resources[0].Name; got != "payments-notifications" {
+		t.Fatalf("resource name = %q, want the argument the call passed", got)
+	}
+}
+
+// TestWriteTSSchemaCaller_ExportsDefault pins the one keyword directly,
+// so a regression is a unit failure naming the cause rather than a
+// SyntaxError from deno three layers down.
+func TestWriteTSSchemaCaller_ExportsDefault(t *testing.T) {
+	scratch := t.TempDir()
+	entry, err := writeTSSchemaCaller(scratch, t.TempDir(), "payments", "a call", &Schema{
+		Entrypoint: Entrypoint{Language: "ts", TSEntry: "blueprint.ts", Function: "widget"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The runner does `import def from <caller>` and calls def.evaluate().
+	// A caller that only calls stack() at top level is not a program it
+	// can run.
+	if !strings.Contains(string(src), "export default stack(") {
+		t.Fatalf("the caller must export its stack as default, or the evaluator cannot import it:\n%s", src)
+	}
+}
