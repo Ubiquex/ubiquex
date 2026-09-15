@@ -981,6 +981,12 @@ func newProgressPrinter(out io.Writer, st *styler, tty bool, termWidth int, kind
 			// printer's own renderElapsed never exceeds this in practice
 			// (a real `ubx ship` finishing in 100+ minutes is not a
 			// realistic case to budget column space for).
+			//
+			// A SECOND time field here (a per-row start offset) is the
+			// change this reservation makes look easy and which was
+			// measured and declined: see shipTotalElapsed's own comment
+			// for what it costs the text column and for the clock that
+			// has to exist first.
 			overhead += 1 + 6
 		}
 		w := termWidth - overhead
@@ -1345,6 +1351,35 @@ func renderElapsed(d time.Duration) string {
 // screen and the number in the ledger cannot disagree, and so `--json`
 // consumers are reading the same thing rather than a second measurement
 // of it.
+//
+// # If you are here to add a per-row start offset
+//
+// That was scoped and declined, and the reason it was declined is not
+// the reason it looks like.
+//
+// Rows showing when each resource STARTED would carry ordering per line
+// rather than leaving a reader to hold this total against the rows. It
+// costs 7 columns, and the text column is what pays: on an 80-column
+// terminal a realistic address leaves 33 columns of text today and 26
+// after, while a long address is already pinned at maxRowTextWidth's own
+// 20-column floor before any change. That buys ordering at the cost of
+// the reconciliation detail, which is what the row is for, and this
+// total already answers the ordering question.
+//
+// The cursor math is NOT the obstacle, which is worth saying because it
+// looks like it would be. The in-place redraw depends only on a row
+// never wrapping, and maxRowTextWidth already guarantees that and is
+// already parameterised by whether an elapsed field is present.
+//
+// The real prerequisite is a clock. The live printer has no ship-wide
+// start: it holds starts[address] per resource and nothing else. This
+// total reads the sealed record's StartedAt, set inside Ship AFTER the
+// printer was built, so the two are different clocks a moment apart. At
+// the second granularity both render in, they can disagree by a full
+// second, and a row would read 0:00 in a run whose total began a second
+// earlier. Thread one ship start through both before adding a column,
+// or the offsets will not line up with the total that is meant to
+// explain them.
 //
 // Returns "" when the summary is absent, either timestamp is missing or
 // unparseable, or the result would be negative. A summary with no total
