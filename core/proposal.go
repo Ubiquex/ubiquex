@@ -358,6 +358,39 @@ type DestroyEntry struct {
 	State     json.RawMessage `json:"state"`
 	DependsOn []string        `json:"depends_on,omitempty"`
 	Provider  *ProviderRef    `json:"provider,omitempty"`
+
+	// Sources is what declared the resource being destroyed (UBI-284),
+	// completing the provenance creates have carried since 2026-08-05 and
+	// modifies since UBI-281. A destroy was the last delta shape with no
+	// answer to "what produced this", which is the shape that matters
+	// most: after it ships, the resource is gone, and this entry is the
+	// ledger's final word on it.
+	//
+	// Unlike a create or a modify, a destroy has no intent in hand to copy
+	// this from. core/resolver/destroys.go builds one from
+	// Ledger.FoldState alone, given nothing but an address, so this is
+	// recovered from the chain rather than carried in: see
+	// Ledger.FoldSources, which is the same fold reading the same walk.
+	//
+	// It records the provenance of the state this entry destroys, not the
+	// resource's whole history. That is deliberate and mirrors State
+	// beside it, which is likewise the folded final value rather than
+	// every value the resource ever held. So for a resource created by a
+	// blueprint at v1 and re-declared by the same blueprint at v2, this
+	// names v2: the thing being destroyed is what v2 described. The
+	// earlier references are still in the chain, which is where a history
+	// belongs.
+	//
+	// Nil is ordinary and means no declaration claims the resource:
+	// hand-written, or blueprint-produced and since re-declared by hand.
+	//
+	// Additive and omitempty, the same rule Provider and
+	// Modification.Sources above already set: a proposal carrying none
+	// produces byte-identical canonical content to one resolved before
+	// this existed, so no stored ledger is revalued and SchemaVersion does
+	// not move. The forward-compatibility consequence is the same one, and
+	// UBI-285 now makes it audible rather than silent.
+	Sources []IntentSource `json:"sources,omitempty"`
 }
 
 // Delta is Proposal.Delta. Creates stays opaque JSON — typed IR resource

@@ -298,7 +298,32 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 	if err != nil {
 		return nil, false, fmt.Errorf("fold state: %w", err)
 	}
-	return l.foldStateOverChain(chain, addr)
+	state, _, found, ferr := l.foldStateOverChain(chain, addr)
+	return state, found, ferr
+}
+
+// FoldSources reports the provenance of the address's CURRENT state: the
+// sources recorded by the last operation that actually contributed to what
+// FoldState returns.
+//
+// It is the same walk, not a second one. A resource's provenance and its
+// state are two readings of one fold, so they cannot disagree about which
+// operation they last took from -- that invariant is what makes
+// DestroyEntry.Sources checkable rather than argued, and it is true by
+// construction here rather than by two implementations kept in step.
+//
+// found follows FoldState's own: false means the ledger does not currently
+// carry this address at all. A found resource with nil sources is a
+// different and ordinary answer, meaning nothing in a declaration claims
+// it: hand-written, never blueprint-produced, or produced by one and since
+// re-declared by hand.
+func (l *Ledger) FoldSources(addr Address) (sources []IntentSource, found bool, err error) {
+	chain, err := l.Chain()
+	if err != nil {
+		return nil, false, fmt.Errorf("fold sources: %w", err)
+	}
+	_, sources, found, err = l.foldStateOverChain(chain, addr)
+	return sources, found, err
 }
 
 // FoldStateAt is FoldState's own real implementation, generalized to fold
@@ -316,14 +341,83 @@ func (l *Ledger) FoldStateAt(headID string, addr Address) (state json.RawMessage
 	if err != nil {
 		return nil, false, fmt.Errorf("fold state: %w", err)
 	}
-	return l.foldStateOverChain(chain, addr)
+	state, _, found, ferr := l.foldStateOverChain(chain, addr)
+	return state, found, ferr
+}
+
+// restatesDeclaration reports whether a Modification re-states the
+// resource's declaration, and so replaces its provenance, rather than
+// merely recording something observed about a resource whose declaration
+// nobody touched.
+//
+// The distinction is real and the fold depends on it. core/scan.go's own
+// drift_adopt says "the cloud changed, record it"; it does not say "this
+// resource is no longer blueprint-managed". A fold that took provenance
+// from the last state-contributing operation regardless would erase a
+// blueprint reference every time a resource drifted and was adopted. A
+// hand-written modify is the opposite case and must clear it: re-stating a
+// declaration to nothing is a decision, re-stating nothing at all is not.
+//
+// # This is an inference, written down rather than hidden
+//
+// Nothing in the schema says "this entry restates a declaration". The
+// honest options were a new boolean field, which is a second hashed-content
+// change on the heels of Sources' own, or reading Proposal.Kind, which puts
+// the signal on the proposal rather than the entry and quietly mis-sorts
+// any kind added later. This reads Provider instead, which is not a
+// coincidence but a structural consequence: a record-only modify has
+// nothing to apply and therefore no provider to apply it with, so
+// core/scan.go leaves it nil at both its construction sites, and
+// core/resolver sets it unconditionally on every Modification it produces.
+// TestProviderDiscriminatesRestatement enumerates every producer so a new
+// one that breaks the correspondence fails a test rather than silently
+// mis-folding.
+//
+// # Why the pre-Provider gap is empty rather than merely unlikely
+//
+// Provider is itself additive (UBI-43), so a modify resolved before it
+// existed has nil Provider and reads here as record-only. That would be a
+// real hole if such a modify could ever appear where provenance exists to
+// clear, and it cannot: Provider was added 2026-07-18 and resource-level
+// Sources 2026-08-05, eighteen days later. A create can only carry sources
+// if it was written on or after the later date; the fold ignores every
+// modify preceding the create that seeds it (the current == nil guard
+// below); and the ledger is append-only, so chain order is write order.
+// Any modify this function's answer can actually change therefore sits
+// after a create written after 2026-08-05, hence after 2026-07-18, hence
+// carries Provider. Where the inference could be wrong there is no
+// provenance to get wrong.
+//
+// That reasoning is load-bearing and rests on the amendment ordering, so it
+// is stated here rather than left to be re-derived. If Sources is ever
+// back-filled onto older creates the argument lapses and this needs a real
+// field.
+func restatesDeclaration(mod *Modification) bool { return mod.Provider != nil }
+
+// createNodeSources pulls the provenance off a resolved create node.
+// Creates are opaque json.RawMessage, so this is a second targeted decode
+// rather than a read of the generic map the fold already built: "sources"
+// has a pinned shape and decoding it as one keeps that shape in the type
+// system instead of in a chain of interface{} assertions.
+func createNodeSources(raw json.RawMessage) []IntentSource {
+	var carrier struct {
+		Sources []IntentSource `json:"sources"`
+	}
+	if err := json.Unmarshal(raw, &carrier); err != nil {
+		return nil // not shaped like a resource node -- not our concern here
+	}
+	return carrier.Sources
 }
 
 // foldStateOverChain is the one real fold both FoldState and FoldStateAt
 // share -- see FoldState's own doc comment for the full account of what
 // this actually computes and why it's an O(chain length) walk, not an
 // indexed lookup.
-func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json.RawMessage, found bool, err error) {
+//
+// It also returns the provenance of whatever state it arrived at, updated
+// at exactly the points state itself is contributed, so FoldSources is a
+// second reading of this one walk rather than a parallel implementation.
+func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json.RawMessage, sources []IntentSource, found bool, err error) {
 	var current map[string]interface{}
 	for _, p := range chain {
 		for _, raw := range p.Delta.Creates {
@@ -339,20 +433,22 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			}
 			if st, ok := node["state"].(map[string]interface{}); ok {
 				current = st
+				sources = createNodeSources(raw)
 				found = true
 				continue
 			}
 			if _, ok := node["config"]; ok {
 				result, _, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
 				if ferr != nil {
-					return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+					return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
 				}
 				if shipped {
 					var seed map[string]interface{}
 					if err := json.Unmarshal(result, &seed); err != nil {
-						return nil, false, fmt.Errorf("fold state: %s: bad provider_result: %w", addr, err)
+						return nil, nil, false, fmt.Errorf("fold state: %s: bad provider_result: %w", addr, err)
 					}
 					current = seed
+					sources = createNodeSources(raw)
 					found = true
 				}
 				// Not yet shipped (or never applied successfully): leave
@@ -395,7 +491,7 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			if p.Kind == KindChange {
 				_, shipped, ferr := l.shippedModifyFold(p.ID, addr)
 				if ferr != nil {
-					return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+					return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
 				}
 				if !shipped {
 					continue
@@ -404,9 +500,16 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			for path, raw := range mod.After {
 				var v interface{}
 				if err := json.Unmarshal(raw, &v); err != nil {
-					return nil, false, fmt.Errorf("fold state: %s: bad after[%q]: %w", addr, path, err)
+					return nil, nil, false, fmt.Errorf("fold state: %s: bad after[%q]: %w", addr, path, err)
 				}
 				dotSet(current, path, v)
+			}
+			// Provenance follows the declaration, not the state change: a
+			// drift record moves state without saying anything about what
+			// declares the resource, so it passes through. See
+			// restatesDeclaration.
+			if restatesDeclaration(&mod) {
+				sources = mod.Sources
 			}
 			found = true
 		}
@@ -417,10 +520,11 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			}
 			_, shipped, ferr := l.shippedDestroyFold(p.ID, addr)
 			if ferr != nil {
-				return nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+				return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
 			}
 			if shipped {
 				current = nil
+				sources = nil
 				found = false
 			}
 			// Not yet shipped: leave current/found exactly as they were --
@@ -430,13 +534,13 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 		}
 	}
 	if !found {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	b, err := json.Marshal(current)
 	if err != nil {
-		return nil, false, fmt.Errorf("fold state: %w", err)
+		return nil, nil, false, fmt.Errorf("fold state: %w", err)
 	}
-	return b, true, nil
+	return b, sources, true, nil
 }
 
 // dotSet applies a dot-notation path update onto a generic decoded-JSON

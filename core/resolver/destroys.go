@@ -185,11 +185,21 @@ func resolveDestroys(
 		if perr != nil {
 			return nil, nil, perr
 		}
+		// A destroy has no intent to copy provenance from -- it is built
+		// from an address and the ledger alone -- so it is recovered by the
+		// same fold that produced state just above, reading the same walk
+		// rather than a second one (core.Ledger.FoldSources). Nil is
+		// ordinary: it means no declaration claims this resource.
+		sources, _, serr := l.FoldSources(addr)
+		if serr != nil {
+			return nil, nil, fmt.Errorf("resolve destroy %s: %w", addr, serr)
+		}
 		entries = append(entries, core.DestroyEntry{
 			Address:   addr,
 			State:     state,
 			DependsOn: dependsOn[key],
 			Provider:  &core.ProviderRef{Source: prov.Source, Version: prov.Version},
+			Sources:   sources,
 		})
 
 		observedHash, herr := core.ObservedHash(state)
